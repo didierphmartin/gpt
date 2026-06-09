@@ -1,5 +1,11 @@
 /**
- * Copy this file to config.js and fill in your own keys.
+ * Frontend config — copy this file to `config.js` (gitignored) and fill in your keys.
+ *
+ * ⚠️ TEMPORARY: the voice keys (hume/grok/gemini) below are shipped to the browser
+ * (client-side, visible in DevTools). This is an accepted interim choice. The plan is
+ * to move these voice keys into the DB and have the frontend obtain them via the
+ * backend (short-lived token / proxy), the same way the LLM chat keys already live
+ * only in the DB. See docs/HARDENING.md.
  */
 
 const CONFIG = {
