@@ -6576,6 +6576,116 @@ class WorkflowEditor {
     }
 
     /**
+     * Headless run: execute a workflow and return its result without
+     * driving the editor canvas (no node highlighting, abort button,
+     * reset button, or results modal). This is the reusable entry point
+     * the chat uses to run a workflow inline.
+     *
+     * Behavior mirrors executeWorkflow's network/stream contract exactly
+     * (same body shape, headers, SSE loop, and handleWorkflowEvent call —
+     * so client_tool_call round-trips and final-result extraction keep
+     * working), but deliberately skips all canvas-UI side effects.
+     *
+     * @param {string|number} workflowId
+     * @param {string} userPrompt
+     * @param {{ onProgress?: (event: object) => void }} [opts]
+     * @returns {Promise<{ result: object|null, outputs: object|null }>}
+     */
+    async runHeadless(workflowId, userPrompt, { onProgress } = {}) {
+        // Populate the drawflow so client-skill / inline-document
+        // collection can walk the node graph below.
+        await this.loadWorkflow(workflowId);
+
+        // Re-promote local FS permission if Chrome silently downgraded it
+        // (same rationale as executeWorkflow).
+        await this._ensureLocalFsPermission();
+
+        const clientSkills = await this._collectClientSkillsForRun();
+        const { inlineDocuments, scratchFiles } = await this._collectInlineDocumentsForRun();
+
+        const body = {
+            variables: { prompt: userPrompt },
+        };
+        if (clientSkills && Object.keys(clientSkills).length > 0) {
+            body.client_skills = clientSkills;
+        }
+        if (inlineDocuments && Object.keys(inlineDocuments).length > 0) {
+            body.inline_documents = inlineDocuments;
+        }
+        if (scratchFiles && scratchFiles.length > 0) {
+            body.scratch_files = scratchFiles;
+        }
+
+        const token = window.authManager?.token || window.authManager?.getToken?.();
+        const url = `${this.apiBase}/workflows/${workflowId}/run-stream`;
+        const abortController = new AbortController();
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify(body),
+                signal: abortController.signal
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalResult = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6).trim();
+                        if (data === '[DONE]') {
+                            console.log('[WorkflowEditor] runHeadless SSE stream complete');
+                            continue;
+                        }
+                        try {
+                            const ev = JSON.parse(data);
+                            const r = this.handleWorkflowEvent(ev);
+                            if (r) finalResult = r;
+                            if (typeof onProgress === 'function' &&
+                                (ev.type === 'node_start' || ev.type === 'node_complete' ||
+                                 ev.type === 'workflow_start' || ev.type === 'workflow_complete')) {
+                                onProgress(ev);
+                            }
+                        } catch (e) {
+                            console.warn('[WorkflowEditor] runHeadless failed to parse SSE event:', data);
+                        }
+                    }
+                }
+            }
+
+            this._cleanupScratchFiles();
+            return { result: finalResult, outputs: finalResult?.outputs ?? null };
+
+        } catch (error) {
+            this._cleanupScratchFiles();
+            if (error.name === 'AbortError') {
+                console.log('[WorkflowEditor] runHeadless aborted');
+                return { result: null, outputs: null };
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Walk drawflow nodes, find any bound to a folder-backed skill
      * (source === 'local'), and read their SKILL.md + script list off
      * the user's local FS so we can ship them inline with the run
