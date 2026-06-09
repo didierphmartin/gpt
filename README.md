@@ -1,9 +1,18 @@
-# gpt — Multi‑Provider AI Chat Platform
+# gpt — Multi‑Provider AI Framework
 
-A self‑hostable harness for **multi‑provider LLM chat** with streaming, tool/function calling,
-realtime voice, agent workflows, and browser‑side skills. A PHP backend exposes one unified API
-across many model providers; a static‑HTML frontend provides the chat UI, a visual workflow editor,
-a voice panel, and an in‑browser Python runtime.
+A self‑hostable **framework for building with many LLM providers**. It brings together three things:
+
+- 🧩 **A harness** — a backend runtime that brokers **Claude, OpenAI, Grok, Gemini, DeepSeek, and
+  Kimi** behind one API, with streaming, function/tool calling, MCP, agent teams, and LangGraph
+  workflows. It handles provider resolution, auth, tool execution, and orchestration so you don't
+  have to.
+- 🗣️ **A human‑AI interface** — a frontend for *directing* and *conversing with* the AI: a chat UI,
+  realtime voice, and a visual workflow editor.
+- 📦 **Packaged know‑how** — reusable capability built in: browser‑side **Skills** (Python), MCP tool
+  servers, agent‑team designs, workflow templates, and service integrations (search, financial,
+  PubMed, Google Drive).
+
+Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 > **Status:** standalone, self‑hostable. Secrets live outside the repo — see [Configuration](#configuration--secrets).
 
