@@ -6620,6 +6620,19 @@ class WorkflowEditor {
         const url = `${this.apiBase}/workflows/${workflowId}/run-stream`;
         const abortController = new AbortController();
 
+        // handleWorkflowEvent (invoked per SSE event below) drives the editor's
+        // per-node timers via this.executionState. executeWorkflow initializes
+        // it; runHeadless MUST too, or every event throws inside the handler and
+        // gets swallowed by the catch — losing finalResult and the artifact.
+        this.resetNodeStates();
+        this.executionState = {
+            startTime: Date.now(),
+            activeNodeId: null,
+            nodeTimers: new Map(),
+            completedNodes: new Set(),
+            abortController,
+        };
+
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -6666,12 +6679,18 @@ class WorkflowEditor {
                                 onProgress(ev);
                             }
                         } catch (e) {
-                            console.warn('[WorkflowEditor] runHeadless failed to parse SSE event:', data);
+                            console.warn('[WorkflowEditor] runHeadless error handling SSE event:', e, data);
                         }
                     }
                 }
             }
 
+            if (this.executionState?.nodeTimers) {
+                for (const [, timerInfo] of this.executionState.nodeTimers) {
+                    clearInterval(timerInfo.interval);
+                }
+                this.executionState.nodeTimers.clear();
+            }
             this._cleanupScratchFiles();
             return { result: finalResult, outputs: finalResult?.outputs ?? null };
 
