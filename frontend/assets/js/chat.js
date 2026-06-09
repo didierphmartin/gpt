@@ -3549,11 +3549,16 @@ class ChatApp {
         // turn was identified as B3-eligible. Update the phase text now
         // that we know which script is about to run.
         const scriptLabel = call.input?.script || call.name || 'script';
-        this._updateB3OverlayPhase(`Running ${scriptLabel}…`);
+        // Make the progress recognizable for workflow authoring — otherwise the
+        // user just sees a bare "Running compile.py…" and can't tell a workflow
+        // is being built.
+        const isWorkflowBuild = dirName === 'workflow-compile';
+        const phaseLabel = isWorkflowBuild ? '🔄 Building workflow…' : `Running ${scriptLabel}…`;
+        this._updateB3OverlayPhase(phaseLabel);
         const isOuterMost = depth === 0;
         try {
 
-        this.showProgress(`Running ${scriptLabel}…`);
+        this.showProgress(phaseLabel);
 
 
         const req = await this._buildSkillScriptRequest(call, ctx);
@@ -3566,6 +3571,10 @@ class ChatApp {
         const result = await (runSkill
             ? runSkill(req)
             : window.pyodideRunner.runSkillScript(req));
+
+        if (isWorkflowBuild) {
+            this.showProgress('✅ Workflow built — open it in the editor.');
+        }
 
         // Resolve the FSA root name once, BEFORE any output processing.
         // Used by the artifact-pane header, the disk-path hint we put in
