@@ -6691,6 +6691,12 @@ class WorkflowEditor {
                 }
                 this.executionState.nodeTimers.clear();
             }
+            // The editor panel is visible during a chat-driven run, so surface
+            // the result in its own results panel + artifact view — exactly like
+            // executeWorkflow does (otherwise the panel shows "No Results Yet").
+            if (finalResult) {
+                this.showWorkflowResults(finalResult);
+            }
             this._cleanupScratchFiles();
             return { result: finalResult, outputs: finalResult?.outputs ?? null };
 

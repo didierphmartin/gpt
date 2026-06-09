@@ -5486,7 +5486,11 @@ class ChatApp {
                     else if (ev.type === 'node_complete') this.showProgress(`✓ ${name}`);
                 },
             });
-            this._renderWorkflowResult(run);
+            // The result + produced artifact are shown by the editor's own
+            // results panel (runHeadless calls showWorkflowResults) since the
+            // editor is the visible view during a chat-driven run. `run` is kept
+            // for the return contract / future inline rendering.
+            void run;
         } catch (e) {
             this.addMessage('assistant', `⚠️ Workflow run failed: ${e.message}. It's saved — open it in the editor to retry.`);
         }
