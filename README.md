@@ -37,6 +37,46 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 ## Architecture
 
+```mermaid
+graph TD
+    User(["👤 User"])
+
+    subgraph UI["🗣️ Human-AI Interface · frontend"]
+        direction LR
+        Chat["Chat UI"]
+        Voice["Realtime Voice"]
+        Flow["Workflow Editor"]
+    end
+
+    subgraph Harness["🧩 Harness · backend /api/v1"]
+        direction LR
+        Auth["Auth"]
+        Resolver["Provider Resolver"]
+        Exec["Tools · MCP · Agents · Workflows"]
+    end
+
+    subgraph Know["📦 Packaged Know-how"]
+        direction LR
+        SkillsK["Skills · Python"]
+        ToolsK["MCP tool servers"]
+        Integ["Integrations"]
+    end
+
+    Providers["🤖 Claude · OpenAI · Grok<br/>Gemini · DeepSeek · Kimi"]
+    Store[("🗄️ MySQL · keys, contexts")]
+    Secrets["🔑 backend/.env"]
+
+    User --> UI
+    UI -->|"SSE / REST"| Harness
+    Harness --> Providers
+    Exec --> Know
+    Resolver -.->|keys| Store
+    Auth -.-> Store
+    Harness -.-> Secrets
+```
+
+Repository layout:
+
 ```
 gpt/
 ├── backend/     PHP 8.1+ API (front controller at /api/v1), Composer, MySQL
