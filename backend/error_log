@@ -1,0 +1,998 @@
+[07-Mar-2026 04:16:49 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:16:49 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:16:49 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/netfo587/synergyaichat.com/gpt/backend/vendor/autoload.php(22): ComposerAutoloaderInitd2acea344b47b9c19fb553c264ddcb92::getLoader()
+#2 /home/netfo587/synergyaichat.com/gpt/backend/index.php(17): require_once('/home/netfo587/...')
+#3 {main}
+  thrown in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/netfo587/synergyaichat.com/gpt/backend/vendor/autoload.php(22): ComposerAutoloaderInitd2acea344b47b9c19fb553c264ddcb92::getLoader()
+#2 /home/netfo587/synergyaichat.com/gpt/backend/index.php(17): require_once('/home/netfo587/...')
+#3 {main}
+  thrown in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/netfo587/synergyaichat.com/gpt/backend/vendor/autoload.php(22): ComposerAutoloaderInitd2acea344b47b9c19fb553c264ddcb92::getLoader()
+#2 /home/netfo587/synergyaichat.com/gpt/backend/index.php(17): require_once('/home/netfo587/...')
+#3 {main}
+  thrown in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/netfo587/synergyaichat.com/gpt/backend/vendor/autoload.php(22): ComposerAutoloaderInitd2acea344b47b9c19fb553c264ddcb92::getLoader()
+#2 /home/netfo587/synergyaichat.com/gpt/backend/index.php(17): require_once('/home/netfo587/...')
+#3 {main}
+  thrown in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Warning:  require(/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php): Failed to open stream: No such file or directory in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 04:17:38 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/../phpunit/phpunit/src/Framework/Assert/Functions.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/netfo587/synergyaichat.com/gpt/backend/vendor/autoload.php(22): ComposerAutoloaderInitd2acea344b47b9c19fb553c264ddcb92::getLoader()
+#2 /home/netfo587/synergyaichat.com/gpt/backend/index.php(17): require_once('/home/netfo587/...')
+#3 {main}
+  thrown in /home/netfo587/synergyaichat.com/gpt/backend/vendor/composer/autoload_real.php on line 41
+[07-Mar-2026 12:47:41 UTC] [ChatController] Received conversation_history count: 6
+[07-Mar-2026 12:47:41 UTC] [ChatController] First history entry: {"role":"assistant","content":"Hello, this is Synergy. How can I help you today?"}
+[07-Mar-2026 12:47:41 UTC] [ChatController] Last history entry: {"role":"user","content":"Yes, can you give me, uh, the current status of the research?"}
+[07-Mar-2026 12:47:41 UTC] [ChatController] Provider from request: claude
+[07-Mar-2026 12:47:41 UTC] [ChatController] handleStreamingChat provider: claude
+[07-Mar-2026 12:47:41 UTC] [MCP] Loaded 12 MCP tools for user: 3
+[07-Mar-2026 12:47:41 UTC] [ChatController] streamChat options: {"provider":"claude"}
+[07-Mar-2026 12:47:41 UTC] [AIPortfolioAssistant] streamChat - provider from options: claude
+[07-Mar-2026 12:47:41 UTC] [AIPortfolioAssistant] streamChat - resolved provider: claude
+[07-Mar-2026 12:47:41 UTC] [LLMManager] streamChat - requested provider: claude
+[07-Mar-2026 12:47:41 UTC] [LLMManager] streamChat - resolved provider: claude
+[07-Mar-2026 12:47:41 UTC] [LLMManager] streamChat - registered providers: claude, openai, kimi, grok, gemini, deepseek
+[07-Mar-2026 12:47:41 UTC] [LLMManager] streamChat - raw history count: 6
+[07-Mar-2026 12:47:41 UTC] [LLMManager] streamChat - normalized history count: 6
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[0]: role=assistant, content="Hello, this is Synergy. How can I help you today?..."
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[1]: role=user, content="I'm trying to log in with the phone number and......"
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[2]: role=user, content="I'm trying to log in with the phone number and......"
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[3]: role=assistant, content="No worries, let's get that sorted. Are you seeing an error message, or is the phone number not being..."
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[4]: role=assistant, content="Hello, this is Synergy. How can I help you today?..."
+[07-Mar-2026 12:47:41 UTC] [LLMManager] History[5]: role=user, content="Yes, can you give me, uh, the current status of the research?..."
+[07-Mar-2026 12:47:41 UTC] 🔍 Messages being sent to Claude API: [
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Hello, this is Synergy. How can I help you today?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'm trying to log in with the phone number and..."
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'm trying to log in with the phone number and..."
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "No worries, let's get that sorted. Are you seeing an error message, or is the phone number not being recognized? Walk me through what's happening."
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Hello, this is Synergy. How can I help you today?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research?"
+            }
+        ]
+    }
+]
+[07-Mar-2026 12:47:43 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:43 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:43 UTC] 📝 Text delta received (len=1): I
+[07-Mar-2026 12:47:43 UTC] 📤 SENDING TO FRONTEND (len=1): "I"
+[07-Mar-2026 12:47:43 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:43 UTC] 📝 Text delta received (len=2): 'd
+[07-Mar-2026 12:47:43 UTC] 📤 SENDING TO FRONTEND (len=2): "'d"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=26):  be happy to help you with
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=26): " be happy to help you with"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=9):  research
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=9): " research"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=12):  information
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=12): " information"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=19): ! However, I need a
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=19): "! However, I need a"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=17):  bit more context
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=17): " bit more context"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=30):  to provide you with the right
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=30): " to provide you with the right"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=12):  information
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=12): " information"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=1): .
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=1): "."
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=23): 
+
+Could you please clar
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=23): "\n\nCould you please clar"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=4): ify:
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=4): "ify:"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=16): 
+
+1. **What type
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=16): "\n\n1. **What type"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=14):  of research**
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=14): " of research**"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=21):  are you looking for?
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=21): " are you looking for?"
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=4): 
+   
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=4): "\n   "
+[07-Mar-2026 12:47:44 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:44 UTC] 📝 Text delta received (len=9): - Medical
+[07-Mar-2026 12:47:44 UTC] 📤 SENDING TO FRONTEND (len=9): "- Medical"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=1): /
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=1): "\/"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=21): scientific research (
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=21): "scientific research ("
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=1): I
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=1): "I"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=11):  can search
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=11): " can search"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=2):  P
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=2): " P"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=13): ubMed for bio
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=13): "ubMed for bio"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=18): medical literature
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=18): "medical literature"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=16): )
+   - Financial
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=16): ")\n   - Financial"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=7): /market
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=7): "\/market"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=35):  research (I can search for company
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=35): " research (I can search for company"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=12):  information
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=12): " information"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=5): , SEC
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=5): ", SEC"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=19):  filings, financial
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=19): " filings, financial"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=5):  news
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=5): " news"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=6): )
+   -
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=6): ")\n   -"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=15):  Cryptocurrency
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=15): " Cryptocurrency"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=9):  research
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=9): " research"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=11):  (I can get
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=11): " (I can get"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=7):  crypto
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=7): " crypto"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=9):  news and
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=9): " news and"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=12):  information
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=12): " information"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=14): )
+   - General
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=14): ")\n   - General"
+[07-Mar-2026 12:47:45 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:45 UTC] 📝 Text delta received (len=19):  research (I can do
+[07-Mar-2026 12:47:45 UTC] 📤 SENDING TO FRONTEND (len=19): " research (I can do"
+[07-Mar-2026 12:47:45 UTC] [ChatController] Received conversation_history count: 8
+[07-Mar-2026 12:47:45 UTC] [ChatController] First history entry: {"role":"assistant","content":"Hello, this is Synergy. How can I help you today?"}
+[07-Mar-2026 12:47:45 UTC] [ChatController] Last history entry: {"role":"user","content":"Yes, can you give me, uh, the current status of the research about vitamin D and its link to the immune system?"}
+[07-Mar-2026 12:47:45 UTC] [ChatController] Provider from request: claude
+[07-Mar-2026 12:47:45 UTC] [ChatController] handleStreamingChat provider: claude
+[07-Mar-2026 12:47:46 UTC] [MCP] Loaded 12 MCP tools for user: 3
+[07-Mar-2026 12:47:46 UTC] [ChatController] streamChat options: {"provider":"claude"}
+[07-Mar-2026 12:47:46 UTC] [AIPortfolioAssistant] streamChat - provider from options: claude
+[07-Mar-2026 12:47:46 UTC] [AIPortfolioAssistant] streamChat - resolved provider: claude
+[07-Mar-2026 12:47:46 UTC] [LLMManager] streamChat - requested provider: claude
+[07-Mar-2026 12:47:46 UTC] [LLMManager] streamChat - resolved provider: claude
+[07-Mar-2026 12:47:46 UTC] [LLMManager] streamChat - registered providers: claude, openai, kimi, grok, gemini, deepseek
+[07-Mar-2026 12:47:46 UTC] [LLMManager] streamChat - raw history count: 8
+[07-Mar-2026 12:47:46 UTC] [LLMManager] streamChat - normalized history count: 8
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[0]: role=assistant, content="Hello, this is Synergy. How can I help you today?..."
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[1]: role=user, content="I'm trying to log in with the phone number and......"
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[2]: role=user, content="I'm trying to log in with the phone number and......"
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[3]: role=assistant, content="No worries, let's get that sorted. Are you seeing an error message, or is the phone number not being..."
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[4]: role=assistant, content="Hello, this is Synergy. How can I help you today?..."
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[5]: role=user, content="Yes, can you give me, uh, the current status of the research?..."
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[6]: role=user, content="Yes, can you give me, uh, the current status of the research?..."
+[07-Mar-2026 12:47:46 UTC] [LLMManager] History[7]: role=user, content="Yes, can you give me, uh, the current status of the research about vitamin D and its link to the imm..."
+[07-Mar-2026 12:47:46 UTC] 🔍 Messages being sent to Claude API: [
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Hello, this is Synergy. How can I help you today?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'm trying to log in with the phone number and..."
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'm trying to log in with the phone number and..."
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "No worries, let's get that sorted. Are you seeing an error message, or is the phone number not being recognized? Walk me through what's happening."
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Hello, this is Synergy. How can I help you today?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research about vitamin D and its link to the immune system?"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Yes, can you give me, uh, the current status of the research about vitamin D and its link to the immune system?"
+            }
+        ]
+    }
+]
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=4):  web
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=4): " web"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=30):  searches)
+
+2. **What specific
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=30): " searches)\n\n2. **What specific"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=6):  topic
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=6): " topic"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=11):  or subject
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=11): " or subject"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=2): **
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=2): "**"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=4):  are
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=4): " are"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=19):  you interested in?
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=19): " you interested in?"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=3): 
+
+3
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=3): "\n\n3"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=7): . **Are
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=7): ". **Are"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=14):  you referring
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=14): " you referring"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=22):  to a specific project
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=22): " to a specific project"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=3):  or
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=3): " or"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=6):  study
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=6): " study"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=2): **
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=2): "**"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=8):  that we
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=8): " that we"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=3): 've
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=3): "'ve"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=17):  discussed before
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=17): " discussed before"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=11): ?
+
+Once you
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=11): "?\n\nOnce you"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=5):  give
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=5): " give"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=17):  me more details,
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=17): " me more details,"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=5):  I'll
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=5): " I'll"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=16):  be able to pull
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=16): " be able to pull"
+[07-Mar-2026 12:47:46 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:46 UTC] 📝 Text delta received (len=15):  up the current
+[07-Mar-2026 12:47:46 UTC] 📤 SENDING TO FRONTEND (len=15): " up the current"
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:47 UTC] 📝 Text delta received (len=11):  status and
+[07-Mar-2026 12:47:47 UTC] 📤 SENDING TO FRONTEND (len=11): " status and"
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:47 UTC] 📝 Text delta received (len=9):  relevant
+[07-Mar-2026 12:47:47 UTC] 📤 SENDING TO FRONTEND (len=9): " relevant"
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:47 UTC] 📝 Text delta received (len=21):  information for you!
+[07-Mar-2026 12:47:47 UTC] 📤 SENDING TO FRONTEND (len=21): " information for you!"
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: message_delta
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: message_stop
+[07-Mar-2026 12:47:47 UTC] 📊 Final response length: 759
+[07-Mar-2026 12:47:47 UTC] ✅ [UsageLogger] Transaction logged: ID=446, User=3, Provider=claude, Tokens=5893, Cost=$0.019839
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:47 UTC] 📝 Text delta received (len=1): I
+[07-Mar-2026 12:47:47 UTC] 📤 SENDING TO FRONTEND (len=1): "I"
+[07-Mar-2026 12:47:47 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:47 UTC] 📝 Text delta received (len=10): 'll search
+[07-Mar-2026 12:47:47 UTC] 📤 SENDING TO FRONTEND (len=10): "'ll search"
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 📝 Text delta received (len=15):  for the latest
+[07-Mar-2026 12:47:48 UTC] 📤 SENDING TO FRONTEND (len=15): " for the latest"
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 📝 Text delta received (len=43):  research on vitamin D and its relationship
+[07-Mar-2026 12:47:48 UTC] 📤 SENDING TO FRONTEND (len=43): " research on vitamin D and its relationship"
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 📝 Text delta received (len=25):  to the immune system for
+[07-Mar-2026 12:47:48 UTC] 📤 SENDING TO FRONTEND (len=25): " to the immune system for"
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 📝 Text delta received (len=5):  you.
+[07-Mar-2026 12:47:48 UTC] 📤 SENDING TO FRONTEND (len=5): " you."
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: message_delta
+[07-Mar-2026 12:47:48 UTC] 🎯 Received SSE event: message_stop
+[07-Mar-2026 12:47:48 UTC] 🔧 Tool use detected, starting recursive handling
+[07-Mar-2026 12:47:48 UTC] 🔧 Tool 'pubmed_search' result: {"error":"PubMed search error: Client error: `POST http:\/\/localhost\/pubmed\/public\/search` resulted in a `404 Not Found` response:\n\n\n\n<!DOCTYPE html>\n<html>\n    <head>\n    <meta http-equiv=
+[07-Mar-2026 12:47:48 UTC] 🔄 Sending continuation request with messages: {"message_count":11,"last_message_role":"user","sanitized_content_count":1}
+[07-Mar-2026 12:47:49 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:49 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:49 UTC] 📝 Text delta received (len=3): Let
+[07-Mar-2026 12:47:49 UTC] 📤 SENDING TO FRONTEND (len=3): "Let"
+[07-Mar-2026 12:47:49 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:49 UTC] 📝 Text delta received (len=10):  me search
+[07-Mar-2026 12:47:49 UTC] 📤 SENDING TO FRONTEND (len=10): " me search"
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 📝 Text delta received (len=8):  for the
+[07-Mar-2026 12:47:50 UTC] 📤 SENDING TO FRONTEND (len=8): " for the"
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 📝 Text delta received (len=7):  latest
+[07-Mar-2026 12:47:50 UTC] 📤 SENDING TO FRONTEND (len=7): " latest"
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 📝 Text delta received (len=15):  information on
+[07-Mar-2026 12:47:50 UTC] 📤 SENDING TO FRONTEND (len=15): " information on"
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 📝 Text delta received (len=41):  vitamin D and immune system research for
+[07-Mar-2026 12:47:50 UTC] 📤 SENDING TO FRONTEND (len=41): " vitamin D and immune system research for"
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 📝 Text delta received (len=5):  you.
+[07-Mar-2026 12:47:50 UTC] 📤 SENDING TO FRONTEND (len=5): " you."
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: message_delta
+[07-Mar-2026 12:47:50 UTC] 🎯 Received SSE event: message_stop
+[07-Mar-2026 12:47:53 UTC] 🔧 Tool 'serpapi_search' result: {"success":true,"query":"vitamin D immune system research 2024","results":[{"title":"How It Can Improve Patient Care in Autoimmune Diseases","link":"https:\/\/www.aiarthritis.org\/vitamind-acr24","sni
+[07-Mar-2026 12:47:53 UTC] 🔄 Sending continuation request with messages: {"message_count":13,"last_message_role":"user","sanitized_content_count":1}
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_start
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=5): Great
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=5): "Great"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=3): ! I
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=3): "! I"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=4):  can
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=4): " can"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=5):  give
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=5): " give"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=7):  you an
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=7): " you an"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=9):  overview
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=9): " overview"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=24):  of the current research
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=24): " of the current research"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=3):  on
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=3): " on"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=23):  vitamin D and its link
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=23): " vitamin D and its link"
+[07-Mar-2026 12:47:55 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:55 UTC] 📝 Text delta received (len=7):  to the
+[07-Mar-2026 12:47:55 UTC] 📤 SENDING TO FRONTEND (len=7): " to the"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=20):  immune system. Here
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=20): " immune system. Here"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=11): 's what the
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=11): "'s what the"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=7):  latest
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=7): " latest"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=20):  research shows:
+
+##
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=20): " research shows:\n\n##"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=4):  Key
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=4): " Key"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=14):  Findings from
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=14): " Findings from"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=16):  Recent Research
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=16): " Recent Research"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=2):  (
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=2): " ("
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=6): 2024):
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=6): "2024):"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=5): 
+
+###
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=5): "\n\n###"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=3):  **
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=3): " **"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=6): Immune
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=6): "Immune"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=30):  System Regulation**
+- Vitamin
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=30): " System Regulation**\n- Vitamin"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=7):  D acts
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=7): " D acts"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=9):  as an **
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=9): " as an **"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=18): immunomodulator**,
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=18): "immunomodulator**,"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=8):  meaning
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=8): " meaning"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=7):  it can
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=7): " it can"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=9):  suppress
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=9): " suppress"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=29): , modulate, and regulate both
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=29): ", modulate, and regulate both"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=33):  innate and adaptive immune cells
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=33): " innate and adaptive immune cells"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=9): 
+- It reg
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=9): "\n- It reg"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=11): ulates gene
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=11): "ulates gene"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=41):  expression involved in immune responses,
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=41): " expression involved in immune responses,"
+[07-Mar-2026 12:47:56 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:56 UTC] 📝 Text delta received (len=16):  including genes
+[07-Mar-2026 12:47:56 UTC] 📤 SENDING TO FRONTEND (len=16): " including genes"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=13):  encoding for
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=13): " encoding for"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=18):  cytokines (immune
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=18): " cytokines (immune"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=5):  sign
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=5): " sign"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=28): aling molecules)
+- Vitamin D
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=28): "aling molecules)\n- Vitamin D"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=15):  helps regulate
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=15): " helps regulate"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=15):  the generation
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=15): " the generation"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=20):  and activity of key
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=20): " and activity of key"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=21):  immune cells like **
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=21): " immune cells like **"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=11): T cells and
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=11): "T cells and"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=22):  B cells**
+
+### **Auto
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=22): " B cells**\n\n### **Auto"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=31): immune Disease Prevention**
+- A
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=31): "immune Disease Prevention**\n- A"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=12):  significant
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=12): " significant"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=6):  study
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=6): " study"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=12):  showed that
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=12): " showed that"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=20):  long-term use of **
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=20): " long-term use of **"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=20): 2,000 IUs of vitamin
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=20): "2,000 IUs of vitamin"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=14):  D per day can
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=14): " D per day can"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=35):  reduce the incidence of autoimmune
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=35): " reduce the incidence of autoimmune"
+[07-Mar-2026 12:47:57 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:57 UTC] 📝 Text delta received (len=16):  diseases by 22%
+[07-Mar-2026 12:47:57 UTC] 📤 SENDING TO FRONTEND (len=16): " diseases by 22%"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=25): ** over five years
+- This
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=25): "** over five years\n- This"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=4):  has
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=4): " has"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=10):  important
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=10): " important"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=25):  implications for patient
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=25): " implications for patient"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=8):  care in
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=8): " care in"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=22):  autoimmune conditions
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=22): " autoimmune conditions"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=14): 
+
+### **Cancer
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=14): "\n\n### **Cancer"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=11):  Immunity**
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=11): " Immunity**"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=2):  (
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=2): " ("
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=1): 2
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=1): "2"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=4): 024 
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=4): "024 "
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=8): Research
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=8): "Research"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=10): )
+- Recent
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=10): ")\n- Recent"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=14):  research from
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=14): " research from"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=6):  the C
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=6): " the C"
+[07-Mar-2026 12:47:58 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:58 UTC] 📝 Text delta received (len=33): rick Institute found that vitamin
+[07-Mar-2026 12:47:58 UTC] 📤 SENDING TO FRONTEND (len=33): "rick Institute found that vitamin"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=3):  D-
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=3): " D-"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=4): rich
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=4): "rich"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=15):  diets improved
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=15): " diets improved"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=3):  **
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=3): " **"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=27): immune resistance to cancer
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=27): "immune resistance to cancer"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=24): ** in mice
+- Mice showed
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=24): "** in mice\n- Mice showed"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=9):  improved
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=9): " improved"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=20):  responses to cancer
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=20): " responses to cancer"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=6):  immun
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=6): " immun"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=28): otherapy when given adequate
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=28): "otherapy when given adequate"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=26):  vitamin D
+- The mechanism
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=26): " vitamin D\n- The mechanism"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=22):  involves vitamin D al
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=22): " involves vitamin D al"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=31): tering gut bacteria composition
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=31): "tering gut bacteria composition"
+[07-Mar-2026 12:47:59 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:47:59 UTC] 📝 Text delta received (len=1): ,
+[07-Mar-2026 12:47:59 UTC] 📤 SENDING TO FRONTEND (len=1): ","
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=11):  which then
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=11): " which then"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=24):  affects immune function
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=24): " affects immune function"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=17): 
+
+### **Important
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=17): "\n\n### **Important"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=4):  Cav
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=4): " Cav"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=5): eat -
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=5): "eat -"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=8):  Vitamin
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=8): " Vitamin"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=3):  D2
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=3): " D2"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=14):  vs D3**
+- New
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=14): " vs D3**\n- New"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=11):  research (
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=11): " research ("
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=1): 2
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=1): "2"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=3): 024
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=3): "024"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=12): ) discovered
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=12): ") discovered"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=34):  that **vitamin D2 supplements can
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=34): " that **vitamin D2 supplements can"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=9):  actually
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=9): " actually"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=13):  lower levels
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=13): " lower levels"
+[07-Mar-2026 12:48:00 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:00 UTC] 📝 Text delta received (len=23):  of vitamin D3**, which
+[07-Mar-2026 12:48:00 UTC] 📤 SENDING TO FRONTEND (len=23): " of vitamin D3**, which"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=7):  is the
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=7): " is the"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=5):  form
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=5): " form"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=38):  the body uses most effectively
+- This
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=38): " the body uses most effectively\n- This"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=9):  suggests
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=9): " suggests"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=5):  that
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=5): " that"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=4):  the
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=4): " the"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=5):  type
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=5): " type"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=3):  of
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=3): " of"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=21):  vitamin D supplement
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=21): " vitamin D supplement"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=50):  matters significantly for immune function
+
+### **
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=50): " matters significantly for immune function\n\n### **"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=7): Overall
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=7): "Overall"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=7):  Effect
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=7): " Effect"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=13): **
+- Research
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=13): "**\n- Research"
+[07-Mar-2026 12:48:01 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:01 UTC] 📝 Text delta received (len=10):  indicates
+[07-Mar-2026 12:48:01 UTC] 📤 SENDING TO FRONTEND (len=10): " indicates"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=34):  that vitamin D supplementation **
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=34): " that vitamin D supplementation **"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=38): modestly affects the immune response**
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=38): "modestly affects the immune response**"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=6): 
+- The
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=6): "\n- The"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=8):  effects
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=8): " effects"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=17):  are particularly
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=17): " are particularly"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=8):  notable
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=8): " notable"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=15):  in respiratory
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=15): " in respiratory"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=13):  diseases and
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=13): " diseases and"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=11):  infections
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=11): " infections"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=5): 
+
+The
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=5): "\n\nThe"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=10):  consensus
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=10): " consensus"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=24):  is that vitamin D plays
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=24): " is that vitamin D plays"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=41):  a crucial role in immune system function
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=41): " a crucial role in immune system function"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=5): , but
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=5): ", but"
+[07-Mar-2026 12:48:02 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:02 UTC] 📝 Text delta received (len=11):  supplement
+[07-Mar-2026 12:48:02 UTC] 📤 SENDING TO FRONTEND (len=11): " supplement"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=28): ation should be done thought
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=28): "ation should be done thought"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=13): fully, prefer
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=13): "fully, prefer"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=20): ably with vitamin D3
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=20): "ably with vitamin D3"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=7):  rather
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=7): " rather"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=9):  than D2,
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=9): " than D2,"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=4):  and
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=4): " and"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=4):  ide
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=4): " ide"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=27): ally under medical guidance
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=27): "ally under medical guidance"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=3):  to
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=3): " to"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=7):  ensure
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=7): " ensure"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=12):  appropriate
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=12): " appropriate"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=15):  dosing.
+
+Would
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=15): " dosing.\n\nWould"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=20):  you like me to dive
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=20): " you like me to dive"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=49):  deeper into any specific aspect of this research
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=49): " deeper into any specific aspect of this research"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_delta
+[07-Mar-2026 12:48:03 UTC] 📝 Text delta received (len=1): ?
+[07-Mar-2026 12:48:03 UTC] 📤 SENDING TO FRONTEND (len=1): "?"
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: content_block_stop
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: message_delta
+[07-Mar-2026 12:48:03 UTC] 🎯 Received SSE event: message_stop
+[07-Mar-2026 12:48:03 UTC] ✅ Tool use handling completed successfully
+[07-Mar-2026 12:48:03 UTC] 📊 Final response length: 2022
+[07-Mar-2026 12:48:03 UTC] ✅ [UsageLogger] Transaction logged: ID=447, User=3, Provider=claude, Tokens=19291, Cost=$0.065481

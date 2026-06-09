@@ -1,0 +1,239 @@
+ems<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Test - Backend Response Check</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        #log {
+            background: #f5f5f5;
+            padding: 15px;
+            border: 1px solid #ccc;
+            margin-top: 20px;
+            white-space: pre-wrap;
+            font-size: 14px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <h1>🎤 Voice Backend Test</h1>
+    <p>This test will check if the backend is sending both text AND audio in the response.</p>
+
+    <button onclick="testVoiceResponse()">Test Voice Response (Streaming)</button>
+    <button onclick="testVoiceResponseNonStreaming()">Test Voice Response (Non-Streaming)</button>
+    <button onclick="clearLog()">Clear Log</button>
+
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = `[${timestamp}] ${message}`;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function clearLog() {
+            log.innerHTML = '';
+        }
+
+        // Test with STREAMING (SSE)
+        async function testVoiceResponse() {
+            clearLog();
+            addLog('=== TESTING STREAMING RESPONSE ===');
+            addLog('Sending request with voice_enabled: true...');
+
+            try {
+                const response = await fetch('api/chat.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: 'Say hello',
+                        streaming: true,
+                        voice_enabled: true
+                    })
+                });
+
+                addLog('Response received, reading SSE stream...');
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let finalResponse = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            const event = line.substring(6).trim();
+                            addLog(`Event: ${event}`, 'info');
+                        } else if (line.startsWith('data:')) {
+                            const data = line.substring(5).trim();
+
+                            // Try to parse as JSON
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.text) {
+                                    addLog(`✓ Text received: "${parsed.text.substring(0, 50)}..."`, 'success');
+                                }
+                                if (parsed.audio) {
+                                    addLog(`✓ Audio received: ${parsed.audio.length} bytes (base64)`, 'success');
+                                    finalResponse = parsed;
+                                } else if (parsed.text && !parsed.audio) {
+                                    addLog(`✗ NO AUDIO in response!`, 'error');
+                                    finalResponse = parsed;
+                                }
+                                if (parsed.debug_hume_error) {
+                                    addLog(`✗ Hume Error: ${parsed.debug_hume_error}`, 'error');
+                                }
+                            } catch (e) {
+                                // Not JSON, just progress message
+                                if (data.length < 100) {
+                                    addLog(`Progress: ${data}`, 'info');
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check final response
+                if (finalResponse) {
+                    addLog('\n=== FINAL RESULT ===');
+                    addLog(`Has text: ${!!finalResponse.text}`, finalResponse.text ? 'success' : 'error');
+                    addLog(`Has audio: ${!!finalResponse.audio}`, finalResponse.audio ? 'success' : 'error');
+
+                    if (finalResponse.audio) {
+                        addLog(`Audio format: ${finalResponse.audio_format || 'unknown'}`);
+                        addLog(`Audio size: ${finalResponse.audio.length} bytes`);
+                        addLog('\n✅ BACKEND IS WORKING! Audio is being sent.');
+                        addLog('Attempting to play audio...');
+                        playAudio(finalResponse.audio, finalResponse.audio_format || 'mp3');
+                    } else {
+                        addLog('\n❌ BACKEND BUG: No audio in response!', 'error');
+                    }
+                } else {
+                    addLog('\n❌ No response data received!', 'error');
+                }
+
+            } catch (error) {
+                addLog(`ERROR: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Test with NON-STREAMING (regular JSON)
+        async function testVoiceResponseNonStreaming() {
+            clearLog();
+            addLog('=== TESTING NON-STREAMING RESPONSE ===');
+            addLog('Sending request with voice_enabled: true...');
+
+            try {
+                const response = await fetch('api/chat.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: 'Say hello',
+                        streaming: false,
+                        voice_enabled: true
+                    })
+                });
+
+                const data = await response.json();
+
+                addLog('\n=== RESPONSE RECEIVED ===');
+                addLog(`Has text: ${!!data.text}`, data.text ? 'success' : 'error');
+                addLog(`Has audio: ${!!data.audio}`, data.audio ? 'success' : 'error');
+
+                if (data.text) {
+                    addLog(`Text: "${data.text.substring(0, 100)}..."`);
+                }
+
+                if (data.audio) {
+                    addLog(`Audio format: ${data.audio_format || 'unknown'}`);
+                    addLog(`Audio size: ${data.audio.length} bytes`);
+                    addLog('\n✅ BACKEND IS WORKING! Audio is being sent.');
+                    addLog('Attempting to play audio...');
+                    playAudio(data.audio, data.audio_format || 'mp3');
+                } else {
+                    addLog('\n❌ BACKEND BUG: No audio in response!', 'error');
+                    if (data.debug_hume_error) {
+                        addLog(`Hume Error: ${data.debug_hume_error}`, 'error');
+                    }
+                }
+
+            } catch (error) {
+                addLog(`ERROR: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        // Play audio from base64
+        function playAudio(base64Audio, format = 'mp3') {
+            try {
+                addLog('Decoding base64 audio...');
+                const binaryString = atob(base64Audio);
+                const bytes = new Uint8Array(binaryString.length);
+
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                const blob = new Blob([bytes], { type: `audio/${format}` });
+                const audioUrl = URL.createObjectURL(blob);
+
+                addLog(`Creating audio element...`);
+                const audio = new Audio(audioUrl);
+
+                audio.oncanplay = () => {
+                    addLog('🔊 Audio is ready, playing...', 'success');
+                };
+
+                audio.onended = () => {
+                    addLog('✅ Audio playback completed!', 'success');
+                    URL.revokeObjectURL(audioUrl);
+                };
+
+                audio.onerror = (e) => {
+                    addLog(`❌ Audio playback error: ${e.message || 'Unknown error'}`, 'error');
+                    URL.revokeObjectURL(audioUrl);
+                };
+
+                audio.play().catch(err => {
+                    addLog(`❌ Failed to play audio: ${err.message}`, 'error');
+                });
+
+            } catch (error) {
+                addLog(`❌ Error decoding/playing audio: ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>

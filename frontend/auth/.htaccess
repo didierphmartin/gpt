@@ -1,0 +1,19 @@
+# Override the parent /gpt/frontend/.htaccess's strict frame-ancestors
+# for this auth helper page. The helper page (signInWithPopup.html) is
+# loaded into a chrome-extension:// offscreen-document iframe to drive
+# Firebase signInWithPopup for the MV3 extension — that origin is
+# scheme-only `chrome-extension:` and is not listable as a finite host.
+#
+# Defense-in-depth still applies inside the helper page: it only acts on
+# postMessage from chrome-extension:// origins, and only on a tightly-
+# scoped initAuth message shape.
+<IfModule mod_headers.c>
+    <FilesMatch "\.html$">
+        Header set Content-Security-Policy "frame-ancestors 'self' https://finmind.org http://localhost:3000 chrome-extension:"
+        Header unset X-Frame-Options
+        # The helper page is an iframe content target; avoid cached CSP
+        # poisoning across CSP-rule changes during development.
+        Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+        Header set Pragma "no-cache"
+    </FilesMatch>
+</IfModule>

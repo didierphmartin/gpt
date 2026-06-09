@@ -1,0 +1,800 @@
+/**
+ * AI Portfolio Assistant - Chat Interface
+ * Supports multiple AI providers with one-click switching
+ */
+
+class ChatApp {
+    constructor() {
+        // DOM Elements
+        this.messagesContainer = document.getElementById('messages');
+        this.userInput = document.getElementById('user-input');
+        this.sendBtn = document.getElementById('send-btn');
+        this.clearBtn = document.getElementById('clear-chat');
+        this.progressBar = document.getElementById('progress-bar');
+        this.progressText = document.getElementById('progress-text');
+        this.providerName = document.getElementById('provider-name');
+        this.functionCount = document.getElementById('function-count');
+        this.tokenInfo = document.getElementById('token-info');
+        this.functionsModal = document.getElementById('functions-modal');
+        this.functionsList = document.getElementById('functions-list');
+        this.showFunctionsBtn = document.getElementById('show-functions');
+        this.closeModalBtn = document.getElementById('close-modal');
+        this.providerButtons = document.getElementById('provider-buttons');
+        this.mergeConversationsCheckbox = document.getElementById('merge-conversations');
+        // EVI elements
+        this.eviStatus = document.getElementById('evi-status');
+        this.eviIcon = document.getElementById('evi-icon');
+        this.eviStateText = document.getElementById('evi-state-text');
+        this.eviHintText = document.getElementById('evi-hint-text');
+        this.eviDisconnectBtn = document.getElementById('evi-disconnect');
+        // Get input area container (parent of user input)
+        this.inputArea = this.userInput.closest('.border-t');
+
+        // State
+        this.conversationHistory = [];
+        this.isLoading = false;
+        this.functions = [];
+        this.totalTokens = 0;
+        this.providers = [];
+        this.currentProvider = 'claude';
+
+        // EVI state
+        this.eviSocket = null;
+        this.eviPlayer = null;
+        this.eviConnected = false;
+
+        // Provider colors/styles
+        this.providerStyles = {
+            claude: { bg: 'bg-purple-600', hover: 'hover:bg-purple-700', text: 'text-white', icon: '🟣' },
+            openai: { bg: 'bg-green-600', hover: 'hover:bg-green-700', text: 'text-white', icon: '🟢' },
+            kimi: { bg: 'bg-blue-500', hover: 'hover:bg-blue-600', text: 'text-white', icon: '🔵' },
+            grok: { bg: 'bg-gray-800', hover: 'hover:bg-gray-900', text: 'text-white', icon: '⚫' },
+            gemini: { bg: 'bg-cyan-500', hover: 'hover:bg-cyan-600', text: 'text-white', icon: '💎' },
+            evi: { bg: 'bg-orange-600', hover: 'hover:bg-orange-700', text: 'text-white', icon: '🎙️' },
+            default: { bg: 'bg-indigo-600', hover: 'hover:bg-indigo-700', text: 'text-white', icon: '🤖' }
+        };
+
+        // Initialize
+        this.init();
+    }
+
+    async init() {
+        // Wait for i18n to initialize
+        await window.i18n.init();
+
+        // Add language switcher to header
+        const languageSwitcherContainer = document.getElementById('language-switcher-container');
+        if (languageSwitcherContainer) {
+            const switcher = window.i18n.createLanguageSwitcher();
+            languageSwitcherContainer.appendChild(switcher);
+        }
+
+        // Listen for language changes
+        window.i18n.onLanguageChange((lang) => {
+            this.onLanguageChanged(lang);
+        });
+
+        // Event listeners
+        this.sendBtn.addEventListener('click', () => this.sendMessage());
+        this.clearBtn.addEventListener('click', () => this.clearChat());
+        this.showFunctionsBtn.addEventListener('click', () => this.showFunctionsModal());
+        this.closeModalBtn.addEventListener('click', () => this.hideFunctionsModal());
+        this.eviDisconnectBtn.addEventListener('click', () => this.disconnectEVI());
+        this.functionsModal.addEventListener('click', (e) => {
+            if (e.target === this.functionsModal) this.hideFunctionsModal();
+        });
+
+        // Keyboard shortcuts
+        this.userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.sendMessage();
+            }
+        });
+
+        // Load provider info
+        this.loadProviders();
+    }
+
+    onLanguageChanged(lang) {
+        // Update token info if it shows "Ready"
+        if (this.totalTokens === 0) {
+            this.tokenInfo.textContent = window.i18n.t('infoBar.ready');
+        }
+
+        // Re-render provider buttons to update text
+        if (this.providers.length > 0) {
+            this.renderProviderButtons();
+        }
+    }
+
+    async loadProviders() {
+        try {
+            const response = await fetch('api/providers.php');
+            const data = await response.json();
+
+            if (data.success) {
+                this.providers = data.providers;
+                this.currentProvider = data.current_provider;
+                this.functions = data.functions;
+                this.functionCount.textContent = data.function_count;
+
+                // Update UI
+                this.renderProviderButtons();
+                this.updateProviderDisplay();
+            }
+        } catch (error) {
+            console.error('Failed to load providers:', error);
+            this.providerName.textContent = window.i18n.t('header.loading');
+            this.providerButtons.innerHTML = `<span class="text-red-500 text-sm">${window.i18n.t('providerBar.failedToLoad')}</span>`;
+        }
+    }
+
+    renderProviderButtons() {
+        this.providerButtons.innerHTML = '';
+
+        // Render backend providers
+        this.providers.forEach(provider => {
+            const btn = document.createElement('button');
+            const style = this.providerStyles[provider.name] || this.providerStyles.default;
+            const isActive = provider.name === this.currentProvider;
+            const isAvailable = provider.available;
+
+            btn.className = `provider-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${
+                isActive
+                    ? `${style.bg} ${style.text} ring-2 ring-offset-2 ring-blue-400`
+                    : isAvailable
+                        ? `bg-white border border-gray-300 text-gray-700 hover:bg-gray-50`
+                        : `bg-gray-100 text-gray-400 cursor-not-allowed`
+            }`;
+            btn.disabled = !isAvailable;
+            btn.dataset.provider = provider.name;
+
+            btn.innerHTML = `
+                <span>${style.icon}</span>
+                <span>${provider.display_name}</span>
+                ${isActive ? `<span class="text-xs">(${window.i18n.t('provider.active')})</span>` : ''}
+                ${!isAvailable ? `<span class="text-xs">(${window.i18n.t('provider.unavailable')})</span>` : ''}
+            `;
+
+            if (isAvailable) {
+                btn.addEventListener('click', () => this.switchProvider(provider.name));
+            }
+
+            this.providerButtons.appendChild(btn);
+        });
+
+        // Add EVI button (client-side only)
+        this.addEVIButton();
+    }
+
+    addEVIButton() {
+        const btn = document.createElement('button');
+        const style = this.providerStyles.evi;
+        const isActive = this.currentProvider === 'evi';
+
+        btn.className = `provider-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${
+            isActive
+                ? `${style.bg} ${style.text} ring-2 ring-offset-2 ring-orange-400`
+                : `bg-white border border-gray-300 text-gray-700 hover:bg-gray-50`
+        }`;
+        btn.dataset.provider = 'evi';
+
+        btn.innerHTML = `
+            <span>${style.icon}</span>
+            <span>Hume EVI</span>
+            ${isActive ? '<span class="text-xs">(Active)</span>' : ''}
+            <span class="text-xs text-gray-500">(Voice)</span>
+        `;
+
+        btn.addEventListener('click', () => this.switchProvider('evi'));
+        this.providerButtons.appendChild(btn);
+    }
+
+    async switchProvider(providerName) {
+        if (providerName === this.currentProvider || this.isLoading) return;
+
+        try {
+            // Handle EVI (client-side only, no backend call)
+            if (providerName === 'evi') {
+                this.currentProvider = 'evi';
+                this.renderProviderButtons();
+                this.updateProviderDisplay();
+
+                // Auto-connect to EVI
+                await this.connectToEVI();
+                return;
+            }
+
+            // Disconnect EVI if switching away from it
+            if (this.currentProvider === 'evi') {
+                await this.disconnectEVI();
+            }
+
+            // Show switching feedback
+            this.showProgress(`${window.i18n.t('progress.switchingTo')} ${providerName}...`);
+
+            const response = await fetch('api/providers.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: providerName })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                this.currentProvider = providerName;
+                this.renderProviderButtons();
+                this.updateProviderDisplay();
+
+                // If merge conversations is unchecked, clear history and UI
+                if (!this.mergeConversationsCheckbox.checked) {
+                    this.clearChat();
+                }
+            } else {
+                throw new Error(data.error || window.i18n.t('messages.failedToSwitch'));
+            }
+        } catch (error) {
+            console.error('Failed to switch provider:', error);
+            this.addSystemMessage(`${window.i18n.t('messages.failedToSwitch')}: ${error.message}`, 'error');
+        } finally {
+            this.hideProgress();
+        }
+    }
+
+    getProviderDisplayName(name) {
+        const provider = this.providers.find(p => p.name === name);
+        return provider ? provider.display_name : name;
+    }
+
+    updateProviderDisplay() {
+        const provider = this.providers.find(p => p.name === this.currentProvider);
+        if (provider) {
+            this.providerName.textContent = `${provider.display_name} (${provider.model})`;
+        }
+    }
+
+    addSystemMessage(text, type = 'info') {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'flex justify-center';
+
+        const bgColor = type === 'error' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600';
+        const bubble = document.createElement('div');
+        bubble.className = `${bgColor} px-4 py-2 rounded-full text-sm`;
+        bubble.textContent = text;
+
+        wrapper.appendChild(bubble);
+        this.messagesContainer.appendChild(wrapper);
+        this.scrollToBottom();
+    }
+
+    async sendMessage() {
+        const message = this.userInput.value.trim();
+        if (!message || this.isLoading) return;
+
+        this.isLoading = true;
+        this.sendBtn.disabled = true;
+        this.userInput.value = '';
+
+        // Add user message to UI
+        this.addMessage('user', message);
+
+        // Store message to add to history after success
+        const userMessage = { role: 'user', content: message };
+
+        // Show progress
+        this.showProgress(`${window.i18n.t('progress.connectingTo')} ${this.getProviderDisplayName(this.currentProvider)}...`);
+
+        // Create assistant message placeholder
+        const assistantMsgId = this.addMessage('assistant', '', true);
+
+        try {
+            // Send request with streaming and selected provider
+            const requestBody = {
+                message: message,
+                conversation_history: this.conversationHistory.slice(-10),
+                streaming: true,
+                user_id: 'demo-user',
+                provider: this.currentProvider  // Send selected provider
+            };
+
+            const response = await fetch('api/chat.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalResponse = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Process complete events (separated by double newline)
+                while (true) {
+                    const doubleNewline = buffer.indexOf('\n\n');
+                    if (doubleNewline === -1) break;
+
+                    const eventBlock = buffer.substring(0, doubleNewline);
+                    buffer = buffer.substring(doubleNewline + 2);
+
+                    if (!eventBlock.trim()) continue;
+
+                    // Parse event block
+                    const lines = eventBlock.split('\n');
+                    let event = null;
+                    let data = '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            event = line.substring(6).trim();
+                        } else if (line.startsWith('data:')) {
+                            data += line.substring(5).trim();
+                        }
+                    }
+
+                    if (event && data) {
+                        this.handleSSEEvent(event, data, assistantMsgId);
+
+                        if (event === 'response') {
+                            try {
+                                finalResponse = JSON.parse(data);
+                                console.log('✅ Got text response');
+                            } catch (e) {
+                                console.error('Parse error:', e, 'Data length:', data.length);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update conversation history with both user and assistant messages
+            if (finalResponse && finalResponse.text) {
+                this.conversationHistory.push(userMessage);
+                this.conversationHistory.push({ role: 'assistant', content: finalResponse.text });
+
+                // Update token info
+                if (finalResponse.usage) {
+                    this.totalTokens += finalResponse.usage.total_tokens || 0;
+                    this.tokenInfo.textContent = `${window.i18n.t('infoBar.tokensUsed')}: ${this.totalTokens.toLocaleString()}`;
+                }
+            }
+
+        } catch (error) {
+            console.error('Chat error:', error);
+            this.updateMessage(assistantMsgId, `${window.i18n.t('messages.error')}: ${error.message}`);
+        } finally {
+            this.isLoading = false;
+            this.sendBtn.disabled = false;
+            this.hideProgress();
+            this.scrollToBottom();
+        }
+    }
+
+    handleSSEEvent(event, data, messageId) {
+        switch (event) {
+            case 'progress':
+                this.showProgress(data);
+                break;
+
+            case 'response':
+                try {
+                    const response = JSON.parse(data);
+                    if (response.text) {
+                        this.updateMessage(messageId, response.text);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse response:', e);
+                }
+                break;
+
+            case 'error':
+                try {
+                    const error = JSON.parse(data);
+                    this.updateMessage(messageId, `${window.i18n.t('messages.error')}: ${error.message}`);
+                } catch (e) {
+                    this.updateMessage(messageId, `${window.i18n.t('messages.error')}: ${data}`);
+                }
+                break;
+
+            case 'complete':
+                this.hideProgress();
+                break;
+        }
+    }
+
+    addMessage(type, content, isPlaceholder = false) {
+        const id = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const wrapper = document.createElement('div');
+        wrapper.id = id;
+        wrapper.className = `flex ${type === 'user' ? 'justify-end' : 'justify-start'}`;
+
+        const bubble = document.createElement('div');
+        bubble.className = type === 'user'
+            ? 'max-w-[80%] bg-blue-600 text-white px-4 py-3 rounded-2xl rounded-br-md'
+            : 'max-w-[80%] bg-white border border-gray-200 text-gray-800 px-4 py-3 rounded-2xl rounded-bl-md shadow-sm';
+
+        if (isPlaceholder) {
+            bubble.innerHTML = `
+                <div class="typing-indicator">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            `;
+        } else if (type === 'user') {
+            bubble.textContent = content;
+        } else {
+            bubble.innerHTML = `<div class="markdown-content">${this.renderMarkdown(content)}</div>`;
+        }
+
+        wrapper.appendChild(bubble);
+        this.messagesContainer.appendChild(wrapper);
+        this.scrollToBottom();
+
+        return id;
+    }
+
+    updateMessage(id, content) {
+        const wrapper = document.getElementById(id);
+        if (!wrapper) return;
+
+        const bubble = wrapper.querySelector('div');
+        bubble.innerHTML = `<div class="markdown-content">${this.renderMarkdown(content)}</div>`;
+
+        // Highlight code blocks
+        wrapper.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+        });
+    }
+
+    renderMarkdown(text) {
+        if (!text) return '';
+
+        // Configure marked
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false
+        });
+
+        return marked.parse(text);
+    }
+
+    showProgress(text) {
+        this.progressBar.classList.remove('hidden');
+        this.progressText.textContent = text;
+    }
+
+    hideProgress() {
+        this.progressBar.classList.add('hidden');
+    }
+
+    scrollToBottom() {
+        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    }
+
+    clearChat() {
+        this.messagesContainer.innerHTML = `
+            <div class="flex justify-center">
+                <div class="bg-gray-100 text-gray-600 px-4 py-2 rounded-full text-sm" data-i18n="welcome.message">
+                    ${window.i18n.t('welcome.message')}
+                </div>
+            </div>
+        `;
+        this.conversationHistory = [];
+        this.totalTokens = 0;
+        this.tokenInfo.textContent = window.i18n.t('infoBar.ready');
+    }
+
+    showFunctionsModal() {
+        this.functionsList.innerHTML = this.functions.map(fn => `
+            <div class="py-2 border-b last:border-0">
+                <code class="text-blue-600 font-medium">${fn}</code>
+            </div>
+        `).join('');
+        this.functionsModal.classList.remove('hidden');
+    }
+
+    hideFunctionsModal() {
+        this.functionsModal.classList.add('hidden');
+    }
+
+    // ============================================
+    // EVI (Empathic Voice Interface) Methods
+    // Pure WebSocket - No SDK Required
+    // ============================================
+
+    async connectToEVI() {
+        try {
+            console.log('🎙️ Connecting to Hume EVI...');
+            this.updateEVIStatus('🔄', 'Connecting...', 'Initializing voice connection');
+            this.eviStatus.classList.remove('hidden');
+
+            // Hide input area in EVI mode
+            if (this.inputArea) {
+                this.inputArea.style.display = 'none';
+            }
+
+            // Get API key from config
+            const apiKey = window.APP_CONFIG?.hume?.apiKey;
+            if (!apiKey) {
+                throw new Error('Hume API key not configured in config.js');
+            }
+
+            // Build WebSocket URL with query parameters
+            let wsUrl = `wss://api.hume.ai/v0/evi/chat?api_key=${encodeURIComponent(apiKey)}`;
+
+            // Add optional config_id if provided
+            const configId = window.APP_CONFIG.hume.configId;
+            if (configId) {
+                wsUrl += `&config_id=${encodeURIComponent(configId)}`;
+            }
+
+            // Create WebSocket connection
+            this.eviSocket = new WebSocket(wsUrl);
+
+            // Set up event handlers
+            this.eviSocket.onopen = async () => {
+                console.log('✅ EVI WebSocket connected');
+                this.eviConnected = true;
+
+                // Start capturing audio
+                await this.startEVIAudioCapture();
+
+                this.updateEVIStatus('🟢', 'Listening...', 'Speak now to start conversation');
+            };
+
+            this.eviSocket.onmessage = (event) => {
+                this.handleEVIMessage(JSON.parse(event.data));
+            };
+
+            this.eviSocket.onerror = (error) => {
+                console.error('❌ EVI WebSocket error:', error);
+                this.updateEVIStatus('⚠️', 'Error', 'Connection error occurred');
+            };
+
+            this.eviSocket.onclose = () => {
+                console.log('EVI connection closed');
+                this.eviConnected = false;
+                this.updateEVIStatus('⭕', 'Disconnected', 'Connection closed');
+            };
+
+        } catch (error) {
+            console.error('❌ EVI connection failed:', error);
+            this.updateEVIStatus('❌', 'Connection Failed', error.message);
+            setTimeout(() => {
+                this.addSystemMessage(`EVI connection failed: ${error.message}`, 'error');
+                // Switch back to previous provider
+                if (this.providers.length > 0) {
+                    this.switchProvider(this.providers[0].name);
+                }
+            }, 2000);
+        }
+    }
+
+    handleEVIMessage(message) {
+        console.log('📨 EVI message:', message);
+
+        switch (message.type) {
+            case 'chat_metadata':
+                // Initial connection metadata
+                console.log('Chat metadata:', message);
+                break;
+
+            case 'user_message':
+                // User spoke something
+                console.log('👤 User said:', message.message?.content);
+                this.updateEVIStatus('🔵', 'Processing...', 'Understanding your message');
+                break;
+
+            case 'assistant_message':
+                // EVI's text response
+                console.log('🤖 EVI said:', message.message?.content);
+                break;
+
+            case 'audio_output':
+                // EVI's voice response
+                this.playEVIAudio(message.data);
+                this.updateEVIStatus('🔊', 'Speaking...', 'EVI is responding');
+                break;
+
+            case 'assistant_end':
+                // EVI finished speaking
+                console.log('✅ Assistant response complete');
+                this.updateEVIStatus('🟢', 'Listening...', 'Your turn to speak');
+                break;
+
+            case 'user_interruption':
+                // User interrupted EVI
+                console.log('✋ User interrupted');
+                if (this.eviAudioElement) {
+                    this.eviAudioElement.pause();
+                    this.eviAudioElement.currentTime = 0;
+                }
+                this.updateEVIStatus('🟢', 'Listening...', 'Continue speaking');
+                break;
+
+            case 'error':
+                console.error('EVI error:', message);
+                this.updateEVIStatus('⚠️', 'Error', message.message || 'An error occurred');
+                break;
+
+            default:
+                console.log('Unknown message type:', message.type);
+        }
+    }
+
+    async startEVIAudioCapture() {
+        try {
+            // Request microphone access
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Create media recorder
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm')
+                ? 'audio/webm'
+                : 'audio/ogg';
+
+            const mediaRecorder = new MediaRecorder(stream, {
+                mimeType: mimeType
+            });
+
+            mediaRecorder.ondataavailable = async (event) => {
+                if (event.data.size > 0 && this.eviSocket && this.eviConnected) {
+                    // Convert blob to base64
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const base64Audio = reader.result.split(',')[1];
+
+                        // Send audio_input message to EVI
+                        const message = {
+                            type: 'audio_input',
+                            data: base64Audio
+                        };
+
+                        this.eviSocket.send(JSON.stringify(message));
+                    };
+                    reader.readAsDataURL(event.data);
+                }
+            };
+
+            // Record in chunks (send audio every 100ms)
+            mediaRecorder.start(100);
+
+            // Store for cleanup
+            this.eviMediaRecorder = mediaRecorder;
+            this.eviMediaStream = stream;
+
+            console.log('🎤 Microphone active');
+
+        } catch (error) {
+            console.error('Failed to access microphone:', error);
+            throw new Error('Microphone access denied. Please allow microphone access.');
+        }
+    }
+
+    playEVIAudio(base64Audio) {
+        try {
+            // Decode base64 to binary
+            const binaryString = atob(base64Audio);
+            const bytes = new Uint8Array(binaryString.length);
+
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Create blob from binary data
+            const blob = new Blob([bytes], { type: 'audio/mpeg' });
+            const audioUrl = URL.createObjectURL(blob);
+
+            // Create audio element and play
+            if (!this.eviAudioElement) {
+                this.eviAudioElement = new Audio();
+            }
+
+            this.eviAudioElement.src = audioUrl;
+
+            this.eviAudioElement.onended = () => {
+                URL.revokeObjectURL(audioUrl);
+                this.updateEVIStatus('🟢', 'Listening...', 'Your turn to speak');
+            };
+
+            this.eviAudioElement.onerror = (e) => {
+                console.error('Error playing EVI audio:', e);
+                URL.revokeObjectURL(audioUrl);
+            };
+
+            this.eviAudioElement.play().catch(err => {
+                console.error('Failed to play audio:', err);
+            });
+
+        } catch (error) {
+            console.error('Error decoding EVI audio:', error);
+        }
+    }
+
+    updateEVIStatus(icon, state, hint) {
+        this.eviIcon.textContent = icon;
+        this.eviStateText.textContent = state;
+        this.eviHintText.textContent = hint;
+    }
+
+    async disconnectEVI() {
+        console.log('🔌 Disconnecting EVI...');
+
+        try {
+            // Stop media recorder
+            if (this.eviMediaRecorder && this.eviMediaRecorder.state !== 'inactive') {
+                this.eviMediaRecorder.stop();
+                this.eviMediaRecorder = null;
+            }
+
+            // Stop media stream
+            if (this.eviMediaStream) {
+                this.eviMediaStream.getTracks().forEach(track => track.stop());
+                this.eviMediaStream = null;
+            }
+
+            // Stop audio playback
+            if (this.eviAudioElement) {
+                this.eviAudioElement.pause();
+                this.eviAudioElement = null;
+            }
+
+            // Close WebSocket
+            if (this.eviSocket && this.eviSocket.readyState === WebSocket.OPEN) {
+                this.eviSocket.close();
+                this.eviSocket = null;
+            }
+
+            this.eviConnected = false;
+            this.eviStatus.classList.add('hidden');
+
+            // Show input area again
+            if (this.inputArea) {
+                this.inputArea.style.display = '';
+            }
+
+            // Switch back to Claude (first provider) - bypass switchProvider to avoid recursion
+            if (this.providers.length > 0) {
+                const claudeProvider = this.providers[0]; // Claude is first
+
+                try {
+                    this.showProgress(`Switching to ${claudeProvider.display_name}...`);
+
+                    const response = await fetch('api/providers.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ provider: claudeProvider.name })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.currentProvider = claudeProvider.name;
+                        this.renderProviderButtons();
+                        this.updateProviderDisplay();
+                    }
+                } catch (error) {
+                    console.error('Failed to switch back to Claude:', error);
+                } finally {
+                    this.hideProgress();
+                }
+            }
+
+            console.log('✅ EVI disconnected');
+        } catch (error) {
+            console.error('Error disconnecting EVI:', error);
+        }
+    }
+}
+
+// Initialize app
+document.addEventListener('DOMContentLoaded', () => {
+    window.chatApp = new ChatApp();
+});

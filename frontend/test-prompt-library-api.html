@@ -1,0 +1,275 @@
+d the in<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt Library API Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        pre {
+            background: #f3f4f6;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Prompt Library API Test</h1>
+
+    <div class="test-section">
+        <h2>Authentication</h2>
+        <p>Token: <span id="token-status">Not loaded</span></p>
+        <button onclick="checkAuth()">Check Auth</button>
+    </div>
+
+    <div class="test-section">
+        <h2>1. Get Tree Structure</h2>
+        <button onclick="getTree()">GET /api/prompt-library.php</button>
+        <pre id="tree-result"></pre>
+    </div>
+
+    <div class="test-section">
+        <h2>2. Create Folder</h2>
+        <input type="text" id="folder-name" placeholder="Folder name" value="Test Folder">
+        <button onclick="createFolder()">POST Create Folder</button>
+        <pre id="create-folder-result"></pre>
+    </div>
+
+    <div class="test-section">
+        <h2>3. Create Prompt</h2>
+        <input type="text" id="prompt-name" placeholder="Prompt name" value="Test Prompt">
+        <input type="number" id="prompt-parent" placeholder="Parent ID (optional)">
+        <textarea id="prompt-content" placeholder="Prompt content" rows="3">Write a story about...</textarea>
+        <br>
+        <button onclick="createPrompt()">POST Create Prompt</button>
+        <pre id="create-prompt-result"></pre>
+    </div>
+
+    <div class="test-section">
+        <h2>4. Update Item</h2>
+        <input type="number" id="update-id" placeholder="Item ID">
+        <input type="text" id="update-name" placeholder="New name">
+        <textarea id="update-content" placeholder="New content (for prompts)" rows="3"></textarea>
+        <br>
+        <button onclick="updateItem()">PUT Update Item</button>
+        <pre id="update-result"></pre>
+    </div>
+
+    <div class="test-section">
+        <h2>5. Delete Item</h2>
+        <input type="number" id="delete-id" placeholder="Item ID">
+        <button onclick="deleteItem()">DELETE Item</button>
+        <pre id="delete-result"></pre>
+    </div>
+
+    <script>
+        function getToken() {
+            return localStorage.getItem('token');
+        }
+
+        function checkAuth() {
+            const token = getToken();
+            if (token) {
+                document.getElementById('token-status').innerHTML = '<span class="success">✓ Token found</span>';
+            } else {
+                document.getElementById('token-status').innerHTML = '<span class="error">✗ No token found - Please log in first</span>';
+            }
+        }
+
+        async function getTree() {
+            const token = getToken();
+            if (!token) {
+                alert('Please log in first');
+                return;
+            }
+
+            try {
+                const response = await fetch('api/prompt-library.php', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                const data = await response.json();
+                document.getElementById('tree-result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('tree-result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function createFolder() {
+            const token = getToken();
+            if (!token) {
+                alert('Please log in first');
+                return;
+            }
+
+            const name = document.getElementById('folder-name').value;
+            if (!name) {
+                alert('Please enter folder name');
+                return;
+            }
+
+            try {
+                const response = await fetch('api/prompt-library.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        type: 'folder',
+                        name: name
+                    })
+                });
+                const data = await response.json();
+                document.getElementById('create-folder-result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('create-folder-result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function createPrompt() {
+            const token = getToken();
+            if (!token) {
+                alert('Please log in first');
+                return;
+            }
+
+            const name = document.getElementById('prompt-name').value;
+            const content = document.getElementById('prompt-content').value;
+            const parentId = document.getElementById('prompt-parent').value;
+
+            if (!name) {
+                alert('Please enter prompt name');
+                return;
+            }
+
+            const body = {
+                type: 'prompt',
+                name: name,
+                content: content
+            };
+
+            if (parentId) {
+                body.parent_id = parseInt(parentId);
+            }
+
+            try {
+                const response = await fetch('api/prompt-library.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+                document.getElementById('create-prompt-result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('create-prompt-result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function updateItem() {
+            const token = getToken();
+            if (!token) {
+                alert('Please log in first');
+                return;
+            }
+
+            const id = document.getElementById('update-id').value;
+            const name = document.getElementById('update-name').value;
+            const content = document.getElementById('update-content').value;
+
+            if (!id) {
+                alert('Please enter item ID');
+                return;
+            }
+
+            const body = {};
+            if (name) body.name = name;
+            if (content) body.content = content;
+
+            try {
+                const response = await fetch(`api/prompt-library.php/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+                document.getElementById('update-result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('update-result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function deleteItem() {
+            const token = getToken();
+            if (!token) {
+                alert('Please log in first');
+                return;
+            }
+
+            const id = document.getElementById('delete-id').value;
+
+            if (!id) {
+                alert('Please enter item ID');
+                return;
+            }
+
+            if (!confirm('Are you sure you want to delete this item?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`api/prompt-library.php/${id}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                const data = await response.json();
+                document.getElementById('delete-result').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('delete-result').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        // Check auth on load
+        checkAuth();
+    </script>
+</body>
+</html>

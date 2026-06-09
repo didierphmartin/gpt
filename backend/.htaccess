@@ -1,0 +1,38 @@
+RewriteEngine On
+
+# Debug: Log rewrite activity
+# RewriteLog "/Applications/XAMPP/xamppfiles/logs/rewrite.log"
+# RewriteLogLevel 3
+
+# Pass Authorization header to PHP (required for JWT auth via curl/CLI)
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+
+# If the file or directory exists, serve it directly
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Route everything through index.php
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# Disable directory browsing
+Options -Indexes
+
+# PHP settings.
+# upload_max_filesize / post_max_size sized to match the per-file cap that
+# ChatAttachmentController enforces (50MB) — chat attachments (PDFs, Office
+# docs, images) routinely exceed the old 10M default.
+<IfModule mod_php.c>
+    php_value upload_max_filesize 60M
+    php_value post_max_size 60M
+    php_value max_execution_time 600
+    php_value max_input_time 600
+</IfModule>

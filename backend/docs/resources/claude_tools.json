@@ -1,0 +1,356 @@
+[
+  {
+    "name": "get_portfolios",
+    "description": "Get all portfolios for the current user",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "get_portfolio_assets_with_discovery",
+    "description": "PRIMARY FUNCTION FOR PORTFOLIO ANALYSIS - Get comprehensive portfolio holdings with current prices, values, and performance metrics. Automatically discovers the default portfolio if no portfolio_id is specified.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "portfolio_id": {
+          "type": "integer",
+          "description": "Optional specific portfolio ID. If not provided, uses default portfolio."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_portfolio_diversification",
+    "description": "Get portfolio diversification breakdown by asset type, sector, and currency",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "portfolio_id": {
+          "type": "integer",
+          "description": "Portfolio ID to analyze"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_all_transactions",
+    "description": "Get all transactions for the user with pagination support",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "description": "Page number (default: 1)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Items per page (default: 50, max: 100)"
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort field: date, amount, type (default: date)"
+        },
+        "order": {
+          "type": "string",
+          "description": "Sort order: asc or desc (default: desc)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_user_watchlist",
+    "description": "Get the user's watchlist of tracked assets (NOT owned, just tracked for monitoring)",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "get_watchlist_with_market_data",
+    "description": "Get watchlist with current market prices, 24h changes, and performance metrics including price alert status",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "add_to_watchlist",
+    "description": "Add an asset to the user's watchlist for tracking",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Asset symbol (e.g., AAPL, BTC)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Asset name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Asset type: stock, crypto, etf, bond, commodity"
+        },
+        "exchange": {
+          "type": "string",
+          "description": "Exchange where the asset is traded"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency (default: USD)"
+        }
+      },
+      "required": ["symbol", "name", "type"]
+    }
+  },
+  {
+    "name": "remove_from_watchlist",
+    "description": "Remove an asset from the user's watchlist",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Asset symbol to remove"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "search_assets",
+    "description": "Search for assets (stocks, crypto, ETFs) by name or symbol",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query (name or symbol)"
+        }
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "get_trending_assets",
+    "description": "Get trending/popular assets based on market activity",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Number of results (default: 10)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_top_gainers",
+    "description": "Get top gaining assets by percentage change",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Number of results (default: 10)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_top_losers",
+    "description": "Get top losing assets by percentage change",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Number of results (default: 10)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "get_analyst_ratings",
+    "description": "Get analyst ratings and recommendations for a stock from major financial institutions",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Stock symbol (e.g., AAPL, MSFT)"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_financial_ratios",
+    "description": "Get financial ratios for a company including P/E, P/B, ROE, ROA, debt ratios, and more",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Stock symbol"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_price_targets",
+    "description": "Get analyst price targets for a stock including consensus, high, low, and individual analyst targets",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Stock symbol"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_company_profile",
+    "description": "Get comprehensive company profile including business description, sector, industry, market cap, and key metrics",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Stock symbol"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_asset_sentiment",
+    "description": "Get market sentiment for an asset based on news and social media analysis",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Asset symbol"
+        }
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "llm_get_crypto_news",
+    "description": "Fetch cryptocurrency news from multiple RSS sources with optional topic filtering. Returns articles from 14+ crypto news sites including CoinDesk, CoinTelegraph, Decrypt, TheBlock, Bitcoin Magazine, and more. Server-side topic filtering reduces token usage by 80-90%.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Optional: specific source name (coindesk, cointelegraph, decrypt, theblock, bitcoinmagazine, cryptonews, newsbtc, cryptopotato, readwrite, coingape, bankless, beincrypto, blockworks, cryptopolitan). If omitted, returns news from all sources."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Optional: Filter articles by topic/keyword (case-insensitive). Searches in titles and descriptions. Supports multiple keywords separated by commas (e.g., \"bitcoin,BTC\" or \"ethereum,ETH\"). Server-side filtering dramatically reduces token usage."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of articles per source (default: 20)"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "llm_list_crypto_sources",
+    "description": "List all available cryptocurrency news sources with their configuration, priority, and status. Useful for discovering which sources are available.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "llm_get_news_by_source",
+    "description": "Get news from a specific cryptocurrency news source by its identifier, with optional topic filtering.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "sourceName": {
+          "type": "string",
+          "description": "Source identifier (coindesk, cointelegraph, decrypt, etc.)"
+        },
+        "topic": {
+          "type": "string",
+          "description": "Optional: Filter by topic (e.g., \"bitcoin,BTC\")"
+        }
+      },
+      "required": ["sourceName"]
+    }
+  },
+  {
+    "name": "llm_get_priority_crypto_news",
+    "description": "Get news from only the highest-priority cryptocurrency news sources (CoinDesk, CoinTelegraph, Decrypt, TheBlock) with optional topic filtering. Use this for the most reliable and breaking news.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "Optional: Filter by topic (e.g., \"bitcoin,BTC\")"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "serpapi_search",
+    "description": "Search the web using Google via SerpAPI. Use for current events, company info, product research, software tools, and any information not available through other functions.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query"
+        },
+        "count": {
+          "type": "integer",
+          "description": "Number of results (default: 10, max: 20)"
+        },
+        "location": {
+          "type": "string",
+          "description": "Search location (default: United States)"
+        }
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "brave_search",
+    "description": "Search the web using Brave Search API. Fallback search option when SerpAPI is unavailable.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query"
+        },
+        "count": {
+          "type": "integer",
+          "description": "Number of results (default: 10)"
+        }
+      },
+      "required": ["query"]
+    }
+  }
+]

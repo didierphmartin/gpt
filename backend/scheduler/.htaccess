@@ -1,0 +1,21 @@
+# Scheduler Directory Protection
+# Allow access only with valid token parameter or from CLI
+
+# Deny direct access without token
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Allow if token parameter is present (validated by PHP script)
+    RewriteCond %{QUERY_STRING} !token=
+    RewriteCond %{HTTP:X-Scheduler-Token} ^$
+    RewriteRule ^run-scheduled-workflows\.php$ - [F,L]
+</IfModule>
+
+# Prevent directory listing
+Options -Indexes
+
+# Protect log files if any
+<FilesMatch "\.(log|txt)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
