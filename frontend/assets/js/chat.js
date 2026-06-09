@@ -5469,10 +5469,17 @@ class ChatApp {
             this.addMessage('assistant', `⚠️ Could not open the workflow engine. The workflow is saved — open it in the editor to run.`);
             return;
         }
+        // The run prompt must be a STRING — the backend's initTemplateProcessor
+        // rejects arrays. Use the workflow's own start-node prompt (the chat
+        // message can be a structured array and isn't the right run input anyway).
+        const startNode = (dsl.definition.nodes || []).find(n => n.node_type === 'start');
+        const runPrompt = (startNode && typeof startNode.config?.prompt === 'string' && startNode.config.prompt)
+            ? startNode.config.prompt
+            : (typeof userPrompt === 'string' ? userPrompt : '');
         try {
             this.showProgress('▶ Running workflow…');
             ed.lastProducedArtifact = null; // avoid showing a stale artifact
-            const run = await ed.runHeadless(Number(id), userPrompt, {
+            const run = await ed.runHeadless(Number(id), runPrompt, {
                 onProgress: (ev) => {
                     const name = ev.node?.agent_name || ev.agent_name || ev.node_id || '';
                     if (ev.type === 'node_start') this.showProgress(`▶ ${name}…`);
