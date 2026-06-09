@@ -1,6 +1,56 @@
-composer.phar
-/vendor/
+# ───────────────── OS / editor ─────────────────
+.DS_Store
+**/.DS_Store
+*.swp
+Thumbs.db
 
-# Commit your application's lock file https://getcomposer.org/doc/01-basic-usage.md#commit-your-composer-lock-file-to-version-control
-# You may choose to ignore a library lock file http://getcomposer.org/doc/02-libraries.md#lock-file
-# composer.lock
+# Local Claude Code settings
+.claude/settings.local.json
+
+# ───────────────── Secrets / live config ─────────────────
+# Secrets live ONLY in backend/.env (gitignored). The ai_config.php files are now
+# secret-free (they read $_ENV) and ARE committed. Copy backend/.env.example → backend/.env.
+backend/.env
+
+# Frontend config (Firebase web config + provider keys)
+frontend/assets/js/config.js
+frontend/voice/config.json
+
+# Catch-alls for any other secret/config the project may add
+**/.env
+**/.env.*
+!**/.env.example
+**/*.local.php
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+**/serviceAccount*.json
+
+# ───────────────── Runtime / user data ─────────────────
+backend/storage/
+
+# ───────────────── Build artifacts ─────────────────
+frontend/voice/assets/
+**/dist/
+**/.next/
+
+# ───────────────── Dependencies ─────────────────
+**/vendor/
+**/node_modules/
+**/.venv/
+**/venv/
+**/__pycache__/
+*.pyc
+
+# Nested git repo (vendored library)
+frontend/driver.js/.git/
+
+# ───────────────── Logs / temp ─────────────────
+*.log
+*.tmp
+tmp/
+
+# Vendored library with its own git repo (install separately)
+frontend/driver.js/

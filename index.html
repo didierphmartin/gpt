@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPT Chatbot</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 GPT Chatbot</h1>
+        <div class="spinner"></div>
+        <p id="status-text">Checking authentication...</p>
+    </div>
+    <script>
+        /**
+         * Check if JWT token is expired by decoding it client-side
+         */
+        function isTokenExpired(token) {
+            try {
+                // Decode JWT token (it's base64 encoded)
+                const payload = JSON.parse(atob(token.split('.')[1]));
+
+                // Check expiration time (exp is in seconds, Date.now() is in milliseconds)
+                if (payload.exp) {
+                    const now = Math.floor(Date.now() / 1000);
+                    return payload.exp < now;
+                }
+
+                // If no expiration in token, assume it's valid
+                return false;
+            } catch (error) {
+                // If we can't decode the token, assume it's invalid/expired
+                console.error('Error decoding token:', error);
+                return true;
+            }
+        }
+
+        // Check authentication before redirecting
+        const token = localStorage.getItem('token');
+        const user = localStorage.getItem('user');
+
+        if (token && user && !isTokenExpired(token)) {
+            // Token exists and is not expired, redirect to app
+            document.getElementById('status-text').textContent = 'Authentication verified, loading app...';
+            window.location.href = 'frontend/index.html';
+        } else {
+            // No token or expired token, redirect to login
+            if (token) {
+                // Clear expired token
+                localStorage.removeItem('token');
+                localStorage.removeItem('refresh_token');
+                localStorage.removeItem('user');
+                console.log('Token expired, cleared from storage');
+            }
+            document.getElementById('status-text').textContent = 'Redirecting to login...';
+            window.location.href = 'frontend/login.html';
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,172 @@
+All 6 LLM providers you support offer some form of constrained decoding for JSON structured outputs. Here's the detailed    
+  breakdown:                                                                                                                  
+                                                                                                                              
+  ---                                                                                                                         
+  1. OpenAI ✅ Full Support                                                                                                   
+                                                                                                                              
+  Feature: Structured Outputs (strict schema adherence) + JSON Mode                                                           
+                                                                                                                              
+  How it works:                                                                                                               
+  - Uses response_format parameter with type: "json_schema" and strict: true                                                  
+  - Compiles JSON Schema into grammar that constrains token generation                                                        
+  - Guarantees 100% schema compliance                                                                                         
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "response_format": {                                                                                                      
+      "type": "json_schema",                                                                                                  
+      "json_schema": {                                                                                                        
+        "name": "my_schema",                                                                                                  
+        "strict": true,                                                                                                       
+        "schema": { /* JSON Schema */ }                                                                                       
+      }                                                                                                                       
+    }                                                                                                                         
+  }                                                                                                                           
+                                                                                                                              
+  Supported Models: gpt-4o, gpt-4o-mini (2024-08-06 and later)                                                                
+                                                                                                                              
+  Sources: https://developers.openai.com/api/docs/guides/structured-outputs,                                                  
+  https://openai.com/index/introducing-structured-outputs-in-the-api/                                                         
+                                                                                                                              
+  ---                                                                                                                         
+  2. Claude (Anthropic) ✅ Full Support                                                                                       
+                                                                                                                              
+  Feature: Structured Outputs with constrained sampling + Strict Tool Use                                                     
+                                                                                                                              
+  How it works:                                                                                                               
+  - Uses output_config.format for JSON output format                                                                          
+  - Compiles JSON Schema into grammar artifacts                                                                               
+  - Uses constrained sampling during inference - model cannot produce invalid tokens                                          
+  - Grammar caching for 24 hours improves latency on repeated schemas                                                         
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "output_config": {                                                                                                        
+      "format": {                                                                                                             
+        "type": "json_schema",                                                                                                
+        "json_schema": { /* JSON Schema */ }                                                                                  
+      }                                                                                                                       
+    }                                                                                                                         
+  }                                                                                                                           
+                                                                                                                              
+  Supported Models: Claude Opus 4.5/4.6, Claude Sonnet 4.5/4.6, Claude Haiku 4.5                                              
+                                                                                                                              
+  Sources: https://docs.claude.com/en/docs/build-with-claude/structured-outputs,                                              
+  https://tessl.io/blog/anthropic-brings-structured-outputs-to-claude-developer-platform-making-api-responses-more-reliable/  
+                                                                                                                              
+  ---                                                                                                                         
+  3. Google Gemini ✅ Full Support                                                                                            
+                                                                                                                              
+  Feature: Structured Outputs with JSON Schema                                                                                
+                                                                                                                              
+  How it works:                                                                                                               
+  - Uses response_schema parameter with full JSON Schema support                                                              
+  - Supports anyOf, $ref, and other JSON Schema keywords                                                                      
+  - Preserves property ordering from schema (Gemini 2.5+)                                                                     
+  - Works with Pydantic/Zod libraries out-of-the-box                                                                          
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "generationConfig": {                                                                                                     
+      "responseMimeType": "application/json",                                                                                 
+      "responseSchema": { /* JSON Schema */ }                                                                                 
+    }                                                                                                                         
+  }                                                                                                                           
+                                                                                                                              
+  Supported Models: All Gemini 2.5+ models, Gemini 3                                                                          
+                                                                                                                              
+  Sources: https://ai.google.dev/gemini-api/docs/structured-output,                                                           
+  https://blog.google/technology/developers/gemini-api-structured-outputs/                                                    
+                                                                                                                              
+  ---                                                                                                                         
+  4. Grok (xAI) ✅ Full Support                                                                                               
+                                                                                                                              
+  Feature: Structured Outputs with JSON Schema                                                                                
+                                                                                                                              
+  How it works:                                                                                                               
+  - Uses response_format parameter (OpenAI-compatible)                                                                        
+  - Supports json_object mode and json_schema mode                                                                            
+  - Compatible with Pydantic models via xAI SDK                                                                               
+  - Supports streaming structured responses                                                                                   
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "response_format": {                                                                                                      
+      "type": "json_schema",                                                                                                  
+      "json_schema": {                                                                                                        
+        "name": "my_schema",                                                                                                  
+        "schema": { /* JSON Schema */ }                                                                                       
+      }                                                                                                                       
+    }                                                                                                                         
+  }                                                                                                                           
+                                                                                                                              
+  Supported Models: Grok 3, Grok 4                                                                                            
+                                                                                                                              
+  Sources: https://docs.x.ai/developers/model-capabilities/text/structured-outputs,                                           
+  https://python.useinstructor.com/integrations/xai/                                                                          
+                                                                                                                              
+  ---                                                                                                                         
+  5. DeepSeek ⚠️ Partial Support (JSON Mode only)                                                                             
+                                                                                                                              
+  Feature: JSON Mode (no strict schema enforcement)                                                                           
+                                                                                                                              
+  How it works:                                                                                                               
+  - Uses response_format: { "type": "json_object" }                                                                           
+  - Requires "json" keyword in system/user prompt                                                                             
+  - Must provide example JSON format in prompt                                                                                
+  - Does NOT guarantee strict schema adherence                                                                                
+  - Reasoning models (R1) output JSON after </think> tags                                                                     
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "response_format": { "type": "json_object" },                                                                             
+    "max_tokens": 4096                                                                                                        
+  }                                                                                                                           
+                                                                                                                              
+  Limitations:                                                                                                                
+  - No native JSON Schema validation                                                                                          
+  - May omit optional fields or misinterpret types                                                                            
+  - Requires careful prompt engineering for complex schemas                                                                   
+                                                                                                                              
+  Sources: https://api-docs.deepseek.com/guides/json_mode, https://www.byteplus.com/en/topic/404926                           
+                                                                                                                              
+  ---                                                                                                                         
+  6. Kimi (Moonshot AI) ✅ Full Support                                                                                       
+                                                                                                                              
+  Feature: JSON Mode with JSON Schema support                                                                                 
+                                                                                                                              
+  How it works:                                                                                                               
+  - OpenAI-compatible API format                                                                                              
+  - Supports response_format with JSON mode                                                                                   
+  - JSON Schema support for structured outputs                                                                                
+  - 256K context window in Kimi K2.5                                                                                          
+                                                                                                                              
+  API Implementation:                                                                                                         
+  {                                                                                                                           
+    "response_format": { "type": "json_object" }                                                                              
+  }                                                                                                                           
+                                                                                                                              
+  Supported Models: Kimi K2, Kimi K2.5                                                                                        
+                                                                                                                              
+  Sources: https://platform.moonshot.ai/docs/guide/use-json-mode-feature-of-kimi-api,                                         
+  https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart                                                                
+                                                                                                                              
+  ---                                                                                                                         
+  Summary Table                                                                                                               
+  ┌──────────┬───────────────┬───────────┬─────────────────────────────┬──────────────────────┐                               
+  │ Provider │ Strict Schema │ JSON Mode │        API Parameter        │ Constrained Decoding │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ OpenAI   │ ✅ Yes        │ ✅ Yes    │ response_format.json_schema │ ✅ Grammar-based     │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ Claude   │ ✅ Yes        │ ✅ Yes    │ output_config.format        │ ✅ Grammar-based     │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ Gemini   │ ✅ Yes        │ ✅ Yes    │ responseSchema              │ ✅ Yes               │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ Grok     │ ✅ Yes        │ ✅ Yes    │ response_format.json_schema │ ✅ Yes               │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ DeepSeek │ ❌ No         │ ✅ Yes    │ response_format.json_object │ ❌ Prompt-based      │                               
+  ├──────────┼───────────────┼───────────┼─────────────────────────────┼──────────────────────┤                               
+  │ Kimi     │ ✅ Yes        │ ✅ Yes    │ response_format             │ ✅ Yes               │                               
+  └──────────┴───────────────┴───────────┴─────────────────────────────┴──────────────────────┘                               
+  Key Insight: DeepSeek is the only provider without true constrained decoding - it relies on prompt engineering rather than  
+  grammar-based token constraints. All others support strict schema enforcement at the inference level.   

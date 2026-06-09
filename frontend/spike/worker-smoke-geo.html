@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Worker smoke test — real geo-crawlers skill</title>
+<style>body{font:14px system-ui;margin:2rem;max-width:70rem}button,input{font:inherit;padding:.4rem .6rem;margin:.3rem 0}input{width:28rem}pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap;max-height:40rem;overflow:auto}b{color:#063}</style>
+<h1>Worker smoke test — runs the <b>production</b> worker against a real skill</h1>
+<p>Drives <code>../assets/js/pyodide.worker.js</code> with a real payload for
+<code>GEO/geo-crawlers</code> (script <code>scripts/crawler_check.py</code>, dep
+<code>beautifulsoup4</code>). Proves the faithful worker can mount a nested skill,
+install deps, run the script, and <b>persist</b> its output to disk — before we wire
+it into chat.js.</p>
+
+<ol>
+<li><button id="pick">Pick your <b>synergyAI</b> folder (the one containing <code>skills/</code> and <code>outputs/</code>)</button></li>
+<li>URL to audit: <input id="url" value="https://didierphmartin.com"></li>
+<li><button id="run" disabled>Run geo-crawlers through the worker</button></li>
+</ol>
+<pre id="log"></pre>
+
+<script>
+const WORKER_VERSION = 2; // bump if you edit the worker
+const logEl = document.getElementById('log');
+const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+let root = null, skillHandle = null, outputsHandle = null;
+
+async function listDir(dirHandle, label) {
+  const items = [];
+  try {
+    for await (const [name, h] of dirHandle.entries()) {
+      let info = h.kind === 'dir' ? 'dir' : '?';
+      try { if (h.kind === 'file') info = (await h.getFile()).size + 'b'; } catch (_) {}
+      items.push(`${name} (${info})`);
+    }
+  } catch (e) { return `${label}: ENUMERATION FAILED — ${e.message}`; }
+  return `${label}: ${items.length ? items.join(', ') : '(empty)'}`;
+}
+
+document.getElementById('pick').onclick = async () => {
+  try {
+    root = await window.showDirectoryPicker({ mode: 'readwrite' });
+    const p = await root.requestPermission({ mode: 'readwrite' });
+    log(`picked root "${root.name}"  permission: ${p}`);
+    const skills = await root.getDirectoryHandle('skills');
+    const geo = await skills.getDirectoryHandle('GEO');
+    skillHandle = await geo.getDirectoryHandle('geo-crawlers');
+    outputsHandle = await root.getDirectoryHandle('outputs', { create: true });
+    log(`resolved skill handle: skills/GEO/geo-crawlers ("${skillHandle.name}")`);
+    log(`resolved outputs handle: outputs ("${outputsHandle.name}")`);
+    log('child-handle permissions: skill=' + await skillHandle.queryPermission({ mode: 'readwrite' })
+        + ', outputs=' + await outputsHandle.queryPermission({ mode: 'readwrite' }));
+    log(await listDir(outputsHandle, 'outputs/ before run'));
+    document.getElementById('run').disabled = false;
+  } catch (e) { log('PICK FAILED: ' + e.message); }
+};
+
+document.getElementById('run').onclick = async () => {
+  const url = document.getElementById('url').value.trim();
+  log(`\n=== running geo-crawlers for ${url} (first run loads Pyodide + beautifulsoup4, ~15-30s) ===`);
+  const t0 = performance.now();
+  const w = new Worker('../assets/js/pyodide.worker.js?v=' + WORKER_VERSION);
+  const reply = await new Promise((resolve) => {
+    w.onmessage = (e) => resolve(e.data);
+    w.onerror = (e) => resolve({ ok: false, error: 'worker.onerror: ' + (e.message || e.filename + ':' + e.lineno) });
+    w.postMessage({
+      id: 1,
+      verb: 'runSkillScript',
+      payload: {
+        dirName: 'GEO/geo-crawlers',
+        script: 'scripts/crawler_check.py',
+        argv: [url],
+        inputFiles: null,
+        readOutputs: null,        // we enumerate the folder instead
+        dependencies: ['beautifulsoup4'],
+        prefetched: [],
+        skillHandle,
+        outputsHandle,
+      },
+    });
+  });
+  w.terminate();
+  log(`worker returned after ${Math.round(performance.now() - t0)}ms, ok=${reply.ok}`);
+  if (!reply.ok) { log('ERROR: ' + reply.error); return; }
+  const r = reply.result || {};
+  log(`exitCode: ${r.exitCode}   durationMs: ${Math.round(r.durationMs)}`);
+  log('--- stdout (first 1500 chars) ---\n' + String(r.stdout || '').slice(0, 1500));
+  log('--- stderr (first 1500 chars) ---\n' + String(r.stderr || '').slice(0, 1500));
+  // The real proof: what landed on disk. Check both /outputs and the GEO bucket.
+  log('\n' + await listDir(outputsHandle, 'outputs/ after run'));
+  try {
+    const geoOut = await outputsHandle.getDirectoryHandle('GEO');
+    log(await listDir(geoOut, 'outputs/GEO/ after run'));
+  } catch (_) { log('outputs/GEO/ : (not created — script wrote to outputs/ root)'); }
+};
+</script>

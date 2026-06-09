@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign-in helper</title>
+</head>
+<body>
+<script>
+  console.log('[helper] inline script ran; document.location =', document.location.href);
+  try { window.parent.postMessage({ type: 'helperHtmlLoaded' }, '*'); }
+  catch (e) { console.error('[helper] inline postMessage threw:', e); }
+</script>
+<script src="../assets/js/config.js"></script>
+<script type="module">
+console.log('[helper] module starting');
+// Hosted helper page for Chrome MV3 extension Firebase popup auth.
+// Loaded in an iframe by the extension's offscreen document.
+// Receives an `initAuth` postMessage with the provider name, runs
+// signInWithPopup, and postMessages the result (or error) back.
+
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  FacebookAuthProvider
+} from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+
+const firebaseConfig = window.APP_CONFIG.firebase;
+
+initializeApp(firebaseConfig);
+const auth = getAuth();
+
+// Allow only chrome-extension://* origins to drive this page.
+function isAllowedOrigin(origin) {
+  return /^chrome-extension:\/\//.test(origin);
+}
+
+window.addEventListener('message', async ({ origin, data, source }) => {
+  if (!isAllowedOrigin(origin) || !data || data.type !== 'initAuth') return;
+
+  try {
+    let provider;
+    if (data.provider === 'google') {
+      provider = new GoogleAuthProvider();
+      provider.addScope('email');
+      provider.addScope('profile');
+    } else if (data.provider === 'facebook') {
+      provider = new FacebookAuthProvider();
+      provider.addScope('email');
+    } else {
+      throw new Error(`unknown provider: ${data.provider}`);
+    }
+
+    const result = await signInWithPopup(auth, provider);
+
+    // Extract the OAuth credential so the extension can replay it via
+    // signInWithCredential in its own Firebase instance.
+    let credential = null;
+    if (data.provider === 'google') credential = GoogleAuthProvider.credentialFromResult(result);
+    else if (data.provider === 'facebook') credential = FacebookAuthProvider.credentialFromResult(result);
+
+    const idToken = await result.user.getIdToken();
+    source.postMessage({
+      type: 'authResult',
+      ok: true,
+      idToken,
+      providerId: credential?.providerId ?? data.provider + '.com',
+      oauthIdToken: credential?.idToken ?? null,
+      oauthAccessToken: credential?.accessToken ?? null,
+      user: {
+        uid: result.user.uid,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        photoURL: result.user.photoURL
+      }
+    }, origin);
+  } catch (e) {
+    source.postMessage({
+      type: 'authResult',
+      ok: false,
+      code: e?.code ?? null,
+      error: e?.message ?? String(e)
+    }, origin);
+  }
+});
+
+// Tell the parent we're ready to receive initAuth.
+console.log('[helper] module ready; posting helperReady to parent');
+window.parent?.postMessage({ type: 'helperReady' }, '*');
+</script>
+</body>
+</html>

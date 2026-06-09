@@ -1,0 +1,101 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="description" content="SynergyAIChat - Multi-engine AI voice assistant">
+  <link rel="icon" type="image/x-icon" href="./favicon.ico">
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icons/icon-180x180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SynergyAIChat">
+
+  <title>SynergyAIChat - AI Voice Assistant</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+
+  <style>
+    /* Markdown content styles */
+    .markdown-content h1 { font-size: 1.5rem; font-weight: bold; margin-bottom: 0.75rem; }
+    .markdown-content h2 { font-size: 1.25rem; font-weight: bold; margin-bottom: 0.5rem; margin-top: 1rem; }
+    .markdown-content h3 { font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .markdown-content p { margin-bottom: 0.75rem; line-height: 1.6; }
+    .markdown-content ul, .markdown-content ol { margin-left: 1.5rem; margin-bottom: 0.75rem; }
+    .markdown-content li { margin-bottom: 0.25rem; }
+    .markdown-content code { background: rgba(99, 102, 241, 0.2); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-size: 0.875rem; }
+    .markdown-content pre { background: #1e293b; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.75rem; }
+    .markdown-content pre code { background: transparent; padding: 0; }
+    .markdown-content blockquote { border-left: 3px solid #6366f1; padding-left: 1rem; margin: 0.75rem 0; color: #94a3b8; }
+    .markdown-content table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; }
+    .markdown-content th, .markdown-content td { padding: 0.5rem 0.75rem; border: 1px solid #334155; text-align: left; }
+    .markdown-content th { background: #1e293b; font-weight: 600; }
+    .markdown-content a { color: #818cf8; text-decoration: underline; }
+    .markdown-content a:hover { color: #a5b4fc; }
+
+    /* SVG container */
+    .svg-render-container { margin: 1rem 0; }
+    .svg-display { background: #0f172a; padding: 1rem; border-radius: 0.5rem; display: flex; justify-content: center; }
+    .svg-display svg { max-width: 100%; height: auto; }
+
+    /* Table container */
+    .table-container { overflow-x: auto; margin: 0.75rem 0; }
+
+    /* MCP UI container styles */
+    .mcp-ui-container {
+      width: 100%;
+      min-height: 200px;
+      border-radius: 0.75rem;
+      overflow: hidden;
+    }
+    .mcp-ui-frame {
+      width: 100%;
+      min-height: 400px;
+      border: none;
+      background: transparent;
+    }
+    .mcp-ui-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 2rem;
+    }
+    .mcp-ui-loaded .mcp-ui-loading {
+      display: none;
+    }
+  </style>
+  <script type="module" crossorigin src="./assets/index-B7CtJRa1.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CVY9IKPs.css">
+<script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+<body>
+  <div id="root"></div>
+
+  <!-- PWA Window Sizing - resize to content width when running as standalone app -->
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      // Check if running as installed PWA (not in browser)
+      const isStandalone = window.matchMedia("(display-mode: standalone)").matches
+                        || window.navigator.standalone === true;
+
+      if (isStandalone) {
+        // Resize window to match max-w-4xl (896px) + some padding
+        const preferredWidth = 920;
+        const preferredHeight = window.screen.availHeight * 0.9;
+
+        window.resizeTo(preferredWidth, preferredHeight);
+        // Center the window
+        const left = (window.screen.availWidth - preferredWidth) / 2;
+        const top = (window.screen.availHeight - preferredHeight) / 2;
+        window.moveTo(left, top);
+      }
+    });
+  </script>
+
+  <!-- Service Worker is auto-registered by vite-plugin-pwa -->
+</body>
+</html>
