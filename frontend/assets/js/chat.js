@@ -5388,6 +5388,82 @@ class ChatApp {
         return data?.data?.id ?? data?.id;
     }
 
+    // Render a finished workflow run. Prefer the artifact the editor captured
+    // during the run (report-pdf/html → overlay); else the markdown text inline.
+    _renderWorkflowResult(run) {
+        const art = window.workflowEditor?.lastProducedArtifact;
+        // The chat artifact pane is showArtifactPane(dirName, relPath, content, kind);
+        // lastProducedArtifact has shape { dirName, relPath, content, kind, ... }.
+        if (art && art.relPath && typeof this.showArtifactPane === 'function') {
+            this.showArtifactPane(art.dirName, art.relPath, art.content, art.kind);
+            return;
+        }
+        const text = (run && run.result && typeof run.result.output === 'string') ? run.result.output : '';
+        if (text.trim()) {
+            this.addMessage('assistant', text);
+        } else {
+            this.showProgress('Workflow finished.');
+        }
+    }
+
+    // Minimal modal: resolves 'editor' | 'run' | null (dismissed).
+    _showWorkflowChoiceDialog(summary) {
+        return new Promise((resolve) => {
+            const ov = document.createElement('div');
+            ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40';
+            ov.innerHTML = `
+              <div class="bg-white rounded-xl shadow-xl p-5 max-w-sm w-full">
+                <p class="text-sm text-gray-800 mb-4">${summary}<br>What would you like to do?</p>
+                <div class="flex flex-col gap-2">
+                  <button data-act="run"    class="px-3 py-2 rounded-md bg-indigo-600 text-white text-sm">▶ Run &amp; show the result</button>
+                  <button data-act="editor" class="px-3 py-2 rounded-md border border-gray-300 text-sm">✏️ Open in the workflow editor</button>
+                </div>
+              </div>`;
+            ov.addEventListener('click', (e) => {
+                const act = e.target?.dataset?.act;
+                if (act || e.target === ov) { ov.remove(); resolve(act || null); }
+            });
+            document.body.appendChild(ov);
+        });
+    }
+
+    // After workflow-compile authored a DSL: create it, then ask the user.
+    async _onWorkflowAuthored(dsl, userPrompt = '') {
+        let id;
+        try {
+            this.showProgress('🔄 Building workflow…');
+            id = await this._createWorkflowFromDsl(dsl);
+        } catch (e) {
+            this.addMessage('assistant', `⚠️ Could not create the workflow: ${e.message}`);
+            return;
+        }
+        const agentCount = (dsl.definition.nodes || []).filter(n => n.node_type === 'agent').length;
+        const summary = `Workflow “${dsl.name || 'Untitled'}” created — ${agentCount} agent(s).`;
+        const choice = await this._showWorkflowChoiceDialog(summary);
+
+        if (choice === 'editor') {
+            if (window.workflowEditor) { await window.workflowEditor.loadWorkflow(id); }
+            if (window.agentTeamsPanel?.show) { window.agentTeamsPanel.show(); }
+            return;
+        }
+        if (choice !== 'run') return;  // dismissed
+
+        try {
+            this.showProgress('▶ Running workflow…');
+            if (window.workflowEditor) { window.workflowEditor.lastProducedArtifact = null; } // avoid stale
+            const run = await window.workflowEditor.runHeadless(id, userPrompt, {
+                onProgress: (ev) => {
+                    const name = ev.node?.agent_name || ev.agent_name || ev.node_id || '';
+                    if (ev.type === 'node_start') this.showProgress(`▶ ${name}…`);
+                    else if (ev.type === 'node_complete') this.showProgress(`✓ ${name}`);
+                },
+            });
+            this._renderWorkflowResult(run);
+        } catch (e) {
+            this.addMessage('assistant', `⚠️ Workflow run failed: ${e.message}. It's saved — open it in the editor to retry.`);
+        }
+    }
+
     /**
      * Abort the current message generation
      * - Aborts the fetch stream (client side)
