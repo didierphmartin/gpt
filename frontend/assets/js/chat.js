@@ -5352,6 +5352,42 @@ class ChatApp {
         return mdMatch;
     }
 
+    // True iff a skill result is a workflow DSL produced by workflow-compile.
+    // Returns the parsed DSL ({name, description, definition:{nodes,edges}}) or null.
+    _detectWorkflowOutput(dirName, outputs) {
+        if (dirName !== 'workflow-compile' || !outputs) return null;
+        for (const [path, content] of Object.entries(outputs)) {
+            if (!/\.json$/i.test(path) || typeof content !== 'string') continue;
+            try {
+                const dsl = JSON.parse(content);
+                if (dsl && dsl.definition && Array.isArray(dsl.definition.nodes)) return dsl;
+            } catch (_) { /* not the DSL */ }
+        }
+        return null;
+    }
+
+    // Create the workflow in the engine. Returns the new id, or throws with the
+    // backend's validation errors surfaced.
+    async _createWorkflowFromDsl(dsl) {
+        const token = window.authManager?.token || window.authManager?.getToken?.();
+        const base = '/gpt/backend/api/v1';
+        const resp = await fetch(`${base}/workflows`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+                name: dsl.name || 'Untitled workflow',
+                description: dsl.description || '',
+                definition: dsl.definition,
+            }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data?.success === false) {
+            const errs = data?.validation_errors || data?.message || `HTTP ${resp.status}`;
+            throw new Error(Array.isArray(errs) ? errs.join('; ') : String(errs));
+        }
+        return data?.data?.id ?? data?.id;
+    }
+
     /**
      * Abort the current message generation
      * - Aborts the fetch stream (client side)
