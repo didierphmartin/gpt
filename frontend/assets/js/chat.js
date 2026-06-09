@@ -3572,8 +3572,20 @@ class ChatApp {
             ? runSkill(req)
             : window.pyodideRunner.runSkillScript(req));
 
+        // Dynamic-workflow loop: if workflow-compile produced a DSL, create it
+        // and let the user open it in the editor or run-and-show here.
         if (isWorkflowBuild) {
-            this.showProgress('✅ Workflow built — open it in the editor.');
+            try {
+                const wfDsl = this._detectWorkflowOutput(dirName, result?.outputs);
+                if (wfDsl) {
+                    await this._onWorkflowAuthored(wfDsl, ctx?.userMessage || '');
+                } else {
+                    this.showProgress('✅ Workflow built — open it in the editor.');
+                }
+            } catch (e) {
+                console.warn('[workflow] post-author orchestration failed:', e);
+                this.showProgress('✅ Workflow built — open it in the editor.');
+            }
         }
 
         // Resolve the FSA root name once, BEFORE any output processing.
