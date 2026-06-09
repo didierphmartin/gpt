@@ -5454,16 +5454,25 @@ class ChatApp {
         const choice = await this._showWorkflowChoiceDialog(summary);
 
         if (choice === 'editor') {
-            if (window.workflowEditor) { await window.workflowEditor.loadWorkflow(id); }
-            if (window.agentTeamsPanel?.show) { window.agentTeamsPanel.show(); }
+            // Reuse the canonical open flow: it reveals the panel (which lazily
+            // creates window.workflowEditor), WAITS for the editor to be ready,
+            // THEN loads the workflow — fixing the empty-canvas race.
+            await this.openWorkflowFromContext(Number(id));
             return;
         }
         if (choice !== 'run') return;  // dismissed
 
+        // window.workflowEditor is created lazily when the panel is first shown;
+        // make sure it exists before we drive a run through it.
+        const ed = await this._ensureWorkflowEditor();
+        if (!ed) {
+            this.addMessage('assistant', `⚠️ Could not open the workflow engine. The workflow is saved — open it in the editor to run.`);
+            return;
+        }
         try {
             this.showProgress('▶ Running workflow…');
-            if (window.workflowEditor) { window.workflowEditor.lastProducedArtifact = null; } // avoid stale
-            const run = await window.workflowEditor.runHeadless(id, userPrompt, {
+            ed.lastProducedArtifact = null; // avoid showing a stale artifact
+            const run = await ed.runHeadless(Number(id), userPrompt, {
                 onProgress: (ev) => {
                     const name = ev.node?.agent_name || ev.agent_name || ev.node_id || '';
                     if (ev.type === 'node_start') this.showProgress(`▶ ${name}…`);
@@ -5474,6 +5483,19 @@ class ChatApp {
         } catch (e) {
             this.addMessage('assistant', `⚠️ Workflow run failed: ${e.message}. It's saved — open it in the editor to retry.`);
         }
+    }
+
+    // Ensure window.workflowEditor exists — it's lazily created when the agent-
+    // teams panel is first shown. Reveals the panel if needed, then waits (up to
+    // ~1s) for the editor to be ready. Returns the editor instance or null.
+    async _ensureWorkflowEditor() {
+        if (window.workflowEditor?.loadWorkflow) return window.workflowEditor;
+        if (window.agentTeamsPanel?.show) window.agentTeamsPanel.show();
+        for (let i = 0; i < 20; i++) {
+            if (window.workflowEditor?.loadWorkflow) return window.workflowEditor;
+            await new Promise(r => setTimeout(r, 50));
+        }
+        return null;
     }
 
     /**
