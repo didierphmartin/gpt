@@ -474,9 +474,9 @@ class WorkflowEditor {
                 : 'background:#dbeafe;color:#1d4ed8;';
             return `
                 <div class="sidebar-workflow-item flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs transition
-                            ${isActive ? 'bg-blue-200 text-blue-900 font-semibold' : 'hover:bg-gray-100 text-gray-700'}"
+                            ${isActive ? 'text-blue-700' : 'hover:bg-gray-100 text-gray-700'}"
                      data-workflow-id="${wf.id}" data-workflow-name="${this.escapeHtml(wf.name || '')}"
-                     ${isActive ? 'style="border:2px solid #2563eb; border-left-width:6px; border-left-color:#3b82f6; box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 3px 0 #1e3a8a, 0 6px 12px rgba(30,58,138,0.40); transform: translateY(-1px); margin-bottom:3px;"' : ''}>
+                     ${isActive ? 'style="background:#dbeafe; border-left:3px solid #3b82f6;"' : ''}>
                     <span class="opacity-60">${icon}</span>
                     <span class="flex-1 truncate" title="${this.escapeHtml(wf.name)} (${badgeLabel}, ID: ${wf.id})">${this.escapeHtml(wf.name || 'Untitled')}</span>
                     <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded" style="${badgeStyle}">${badgeLabel}</span>
