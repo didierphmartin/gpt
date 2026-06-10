@@ -28,19 +28,27 @@
     cursor: pointer;
     transition: background-color 0.15s ease;
     border-radius: 4px;
+    /* Transparent left bar on every row so the selected row's coloured bar
+       adds no width — keeps the tree indentation aligned. */
+    border-left: 3px solid transparent;
     margin: 1px 4px;
     user-select: none;
 }
 
 .file-tree-item:hover {
-    background-color: #e5e7eb;
+    background-color: #f3f4f6;
 }
 
-/* Selected row — app-standard list selection (matches .context-item.active):
-   light-blue fill + a blue left bar via inset shadow (keeps tree indentation). */
+/* Selected row — identical to the workflow list / .context-item.active:
+   light-blue fill (#dbeafe) + a blue left bar (#3b82f6). */
 .file-tree-item.selected {
     background-color: #dbeafe;
-    box-shadow: inset 3px 0 0 0 #3b82f6;
+    border-left-color: #3b82f6;
+}
+
+/* A selected row still shows a hover cue (slightly deeper than the fill). */
+.file-tree-item.selected:hover {
+    background-color: #c7ddfb;
 }
 
 /* Root folder styling */
