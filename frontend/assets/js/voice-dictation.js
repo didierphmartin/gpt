@@ -64,7 +64,8 @@
             const r = nextInputState(this._base, text, isFinal);
             this.inputEl.value = r.value;
             this.inputEl.dispatchEvent(new Event('input', { bubbles: true })); // grow textarea / enable Send
-            if (isFinal) { this._base = r.base; this._resetSilenceTimer(); }
+            if (isFinal) this._base = r.base;
+            this._resetSilenceTimer(); // any transcript activity counts as "not silent"
         }
 
         _resetSilenceTimer() {
@@ -76,14 +77,17 @@
             if (this.isRecording) return;
             const provider = this.getProvider();
             const config = (window.APP_CONFIG && window.APP_CONFIG[provider]) || {};
-            console.log('[VoiceDictation] start →', {
-                provider,
-                hasKey: !!config.apiKey,
-                hasAudioStreamer: !!window.AudioStreamer,
-                hasAdapter: provider === 'gemini' ? !!window.GeminiRealtimeAdapter : !!window.GrokLiveClient,
-            });
+            // Use the SAME clients the Voice Panel uses (verified working):
+            // gemini → GeminiLiveClient, grok → GrokLiveClient. Both share a
+            // config-based callback interface.
+            const ClientClass = provider === 'gemini' ? window.GeminiLiveClient : window.GrokLiveClient;
+            console.log(`[VoiceDictation] start → provider=${provider} hasKey=${!!config.apiKey} hasAudioStreamer=${!!window.AudioStreamer} hasClient=${!!ClientClass}`);
             if (!config.apiKey) {
                 this.onError(`No ${provider} voice key configured — set the Voice provider in Settings → Account.`);
+                return;
+            }
+            if (!ClientClass || !window.AudioStreamer) {
+                this.onError(`Voice component not loaded for ${provider}.`);
                 return;
             }
             const existing = (this.inputEl.value || '').replace(/\s+$/, '');
@@ -92,21 +96,32 @@
                 this._streamer = new window.AudioStreamer({
                     onAudioData: (b64) => { if (this._client && (!this._client.isReady || this._client.isReady())) this._client.sendAudio(b64); },
                 });
-                if (provider === 'grok') {
-                    this._client = new window.GrokLiveClient({
-                        ...config,
-                        onSetupComplete: async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); },
-                        onInputTranscription: (text, isFinal) => this._applyTranscript(text, isFinal),
-                        onError: (e) => this._fail(e),
-                        onClose: () => { if (this.isRecording) this.stop(); },
-                    });
+                // onAudio is intentionally omitted → the AI reply is never played.
+                // onInputTranscription gives a live preview; onTurnComplete gives
+                // the committed user text (what the Voice Panel relies on).
+                const clientConfig = {
+                    apiKey: config.apiKey,
+                    systemPrompt: "Transcribe the user's speech verbatim. Do not reply.",
+                    sampleRateInput: config.sampleRateInput || 16000,
+                    sampleRateOutput: config.sampleRateOutput || 24000,
+                    onSetupComplete: async () => {
+                        console.log('[VoiceDictation] session ready → mic on');
+                        await this._streamer.startCapture();
+                        this._setState('recording');
+                        this._resetSilenceTimer();
+                    },
+                    onInputTranscription: (text) => { console.log('[VoiceDictation] inputTranscription len=' + ((text || '').length)); this._applyTranscript(text, false); },
+                    onTurnComplete: (userText) => { console.log('[VoiceDictation] turnComplete len=' + ((userText || '').length)); if (userText) this._applyTranscript(userText, true); },
+                    onError: (e) => this._fail(e),
+                    onClose: () => { if (this.isRecording) this.stop(); },
+                };
+                if (provider === 'gemini') {
+                    clientConfig.model = config.model || 'gemini-2.5-flash-native-audio-preview-12-2025';
+                    clientConfig.voiceName = config.voiceName || 'Kore';
                 } else {
-                    this._client = new window.GeminiRealtimeAdapter(config);
-                    this._client.onSessionReady = async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); };
-                    this._client.onTranscript = (text, isFinal, dir) => { if (dir === 'in') this._applyTranscript(text, isFinal); };
-                    this._client.onError = (e) => this._fail(e);
-                    this._client.onClose = () => { if (this.isRecording) this.stop(); };
+                    clientConfig.voice = config.voice || 'Ara';
                 }
+                this._client = new ClientClass(clientConfig);
                 await this._client.connect();
             } catch (e) {
                 this._fail(e);
