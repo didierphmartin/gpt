@@ -16,11 +16,95 @@
         return { value, base: newBase };
     }
 
+    const PROVIDER_KEY = 'voiceDictationProvider';
+    const SILENCE_MS = 1500; // auto-stop after this much quiet (between final transcripts)
+
+    class VoiceDictation {
+        constructor({ inputEl, buttonEl, onState, onError } = {}) {
+            this.inputEl = inputEl;
+            this.buttonEl = buttonEl;
+            this.onState = onState || (() => {});       // 'idle' | 'recording'
+            this.onError = onError || ((msg) => console.warn('[VoiceDictation]', msg));
+            this.isRecording = false;
+            this._base = '';
+            this._silenceTimer = null;
+            this._client = null;
+            this._streamer = null;
+        }
+
+        getProvider() {
+            const p = localStorage.getItem(PROVIDER_KEY);
+            return (p === 'gemini' || p === 'grok') ? p : 'grok';
+        }
+
+        toggle() { return this.isRecording ? this.stop() : this.start(); }
+
+        _setState(s) { this.isRecording = (s === 'recording'); this.onState(s); }
+
+        _applyTranscript(text, isFinal) {
+            if (!text) return;
+            const r = nextInputState(this._base, text, isFinal);
+            this.inputEl.value = r.value;
+            this.inputEl.dispatchEvent(new Event('input', { bubbles: true })); // grow textarea / enable Send
+            if (isFinal) { this._base = r.base; this._resetSilenceTimer(); }
+        }
+
+        _resetSilenceTimer() {
+            clearTimeout(this._silenceTimer);
+            this._silenceTimer = setTimeout(() => this.stop(), SILENCE_MS);
+        }
+
+        async start() {
+            if (this.isRecording) return;
+            const provider = this.getProvider();
+            const config = (window.APP_CONFIG && window.APP_CONFIG[provider]) || {};
+            if (!config.apiKey) {
+                this.onError(`No ${provider} voice key configured — set the Voice provider in Settings → Account.`);
+                return;
+            }
+            const existing = (this.inputEl.value || '').replace(/\s+$/, '');
+            this._base = existing ? existing + ' ' : '';
+            try {
+                this._streamer = new window.AudioStreamer({
+                    onAudioData: (b64) => { if (this._client && (!this._client.isReady || this._client.isReady())) this._client.sendAudio(b64); },
+                });
+                if (provider === 'grok') {
+                    this._client = new window.GrokLiveClient({
+                        ...config,
+                        onSetupComplete: async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); },
+                        onInputTranscription: (text, isFinal) => this._applyTranscript(text, isFinal),
+                        onError: (e) => { this.onError(String(e && e.message || e)); this.stop(); },
+                        onClose: () => { if (this.isRecording) this.stop(); },
+                    });
+                } else {
+                    this._client = new window.GeminiRealtimeAdapter(config);
+                    this._client.onSessionReady = async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); };
+                    this._client.onTranscript = (text, isFinal, dir) => { if (dir === 'in') this._applyTranscript(text, isFinal); };
+                    this._client.onError = (e) => { this.onError(String(e && e.message || e)); this.stop(); };
+                    this._client.onClose = () => { if (this.isRecording) this.stop(); };
+                }
+                await this._client.connect();
+            } catch (e) {
+                this.onError(String(e && e.message || e));
+                await this.stop();
+            }
+        }
+
+        async stop() {
+            clearTimeout(this._silenceTimer);
+            try { if (this._streamer && this._streamer.stopCapture) await this._streamer.stopCapture(); } catch (_) {}
+            try { if (this._client && this._client.disconnect) await this._client.disconnect(); } catch (_) {}
+            this._streamer = null; this._client = null;
+            this._setState('idle');
+        }
+    }
+
     const api = { nextInputState };
+    api.VoiceDictation = VoiceDictation;
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;                 // node tests
     } else {
-        global.VoiceDictationLib = api;       // browser (controller added in Task 2)
+        global.VoiceDictationLib = api;       // browser
     }
 })(typeof window !== 'undefined' ? window : globalThis);
