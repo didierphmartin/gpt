@@ -4002,7 +4002,7 @@
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
     <script src="assets/js/gemini-realtime-adapter.js"></script>
-    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate2"></script>
+    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate3"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
@@ -4034,7 +4034,10 @@
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');
         const btn = document.getElementById('voice-dictate-btn');
-        if (!input || !btn || !window.VoiceDictationLib) return;
+        if (!input || !btn || !window.VoiceDictationLib) {
+          console.warn('[VoiceDictation] NOT wired:', { input: !!input, btn: !!btn, lib: !!window.VoiceDictationLib });
+          return;
+        }
         const vd = new window.VoiceDictationLib.VoiceDictation({
           inputEl: input,
           buttonEl: btn,
@@ -4043,6 +4046,7 @@
         });
         btn.addEventListener('click', () => vd.toggle());
         window.voiceDictation = vd;
+        console.log('[VoiceDictation] wired ✓ provider=', vd.getProvider());
       })();
     </script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->

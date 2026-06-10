@@ -76,6 +76,12 @@
             if (this.isRecording) return;
             const provider = this.getProvider();
             const config = (window.APP_CONFIG && window.APP_CONFIG[provider]) || {};
+            console.log('[VoiceDictation] start →', {
+                provider,
+                hasKey: !!config.apiKey,
+                hasAudioStreamer: !!window.AudioStreamer,
+                hasAdapter: provider === 'gemini' ? !!window.GeminiRealtimeAdapter : !!window.GrokLiveClient,
+            });
             if (!config.apiKey) {
                 this.onError(`No ${provider} voice key configured — set the Voice provider in Settings → Account.`);
                 return;
