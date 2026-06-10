@@ -17,7 +17,7 @@
     }
 
     const PROVIDER_KEY = 'voiceDictationProvider';
-    const SILENCE_MS = 2500;  // auto-stop after this much quiet, once speech has started
+    const SILENCE_MS = 3000;  // auto-stop after this much quiet, once speech has started
     const INITIAL_MS = 12000; // grace period to START speaking before auto-stop
 
     // Turn whatever the adapter throws (Error, WebSocket Event, close event,
@@ -111,7 +111,13 @@
                         this._setState('recording');
                         this._resetSilenceTimer(INITIAL_MS); // long grace until the first words
                     },
-                    onInputTranscription: (text) => { console.log('[VoiceDictation] inputTranscription len=' + ((text || '').length)); this._applyTranscript(text, false); },
+                    onInputTranscription: (a, b) => {
+                        // Gemini calls (deltaChunk, accumulatedFullText); Grok calls
+                        // (fullText, isFinal). Use the full accumulated text either way.
+                        const full = provider === 'gemini' ? (b || '') : (a || '');
+                        console.log('[VoiceDictation] inputTranscription len=' + full.length);
+                        this._applyTranscript(full, false); // live preview (persists if turn-complete is late)
+                    },
                     onTurnComplete: (userText) => { console.log('[VoiceDictation] turnComplete len=' + ((userText || '').length)); if (userText) this._applyTranscript(userText, true); },
                     onError: (e) => this._fail(e),
                     onClose: () => { if (this.isRecording) this.stop(); },
