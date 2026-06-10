@@ -114,6 +114,15 @@
         return await file.text();
     }
 
+    // Directories that are never skills or skill groups: VCS internals,
+    // dotfiles, and common tooling/output dirs. These show up once `skills/`
+    // is itself a git repo (e.g. `.git`, `docs`) and must be hidden from the
+    // skills tree.
+    const NON_SKILL_DIRS = new Set(['node_modules', '__pycache__', 'docs', 'scratch', 'outputs', 'dist', 'build']);
+    function isNonSkillDir(name) {
+        return !name || name.startsWith('.') || NON_SKILL_DIRS.has(name);
+    }
+
     /**
      * True when a directory handle contains a SKILL.md file. This is the
      * single disambiguator under `<root>/skills/`: a directory with a
@@ -183,7 +192,7 @@
 
         const out = [];
         for await (const entry of skillsDir.values()) {
-            if (entry.kind !== 'directory') continue;
+            if (entry.kind !== 'directory' || isNonSkillDir(entry.name)) continue;
             if (await hasSkillMd(entry)) {
                 out.push(await buildSkillEntry(entry, null));
             } else {
@@ -212,7 +221,7 @@
         if (!skillsDir) return [];
         const out = [];
         for await (const entry of skillsDir.values()) {
-            if (entry.kind === 'directory' && !(await hasSkillMd(entry))) {
+            if (entry.kind === 'directory' && !isNonSkillDir(entry.name) && !(await hasSkillMd(entry))) {
                 out.push({ name: entry.name });
             }
         }
