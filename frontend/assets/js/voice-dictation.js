@@ -60,6 +60,26 @@
             this.stop();
         }
 
+        // Grok realtime rejects raw API keys from the browser (x.ai returns 400).
+        // Mint a short-lived ephemeral token server-side — the same endpoint the
+        // Voice Panel used — and use its client_secret as the credential.
+        async _mintGrokToken() {
+            const headers = { 'Content-Type': 'application/json' };
+            const jwt = window.authManager?.token || localStorage.getItem('token') || localStorage.getItem('auth_token');
+            if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+            const resp = await fetch('/gpt/backend/api/v1/voice/token', {
+                method: 'POST', headers, credentials: 'include',
+                body: JSON.stringify({ provider: 'grok' }),
+            });
+            if (!resp.ok) {
+                const detail = await resp.text().catch(() => '');
+                throw new Error(`Failed to mint Grok voice token (${resp.status}). ${detail}`.trim());
+            }
+            const j = await resp.json().catch(() => ({}));
+            if (!j || !j.success || !j.client_secret) throw new Error((j && j.error) || 'Grok token response missing client_secret.');
+            return j.client_secret;
+        }
+
         _applyTranscript(text, isFinal) {
             if (!text) return;
             const r = nextInputState(this._base, text, isFinal);
@@ -93,6 +113,8 @@
             const existing = (this.inputEl.value || '').replace(/\s+$/, '');
             this._base = existing ? existing + ' ' : '';
             try {
+                // Grok needs an ephemeral token; Gemini uses the configured key directly.
+                const apiKey = provider === 'grok' ? await this._mintGrokToken() : config.apiKey;
                 this._streamer = new window.AudioStreamer({
                     onAudioData: (b64) => { if (this._client && (!this._client.isReady || this._client.isReady())) this._client.sendAudio(b64); },
                 });
@@ -100,7 +122,7 @@
                 // onInputTranscription gives a live preview; onTurnComplete gives
                 // the committed user text (what the Voice Panel relies on).
                 const clientConfig = {
-                    apiKey: config.apiKey,
+                    apiKey,
                     systemPrompt: "Transcribe the user's speech verbatim. Do not reply.",
                     sampleRateInput: config.sampleRateInput || 16000,
                     sampleRateOutput: config.sampleRateOutput || 24000,
