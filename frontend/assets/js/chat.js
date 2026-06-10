@@ -3572,8 +3572,20 @@ class ChatApp {
             ? runSkill(req)
             : window.pyodideRunner.runSkillScript(req));
 
+        // Dynamic-workflow loop: if workflow-compile produced a DSL, create it
+        // and let the user open it in the editor or run-and-show here.
         if (isWorkflowBuild) {
-            this.showProgress('✅ Workflow built — open it in the editor.');
+            try {
+                const wfDsl = this._detectWorkflowOutput(dirName, result?.outputs);
+                if (wfDsl) {
+                    await this._onWorkflowAuthored(wfDsl, ctx?.userMessage || '');
+                } else {
+                    this.showProgress('✅ Workflow built — open it in the editor.');
+                }
+            } catch (e) {
+                console.warn('[workflow] post-author orchestration failed:', e);
+                this.showProgress('✅ Workflow built — open it in the editor.');
+            }
         }
 
         // Resolve the FSA root name once, BEFORE any output processing.
@@ -5350,6 +5362,151 @@ class ChatApp {
             }
         }
         return mdMatch;
+    }
+
+    // True iff a skill result is a workflow DSL produced by workflow-compile.
+    // Returns the parsed DSL ({name, description, definition:{nodes,edges}}) or null.
+    _detectWorkflowOutput(dirName, outputs) {
+        if (dirName !== 'workflow-compile' || !outputs) return null;
+        for (const [path, content] of Object.entries(outputs)) {
+            if (!/\.json$/i.test(path) || typeof content !== 'string') continue;
+            try {
+                const dsl = JSON.parse(content);
+                if (dsl && dsl.definition && Array.isArray(dsl.definition.nodes)) return dsl;
+            } catch (_) { /* not the DSL */ }
+        }
+        return null;
+    }
+
+    // Create the workflow in the engine. Returns the new id, or throws with the
+    // backend's validation errors surfaced.
+    async _createWorkflowFromDsl(dsl) {
+        const token = window.authManager?.token || window.authManager?.getToken?.();
+        const base = '/gpt/backend/api/v1';
+        const resp = await fetch(`${base}/workflows`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+                name: dsl.name || 'Untitled workflow',
+                description: dsl.description || '',
+                definition: dsl.definition,
+            }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data?.success === false) {
+            const errs = data?.validation_errors || data?.message || `HTTP ${resp.status}`;
+            throw new Error(Array.isArray(errs) ? errs.join('; ') : String(errs));
+        }
+        return data?.data?.id ?? data?.id;
+    }
+
+    // Render a finished workflow run. Prefer the artifact the editor captured
+    // during the run (report-pdf/html → overlay); else the markdown text inline.
+    _renderWorkflowResult(run) {
+        const art = window.workflowEditor?.lastProducedArtifact;
+        // The chat artifact pane is showArtifactPane(dirName, relPath, content, kind);
+        // lastProducedArtifact has shape { dirName, relPath, content, kind, ... }.
+        if (art && art.relPath && typeof this.showArtifactPane === 'function') {
+            this.showArtifactPane(art.dirName, art.relPath, art.content, art.kind);
+            return;
+        }
+        const text = (run && run.result && typeof run.result.output === 'string') ? run.result.output : '';
+        if (text.trim()) {
+            this.addMessage('assistant', text);
+        } else {
+            this.showProgress('Workflow finished.');
+        }
+    }
+
+    // Minimal modal: resolves 'editor' | 'run' | null (dismissed).
+    _showWorkflowChoiceDialog(summary) {
+        return new Promise((resolve) => {
+            const ov = document.createElement('div');
+            ov.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40';
+            ov.innerHTML = `
+              <div class="bg-white rounded-xl shadow-xl p-5 max-w-sm w-full">
+                <p class="text-sm text-gray-800 mb-4">${summary}<br>What would you like to do?</p>
+                <div class="flex flex-col gap-2">
+                  <button data-act="run"    class="px-3 py-2 rounded-md bg-indigo-600 text-white text-sm">▶ Run &amp; show the result</button>
+                  <button data-act="editor" class="px-3 py-2 rounded-md border border-gray-300 text-sm">✏️ Open in the workflow editor</button>
+                </div>
+              </div>`;
+            ov.addEventListener('click', (e) => {
+                const act = e.target?.dataset?.act;
+                if (act || e.target === ov) { ov.remove(); resolve(act || null); }
+            });
+            document.body.appendChild(ov);
+        });
+    }
+
+    // After workflow-compile authored a DSL: create it, then ask the user.
+    async _onWorkflowAuthored(dsl, userPrompt = '') {
+        let id;
+        try {
+            this.showProgress('🔄 Building workflow…');
+            id = await this._createWorkflowFromDsl(dsl);
+        } catch (e) {
+            this.addMessage('assistant', `⚠️ Could not create the workflow: ${e.message}`);
+            return;
+        }
+        const agentCount = (dsl.definition.nodes || []).filter(n => n.node_type === 'agent').length;
+        const summary = `Workflow “${dsl.name || 'Untitled'}” created — ${agentCount} agent(s).`;
+        const choice = await this._showWorkflowChoiceDialog(summary);
+
+        if (choice === 'editor') {
+            // Reuse the canonical open flow: it reveals the panel (which lazily
+            // creates window.workflowEditor), WAITS for the editor to be ready,
+            // THEN loads the workflow — fixing the empty-canvas race.
+            await this.openWorkflowFromContext(Number(id));
+            return;
+        }
+        if (choice !== 'run') return;  // dismissed
+
+        // window.workflowEditor is created lazily when the panel is first shown;
+        // make sure it exists before we drive a run through it.
+        const ed = await this._ensureWorkflowEditor();
+        if (!ed) {
+            this.addMessage('assistant', `⚠️ Could not open the workflow engine. The workflow is saved — open it in the editor to run.`);
+            return;
+        }
+        // The run prompt must be a STRING — the backend's initTemplateProcessor
+        // rejects arrays. Use the workflow's own start-node prompt (the chat
+        // message can be a structured array and isn't the right run input anyway).
+        const startNode = (dsl.definition.nodes || []).find(n => n.node_type === 'start');
+        const runPrompt = (startNode && typeof startNode.config?.prompt === 'string' && startNode.config.prompt)
+            ? startNode.config.prompt
+            : (typeof userPrompt === 'string' ? userPrompt : '');
+        try {
+            this.showProgress('▶ Running workflow…');
+            ed.lastProducedArtifact = null; // avoid showing a stale artifact
+            const run = await ed.runHeadless(Number(id), runPrompt, {
+                onProgress: (ev) => {
+                    const name = ev.node?.agent_name || ev.agent_name || ev.node_id || '';
+                    if (ev.type === 'node_start') this.showProgress(`▶ ${name}…`);
+                    else if (ev.type === 'node_complete') this.showProgress(`✓ ${name}`);
+                },
+            });
+            // The result + produced artifact are shown by the editor's own
+            // results panel (runHeadless calls showWorkflowResults) since the
+            // editor is the visible view during a chat-driven run. `run` is kept
+            // for the return contract / future inline rendering.
+            void run;
+        } catch (e) {
+            this.addMessage('assistant', `⚠️ Workflow run failed: ${e.message}. It's saved — open it in the editor to retry.`);
+        }
+    }
+
+    // Ensure window.workflowEditor exists — it's lazily created when the agent-
+    // teams panel is first shown. Reveals the panel if needed, then waits (up to
+    // ~1s) for the editor to be ready. Returns the editor instance or null.
+    async _ensureWorkflowEditor() {
+        if (window.workflowEditor?.loadWorkflow) return window.workflowEditor;
+        if (window.agentTeamsPanel?.show) window.agentTeamsPanel.show();
+        for (let i = 0; i < 20; i++) {
+            if (window.workflowEditor?.loadWorkflow) return window.workflowEditor;
+            await new Promise(r => setTimeout(r, 50));
+        }
+        return null;
     }
 
     /**
