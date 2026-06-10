@@ -423,8 +423,9 @@ class FileStorageManager {
         const sizeStr = !isFolder ? this.formatSize(item.size) : '';
         const cls = isFolder ? 'file-tree-folder' : 'file-tree-file';
         const rootCls = item.isRoot ? ' file-tree-root' : '';
+        const selCls = (item.path ?? '') === this.selectedPath ? ' file-tree-selected' : '';
         return `
-            <div class="file-tree-item ${cls}${rootCls}"
+            <div class="file-tree-item ${cls}${rootCls}${selCls}"
                  data-type="${item.type}"
                  data-id="${this.escapeHtml(item.id ?? '')}"
                  data-path="${this.escapeHtml(item.path ?? '')}"
@@ -513,6 +514,9 @@ class FileStorageManager {
         const path = item.dataset.path;
         const name = item.dataset.name;
 
+        // Mark the clicked row as selected — same highlight as the other lists.
+        this.selectedPath = path ?? '';
+
         if (type === 'folder') {
             // Toggle expand / collapse. Path is the relative path from
             // the storage root; the root itself is the empty string.
@@ -531,7 +535,8 @@ class FileStorageManager {
             }
             this.renderTree();
         } else if (type === 'file' && id) {
-            // Open the file in the main viewer.
+            // Re-render to show the selection highlight, then open the file.
+            this.renderTree();
             this.openFile(id, name);
         }
     }
