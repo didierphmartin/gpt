@@ -2989,12 +2989,12 @@
                     <!-- Voice Dictation Provider Section -->
                     <div class="settings-section">
                         <div class="mb-4">
-                            <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="account.voiceProvider">Voice provider (dictation)</label>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Voice provider (dictation)</label>
                             <select id="voice-dictation-provider" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                                <option value="grok">Grok</option>
                                 <option value="gemini">Gemini</option>
+                                <option value="grok">Grok</option>
                             </select>
-                            <p class="text-xs text-gray-400 mt-1" data-i18n="account.voiceProviderHint">Used by the mic button next to Send.</p>
+                            <p class="text-xs text-gray-400 mt-1">Used by the mic button next to Send.</p>
                         </div>
                     </div>
 
@@ -3996,13 +3996,13 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260509-modeldisplay"></script>
+    <script src="assets/js/settings-panel.js?v=20260610-voicedictate2"></script>
     <script src="assets/js/agent-teams-panel.js"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
     <script src="assets/js/gemini-realtime-adapter.js"></script>
-    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate"></script>
+    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate2"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before

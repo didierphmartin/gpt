@@ -1077,7 +1077,7 @@ class SettingsPanel {
         const vdSelect = document.getElementById('voice-dictation-provider');
         if (vdSelect) {
             const saved = localStorage.getItem('voiceDictationProvider');
-            vdSelect.value = (saved === 'gemini' || saved === 'grok') ? saved : 'grok';
+            vdSelect.value = (saved === 'gemini' || saved === 'grok') ? saved : 'gemini';
             vdSelect.addEventListener('change', (e) => {
                 localStorage.setItem('voiceDictationProvider', e.target.value);
             });

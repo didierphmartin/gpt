@@ -19,6 +19,17 @@
     const PROVIDER_KEY = 'voiceDictationProvider';
     const SILENCE_MS = 1500; // auto-stop after this much quiet (between final transcripts)
 
+    // Turn whatever the adapter throws (Error, WebSocket Event, close event,
+    // string) into a human, actionable message. Browser WebSocket 'error'
+    // events carry no detail, so fall back to a hint.
+    function errMsg(e) {
+        if (!e) return 'Voice connection failed.';
+        if (typeof e === 'string') return e;
+        if (e.message) return e.message;
+        if (e.code || e.reason) return `Voice connection closed (${e.code || ''} ${e.reason || ''}).`.trim();
+        return 'Voice connection failed — the provider rejected it. Check the key in Settings → Account, or try the other provider.';
+    }
+
     class VoiceDictation {
         constructor({ inputEl, buttonEl, onState, onError } = {}) {
             this.inputEl = inputEl;
@@ -34,12 +45,19 @@
 
         getProvider() {
             const p = localStorage.getItem(PROVIDER_KEY);
-            return (p === 'gemini' || p === 'grok') ? p : 'grok';
+            return (p === 'gemini' || p === 'grok') ? p : 'gemini';
         }
 
         toggle() { return this.isRecording ? this.stop() : this.start(); }
 
         _setState(s) { this.isRecording = (s === 'recording'); this.onState(s); }
+
+        // Log the raw error for diagnosis, surface a readable message, stop.
+        _fail(e) {
+            console.error('[VoiceDictation] error:', e);
+            this.onError(errMsg(e));
+            this.stop();
+        }
 
         _applyTranscript(text, isFinal) {
             if (!text) return;
@@ -73,20 +91,19 @@
                         ...config,
                         onSetupComplete: async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); },
                         onInputTranscription: (text, isFinal) => this._applyTranscript(text, isFinal),
-                        onError: (e) => { this.onError(String(e && e.message || e)); this.stop(); },
+                        onError: (e) => this._fail(e),
                         onClose: () => { if (this.isRecording) this.stop(); },
                     });
                 } else {
                     this._client = new window.GeminiRealtimeAdapter(config);
                     this._client.onSessionReady = async () => { await this._streamer.startCapture(); this._setState('recording'); this._resetSilenceTimer(); };
                     this._client.onTranscript = (text, isFinal, dir) => { if (dir === 'in') this._applyTranscript(text, isFinal); };
-                    this._client.onError = (e) => { this.onError(String(e && e.message || e)); this.stop(); };
+                    this._client.onError = (e) => this._fail(e);
                     this._client.onClose = () => { if (this.isRecording) this.stop(); };
                 }
                 await this._client.connect();
             } catch (e) {
-                this.onError(String(e && e.message || e));
-                await this.stop();
+                this._fail(e);
             }
         }
 
