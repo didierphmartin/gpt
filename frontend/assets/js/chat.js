@@ -9438,6 +9438,15 @@ class ChatApp {
                 ? 'text-blue-200 hover:text-white'
                 : 'text-gray-500 hover:text-gray-700';
 
+            // 3D raised border for the workflow currently open in the editor: a
+            // beveled bottom edge + soft drop shadow + a bright left accent bar
+            // + a slight lift, so the selected row is unmistakable in the list.
+            const selectedStyle = isCenterShowingThisWorkflow
+                ? 'border-width:2px; border-left-width:5px; border-left-color:#3b82f6;'
+                  + ' box-shadow: inset 0 1px 0 rgba(255,255,255,0.30), 0 3px 0 #172554,'
+                  + ' 0 7px 14px rgba(23,37,84,0.50); transform: translateY(-1px);'
+                : '';
+
             // Skip the ".active" class when our marine-blue workflow
             // highlight is in effect — the CSS rule .context-item.active
             // (index.html) has higher specificity and would overwrite the
@@ -9448,7 +9457,7 @@ class ChatApp {
                 <div class="context-item ${applyActiveClass ? 'active' : ''} ${itemBg} ${itemBorder} rounded p-1 mb-1"
                      data-context-id="${context.id}"
                      onclick="window.chatApp.loadContext(${context.id})"
-                     style="max-width: 100%;">
+                     style="max-width: 100%; ${selectedStyle}">
                     <div class="flex items-center gap-1" style="width: 100%;">
                         <div class="flex-1" style="min-width: 0; overflow: hidden;">
                             <div class="context-title text-xs font-medium ${titleTextCls}"
