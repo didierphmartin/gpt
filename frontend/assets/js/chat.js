@@ -236,9 +236,6 @@ class ChatApp {
         this.eviMaxReconnectAttempts = 3;
         this.eviManualDisconnect = false; // Flag to prevent auto-reconnect on manual disconnect
 
-        // Voice Panel (Gemini 2.5) - initialized after DOM ready
-        this.voicePanel = null;
-
         // Verifier state
         this.selectedVerifier = null;         // Selected verifier LLM name
         this.verificationEnabled = false;     // Toggle state
@@ -507,9 +504,6 @@ class ChatApp {
 
         // Initialize sidebar resize functionality
         this.initSidebarResize();
-
-        // Initialize Voice Panel (Gemini 2.5)
-        this.initVoicePanel();
 
         // Handle window resize to update sidebar behavior
         window.addEventListener('resize', () => {
@@ -9214,25 +9208,6 @@ class ChatApp {
                 localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
             }
         });
-    }
-
-    /**
-     * Initialize Voice Panel (Gemini 2.5)
-     * UI-only for Goal 1 - voice logic will be added in Goal 2
-     */
-    initVoicePanel() {
-        // Check if VoicePanel class is available
-        if (typeof window.VoicePanel !== 'function') {
-            console.warn('VoicePanel class not found. Voice panel will not be available.');
-            return;
-        }
-
-        try {
-            this.voicePanel = new window.VoicePanel();
-            console.log('Voice Panel initialized successfully');
-        } catch (error) {
-            console.error('Failed to initialize Voice Panel:', error);
-        }
     }
 
     /**

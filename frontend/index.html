@@ -586,6 +586,13 @@
             background: #dbeafe;
             border-left: 3px solid #3b82f6;
         }
+        #voice-dictate-btn.recording {
+            background-color: #ef4444;
+            border-color: #ef4444;
+            color: #ffffff;
+            animation: vd-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes vd-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); } }
 
         /* Three-dot menu button - always visible */
         .context-menu-btn {
@@ -2199,12 +2206,6 @@
                     </svg>
                     <span class="hidden sm:inline" data-i18n="header.tools">Tools</span>
                 </button>
-                <button id="voice-panel-toggle-header" class="voice-header-toggle" title="Toggle Voice Assistant" data-i18n-title="voicePanel.toggleTitle">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                    </svg>
-                    <span class="hidden sm:inline" data-i18n="voicePanel.title">Voice</span>
-                </button>
                 <!-- Help / Tour Button -->
                 <button id="help-tour-btn" class="settings-header-toggle" title="Show help tour" data-i18n-title="header.helpTour" onclick="window.startOnboardingTour && window.startOnboardingTour()">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2980,6 +2981,18 @@
                         </div>
                     </div>
 
+                    <!-- Voice Dictation Provider Section -->
+                    <div class="settings-section">
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Voice provider (dictation)</label>
+                            <select id="voice-dictation-provider" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                <option value="gemini">Gemini</option>
+                                <option value="grok">Grok</option>
+                            </select>
+                            <p class="text-xs text-gray-400 mt-1">Used by the mic button next to Send.</p>
+                        </div>
+                    </div>
+
                     <!-- Login Methods Section -->
                     <div class="settings-section">
                         <h3>
@@ -3700,6 +3713,18 @@
                     </div>
                 </div>
                 <button
+                    id="voice-dictate-btn"
+                    type="button"
+                    title="Dictate your prompt"
+                    aria-label="Dictate your prompt"
+                    class="flex-shrink-0 self-stretch px-2.5 md:px-3 py-2 md:py-3 text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-gray-300 rounded-lg transition flex items-center justify-center"
+                >
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M19 11a7 7 0 01-14 0m7 7v3m0-3a4 4 0 01-4-4V7a4 4 0 118 0v4a4 4 0 01-4 4z" />
+                    </svg>
+                </button>
+                <button
                     id="send-btn"
                     class="self-stretch bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 md:px-6 py-2 md:py-3 rounded-lg font-medium transition flex items-center justify-center gap-1 md:gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm md:text-base"
                 >
@@ -3722,77 +3747,6 @@
         </div>
             </div> <!-- End of Main Chat Area -->
 
-            <!-- Voice Panel Backdrop (mobile) -->
-            <div id="voice-panel-backdrop"></div>
-
-            <!-- Voice Panel Resize Handle -->
-            <div id="voice-panel-resizer" class="resize-handle hidden lg:flex">
-                <div class="resize-handle-line"></div>
-            </div>
-
-            <!-- Voice Panel (Right Sidebar) -->
-            <div id="voice-panel" class="flex-shrink-0 flex bg-gray-50 border-l border-gray-200 flex-col transition-all duration-300 overflow-hidden" style="width: 300px; min-width: 200px; max-width: 450px;">
-                <!-- Voice Panel Header -->
-                <div class="voice-panel-header">
-                    <div class="flex items-center gap-2">
-                        <span class="voice-title">🎙️ <span data-i18n="voicePanel.title">Voice Assistant</span></span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <div class="voice-status">
-                            <span id="voice-status-dot" class="voice-status-dot"></span>
-                            <span id="voice-status-label" class="voice-status-text" data-i18n="voicePanel.status.disconnected">Disconnected</span>
-                        </div>
-                        <button id="voice-panel-collapse" class="voice-panel-toggle" title="Collapse panel" data-i18n-title="voicePanel.collapsePanel">▶</button>
-                    </div>
-                </div>
-
-                <!-- Voice Transcription History -->
-                <div id="voice-history" class="voice-history">
-                    <div class="text-center text-gray-400 text-xs py-8" id="voice-history-placeholder">
-                        <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                        </svg>
-                        <p data-i18n="voicePanel.history.placeholder">Voice transcriptions will appear here</p>
-                        <p class="mt-1 text-gray-300" data-i18n="voicePanel.history.startHint">Click "Start Voice" to begin</p>
-                    </div>
-                </div>
-
-                <!-- Voice Controls -->
-                <div class="voice-controls">
-                    <!-- Provider Selector -->
-                    <div class="voice-provider-selector">
-                        <label for="voice-provider-select" class="text-xs text-gray-500 mr-2">Provider:</label>
-                        <select id="voice-provider-select" class="voice-provider-dropdown">
-                            <option value="gemini">Gemini</option>
-                            <option value="grok">Grok</option>
-                            <option value="hume" disabled>Hume (coming soon)</option>
-                        </select>
-                    </div>
-
-                    <!-- Audio Visualizer -->
-                    <div class="voice-visualizer">
-                        <canvas id="voice-visualizer-canvas"></canvas>
-                    </div>
-
-                    <!-- Status Text -->
-                    <div id="voice-control-status" class="voice-control-status" data-i18n="voicePanel.controlStatus.standby">
-                        System standby
-                    </div>
-
-                    <!-- Connect/Disconnect Button -->
-                    <button id="voice-connect-btn" class="voice-connect-btn start">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                        </svg>
-                        <span id="voice-connect-btn-text" data-i18n="voicePanel.button.start">Start Voice</span>
-                    </button>
-                </div>
-
-                <!-- Voice Panel Footer Toggle -->
-                <button id="voice-panel-toggle-bottom" class="px-2 py-2 bg-gray-100 hover:bg-gray-200 border-t border-gray-200 text-gray-600 text-xs flex items-center justify-center transition">
-                    <span id="voice-panel-toggle-bottom-icon">▶</span>
-                </button>
-            </div>
         </div> <!-- End of Flex Container with Sidebar -->
     </div> <!-- End of Main Container -->
 
@@ -3956,22 +3910,22 @@
     <script src="assets/js/auth.js?v=20260515-startup-tasks"></script>
     <script src="assets/js/config.js"></script>
     <script src="assets/js/i18n.js"></script>
-    <!-- Voice Panel dependencies (must load before voice-panel.js) -->
+    <!-- Voice dependencies (used by voice dictation) -->
     <script src="assets/js/audio-streamer.js"></script>
     <script src="assets/js/gemini-live-client.js"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/voice-panel.js"></script>
     <script src="assets/js/mcp-client.js"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260509-modeldisplay"></script>
+    <script src="assets/js/settings-panel.js?v=20260610-voicedictate2"></script>
     <script src="assets/js/agent-teams-panel.js"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
     <script src="assets/js/gemini-realtime-adapter.js"></script>
+    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate8"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
@@ -3998,7 +3952,24 @@
     <script src="assets/js/workflow-editor.js?v=20260610-selstd"></script>
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20260610-selstd"></script>
+    <script src="assets/js/chat.js?v=20260610-novoicepanel"></script>
+    <script>
+      (function initVoiceDictation() {
+        const input = document.getElementById('user-input');
+        const btn = document.getElementById('voice-dictate-btn');
+        if (!input || !btn || !window.VoiceDictationLib) {
+          return;
+        }
+        const vd = new window.VoiceDictationLib.VoiceDictation({
+          inputEl: input,
+          buttonEl: btn,
+          onState: (s) => btn.classList.toggle('recording', s === 'recording'),
+          onError: (msg) => { (window.chatApp && window.chatApp.showToast ? window.chatApp.showToast(msg) : window.alert(msg)); btn.classList.remove('recording'); },
+        });
+        btn.addEventListener('click', () => vd.toggle());
+        window.voiceDictation = vd;
+      })();
+    </script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->
     <script src="https://cdn.jsdelivr.net/npm/driver.js@1.4.0/dist/driver.js.iife.js"></script>
     <script src="assets/js/onboarding-tour.js?v=20260427-1" defer></script>

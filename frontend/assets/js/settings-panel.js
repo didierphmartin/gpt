@@ -1073,6 +1073,16 @@ class SettingsPanel {
      * Setup Account tab event listeners
      */
     setupAccountListeners() {
+        // Voice dictation provider (used by the mic button next to Send).
+        const vdSelect = document.getElementById('voice-dictation-provider');
+        if (vdSelect) {
+            const saved = localStorage.getItem('voiceDictationProvider');
+            vdSelect.value = (saved === 'gemini' || saved === 'grok') ? saved : 'gemini';
+            vdSelect.addEventListener('change', (e) => {
+                localStorage.setItem('voiceDictationProvider', e.target.value);
+            });
+        }
+
         // Send verification code button
         const sendVerificationBtn = document.getElementById('send-verification-btn');
         if (sendVerificationBtn) {
