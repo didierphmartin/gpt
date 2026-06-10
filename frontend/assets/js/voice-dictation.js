@@ -17,7 +17,8 @@
     }
 
     const PROVIDER_KEY = 'voiceDictationProvider';
-    const SILENCE_MS = 1500; // auto-stop after this much quiet (between final transcripts)
+    const SILENCE_MS = 2500;  // auto-stop after this much quiet, once speech has started
+    const INITIAL_MS = 12000; // grace period to START speaking before auto-stop
 
     // Turn whatever the adapter throws (Error, WebSocket Event, close event,
     // string) into a human, actionable message. Browser WebSocket 'error'
@@ -68,9 +69,9 @@
             this._resetSilenceTimer(); // any transcript activity counts as "not silent"
         }
 
-        _resetSilenceTimer() {
+        _resetSilenceTimer(ms) {
             clearTimeout(this._silenceTimer);
-            this._silenceTimer = setTimeout(() => this.stop(), SILENCE_MS);
+            this._silenceTimer = setTimeout(() => { console.log('[VoiceDictation] auto-stop (silence)'); this.stop(); }, ms || SILENCE_MS);
         }
 
         async start() {
@@ -108,7 +109,7 @@
                         console.log('[VoiceDictation] session ready → mic on');
                         await this._streamer.startCapture();
                         this._setState('recording');
-                        this._resetSilenceTimer();
+                        this._resetSilenceTimer(INITIAL_MS); // long grace until the first words
                     },
                     onInputTranscription: (text) => { console.log('[VoiceDictation] inputTranscription len=' + ((text || '').length)); this._applyTranscript(text, false); },
                     onTurnComplete: (userText) => { console.log('[VoiceDictation] turnComplete len=' + ((userText || '').length)); if (userText) this._applyTranscript(userText, true); },
