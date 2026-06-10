@@ -586,6 +586,12 @@
             background: #dbeafe;
             border-left: 3px solid #3b82f6;
         }
+        #voice-dictate-btn.recording {
+            background-color: #ef4444;
+            color: #ffffff;
+            animation: vd-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes vd-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); } }
 
         /* Three-dot menu button - always visible */
         .context-menu-btn {
@@ -3700,6 +3706,18 @@
                     </div>
                 </div>
                 <button
+                    id="voice-dictate-btn"
+                    type="button"
+                    title="Dictate your prompt"
+                    data-i18n-title="input.dictate"
+                    class="self-stretch bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 md:px-4 py-2 md:py-3 rounded-lg font-medium transition flex items-center justify-center"
+                >
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M19 11a7 7 0 01-14 0m7 7v3m0-3a4 4 0 01-4-4V7a4 4 0 118 0v4a4 4 0 01-4 4z" />
+                    </svg>
+                </button>
+                <button
                     id="send-btn"
                     class="self-stretch bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 md:px-6 py-2 md:py-3 rounded-lg font-medium transition flex items-center justify-center gap-1 md:gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm md:text-base"
                 >
@@ -3972,6 +3990,7 @@
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
     <script src="assets/js/gemini-realtime-adapter.js"></script>
+    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
@@ -3999,6 +4018,21 @@
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
     <script src="assets/js/chat.js?v=20260610-selstd"></script>
+    <script>
+      (function initVoiceDictation() {
+        const input = document.getElementById('user-input');
+        const btn = document.getElementById('voice-dictate-btn');
+        if (!input || !btn || !window.VoiceDictationLib) return;
+        const vd = new window.VoiceDictationLib.VoiceDictation({
+          inputEl: input,
+          buttonEl: btn,
+          onState: (s) => btn.classList.toggle('recording', s === 'recording'),
+          onError: (msg) => { (window.chatApp && window.chatApp.showToast ? window.chatApp.showToast(msg) : window.alert(msg)); btn.classList.remove('recording'); },
+        });
+        btn.addEventListener('click', () => vd.toggle());
+        window.voiceDictation = vd;
+      })();
+    </script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->
     <script src="https://cdn.jsdelivr.net/npm/driver.js@1.4.0/dist/driver.js.iife.js"></script>
     <script src="assets/js/onboarding-tour.js?v=20260427-1" defer></script>
