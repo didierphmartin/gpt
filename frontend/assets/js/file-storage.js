@@ -423,7 +423,7 @@ class FileStorageManager {
         const sizeStr = !isFolder ? this.formatSize(item.size) : '';
         const cls = isFolder ? 'file-tree-folder' : 'file-tree-file';
         const rootCls = item.isRoot ? ' file-tree-root' : '';
-        const selCls = (item.path ?? '') === this.selectedPath ? ' file-tree-selected' : '';
+        const selCls = (item.path ?? '') === this.selectedPath ? ' selected' : '';
         return `
             <div class="file-tree-item ${cls}${rootCls}${selCls}"
                  data-type="${item.type}"
@@ -523,22 +523,21 @@ class FileStorageManager {
             const key = path ?? '';
             if (this.expandedPaths.has(key)) {
                 this.expandedPaths.delete(key);
-                this.renderTree();
-                return;
+            } else {
+                this.expandedPaths.add(key);
+                // Lazy fetch children if not already cached. Render once with a
+                // Loading… row (selection shown), then again once data arrives.
+                if (!this.childrenCache.has(key)) {
+                    this.renderTree();
+                    await this.fetchChildren(key);
+                }
             }
-            this.expandedPaths.add(key);
-            // Lazy fetch children if not already cached. Render once
-            // with a Loading… row, then re-render with the data.
-            if (!this.childrenCache.has(key)) {
-                this.renderTree();
-                await this.fetchChildren(key);
-            }
-            this.renderTree();
         } else if (type === 'file' && id) {
-            // Re-render to show the selection highlight, then open the file.
-            this.renderTree();
             this.openFile(id, name);
         }
+        // Always re-render so the selection highlight reflects the clicked row —
+        // file OR folder — regardless of which branch ran above.
+        this.renderTree();
     }
 
     /**

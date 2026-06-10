@@ -65,7 +65,7 @@
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
     <link rel="stylesheet" href="assets/css/workflow-editor.css">
-    <link rel="stylesheet" href="assets/css/file-storage.css">
+    <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect2">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.4.0/dist/driver.css">
@@ -585,12 +585,6 @@
         .context-item.active {
             background: #dbeafe;
             border-left: 3px solid #3b82f6;
-        }
-        /* Selected file/folder row — same highlight as .context-item.active,
-           via inset shadow so the tree indentation doesn't shift. */
-        .file-tree-item.file-tree-selected {
-            background: #dbeafe;
-            box-shadow: inset 3px 0 0 0 #3b82f6;
         }
 
         /* Three-dot menu button - always visible */
@@ -4003,7 +3997,7 @@
     <script src="assets/js/skillopt-panel.js?v=20260530-skillopt-2-model-picker"></script>
     <script src="assets/js/workflow-editor.js?v=20260610-selstd"></script>
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
-    <script src="assets/js/file-storage.js?v=20260610-fileselect"></script>
+    <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
     <script src="assets/js/chat.js?v=20260610-selstd"></script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->
     <script src="https://cdn.jsdelivr.net/npm/driver.js@1.4.0/dist/driver.js.iife.js"></script>

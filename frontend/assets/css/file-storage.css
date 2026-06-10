@@ -36,13 +36,11 @@
     background-color: #e5e7eb;
 }
 
+/* Selected row — app-standard list selection (matches .context-item.active):
+   light-blue fill + a blue left bar via inset shadow (keeps tree indentation). */
 .file-tree-item.selected {
-    background-color: #3b82f6;
-}
-
-.file-tree-item.selected .file-name,
-.file-tree-item.selected .file-size {
-    color: white;
+    background-color: #dbeafe;
+    box-shadow: inset 3px 0 0 0 #3b82f6;
 }
 
 /* Root folder styling */
