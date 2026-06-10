@@ -2206,12 +2206,6 @@
                     </svg>
                     <span class="hidden sm:inline" data-i18n="header.tools">Tools</span>
                 </button>
-                <button id="voice-panel-toggle-header" class="voice-header-toggle" title="Toggle Voice Assistant" data-i18n-title="voicePanel.toggleTitle">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                    </svg>
-                    <span class="hidden sm:inline" data-i18n="voicePanel.title">Voice</span>
-                </button>
                 <!-- Help / Tour Button -->
                 <button id="help-tour-btn" class="settings-header-toggle" title="Show help tour" data-i18n-title="header.helpTour" onclick="window.startOnboardingTour && window.startOnboardingTour()">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3753,77 +3747,6 @@
         </div>
             </div> <!-- End of Main Chat Area -->
 
-            <!-- Voice Panel Backdrop (mobile) -->
-            <div id="voice-panel-backdrop"></div>
-
-            <!-- Voice Panel Resize Handle -->
-            <div id="voice-panel-resizer" class="resize-handle hidden lg:flex">
-                <div class="resize-handle-line"></div>
-            </div>
-
-            <!-- Voice Panel (Right Sidebar) -->
-            <div id="voice-panel" class="flex-shrink-0 flex bg-gray-50 border-l border-gray-200 flex-col transition-all duration-300 overflow-hidden" style="width: 300px; min-width: 200px; max-width: 450px;">
-                <!-- Voice Panel Header -->
-                <div class="voice-panel-header">
-                    <div class="flex items-center gap-2">
-                        <span class="voice-title">🎙️ <span data-i18n="voicePanel.title">Voice Assistant</span></span>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <div class="voice-status">
-                            <span id="voice-status-dot" class="voice-status-dot"></span>
-                            <span id="voice-status-label" class="voice-status-text" data-i18n="voicePanel.status.disconnected">Disconnected</span>
-                        </div>
-                        <button id="voice-panel-collapse" class="voice-panel-toggle" title="Collapse panel" data-i18n-title="voicePanel.collapsePanel">▶</button>
-                    </div>
-                </div>
-
-                <!-- Voice Transcription History -->
-                <div id="voice-history" class="voice-history">
-                    <div class="text-center text-gray-400 text-xs py-8" id="voice-history-placeholder">
-                        <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                        </svg>
-                        <p data-i18n="voicePanel.history.placeholder">Voice transcriptions will appear here</p>
-                        <p class="mt-1 text-gray-300" data-i18n="voicePanel.history.startHint">Click "Start Voice" to begin</p>
-                    </div>
-                </div>
-
-                <!-- Voice Controls -->
-                <div class="voice-controls">
-                    <!-- Provider Selector -->
-                    <div class="voice-provider-selector">
-                        <label for="voice-provider-select" class="text-xs text-gray-500 mr-2">Provider:</label>
-                        <select id="voice-provider-select" class="voice-provider-dropdown">
-                            <option value="gemini">Gemini</option>
-                            <option value="grok">Grok</option>
-                            <option value="hume" disabled>Hume (coming soon)</option>
-                        </select>
-                    </div>
-
-                    <!-- Audio Visualizer -->
-                    <div class="voice-visualizer">
-                        <canvas id="voice-visualizer-canvas"></canvas>
-                    </div>
-
-                    <!-- Status Text -->
-                    <div id="voice-control-status" class="voice-control-status" data-i18n="voicePanel.controlStatus.standby">
-                        System standby
-                    </div>
-
-                    <!-- Connect/Disconnect Button -->
-                    <button id="voice-connect-btn" class="voice-connect-btn start">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                        </svg>
-                        <span id="voice-connect-btn-text" data-i18n="voicePanel.button.start">Start Voice</span>
-                    </button>
-                </div>
-
-                <!-- Voice Panel Footer Toggle -->
-                <button id="voice-panel-toggle-bottom" class="px-2 py-2 bg-gray-100 hover:bg-gray-200 border-t border-gray-200 text-gray-600 text-xs flex items-center justify-center transition">
-                    <span id="voice-panel-toggle-bottom-icon">▶</span>
-                </button>
-            </div>
         </div> <!-- End of Flex Container with Sidebar -->
     </div> <!-- End of Main Container -->
 
@@ -3987,11 +3910,10 @@
     <script src="assets/js/auth.js?v=20260515-startup-tasks"></script>
     <script src="assets/js/config.js"></script>
     <script src="assets/js/i18n.js"></script>
-    <!-- Voice Panel dependencies (must load before voice-panel.js) -->
+    <!-- Voice dependencies (used by voice dictation) -->
     <script src="assets/js/audio-streamer.js"></script>
     <script src="assets/js/gemini-live-client.js"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/voice-panel.js"></script>
     <script src="assets/js/mcp-client.js"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
@@ -4036,7 +3958,6 @@
         const input = document.getElementById('user-input');
         const btn = document.getElementById('voice-dictate-btn');
         if (!input || !btn || !window.VoiceDictationLib) {
-          console.warn('[VoiceDictation] NOT wired:', { input: !!input, btn: !!btn, lib: !!window.VoiceDictationLib });
           return;
         }
         const vd = new window.VoiceDictationLib.VoiceDictation({
@@ -4047,7 +3968,6 @@
         });
         btn.addEventListener('click', () => vd.toggle());
         window.voiceDictation = vd;
-        console.log('[VoiceDictation] wired ✓ provider=', vd.getProvider());
       })();
     </script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->

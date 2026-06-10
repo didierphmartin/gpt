@@ -71,7 +71,7 @@
 
         _resetSilenceTimer(ms) {
             clearTimeout(this._silenceTimer);
-            this._silenceTimer = setTimeout(() => { console.log('[VoiceDictation] auto-stop (silence)'); this.stop(); }, ms || SILENCE_MS);
+            this._silenceTimer = setTimeout(() => { this.stop(); }, ms || SILENCE_MS);
         }
 
         async start() {
@@ -82,7 +82,6 @@
             // gemini → GeminiLiveClient, grok → GrokLiveClient. Both share a
             // config-based callback interface.
             const ClientClass = provider === 'gemini' ? window.GeminiLiveClient : window.GrokLiveClient;
-            console.log(`[VoiceDictation] start → provider=${provider} hasKey=${!!config.apiKey} hasAudioStreamer=${!!window.AudioStreamer} hasClient=${!!ClientClass}`);
             if (!config.apiKey) {
                 this.onError(`No ${provider} voice key configured — set the Voice provider in Settings → Account.`);
                 return;
@@ -106,7 +105,6 @@
                     sampleRateInput: config.sampleRateInput || 16000,
                     sampleRateOutput: config.sampleRateOutput || 24000,
                     onSetupComplete: async () => {
-                        console.log('[VoiceDictation] session ready → mic on');
                         await this._streamer.startCapture();
                         this._setState('recording');
                         this._resetSilenceTimer(INITIAL_MS); // long grace until the first words
@@ -115,10 +113,9 @@
                         // Gemini calls (deltaChunk, accumulatedFullText); Grok calls
                         // (fullText, isFinal). Use the full accumulated text either way.
                         const full = provider === 'gemini' ? (b || '') : (a || '');
-                        console.log('[VoiceDictation] inputTranscription len=' + full.length);
                         this._applyTranscript(full, false); // live preview (persists if turn-complete is late)
                     },
-                    onTurnComplete: (userText) => { console.log('[VoiceDictation] turnComplete len=' + ((userText || '').length)); if (userText) this._applyTranscript(userText, true); },
+                    onTurnComplete: (userText) => { if (userText) this._applyTranscript(userText, true); },
                     onError: (e) => this._fail(e),
                     onClose: () => { if (this.isRecording) this.stop(); },
                 };
