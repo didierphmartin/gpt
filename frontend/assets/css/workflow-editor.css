@@ -1013,11 +1013,26 @@ svg.connection.selected .main-path,
 .workflow-node.output-node.ingestion-output .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
 .workflow-node.output-node.ingestion-output .node-icon { color: #0284c7; }
 
-/* The ingestion output node is JUST the Compile-to-Python button — no header/body
-   above it, so round all corners and drop the divider top border. */
+/* The ingestion output node is JUST the Compile-to-Python button. Style the node
+   box + the button so it still reads as a deliberate node (recoloured, rounded),
+   not a bare floating pill. */
+.workflow-node.output-node.ingestion-output {
+    border: 1px solid #7dd3fc;
+    border-radius: 10px;
+    overflow: hidden;
+    min-width: 150px;
+}
 .workflow-node.output-node.ingestion-output .node-langgraph {
     border-top: none;
-    border-radius: 8px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+    color: #0369a1;
+    font-weight: 600;
+    padding: 12px 16px;
+}
+.workflow-node.output-node.ingestion-output .node-langgraph:hover {
+    background: linear-gradient(135deg, #bae6fd 0%, #7dd3fc 100%);
+    color: #075985;
 }
 
 /* Ingestion start node (start → loader): recoloured like the ingestion nodes,
