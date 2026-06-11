@@ -1,0 +1,281 @@
+/**
+ * File Storage CSS
+ *
+ * Styles for the file storage treeview and content display.
+ */
+
+/* ============================================
+   File Tree Container
+   ============================================ */
+
+.file-tree-container {
+    min-height: 200px;
+}
+
+.file-tree {
+    padding: 4px 0;
+}
+
+/* ============================================
+   Tree Items
+   ============================================ */
+
+.file-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    border-radius: 4px;
+    /* Transparent left bar on every row so the selected row's coloured bar
+       adds no width — keeps the tree indentation aligned. */
+    border-left: 3px solid transparent;
+    margin: 1px 4px;
+    user-select: none;
+}
+
+.file-tree-item:hover {
+    background-color: #f3f4f6;
+}
+
+/* Selected row — identical to the workflow list / .context-item.active:
+   light-blue fill (#dbeafe) + a blue left bar (#3b82f6). */
+.file-tree-item.selected {
+    background-color: #dbeafe;
+    border-left-color: #3b82f6;
+}
+
+/* A selected row still shows a hover cue (slightly deeper than the fill). */
+.file-tree-item.selected:hover {
+    background-color: #c7ddfb;
+}
+
+/* Root folder styling */
+.file-tree-item.file-tree-root {
+    font-weight: 600;
+    padding-left: 4px;
+}
+
+/* Expand/Collapse Icon */
+.expand-icon {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #6b7280;
+    transition: transform 0.15s ease;
+}
+
+.expand-icon:hover {
+    color: #374151;
+}
+
+/* Collapsed state */
+.file-tree-item[data-expanded="false"] .expand-icon {
+    transform: rotate(-90deg);
+}
+
+/* Placeholder for files (no expand icon) */
+.expand-icon-placeholder {
+    width: 16px;
+    flex-shrink: 0;
+}
+
+/* Folder styling */
+.file-tree-item.file-tree-folder .file-name {
+    font-weight: 500;
+    color: #1e40af;
+}
+
+/* File styling */
+.file-tree-item.file-tree-file .file-name {
+    color: #374151;
+}
+
+/* Tree indentation levels */
+.file-tree-item[data-level="0"] {
+    padding-left: 4px;
+}
+
+.file-tree-item[data-level="1"] {
+    padding-left: 20px;
+}
+
+.file-tree-item[data-level="2"] {
+    padding-left: 40px;
+}
+
+.file-tree-item[data-level="3"] {
+    padding-left: 60px;
+}
+
+.file-tree-item[data-level="4"] {
+    padding-left: 80px;
+}
+
+.file-tree-item[data-level="5"] {
+    padding-left: 100px;
+}
+
+/* File/Folder Icons */
+.file-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+}
+
+.file-name {
+    flex: 1;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-size {
+    font-size: 11px;
+    color: #9ca3af;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding-left: 8px;
+}
+
+/* Tree children container */
+.file-tree-children {
+    display: block;
+}
+
+.file-tree-children.collapsed {
+    display: none;
+}
+
+/* Empty folder message */
+.file-tree-empty {
+    padding: 8px 20px;
+    color: #9ca3af;
+    font-size: 12px;
+    font-style: italic;
+}
+
+/* ============================================
+   File Content Display
+   ============================================ */
+
+.file-content-wrapper {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.file-content-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.file-content-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-content-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    opacity: 0.9;
+}
+
+.file-content-body {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+    background: #fafbfc;
+}
+
+.file-content-pre {
+    margin: 0;
+    padding: 12px;
+    background: #1e1e1e;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.file-content-pre code {
+    color: #d4d4d4;
+    font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+}
+
+/* ============================================
+   Provider Select
+   ============================================ */
+
+#storage-provider-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-position: right 8px center;
+    background-repeat: no-repeat;
+    background-size: 16px;
+    padding-right: 28px;
+}
+
+#storage-provider-select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+/* ============================================
+   Loading Animation
+   ============================================ */
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.animate-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ============================================
+   Responsive Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+    .file-tree-item {
+        padding: 10px 8px;
+    }
+
+    .file-content-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    .file-content-meta {
+        width: 100%;
+        justify-content: space-between;
+    }
+}

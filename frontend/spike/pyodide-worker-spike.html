@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pyodide worker FSA spike</title>
+<style>body{font:14px system-ui;margin:2rem;max-width:60rem}button{display:block;margin:.4rem 0;padding:.5rem .8rem}pre{background:#f5f5f5;padding:1rem;white-space:pre-wrap}</style>
+<h1>Pyodide worker + File System Access spike</h1>
+<p>Proves a Web Worker Pyodide can <code>mountNativeFS</code> a transferred, pre-permitted
+folder handle and <b>persist</b> writes to disk — verified by enumerating the picked
+folder after each run.</p>
+<button id="pick">1. Pick a scratch folder (acts as outputs/)</button>
+<button id="one" disabled>2. One worker writes a file</button>
+<button id="two" disabled>3. Two workers write distinct files concurrently</button>
+<pre id="log"></pre>
+<script>
+// Bump this when you edit the worker, so a normal reload picks up the new code.
+const WORKER_VERSION = 4;
+const log = (m) => document.getElementById('log').textContent += m + '\n';
+let outputsHandle = null;
+
+// Enumerate the EXACT handle the user picked — proves where files actually land.
+async function listDir() {
+  const items = [];
+  try {
+    for await (const [name, h] of outputsHandle.entries()) {
+      let size = '?';
+      try { if (h.kind === 'file') { const f = await h.getFile(); size = f.size + 'b'; } else { size = 'dir'; } }
+      catch (_) {}
+      items.push(`${name} (${size})`);
+    }
+  } catch (e) { return 'ENUMERATION FAILED: ' + e.message; }
+  return items.length ? items.join(', ') : '(empty)';
+}
+
+document.getElementById('pick').onclick = async () => {
+  outputsHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  const p = await outputsHandle.requestPermission({ mode: 'readwrite' });
+  log('picked folder name: "' + outputsHandle.name + '"   permission: ' + p);
+  log('folder contents now: ' + await listDir());
+  log('(the worker mounts THIS handle at the in-Pyodide path /outputs, then writes /outputs/<file>)');
+  document.getElementById('one').disabled = false;
+  document.getElementById('two').disabled = false;
+};
+
+function runWorker(filename, contents) {
+  return new Promise((resolve) => {
+    const w = new Worker('./pyodide-spike.worker.js?v=' + WORKER_VERSION);
+    w.onmessage = (e) => { w.terminate(); resolve(e.data); };
+    w.postMessage({ id: filename, outputsHandle, filename, contents });
+  });
+}
+
+document.getElementById('one').onclick = async () => {
+  log('\none: worker writes in-Pyodide path /outputs/spike-one.txt (first run loads Pyodide, ~10s)...');
+  const r = await runWorker('spike-one.txt', 'hello from worker\n');
+  log('one: worker reply = ' + JSON.stringify(r));
+  log('one: picked-folder contents after run = ' + await listDir());
+};
+
+document.getElementById('two').onclick = async () => {
+  log('\ntwo: two workers write /outputs/spike-A.txt and /outputs/spike-B.txt concurrently...');
+  const [a, b] = await Promise.all([
+    runWorker('spike-A.txt', 'A'.repeat(1000) + '\n'),
+    runWorker('spike-B.txt', 'B'.repeat(1000) + '\n'),
+  ]);
+  log('two: A reply = ' + JSON.stringify(a));
+  log('two: B reply = ' + JSON.stringify(b));
+  log('two: picked-folder contents after run = ' + await listDir());
+};
+</script>

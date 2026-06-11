@@ -1,0 +1,863 @@
+In a previous session we started to think together on how to add a real time behavior for          
+  workflows. This would allow workflows to process audio and video chunks. As we know, the actual    
+  workflow is based on batch processing interacting with LLMs through HTTPS. On the other hand,      
+  realtime processing requires websocket connection to LLMs like gemini or Grok, both multi modal.   
+  Obviously, for performence, the realtime workflow has to be different than the batch one. So, we   
+  are both thinking on the best way to implement this. I include your previous thoughts on the       
+  subject. I added the present information trying to help you build a better picture of the          
+  requirement and constrains\                                                                        
+  Here your previous thoughts on the subject:                                                        
+                                                                                                     
+    You're suggesting that the execution engine for workflows should live in JavaScript, not PHP.    
+  This                                                                                               
+    is a much deeper change than I was thinking. Let me unpack why it makes sense — and where it     
+  gets                                                                                               
+    hard.                                                                                            
+                                                                                                     
+    Why JavaScript-First Makes Sense                                                                 
+                                                                                                     
+    1. Audio capture already lives in the browser. getUserMedia, MediaRecorder, AudioContext — these 
+    only exist in the browser. Having the workflow runner in PHP means constantly ferrying audio     
+  chunks                                                                                             
+     across the network. Having it in JavaScript means the audio stays local until it needs to leave 
+    (to a Grok/Gemini realtime endpoint).                                                            
+                                                                                                     
+    2. Realtime APIs are WebSocket-based. Grok Voice, Gemini Live, GPT-4o Realtime — all of them     
+  speak                                                                                              
+    WebSocket with the client directly. Browser-to-provider is a natural fit. PHP doesn't even need  
+  to                                                                                                 
+    be in the hot path. It would only be there to mint ephemeral tokens (which your codebase already 
+    does via /voice/token).                                                                          
+                                                                                                     
+    3. Same code, two runtimes. This is the elegant part. A well-written JavaScript runner runs      
+    identically in the browser (during editing/testing) and in Node.js (for deployed, unattended     
+    execution). The user tests their workflow live in the editor, and when they hit "Deploy," the    
+  same                                                                                               
+    file runs on a Node sidecar — no translation layer, no risk of behavior differences. This is the 
+    pattern Cloudflare Workers, Vercel Edge, and Temporal.io all use.                                
+                                                                                                     
+    4. Concurrency is natural in JavaScript. Audio streaming is fundamentally async: events arriving 
+    continuously, multiple agents reacting in parallel, timers, debounces, backpressure.             
+  JavaScript's                                                                                       
+    event loop + Promises handle this cleanly. PHP would need curl_multi, fibers, or workarounds for 
+    every concurrency primitive.                                                                     
+                                                                                                     
+    5. Your frontend already has most of the building blocks. workflo                                
+  … +183 lines …                                                                                     
+  er depends on adapters:                                                                            
+    - BrowserAudioAdapter — uses MediaRecorder                                                       
+    - NodeAudioAdapter — uses SIP/WebRTC library or receives from a WebSocket                        
+    - BrowserFetchAdapter vs NodeFetchAdapter — fetch works in both modern Node and browsers, so     
+  this                                                                                               
+    one is easy                                                                                      
+                                                                                                     
+    The runner says "give me audio chunks," and whichever adapter is plugged in provides them. This  
+  is                                                                                                 
+    dependency injection, and it keeps the core portable.                                            
+                                                                                                     
+    5. Testing and observability                                                                     
+                                                                                                     
+    Running the same code in two runtimes means you need tests that verify both behave identically.  
+    Different event loop timing, different Promise scheduling can cause subtle bugs.                 
+                                                                                                     
+    Where I'd Start                                                                                  
+                                                                                                     
+    If you want to pilot this, here's the smallest viable thing:                                     
+                                                                                                     
+    1. Pick one provider — Grok Voice has the cleanest realtime API and you already have ephemeral   
+    token support.                                                                                   
+    2. Build a prototype workflow-runner.js that runs only batch workflows in the browser, just to   
+    prove the JS runner concept and validate against PHP's output.                                   
+    3. Add a streaming Start node type that opens a Grok Voice WebSocket, pipes transcripts into the 
+    graph as new prompts, and runs the downstream agents per utterance.                              
+    4. Test the receptionist scenario end-to-end in the browser. No Node sidecar yet.                
+    5. Only then, if it all works, stand up the Node sidecar and migrate the JS runner to run in     
+  both                                                                                               
+    environments.                                                                                    
+                                                                                                     
+    This gives you a proof of concept in weeks, not months, and validates the architecture before    
+    committing to the Node deployment path.                                                          
+                                                                                                     
+    My Honest Take                                                                                   
+                                                                                                     
+    I think you're right. The PHP-based batch runner has served the current workflows well, but it   
+    fundamentally cannot do what you're describing next. Audio streaming, persistent voice agents,   
+    agent-to-agent handoffs mid-conversation — these all want to live close to the audio, and the    
+  audio                                                                                              
+     lives in the browser.                                                                           
+                                                                                                     
+    The "same code in browser and Node" idea is the best part. It's rare for an architecture         
+  decision                                                                                           
+    to give you both a better development experience (live testing in the editor) and a better       
+    deployment story (deploy the exact same code to production). This is one of those cases.         
+                                                                                                     
+    The risk is scope — this is a major undertaking if you try to do it all at once. But staged as I 
+    sketched above, each step delivers value on its own:                                             
+                                                                                                     
+    - JS batch runner → faster editing/testing, no server round-trip                                 
+    - Streaming start node → unlocks voice workflows (a new product category)                        
+    - Node sidecar → unattended deployment (a new business model: 24/7 agents)                       
+                                                                                                     
+
+⏺ Before continuing, I want to ground this in what actually exists in the repo rather than
+  re-speculating. Let me take a quick look at the current workflow runner, the voice/realtime
+  plumbing, and what's already been built toward this.
+
+⏺ Explore(Survey workflow + realtime infrastructure)
+  ⎿  Done (40 tool uses · 65.5k tokens · 59s)
+  (ctrl+o to expand)
+
+❯ currently we have only the batch workflow no realtime workflows 
+
+⏺ Confirmed — and the survey matches that: the PHP side has GraphWorkflowRunner + WorkflowRunner
+  doing batch, and there's no browser-side graph executor anywhere. But the survey also surfaced
+  something important that changes how I'd stage this compared to my earlier thoughts.
+
+  What I got wrong the first time
+
+  In my previous response I framed this as "build a JS runner that does batch first, then add
+  streaming." Re-reading the codebase, I don't think that's the right sequencing anymore. Here's why:
+
+  The voice infrastructure is already almost entirely in the browser. The repo already has:
+
+  - frontend/assets/js/grok-live-client.js — live WebSocket client to wss://api.x.ai/v1/realtime with
+   ephemeral-token auth
+  - frontend/assets/js/audio-streamer.js — getUserMedia + AudioContext + AudioWorklet at 16 kHz in /
+  24 kHz out
+  - frontend/assets/js/voice-panel.js — provider selection (Grok / Gemini / Hume)
+  - backend/.../VoiceController::getEphemeralToken() — already mints short-lived xAI tokens
+  - /api/v1/voice/usage — already logs audio-seconds per session
+
+  What's missing is not the voice plumbing. It's the workflow-level orchestration over that plumbing.
+   The browser already knows how to have a conversation with Grok Live. What it doesn't know is how
+  to route utterances, tool calls, and handoffs through a graph of agents.
+
+  That reframes the problem: we're not building "a JS runner." We're building an event-driven
+  orchestrator on top of existing voice clients. That's a much smaller first stage than my earlier
+  sketch suggested.
+
+  The deeper insight: batch edges and realtime edges aren't the same thing
+
+  A batch workflow edge is a data-flow wire: output of node A becomes input of node B, one shot,
+  done. A topological DAG.
+
+  A realtime workflow edge is an event subscription: node A emits events continuously (on_utterance,
+  on_tool_call, on_intent_detected); node B reacts each time. This is pub/sub, not DAG. Closer to
+  Node-RED or Max/MSP than to BPMN.
+
+  This has two consequences I didn't spell out before:
+
+  1. The execution model is fundamentally different. A "same runtime for both" design ends up awkward
+   because batch nodes are pull-based and realtime nodes are push-based. Forcing them into one engine
+   means the engine carries both a scheduler and an event bus, and nodes have to know which mode
+  they're in.
+  2. The Drawflow UX has to distinguish them. Users who drag an edge between two realtime nodes
+  aren't saying "A's output is B's input." They're saying "B subscribes to A's events." If both edge
+  types look the same on the canvas, people will be confused about why data doesn't flow through.
+
+  My recommendation: realtime is a separate runner, not a superset of batch. Share the graph schema
+  (nodes/edges tables, Drawflow rendering), but keep the executors apart. The PHP batch runner stays
+  exactly as it is. A new JS realtime runner lives in frontend/assets/js/workflow-realtime-runner.js
+  and only handles graphs whose Start node is voice_session (or similar streaming type). PHP refuses
+  those; JS refuses the batch ones. Clean split.
+
+  The hardest technical question
+
+  Who owns conversation state during a live session?
+
+  The provider (Grok Live / Gemini Live) holds the verbatim audio history on their side. But your
+  workflow runner wants to track intent classification, handoff history, and application state
+  ("caller already gave us their account number"). These can drift out of sync.
+
+  Handoffs make this acute. Receptionist → Billing: two options:
+
+  - Swap session on the wire: close the master Grok session, open a new one with the billing agent's
+  system prompt. Caller hears a hiccup; clean context for the billing agent but they lose everything
+  the caller just said.
+  - Swap system prompt + tools in place: keep the same Grok session, push session.update with new
+  instructions. Seamless audio; the billing agent "hears" the entire prior conversation history
+  whether they need it or not.
+
+  I'd go with option 2 + an application-level "session memory" that the workflow runner maintains
+  independently. The provider is the source of truth for what was said; the runner is the source of
+  truth for what it means to the workflow. When handing off, the runner passes the billing agent a
+  condensed brief ("caller name X, asking about invoice Y") via the new system prompt, rather than
+  relying on the provider's raw history.
+
+  The hardest product question
+
+  Cost blast radius. A batch workflow that misbehaves costs cents. A realtime workflow stuck in a
+  loop costs dollars per minute. Your existing 403-quota pattern in chat.js is a good start but it
+  checks at the start of a request. For live sessions you need:
+
+  - Pre-session hard cap (max minutes per session, enforced by the runner and verified server-side
+  when minting the token so a hacked client can't bypass it)
+  - Mid-session meter that ticks /voice/usage every ~5s, not only at session end — if the browser
+  crashes, you still billed what actually streamed
+  - Server-side "kill session" capability — but here's the catch: once the browser has an ephemeral
+  token, you can't actually force-disconnect the provider WebSocket from the backend. Either (a)
+  issue very short-lived tokens (30-60s) that the browser has to renew, giving you a kill switch at
+  each renewal, or (b) route audio through your own WebSocket proxy (costs latency, adds a server
+  component). I'd start with (a).
+
+  Proposed staging, grounded in what exists today
+
+  Stage 0 — Schema + registry (small, no user-visible change)
+  - Add runtime_mode to agent_workflows ('batch' | 'realtime', default 'batch')
+  - Node-type registry: existing types stay batch-only; add stubs for voice_session, handoff,
+  intent_router
+  - PHP runner refuses realtime graphs with a clear error; no JS runner yet, so realtime graphs can't
+   run at all
+
+  Stage 1 — Realtime runner prototype, one hardcoded shape
+  - workflow-realtime-runner.js that only handles the exact topology: voice_session → intent_router →
+   [agent_a, agent_b]
+  - Reuses grok-live-client.js + audio-streamer.js as-is
+  - Handoff = session.update with new system prompt + tool set on the same WebSocket
+  - Run it from a debug URL, not the editor. Goal: prove that handoff-mid-conversation works
+  end-to-end
+  - Concrete target: the receptionist → billing scenario, 2 minutes end-to-end, in the browser only
+
+  Stage 2 — Editor integration
+  - Realtime node palette in Drawflow (dashed edges for event subscriptions, solid for data flow)
+  - Graph JSON keeps the same nodes/edges schema; edges gain an optional event field ('on_utterance',
+   'on_tool_call', etc.)
+  - "Run in browser" button for realtime graphs; "Run on server" disabled for realtime
+
+  Stage 3 — Cost + observability
+  - Short-lived token renewal (Stage 1 can use the existing 10-min tokens; Stage 3 tightens to 60s)
+  - Per-session usage meter emitting to /voice/usage every 5s
+  - Session-replay log written to a new table: which nodes fired, which handoffs happened, which tool
+   calls ran — independent of the provider's audio history
+
+  Stage 4 — Unattended deployment (only if demand justifies it)
+  - Node.js sidecar that loads workflow-realtime-runner.js headless
+  - Audio adapters for SIP/Twilio instead of getUserMedia
+  - This is where my earlier "same code in browser and Node" point actually pays off — but only for
+  the realtime runner, not the batch one. The batch runner stays in PHP forever, no reason to port
+  it.
+
+  What I'd want to decide before writing a line of code
+
+  1. Primary provider for the pilot? Grok is most complete in your repo today (ephemeral tokens
+  working, client library exists). Gemini Live is second. I'd start with Grok unless you have a
+  product reason to prefer Gemini.
+  2. Handoff semantics: in-place vs. new session? (My lean: in-place + runner-maintained brief. But
+  this is a call you should make explicitly because it affects the whole data model.)
+  3. What's the receptionist proof-of-concept's success criterion? "Caller says billing, billing
+  agent takes over, answers one question, hands back" is probably the right shape. If it works, the
+  architecture is validated. If you try for more on the pilot, you'll be debugging product scope
+  instead of the runtime.
+  4. Is video actually in scope? You mentioned audio and video. Gemini Live supports video-in; Grok
+  doesn't yet. If video is essential for Stage 1, that forces Gemini and a different set of
+  constraints. If it's Stage 2+, Grok-first is the faster path.
+
+  There is also the UI to think about because the users have to find that easy to use like actually  
+  they find of the btch workflow. Your intuition of the event driven system is right and that was a  
+  very impresive thought. Now, the challenge is to find how to model that as a UI metaphone. We have 
+   to think both about this aspect before dealing with the underneath code.                          
+                                                                                                     
+⏺ The core UX problem in one sentence                                                                
+                                                                                                   
+  The batch editor is a DAG of data-flow arrows ("output of A becomes input of B"). The realtime     
+  editor needs to be a statechart of event-triggered transitions ("when X happens to A, become B").  
+  Those are different mental models, but the visual vocabulary — boxes on a canvas connected by      
+  arrows — is identical. That's our lever: if users can recognize the shape, they can learn the new  
+  semantics with one small cognitive shift, not a whole new tool.                                    
+
+  Metaphors I considered and rejected
+
+  Before landing on a recommendation, I weighed several options against the constraint "must feel    
+  like the batch editor to someone who already knows it":                                     
+                             
+  - Node-RED style pub/sub — nodes subscribe to topics, wires carry events. Accurate but the wires   
+  look identical to data wires, which is exactly the confusion we want to avoid.              
+  - Zapier-style "when this, then that" cards — accessible for simple cases, but abandons the canvas
+  entirely. Users who already like the Drawflow canvas would feel downgraded.                        
+  - Swimlane timeline (tracks for agent / tool / user with events flowing left-to-right) — brilliant
+  for debugging a completed session, but terrible for authoring because time isn't explicit in the   
+  design.                                                                                            
+  - Phone tree / org chart — perfect for the receptionist example, too rigid for anything else.
+  - Stage with actors + side panel — good metaphor for "one voice at a time" but requires a          
+  completely new interaction surface. Too much to learn.                                             
+                                                                                              
+  The recommendation: statechart inside a "session frame"                                            
+                                                                                                     
+  Keep the Drawflow canvas. Keep boxes and arrows. Change four things:                               
+                                                                                              
+  1. A visible frame represents "the call." Everything inside the frame happens during a single live 
+  session. The frame has an entry point (caller connects) and an exit point (caller hangs up). This  
+  is the single most important anchor — it gives users a container for "things that only make sense
+  while the call is live," and it visually separates realtime concerns from the rest of the workflow.
+  2. Agent nodes become states. Same rounded box as today, same palette drag-and-drop, but with a
+  small mic icon indicating it's a voice persona. Exactly one agent is "active" at any moment during 
+  a session (the one currently talking to the caller).                                        
+  3. Arrows become labeled event transitions. Instead of unlabeled arrows meaning "data flows here,"
+  realtime arrows have a required label: on intent:billing, on tool_call:transfer, on silence > 10s. 
+  Visually they're dashed to distinguish from solid data-flow arrows in batch graphs. When the user
+  drags an arrow between two agents, the editor opens a small inspector asking "what event triggers
+  this handoff?" with a dropdown of known events — they can't create an unlabeled realtime arrow at  
+  all. This makes the metaphor teach itself.
+  4. Observers pin to the frame border. Cross-cutting nodes — a safety monitor, a transcript logger,
+  a usage meter — don't fit anywhere in the state graph because they're "always on." They get a      
+  special gutter along the top or side of the session frame labeled "Always listening." Conceptually
+  clean; visually distinct from the state machine inside.
+                                                                                                     
+  ASCII sketch of what the canvas looks like                                                         
+                                                                                              
+  ┌─ Realtime Session ──────────────────────────────────────┐
+  │                                                         │                                        
+  │  Always listening:  [Transcript Log]  [Safety Monitor]  │                                        
+  │  ─────────────────────────────────────────────────────  │                                        
+  │                                                         │                                        
+  │     ▶ ┌──────────┐                                      │                                        
+  │       │ 🎙 Greet │                                      │                                        
+  │       │   Agent  │                                      │                                        
+  │       └────┬─────┘                                      │                                        
+  │            │ on intent:billing                          │                                        
+  │            ▼                                            │                                        
+  │       ┌──────────┐    on resolved    ┌──────────┐       │                                        
+  │       │ 🎙 Billing│ ─────────────────▶│ 🎙 Greet │       │                                         
+  │       │   Agent  │                   │   Agent  │       │                                        
+  │       └────┬─────┘                   └──────────┘       │                                        
+  │            │ uses                                       │                                        
+  │            ▼                                            │                                        
+  │       ⬢ lookup_invoice  ⬢ issue_refund                  │                                        
+  │                                                         │                                        
+  └─────────────────────────────────────────────────────────┘                                 
+                                      Exit: caller hangs up                                          
+                                                                                                     
+  The frame is the call. The boxes are states (agents). The dashed/labeled arrows are transitions.   
+  The hexagons are tools attached to an agent. The top strip holds always-on observers. The entry
+  triangle on the left marks the starting agent.                                                     
+                                                                                                     
+  A user who built batch workflows looks at this and sees: a canvas with boxes and arrows. Same      
+  vocabulary. The only new thing is labels on arrows and the frame around everything — two concepts,
+  learnable in 30 seconds.   
+                                                                                                     
+  How a user builds the receptionist scenario
+
+  1. Click "New Workflow" → toggle Realtime (top-right mode indicator, same spot as today's Save     
+  button)                                                                                     
+  2. Canvas auto-creates an empty Session Frame
+  3. Drag an "Agent" from the palette into the frame → it lands as "Agent 1"; the editor auto-marks  
+  it as the start (▶ triangle on its left edge)                                                      
+  4. Configure it: name "Greeter", system prompt, voice, tools. Same inspector panel as batch agent
+  config with one extra section: Voice (provider, voice name, language)                              
+  5. Drag another Agent in → "Billing Agent". Same inspector.                                        
+  6. Drag an arrow from Greeter to Billing Agent → mandatory small dialog: "When should this handoff 
+  happen?" with options:                                                                             
+    - Intent detected (dropdown of known intents, or type a new one)                          
+    - Tool called (dropdown of tools on the source agent)                                            
+    - Silence timeout (seconds field)                                                                
+    - Custom condition (expression editor, advanced)                                                 
+  7. User picks "Intent detected → billing" → arrow gets labeled on intent:billing                   
+  8. Drag a return arrow from Billing back to Greeter, label it on resolved                          
+  9. Drag two tool nodes onto the canvas, draw "uses" edges from Billing Agent → lookup_invoice and  
+  issue_refund                                                                                       
+  10. Hit Run → browser opens a mic permission prompt, the session frame glows, caller can start     
+  speaking                                                                                           
+                                                                                                     
+  Nothing in that flow requires new UI primitives that don't already exist in the batch editor. It   
+  requires: a frame shape, mandatory arrow labels, a "uses" edge type, a voice section in the agent  
+  inspector, and a mode toggle.
+                                                                                                     
+  The runtime view (which is where realtime earns its keep)                                          
+                                                                                              
+  The same canvas becomes a live dashboard during execution:                                         
+  - The currently active agent glows (soft blue pulse)                                               
+  - An event fires → its arrow flashes briefly and the incoming agent takes the glow                 
+  - Tool calls pulse on the hexagon with a small counter                                             
+  - A collapsible event log drawer along the bottom shows a chronological stream: 0:03 user_utterance
+   "I want to check my bill" → 0:04 intent:billing → 0:04 handoff Greeter→Billing → 0:07 tool_call   
+  lookup_invoice → ...                                                                               
+  - A timeline scrubber appears after the session ends: drag back through time and watch the graph   
+  re-animate. This is the killer feature for debugging realtime flows — non-deterministic         
+  conversations are nearly impossible to debug without replay.                                       
+                                                                                              
+  The dashboard and the editor are the same view, not two separate screens. Toggling "Run" just
+  overlays the live glow on top of the canvas you were editing. Users never lose their place.        
+                                                                                              
+  Progressive disclosure     
+                                                                                                     
+  Most users won't start with the receptionist. They'll start with "I have a batch workflow, I want  
+  it to be realtime." That case has to be trivial:                                            
+                             
+  - Simple (1 agent, no handoffs): user flips a batch workflow to realtime mode → the session frame  
+  wraps their single agent → they hit Run. No labels, no transitions, no learning curve. It's a batch
+   workflow that happens to take voice input.
+  - Intermediate (2 agents, 1 handoff): they add a second agent and draw one arrow. Editor asks for  
+  the event. That's the moment they learn "oh, realtime arrows need a reason." One new concept.      
+  - Advanced (receptionist, observers, multiple tools, conditional routing): full statechart. They
+  grow into it.                                                                                      
+                                                                                                     
+  The editor never forces advanced UI on users who don't need it. A 1-agent realtime workflow looks  
+  almost identical to a 1-agent batch workflow; the only visible difference is the dashed frame      
+  around it and the mic icon on the agent box.
+                                                                                                     
+  What stays the same vs. what changes
+
+  ┌────────────────┬───────────────────────────────────┬─────────────────────────────────────────┐   
+  │                │               Batch               │                Realtime                 │
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤
+  │ Canvas         │ Drawflow                          │ Drawflow (same)                         │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤
+  │ Node palette   │ Agents, Conditions, Transforms,   │ Agents, Tools + Observers               │
+  │                │ Tools                             │                                         │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤
+  │ Arrows         │ Solid, unlabeled, data flow       │ Dashed, labeled, event transitions      │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤   
+  │ Container      │ None                              │ Session Frame                           │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤   
+  │ Inspector      │ Per-node config                   │ Per-node config (+ Voice section on     │   
+  │ panel          │                                   │ agents)                                 │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤
+  │ Run button     │ "Run" → server-side PHP runner    │ "Run" → browser-side JS runner          │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤   
+  │ Live feedback  │ Progress events in a log          │ Live glow + event pulses + replay       │
+  │                │                                   │ scrubber                                │   
+  ├────────────────┼───────────────────────────────────┼─────────────────────────────────────────┤   
+  │ Mode indicator │ (none)                            │ Realtime badge in the toolbar           │
+  └────────────────┴───────────────────────────────────┴─────────────────────────────────────────┘   
+                                                                                              
+  The cognitive jump is small. The visible changes are deliberately minimal. The new capabilities    
+  come from the semantics of the labeled dashed arrows and the session frame, not from a new UI      
+  language.                  
+                                                                                                     
+  Open UX questions I'd want your answer on before moving forward                                    
+                                                                                              
+  1. Can one agent belong to multiple sessions? i.e., is "Billing Agent" a reusable component you    
+  drop into several realtime workflows, or is it per-workflow? This affects whether we need an "Agent
+   library" sidebar — which the batch editor doesn't have today — or whether agents stay local to
+  their workflow like now.                                                                           
+  2. How explicit should "intent detection" be? The arrow label on intent:billing implies the runtime
+   classifies intents automatically. Option A: a background LLM call tags every user utterance with  
+  an intent (costs more, magical for users). Option B: the user has to wire an explicit "intent
+  classifier" node whose outputs become the event names (cheaper, more work for the user, more
+  transparent). I have a lean toward A with B as an advanced escape hatch, but it's a product call.  
+  3. Should tools appear inside the session frame or in their own area? Pro inside: visually clear
+  which agent owns which tool. Con: clutters the state graph. Alternative: tools live in a separate  
+  "Tools used in this session" strip, with labels showing which agents can call them. I lean toward
+  inside-the-frame for simple cases (1-3 tools) with an auto-collapse into a strip when there are
+  many.                                                                                              
+  4. How do we teach the frame concept? On a user's first realtime workflow, should the session frame
+   appear automatically with a one-time tooltip ("Everything inside this frame happens while a caller
+   is connected"), or do we leave discovery to documentation? I lean toward the tooltip — it's a
+  novel concept that's worth one sentence of explanation.
+  5. Replay scrubber: how much do we store? Replaying a session means keeping a log of every event   
+  with timestamps. Storage isn't the problem (text is cheap); the question is whether we also store  
+  the audio, which changes the economics and the privacy posture. My instinct: store events by
+  default, audio only if the user explicitly enables "Record session" on the workflow.
+
+  Firstly thanks for your feed back.Let me answer to your comments.\                                 
+  -  1. "Events come from audio. Of course but the event you mentionned e already deal with that     
+  kind of process with the other already implemented workflow. However, a real time workflow based   
+  on audio streaming mar lead to another already defined batch type workflow. Wrokflows could be     
+  linked like in computer languages function calls. So what you say implies that we can link         
+  realtime workflows with batch based like er have actually. I agree on these points though:\        
+   - The audio/transcript — intents, keywords, silence, sentiment, interruption, language switch     
+                                                                                                     
+    - The active LLM itself — tool calls, structured outputs, self-reported state ("I've confirmed   
+    their identity")                                                                                 
+                                                                                                     
+    - Tool results — a function returned a value that matters ("invoice is overdue")                 
+    - Session lifecycle — connected, disconnected, degraded audio, max duration reached              
+                                                                                                     
+    - Timers / conditions — "user has been in billing flow > 2 minutes," "it's now after business    
+                                                                                                     
+    hours"     \                                                                                     
+  we already have this concept of agent supported with functions and MCP servers. This can also be   
+  applied with realtime streaming when an event is fired.\                                           
+  - 2. Prerequisite ordering" is the DAG instinct fighting back. Sure it is obvious the concept in   
+  implicit not explicit, for human the network of nodes indicates a logic the whole network express  
+  a logic of action or a network of conserns\                                                        
+
+⏺ Your composability insight is, I think, the most important architectural observation we've had so
+  far in this discussion. Let me run with it because it cleans up a lot of things I was worrying
+  about.                                                                                             
+                                                                                                     
+  Realtime workflows calling batch workflows is exactly the right frame                              
+                                                                                                     
+  If a realtime workflow can call a batch workflow the way one function calls another, then the      
+  realtime runner doesn't need to re-implement batch capabilities. Everything complex — multi-step   
+  research, document analysis, database lookups, multi-agent reasoning chains, MCP tool sequences —
+  stays in the batch runner where it already works. The realtime runner only needs to handle what's  
+  genuinely new to realtime: voice sessions, agent states, transitions, observers, and local rules.
+
+  This is a massive simplification. Earlier I was implicitly assuming the realtime runner would need 
+  to reach feature parity with the PHP batch runner over time. It doesn't. It needs to reach feature
+  complement: the things batch can't do, plus the ability to call into batch for everything batch
+  already does.                                                                                      
+
+  What this means concretely: batch workflows become tools                                           
+                                                                                                  
+  From the active LLM's perspective, nothing changes. An agent in a realtime session has a tool set. 
+  Some of those tools are:                                                                           
+               
+  - Classic code functions (local JS rules, simple arithmetic, string manipulation)                  
+  - MCP server tools (everything the existing MCP infrastructure provides)                        
+  - Saved batch workflows exposed as callable tools (new)                                            
+  - Event emitters / handoff declarations (new — but these are workflow-level, not LLM-level)        
+                                                                                                     
+  When the realtime runner starts a session with an agent, it assembles the tool list and pushes it  
+  into the Grok Live / Gemini Live session config. The LLM sees a uniform list of functions. It      
+  doesn't know that generate_account_summary is actually a batch workflow with five nodes running on 
+  a PHP server — it just knows there's a function it can call with an account ID that returns an     
+  account summary.
+
+  The runner's job when that tool is called:
+
+  1. Extract the arguments from the tool call                                                        
+  2. Invoke the existing /api/v1/workflows/:id/run endpoint (or whatever the batch runner's execution
+   endpoint is) with the arguments mapped to the workflow's input schema                             
+  3. Receive the result                                                                              
+  4. Return it as the tool's return value to the LLM                                                 
+  5. The LLM speaks the result to the caller                                                         
+                                                                                                     
+  From the user who authored the workflow, nothing new to learn: they already know how to define a   
+  batch workflow, they already know how to give an agent tools. The only new thing is: in the tool 
+  picker, "Saved workflows" is now a category alongside "Code" and "MCP". Pick a workflow, map its   
+  inputs to the agent's intended parameters, done.                                                   
+
+  The latency problem this exposes                                                                   
+                                                                                                  
+  Here's where it gets interesting. Some batch workflows run in seconds — a simple DB lookup, a      
+  single LLM synthesis. Fine for a live voice call; the agent says "one moment" and the result comes 
+  back before the caller notices. But some batch workflows run for minutes — research tasks,
+  multi-document analysis, long reasoning chains. You can't stall a voice call for two minutes       
+  without the caller hanging up.
+
+  So batch-workflow-as-tool needs two calling modes:                                                 
+                                                                                                  
+  Synchronous mode (for fast batch workflows): the tool call blocks until the workflow returns, same 
+  as any other tool call. The runner should enforce a max timeout (say, 10 seconds) — anything longer
+   gets upgraded to async mode automatically.                 
+                                                                                                     
+  Async-with-progress mode (for slow batch workflows): the tool call returns immediately with a job  
+  handle. The workflow keeps running in the background. As it produces progress updates (it already
+  emits these via SSE for the existing batch runner UI), the realtime runner forwards them into the
+  graph as local rule events — on_workflow_progress:generate_account_summary,                        
+  on_workflow_complete:generate_account_summary. The active agent can react to these: play filler
+  audio, give status updates ("still pulling that up"), or wait for completion and then speak the
+  result.
+
+  The elegant part: the existing SSE channel from the PHP batch runner becomes the progress channel  
+  for realtime-invoked batch calls. We reuse the transport layer; we don't build a new one.       
+                                                                
+  The authoring implication: when a user exposes a batch workflow as a tool in the realtime editor,  
+  the tool picker asks "is this fast (< 10s) or slow?" — slow workflows automatically get progress
+  events wired into the graph as additional edges the user can react to. A natural place for filler
+  speech to be attached.                                                                             
+
+  The asymmetry
+
+  Realtime calls batch: yes, natural, solves a lot of problems.                                      
+  Batch calls realtime: doesn't make sense. A batch workflow can't host a live voice conversation.
+  The closest thing is "a batch workflow triggers a realtime workflow as a scheduled job" — e.g.,    
+  "every weekday at 9am, start an outbound voice check-in with user X." That's scheduling, not       
+  calling, and it only works once we have a Node.js sidecar that can host realtime sessions without a
+   browser. Worth flagging for later, not solving now.                                               
+
+  So the calling graph is: realtime → batch → (anything batch can already do). One direction. Clean. 
+                                                                                                  
+  The principle this reveals: workflows are composable functions                                     
+                                                                                                     
+  If realtime-calls-batch works, the natural next question is: can batch workflows also call other   
+  batch workflows? That's currently not supported (a batch graph is one atomic unit). But once we    
+  introduce "workflow-as-callable-tool" for realtime, the same mechanism works for batch — an agent
+  node in a batch workflow could call another saved batch workflow as a tool.                        
+
+  This turns workflows into reusable skills. A user builds summarize_meeting once and invokes it from
+   a dozen higher-level workflows. A library of shared skills emerges naturally. It's a capability
+  you'd want anyway, and the realtime work gives us a reason to build it now instead of later.
+                                                                                                     
+  Caveat: workflow composition introduces versioning questions. When workflow A calls workflow B, is 
+  it calling "B as it exists right now" or "B as it existed when A was saved"? I'd lean toward    
+  pinning a version on save, with an opt-in "track latest" mode for advanced users. But this can wait
+   until after the realtime pilot.                                                                   
+
+  What this doesn't change
+
+  The agent + functions + MCP concept you already have carries over unchanged. An agent is still: a  
+  name, a system prompt, a tool set, optionally MCP server connections, model config. The definition
+  is identical in batch and realtime. What's different is the runtime that activates it:
+                                                                                                     
+  - In batch: the runner makes one HTTP call with the agent's system prompt and conversation history,
+   gets a response, passes it to the next node.                                                   
+  - In realtime: the runner pushes the agent's system prompt + tool set into the live voice session's
+   config (session.update on Grok / Gemini Live). The LLM is already running; we're just changing its
+   personality and toolkit.                                                                       
+                                                                                      
+  The agent is a first-class reusable object across both runtimes. Users don't maintain two copies of
+   "Billing Agent" — they maintain one, and it works in either mode. The workflow tells the runtime
+  what to do with the agent.                                                              
+                                                                                                     
+  Net effect on the architecture                                                                     
+                                                                                                  
+  Given everything in your last message, here's the updated picture compared to what I was drafting  
+  two messages ago:                                                                                  
+                                                                                               
+  - Realtime runner is smaller than I thought. It only handles: voice session lifecycle, agent state 
+  (active/inactive), transitions (event → new active agent), observers, local rules, and "call this
+  batch workflow as a tool." That's maybe 6-8 node types total.                                     
+  - Agents are shared between batch and realtime. One definition, two runtimes.                      
+  - Batch capabilities get inherited for free via workflow-as-tool. No parity work needed.           
+  - The Node.js sidecar can be deferred indefinitely. As long as realtime sessions run in the browser
+   and call batch workflows on the server, the whole thing works with the existing PHP backend plus a
+   new JS runner. Node is only needed for unattended (e.g., phone-in) deployment, which is a separate
+   product concern.                                                                                  
+  - Existing SSE infrastructure gets reused as the progress channel for long-running batch calls     
+  invoked from realtime.                                                                             
+                                                                                                  
+  That's a much less scary project than it looked two messages ago.                                  
+                                                                                                  
+  What I'd want to talk about next                                                                   
+                     
+  Three candidates, and I'd like your take on which is the most important to nail down before we move
+   toward implementation:                                                                         
+                                                                                             
+  1. The tool-picker UX. When a user adds a tool to a realtime agent, they see code functions, MCP   
+  tools, and saved workflows in one list. How do we visually distinguish them? How do we let the user
+   configure the input mapping from the tool call arguments to the workflow's inputs? This is
+  probably the biggest new piece of UI we need to design.
+  2. The async-with-progress pattern. How does a user, in the editor, express "while this batch      
+  workflow is running, make the agent say filler speech"? Is this automatic (the runner generates    
+  on_workflow_progress edges by default)? Is it an explicit "waiting behavior" field on the tool? 
+  This is the piece that most affects how a realtime session feels to the caller.            
+  3. The agent-facing DSL for declaring events. Still the thing I flagged at the end of my previous
+  message, and still the only piece that's genuinely new from the LLM's side: how do we describe to  
+  the active agent, in its system prompt, which events it's allowed to emit and under what        
+  conditions? This is the bridge between the visual editor's arrow labels and the LLM's actual
+  behavior during a live session.
+                                                                                                     
+  My instinct is to do them in that order — tool picker first because it's the most visible to users,
+   async-progress second because it drives the authoring model, DSL third because it's an         
+  implementation concern users don't really see. But I'm open to doing them in whatever order you
+  think matches how users will actually encounter these features.
+                                                                                                     
+✻ Cogitated for 2m 7s                   
+                                                                                          
+❯ 3. "Identify the event, then activate the agent" is backwards for voice. This is not what I mean   
+  but we need a way to identify the events. This could be a state machine b the system has to        
+  recognize the state which, in that case represent the event. So my question is how would you       
+  recognize the event/state?                                                                         
+                                                                                                     
+⏺ Got it — I misread where you were drilling. You're not asking "who fires the event" but "how does  
+  the system actually know an event happened." Fair. That's a more interesting question and the
+  state/event equivalence you raised is exactly right: in a state machine, entering a state is an    
+  event, and firing an event is entering a new state. Same thing from two angles.                    
+                                                                                                     
+  Here's how I'd actually recognize them, by mechanism rather than by event type.                    
+                  
+  The key realization: we're not building a recognition engine from scratch                          
+                  
+  The providers (Grok Live, Gemini Live) already do most of the hard work. They give us, in the      
+  WebSocket protocol, a continuous stream of pre-recognized signals:
+                                                                                                     
+  - Partial and final transcripts — with is_final markers that tell us when a transcription is       
+  committed vs. still being revised
+  - Voice Activity Detection (VAD) — when the user starts/stops speaking, when they go silent, when  
+  they interrupt the assistant mid-response                                                          
+  - Turn detection — "the user is done talking, it's your turn to respond"
+  - Function calls from the LLM — structured tool-call objects that appear in the event stream when  
+  the LLM decides to call something                                                                  
+  - Audio lifecycle — audio chunks in, audio chunks out, playback done, interruption acknowledged    
+  - Connection state — connected, degraded, reconnecting, closed, errored                            
+                                                                                                     
+  Our runner is a subscriber to these provider signals, not a generator. That reframes "how do we    
+  recognize events?" — it becomes "how do we translate what the provider tells us into our workflow's
+   event language?"                                                                                  
+                  
+  The six recognition mechanisms
+
+  Every event in the workflow gets recognized by exactly one of these:                               
+   
+  1. Transcript pattern matching                                                                     
+  - Signal: live transcript stream from the provider
+  - How: a small pattern matcher runs on each new transcript segment. Patterns are regexes, fuzzy    
+  phrase matchers, or structured phrase-list lookups ("did the user say any of these words?")    
+  - Commitment point: fire only on is_final transcript segments, not partials, to avoid firing events
+   that get retracted when the provider corrects itself                                              
+  - Used for: keyword triggers like "human," "supervisor," "cancel my account"                       
+  - Cost: zero; it's a regex on a string                                      
+                                                                                                     
+  2. Provider VAD and turn signals                                                                   
+  - Signal: the provider's own turn-detection events                                                 
+  - How: we subscribe to speech_started, speech_ended, turn_complete, etc., and timers anchored to   
+  those                                                                                           
+  - Commitment point: the provider has already decided; we just receive                              
+  - Used for: silence timeouts, "user is now speaking / waiting," interruption events
+  - Cost: zero; we're a listener                                                                     
+  - Important: we don't build our own VAD. That's a rabbit hole of thresholds and false positives.   
+  The provider's VAD is tuned on millions of calls and works well — use it.                          
+                                                                                                     
+  3. LLM tool calls (the primary semantic channel)                                                   
+  - Signal: the function-call events the active LLM emits via the realtime protocol                  
+  - How: the agent's system prompt declares a set of "emission tools" — emit_intent, mark_state,     
+  handoff_to, request_tool. When the LLM calls one, the runner receives it as a structured object on 
+  the event stream.                                                                                  
+  - Commitment point: atomic. The LLM either called the function or it didn't. No ambiguity.
+  - Used for: intent detection, state progression, handoffs, anything that requires language         
+  understanding in context                                                                           
+  - Cost: zero — the LLM was going to process the turn anyway                                        
+                                                                                                     
+  This is where most "semantic" events come from. The LLM already understands what the user said,    
+  because that's its whole job. Having it emit a structured tool call at the moment of understanding 
+  is free.                                                                                           
+                                                                                                     
+  The subtlety: the LLM is prompted to call these tools, which means we need to describe them in the 
+  system prompt. That's the DSL bridge I flagged in message two. The editor's arrow labels compile
+  down into a tools block in the agent's system prompt. More on this below.                          
+                  
+  4. Tool-result predicates                                                                          
+  - Signal: the return value of a tool call (code function, MCP tool, or batch-workflow-as-tool)
+  - How: after the tool returns and before we pass the result back to the LLM, a predicate evaluates 
+  against the result. JSON-path + operator + value, or a visual condition builder in the editor.    
+  - Commitment point: the tool completes, the predicate evaluates                                    
+  - Used for: "when lookup_invoice.balance < 0, fire on_overdue" — domain logic based on what tools
+  return                                                                                             
+  - Cost: zero; local evaluation                                                                     
+   
+  5. Timers                                                                                          
+  - Signal: wall clock
+  - How: setTimeout anchored to state entry or to other events. "Fire on_idle if no speech for 10s," 
+  "fire on_session_max if session > 30min"                                                          
+  - Commitment point: the timer expires and is still valid (not cancelled by another event)          
+  - Used for: idle detection, session caps, per-agent duration limits, retry logic         
+  - Cost: zero                                                                                       
+                                                                                                     
+  6. Observer classifier (Layer 3, opt-in)                                                           
+  - Signal: rolling window of recent transcript                                                      
+  - How: a cheap parallel model (Haiku, Flash, or a local classifier) sees the last N seconds of     
+  transcript and emits structured labels: frustration, escalation, safety, language switch, off-topic
+  - Commitment point: when the classifier returns a confidence above a threshold, with a debounce    
+  ("don't re-fire the same event within 30s")                                                    
+  - Used for: cross-cutting events the active agent can't or won't report on itself                  
+  - Cost: one cheap-model call per transcript window; only runs when observers are subscribed
+                                                                                                     
+  That's the whole menu. Six mechanisms. Every event in the graph is one of these.                   
+                                                                                                     
+  Walking through the receptionist with mechanisms attached                                          
+                                                                                                     
+  Let me re-do the receptionist with each event tagged by which mechanism recognizes it:             
+   
+  Caller connects                                                                                    
+    → Mechanism 2 (provider WS open event)
+    → fires `on_session_start`                                                                       
+    → runner enters Greeter state, pushes Greeter system prompt                                      
+                                                                                                     
+  Greeter system prompt includes an emission tool:                                                   
+    handoff_to(agent: "billing"|"sales"|"support")                                                   
+                                                                                                     
+  Caller says "I need to check my bill"                                                              
+    → Mechanism 3: Grok Live transcribes, understands, calls handoff_to("billing")                   
+    → runner receives structured tool call                                                           
+    → fires `on_handoff:billing`                                                                     
+    → transitions to Billing state, session.update with Billing system prompt + tools                
+                                                                                                     
+  Billing agent calls lookup_invoice(account_number)                                                 
+    → tool executes, returns {balance: -250, overdue: true}                                          
+    → Mechanism 4: predicate `lookup_invoice.overdue == true` evaluates true                         
+    → fires `on_tool_result:overdue`                                                                 
+    → transitions to Collections state                                                               
+                                                                                                     
+  Meanwhile, Mechanism 6 observer classifier is watching for frustration
+    → after "this is ridiculous" it classifies escalation, confidence 0.87                           
+    → debounce check: no recent escalation event, so                                                 
+    → fires `on_escalation`                                                                          
+    → observer edge overrides current state, transitions to Supervisor state                         
+                                                                                                     
+  10 seconds pass with no user speech
+    → Mechanism 2: provider emits `input_audio_buffer.speech_stopped` 10s ago                        
+    → Mechanism 5: 10s timer anchored to speech_stopped expires                                      
+    → fires `on_idle:10s`                                                                            
+    → agent prompts "are you still there?"                                                           
+                                                                                                     
+  Caller hangs up                                                                                    
+    → Mechanism 2: WebSocket close
+    → fires `on_session_end`                                                                         
+    → runner flushes logs, updates usage, terminates
+                                                                                                     
+  Every event has a clear recognizer. Every recognizer has a known cost and latency characteristic.  
+  No black boxes.                                                                                    
+                                                                                                     
+  What this means for the editor
+
+  When a user draws an arrow between two agents, the "what triggers this?" dialog should be grouped  
+  by mechanism because that's what actually matters — it tells the user the cost, latency, and
+  reliability of the event they're choosing:                                                         
+                  
+  How should this transition fire?
+                                                                                                     
+    ━━━ Free, instant, deterministic ━━━                                                             
+    ○ User says a keyword / phrase         (Mechanism 1)                                             
+    ○ Silence for N seconds                (Mechanism 2)                                             
+    ○ Session / lifecycle signal           (Mechanism 2)
+    ○ Timer elapsed                        (Mechanism 5)                                             
+    ○ Tool result matches a condition      (Mechanism 4)                                             
+                                                                                                     
+    ━━━ Free, conversational ━━━                                                                     
+    ○ Agent decides (emission tool call)   (Mechanism 3)                                             
+                                                                                                     
+    ━━━ Opt-in, costs extra ━━━                                                                      
+    ○ Observer detects cross-cutting event (Mechanism 6)                                             
+                                                                                                     
+  Users learn, just from the picker, that the first group is cheap and reliable, the second group is 
+  the default for anything semantic, and the third group should only be used when the first two can't
+   catch what they need.                                                                             
+                  
+  The subtleties worth flagging now                                                                  
+   
+  A few things that will bite us if we ignore them:                                                  
+                  
+  Partial vs. final transcripts. Both Gemini and Grok stream partials that get revised. If we fire   
+  keyword events on partials, we'll get spurious firings when the model corrects itself. Always gate
+  text-based recognition on is_final. The cost is a small latency (a few hundred ms between partial  
+  and final), but that's acceptable.
+
+  Tool call validation. The LLM might emit a tool call with malformed arguments (wrong enum value,   
+  missing required field). The runner must validate before firing the corresponding event. If
+  validation fails, don't fire anything and optionally feed the error back to the LLM ("that intent  
+  isn't valid, try again").
+
+  Debouncing and commitment. Observer events especially need debounce — a classifier fluctuating     
+  between 0.6 and 0.8 confidence shouldn't fire and un-fire in a loop. Once an event fires, it should
+   have a cooldown before it can fire again. Probably configurable per-edge in the editor, with a    
+  sensible default.
+
+  Event ordering in a busy moment. What if in the same 100ms window, the LLM calls                   
+  handoff_to(billing) AND the observer detects escalation AND a silence timer fires? Three events
+  arrive at the runner nearly simultaneously. Which wins? The runner needs a priority model. My lean:
+   observer events are highest priority (safety concerns trump domain logic), then LLM tool calls,
+  then timers, then transcript matches. But this is a design choice worth being explicit about.
+
+  State-dependent recognition. The same signal can mean different things in different states. "Yes"  
+  after "Do you want to proceed?" means commit. "Yes" after "Are you upset?" means don't commit.
+  Mechanism 3 handles this naturally because the LLM has context. Mechanisms 1 and 4 don't — they're 
+  stateless. If a user wires a keyword-match event on "yes" at the graph level, they're going to get
+  burned. The editor should probably steer users toward Mechanism 3 for anything semantic and only
+  use Mechanism 1 for truly context-free keywords like "operator" or "human."
+
+  My honest take on where this lands                                                                 
+   
+  You now have a clean answer to "how do we recognize events?" — six mechanisms, five of which cost  
+  nothing because the provider is doing the work or it's a local operation, one of which (observer
+  classifier) is opt-in for cross-cutting concerns. No black-box recognition pipeline. Every event   
+  has a traceable origin.
+
+  The piece I'm still slightly worried about is Mechanism 3 — the DSL bridge. The editor lets users  
+  label an arrow on_intent:billing, and that label has to become a specific instruction in the
+  agent's system prompt telling the LLM "when you determine the user wants billing, call             
+  emit_intent(billing)." That translation from visual label → system prompt injection is where the
+  magic happens, and it's the one piece we don't have a pattern for yet. Batch agents have system
+  prompts, yes, but they don't have this "the editor writes part of your prompt for you based on
+  graph structure" concept.
+
+  I think that's the next thing to design, because it's the one piece where the visual editor has to 
+  generate something the LLM will actually see and act on, and if we get it wrong the whole Mechanism
+   3 channel falls apart.                                                                            
+                  
+  If that sounds like the right next topic, I'd want to work through: how does an edge label become a
+   line in the system prompt, how do emission tools get described to the LLM, and how do we make sure
+   the LLM calls them reliably (as opposed to just talking about doing them)? That's the bridge      
+  between the visual language and the live session.

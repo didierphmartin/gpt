@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hume EVI Tools Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-success { background-color: #10b981; }
+        .status-warning { background-color: #f59e0b; }
+        .status-error { background-color: #ef4444; }
+        .status-info { background-color: #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">🔧 Hume EVI Tools Synchronization</h1>
+            <p class="text-gray-600">Manage and sync your backend functions with Hume EVI API</p>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Connection Status</h2>
+            <div id="connection-status" class="flex items-center">
+                <span class="status-indicator status-info"></span>
+                <span class="text-gray-600">Testing connection...</span>
+            </div>
+            <button onclick="testConnection()" class="mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+                Test Connection
+            </button>
+        </div>
+
+        <!-- Sync Status -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Synchronization Status</h2>
+            <div id="sync-status" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                <div class="bg-blue-50 p-4 rounded-lg">
+                    <div class="text-2xl font-bold text-blue-600" id="stat-local">-</div>
+                    <div class="text-sm text-gray-600">Backend Functions</div>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg">
+                    <div class="text-2xl font-bold text-green-600" id="stat-hume">-</div>
+                    <div class="text-sm text-gray-600">Hume Tools</div>
+                </div>
+                <div class="bg-orange-50 p-4 rounded-lg">
+                    <div class="text-2xl font-bold text-orange-600" id="stat-missing">-</div>
+                    <div class="text-sm text-gray-600">Missing in Hume</div>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-lg">
+                    <div class="text-2xl font-bold text-purple-600" id="stat-orphaned">-</div>
+                    <div class="text-sm text-gray-600">Orphaned in Hume</div>
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <button onclick="checkStatus()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+                    Check Status
+                </button>
+                <button onclick="syncTools()" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded" id="sync-btn">
+                    🔄 Sync All Tools
+                </button>
+            </div>
+        </div>
+
+        <!-- Sync Results -->
+        <div id="sync-results" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Last Sync Results</h2>
+            <div id="sync-results-content"></div>
+        </div>
+
+        <!-- Tool Details -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Tool Details</h2>
+            <div id="tool-details" class="space-y-2">
+                <p class="text-gray-500">Click "Check Status" to load tool details</p>
+            </div>
+        </div>
+
+        <!-- Log Console -->
+        <div class="bg-gray-900 rounded-lg shadow-md p-6 mt-6">
+            <h2 class="text-xl font-bold text-white mb-4">📝 Console Log</h2>
+            <div id="console-log" class="font-mono text-sm text-green-400 h-64 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'backend/api/v1/hume/tools';
+
+        function log(message, type = 'info') {
+            const console = document.getElementById('console-log');
+            const timestamp = new Date().toLocaleTimeString();
+            const colors = {
+                info: 'text-green-400',
+                success: 'text-blue-400',
+                warning: 'text-yellow-400',
+                error: 'text-red-400'
+            };
+            const icon = {
+                info: 'ℹ️',
+                success: '✅',
+                warning: '⚠️',
+                error: '❌'
+            };
+
+            const line = document.createElement('div');
+            line.className = colors[type] || colors.info;
+            line.textContent = `[${timestamp}] ${icon[type]} ${message}`;
+            console.appendChild(line);
+            console.scrollTop = console.scrollHeight;
+        }
+
+        async function testConnection() {
+            log('Testing connection to Hume API...');
+            const statusDiv = document.getElementById('connection-status');
+
+            try {
+                const response = await fetch(`${API_BASE}/test-connection`);
+                const data = await response.json();
+
+                if (data.success) {
+                    statusDiv.innerHTML = `
+                        <span class="status-indicator status-success"></span>
+                        <span class="text-green-600 font-semibold">Connected to Hume API</span>
+                        <span class="text-gray-500 ml-2">(${data.tools_count} tools found)</span>
+                    `;
+                    log(`Connection successful! Found ${data.tools_count} tools in Hume`, 'success');
+                } else {
+                    statusDiv.innerHTML = `
+                        <span class="status-indicator status-error"></span>
+                        <span class="text-red-600 font-semibold">Connection failed</span>
+                        <span class="text-gray-500 ml-2">${data.message}</span>
+                    `;
+                    log(`Connection failed: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <span class="status-indicator status-error"></span>
+                    <span class="text-red-600 font-semibold">Error: ${error.message}</span>
+                `;
+                log(`Error testing connection: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkStatus() {
+            log('Checking synchronization status...');
+
+            try {
+                const response = await fetch(`${API_BASE}/status`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const status = data.status;
+
+                    document.getElementById('stat-local').textContent = status.local_count;
+                    document.getElementById('stat-hume').textContent = status.hume_count;
+                    document.getElementById('stat-missing').textContent = status.missing_in_hume.length;
+                    document.getElementById('stat-orphaned').textContent = status.missing_in_local.length;
+
+                    // Display tool details
+                    const detailsDiv = document.getElementById('tool-details');
+                    let html = '';
+
+                    if (status.missing_in_hume.length > 0) {
+                        html += `<div class="mb-4">
+                            <h3 class="font-bold text-orange-600 mb-2">⚠️ Missing in Hume (${status.missing_in_hume.length}):</h3>
+                            <div class="flex flex-wrap gap-2">
+                                ${status.missing_in_hume.map(tool => `<span class="bg-orange-100 text-orange-800 px-2 py-1 rounded text-sm">${tool}</span>`).join('')}
+                            </div>
+                        </div>`;
+                    }
+
+                    if (status.missing_in_local.length > 0) {
+                        html += `<div class="mb-4">
+                            <h3 class="font-bold text-purple-600 mb-2">🔍 Orphaned in Hume (${status.missing_in_local.length}):</h3>
+                            <div class="flex flex-wrap gap-2">
+                                ${status.missing_in_local.map(tool => `<span class="bg-purple-100 text-purple-800 px-2 py-1 rounded text-sm">${tool}</span>`).join('')}
+                            </div>
+                        </div>`;
+                    }
+
+                    if (status.missing_in_hume.length === 0 && status.missing_in_local.length === 0) {
+                        html = '<div class="text-green-600 font-semibold">✅ All tools are in sync!</div>';
+                    }
+
+                    detailsDiv.innerHTML = html;
+                    log(`Status check complete. ${status.missing_in_hume.length} tools need sync.`, 'success');
+                } else {
+                    log(`Status check failed: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`Error checking status: ${error.message}`, 'error');
+            }
+        }
+
+        async function syncTools() {
+            const btn = document.getElementById('sync-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Syncing...';
+
+            log('Starting tool synchronization...');
+
+            try {
+                const response = await fetch(`${API_BASE}/sync`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    const stats = data.stats;
+
+                    // Show results
+                    const resultsDiv = document.getElementById('sync-results');
+                    const resultsContent = document.getElementById('sync-results-content');
+
+                    resultsDiv.classList.remove('hidden');
+                    resultsContent.innerHTML = `
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div class="bg-green-50 p-3 rounded">
+                                <div class="text-xl font-bold text-green-600">${stats.created}</div>
+                                <div class="text-sm text-gray-600">Created</div>
+                            </div>
+                            <div class="bg-blue-50 p-3 rounded">
+                                <div class="text-xl font-bold text-blue-600">${stats.updated}</div>
+                                <div class="text-sm text-gray-600">Updated</div>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded">
+                                <div class="text-xl font-bold text-gray-600">${stats.unchanged}</div>
+                                <div class="text-sm text-gray-600">Unchanged</div>
+                            </div>
+                            <div class="bg-red-50 p-3 rounded">
+                                <div class="text-xl font-bold text-red-600">${stats.errors}</div>
+                                <div class="text-sm text-gray-600">Errors</div>
+                            </div>
+                        </div>
+                        <div class="text-sm text-gray-500">Synced at: ${data.timestamp}</div>
+                    `;
+
+                    log(`Sync complete! Created: ${stats.created}, Updated: ${stats.updated}, Unchanged: ${stats.unchanged}`, 'success');
+
+                    if (stats.errors > 0) {
+                        log(`⚠️ ${stats.errors} error(s) occurred during sync`, 'warning');
+                        console.log('Sync errors:', data.details.errors);
+                    }
+
+                    // Refresh status
+                    await checkStatus();
+                } else {
+                    log(`Sync failed: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`Error during sync: ${error.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Sync All Tools';
+            }
+        }
+
+        // Auto-test connection on load
+        window.addEventListener('load', () => {
+            log('Hume EVI Tools Admin loaded', 'info');
+            testConnection();
+            checkStatus();
+        });
+    </script>
+</body>
+</html>

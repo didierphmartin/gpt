@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grok Realtime - Tool Calling &amp; Handoff Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+        h1 { color: #00d4ff; margin-bottom: 4px; font-size: 18px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 12px; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        button {
+            padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer;
+            font-family: monospace; font-size: 14px; font-weight: bold;
+        }
+        #startBtn { background: #00d4ff; color: #1a1a2e; }
+        #startBtn:disabled { background: #555; cursor: not-allowed; }
+        #stopBtn { background: #ff4757; color: white; }
+        #stopBtn:disabled { background: #555; cursor: not-allowed; }
+        .status {
+            padding: 4px 12px; border-radius: 12px; font-size: 12px;
+            display: inline-block;
+        }
+        .status.disconnected { background: #333; color: #888; }
+        .status.connecting { background: #ff9f43; color: #1a1a2e; }
+        .status.connected { background: #2ed573; color: #1a1a2e; }
+        .status.error { background: #ff4757; color: white; }
+        .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .panel {
+            background: #16213e; border: 1px solid #333; border-radius: 8px;
+            padding: 12px; max-height: 70vh; overflow-y: auto;
+        }
+        .panel h2 { color: #00d4ff; font-size: 14px; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .log-entry { padding: 3px 0; font-size: 12px; border-bottom: 1px solid #1a1a2e; }
+        .log-entry.event { color: #2ed573; }
+        .log-entry.tool-call { color: #ff9f43; font-weight: bold; }
+        .log-entry.handoff { color: #ff6b81; font-weight: bold; }
+        .log-entry.error { color: #ff4757; }
+        .log-entry.transcript-in { color: #a29bfe; }
+        .log-entry.transcript-out { color: #74b9ff; }
+        .log-entry .time { color: #666; margin-right: 8px; }
+        .agent-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: bold; margin-left: 8px;
+        }
+        .agent-badge.receptionist { background: #2ed573; color: #1a1a2e; }
+        .agent-badge.billing { background: #ff9f43; color: #1a1a2e; }
+        .agent-badge.sales { background: #a29bfe; color: #1a1a2e; }
+        #currentAgent { font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<h1>Grok Realtime API - Tool Calling &amp; Handoff Spike</h1>
+<p class="subtitle">Tests: (1) tool declaration in session.update, (2) function_call event handling, (3) mid-session handoff via session.update</p>
+
+<div class="controls">
+    <button id="startBtn" onclick="startTest()">Start Test</button>
+    <button id="stopBtn" onclick="stopTest()" disabled>Stop</button>
+    <span id="statusBadge" class="status disconnected">disconnected</span>
+    <span id="currentAgent">Agent: <span class="agent-badge receptionist">Receptionist</span></span>
+</div>
+
+<div class="panels">
+    <div class="panel" id="eventLog">
+        <h2>Event Log (WebSocket messages)</h2>
+    </div>
+    <div class="panel" id="testLog">
+        <h2>Test Results</h2>
+    </div>
+</div>
+
+<!-- Reuse existing infrastructure -->
+<script src="/gpt/frontend/assets/js/config.js"></script>
+<script src="/gpt/frontend/assets/js/audio-streamer.js"></script>
+
+<script>
+// ============================================================
+// Test configuration
+// ============================================================
+
+const AGENTS = {
+    receptionist: {
+        name: 'Receptionist',
+        voice: 'Ara',    // Female voice for the receptionist
+        instructions: `You are a friendly receptionist for a company. Your job is to greet callers and route them to the right department.
+
+IMPORTANT RULES:
+- When the caller mentions anything about billing, invoices, payments, or account charges:
+  1. FIRST, verbally tell the caller you are transferring them (e.g. "Sure, let me connect you with our billing specialist right away.")
+  2. THEN call the emit_intent function with name "billing".
+- When the caller mentions anything about sales, purchasing, buying, or pricing:
+  1. FIRST, verbally tell the caller you are transferring them (e.g. "Of course, let me put you through to our sales team.")
+  2. THEN call the emit_intent function with name "sales".
+- You MUST speak a brief transfer acknowledgment BEFORE calling the function. Never call the function silently.
+- For general questions, just answer them directly without calling any function.
+- Keep responses short (1-2 sentences).
+- Always be polite and professional.`,
+        badge: 'receptionist'
+    },
+    billing: {
+        name: 'Billing Specialist',
+        voice: 'Rex',    // Male voice — caller hears a distinct person
+        instructions: `You are a billing specialist. The caller has been transferred to you from the receptionist because they have a billing-related question.
+
+IMPORTANT RULES:
+- Introduce yourself briefly as the billing specialist.
+- Help with billing questions: invoices, payments, account charges, refunds.
+- If the caller wants to go back to the main menu or talk to someone else, call emit_intent with name "receptionist".
+- Keep responses short and helpful.`,
+        badge: 'billing'
+    },
+    sales: {
+        name: 'Sales Representative',
+        voice: 'Eve',    // Different female voice — distinct from receptionist
+        instructions: `You are a sales representative. The caller has been transferred to you from the receptionist because they have a sales-related question.
+
+IMPORTANT RULES:
+- Introduce yourself briefly as the sales representative.
+- Help with sales questions: pricing, products, packages, purchasing.
+- If the caller wants to go back to the main menu or talk to someone else, call emit_intent with name "receptionist".
+- Keep responses short and helpful.`,
+        badge: 'sales'
+    }
+};
+
+const TOOLS = [
+    {
+        type: 'function',
+        name: 'emit_intent',
+        description: 'Call this function when you detect the caller wants to be routed to a specific department. Valid intents: "billing", "sales", "receptionist".',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: {
+                    type: 'string',
+                    enum: ['billing', 'sales', 'receptionist'],
+                    description: 'The intent/department to route to'
+                }
+            },
+            required: ['name']
+        }
+    }
+];
+
+// ============================================================
+// State
+// ============================================================
+
+let ws = null;
+let audioStreamer = null;
+let currentAgent = 'receptionist';
+let sessionActive = false;
+let handoffCount = 0;
+let toolCallCount = 0;
+let startTime = null;
+let pendingResponseCreate = false;
+let pendingHandoff = null;  // stores {name, callId} when a handoff tool call arrives
+
+// ============================================================
+// Logging
+// ============================================================
+
+function timestamp() {
+    if (!startTime) return '0.0s';
+    return ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+}
+
+function logEvent(text, className = '') {
+    const el = document.getElementById('eventLog');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + className;
+    entry.innerHTML = `<span class="time">[${timestamp()}]</span> ${text}`;
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function logTest(text, className = '') {
+    const el = document.getElementById('testLog');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + className;
+    entry.innerHTML = `<span class="time">[${timestamp()}]</span> ${text}`;
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(status) {
+    const badge = document.getElementById('statusBadge');
+    badge.className = 'status ' + status;
+    badge.textContent = status;
+}
+
+function setCurrentAgent(agentKey) {
+    currentAgent = agentKey;
+    const agent = AGENTS[agentKey];
+    document.getElementById('currentAgent').innerHTML =
+        `Agent: <span class="agent-badge ${agent.badge}">${agent.name}</span>`;
+}
+
+// ============================================================
+// WebSocket + Tool Handling
+// ============================================================
+
+function configureSession(agentKey) {
+    const agent = AGENTS[agentKey];
+    const config = {
+        type: 'session.update',
+        session: {
+            voice: agent.voice || 'Ara',
+            instructions: agent.instructions,
+            tools: TOOLS,
+            turn_detection: { type: 'server_vad' },
+            input_audio_transcription: { model: 'grok-2-public' },
+            audio: {
+                input: { format: { type: 'audio/pcm', rate: 16000 } },
+                output: { format: { type: 'audio/pcm', rate: 24000 } }
+            }
+        }
+    };
+
+    ws.send(JSON.stringify(config));
+    logEvent(`session.update sent (agent: ${agent.name}, tools: ${TOOLS.length})`, 'event');
+}
+
+function handleToolCall(name, callId, args) {
+    toolCallCount++;
+    logEvent(`TOOL CALL #${toolCallCount}: ${name}(${JSON.stringify(args)}) [call_id: ${callId}]`, 'tool-call');
+    logTest(`TOOL CALL received: ${name}(${JSON.stringify(args)})`, 'tool-call');
+
+    // Send tool result back immediately (required by the protocol)
+    const result = { status: 'ok', routed_to: args.name };
+    ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+            type: 'function_call_output',
+            call_id: callId,
+            output: JSON.stringify(result)
+        }
+    }));
+    logEvent(`function_call_output sent for call_id: ${callId}`, 'event');
+
+    // DON'T handoff yet — defer until response.done so the receptionist's
+    // verbal acknowledgment ("Let me transfer you...") finishes playing.
+    if (args.name && AGENTS[args.name] && args.name !== currentAgent) {
+        pendingHandoff = { target: args.name };
+        logEvent(`Handoff to "${args.name}" deferred until response.done (waiting for speech to finish)`, 'event');
+    } else {
+        // No handoff — just resume
+        ws.send(JSON.stringify({ type: 'response.create' }));
+        logEvent('response.create sent (no handoff needed)', 'event');
+    }
+}
+
+function executePendingHandoff() {
+    if (!pendingHandoff) return;
+
+    const targetAgent = pendingHandoff.target;
+    pendingHandoff = null;
+
+    handoffCount++;
+    logEvent(`HANDOFF #${handoffCount}: ${currentAgent} → ${targetAgent}`, 'handoff');
+    logTest(`HANDOFF #${handoffCount}: ${AGENTS[currentAgent].name} → ${AGENTS[targetAgent].name}`, 'handoff');
+
+    setCurrentAgent(targetAgent);
+
+    // 1. Push new personality FIRST
+    configureSession(targetAgent);
+    logTest(`session.update pushed BEFORE response.create`, 'event');
+
+    // 2. Wait for session.updated, then send response.create
+    pendingResponseCreate = true;
+    logTest(`Waiting for session.updated before resuming...`, '');
+}
+
+function handleMessage(data) {
+    const msg = JSON.parse(data);
+    const type = msg.type;
+
+    switch (type) {
+        case 'session.created':
+            logEvent('session.created', 'event');
+            break;
+
+        case 'session.updated':
+            logEvent('session.updated — tools + instructions configured', 'event');
+            logTest('session.updated confirmed by server', 'event');
+            // If we were waiting for this to complete a handoff, NOW resume
+            if (pendingResponseCreate) {
+                pendingResponseCreate = false;
+                ws.send(JSON.stringify({ type: 'response.create' }));
+                logEvent('response.create sent (after handoff confirmed)', 'event');
+                logTest('response.create sent — new agent should speak now', 'event');
+            }
+            break;
+
+        case 'input_audio_buffer.speech_started':
+            logEvent('VAD: speech started', 'event');
+            break;
+
+        case 'input_audio_buffer.speech_stopped':
+            logEvent('VAD: speech stopped', 'event');
+            break;
+
+        case 'input_audio_buffer.committed':
+            logEvent('audio buffer committed', 'event');
+            break;
+
+        case 'conversation.item.input_audio_transcription.completed':
+            if (msg.transcript) {
+                logEvent(`USER: "${msg.transcript}"`, 'transcript-in');
+            }
+            break;
+
+        case 'response.created':
+            logEvent('response.created', 'event');
+            break;
+
+        case 'response.output_audio.delta':
+            // Play audio
+            if (msg.delta && audioStreamer) {
+                audioStreamer.playAudio(msg.delta);
+            }
+            break;
+
+        case 'response.output_audio_transcript.delta':
+            // Streaming transcript — skip logging to avoid noise
+            break;
+
+        case 'response.output_audio_transcript.done':
+            if (msg.transcript) {
+                logEvent(`AGENT (${AGENTS[currentAgent].name}): "${msg.transcript}"`, 'transcript-out');
+            }
+            break;
+
+        // ========== TOOL CALL EVENTS ==========
+        case 'response.function_call_arguments.delta':
+            // Streaming tool call arguments (partial)
+            logEvent(`function_call_arguments.delta: ${msg.delta || ''}`, 'tool-call');
+            break;
+
+        case 'response.function_call_arguments.done':
+            // Complete tool call — this is the key event
+            logEvent(`function_call_arguments.done: name=${msg.name}, call_id=${msg.call_id}, args=${msg.arguments}`, 'tool-call');
+            logTest(`function_call_arguments.done RECEIVED`, 'tool-call');
+            try {
+                const args = JSON.parse(msg.arguments || '{}');
+                handleToolCall(msg.name, msg.call_id, args);
+            } catch (e) {
+                logEvent(`Failed to parse tool call args: ${e.message}`, 'error');
+            }
+            break;
+
+        case 'response.output_item.done':
+            // An output item completed — could be message or function_call
+            if (msg.item?.type === 'function_call') {
+                logEvent(`output_item.done (function_call): ${msg.item.name}`, 'tool-call');
+            }
+            break;
+
+        case 'response.done':
+            logEvent('response.done', 'event');
+            // If a handoff was deferred, execute it now that the
+            // receptionist's speech has finished.
+            if (pendingHandoff) {
+                executePendingHandoff();
+            }
+            break;
+
+        case 'response.cancelled':
+            logEvent('response cancelled/interrupted', 'event');
+            if (audioStreamer) audioStreamer.stopPlayback();
+            break;
+
+        case 'error':
+            logEvent(`ERROR: ${JSON.stringify(msg.error)}`, 'error');
+            logTest(`ERROR: ${JSON.stringify(msg.error)}`, 'error');
+            break;
+
+        default:
+            if (type && !type.startsWith('rate_limits')) {
+                logEvent(`unhandled: ${type}`, '');
+            }
+    }
+}
+
+// ============================================================
+// Start / Stop
+// ============================================================
+
+async function fetchEphemeralToken() {
+    // Fetch an ephemeral client secret from the backend.
+    // The backend calls xAI's /v1/realtime/client_secrets using the
+    // server-side API key, returning a short-lived token for the browser.
+    const token = localStorage.getItem('token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch('/gpt/backend/api/v1/voice/token', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ provider: 'grok' })
+    });
+
+    const data = await response.json();
+    if (!data.success || !data.client_secret) {
+        throw new Error(`Failed to get ephemeral token: ${data.error || 'unknown error'}`);
+    }
+    return data.client_secret;
+}
+
+async function startTest() {
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('eventLog').innerHTML = '<h2>Event Log (WebSocket messages)</h2>';
+    document.getElementById('testLog').innerHTML = '<h2>Test Results</h2>';
+    startTime = Date.now();
+    handoffCount = 0;
+    toolCallCount = 0;
+    setCurrentAgent('receptionist');
+    setStatus('connecting');
+
+    logTest('Test plan:', '');
+    logTest('1. Fetch ephemeral token from /api/v1/voice/token', '');
+    logTest('2. Connect to wss://api.x.ai/v1/realtime', '');
+    logTest('3. Send session.update with tools array (emit_intent)', '');
+    logTest('4. Speak: "I want to check my bill"', '');
+    logTest('5. Expect: response.function_call_arguments.done', '');
+    logTest('6. Send function_call_output + response.create', '');
+    logTest('7. Send session.update with new agent personality', '');
+    logTest('8. Verify next response uses new agent voice/personality', '');
+    logTest('─'.repeat(50), '');
+
+    try {
+        // Step 1: Get ephemeral token from backend
+        logTest('Fetching ephemeral token...', '');
+        let clientSecret;
+        try {
+            clientSecret = await fetchEphemeralToken();
+            logTest(`Ephemeral token received (${clientSecret.substring(0, 20)}...)`, 'event');
+            logEvent('Ephemeral token obtained from backend', 'event');
+        } catch (e) {
+            logTest(`Token error: ${e.message}`, 'error');
+            logTest('Make sure the backend is running and /api/v1/voice/token works', 'error');
+            setStatus('error');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            return;
+        }
+
+        // Create audio streamer
+        audioStreamer = new window.AudioStreamer({
+            onAudioData: (base64Data) => {
+                if (ws && ws.readyState === WebSocket.OPEN && sessionActive) {
+                    ws.send(JSON.stringify({
+                        type: 'input_audio_buffer.append',
+                        audio: base64Data
+                    }));
+                }
+            }
+        });
+
+        // Step 2: Connect WebSocket with ephemeral token
+        logEvent('Connecting to wss://api.x.ai/v1/realtime...', 'event');
+        ws = new WebSocket('wss://api.x.ai/v1/realtime', [`xai-client-secret.${clientSecret}`]);
+
+        ws.onopen = async () => {
+            logEvent('WebSocket connected', 'event');
+            setStatus('connected');
+            sessionActive = true;
+
+            // Configure session with tools
+            configureSession('receptionist');
+
+            // Start mic capture
+            try {
+                await audioStreamer.startCapture();
+                logEvent('Microphone capture started', 'event');
+                logTest('Microphone active — speak to test', 'event');
+            } catch (e) {
+                logTest(`Mic error: ${e.message}`, 'error');
+            }
+        };
+
+        ws.onmessage = (event) => {
+            handleMessage(event.data);
+        };
+
+        ws.onclose = (event) => {
+            const codeMap = {
+                1000: 'normal close',
+                1001: 'going away',
+                1006: 'abnormal close (no close frame — likely auth rejected or network error)',
+                1008: 'policy violation',
+                1011: 'server error',
+                4001: 'authentication failed',
+                4003: 'forbidden'
+            };
+            const desc = codeMap[event.code] || 'unknown';
+            logEvent(`WebSocket closed: ${event.code} (${desc}) ${event.reason || ''}`, event.code === 1000 ? 'event' : 'error');
+            setStatus('disconnected');
+            sessionActive = false;
+            logTest('─'.repeat(50), '');
+            logTest(`Session ended. Tool calls: ${toolCallCount}, Handoffs: ${handoffCount}`, '');
+            if (toolCallCount > 0) {
+                logTest('PASS: Tool calling works on Grok Realtime', 'event');
+            } else {
+                logTest('INCONCLUSIVE: No tool calls received (did you speak a routing intent?)', 'error');
+            }
+            if (handoffCount > 0) {
+                logTest('PASS: Mid-session handoff via session.update accepted', 'event');
+            }
+        };
+
+        ws.onerror = (error) => {
+            logEvent(`WebSocket error: ${error}`, 'error');
+            setStatus('error');
+        };
+
+    } catch (e) {
+        logTest(`Connection failed: ${e.message}`, 'error');
+        setStatus('error');
+    }
+}
+
+function stopTest() {
+    sessionActive = false;
+    if (audioStreamer) {
+        audioStreamer.stopCapture();
+        audioStreamer.stopPlayback();
+        audioStreamer = null;
+    }
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+}
+</script>
+
+</body>
+</html>

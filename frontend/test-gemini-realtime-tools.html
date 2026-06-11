@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Live - Tool Calling &amp; Voice Handoff Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+        h1 { color: #4285f4; margin-bottom: 4px; font-size: 18px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 12px; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        button {
+            padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer;
+            font-family: monospace; font-size: 14px; font-weight: bold;
+        }
+        #startBtn { background: #4285f4; color: white; }
+        #startBtn:disabled { background: #555; cursor: not-allowed; }
+        #stopBtn { background: #ff4757; color: white; }
+        #stopBtn:disabled { background: #555; cursor: not-allowed; }
+        .status {
+            padding: 4px 12px; border-radius: 12px; font-size: 12px;
+            display: inline-block;
+        }
+        .status.disconnected { background: #333; color: #888; }
+        .status.connecting { background: #ff9f43; color: #1a1a2e; }
+        .status.connected { background: #2ed573; color: #1a1a2e; }
+        .status.handoff { background: #ff6b81; color: #1a1a2e; }
+        .status.error { background: #ff4757; color: white; }
+        .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .panel {
+            background: #16213e; border: 1px solid #333; border-radius: 8px;
+            padding: 12px; max-height: 70vh; overflow-y: auto;
+        }
+        .panel h2 { color: #4285f4; font-size: 14px; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .log-entry { padding: 3px 0; font-size: 12px; border-bottom: 1px solid #1a1a2e; }
+        .log-entry.event { color: #2ed573; }
+        .log-entry.tool-call { color: #ff9f43; font-weight: bold; }
+        .log-entry.handoff { color: #ff6b81; font-weight: bold; }
+        .log-entry.error { color: #ff4757; }
+        .log-entry.transcript-in { color: #a29bfe; }
+        .log-entry.transcript-out { color: #74b9ff; }
+        .log-entry .time { color: #666; margin-right: 8px; }
+        .agent-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: bold; margin-left: 8px;
+        }
+        .agent-badge.receptionist { background: #2ed573; color: #1a1a2e; }
+        .agent-badge.billing { background: #ff9f43; color: #1a1a2e; }
+        .agent-badge.sales { background: #a29bfe; color: #1a1a2e; }
+        #currentAgent { font-size: 14px; }
+        .note { background: #2a2a4e; padding: 10px; border-radius: 6px; margin-bottom: 16px; font-size: 12px; color: #aaa; }
+        .note strong { color: #ff9f43; }
+    </style>
+</head>
+<body>
+
+<h1>Gemini Live API - Voice Handoff via Reconnect</h1>
+<p class="subtitle">Tests: tool calling + handoff by closing session and reconnecting with a different voice and personality</p>
+
+<div class="note">
+    <strong>Approach:</strong> Gemini Live doesn't support mid-session voice changes. On handoff, this test
+    closes the current session, opens a new one with a different voice + system prompt, and injects
+    conversation context so the new agent knows what happened. Mic stays active throughout.
+</div>
+
+<div class="controls">
+    <button id="startBtn" onclick="startTest()">Start Test</button>
+    <button id="stopBtn" onclick="stopTest()" disabled>Stop</button>
+    <span id="statusBadge" class="status disconnected">disconnected</span>
+    <span id="currentAgent">Agent: <span class="agent-badge receptionist">Receptionist</span></span>
+</div>
+
+<div class="panels">
+    <div class="panel" id="eventLog">
+        <h2>Event Log (SDK messages)</h2>
+    </div>
+    <div class="panel" id="testLog">
+        <h2>Test Results</h2>
+    </div>
+</div>
+
+<script src="/gpt/frontend/assets/js/config.js"></script>
+<script src="/gpt/frontend/assets/js/audio-streamer.js"></script>
+
+<script type="module">
+// ============================================================
+// Import Google GenAI SDK
+// ============================================================
+
+let GoogleGenAI, Modality;
+try {
+    const module = await import('https://cdn.jsdelivr.net/npm/@google/genai@1.37.0/dist/web/index.mjs');
+    GoogleGenAI = module.GoogleGenAI;
+    Modality = module.Modality;
+    console.log('[Test] Google GenAI library loaded');
+} catch (e) {
+    console.error('[Test] Failed to load GenAI library:', e);
+}
+
+// ============================================================
+// Agent definitions — each has a distinct voice
+// ============================================================
+
+const AGENTS = {
+    receptionist: {
+        name: 'Receptionist',
+        voice: 'Kore',     // Default female
+        instructions: `You are a friendly receptionist for a company. Your job is to greet callers and route them to the right department.
+
+IMPORTANT RULES:
+- When the caller mentions anything about billing, invoices, payments, or account charges:
+  1. FIRST, verbally tell the caller you are transferring them (e.g. "Sure, let me connect you with our billing specialist right away.")
+  2. THEN call the emit_intent function with name "billing".
+- When the caller mentions anything about sales, purchasing, buying, or pricing:
+  1. FIRST, verbally tell the caller you are transferring them (e.g. "Of course, let me put you through to our sales team.")
+  2. THEN call the emit_intent function with name "sales".
+- You MUST speak a brief transfer acknowledgment BEFORE calling the function. Never call the function silently.
+- For general questions, just answer them directly without calling any function.
+- Keep responses short (1-2 sentences).
+- Always be polite and professional.`,
+        badge: 'receptionist'
+    },
+    billing: {
+        name: 'Billing Specialist',
+        voice: 'Puck',     // Male voice — distinct from receptionist
+        instructions: `You are a billing specialist. The caller has just been transferred to you from the receptionist.
+
+IMPORTANT RULES:
+- Introduce yourself briefly as the billing specialist.
+- Help with billing questions: invoices, payments, account charges, refunds.
+- If the caller wants to go back to the main menu or talk to someone else, call emit_intent with name "receptionist".
+- Keep responses short and helpful.`,
+        badge: 'billing'
+    },
+    sales: {
+        name: 'Sales Representative',
+        voice: 'Aoede',    // Different female voice
+        instructions: `You are a sales representative. The caller has just been transferred to you from the receptionist.
+
+IMPORTANT RULES:
+- Introduce yourself briefly as the sales representative.
+- Help with sales questions: pricing, products, packages, purchasing.
+- If the caller wants to go back to the main menu or talk to someone else, call emit_intent with name "receptionist".
+- Keep responses short and helpful.`,
+        badge: 'sales'
+    }
+};
+
+const TOOL_DECLARATIONS = [
+    {
+        name: 'emit_intent',
+        description: 'Call this function when you detect the caller wants to be routed to a specific department. Valid intents: "billing", "sales", "receptionist".',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: {
+                    type: 'string',
+                    enum: ['billing', 'sales', 'receptionist'],
+                    description: 'The intent/department to route to'
+                }
+            },
+            required: ['name']
+        }
+    }
+];
+
+// ============================================================
+// State
+// ============================================================
+
+let session = null;
+let audioStreamer = null;
+let ai = null;              // GoogleGenAI instance — reused across reconnects
+let currentAgent = 'receptionist';
+let sessionActive = false;
+let handoffCount = 0;
+let toolCallCount = 0;
+let startTime = null;
+let conversationSummary = '';   // Carries context across session reconnects
+let handoffInProgress = false;
+let pendingHandoff = null;
+
+// ============================================================
+// Logging
+// ============================================================
+
+function timestamp() {
+    if (!startTime) return '0.0s';
+    return ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+}
+
+function logEvent(text, className = '') {
+    const el = document.getElementById('eventLog');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + className;
+    entry.innerHTML = `<span class="time">[${timestamp()}]</span> ${text}`;
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function logTest(text, className = '') {
+    const el = document.getElementById('testLog');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + className;
+    entry.innerHTML = `<span class="time">[${timestamp()}]</span> ${text}`;
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(status) {
+    const badge = document.getElementById('statusBadge');
+    badge.className = 'status ' + status;
+    badge.textContent = status;
+}
+
+function setCurrentAgent(agentKey) {
+    currentAgent = agentKey;
+    const agent = AGENTS[agentKey];
+    document.getElementById('currentAgent').innerHTML =
+        `Agent: <span class="agent-badge ${agent.badge}">${agent.name}</span>`;
+}
+
+// ============================================================
+// Create a Gemini Live session for a given agent
+// ============================================================
+
+async function createSession(agentKey, contextMessage) {
+    const agent = AGENTS[agentKey];
+    const model = window.APP_CONFIG?.gemini?.model || 'gemini-2.5-flash-native-audio-preview-12-2025';
+
+    // Build system instruction with optional context from prior session
+    let sysInstruction = agent.instructions;
+    if (contextMessage) {
+        sysInstruction += `\n\nCONTEXT FROM PRIOR CONVERSATION:\n${contextMessage}\nPlease greet the caller and continue from here.`;
+    }
+
+    logEvent(`Creating session: agent=${agent.name}, voice=${agent.voice}, model=${model}`, 'event');
+
+    const newSession = await ai.live.connect({
+        model: model,
+        callbacks: {
+            onopen: () => {
+                logEvent(`Session opened (${agent.name}, voice: ${agent.voice})`, 'event');
+                setStatus('connected');
+                sessionActive = true;
+
+                // If this is a reconnect after handoff, inject context via text
+                if (contextMessage) {
+                    logEvent('Sending conversation context to new session...', 'event');
+                }
+            },
+            onmessage: (message) => {
+                handleMessage(message);
+            },
+            onerror: (error) => {
+                logEvent(`Error: ${error}`, 'error');
+                setStatus('error');
+            },
+            onclose: (event) => {
+                // Only log if this wasn't an intentional handoff close
+                if (!handoffInProgress) {
+                    logEvent('Session closed', 'event');
+                    setStatus('disconnected');
+                    sessionActive = false;
+                    logTest('─'.repeat(50), '');
+                    logTest(`Session ended. Tool calls: ${toolCallCount}, Handoffs: ${handoffCount}`, '');
+                    if (toolCallCount > 0) {
+                        logTest('PASS: Tool calling works on Gemini Live', 'event');
+                    }
+                    if (handoffCount > 0) {
+                        logTest('PASS: Voice handoff via reconnect completed', 'event');
+                    }
+                } else {
+                    logEvent('Session closed (intentional — handoff in progress)', 'event');
+                }
+            }
+        },
+        config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+                voiceConfig: {
+                    prebuiltVoiceConfig: {
+                        voiceName: agent.voice
+                    }
+                }
+            },
+            systemInstruction: sysInstruction,
+            tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+            inputAudioTranscription: {},
+            outputAudioTranscription: {}
+        }
+    });
+
+    return newSession;
+}
+
+// ============================================================
+// Handoff: close session, reconnect with new voice + persona
+// ============================================================
+
+async function executeHandoff(targetAgentKey, reason) {
+    handoffInProgress = true;
+    handoffCount++;
+
+    const fromAgent = AGENTS[currentAgent];
+    const toAgent = AGENTS[targetAgentKey];
+
+    logEvent(`HANDOFF #${handoffCount}: ${fromAgent.name} (${fromAgent.voice}) → ${toAgent.name} (${toAgent.voice})`, 'handoff');
+    logTest(`HANDOFF #${handoffCount}: ${fromAgent.name} → ${toAgent.name}`, 'handoff');
+    logTest(`Voice change: ${fromAgent.voice} → ${toAgent.voice}`, 'event');
+
+    setStatus('handoff');
+    setCurrentAgent(targetAgentKey);
+
+    // Build context summary to carry into new session
+    const context = `The caller was speaking with the ${fromAgent.name}. They requested to be transferred to ${toAgent.name} because: ${reason}. Please introduce yourself and continue helping them.`;
+
+    const handoffStartTime = Date.now();
+
+    // 1. Close current session
+    sessionActive = false;
+    try {
+        session.close();
+    } catch (e) {
+        logEvent(`Close error (non-fatal): ${e.message}`, '');
+    }
+    session = null;
+    logEvent('Old session closed', 'event');
+
+    // 2. Open new session with different voice + personality
+    try {
+        session = await createSession(targetAgentKey, context);
+        const reconnectMs = Date.now() - handoffStartTime;
+        logEvent(`New session ready in ${reconnectMs}ms`, 'event');
+        logTest(`Reconnect latency: ${reconnectMs}ms`, reconnectMs < 2000 ? 'event' : 'error');
+        sessionActive = true;
+        handoffInProgress = false;
+
+        // 3. Prompt the new agent to introduce itself — Gemini won't
+        //    speak spontaneously, so we send a text nudge.
+        try {
+            session.sendClientContent({
+                turns: [{
+                    role: 'user',
+                    parts: [{ text: `You have just been connected with the caller. Please introduce yourself briefly and ask how you can help.` }]
+                }],
+                turnComplete: true
+            });
+            logEvent('Sent intro prompt to new agent', 'event');
+        } catch (e) {
+            logEvent(`Failed to send intro prompt: ${e.message}`, 'error');
+        }
+    } catch (e) {
+        logEvent(`Reconnect failed: ${e.message}`, 'error');
+        logTest(`Reconnect FAILED: ${e.message}`, 'error');
+        setStatus('error');
+        handoffInProgress = false;
+    }
+}
+
+// ============================================================
+// Tool call handling
+// ============================================================
+
+function handleToolCall(functionCalls) {
+    for (const call of functionCalls) {
+        toolCallCount++;
+        logEvent(`TOOL CALL #${toolCallCount}: ${call.name}(${JSON.stringify(call.args)}) [id: ${call.id}]`, 'tool-call');
+        logTest(`TOOL CALL received: ${call.name}(${JSON.stringify(call.args)})`, 'tool-call');
+
+        // Send tool response back
+        const result = { status: 'ok', routed_to: call.args?.name };
+        try {
+            session.sendToolResponse({
+                functionResponses: [{
+                    id: call.id,
+                    name: call.name,
+                    response: result
+                }]
+            });
+            logEvent(`toolResponse sent for id: ${call.id}`, 'event');
+        } catch (e) {
+            logEvent(`Failed to send toolResponse: ${e.message}`, 'error');
+            try {
+                session.sendToolResponse({
+                    functionResponses: [{
+                        id: call.id,
+                        response: result
+                    }]
+                });
+                logEvent(`toolResponse sent (fallback) for id: ${call.id}`, 'event');
+            } catch (e2) {
+                logEvent(`Fallback also failed: ${e2.message}`, 'error');
+            }
+        }
+
+        // Defer handoff until turn completes (so transfer speech plays first)
+        const targetAgent = call.args?.name;
+        if (targetAgent && AGENTS[targetAgent] && targetAgent !== currentAgent) {
+            pendingHandoff = {
+                target: targetAgent,
+                reason: `caller asked about ${targetAgent}`
+            };
+            logEvent(`Handoff to ${targetAgent} deferred until turn complete`, 'event');
+        }
+    }
+}
+
+// ============================================================
+// Message handler
+// ============================================================
+
+function handleMessage(message) {
+    // Tool call from the model
+    if (message.toolCall) {
+        logEvent(`toolCall received: ${JSON.stringify(message.toolCall.functionCalls?.map(f => f.name))}`, 'tool-call');
+        logTest('toolCall message RECEIVED from server', 'tool-call');
+        handleToolCall(message.toolCall.functionCalls || []);
+        return;
+    }
+
+    // Tool call cancellation
+    if (message.toolCallCancellation) {
+        logEvent(`Tool call cancellation: ${JSON.stringify(message.toolCallCancellation.ids)}`, 'tool-call');
+        pendingHandoff = null; // Cancel the pending handoff
+        return;
+    }
+
+    // Server content
+    const sc = message.serverContent;
+    if (!sc) {
+        const keys = Object.keys(message);
+        if (keys.length > 0 && !keys.includes('setupComplete')) {
+            logEvent(`unknown message keys: ${keys.join(', ')}`, '');
+        }
+        return;
+    }
+
+    // Input transcription
+    if (sc.inputTranscription?.text) {
+        logEvent(`USER: "${sc.inputTranscription.text}"`, 'transcript-in');
+    }
+
+    // Output transcription
+    if (sc.outputTranscription?.text) {
+        logEvent(`AGENT (${AGENTS[currentAgent].name}): "${sc.outputTranscription.text}"`, 'transcript-out');
+    }
+
+    // Audio
+    if (sc.modelTurn?.parts) {
+        for (const part of sc.modelTurn.parts) {
+            if (part.inlineData?.data && audioStreamer) {
+                audioStreamer.playAudio(part.inlineData.data);
+            }
+        }
+    }
+
+    // Turn complete — execute pending handoff if any
+    if (sc.turnComplete) {
+        logEvent('turn complete', 'event');
+        if (pendingHandoff) {
+            const { target, reason } = pendingHandoff;
+            pendingHandoff = null;
+            // Execute handoff asynchronously
+            executeHandoff(target, reason);
+        }
+    }
+
+    // Interrupted
+    if (sc.interrupted) {
+        logEvent('interrupted by user', 'event');
+        if (audioStreamer) audioStreamer.stopPlayback();
+    }
+}
+
+// ============================================================
+// Start / Stop
+// ============================================================
+
+async function startTest() {
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('eventLog').innerHTML = '<h2>Event Log (SDK messages)</h2>';
+    document.getElementById('testLog').innerHTML = '<h2>Test Results</h2>';
+    startTime = Date.now();
+    handoffCount = 0;
+    toolCallCount = 0;
+    pendingHandoff = null;
+    handoffInProgress = false;
+    setCurrentAgent('receptionist');
+    setStatus('connecting');
+
+    const apiKey = window.APP_CONFIG?.gemini?.apiKey;
+    if (!apiKey) {
+        logTest('ERROR: No Gemini API key in config.js', 'error');
+        setStatus('error');
+        return;
+    }
+
+    if (!GoogleGenAI) {
+        logTest('ERROR: Google GenAI SDK failed to load', 'error');
+        setStatus('error');
+        return;
+    }
+
+    logTest('Test plan:', '');
+    logTest('1. Connect with Kore voice (Receptionist)', '');
+    logTest('2. Speak: "I want to check my bill"', '');
+    logTest('3. Expect: toolCall → emit_intent("billing")', '');
+    logTest('4. Wait for receptionist\'s transfer speech to finish', '');
+    logTest('5. Close session, reconnect with Puck voice (Billing)', '');
+    logTest('6. Measure reconnect latency', '');
+    logTest('7. Verify new voice + personality', '');
+    logTest('─'.repeat(50), '');
+
+    try {
+        // Create audio streamer (stays alive across reconnects)
+        audioStreamer = new window.AudioStreamer({
+            onAudioData: (base64Data) => {
+                if (session && sessionActive && !handoffInProgress) {
+                    try {
+                        session.sendRealtimeInput({
+                            media: {
+                                data: base64Data,
+                                mimeType: 'audio/pcm;rate=16000'
+                            }
+                        });
+                    } catch (e) {
+                        // Session may have closed during handoff
+                    }
+                }
+            }
+        });
+
+        // Start mic capture ONCE — it stays alive across session reconnects
+        await audioStreamer.startCapture();
+        logEvent('Microphone capture started (persists across reconnects)', 'event');
+
+        // Initialize GenAI client (reused for all sessions)
+        ai = new GoogleGenAI({ apiKey });
+
+        // Create initial session with receptionist
+        session = await createSession('receptionist', null);
+        logTest('Connection established', 'event');
+        logTest(`Voice: ${AGENTS.receptionist.voice} (${AGENTS.receptionist.name})`, 'event');
+        logTest('Microphone active — speak to test', 'event');
+
+    } catch (e) {
+        logTest(`Connection failed: ${e.message}`, 'error');
+        logEvent(`Connection failed: ${e.message}`, 'error');
+        setStatus('error');
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+    }
+}
+
+async function stopTest() {
+    sessionActive = false;
+    handoffInProgress = false;
+    pendingHandoff = null;
+    if (audioStreamer) {
+        audioStreamer.stopCapture();
+        audioStreamer.stopPlayback();
+        audioStreamer = null;
+    }
+    if (session) {
+        try { session.close(); } catch (e) { /* ok */ }
+        session = null;
+    }
+    ai = null;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    setStatus('disconnected');
+}
+
+window.startTest = startTest;
+window.stopTest = stopTest;
+</script>
+
+</body>
+</html>

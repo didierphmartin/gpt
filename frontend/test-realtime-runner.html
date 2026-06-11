@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realtime Workflow Runner — Integration Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+        h1 { color: #ff9f43; margin-bottom: 4px; font-size: 18px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 12px; }
+
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        button {
+            padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer;
+            font-family: monospace; font-size: 14px; font-weight: bold;
+        }
+        #startBtn { background: #2ed573; color: #1a1a2e; }
+        #startBtn:disabled { background: #555; cursor: not-allowed; }
+        #stopBtn { background: #ff4757; color: white; }
+        #stopBtn:disabled { background: #555; cursor: not-allowed; }
+        .status-badge {
+            padding: 4px 12px; border-radius: 12px; font-size: 12px;
+        }
+        .status-badge.off { background: #333; color: #888; }
+        .status-badge.running { background: #2ed573; color: #1a1a2e; }
+        .status-badge.error { background: #ff4757; color: white; }
+
+        /* Agent cards — simulates what the editor canvas will look like */
+        .agent-cards {
+            display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+        }
+        .agent-card {
+            background: #16213e; border: 2px solid #333; border-radius: 12px;
+            padding: 16px; min-width: 180px; text-align: center;
+            transition: all 0.3s ease;
+        }
+        .agent-card.active {
+            border-color: #ff9f43;
+            box-shadow: 0 0 20px 6px rgba(255, 165, 0, 0.4);
+        }
+        .agent-card.active .spinner {
+            display: inline-block;
+        }
+        .agent-card .name { font-size: 14px; font-weight: bold; color: #fff; }
+        .agent-card .voice { font-size: 11px; color: #888; margin-top: 4px; }
+        .agent-card .mic { font-size: 20px; margin-bottom: 8px; }
+        .agent-card .spinner {
+            display: none; width: 14px; height: 14px;
+            border: 2px solid #ff9f43; border-top-color: transparent;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+            position: absolute; top: 8px; right: 8px;
+        }
+        .agent-card { position: relative; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .connector {
+            color: #555; font-size: 20px; display: flex; align-items: center;
+        }
+
+        /* Log panels */
+        .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .panel {
+            background: #16213e; border: 1px solid #333; border-radius: 8px;
+            padding: 12px; max-height: 50vh; overflow-y: auto;
+        }
+        .panel h2 { color: #ff9f43; font-size: 13px; margin-bottom: 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .log-entry { padding: 2px 0; font-size: 11px; border-bottom: 1px solid #1a1a2e; word-break: break-all; }
+        .log-entry .time { color: #666; margin-right: 6px; }
+        .log-entry.event { color: #2ed573; }
+        .log-entry.handoff { color: #ff6b81; font-weight: bold; }
+        .log-entry.tool { color: #ff9f43; font-weight: bold; }
+        .log-entry.transcript-in { color: #a29bfe; }
+        .log-entry.transcript-out { color: #74b9ff; }
+        .log-entry.error { color: #ff4757; }
+        .log-entry.state { color: #ffeaa7; }
+
+        .stack-display {
+            background: #0d1117; padding: 8px 12px; border-radius: 6px;
+            font-size: 12px; margin-bottom: 16px; color: #888;
+        }
+        .stack-display strong { color: #ff9f43; }
+    </style>
+</head>
+<body>
+
+<h1>Realtime Workflow Runner — Integration Test</h1>
+<p class="subtitle">Tests RealtimeWorkflowRunner + GrokRealtimeAdapter with the receptionist scenario (3 agents, voice handoffs)</p>
+
+<div class="controls">
+    <button id="startBtn">▶ Start Session</button>
+    <button id="stopBtn" disabled>■ Stop</button>
+    <span id="statusBadge" class="status-badge off">offline</span>
+</div>
+
+<div class="stack-display">
+    Agent stack: <strong id="stackDisplay">[ ]</strong>
+</div>
+
+<!-- Visual agent cards (simulates editor canvas) -->
+<div class="agent-cards">
+    <div class="agent-card" id="card-start">
+        <div class="mic">▶</div>
+        <div class="name">START</div>
+        <div class="voice">Grok Realtime</div>
+    </div>
+    <div class="connector">──▶</div>
+    <div class="agent-card" id="card-receptionist">
+        <div class="spinner"></div>
+        <div class="mic">🎙</div>
+        <div class="name">Receptionist</div>
+        <div class="voice">voice: Ara</div>
+    </div>
+    <div class="connector">──▶</div>
+    <div class="agent-card" id="card-billing">
+        <div class="spinner"></div>
+        <div class="mic">🎙</div>
+        <div class="name">Billing</div>
+        <div class="voice">voice: Rex</div>
+    </div>
+    <div class="connector">──▶</div>
+    <div class="agent-card" id="card-sales">
+        <div class="spinner"></div>
+        <div class="mic">🎙</div>
+        <div class="name">Sales</div>
+        <div class="voice">voice: Eve</div>
+    </div>
+    <div class="connector">──▶</div>
+    <div class="agent-card" id="card-end">
+        <div class="mic">■</div>
+        <div class="name">END</div>
+        <div class="voice">&nbsp;</div>
+    </div>
+</div>
+
+<div class="panels">
+    <div class="panel" id="transcriptLog">
+        <h2>Transcript</h2>
+    </div>
+    <div class="panel" id="eventLog">
+        <h2>Runner Events</h2>
+    </div>
+</div>
+
+<!-- Dependencies -->
+<script src="/gpt/frontend/assets/js/audio-streamer.js"></script>
+<script src="/gpt/frontend/assets/js/grok-realtime-adapter.js"></script>
+<script src="/gpt/frontend/assets/js/workflow-realtime-runner.js"></script>
+
+<script>
+// ============================================================
+// Hardcoded receptionist graph (what the editor would produce)
+// ============================================================
+
+const RECEPTIONIST_GRAPH = {
+    startAgent: 'receptionist',
+    agents: {
+        receptionist: {
+            name: 'Receptionist',
+            voice: 'Ara',
+            instructions: `You are a friendly receptionist for a company called Synergy AI. Your job is to greet callers warmly and route them to the right department.
+
+When the caller mentions billing, invoices, payments, or account charges — transfer to billing.
+When the caller mentions sales, purchasing, pricing, or buying — transfer to sales.
+For general questions, answer them directly.
+Keep responses short and natural (1-2 sentences).`,
+            handoffTargets: ['billing', 'sales', 'end'],
+            whenDone: null,  // start agent has no "when done"
+            tools: []
+        },
+        billing: {
+            name: 'Billing Specialist',
+            voice: 'Rex',
+            transferDelay: 1.5,  // seconds — simulates phone transfer pause
+            instructions: `You are a billing specialist at Synergy AI. The caller has been transferred to you for billing help.
+
+Introduce yourself briefly. Help with billing questions: invoices, payments, account charges, refunds.
+If the caller asks about sales, purchasing, or pricing, transfer them to sales.
+If the caller says goodbye, says "that's all", or indicates the conversation is over, say a warm goodbye and end the session. Do NOT transfer back to the receptionist — end the call directly.
+Keep responses helpful and concise.`,
+            handoffTargets: ['sales', 'end'],
+            whenDone: { type: 'return' },
+            tools: []
+        },
+        sales: {
+            name: 'Sales Representative',
+            voice: 'Eve',
+            transferDelay: 1.5,  // seconds — simulates phone transfer pause
+            instructions: `You are a sales representative at Synergy AI. The caller has been transferred to you for sales help.
+
+Introduce yourself briefly. Help with sales questions: pricing, products, packages, purchasing.
+If the caller asks about billing, invoices, or payments, transfer them to billing.
+If the caller says goodbye, says "that's all", or indicates the conversation is over, say a warm goodbye and end the session. Do NOT transfer back to the receptionist — end the call directly.
+Keep responses helpful and concise.`,
+            handoffTargets: ['billing', 'end'],
+            whenDone: { type: 'return' },
+            tools: []
+        }
+    }
+};
+
+// ============================================================
+// UI helpers
+// ============================================================
+
+let startTime = null;
+
+function timestamp() {
+    if (!startTime) return '0.0s';
+    return ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+}
+
+function logTranscript(text, direction, agentKey) {
+    const el = document.getElementById('transcriptLog');
+    const entry = document.createElement('div');
+    const agent = RECEPTIONIST_GRAPH.agents[agentKey];
+    if (direction === 'in') {
+        entry.className = 'log-entry transcript-in';
+        entry.innerHTML = `<span class="time">[${timestamp()}]</span> 🗣 You: "${text}"`;
+    } else {
+        entry.className = 'log-entry transcript-out';
+        entry.innerHTML = `<span class="time">[${timestamp()}]</span> 🎙 ${agent?.name || agentKey}: "${text}"`;
+    }
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function logEvent(type, data) {
+    const el = document.getElementById('eventLog');
+    const entry = document.createElement('div');
+
+    let className = 'log-entry event';
+    let text = type;
+
+    if (type.includes('handoff') || type.includes('done_pending')) {
+        className = 'log-entry handoff';
+        text = `${type}: ${JSON.stringify(data)}`;
+    } else if (type === 'tool_call') {
+        className = 'log-entry tool';
+        text = `TOOL: ${data.name}(${JSON.stringify(data.args)})`;
+    } else if (type === 'agent_active') {
+        className = 'log-entry state';
+        text = `▶ ACTIVE: ${data.agent}`;
+    } else if (type === 'error') {
+        className = 'log-entry error';
+        text = `ERROR: ${JSON.stringify(data)}`;
+    } else if (type === 'end_execute') {
+        className = 'log-entry handoff';
+        text = `SESSION ENDED: ${data.reason}`;
+    } else {
+        text = `${type} ${Object.keys(data).length > 1 ? JSON.stringify(data) : ''}`.trim();
+    }
+
+    entry.className = className;
+    entry.innerHTML = `<span class="time">[${timestamp()}]</span> ${text}`;
+    el.appendChild(entry);
+    el.scrollTop = el.scrollHeight;
+}
+
+function updateActiveCard(agentKey) {
+    // Remove active from all
+    document.querySelectorAll('.agent-card').forEach(c => c.classList.remove('active'));
+    // Add active to current
+    const card = document.getElementById('card-' + agentKey);
+    if (card) card.classList.add('active');
+}
+
+function updateStack(stack) {
+    document.getElementById('stackDisplay').textContent =
+        '[ ' + stack.join(' → ') + ' ]';
+}
+
+function setStatus(status) {
+    const badge = document.getElementById('statusBadge');
+    badge.className = 'status-badge ' + status;
+    badge.textContent = status === 'running' ? 'live' : status;
+}
+
+// ============================================================
+// Runner lifecycle
+// ============================================================
+
+let runner = null;
+let audioStreamer = null;
+
+async function startSession() {
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('transcriptLog').innerHTML = '<h2>Transcript</h2>';
+    document.getElementById('eventLog').innerHTML = '<h2>Runner Events</h2>';
+    startTime = Date.now();
+    setStatus('running');
+
+    try {
+        // Create audio streamer
+        audioStreamer = new window.AudioStreamer({
+            onAudioData: (base64) => {
+                if (runner?.running && runner.adapter.isReady()) {
+                    runner.adapter.sendAudio(base64);
+                }
+            }
+        });
+
+        // Create adapter
+        const adapter = new window.GrokRealtimeAdapter();
+
+        // Wire audio output
+        adapter.onAudio = (base64) => {
+            if (audioStreamer) audioStreamer.playAudio(base64);
+        };
+
+        // Create runner
+        runner = new window.RealtimeWorkflowRunner(RECEPTIONIST_GRAPH, adapter, {
+            onStateChange: (agentKey, stack) => {
+                updateActiveCard(agentKey);
+                updateStack(stack);
+            },
+            onTranscript: (text, isFinal, direction, agentKey) => {
+                if (isFinal) logTranscript(text, direction, agentKey);
+            },
+            onEvent: (type, data) => {
+                logEvent(type, data);
+            },
+            onEnd: (reason) => {
+                setStatus('off');
+                logEvent('session_ended', { reason });
+                updateActiveCard('end');
+                cleanup();
+            }
+        });
+
+        // Wire the silence detection hook — runner waits for audio
+        // playback to finish before activating the next agent
+        runner.waitForSilence = () => new Promise(resolve => {
+            const check = () => {
+                if (!audioStreamer || !audioStreamer.isPlaying()) {
+                    resolve();
+                } else {
+                    setTimeout(check, 100);
+                }
+            };
+            check();
+        });
+
+        // Start mic capture
+        await audioStreamer.startCapture();
+
+        // Start the workflow
+        await runner.start();
+
+    } catch (e) {
+        console.error('Start failed:', e);
+        logEvent('error', { message: e.message });
+        setStatus('error');
+        cleanup();
+    }
+}
+
+function stopSession() {
+    if (runner) runner.stop();
+    cleanup();
+    setStatus('off');
+}
+
+function cleanup() {
+    if (audioStreamer) {
+        audioStreamer.stopCapture();
+        audioStreamer.stopPlayback();
+        audioStreamer = null;
+    }
+    runner = null;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+}
+
+// Wire buttons
+document.getElementById('startBtn').addEventListener('click', startSession);
+document.getElementById('stopBtn').addEventListener('click', stopSession);
+</script>
+
+</body>
+</html>

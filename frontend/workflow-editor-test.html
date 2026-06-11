@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Editor Test</title>
+
+    <!-- Drawflow CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.css">
+
+    <!-- Workflow Editor CSS -->
+    <link rel="stylesheet" href="assets/css/workflow-editor.css">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .header-btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid #475569;
+            background: #334155;
+            color: #e2e8f0;
+            transition: all 0.2s;
+        }
+
+        .header-btn:hover {
+            background: #475569;
+        }
+
+        .header-btn.primary {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .header-btn.primary:hover {
+            background: #2563eb;
+        }
+
+        /* Main container */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
+        /* Workflow editor container */
+        .workflow-editor-container {
+            display: flex;
+            flex: 1;
+            height: 100%;
+        }
+
+        /* Canvas area */
+        .workflow-canvas {
+            flex: 1;
+            position: relative;
+            background: #1e1e2e;
+            background-image:
+                radial-gradient(circle, #3a3a4a 1px, transparent 1px);
+            background-size: 20px 20px;
+            overflow: hidden;
+        }
+
+        /* Help overlay */
+        .help-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #64748b;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Ensure drawflow elements are above help overlay */
+        .drawflow .drawflow-node {
+            z-index: 10;
+        }
+
+        .drawflow .connection {
+            z-index: 5;
+        }
+
+        .help-overlay .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .help-overlay h2 {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .help-overlay p {
+            font-size: 14px;
+        }
+
+        .help-overlay.hidden {
+            display: none;
+        }
+
+        /* Zoom controls */
+        .zoom-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 4px;
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 4px;
+            border: 1px solid #334155;
+        }
+
+        .zoom-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: #e2e8f0;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zoom-btn:hover {
+            background: #334155;
+        }
+
+        .zoom-level {
+            padding: 0 12px;
+            font-size: 12px;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Workflow list modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.hidden {
+            display: none;
+        }
+
+        .modal {
+            background: #1e293b;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 60vh;
+        }
+
+        .workflow-list-item {
+            padding: 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .workflow-list-item:hover {
+            border-color: #3b82f6;
+            background: #1e293b;
+        }
+
+        .workflow-list-item h3 {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .workflow-list-item p {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        /* Toast notifications */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 13px;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            border-color: #22c55e;
+            background: #14532d;
+        }
+
+        .toast.error {
+            border-color: #ef4444;
+            background: #7f1d1d;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Login notice */
+        .login-notice {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 8px 16px;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .login-notice a {
+            color: #d97706;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login notice if not authenticated -->
+    <div id="login-notice" class="login-notice hidden">
+        You need to be logged in to load agents and save workflows.
+        <a href="login.html">Login here</a> |
+        <button onclick="testAgentsAPI()" style="background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Test Agents API</button>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+        <h1>
+            <span>🔀</span>
+            Workflow Editor
+        </h1>
+        <div class="header-actions">
+            <button id="new-workflow-btn" class="header-btn">+ New</button>
+            <button id="load-workflow-btn" class="header-btn">📂 Load</button>
+            <button id="export-json-btn" class="header-btn">📋 Export JSON</button>
+        </div>
+    </header>
+
+    <!-- Main container -->
+    <div class="main-container">
+        <div class="workflow-editor-container">
+            <!-- Canvas (Drawflow container) -->
+            <div id="workflow-canvas" class="workflow-canvas">
+                <!-- SVG with arrowhead markers (for connection arrows) -->
+                <svg style="position: absolute; width: 0; height: 0; overflow: hidden;">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+                        </marker>
+                        <marker id="arrowhead-hover" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L0,6 L9,3 z" fill="#3b82f6"/>
+                        </marker>
+                    </defs>
+                </svg>
+                <!-- Help overlay -->
+                <div id="help-overlay" class="help-overlay">
+                    <div class="icon">🔀</div>
+                    <h2>Drag agents here to build your workflow</h2>
+                    <p>Connect Start → Agents → Output to create an execution pipeline</p>
+                </div>
+
+                <!-- Zoom controls -->
+                <div class="zoom-controls">
+                    <button class="zoom-btn" id="zoom-out">−</button>
+                    <span class="zoom-level" id="zoom-level">100%</span>
+                    <button class="zoom-btn" id="zoom-in">+</button>
+                    <button class="zoom-btn" id="zoom-reset">⟲</button>
+                </div>
+            </div>
+
+            <!-- Agents Panel (Right side) -->
+            <div id="workflow-agents-panel" class="workflow-agents-panel">
+                <!-- Populated by WorkflowEditor.js -->
+                <div style="padding: 20px; text-align: center; color: #64748b;">
+                    Loading agents...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Workflow list modal -->
+    <div id="workflow-modal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Load Workflow</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="workflow-list">
+                <p style="color: #64748b; text-align: center;">Loading workflows...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drawflow JS -->
+    <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
+
+    <!-- Auth Manager (same as main app) -->
+    <script src="assets/js/account-store.js?v=20260529-account-store"></script>
+    <script src="assets/js/auth.js"></script>
+
+    <!-- Config -->
+    <script>
+        window.CONFIG = {
+            API_BASE_URL: '/gpt/backend/api/v1'
+        };
+    </script>
+
+    <!-- Workflow Editor -->
+    <script src="assets/js/workflow-editor.js"></script>
+
+    <!-- Main Script -->
+    <script>
+        let workflowEditor;
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Check authentication
+            const token = localStorage.getItem('token');
+            const loginNotice = document.getElementById('login-notice');
+            if (!token) {
+                loginNotice.classList.remove('hidden');
+                loginNotice.innerHTML = `
+                    Not logged in - <a href="login.html">Login here</a> |
+                    <button onclick="testAgentsAPI()" style="background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Test Agents API</button>
+                `;
+            } else {
+                // Show debug bar even when logged in
+                loginNotice.classList.remove('hidden');
+                loginNotice.style.background = '#dcfce7';
+                loginNotice.style.color = '#166534';
+                loginNotice.innerHTML = `
+                    ✓ Logged in |
+                    <button onclick="testAgentsAPI()" style="background: #16a34a; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Test Agents API</button> |
+                    <button onclick="location.reload()" style="background: #3b82f6; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Reload</button>
+                `;
+            }
+
+            // Initialize workflow editor
+            workflowEditor = new WorkflowEditor('workflow-canvas', 'workflow-agents-panel');
+            await workflowEditor.init();
+
+            // Hide help overlay when nodes are added
+            workflowEditor.editor.on('nodeCreated', () => {
+                document.getElementById('help-overlay').classList.add('hidden');
+            });
+
+            // Show help when all nodes removed
+            workflowEditor.editor.on('nodeRemoved', () => {
+                const data = workflowEditor.editor.export();
+                const nodes = data.drawflow?.Home?.data || {};
+                if (Object.keys(nodes).length === 0) {
+                    document.getElementById('help-overlay').classList.remove('hidden');
+                }
+            });
+
+            // Set up zoom controls
+            setupZoomControls();
+
+            // Set up header buttons
+            document.getElementById('new-workflow-btn').addEventListener('click', () => {
+                if (confirm('Create new workflow? Unsaved changes will be lost.')) {
+                    workflowEditor.clearWorkflow();
+                    document.getElementById('help-overlay').classList.remove('hidden');
+                }
+            });
+
+            document.getElementById('load-workflow-btn').addEventListener('click', loadWorkflowList);
+            document.getElementById('export-json-btn').addEventListener('click', exportAsJSON);
+        });
+
+        // Zoom controls
+        function setupZoomControls() {
+            const zoomLevel = document.getElementById('zoom-level');
+
+            document.getElementById('zoom-in').addEventListener('click', () => {
+                workflowEditor.editor.zoom_in();
+                updateZoomLevel();
+            });
+
+            document.getElementById('zoom-out').addEventListener('click', () => {
+                workflowEditor.editor.zoom_out();
+                updateZoomLevel();
+            });
+
+            document.getElementById('zoom-reset').addEventListener('click', () => {
+                workflowEditor.editor.zoom_reset();
+                updateZoomLevel();
+            });
+
+            function updateZoomLevel() {
+                const zoom = Math.round(workflowEditor.editor.zoom * 100);
+                zoomLevel.textContent = zoom + '%';
+            }
+        }
+
+        // Load workflow list
+        async function loadWorkflowList() {
+            const modal = document.getElementById('workflow-modal');
+            const list = document.getElementById('workflow-list');
+            modal.classList.remove('hidden');
+
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch('/api/v1/workflows', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) throw new Error('Failed to load workflows');
+
+                const data = await response.json();
+                const workflows = data.workflows || data.data || [];
+
+                if (workflows.length === 0) {
+                    list.innerHTML = '<p style="color: #64748b; text-align: center;">No workflows saved yet.</p>';
+                } else {
+                    list.innerHTML = workflows.map(w => `
+                        <div class="workflow-list-item" onclick="loadWorkflow(${w.id})">
+                            <h3>${escapeHtml(w.name || 'Untitled')}</h3>
+                            <p>${escapeHtml(w.description || 'No description')}</p>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                list.innerHTML = `<p style="color: #ef4444; text-align: center;">Error: ${error.message}</p>`;
+            }
+        }
+
+        // Load a specific workflow
+        async function loadWorkflow(id) {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch(`/api/v1/workflows/${id}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) throw new Error('Failed to load workflow');
+
+                const data = await response.json();
+                const workflow = data.workflow || data;
+
+                if (workflow.definition) {
+                    workflowEditor.importWorkflow(workflow.definition);
+                    workflowEditor.currentWorkflowId = id;
+                    document.getElementById('help-overlay').classList.add('hidden');
+                }
+
+                closeModal();
+                showToast('Workflow loaded successfully', 'success');
+            } catch (error) {
+                showToast('Error loading workflow: ' + error.message, 'error');
+            }
+        }
+
+        // Export as JSON
+        function exportAsJSON() {
+            const workflow = workflowEditor.exportWorkflow();
+            const json = JSON.stringify(workflow, null, 2);
+
+            // Copy to clipboard
+            navigator.clipboard.writeText(json).then(() => {
+                showToast('Workflow JSON copied to clipboard!', 'success');
+            }).catch(() => {
+                // Fallback: show in console
+                console.log('Workflow JSON:', json);
+                showToast('JSON logged to console (clipboard failed)', 'success');
+            });
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('workflow-modal').classList.add('hidden');
+        }
+
+        // Toast notification
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close modal on click outside
+        document.getElementById('workflow-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeModal();
+            }
+        });
+
+        // Test agents API directly
+        async function testAgentsAPI() {
+            const token = localStorage.getItem('token');
+            console.log('Auth token:', token);
+
+            try {
+                const response = await fetch('/gpt/backend/api/v1/agents', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                console.log('Response status:', response.status);
+                const data = await response.json();
+                console.log('Response data:', data);
+
+                const agents = data.data || data.agents || [];
+                alert(`API returned ${agents.length} agents.\n\nCheck browser console (F12) for full details.\n\nAgent types: ${agents.map(a => a.agent_type).join(', ')}`);
+            } catch (error) {
+                console.error('API error:', error);
+                alert('Error: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
