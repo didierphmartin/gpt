@@ -2959,12 +2959,16 @@ class WorkflowEditor {
      * script it would fall back to if the saved graph were stale. Then show it.
      */
     async _compileIngestionToPython() {
-        try {
-            await this.saveWorkflow();
-        } catch (e) {
-            console.warn('[WorkflowEditor] save before ingestion compile failed:', e);
+        // Only create the workflow once (for the endpoint id); no re-save when
+        // parameters change — the compiler reads the LIVE configs from the canvas.
+        if (!this.currentWorkflowId) {
+            try {
+                await this.saveWorkflow();
+            } catch (e) {
+                console.warn('[WorkflowEditor] save before ingestion compile failed:', e);
+            }
+            if (!this.currentWorkflowId) return; // create cancelled / failed
         }
-        if (!this.currentWorkflowId) return; // save was cancelled / failed
 
         // Gather the ingestion stage configs straight from the canvas (the form
         // attributes) and hand them to the standalone IngestionCompiler. No
@@ -7366,7 +7370,9 @@ class WorkflowEditor {
      * execution (needs no vector DB / API key).
      */
     async _runIngestion() {
-        // Persist the latest canvas first so the per-node code reflects it.
+        // No re-save when parameters change — the workflow exists only to host
+        // the pipeline; the per-node code is generated from the LIVE form attrs.
+        // Only create it once (to get an id for the endpoints) if it's brand new.
         if (!this.currentWorkflowId) {
             await this.saveWorkflow();
             if (!this.currentWorkflowId) {
@@ -7377,8 +7383,6 @@ class WorkflowEditor {
                 this.updateStartNodeIndicator(false);
                 return;
             }
-        } else {
-            await this.saveWorkflow();
         }
         this.updateStartNodeIndicator(false); // not a long-running execution
 
