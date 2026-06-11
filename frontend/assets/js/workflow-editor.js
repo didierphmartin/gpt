@@ -2027,6 +2027,21 @@ class WorkflowEditor {
         // Connection created
         this.editor.on('connectionCreated', (connection) => {
             console.log('[WorkflowEditor] Connection created:', connection);
+            // Enforce the ingestion pipeline (start → loader → splitter →
+            // vectorstore → output). If an ingestion node is involved and the
+            // edge isn't a valid pipeline pair, undo it immediately.
+            if (!this._isValidIngestionConnection(connection)) {
+                try {
+                    this.editor.removeSingleConnection(
+                        connection.output_id, connection.input_id,
+                        connection.output_class, connection.input_class
+                    );
+                } catch (e) { /* connection already gone */ }
+                const msg = this.t('workflow.ingestion.invalidConnection')
+                    || 'Invalid connection — ingestion pipeline must be start → loader → splitter → vector store → output.';
+                if (this.showToast) this.showToast(msg, 'error'); else console.warn(msg);
+                return;
+            }
             // Apply animated styles to the new connection
             this.styleConnections();
             // Graph changed — flip the Output node variant if needed.
@@ -6642,6 +6657,37 @@ class WorkflowEditor {
         } catch (_) {
             return false;
         }
+    }
+
+    /**
+     * Resolve a Drawflow node id to its logical type:
+     * 'loader' | 'splitter' | 'vectorstore' for ingestion components, else the
+     * node's base type/name ('start' | 'output' | 'agent' | …).
+     */
+    _nodeTypeById(id) {
+        const n = this.editor.getNodeFromId(id);
+        if (!n) return null;
+        const nt = n.data?.node_type;
+        if (['loader', 'splitter', 'vectorstore'].includes(nt)) return nt;
+        return n.data?.type || n.name || null;
+    }
+
+    /**
+     * Validate a just-created connection against the ingestion pipeline rules.
+     * Ingestion is a fixed linear pipeline:
+     *   start → loader → splitter → vectorstore → output
+     * If EITHER endpoint is an ingestion component node, the edge must be one of
+     * those pairs (so e.g. only a splitter may follow a loader, and ingestion
+     * nodes can't be wired to agents). Connections that involve no ingestion
+     * node are left to the existing agent-workflow behavior.
+     */
+    _isValidIngestionConnection(connection) {
+        const ING = ['loader', 'splitter', 'vectorstore'];
+        const src = this._nodeTypeById(connection.output_id);
+        const tgt = this._nodeTypeById(connection.input_id);
+        if (!ING.includes(src) && !ING.includes(tgt)) return true; // pure agent edge
+        const ALLOWED = { start: 'loader', loader: 'splitter', splitter: 'vectorstore', vectorstore: 'output' };
+        return ALLOWED[src] === tgt;
     }
 
     /**
