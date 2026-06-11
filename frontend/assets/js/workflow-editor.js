@@ -5748,9 +5748,14 @@ class WorkflowEditor {
         if (nodeType === 'loader') {
             fieldsHtml = `
                 <div class="storage-config-folder">
-                    <label for="ingestion-loader-source">Source</label>
+                    <label for="ingestion-loader-source">Document type</label>
                     <select id="ingestion-loader-source">
-                        <option value="pdf" selected>pdf</option>
+                        ${[
+                            { v: 'pdf',  label: 'PDF (.pdf)' },
+                            { v: 'word', label: 'Word (.docx)' },
+                            { v: 'text', label: 'Text (.txt)' },
+                            { v: 'csv',  label: 'CSV (.csv)' },
+                        ].map(o => `<option value="${o.v}" ${(config.source || 'pdf') === o.v ? 'selected' : ''}>${o.label}</option>`).join('')}
                     </select>
                 </div>
                 <div class="storage-config-folder">

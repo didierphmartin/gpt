@@ -1060,6 +1060,16 @@ if not LOADER.get("path"):
     raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
 docs = TextLoader(LOADER["path"], encoding="utf-8").load()
 PYB;
+        $pyLoadWord = <<<'PYB'
+if not LOADER.get("path"):
+    raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
+docs = Docx2txtLoader(LOADER["path"]).load()
+PYB;
+        $pyLoadCsv = <<<'PYB'
+if not LOADER.get("path"):
+    raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
+docs = CSVLoader(LOADER["path"]).load()
+PYB;
         $pySplitRecursive = <<<'PYB'
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=int(SPLITTER.get("chunk_size", 1000)),
@@ -1088,8 +1098,10 @@ PYB;
 
         // ── Dispatch tables: choice → { python import, pipeline fragment } ──
         $loaderDispatch = [
-            'pdf'  => ['import' => 'from langchain_community.document_loaders import PyPDFLoader', 'block' => $pyLoadPdf],
-            'text' => ['import' => 'from langchain_community.document_loaders import TextLoader',  'block' => $pyLoadText],
+            'pdf'  => ['import' => 'from langchain_community.document_loaders import PyPDFLoader',   'block' => $pyLoadPdf],
+            'word' => ['import' => 'from langchain_community.document_loaders import Docx2txtLoader', 'block' => $pyLoadWord],
+            'text' => ['import' => 'from langchain_community.document_loaders import TextLoader',     'block' => $pyLoadText],
+            'csv'  => ['import' => 'from langchain_community.document_loaders import CSVLoader',      'block' => $pyLoadCsv],
             // future: 'web' => WebBaseLoader, 'sql' => SQLDatabaseLoader, 'mcp:<srv>' => MCP adapter
         ];
         $splitterDispatch = [
