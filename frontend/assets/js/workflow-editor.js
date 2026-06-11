@@ -6728,7 +6728,6 @@ class WorkflowEditor {
                 </div>
                 <div class="node-documents-zone">
                     <div class="documents-list"></div>
-                    <div class="documents-drop-hint">📎 ${this.t('workflow.documents.dropHint') || 'Drop the document to ingest'}</div>
                 </div>
             </div>
         `;
