@@ -2320,7 +2320,7 @@ class WorkflowEditor {
             const ingestionCompileBtn = e.target.closest('[data-action="ingestion-compile"]');
             if (ingestionCompileBtn) {
                 e.stopPropagation();
-                this._showLangGraphCodeModal();
+                this._compileIngestionToPython();
                 return;
             }
 
@@ -2946,6 +2946,22 @@ class WorkflowEditor {
     }
 
     /**
+     * Ingestion "Compile to Python": persist the latest graph FIRST so the
+     * backend compiler sees the ingestion nodes (loader/splitter/vectorstore)
+     * and emits the lean standalone ingestion script — not the LangGraph/LLM
+     * script it would fall back to if the saved graph were stale. Then show it.
+     */
+    async _compileIngestionToPython() {
+        try {
+            await this.saveWorkflow();
+        } catch (e) {
+            console.warn('[WorkflowEditor] save before ingestion compile failed:', e);
+        }
+        if (!this.currentWorkflowId) return; // save was cancelled / failed
+        this._showLangGraphCodeModal();
+    }
+
+    /**
      * Display Code — fetch the generated Python from the backend and show
      * it in a scrollable code block with copy-to-clipboard. Read-only;
      * does not touch the local filesystem. The same endpoint
@@ -2975,7 +2991,7 @@ class WorkflowEditor {
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold text-gray-900">Generated LangGraph code</h3>
+                    <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
