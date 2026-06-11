@@ -991,6 +991,11 @@ svg.connection.selected .main-path,
     background: rgba(245, 158, 11, 0.15);
 }
 
+/* Ingestion (vector store) end node — visually distinct from the agent
+   Output node so the two variants are easy to tell apart. */
+.workflow-node.output-node.ingestion-output .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
+.workflow-node.output-node.ingestion-output .node-icon { color: #0284c7; }
+
 /* Output node with results available */
 .workflow-node.output-node.has-results {
     box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);

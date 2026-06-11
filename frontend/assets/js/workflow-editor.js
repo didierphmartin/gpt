@@ -2029,6 +2029,14 @@ class WorkflowEditor {
             console.log('[WorkflowEditor] Connection created:', connection);
             // Apply animated styles to the new connection
             this.styleConnections();
+            // Graph changed — flip the Output node variant if needed.
+            this.refreshOutputNodeVariant();
+        });
+
+        // Connection removed — graph changed, refresh the Output node variant.
+        this.editor.on('connectionRemoved', (connection) => {
+            console.log('[WorkflowEditor] Connection removed:', connection);
+            this.refreshOutputNodeVariant();
         });
 
         // Connection start (dragging from output)
@@ -2044,6 +2052,9 @@ class WorkflowEditor {
         // Node removed
         this.editor.on('nodeRemoved', (nodeId) => {
             console.log('[WorkflowEditor] Node removed:', nodeId);
+            // Removing the last ingestion node flips the Output node back to
+            // the agent variant.
+            this.refreshOutputNodeVariant();
         });
 
         // Click event for debugging
@@ -2055,6 +2066,8 @@ class WorkflowEditor {
         this.editor.on('nodeCreated', () => {
             this.addArrowheadMarker();
             this.hideHelpOverlay();
+            // A new node may make this an ingestion workflow — flip the variant.
+            this.refreshOutputNodeVariant();
         });
 
         // Track selected connection
@@ -2751,9 +2764,28 @@ class WorkflowEditor {
             return;
         }
 
+        const isIngestion = this._isIngestionWorkflow();
+
         const menu = document.createElement('div');
         menu.className = 'langgraph-menu';
-        menu.innerHTML = `
+        // Ingestion workflows get a script-focused menu (no langgraph-runtime
+        // setup/info, which are agent-only). The agent menu is unchanged.
+        menu.innerHTML = isIngestion
+            ? `
+            <button type="button" class="langgraph-menu-item" data-action="generate">
+                ${this.escapeHtml(this.t('workflow.output.ingestionGenerate') || 'Generate Python script')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="run">
+                ${this.escapeHtml(this.t('workflow.output.ingestionRun') || 'Run ingestion')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="download">
+                ${this.escapeHtml(this.t('workflow.output.ingestionDownload') || 'Download script')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="display-code">
+                ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
+            </button>
+        `
+            : `
             <button type="button" class="langgraph-menu-item" data-action="setup">
                 ${this.escapeHtml(this.t('workflow.output.langgraphSetup') || 'Setup')}
             </button>
@@ -2778,23 +2810,35 @@ class WorkflowEditor {
         menu.style.left = `${Math.max(8, left)}px`;
         menu.style.top = `${r.bottom + 4}px`;
 
-        menu.querySelector('[data-action="setup"]').addEventListener('click', () => {
+        // Guard each binding with ?. so the items absent in one variant
+        // (setup/info for ingestion; download for agent) don't throw.
+        menu.querySelector('[data-action="setup"]')?.addEventListener('click', () => {
             menu.remove();
             this._showRunnerSetupModal();
         });
-        menu.querySelector('[data-action="generate"]').addEventListener('click', () => {
+        menu.querySelector('[data-action="generate"]')?.addEventListener('click', () => {
             menu.remove();
             this.downloadGeneratedPython();
         });
-        menu.querySelector('[data-action="info"]').addEventListener('click', () => {
+        menu.querySelector('[data-action="info"]')?.addEventListener('click', () => {
             menu.remove();
             this._showLangGraphInfoModal();
         });
-        menu.querySelector('[data-action="run"]').addEventListener('click', () => {
+        menu.querySelector('[data-action="download"]')?.addEventListener('click', () => {
             menu.remove();
-            this._runLangGraphScript();
+            this.downloadGeneratedPython();
         });
-        menu.querySelector('[data-action="display-code"]').addEventListener('click', () => {
+        menu.querySelector('[data-action="run"]')?.addEventListener('click', () => {
+            menu.remove();
+            // Ingestion runs server-side via run-ingestion, not the
+            // langgraph_runner (/api/run-file) used for agent scripts.
+            if (isIngestion) {
+                this._runIngestion();
+            } else {
+                this._runLangGraphScript();
+            }
+        });
+        menu.querySelector('[data-action="display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._showLangGraphCodeModal();
         });
@@ -3454,6 +3498,36 @@ class WorkflowEditor {
                 this.editor.updateNodeDataFromId(nodeId, {});
 
                 // Update DOM directly
+                const nodeElement = document.getElementById(`node-${nodeId}`);
+                if (nodeElement) {
+                    const contentDiv = nodeElement.querySelector('.drawflow_content_node');
+                    if (contentDiv) {
+                        contentDiv.innerHTML = newHtml;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    /**
+     * Re-render the Output node in place so it shows the variant (agent vs
+     * ingestion) matching the current graph. The Output node is usually added
+     * before the ingestion nodes, so its variant must flip when the workflow
+     * type changes (a vectorstore/loader/splitter appears or disappears).
+     * Reuses the same find-node-named-'output' + set innerHTML loop as
+     * updateOutputNodeDisplay(); createOutputNodeHtml() picks the variant.
+     */
+    refreshOutputNodeVariant() {
+        if (!this.drawflow) return;
+
+        const nodes = this.drawflow.drawflow?.Home?.data;
+        if (!nodes) return;
+
+        for (const nodeId in nodes) {
+            const node = nodes[nodeId];
+            if (node.name === 'output') {
+                const newHtml = this.createOutputNodeHtml();
                 const nodeElement = document.getElementById(`node-${nodeId}`);
                 if (nodeElement) {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
@@ -5510,6 +5584,10 @@ class WorkflowEditor {
 
         this.hideHelpOverlay();
 
+        // The Output node is usually already on the canvas; dragging an
+        // ingestion node must immediately flip it to the ingestion variant.
+        this.refreshOutputNodeVariant();
+
         return drawflowId;
     }
 
@@ -6551,9 +6629,54 @@ class WorkflowEditor {
     }
 
     /**
+     * Is the current canvas an ingestion (RAG) workflow rather than an agent
+     * workflow? True when it contains any loader/splitter/vectorstore node.
+     * exportWorkflow() already resolves each node's node_type to its concrete
+     * ingestion type (see exportWorkflow), so this is the consistent source.
+     */
+    _isIngestionWorkflow() {
+        try {
+            return this.exportWorkflow().nodes.some(
+                n => ['loader', 'splitter', 'vectorstore'].includes(n.node_type)
+            );
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /**
+     * Create HTML for the ingestion (RAG) end node — the vector-store sink.
+     * Mirrors createOutputNodeHtml()'s structure (same node-langgraph and
+     * node-view-json buttons so existing CSS/click wiring applies) but with
+     * ingestion-flavored content and no agent-only storage indicator.
+     */
+    createIngestionOutputNodeHtml() {
+        return `
+            <div class="workflow-node output-node ingestion-output">
+                <div class="node-header">
+                    <span class="node-icon">🗄️</span>
+                    <span class="node-title">${this.t('workflow.nodes.vectorStore') || 'Vector store'}</span>
+                </div>
+                <div class="node-body">
+                    <small>Embeddings → pgvector</small>
+                </div>
+                <button class="node-langgraph" title="${this.t('workflow.output.langgraphTitle') || 'Generate or run the ingestion script'}" data-action="langgraph-menu">
+                    <span class="gen-label">Python / Run</span>
+                    <span class="gen-caret" aria-hidden="true">▾</span>
+                </button>
+                <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
+                    <span class="gen-label">${this.t('workflow.output.viewJson') || '{ } View JSON'}</span>
+                </button>
+            </div>
+        `;
+    }
+
+    /**
      * Create HTML for output node
      */
     createOutputNodeHtml() {
+        if (this._isIngestionWorkflow()) return this.createIngestionOutputNodeHtml();
+
         const storageEnabled = this.outputStorageEnabled;
         const storageIcon = storageEnabled ? '💾' : '📤';
         const storageLabel = storageEnabled ? this.t('workflow.storage.storageOn') : this.t('workflow.storage.storageOff');
