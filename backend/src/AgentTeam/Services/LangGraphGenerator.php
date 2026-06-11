@@ -993,6 +993,23 @@ class LangGraphGenerator
         array $vectorstoreNode,
         array $startDocuments
     ): array {
+        // ───────────────────────────────────────────────────────────────
+        // EXTENSION POINTS (v1 is the strict minimum — extend these together
+        // with the editor's dropdowns when adding options; see the design spec
+        // docs/superpowers/specs/2026-06-10-rag-ingestion-components-design.md §4/§5):
+        //   • loader.source : v1 pdf/text → future web (WebBaseLoader),
+        //                     sql (SQLDatabaseLoader), mcp:<server>.
+        //   • vectorstore.store : v1 pgvector → future faiss/chroma/mcp:<server>.
+        //   • splitter.strategy : v1 recursive only → future "auto", which MUST
+        //     pick the splitter from the loader's FILE TYPE / content kind:
+        //       markdown → MarkdownHeaderTextSplitter
+        //       code     → RecursiveCharacterTextSplitter.from_language
+        //       html     → HTMLHeaderTextSplitter
+        //       json     → RecursiveJsonSplitter
+        //       rows     → row-serialization template (tabular)
+        // The emitted python below (the source switch, the strategy, the store
+        // check) is where each new option gets a branch.
+        // ───────────────────────────────────────────────────────────────
         $loaderCfg = self::nodeConfig($loaderNode);
         $splitterCfg = self::nodeConfig($splitterNode);
         $storeCfg = self::nodeConfig($vectorstoreNode);
@@ -1026,57 +1043,35 @@ class LangGraphGenerator
         $splitterLit = json_encode($splitterJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $storeLit = json_encode($storeJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        // Fully-inlined, self-contained standalone script: load -> recursive
-        // split -> embed (OpenAI) -> write to pgvector, with no dependency on
-        // the langchain_runner/ingestion.py module. It only needs the libs in
-        // the venv (langchain-community, langchain-text-splitters,
-        // langchain-openai, langchain-postgres, pypdf, psycopg) and the env
-        // vars VECTOR_DB_DSN + OPENAI_API_KEY. This file can be downloaded and
-        // run anywhere those are present.
-        $code = <<<PY
-# Standalone RAG ingestion script — generated from workflow {$workflowId}.
-# load -> recursive-split -> embed (OpenAI) -> write to pgvector.
-# Requires: langchain-community, langchain-text-splitters, langchain-openai,
-#           langchain-postgres, pypdf, psycopg ; env VECTOR_DB_DSN + OPENAI_API_KEY.
-import json, os
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_postgres import PGVector
-
-LOADER = {$loaderLit}
-SPLITTER = {$splitterLit}
-STORE = {$storeLit}
-
-# 1. Load the source document(s).
-source = LOADER.get("source", "pdf")
-path = LOADER.get("path")
-if not path:
+        // ── Python pipeline fragments (one per choice) ───────────────────
+        // Each fragment is a self-contained block that advances the pipeline:
+        // a loader sets `docs`, a splitter sets `chunks` from `docs`, the
+        // embeddings sets `embeddings`, the store writes + sets `result`.
+        // To add a new loader source / splitter strategy / store / embeddings
+        // provider: add ONE fragment + its dispatch entry below (and the
+        // matching editor dropdown). The skeleton stays choice-agnostic.
+        $pyLoadPdf = <<<'PYB'
+if not LOADER.get("path"):
     raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
-if source == "pdf":
-    docs = PyPDFLoader(path).load()
-elif source == "text":
-    docs = TextLoader(path, encoding="utf-8").load()
-else:
-    raise ValueError("unsupported loader source: " + repr(source))
-
-# 2. Recursive-split into chunks.
+docs = PyPDFLoader(LOADER["path"]).load()
+PYB;
+        $pyLoadText = <<<'PYB'
+if not LOADER.get("path"):
+    raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
+docs = TextLoader(LOADER["path"], encoding="utf-8").load()
+PYB;
+        $pySplitRecursive = <<<'PYB'
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=int(SPLITTER.get("chunk_size", 1000)),
     chunk_overlap=int(SPLITTER.get("overlap", 150)),
 )
 chunks = splitter.split_documents(docs)
-
-# 3. Embeddings (online, OpenAI by default).
-emb_spec = STORE.get("embeddings") or "openai:text-embedding-3-small"
-emb_provider, _, emb_model = emb_spec.partition(":")
-if emb_provider != "openai":
-    raise ValueError("unsupported embeddings provider: " + repr(emb_provider))
+PYB;
+        $pyEmbedOpenAI = <<<'PYB'
+emb_model = (STORE.get("embeddings") or "openai:text-embedding-3-small").partition(":")[2]
 embeddings = OpenAIEmbeddings(model=emb_model or "text-embedding-3-small")
-
-# 4. Write to pgvector.
-if STORE.get("store", "pgvector") != "pgvector":
-    raise ValueError("unsupported store: " + repr(STORE.get("store")))
+PYB;
+        $pyStorePgvector = <<<'PYB'
 dsn = os.environ.get("VECTOR_DB_DSN")
 if not dsn:
     raise RuntimeError("VECTOR_DB_DSN is not set")
@@ -1088,8 +1083,82 @@ PGVector.from_documents(
     connection=dsn,
     use_jsonb=True,
 )
+result = {"store": "pgvector", "collection": collection, "chunks": len(chunks)}
+PYB;
 
-print(json.dumps({"store": "pgvector", "collection": collection, "chunks": len(chunks)}))
+        // ── Dispatch tables: choice → { python import, pipeline fragment } ──
+        $loaderDispatch = [
+            'pdf'  => ['import' => 'from langchain_community.document_loaders import PyPDFLoader', 'block' => $pyLoadPdf],
+            'text' => ['import' => 'from langchain_community.document_loaders import TextLoader',  'block' => $pyLoadText],
+            // future: 'web' => WebBaseLoader, 'sql' => SQLDatabaseLoader, 'mcp:<srv>' => MCP adapter
+        ];
+        $splitterDispatch = [
+            'recursive' => ['import' => 'from langchain_text_splitters import RecursiveCharacterTextSplitter', 'block' => $pySplitRecursive],
+            // future: 'markdown' => MarkdownHeaderTextSplitter, 'auto' => route by content kind, 'rows' => row template
+        ];
+        $embeddingsDispatch = [
+            'openai' => ['import' => 'from langchain_openai import OpenAIEmbeddings', 'block' => $pyEmbedOpenAI],
+            // future: 'ollama' => OllamaEmbeddings, 'hf' => HuggingFaceEmbeddings, 'mcp:<srv>'
+        ];
+        $storeDispatch = [
+            'pgvector' => ['import' => 'from langchain_postgres import PGVector', 'block' => $pyStorePgvector],
+            // future: 'faiss', 'chroma', 'mcp:<srv>'
+        ];
+
+        // Resolve the chosen options; fail loudly if the editor offered an
+        // option the compiler has no fragment for yet.
+        $source = $loaderJson['source'];
+        $strategy = $splitterJson['strategy'];
+        $store = $storeJson['store'];
+        $embProvider = strtok((string) $storeJson['embeddings'], ':') ?: 'openai';
+        foreach ([
+            ['loader source', $source, $loaderDispatch],
+            ['splitter strategy', $strategy, $splitterDispatch],
+            ['embeddings provider', $embProvider, $embeddingsDispatch],
+            ['vector store', $store, $storeDispatch],
+        ] as [$label, $choice, $table]) {
+            if (!isset($table[$choice])) {
+                throw new \RuntimeException("ingestion compiler: no fragment for {$label} '{$choice}' yet — add it to the dispatch table.");
+            }
+        }
+        $L = $loaderDispatch[$source];
+        $S = $splitterDispatch[$strategy];
+        $E = $embeddingsDispatch[$embProvider];
+        $V = $storeDispatch[$store];
+
+        // Compose only the imports the chosen fragments need (dedup, stable order).
+        $importBlock = implode("\n", array_values(array_unique([$L['import'], $S['import'], $E['import'], $V['import']])));
+        $loaderBlock = $L['block'];
+        $splitterBlock = $S['block'];
+        $embeddingsBlock = $E['block'];
+        $storeBlock = $V['block'];
+
+        // Choice-agnostic skeleton. Self-contained standalone script: needs only
+        // the venv libs for the chosen backends + VECTOR_DB_DSN/OPENAI_API_KEY,
+        // so it can be downloaded and run anywhere.
+        $code = <<<PY
+# Standalone RAG ingestion script — generated from workflow {$workflowId}.
+# Composed from the chosen loader/splitter/embeddings/store fragments.
+import json, os
+{$importBlock}
+
+LOADER = {$loaderLit}
+SPLITTER = {$splitterLit}
+STORE = {$storeLit}
+
+# 1. Load → docs
+{$loaderBlock}
+
+# 2. Split → chunks
+{$splitterBlock}
+
+# 3. Embeddings → embeddings
+{$embeddingsBlock}
+
+# 4. Store (writes chunks, sets `result`)
+{$storeBlock}
+
+print(json.dumps(result))
 PY;
 
         return [
