@@ -172,7 +172,7 @@ The editor's **Run** button is target‑aware: `interpretable` → existing run�
 ## 13. Open questions to confirm before planning
 
 1. **Mixed graphs**: confirm "any python‑only node ⇒ whole graph compiles to Python" (LLM agents become LangChain LLM nodes) vs. splitting sub‑graphs. *(Recommend: whole‑graph.)*
-2. **Embeddings default = online** (`openai:text-embedding-3-small`) — **decided**; offline/local stays available. **Still to pick: the vector store** — FAISS/Chroma on disk (simplest) vs. pgvector (needs Postgres; you run MySQL) vs. an MCP vector‑store server.
+2. **Embeddings default = online** (`openai:text-embedding-3-small`) — **decided**; offline/local stays available. **Vector store = pgvector — decided.** ⚠️ New infra: a **Postgres** instance with the **`pgvector`** extension (alongside the existing MySQL); connection via an env var (e.g. `VECTOR_DB_DSN`), consumed by `langchain_postgres.PGVector` in `langchain_runner`. FAISS/Chroma can be added later via the same `store` field.
 3. **Port typing strictness**: the fixed content‑kind set only (recommended) vs. richer typing.
 4. **Run endpoint**: server‑side subprocess in `langchain_runner` (recommended) vs. download‑and‑run the script.
 5. **Scope of v1**: ship **pure ingestion** end‑to‑end — the 3 components (`loader`/`splitter`/`vectorstore`) + generator templates + the `langchain_runner` run endpoint, populating a vector store. The **query side needs no new nodes** (agent + the store's MCP `retrieve` tool, already interpretable), so it's mostly wiring/docs in v2.
