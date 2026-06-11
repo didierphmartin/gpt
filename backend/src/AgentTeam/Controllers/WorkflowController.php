@@ -322,21 +322,39 @@ class WorkflowController
             // 2) Write code to <langchain_runner_dir>/<filename>.
             // Controllers live at backend/src/AgentTeam/Controllers -> repo root is 4 up.
             $runnerDir = dirname(__DIR__, 4) . '/langchain_runner';
-            $venvPython = $runnerDir . '/.venv/bin/python';
-            if (!is_file($venvPython)) {
-                return [
-                    'success' => false,
-                    'error' => 'langchain_runner venv python not found at ' . $venvPython,
-                    'status_code' => 500,
-                ];
-            }
-
             $filename = basename((string) $result['filename']); // defensive: no path traversal
             $scriptPath = $runnerDir . '/' . $filename;
             if (file_put_contents($scriptPath, (string) $result['code']) === false) {
                 return [
                     'success' => false,
                     'error' => 'Failed to write ingestion script to ' . $scriptPath,
+                    'status_code' => 500,
+                ];
+            }
+
+            // Compile-only: the script is now on disk; return its path + code
+            // without executing it (no venv / DB / API key needed). This is what
+            // the "Compile to Python" button calls so the generated .py shows up
+            // in langchain_runner/.
+            if (($request['query']['compile_only'] ?? '') === '1') {
+                return [
+                    'success' => true,
+                    'data' => [
+                        'filename' => $filename,
+                        'path' => $scriptPath,
+                        'code' => (string) $result['code'],
+                        'compiled' => true,
+                    ],
+                    'status_code' => 200,
+                ];
+            }
+
+            // 3) For a real run we need the venv python.
+            $venvPython = $runnerDir . '/.venv/bin/python';
+            if (!is_file($venvPython)) {
+                return [
+                    'success' => false,
+                    'error' => 'langchain_runner venv python not found at ' . $venvPython,
                     'status_code' => 500,
                 ];
             }

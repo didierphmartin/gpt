@@ -2965,7 +2965,25 @@ class WorkflowEditor {
             console.warn('[WorkflowEditor] save before ingestion compile failed:', e);
         }
         if (!this.currentWorkflowId) return; // save was cancelled / failed
-        this._showLangGraphCodeModal();
+
+        // Write the compiled script to disk (langchain_runner/ingestion_<id>.py)
+        // via the compile-only path so "Compile" actually produces a file.
+        let savedPath = '';
+        try {
+            const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion?compile_only=1`, {
+                method: 'POST', headers: this.getAuthHeaders(), credentials: 'include',
+            });
+            const j = await resp.json().catch(() => ({}));
+            if (j && j.success && j.data) {
+                savedPath = j.data.path || '';
+                console.log('[WorkflowEditor] compiled ingestion script written to', savedPath);
+            } else {
+                console.warn('[WorkflowEditor] compile-only failed:', j && j.error);
+            }
+        } catch (e) {
+            console.warn('[WorkflowEditor] compile-only request failed:', e);
+        }
+        this._showLangGraphCodeModal(savedPath);
     }
 
     /**
@@ -2975,7 +2993,7 @@ class WorkflowEditor {
      * (/workflows/<id>/generate-python) backs the Generate action that
      * downloads the file.
      */
-    async _showLangGraphCodeModal() {
+    async _showLangGraphCodeModal(savedPath = '') {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3001,6 +3019,7 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
+                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
                 <div class="flex justify-end mt-3">
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -7207,10 +7226,14 @@ class WorkflowEditor {
      * just a single JSON result describing how many chunks were stored.
      */
     async _runIngestion() {
-        // Persist the current canvas DSL before running so the backend
-        // compiles the latest graph. saveWorkflow() is async and sets
-        // this.currentWorkflowId (via loadWorkflow) when creating a new
-        // workflow; it's idempotent (PUT) when an id already exists.
+        // In an ingestion workflow the start node's ▶ does NOT execute the
+        // pipeline (executing it needs the vector DB + embedding API key).
+        // Instead it validates the pipeline and PRODUCES the standalone Python
+        // script (written to langchain_runner/ingestion_<id>.py via the
+        // compile-only path). Persist the current canvas DSL first so the
+        // backend compiles the latest graph. saveWorkflow() sets
+        // this.currentWorkflowId when creating a new workflow; it's idempotent
+        // (PUT) when an id already exists.
         if (!this.currentWorkflowId) {
             await this.saveWorkflow();
             if (!this.currentWorkflowId) {
@@ -7227,7 +7250,8 @@ class WorkflowEditor {
         this.updateStartNodeIndicator(true);
 
         try {
-            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion`;
+            // compile_only=1 → generate + write the script, do NOT execute it.
+            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion?compile_only=1`;
             const resp = await fetch(url, {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
@@ -7241,23 +7265,20 @@ class WorkflowEditor {
                 j = {};
             }
 
-            if (resp.ok && j.success) {
-                const chunks = j.result?.chunks ?? '?';
-                const store = j.result?.store || '';
-                const collection = j.result?.collection || '';
+            if (resp.ok && j.success && j.data) {
                 this.showToast(
-                    `Ingested ${chunks} chunks → ${store}/${collection}`,
+                    `Pipeline OK — Python script generated: ${j.data.filename}`,
                     'success'
                 );
             } else {
                 this.showToast(
-                    `Ingestion failed: ${j.error || resp.status}`,
+                    `Pipeline error: ${j.error || resp.status}`,
                     'error'
                 );
             }
         } catch (error) {
-            console.error('[WorkflowEditor] run-ingestion', error);
-            this.showToast(`Ingestion failed: ${error.message}`, 'error');
+            console.error('[WorkflowEditor] compile-ingestion', error);
+            this.showToast(`Pipeline check failed: ${error.message}`, 'error');
         } finally {
             this.updateStartNodeIndicator(false);
         }
