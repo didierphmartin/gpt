@@ -2047,6 +2047,7 @@ class WorkflowEditor {
             // Graph changed — flip the Output node variant if needed.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._scheduleStructureSave();
         });
 
         // Connection removed — graph changed, refresh the Output node variant.
@@ -2054,6 +2055,7 @@ class WorkflowEditor {
             console.log('[WorkflowEditor] Connection removed:', connection);
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._scheduleStructureSave();
         });
 
         // Connection start (dragging from output)
@@ -2073,6 +2075,7 @@ class WorkflowEditor {
             // the agent variant.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._scheduleStructureSave();
         });
 
         // Click event for debugging
@@ -2087,6 +2090,7 @@ class WorkflowEditor {
             // A new node may make this an ingestion workflow — flip the variant.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._scheduleStructureSave();
         });
 
         // Track selected connection
@@ -6023,6 +6027,19 @@ class WorkflowEditor {
     }
 
     /**
+     * Debounced auto-save triggered ONLY by structure changes (nodes/links added
+     * or removed) on an existing ingestion workflow. Parameter edits (the node
+     * forms) never trigger this — the generated code reads them live. Suppressed
+     * while a graph is being imported from storage.
+     */
+    _scheduleStructureSave() {
+        if (!this.currentWorkflowId || this._suppressAutoSave) return;
+        if (!this._isIngestionWorkflow()) return;
+        clearTimeout(this._structureSaveTimer);
+        this._structureSaveTimer = setTimeout(() => { this.saveWorkflow(); }, 800);
+    }
+
+    /**
      * Add a Start node (user input trigger)
      */
     addStartNode(x, y) {
@@ -6650,6 +6667,12 @@ class WorkflowEditor {
      */
     importGraphFromBackend(graph) {
         console.log('[WorkflowEditor] importGraphFromBackend called with:', graph);
+
+        // Suppress structure auto-save while loading from storage — the node/
+        // connection events fired below are not user edits. Cleared after the
+        // synchronous import (and its events) settle.
+        this._suppressAutoSave = true;
+        setTimeout(() => { this._suppressAutoSave = false; }, 0);
 
         const { nodes, edges } = graph;
 
