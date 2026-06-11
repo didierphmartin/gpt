@@ -6151,11 +6151,20 @@ class WorkflowEditor {
 
         const workflow = this.exportWorkflow();
 
-        // Prompt for name if new workflow
+        // Resolve the name for a new workflow. Prefer the name already typed in
+        // the metadata form (#workflow-name-input) so we don't re-prompt for a
+        // name the user just entered there; only fall back to prompt() when the
+        // form name is empty too.
         let workflowName = this.currentWorkflowName || '';
         if (!this.currentWorkflowId) {
-            workflowName = prompt(this.t('workflow.dialogs.promptWorkflowName'), this.t('workflow.dialogs.defaultWorkflowName'));
-            if (!workflowName) return;
+            const nameInput = document.getElementById('workflow-name-input');
+            const formName = nameInput ? (nameInput.value || '').trim() : '';
+            if (formName) {
+                workflowName = formName;
+            } else {
+                workflowName = prompt(this.t('workflow.dialogs.promptWorkflowName'), this.t('workflow.dialogs.defaultWorkflowName'));
+                if (!workflowName) return;
+            }
         }
 
         try {
