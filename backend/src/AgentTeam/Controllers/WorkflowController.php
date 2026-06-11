@@ -331,10 +331,23 @@ class WorkflowController
      *   - {success: true, result: <parsed json>} on exit 0
      *   - {success: false, error: <stderr/stdout tail>} on non-zero exit
      */
+    /**
+     * Append one line to the dedicated ingestion log
+     * (langchain_runner/ingestion.log) — keeps the compile/run events + errors
+     * out of the giant, MCP-noisy php_error_log so this pipeline is easy to debug.
+     */
+    private function logIngestion(string $message): void
+    {
+        $path = dirname(__DIR__, 4) . '/langchain_runner/ingestion.log';
+        @file_put_contents($path, '[' . date('Y-m-d H:i:s') . '] ' . $message . "\n", FILE_APPEND | LOCK_EX);
+    }
+
     public function runIngestion(array $request): array
     {
         $userId = $request['user_id'] ?? 0;
         $workflowId = (int) ($request['params']['id'] ?? 0);
+        $mode = ((($request['query']['compile_only'] ?? '') === '1') || (($_GET['compile_only'] ?? '') === '1')) ? 'compile' : 'run';
+        $this->logIngestion("runIngestion wf={$workflowId} user={$userId} mode={$mode}");
 
         if (!$userId) {
             return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
@@ -373,6 +386,7 @@ class WorkflowController
                 || (($_GET['compile_only'] ?? '') === '1');
             if ($compileOnly) {
                 $written = @file_put_contents($scriptPath, (string) $result['code']);
+                $this->logIngestion("compiled wf={$workflowId} -> {$filename} (" . strlen((string) $result['code']) . " bytes) written=" . ($written !== false ? "yes ({$scriptPath})" : 'NO (permissions?)'));
                 return [
                     'success' => true,
                     'data' => [
@@ -451,6 +465,7 @@ class WorkflowController
             if ($exitCode !== 0) {
                 $tail = trim($stderr) !== '' ? trim($stderr) : trim((string) $stdout);
                 error_log('[WorkflowController] runIngestion exit ' . $exitCode . ': ' . substr($tail, 0, 2000));
+                $this->logIngestion("ran wf={$workflowId} FAILED exit={$exitCode}: " . substr($tail, 0, 1000));
                 return [
                     'success' => false,
                     'error' => $tail !== '' ? $tail : 'Ingestion script exited with code ' . $exitCode,
@@ -478,6 +493,7 @@ class WorkflowController
                 ];
             }
 
+            $this->logIngestion("ran wf={$workflowId} OK: " . json_encode($parsed));
             return [
                 'success' => true,
                 'result' => $parsed,
@@ -485,6 +501,7 @@ class WorkflowController
             ];
         } catch (\Throwable $e) {
             error_log('[WorkflowController] runIngestion failed: ' . $e->getMessage());
+            $this->logIngestion("ERROR wf={$workflowId}: " . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
         }
     }

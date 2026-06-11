@@ -57,3 +57,4 @@ frontend/driver.js/
 
 # Runtime-generated ingestion scripts (Plan 1)
 langchain_runner/ingestion_*.py
+langchain_runner/ingestion.log
