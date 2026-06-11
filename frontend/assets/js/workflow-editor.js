@@ -6722,6 +6722,18 @@ class WorkflowEditor {
     async executeWorkflow(userPrompt) {
         // Store the prompt for later viewing
         this.lastUserPrompt = userPrompt;
+
+        // Ingestion graphs (loader/splitter/vectorstore) compile to Python and run
+        // in langchain_runner via the run-ingestion endpoint — not the agent
+        // run-stream. Route them there.
+        const _exported = this.exportWorkflow();
+        const _isIngestion = (_exported.nodes || []).some(
+            n => ['loader', 'splitter', 'vectorstore'].includes(n.node_type)
+        );
+        if (_isIngestion) {
+            return this._runIngestion();
+        }
+
         this.updateStartNodeIndicator(true);
 
         console.log('[WorkflowEditor] executeWorkflow - currentWorkflowId:', this.currentWorkflowId);
@@ -6875,6 +6887,69 @@ class WorkflowEditor {
             console.error('[WorkflowEditor] Error running workflow:', error);
             this.resetNodeStates();
             alert(this.t('workflow.errors.runWorkflowFailed', { error: error.message }));
+        }
+    }
+
+    /**
+     * Run an ingestion graph (loader/splitter/vectorstore) via the backend
+     * run-ingestion endpoint. The backend compiles the graph to Python and
+     * executes it in langchain_runner — there's no SSE/agent streaming here,
+     * just a single JSON result describing how many chunks were stored.
+     */
+    async _runIngestion() {
+        // Persist the current canvas DSL before running so the backend
+        // compiles the latest graph. saveWorkflow() is async and sets
+        // this.currentWorkflowId (via loadWorkflow) when creating a new
+        // workflow; it's idempotent (PUT) when an id already exists.
+        if (!this.currentWorkflowId) {
+            await this.saveWorkflow();
+            if (!this.currentWorkflowId) {
+                this.showToast(
+                    this.tWithFallback('workflow.messages.saveFirst', 'Save the workflow first'),
+                    'warning'
+                );
+                return;
+            }
+        } else {
+            await this.saveWorkflow();
+        }
+
+        this.updateStartNodeIndicator(true);
+
+        try {
+            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion`;
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                credentials: 'include'
+            });
+
+            let j = {};
+            try {
+                j = await resp.json();
+            } catch (_) {
+                j = {};
+            }
+
+            if (resp.ok && j.success) {
+                const chunks = j.result?.chunks ?? '?';
+                const store = j.result?.store || '';
+                const collection = j.result?.collection || '';
+                this.showToast(
+                    `Ingested ${chunks} chunks → ${store}/${collection}`,
+                    'success'
+                );
+            } else {
+                this.showToast(
+                    `Ingestion failed: ${j.error || resp.status}`,
+                    'error'
+                );
+            }
+        } catch (error) {
+            console.error('[WorkflowEditor] run-ingestion', error);
+            this.showToast(`Ingestion failed: ${error.message}`, 'error');
+        } finally {
+            this.updateStartNodeIndicator(false);
         }
     }
 
