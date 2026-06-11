@@ -57,10 +57,10 @@ final class IngestionController
         $config = $body['config'] ?? [];
 
         try {
-            $code = IngestionCompiler::compileNodeChunk((string) $nodeType, (array) $config);
+            $view = IngestionCompiler::compileNodeView((string) $nodeType, (array) $config);
             return [
                 'success'     => true,
-                'data'        => ['node' => $nodeType, 'code' => $code],
+                'data'        => array_merge(['node' => $nodeType], $view),
                 'status_code' => 200,
             ];
         } catch (\Throwable $e) {

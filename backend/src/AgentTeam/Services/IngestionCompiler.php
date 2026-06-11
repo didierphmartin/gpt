@@ -124,11 +124,12 @@ final class IngestionCompiler
      * Compile the Python chunk for a SINGLE node, from that node's own config.
      *
      * @param string $kind   one of: start, loader, splitter, vectorstore
-     * @param array<string,mixed> $config the node's own config
+     * @param array<string,mixed> $config the node's own config (the 'start'
+     *        header takes no config, so it defaults to [])
      *
      * @throws \RuntimeException on unknown kind / source / strategy / store
      */
-    public static function compileNodeChunk(string $kind, array $config): string
+    public static function compileNodeChunk(string $kind, array $config = []): string
     {
         switch ($kind) {
             case 'start':
@@ -205,6 +206,41 @@ final class IngestionCompiler
                     "IngestionCompiler: unknown node kind '{$kind}' (expected start, loader, splitter, vectorstore)."
                 );
         }
+    }
+
+    /**
+     * Compile the three-panel "node view" for the editor's per-node tabs:
+     * Input (code received from the previous stage), Generated (ONLY this
+     * node's own chunk) and Output (Input + Generated = code up to and
+     * including this stage; a later node's Input is the prior node's Output).
+     *
+     * @param string $kind   one of: start, loader, splitter, vectorstore
+     * @param array<string,mixed> $config the node's own config
+     *
+     * @return array{input:string,generated:string,output:string}
+     *
+     * @throws \RuntimeException on unknown kind / source / strategy / store
+     */
+    public static function compileNodeView(string $kind, array $config): array
+    {
+        $generated = self::compileNodeChunk($kind, $config);
+
+        if ($kind === 'loader') {
+            // The loader receives the start node's contribution — the common
+            // header (import json, os …).
+            $input = self::compileNodeChunk('start');
+            $output = $input . "\n\n" . $generated;
+        } else {
+            // TODO: cumulative input from upstream stages
+            $input = '';
+            $output = $generated;
+        }
+
+        return [
+            'input'     => $input,
+            'generated' => $generated,
+            'output'    => $output,
+        ];
     }
 
     /**

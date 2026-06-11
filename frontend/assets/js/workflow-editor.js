@@ -5830,9 +5830,16 @@ class WorkflowEditor {
         const existingModal = document.getElementById('ingestion-config-modal');
         if (existingModal) existingModal.remove();
 
-        // Two-tab layout: "Config" (the existing form) and "Output" (the
-        // Python code this node generates, fetched on demand). Minimal tab
-        // toggle — no need for the agent edit form's richer tab system.
+        // Four-tab layout: "Config" (the existing form), "Input" (the code this
+        // node RECEIVES from the previous stage), "Generated code" (ONLY this
+        // node's own chunk) and "Output" (Input + Generated = code up to and
+        // including this stage). The three code panels are filled together by
+        // loadIngestionNodeOutput, fetched on demand. Minimal tab toggle — no
+        // need for the agent edit form's richer tab system.
+        const codePreStyle = "margin:0;padding:12px;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto;";
+        const tabBtn = (tab, label, active) =>
+            `<button type="button" class="ingestion-tab-btn${active ? ' active' : ''}" data-tab="${tab}"
+                style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;${active ? '' : 'opacity:0.7;'}">${label}</button>`;
         const modalHtml = `
             <div id="ingestion-config-modal" class="storage-config-overlay">
                 <div class="storage-config-modal">
@@ -5842,17 +5849,22 @@ class WorkflowEditor {
                     </div>
                     <div class="storage-config-body">
                         <div class="ingestion-config-tabs" style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.12);">
-                            <button type="button" class="ingestion-tab-btn active" data-tab="config"
-                                style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;">Config</button>
-                            <button type="button" class="ingestion-tab-btn" data-tab="output"
-                                style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;opacity:0.7;">Output</button>
+                            ${tabBtn('config', 'Config', true)}
+                            ${tabBtn('input', 'Input', false)}
+                            ${tabBtn('generated', 'Generated code', false)}
+                            ${tabBtn('output', 'Output', false)}
                         </div>
                         <div class="ingestion-tab-panel" data-panel="config">
                             ${fieldsHtml}
                         </div>
+                        <div class="ingestion-tab-panel" data-panel="input" style="display:none;">
+                            <pre id="ingestion-input-code" style="${codePreStyle}">Loading…</pre>
+                        </div>
+                        <div class="ingestion-tab-panel" data-panel="generated" style="display:none;">
+                            <pre id="ingestion-generated-code" style="${codePreStyle}">Loading…</pre>
+                        </div>
                         <div class="ingestion-tab-panel" data-panel="output" style="display:none;">
-                            <pre id="ingestion-output-code"
-                                style="margin:0;padding:12px;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto;">Loading…</pre>
+                            <pre id="ingestion-output-code" style="${codePreStyle}">Loading…</pre>
                         </div>
                     </div>
                     <div class="storage-config-footer">
@@ -5887,7 +5899,6 @@ class WorkflowEditor {
         // --- Tab toggling + lazy Output fetch ---
         const tabBtns = modal.querySelectorAll('.ingestion-tab-btn');
         const panels = modal.querySelectorAll('.ingestion-tab-panel');
-        let outputLoaded = false;
         const showTab = (tab) => {
             tabBtns.forEach(b => {
                 const on = b.dataset.tab === tab;
@@ -5896,9 +5907,10 @@ class WorkflowEditor {
                 b.style.opacity = on ? '1' : '0.7';
             });
             panels.forEach(p => { p.style.display = p.dataset.panel === tab ? '' : 'none'; });
-            if (tab === 'output') {
+            if (tab === 'input' || tab === 'generated' || tab === 'output') {
                 // Always re-generate from the current form so changing an
-                // attribute (e.g. document type) updates the code.
+                // attribute (e.g. document type) updates the code. One fetch
+                // fills all three code panels (input / generated / output).
                 this.loadIngestionNodeOutput(nodeId);
             }
         };
@@ -5963,11 +5975,19 @@ class WorkflowEditor {
      * the backend's "not implemented yet" message shown as the output text.
      */
     async loadIngestionNodeOutput(nodeId) {
-        const pre = document.getElementById('ingestion-output-code');
-        if (!pre) return;
+        const inputPre = document.getElementById('ingestion-input-code');
+        const generatedPre = document.getElementById('ingestion-generated-code');
+        const outputPre = document.getElementById('ingestion-output-code');
+        // The three code panels are filled together; bail only if none exist.
+        if (!inputPre && !generatedPre && !outputPre) return;
+
+        // Set the same text on whichever of the three panels exist.
+        const setAll = (text) => {
+            [inputPre, generatedPre, outputPre].forEach(p => { if (p) p.textContent = text; });
+        };
 
         if (!this.currentWorkflowId) {
-            pre.textContent = this.t('workflow.output.saveFirst') || 'Save the workflow first.';
+            setAll(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
 
@@ -5976,15 +5996,15 @@ class WorkflowEditor {
         // paradigm). This hits the standalone IngestionCompiler endpoint.
         const node = this.editor.getNodeFromId(nodeId);
         const nodeType = node?.data?.node_type;
-        if (!nodeType) { pre.textContent = 'Not an ingestion node.'; return; }
+        if (!nodeType) { setAll('Not an ingestion node.'); return; }
 
-        // Read the CURRENT form attributes so the Output reflects edits even
+        // Read the CURRENT form attributes so the code reflects edits even
         // before Save — change the document type and the code re-generates.
         // Each node is just parameters → code.
         const config = this._readIngestionFormConfig(nodeType, node?.data?.config || {});
         const nodeEl = document.getElementById('node-' + nodeId);
 
-        pre.textContent = 'Loading…';
+        setAll('Loading…');
         try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/node-code`,
@@ -5996,16 +6016,32 @@ class WorkflowEditor {
                 }
             );
             const json = await resp.json().catch(() => ({}));
-            if (resp.ok && json && json.success && json.data && typeof json.data.code === 'string') {
-                pre.textContent = json.data.code;
+            const data = (json && json.data) || {};
+            // New response shape: { input, generated, output } (strings).
+            // Backward-compatible: older responses only had { code } — fall back
+            // to it for generated/output (and leave input empty).
+            const hasNew = typeof data.input === 'string' || typeof data.generated === 'string';
+            if (resp.ok && json && json.success && (hasNew || typeof data.code === 'string')) {
+                const input = typeof data.input === 'string' ? data.input : '';
+                const generated = typeof data.generated === 'string'
+                    ? data.generated
+                    : (typeof data.code === 'string' ? data.code : '');
+                const output = typeof data.output === 'string'
+                    ? data.output
+                    : (typeof data.code === 'string' ? data.code : generated);
+
+                if (inputPre) inputPre.textContent = input !== '' ? input : '—';
+                if (generatedPre) generatedPre.textContent = generated;
+                if (outputPre) outputPre.textContent = output;
+
                 // Green halo once this node's chunk has been generated.
                 if (nodeEl) { nodeEl.classList.remove('node-error'); nodeEl.classList.add('node-completed'); }
             } else {
-                pre.textContent = (json && json.error) ? json.error : `Failed to load code (HTTP ${resp.status}).`;
+                setAll((json && json.error) ? json.error : `Failed to load code (HTTP ${resp.status}).`);
                 if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
             }
         } catch (e) {
-            pre.textContent = 'Failed to load code: ' + (e?.message || String(e));
+            setAll('Failed to load code: ' + (e?.message || String(e)));
             if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
         }
     }
