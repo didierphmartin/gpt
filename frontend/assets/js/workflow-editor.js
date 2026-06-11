@@ -5970,6 +5970,15 @@ class WorkflowEditor {
         const config = node?.data?.config || {};
         if (!nodeType) { pre.textContent = 'Not an ingestion node.'; return; }
 
+        // UX convention (the one thing shared with the agent workflow): the node
+        // glows ORANGE while it's its turn to add its part of the code, then turns
+        // GREEN once that chunk has been generated (RED on error).
+        const nodeEl = document.getElementById('node-' + nodeId);
+        if (nodeEl) {
+            nodeEl.classList.remove('node-completed', 'node-error');
+            nodeEl.classList.add('node-active');
+        }
+
         pre.textContent = 'Loading…';
         try {
             const resp = await fetch(
@@ -5984,11 +5993,14 @@ class WorkflowEditor {
             const json = await resp.json().catch(() => ({}));
             if (resp.ok && json && json.success && json.data && typeof json.data.code === 'string') {
                 pre.textContent = json.data.code;
+                if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-completed'); }
             } else {
                 pre.textContent = (json && json.error) ? json.error : `Failed to load code (HTTP ${resp.status}).`;
+                if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-error'); }
             }
         } catch (e) {
             pre.textContent = 'Failed to load code: ' + (e?.message || String(e));
+            if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-error'); }
         }
     }
 
