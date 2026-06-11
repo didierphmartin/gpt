@@ -1837,7 +1837,9 @@ See [Workflow Storage Model](#workflow-storage-model) below and the [frontend RE
 
 **Endpoint:** `GET /api/v1/workflows/{id}/generate-python` | **Auth:** Yes
 
-Generates a LangGraph Python script that mirrors the workflow.
+Generates a Python script that mirrors the workflow, via `LangGraphGenerator::generate()`. The same generator produces two shapes depending on the graph:
+- **Agent/tool/skill workflows** → a **LangGraph `StateGraph`** script (`from langgraph.graph import START, END, StateGraph`; one `sg.add_node(...)` per workflow node; `create_react_agent` for agent nodes). This is what runs in `langchain_runner`.
+- **Ingestion graphs** (`loader → splitter → vectorstore`) → the **self-contained standalone ingestion script** instead (no LangGraph) — see [Ingestion Workflows](#ingestion-workflows-rag--standalone-python).
 
 **Query Parameters:**
 
