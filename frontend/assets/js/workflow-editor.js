@@ -2539,6 +2539,13 @@ class WorkflowEditor {
             const small = node.querySelector('.node-body small');
             const playBtn = node.querySelector('.node-play-btn');
 
+            // Ingestion start nodes need no prompt — always show the play button
+            // and skip the prompt-text indicator entirely.
+            if (node.classList.contains('ingestion-start')) {
+                if (playBtn) playBtn.style.display = 'flex';
+                return;
+            }
+
             if (hasPrompt) {
                 node.classList.add('has-prompt');
                 if (small) {
