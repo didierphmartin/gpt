@@ -1013,6 +1013,13 @@ svg.connection.selected .main-path,
 .workflow-node.output-node.ingestion-output .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
 .workflow-node.output-node.ingestion-output .node-icon { color: #0284c7; }
 
+/* The ingestion output node is JUST the Compile-to-Python button — no header/body
+   above it, so round all corners and drop the divider top border. */
+.workflow-node.output-node.ingestion-output .node-langgraph {
+    border-top: none;
+    border-radius: 8px;
+}
+
 /* Ingestion start node (start → loader): recoloured like the ingestion nodes,
    prompt-less, just the ▶ play button. */
 .workflow-node.start-node.ingestion-start .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
