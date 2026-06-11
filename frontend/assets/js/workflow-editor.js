@@ -321,8 +321,18 @@ class WorkflowEditor {
                     </div>
                 </div>
 
-                <!-- Agents are added by dragging from the left sidebar's Agents
-                     list onto the canvas, so the palette no longer duplicates them. -->
+                <!-- Agents Section — templates only. Specific saved agents come
+                     from the left sidebar's Agents list (drag-to-canvas); this
+                     section keeps the draggable Agent Template + the "+" to add one. -->
+                <div class="workflow-section">
+                    <div class="workflow-section-header" data-section="agents">
+                        <span class="section-toggle">${collapsedSections.agents ? '▶' : '▼'}</span>
+                        <span class="section-title">${this.t('workflow.agents')}</span>
+                        <span class="section-count">0</span>
+                        <button class="section-add-btn" data-action="add-agent" title="${this.t('agentTeams.addTemplate')}">+</button>
+                    </div>
+                    <div class="workflow-section-content ${collapsedSections.agents ? 'collapsed' : ''}" data-section="agents"></div>
+                </div>
             </div>
 
             <!-- Action Buttons — symmetric with audio workflows: execution
@@ -5797,10 +5807,11 @@ class WorkflowEditor {
 
         // Update count
         const countEl = container.closest('.workflow-section')?.querySelector('.section-count');
-        if (countEl) countEl.textContent = allAgents.length + templates.length;
+        if (countEl) countEl.textContent = templates.length;
 
-        // Build HTML for real agents (use renderAgentCard for consistency)
-        let agentsHtml = allAgents.map(agent => this.renderAgentCard(agent)).join('');
+        // Specific saved agents now live in the left sidebar's Agents list
+        // (drag-to-canvas); this section shows only the draggable Agent Template(s).
+        let agentsHtml = '';
 
         // Add templates HTML (translate at render time for i18n support)
         agentsHtml += templates.map(template => {
