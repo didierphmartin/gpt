@@ -5862,10 +5862,10 @@ class WorkflowEditor {
         const cancelBtn = document.getElementById('ingestion-config-cancel');
         const saveBtn = document.getElementById('ingestion-config-save');
 
-        // Orange active halo: clear any existing, then mark this node.
+        // No orange "active" halo for ingestion — the node only turns GREEN once
+        // its code chunk has been generated (see loadIngestionNodeOutput). Clear
+        // any stray orange, but never the green "generated" state.
         document.querySelectorAll('.drawflow-node.node-active').forEach(n => n.classList.remove('node-active'));
-        const haloEl = document.getElementById('node-' + nodeId);
-        if (haloEl) haloEl.classList.add('node-active');
 
         const closeModal = () => {
             // Remove the halo on every close path (X, Cancel, overlay, Save, Escape).
@@ -5888,8 +5888,9 @@ class WorkflowEditor {
                 b.style.opacity = on ? '1' : '0.7';
             });
             panels.forEach(p => { p.style.display = p.dataset.panel === tab ? '' : 'none'; });
-            if (tab === 'output' && !outputLoaded) {
-                outputLoaded = true;
+            if (tab === 'output') {
+                // Always re-generate from the current form so changing an
+                // attribute (e.g. document type) updates the code.
                 this.loadIngestionNodeOutput(nodeId);
             }
         };
@@ -5967,17 +5968,13 @@ class WorkflowEditor {
         // paradigm). This hits the standalone IngestionCompiler endpoint.
         const node = this.editor.getNodeFromId(nodeId);
         const nodeType = node?.data?.node_type;
-        const config = node?.data?.config || {};
         if (!nodeType) { pre.textContent = 'Not an ingestion node.'; return; }
 
-        // UX convention (the one thing shared with the agent workflow): the node
-        // glows ORANGE while it's its turn to add its part of the code, then turns
-        // GREEN once that chunk has been generated (RED on error).
+        // Read the CURRENT form attributes so the Output reflects edits even
+        // before Save — change the document type and the code re-generates.
+        // Each node is just parameters → code.
+        const config = this._readIngestionFormConfig(nodeType, node?.data?.config || {});
         const nodeEl = document.getElementById('node-' + nodeId);
-        if (nodeEl) {
-            nodeEl.classList.remove('node-completed', 'node-error');
-            nodeEl.classList.add('node-active');
-        }
 
         pre.textContent = 'Loading…';
         try {
@@ -5993,15 +5990,32 @@ class WorkflowEditor {
             const json = await resp.json().catch(() => ({}));
             if (resp.ok && json && json.success && json.data && typeof json.data.code === 'string') {
                 pre.textContent = json.data.code;
-                if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-completed'); }
+                // Green halo once this node's chunk has been generated.
+                if (nodeEl) { nodeEl.classList.remove('node-error'); nodeEl.classList.add('node-completed'); }
             } else {
                 pre.textContent = (json && json.error) ? json.error : `Failed to load code (HTTP ${resp.status}).`;
-                if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-error'); }
+                if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
             }
         } catch (e) {
             pre.textContent = 'Failed to load code: ' + (e?.message || String(e));
-            if (nodeEl) { nodeEl.classList.remove('node-active'); nodeEl.classList.add('node-error'); }
+            if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
         }
+    }
+
+    /**
+     * Read an ingestion node's CURRENT form-field values into a config object so
+     * the Output reflects unsaved edits (change the document type → code updates).
+     * Falls back to the saved config for fields/node-types not yet wired.
+     */
+    _readIngestionFormConfig(nodeType, fallback = {}) {
+        const val = (id, def) => { const el = document.getElementById(id); return el ? el.value : def; };
+        if (nodeType === 'loader') {
+            return {
+                source: val('ingestion-loader-source', fallback.source || 'pdf'),
+                path: (val('ingestion-loader-path', fallback.path || '') || '').trim(),
+            };
+        }
+        return fallback;
     }
 
     /**
