@@ -3509,9 +3509,9 @@ class WorkflowEditor {
      */
     updateOutputNodeDisplay() {
         // Find the output node in drawflow
-        if (!this.drawflow) return;
+        if (!this.editor) return;
 
-        const nodes = this.drawflow.drawflow?.Home?.data;
+        const nodes = this.editor.drawflow?.drawflow?.Home?.data;
         if (!nodes) return;
 
         for (const nodeId in nodes) {
@@ -3543,9 +3543,9 @@ class WorkflowEditor {
      * updateOutputNodeDisplay(); createOutputNodeHtml() picks the variant.
      */
     refreshOutputNodeVariant() {
-        if (!this.drawflow) return;
+        if (!this.editor) return;
 
-        const nodes = this.drawflow.drawflow?.Home?.data;
+        const nodes = this.editor.drawflow?.drawflow?.Home?.data;
         if (!nodes) return;
 
         for (const nodeId in nodes) {
