@@ -358,33 +358,40 @@ class WorkflowController
             );
             $result = $gen->generate($workflowId, (string) $userId);
 
-            // 2) Write code to <langchain_runner_dir>/<filename>.
             // Controllers live at backend/src/AgentTeam/Controllers -> repo root is 4 up.
             $runnerDir = dirname(__DIR__, 4) . '/langchain_runner';
             $filename = basename((string) $result['filename']); // defensive: no path traversal
             $scriptPath = $runnerDir . '/' . $filename;
+
+            // Compile-only (the green ▶ / Compile button): validate the pipeline
+            // and return the generated code WITHOUT executing it. Read the flag
+            // from the query string robustly (works for GET and POST). The disk
+            // write is BEST-EFFORT — if the web-server user can't write
+            // langchain_runner/ we still return the code (viewing/debugging works
+            // regardless), so a permissions issue can never 500 this path.
+            $compileOnly = (($request['query']['compile_only'] ?? '') === '1')
+                || (($_GET['compile_only'] ?? '') === '1');
+            if ($compileOnly) {
+                $written = @file_put_contents($scriptPath, (string) $result['code']);
+                return [
+                    'success' => true,
+                    'data' => [
+                        'filename' => $filename,
+                        'path' => $written !== false ? $scriptPath : null,
+                        'written' => $written !== false,
+                        'code' => (string) $result['code'],
+                        'compiled' => true,
+                    ],
+                    'status_code' => 200,
+                ];
+            }
+
+            // 2) Real run: write the script (required), then execute it.
             if (file_put_contents($scriptPath, (string) $result['code']) === false) {
                 return [
                     'success' => false,
                     'error' => 'Failed to write ingestion script to ' . $scriptPath,
                     'status_code' => 500,
-                ];
-            }
-
-            // Compile-only: the script is now on disk; return its path + code
-            // without executing it (no venv / DB / API key needed). This is what
-            // the "Compile to Python" button calls so the generated .py shows up
-            // in langchain_runner/.
-            if (($request['query']['compile_only'] ?? '') === '1') {
-                return [
-                    'success' => true,
-                    'data' => [
-                        'filename' => $filename,
-                        'path' => $scriptPath,
-                        'code' => (string) $result['code'],
-                        'compiled' => true,
-                    ],
-                    'status_code' => 200,
                 ];
             }
 
