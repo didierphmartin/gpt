@@ -7301,20 +7301,14 @@ class WorkflowEditor {
     }
 
     /**
-     * Run an ingestion graph (loader/splitter/vectorstore) via the backend
-     * run-ingestion endpoint. The backend compiles the graph to Python and
-     * executes it in langchain_runner — there's no SSE/agent streaming here,
-     * just a single JSON result describing how many chunks were stored.
+     * Ingestion "Play": run the pipeline ONE baby-step at a time. For now it
+     * stops at the LOADER stage — it activates the loader node (orange halo) and
+     * opens its Output tab to show the code that node generates, so the loader's
+     * output can be examined/debugged before we wire the next steps. No
+     * execution (needs no vector DB / API key).
      */
     async _runIngestion() {
-        // In an ingestion workflow the start node's ▶ does NOT execute the
-        // pipeline (executing it needs the vector DB + embedding API key).
-        // Instead it validates the pipeline and PRODUCES the standalone Python
-        // script (written to langchain_runner/ingestion_<id>.py via the
-        // compile-only path). Persist the current canvas DSL first so the
-        // backend compiles the latest graph. saveWorkflow() sets
-        // this.currentWorkflowId when creating a new workflow; it's idempotent
-        // (PUT) when an id already exists.
+        // Persist the latest canvas first so the per-node code reflects it.
         if (!this.currentWorkflowId) {
             await this.saveWorkflow();
             if (!this.currentWorkflowId) {
@@ -7322,47 +7316,30 @@ class WorkflowEditor {
                     this.tWithFallback('workflow.messages.saveFirst', 'Save the workflow first'),
                     'warning'
                 );
+                this.updateStartNodeIndicator(false);
                 return;
             }
         } else {
             await this.saveWorkflow();
         }
+        this.updateStartNodeIndicator(false); // not a long-running execution
 
-        this.updateStartNodeIndicator(true);
-
-        try {
-            // compile_only=1 → generate + write the script, do NOT execute it.
-            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion?compile_only=1`;
-            const resp = await fetch(url, {
-                method: 'POST',
-                headers: this.getAuthHeaders(),
-                credentials: 'include'
-            });
-
-            let j = {};
-            try {
-                j = await resp.json();
-            } catch (_) {
-                j = {};
-            }
-
-            if (resp.ok && j.success && j.data) {
-                this.showToast(
-                    `Pipeline OK — Python script generated: ${j.data.filename}`,
-                    'success'
-                );
-            } else {
-                this.showToast(
-                    `Pipeline error: ${j.error || resp.status}`,
-                    'error'
-                );
-            }
-        } catch (error) {
-            console.error('[WorkflowEditor] compile-ingestion', error);
-            this.showToast(`Pipeline check failed: ${error.message}`, 'error');
-        } finally {
-            this.updateStartNodeIndicator(false);
+        // Find the loader node — the first ingestion stage.
+        const data = this.editor.drawflow?.drawflow?.Home?.data || {};
+        let loaderId = null;
+        for (const id in data) {
+            if (data[id]?.data?.node_type === 'loader') { loaderId = String(id); break; }
         }
+        if (!loaderId) {
+            this.showToast('Add a Loader node to start the ingestion pipeline.', 'warning');
+            return;
+        }
+
+        // Activate the loader (orange halo) and show the code it generates in its
+        // Output tab. showIngestionConfigModal adds/removes the .node-active halo.
+        this.showIngestionConfigModal(loaderId);
+        const outputBtn = document.querySelector('.ingestion-tab-btn[data-tab="output"]');
+        if (outputBtn) outputBtn.click();
     }
 
     /**
