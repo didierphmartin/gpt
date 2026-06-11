@@ -6731,6 +6731,7 @@ class WorkflowEditor {
                     <span class="node-title">${this.t('workflow.nodes.start') || 'Start'}</span>
                 </div>
                 <div class="node-body">
+                    <small>Play</small>
                     <button class="node-play-btn" title="Run the ingestion pipeline">▶</button>
                 </div>
                 <div class="node-documents-zone">
