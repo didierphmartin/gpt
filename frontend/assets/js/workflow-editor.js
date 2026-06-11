@@ -304,17 +304,34 @@ class WorkflowEditor {
                     </div>
                 </div>
 
-                <!-- Agents Section -->
+                <!-- Ingestion Section -->
+                <div class="workflow-section">
+                    <div class="workflow-section-header" data-section="ingestion">
+                        <span class="section-toggle">${collapsedSections.ingestion ? '▶' : '▼'}</span>
+                        <span class="section-title">Ingestion</span>
+                        <span class="section-count">3</span>
+                    </div>
+                    <div class="workflow-section-content ${collapsedSections.ingestion ? 'collapsed' : ''}" data-section="ingestion">
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="loader">
+                            <div class="agent-icon">📥</div><div class="agent-info"><div class="agent-name">Loader</div><div class="agent-type">Load a document (PDF)</div></div></div>
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="splitter">
+                            <div class="agent-icon">✂️</div><div class="agent-info"><div class="agent-name">Splitter</div><div class="agent-type">Chunk the text</div></div></div>
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="vectorstore">
+                            <div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
+                    </div>
+                </div>
+
+                <!-- Agents Section — templates only. Specific saved agents come
+                     from the left sidebar's Agents list (drag-to-canvas); this
+                     section keeps the draggable Agent Template + the "+" to add one. -->
                 <div class="workflow-section">
                     <div class="workflow-section-header" data-section="agents">
                         <span class="section-toggle">${collapsedSections.agents ? '▶' : '▼'}</span>
                         <span class="section-title">${this.t('workflow.agents')}</span>
-                        <span class="section-count">${workflowAgents.length}</span>
+                        <span class="section-count">0</span>
                         <button class="section-add-btn" data-action="add-agent" title="${this.t('agentTeams.addTemplate')}">+</button>
                     </div>
-                    <div class="workflow-section-content ${collapsedSections.agents ? 'collapsed' : ''}" data-section="agents">
-                        ${agentsHtml}
-                    </div>
+                    <div class="workflow-section-content ${collapsedSections.agents ? 'collapsed' : ''}" data-section="agents"></div>
                 </div>
             </div>
 
@@ -2206,6 +2223,19 @@ class WorkflowEditor {
             if (storageSection) {
                 e.stopPropagation();
                 this.showStorageConfigModal();
+                return;
+            }
+
+            // Handle Ingestion node clicks (loader / splitter / vectorstore)
+            // to open their editable config modal. Skip the delete button.
+            const ingestionNode = e.target.closest('.workflow-node.ingestion-node');
+            if (ingestionNode && !e.target.closest('.node-delete-btn')) {
+                e.stopPropagation();
+                const drawflowNode = ingestionNode.closest('.drawflow-node');
+                if (drawflowNode) {
+                    const nodeId = drawflowNode.id.replace('node-', '');
+                    this.showIngestionConfigModal(nodeId);
+                }
                 return;
             }
 
@@ -5372,6 +5402,11 @@ class WorkflowEditor {
                 // Create an empty agent node that will be configured
                 this.addAgentTemplateNode(x, y);
                 break;
+            case 'loader':
+            case 'splitter':
+            case 'vectorstore':
+                this.addIngestionNode(x, y, nodeType);
+                break;
             case 'realtime-start':
                 this.addRealtimeStartNode(x, y);
                 break;
@@ -5413,6 +5448,243 @@ class WorkflowEditor {
         );
 
         this.hideHelpOverlay();
+    }
+
+    /**
+     * Add an Ingestion component node (loader / splitter / vectorstore).
+     * Each is a 1-input / 1-output node with a config object and a
+     * one-line summary, mirroring the agent-template node so that
+     * connections, the ⚙ config hint, and saving all work.
+     */
+    addIngestionNode(x, y, nodeType, config = null) {
+        const INGESTION_DEFAULTS = {
+            loader:      { source: 'pdf', path: '' },
+            splitter:    { strategy: 'recursive', chunk_size: 1000, overlap: 150 },
+            vectorstore: { store: 'pgvector', embeddings: 'openai:text-embedding-3-small', collection: '' },
+        };
+        const META = {
+            loader:      { icon: '📥', name: 'Loader' },
+            splitter:    { icon: '✂️', name: 'Splitter' },
+            vectorstore: { icon: '🗄️', name: 'Vector store' },
+        };
+        const meta = META[nodeType];
+        if (!meta) return;
+
+        // Copy defaults so each node owns its own config object. When a saved
+        // config is supplied (re-hydration from backend DSL), merge it over the
+        // type defaults so any missing keys still have a sensible value.
+        const defaults = JSON.parse(JSON.stringify(INGESTION_DEFAULTS[nodeType]));
+        const nodeConfig = config
+            ? { ...defaults, ...config }
+            : defaults;
+        const summary = this.ingestionNodeSummary(nodeType, nodeConfig);
+
+        const html = `
+            <div class="workflow-node ingestion-node configurable" data-ingestion-type="${nodeType}">
+                <div class="node-header">
+                    <span class="node-icon">${meta.icon}</span>
+                    <span class="node-title">${this.escapeHtml(meta.name)}</span>
+                    <span class="node-config-hint" title="Click to configure">⚙</span>
+                    <button class="node-delete-btn" title="Delete node">×</button>
+                </div>
+                <div class="node-body">
+                    <small class="node-config-display">${this.escapeHtml(summary)}</small>
+                </div>
+            </div>
+        `;
+
+        const drawflowId = this.editor.addNode(
+            nodeType,
+            1, // inputs
+            1, // outputs
+            x, y,
+            'ingestion',
+            {
+                type: 'ingestion',
+                node_type: nodeType,
+                name: meta.name,
+                config: nodeConfig
+            },
+            html
+        );
+
+        this.hideHelpOverlay();
+
+        return drawflowId;
+    }
+
+    /**
+     * Build the one-line summary shown on an ingestion node's body.
+     */
+    ingestionNodeSummary(nodeType, config) {
+        switch (nodeType) {
+            case 'loader':
+                return config.source || 'pdf';
+            case 'splitter':
+                return `${config.strategy || 'recursive'} ${config.chunk_size}/${config.overlap}`;
+            case 'vectorstore':
+                return config.store || 'pgvector';
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Show an editable config modal for an ingestion node
+     * (loader / splitter / vectorstore). Mirrors showStorageConfigModal:
+     * an overlay with header / body / footer, close on background click,
+     * X button, Cancel, Escape; Save writes the edited config back into
+     * the Drawflow node data and refreshes the on-canvas summary.
+     */
+    showIngestionConfigModal(nodeId) {
+        const nodeData = this.editor.getNodeFromId(nodeId);
+        if (!nodeData) return;
+
+        const nodeType = nodeData.data?.node_type;
+        const config = nodeData.data?.config || {};
+        if (!nodeType) return;
+
+        const META = {
+            loader:      { icon: '📥', name: 'Loader' },
+            splitter:    { icon: '✂️', name: 'Splitter' },
+            vectorstore: { icon: '🗄️', name: 'Vector store' },
+        };
+        const meta = META[nodeType] || { icon: '⚙', name: nodeType };
+
+        // Build type-specific, pre-filled fields.
+        let fieldsHtml = '';
+        if (nodeType === 'loader') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-loader-source">Source</label>
+                    <select id="ingestion-loader-source">
+                        <option value="pdf" selected>pdf</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-loader-path">Path</label>
+                    <input type="text" id="ingestion-loader-path" value="${this.escapeHtml(config.path || '')}" placeholder="Path to document(s)">
+                </div>
+            `;
+        } else if (nodeType === 'splitter') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-strategy">Strategy</label>
+                    <select id="ingestion-splitter-strategy">
+                        <option value="recursive" selected>recursive</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-chunk">Chunk size</label>
+                    <input type="number" id="ingestion-splitter-chunk" value="${this.escapeHtml(String(config.chunk_size ?? 1000))}" min="1">
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-overlap">Overlap</label>
+                    <input type="number" id="ingestion-splitter-overlap" value="${this.escapeHtml(String(config.overlap ?? 150))}" min="0">
+                </div>
+            `;
+        } else if (nodeType === 'vectorstore') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-store">Store</label>
+                    <select id="ingestion-vs-store">
+                        <option value="pgvector" selected>pgvector</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-embeddings">Embeddings</label>
+                    <input type="text" id="ingestion-vs-embeddings" value="${this.escapeHtml(config.embeddings || '')}" placeholder="openai:text-embedding-3-small">
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-collection">Collection</label>
+                    <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
+                </div>
+            `;
+        }
+
+        // Remove existing modal if any.
+        const existingModal = document.getElementById('ingestion-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const modalHtml = `
+            <div id="ingestion-config-modal" class="storage-config-overlay">
+                <div class="storage-config-modal">
+                    <div class="storage-config-header">
+                        <h3><span>${meta.icon}</span> ${this.escapeHtml(meta.name)}</h3>
+                        <button class="storage-config-close" id="ingestion-config-close">×</button>
+                    </div>
+                    <div class="storage-config-body">
+                        ${fieldsHtml}
+                    </div>
+                    <div class="storage-config-footer">
+                        <button class="storage-config-btn cancel" id="ingestion-config-cancel">${this.t('common.cancel')}</button>
+                        <button class="storage-config-btn save" id="ingestion-config-save">${this.t('common.save')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        const modal = document.getElementById('ingestion-config-modal');
+        const closeBtn = document.getElementById('ingestion-config-close');
+        const cancelBtn = document.getElementById('ingestion-config-cancel');
+        const saveBtn = document.getElementById('ingestion-config-save');
+
+        const closeModal = () => {
+            modal.remove();
+            document.removeEventListener('keydown', escHandler);
+        };
+        const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
+
+        // Close on background click, X, Cancel, Escape.
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        document.addEventListener('keydown', escHandler);
+
+        // Save: read fields, build new config, write back to node data,
+        // refresh the on-canvas summary, close.
+        saveBtn.addEventListener('click', () => {
+            let newConfig;
+            if (nodeType === 'loader') {
+                newConfig = {
+                    source: document.getElementById('ingestion-loader-source').value,
+                    path: document.getElementById('ingestion-loader-path').value.trim(),
+                };
+            } else if (nodeType === 'splitter') {
+                const chunk = parseInt(document.getElementById('ingestion-splitter-chunk').value, 10);
+                const overlap = parseInt(document.getElementById('ingestion-splitter-overlap').value, 10);
+                newConfig = {
+                    strategy: document.getElementById('ingestion-splitter-strategy').value,
+                    chunk_size: Number.isFinite(chunk) ? chunk : 1000,
+                    overlap: Number.isFinite(overlap) ? overlap : 150,
+                };
+            } else if (nodeType === 'vectorstore') {
+                newConfig = {
+                    store: document.getElementById('ingestion-vs-store').value,
+                    embeddings: document.getElementById('ingestion-vs-embeddings').value.trim(),
+                    collection: document.getElementById('ingestion-vs-collection').value.trim(),
+                };
+            } else {
+                newConfig = { ...config };
+            }
+
+            // Write back to the Drawflow node data, mirroring the agent
+            // path's use of updateNodeDataFromId.
+            const updatedData = { ...nodeData.data, config: newConfig };
+            this.editor.updateNodeDataFromId(nodeId, updatedData);
+
+            // Refresh the on-canvas summary line.
+            const summary = this.ingestionNodeSummary(nodeType, newConfig);
+            const nodeElement = document.getElementById(`node-${nodeId}`);
+            const displayEl = nodeElement?.querySelector('.node-config-display');
+            if (displayEl) displayEl.textContent = summary;
+
+            closeModal();
+        });
     }
 
     /**
@@ -5542,10 +5814,11 @@ class WorkflowEditor {
 
         // Update count
         const countEl = container.closest('.workflow-section')?.querySelector('.section-count');
-        if (countEl) countEl.textContent = allAgents.length + templates.length;
+        if (countEl) countEl.textContent = templates.length;
 
-        // Build HTML for real agents (use renderAgentCard for consistency)
-        let agentsHtml = allAgents.map(agent => this.renderAgentCard(agent)).join('');
+        // Specific saved agents now live in the left sidebar's Agents list
+        // (drag-to-canvas); this section shows only the draggable Agent Template(s).
+        let agentsHtml = '';
 
         // Add templates HTML (translate at render time for i18n support)
         agentsHtml += templates.map(template => {
@@ -5556,7 +5829,7 @@ class WorkflowEditor {
                      draggable="true"
                      data-template-id="${template.id}"
                      data-node-type="agent-template">
-                    <div class="agent-icon" style="background: #fef3c7; color: #f59e0b;">🤖</div>
+                    <div class="agent-icon">🤖</div>
                     <div class="agent-info">
                         <div class="agent-name">${this.escapeHtml(name)}</div>
                         <div class="agent-type">${this.escapeHtml(type)}</div>
@@ -5598,16 +5871,27 @@ class WorkflowEditor {
             console.log(`[WorkflowEditor] Exporting node ${id} - node.data:`, JSON.stringify(node.data));
             console.log(`[WorkflowEditor] Exporting node ${id} - node.data.type:`, node.data?.type);
             // Extract node info in backend format
+            // Ingestion component nodes carry their specific type in
+            // node.data.node_type ('loader'/'splitter'/'vectorstore') and their
+            // real config in node.data.config — export those directly so the DSL
+            // the engine reads has the right node_type + config (not the
+            // 'ingestion' group tag, and not the config nested one level deep).
+            const isIngestion = node.data?.type === 'ingestion';
+            const resolvedType = isIngestion
+                ? (node.data?.node_type || 'ingestion')
+                : (node.data?.type || 'agent');
             const nodeExport = {
                 id: id,
-                node_type: node.data?.type || 'agent',
-                type: node.data?.type || 'agent', // For validation
+                node_type: resolvedType,
+                type: resolvedType, // For validation
                 agent_id: node.data?.agent_id || null,
                 agent_name: node.data?.agent_name || null,
-                config: {
-                    agent_type: node.data?.agent_type || null,
-                    ...node.data
-                },
+                config: isIngestion
+                    ? { ...(node.data?.config || {}) }
+                    : {
+                        agent_type: node.data?.agent_type || null,
+                        ...node.data
+                    },
                 position: { x: node.pos_x, y: node.pos_y },
                 pos_x: node.pos_x,
                 pos_y: node.pos_y
@@ -6070,6 +6354,24 @@ class WorkflowEditor {
                 let html, inputs, outputs;
 
                 switch (type) {
+                    case 'loader':
+                    case 'splitter':
+                    case 'vectorstore': {
+                        // Ingestion nodes manage their own addNode() call (custom
+                        // HTML + config modal), so they don't flow through the
+                        // shared addNode path below. Recreate from saved config,
+                        // register the id mappings exactly like the shared path,
+                        // then skip the rest of this iteration.
+                        const x = node.position?.x || node.pos_x || 100;
+                        const y = node.position?.y || node.pos_y || 100;
+                        const dbNodeId = node.db_id || node.id;
+                        const drawflowId = this.addIngestionNode(x, y, type, node.config || {});
+                        idMap[node.id] = String(drawflowId);
+                        if (dbNodeId) {
+                            this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+                        }
+                        return; // next forEach iteration
+                    }
                     case 'realtime-start':
                         html = this.createRealtimeStartNodeHtml();
                         inputs = 0;
@@ -6420,6 +6722,18 @@ class WorkflowEditor {
     async executeWorkflow(userPrompt) {
         // Store the prompt for later viewing
         this.lastUserPrompt = userPrompt;
+
+        // Ingestion graphs (loader/splitter/vectorstore) compile to Python and run
+        // in langchain_runner via the run-ingestion endpoint — not the agent
+        // run-stream. Route them there.
+        const _exported = this.exportWorkflow();
+        const _isIngestion = (_exported.nodes || []).some(
+            n => ['loader', 'splitter', 'vectorstore'].includes(n.node_type)
+        );
+        if (_isIngestion) {
+            return this._runIngestion();
+        }
+
         this.updateStartNodeIndicator(true);
 
         console.log('[WorkflowEditor] executeWorkflow - currentWorkflowId:', this.currentWorkflowId);
@@ -6573,6 +6887,69 @@ class WorkflowEditor {
             console.error('[WorkflowEditor] Error running workflow:', error);
             this.resetNodeStates();
             alert(this.t('workflow.errors.runWorkflowFailed', { error: error.message }));
+        }
+    }
+
+    /**
+     * Run an ingestion graph (loader/splitter/vectorstore) via the backend
+     * run-ingestion endpoint. The backend compiles the graph to Python and
+     * executes it in langchain_runner — there's no SSE/agent streaming here,
+     * just a single JSON result describing how many chunks were stored.
+     */
+    async _runIngestion() {
+        // Persist the current canvas DSL before running so the backend
+        // compiles the latest graph. saveWorkflow() is async and sets
+        // this.currentWorkflowId (via loadWorkflow) when creating a new
+        // workflow; it's idempotent (PUT) when an id already exists.
+        if (!this.currentWorkflowId) {
+            await this.saveWorkflow();
+            if (!this.currentWorkflowId) {
+                this.showToast(
+                    this.tWithFallback('workflow.messages.saveFirst', 'Save the workflow first'),
+                    'warning'
+                );
+                return;
+            }
+        } else {
+            await this.saveWorkflow();
+        }
+
+        this.updateStartNodeIndicator(true);
+
+        try {
+            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion`;
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                credentials: 'include'
+            });
+
+            let j = {};
+            try {
+                j = await resp.json();
+            } catch (_) {
+                j = {};
+            }
+
+            if (resp.ok && j.success) {
+                const chunks = j.result?.chunks ?? '?';
+                const store = j.result?.store || '';
+                const collection = j.result?.collection || '';
+                this.showToast(
+                    `Ingested ${chunks} chunks → ${store}/${collection}`,
+                    'success'
+                );
+            } else {
+                this.showToast(
+                    `Ingestion failed: ${j.error || resp.status}`,
+                    'error'
+                );
+            }
+        } catch (error) {
+            console.error('[WorkflowEditor] run-ingestion', error);
+            this.showToast(`Ingestion failed: ${error.message}`, 'error');
+        } finally {
+            this.updateStartNodeIndicator(false);
         }
     }
 

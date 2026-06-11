@@ -270,13 +270,13 @@
 /* Template cards (new unconfigured templates) */
 .workflow-agent-card.template {
     border-style: dashed;
-    border-color: #fbbf24;
-    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border-color: #cbd5e1;
+    background: #ffffff;
 }
 
 .workflow-agent-card.template:hover {
-    border-color: #f59e0b;
-    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-color: #3b82f6;
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
 }
 
 /* Saved templates (configured and reusable) */
@@ -333,6 +333,11 @@
 .workflow-agent-card.special.output-node .agent-icon {
     background: #fef3c7;
     color: #d97706;
+}
+
+.workflow-agent-card.ingestion-node .agent-icon {
+    background: #e0f2fe;
+    color: #0284c7;
 }
 
 /* ============================================
@@ -1228,6 +1233,16 @@ svg.connection.selected .main-path,
 .workflow-node.agent-node.standard .node-icon {
     color: #7c3aed;
     background: rgba(139, 92, 246, 0.15);
+}
+
+/* Ingestion component node (loader / splitter / vectorstore) */
+.workflow-node.ingestion-node .node-header {
+    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+}
+
+.workflow-node.ingestion-node .node-icon {
+    color: #0284c7;
+    background: rgba(2, 132, 199, 0.15);
 }
 
 /* Selected node - blue border with gradient halo like Drawflow demo */
