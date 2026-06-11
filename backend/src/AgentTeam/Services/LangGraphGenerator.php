@@ -1026,17 +1026,70 @@ class LangGraphGenerator
         $splitterLit = json_encode($splitterJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $storeLit = json_encode($storeJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
+        // Fully-inlined, self-contained standalone script: load -> recursive
+        // split -> embed (OpenAI) -> write to pgvector, with no dependency on
+        // the langchain_runner/ingestion.py module. It only needs the libs in
+        // the venv (langchain-community, langchain-text-splitters,
+        // langchain-openai, langchain-postgres, pypdf, psycopg) and the env
+        // vars VECTOR_DB_DSN + OPENAI_API_KEY. This file can be downloaded and
+        // run anywhere those are present.
         $code = <<<PY
-import sys, json, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ingestion import ingest
+# Standalone RAG ingestion script — generated from workflow {$workflowId}.
+# load -> recursive-split -> embed (OpenAI) -> write to pgvector.
+# Requires: langchain-community, langchain-text-splitters, langchain-openai,
+#           langchain-postgres, pypdf, psycopg ; env VECTOR_DB_DSN + OPENAI_API_KEY.
+import json, os
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_postgres import PGVector
 
-result = ingest(
-    {$loaderLit},
-    {$splitterLit},
-    {$storeLit},
+LOADER = {$loaderLit}
+SPLITTER = {$splitterLit}
+STORE = {$storeLit}
+
+# 1. Load the source document(s).
+source = LOADER.get("source", "pdf")
+path = LOADER.get("path")
+if not path:
+    raise RuntimeError("loader path is empty (set the loader Path or the Start node's document)")
+if source == "pdf":
+    docs = PyPDFLoader(path).load()
+elif source == "text":
+    docs = TextLoader(path, encoding="utf-8").load()
+else:
+    raise ValueError("unsupported loader source: " + repr(source))
+
+# 2. Recursive-split into chunks.
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=int(SPLITTER.get("chunk_size", 1000)),
+    chunk_overlap=int(SPLITTER.get("overlap", 150)),
 )
-print(json.dumps(result))
+chunks = splitter.split_documents(docs)
+
+# 3. Embeddings (online, OpenAI by default).
+emb_spec = STORE.get("embeddings") or "openai:text-embedding-3-small"
+emb_provider, _, emb_model = emb_spec.partition(":")
+if emb_provider != "openai":
+    raise ValueError("unsupported embeddings provider: " + repr(emb_provider))
+embeddings = OpenAIEmbeddings(model=emb_model or "text-embedding-3-small")
+
+# 4. Write to pgvector.
+if STORE.get("store", "pgvector") != "pgvector":
+    raise ValueError("unsupported store: " + repr(STORE.get("store")))
+dsn = os.environ.get("VECTOR_DB_DSN")
+if not dsn:
+    raise RuntimeError("VECTOR_DB_DSN is not set")
+collection = STORE.get("collection") or "default"
+PGVector.from_documents(
+    documents=chunks,
+    embedding=embeddings,
+    collection_name=collection,
+    connection=dsn,
+    use_jsonb=True,
+)
+
+print(json.dumps({"store": "pgvector", "collection": collection, "chunks": len(chunks)}))
 PY;
 
         return [
