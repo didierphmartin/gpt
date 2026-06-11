@@ -2311,6 +2311,15 @@ class WorkflowEditor {
             // The "LangGraph" button inside the output node opens a small
             // menu (Setup / Generate) and must not also trigger the
             // results modal.
+            // Ingestion output node: one click on "Compile to Python" produces
+            // and shows the standalone ingestion script directly (no dropdown).
+            const ingestionCompileBtn = e.target.closest('[data-action="ingestion-compile"]');
+            if (ingestionCompileBtn) {
+                e.stopPropagation();
+                this._showLangGraphCodeModal();
+                return;
+            }
+
             const langgraphBtn = e.target.closest('[data-action="langgraph-menu"]');
             if (langgraphBtn) {
                 e.stopPropagation();
@@ -2779,7 +2788,7 @@ class WorkflowEditor {
             return;
         }
 
-        const isIngestion = this._isIngestionWorkflow();
+        const isIngestion = this._outputConnectedToIngestion();
 
         const menu = document.createElement('div');
         menu.className = 'langgraph-menu';
@@ -5808,17 +5817,12 @@ class WorkflowEditor {
      * Add an Output node (final response)
      */
     addOutputNode(x, y) {
-        const html = `
-            <div class="workflow-node output-node">
-                <div class="node-header">
-                    <span class="node-icon">■</span>
-                    <span class="node-title">${this.t('workflow.nodes.output')}</span>
-                </div>
-                <div class="node-body">
-                    <small>${this.t('workflow.messages.responseToUser')}</small>
-                </div>
-            </div>
-        `;
+        // Use the full template so a freshly-dropped output node already has its
+        // actions (storage + the langGraph/compile menu + view-json). This was
+        // previously a stripped-down header+body, which is why a just-dragged
+        // output node showed no compile button until something re-rendered it.
+        // createOutputNodeHtml() also picks the agent vs ingestion variant.
+        const html = this.createOutputNodeHtml();
 
         // Output node: 1 input, 0 outputs
         this.editor.addNode('output', 1, 0, x, y, 'output', { type: 'output' }, html);
@@ -6691,6 +6695,31 @@ class WorkflowEditor {
     }
 
     /**
+     * True when the output (end) node is wired, on its input, to an ingestion
+     * component (loader/splitter/vectorstore) — i.e. this output is an ingestion
+     * pipeline's sink. The output node uses this to switch between the agent
+     * "response to user" variant and the compile-to-Python ingestion variant.
+     */
+    _outputConnectedToIngestion() {
+        try {
+            const data = this.editor.export().drawflow.Home.data;
+            for (const id in data) {
+                const n = data[id];
+                if (n.name !== 'output') continue;
+                const inputs = n.inputs || {};
+                for (const key in inputs) {
+                    for (const conn of (inputs[key].connections || [])) {
+                        if (['loader', 'splitter', 'vectorstore'].includes(this._nodeTypeById(conn.node))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (_) { /* editor not ready */ }
+        return false;
+    }
+
+    /**
      * Create HTML for the ingestion (RAG) end node — the vector-store sink.
      * Mirrors createOutputNodeHtml()'s structure (same node-langgraph and
      * node-view-json buttons so existing CSS/click wiring applies) but with
@@ -6706,12 +6735,8 @@ class WorkflowEditor {
                 <div class="node-body">
                     <small>Embeddings → pgvector</small>
                 </div>
-                <button class="node-langgraph" title="${this.t('workflow.output.langgraphTitle') || 'Generate or run the ingestion script'}" data-action="langgraph-menu">
-                    <span class="gen-label">Python / Run</span>
-                    <span class="gen-caret" aria-hidden="true">▾</span>
-                </button>
-                <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
-                    <span class="gen-label">${this.t('workflow.output.viewJson') || '{ } View JSON'}</span>
+                <button class="node-langgraph" title="Compile this ingestion pipeline to a standalone Python script" data-action="ingestion-compile">
+                    <span class="gen-label">⚙ Compile to Python</span>
                 </button>
             </div>
         `;
@@ -6721,7 +6746,7 @@ class WorkflowEditor {
      * Create HTML for output node
      */
     createOutputNodeHtml() {
-        if (this._isIngestionWorkflow()) return this.createIngestionOutputNodeHtml();
+        if (this._outputConnectedToIngestion()) return this.createIngestionOutputNodeHtml();
 
         const storageEnabled = this.outputStorageEnabled;
         const storageIcon = storageEnabled ? '💾' : '📤';
