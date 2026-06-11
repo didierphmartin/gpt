@@ -259,6 +259,47 @@ class LangGraphGenerator
         }
         $order = self::topoOrder($startId, $edges);
 
+        // ---- RAG ingestion graph detection ----
+        // An ingestion graph has no agent/tool/skill nodes; instead its
+        // pipeline is loader -> splitter -> vectorstore. When detected we emit
+        // a tiny self-contained script that calls ingestion.ingest() rather
+        // than the full LangGraph runtime. The agent/tool/skill path below is
+        // left completely untouched.
+        $hasExecNode = false;
+        foreach ($nodes as $n) {
+            $t = self::nodeType($n);
+            if (in_array($t, ['agent', 'agent-template', 'tool', 'skill'], true)) {
+                $hasExecNode = true;
+                break;
+            }
+        }
+        $loaderNode = null;
+        $splitterNode = null;
+        $vectorstoreNode = null;
+        foreach ($nodes as $n) {
+            switch (self::nodeType($n)) {
+                case 'loader':
+                    $loaderNode = $loaderNode ?? $n;
+                    break;
+                case 'splitter':
+                    $splitterNode = $splitterNode ?? $n;
+                    break;
+                case 'vectorstore':
+                    $vectorstoreNode = $vectorstoreNode ?? $n;
+                    break;
+            }
+        }
+        if (!$hasExecNode && $vectorstoreNode !== null && $loaderNode !== null) {
+            return self::generateIngestionScript(
+                $workflowId,
+                $wfName,
+                $loaderNode,
+                $splitterNode,
+                $vectorstoreNode,
+                $startDocuments
+            );
+        }
+
         // Provider default models (system_llm_settings.model). Used when
         // an agent has no explicit `model` field set — same source the
         // workflow editor's "Default: <name>" placeholder reads from, so
@@ -901,6 +942,107 @@ class LangGraphGenerator
         $code = implode("\n", $lines);
         $filename = "{$safeName}.py";
         return ['filename' => $filename, 'code' => $code];
+    }
+
+    /**
+     * Read a node's `config` array (same shape the agent/tool/skill path uses).
+     *
+     * @param array<string,mixed>|null $node
+     * @return array<string,mixed>
+     */
+    private static function nodeConfig(?array $node): array
+    {
+        if ($node === null) {
+            return [];
+        }
+        $cfg = $node['config'] ?? [];
+        if (!is_array($cfg)) {
+            $cfg = [];
+        }
+        return $cfg;
+    }
+
+    /**
+     * Slugify a workflow name for a default vectorstore collection:
+     * lowercase, non-alphanumeric runs collapsed to '_', trimmed.
+     */
+    private static function slugify(string $name): string
+    {
+        $slug = strtolower($name);
+        $slug = (string) preg_replace('/[^a-z0-9]+/', '_', $slug);
+        $slug = trim($slug, '_');
+        return $slug;
+    }
+
+    /**
+     * Emit a self-contained Python ingestion script that calls
+     * langchain_runner/ingestion.py's ingest(loader_cfg, splitter_cfg,
+     * store_cfg). Returned in the same {filename, code} shape generate() uses.
+     *
+     * @param array<string,mixed>      $loaderNode
+     * @param array<string,mixed>|null $splitterNode
+     * @param array<string,mixed>      $vectorstoreNode
+     * @param array<int,mixed>         $startDocuments
+     * @return array{filename: string, code: string}
+     */
+    private static function generateIngestionScript(
+        int $workflowId,
+        string $wfName,
+        array $loaderNode,
+        ?array $splitterNode,
+        array $vectorstoreNode,
+        array $startDocuments
+    ): array {
+        $loaderCfg = self::nodeConfig($loaderNode);
+        $splitterCfg = self::nodeConfig($splitterNode);
+        $storeCfg = self::nodeConfig($vectorstoreNode);
+
+        $firstDoc = $startDocuments[0] ?? null;
+        if (is_array($firstDoc)) {
+            // Start documents may be stored as {path: ...} objects.
+            $firstDoc = $firstDoc['path'] ?? null;
+        }
+
+        $loaderJson = [
+            'source' => $loaderCfg['source'] ?? 'pdf',
+            'path'   => $loaderCfg['path'] ?? $firstDoc,
+        ];
+        $splitterJson = [
+            'strategy'   => $splitterCfg['strategy'] ?? 'recursive',
+            'chunk_size' => $splitterCfg['chunk_size'] ?? 1000,
+            'overlap'    => $splitterCfg['overlap'] ?? 150,
+        ];
+        $defaultCollection = self::slugify($wfName);
+        if ($defaultCollection === '') {
+            $defaultCollection = 'workflow_' . $workflowId;
+        }
+        $storeJson = [
+            'store'      => $storeCfg['store'] ?? 'pgvector',
+            'embeddings' => $storeCfg['embeddings'] ?? 'openai:text-embedding-3-small',
+            'collection' => $storeCfg['collection'] ?? $defaultCollection,
+        ];
+
+        $loaderLit = json_encode($loaderJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $splitterLit = json_encode($splitterJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $storeLit = json_encode($storeJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $code = <<<PY
+import sys, json, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ingestion import ingest
+
+result = ingest(
+    {$loaderLit},
+    {$splitterLit},
+    {$storeLit},
+)
+print(json.dumps(result))
+PY;
+
+        return [
+            'filename' => "ingestion_{$workflowId}.py",
+            'code'     => $code,
+        ];
     }
 
     /**
