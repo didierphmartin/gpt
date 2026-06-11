@@ -2226,6 +2226,19 @@ class WorkflowEditor {
                 return;
             }
 
+            // Handle Ingestion node clicks (loader / splitter / vectorstore)
+            // to open their editable config modal. Skip the delete button.
+            const ingestionNode = e.target.closest('.workflow-node.ingestion-node');
+            if (ingestionNode && !e.target.closest('.node-delete-btn')) {
+                e.stopPropagation();
+                const drawflowNode = ingestionNode.closest('.drawflow-node');
+                if (drawflowNode) {
+                    const nodeId = drawflowNode.id.replace('node-', '');
+                    this.showIngestionConfigModal(nodeId);
+                }
+                return;
+            }
+
             // Handle Agent Template node clicks to configure (unconfigured template)
             // But NOT if clicking on document zone elements
             const agentTemplateNode = e.target.closest('.workflow-node.agent-node.template');
@@ -5507,6 +5520,164 @@ class WorkflowEditor {
             default:
                 return '';
         }
+    }
+
+    /**
+     * Show an editable config modal for an ingestion node
+     * (loader / splitter / vectorstore). Mirrors showStorageConfigModal:
+     * an overlay with header / body / footer, close on background click,
+     * X button, Cancel, Escape; Save writes the edited config back into
+     * the Drawflow node data and refreshes the on-canvas summary.
+     */
+    showIngestionConfigModal(nodeId) {
+        const nodeData = this.editor.getNodeFromId(nodeId);
+        if (!nodeData) return;
+
+        const nodeType = nodeData.data?.node_type;
+        const config = nodeData.data?.config || {};
+        if (!nodeType) return;
+
+        const META = {
+            loader:      { icon: '📥', name: 'Loader' },
+            splitter:    { icon: '✂️', name: 'Splitter' },
+            vectorstore: { icon: '🗄️', name: 'Vector store' },
+        };
+        const meta = META[nodeType] || { icon: '⚙', name: nodeType };
+
+        // Build type-specific, pre-filled fields.
+        let fieldsHtml = '';
+        if (nodeType === 'loader') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-loader-source">Source</label>
+                    <select id="ingestion-loader-source">
+                        <option value="pdf" selected>pdf</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-loader-path">Path</label>
+                    <input type="text" id="ingestion-loader-path" value="${this.escapeHtml(config.path || '')}" placeholder="Path to document(s)">
+                </div>
+            `;
+        } else if (nodeType === 'splitter') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-strategy">Strategy</label>
+                    <select id="ingestion-splitter-strategy">
+                        <option value="recursive" selected>recursive</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-chunk">Chunk size</label>
+                    <input type="number" id="ingestion-splitter-chunk" value="${this.escapeHtml(String(config.chunk_size ?? 1000))}" min="1">
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-splitter-overlap">Overlap</label>
+                    <input type="number" id="ingestion-splitter-overlap" value="${this.escapeHtml(String(config.overlap ?? 150))}" min="0">
+                </div>
+            `;
+        } else if (nodeType === 'vectorstore') {
+            fieldsHtml = `
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-store">Store</label>
+                    <select id="ingestion-vs-store">
+                        <option value="pgvector" selected>pgvector</option>
+                    </select>
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-embeddings">Embeddings</label>
+                    <input type="text" id="ingestion-vs-embeddings" value="${this.escapeHtml(config.embeddings || '')}" placeholder="openai:text-embedding-3-small">
+                </div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-vs-collection">Collection</label>
+                    <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
+                </div>
+            `;
+        }
+
+        // Remove existing modal if any.
+        const existingModal = document.getElementById('ingestion-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const modalHtml = `
+            <div id="ingestion-config-modal" class="storage-config-overlay">
+                <div class="storage-config-modal">
+                    <div class="storage-config-header">
+                        <h3><span>${meta.icon}</span> ${this.escapeHtml(meta.name)}</h3>
+                        <button class="storage-config-close" id="ingestion-config-close">×</button>
+                    </div>
+                    <div class="storage-config-body">
+                        ${fieldsHtml}
+                    </div>
+                    <div class="storage-config-footer">
+                        <button class="storage-config-btn cancel" id="ingestion-config-cancel">${this.t('common.cancel')}</button>
+                        <button class="storage-config-btn save" id="ingestion-config-save">${this.t('common.save')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        const modal = document.getElementById('ingestion-config-modal');
+        const closeBtn = document.getElementById('ingestion-config-close');
+        const cancelBtn = document.getElementById('ingestion-config-cancel');
+        const saveBtn = document.getElementById('ingestion-config-save');
+
+        const closeModal = () => {
+            modal.remove();
+            document.removeEventListener('keydown', escHandler);
+        };
+        const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
+
+        // Close on background click, X, Cancel, Escape.
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        document.addEventListener('keydown', escHandler);
+
+        // Save: read fields, build new config, write back to node data,
+        // refresh the on-canvas summary, close.
+        saveBtn.addEventListener('click', () => {
+            let newConfig;
+            if (nodeType === 'loader') {
+                newConfig = {
+                    source: document.getElementById('ingestion-loader-source').value,
+                    path: document.getElementById('ingestion-loader-path').value.trim(),
+                };
+            } else if (nodeType === 'splitter') {
+                const chunk = parseInt(document.getElementById('ingestion-splitter-chunk').value, 10);
+                const overlap = parseInt(document.getElementById('ingestion-splitter-overlap').value, 10);
+                newConfig = {
+                    strategy: document.getElementById('ingestion-splitter-strategy').value,
+                    chunk_size: Number.isFinite(chunk) ? chunk : 1000,
+                    overlap: Number.isFinite(overlap) ? overlap : 150,
+                };
+            } else if (nodeType === 'vectorstore') {
+                newConfig = {
+                    store: document.getElementById('ingestion-vs-store').value,
+                    embeddings: document.getElementById('ingestion-vs-embeddings').value.trim(),
+                    collection: document.getElementById('ingestion-vs-collection').value.trim(),
+                };
+            } else {
+                newConfig = { ...config };
+            }
+
+            // Write back to the Drawflow node data, mirroring the agent
+            // path's use of updateNodeDataFromId.
+            const updatedData = { ...nodeData.data, config: newConfig };
+            this.editor.updateNodeDataFromId(nodeId, updatedData);
+
+            // Refresh the on-canvas summary line.
+            const summary = this.ingestionNodeSummary(nodeType, newConfig);
+            const nodeElement = document.getElementById(`node-${nodeId}`);
+            const displayEl = nodeElement?.querySelector('.node-config-display');
+            if (displayEl) displayEl.textContent = summary;
+
+            closeModal();
+        });
     }
 
     /**
