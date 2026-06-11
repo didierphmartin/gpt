@@ -34,7 +34,13 @@ Let the existing **workflow editor** also model **ingestion / RAG pipelines** (l
 
 7. **Compilation shape:** a **linear** ingestion graph emits a **plain LangChain script**; a graph with **branching or agents** emits a **LangGraph `StateGraph`**.
 
-8. **Embeddings online or offline.** `vectorstore.embeddings`: `openai:…`/`gemini:…` (online API) or `ollama:…`/`hf:…` (offline/local). Online and offline both run **server‑side** in `langchain_runner` (neither works in the Pyodide sandbox). **Default to offline/local for sensitive data** (e.g. SQL rows).
+8. **Embeddings online or offline — default is ONLINE.** `vectorstore.embeddings`: **default `openai:text-embedding-3-small`** (online API); offline/local (`ollama:…`/`hf:…`) remains available for sensitive data (e.g. SQL rows). Both run **server‑side** in `langchain_runner` (neither works in the Pyodide sandbox).
+
+9. **Reuse the existing two‑tier authoring (don't invent a new language).** Ingestion is authored exactly like agent workflows:
+   - **Tier 1 — simple language** (position‑free, what an **LLM emits**): the *same* JSON, extended with the `components` block + the 3 node types. One unified language can carry agents, components, or both.
+   - **Translator** — the *same* `compile.py` (the workflow‑compile skill), extended to validate components and **lay them out** (assign `pos_x`/`pos_y` via the existing topological‑column layout).
+   - **Tier 2 — graphical DSL** (positioned nodes): the *same* DSL the editor draws/imports, with the new component `node_type`s carrying coordinates.
+   So an LLM authors an ingestion pipeline the way it authors a fan‑out research workflow today; the final encoding is always the positioned DSL.
 
 ## 3. Non‑Goals
 
@@ -166,7 +172,7 @@ The editor's **Run** button is target‑aware: `interpretable` → existing run�
 ## 13. Open questions to confirm before planning
 
 1. **Mixed graphs**: confirm "any python‑only node ⇒ whole graph compiles to Python" (LLM agents become LangChain LLM nodes) vs. splitting sub‑graphs. *(Recommend: whole‑graph.)*
-2. **Vector store + embeddings defaults**: pgvector (you run MySQL, but pgvector needs Postgres — or FAISS/Chroma on disk) + local embeddings (Ollama) as the privacy default. Confirm the stack.
+2. **Embeddings default = online** (`openai:text-embedding-3-small`) — **decided**; offline/local stays available. **Still to pick: the vector store** — FAISS/Chroma on disk (simplest) vs. pgvector (needs Postgres; you run MySQL) vs. an MCP vector‑store server.
 3. **Port typing strictness**: the fixed content‑kind set only (recommended) vs. richer typing.
 4. **Run endpoint**: server‑side subprocess in `langchain_runner` (recommended) vs. download‑and‑run the script.
 5. **Scope of v1**: ship **pure ingestion** end‑to‑end — the 3 components (`loader`/`splitter`/`vectorstore`) + generator templates + the `langchain_runner` run endpoint, populating a vector store. The **query side needs no new nodes** (agent + the store's MCP `retrieve` tool, already interpretable), so it's mostly wiring/docs in v2.
