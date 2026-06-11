@@ -2966,24 +2966,39 @@ class WorkflowEditor {
         }
         if (!this.currentWorkflowId) return; // save was cancelled / failed
 
-        // Write the compiled script to disk (langchain_runner/ingestion_<id>.py)
-        // via the compile-only path so "Compile" actually produces a file.
-        let savedPath = '';
+        // Gather the ingestion stage configs straight from the canvas (the form
+        // attributes) and hand them to the standalone IngestionCompiler. No
+        // saved-graph lookup / node interpretation — just parameters → Python.
+        const data = this.editor.drawflow?.drawflow?.Home?.data || {};
+        let loader = {}, splitter = {}, vectorstore = {};
+        for (const id in data) {
+            const nt = data[id]?.data?.node_type;
+            if (nt === 'loader') loader = data[id].data.config || {};
+            else if (nt === 'splitter') splitter = data[id].data.config || {};
+            else if (nt === 'vectorstore') vectorstore = data[id].data.config || {};
+        }
+
+        let code = '', savedPath = '';
         try {
-            const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/run-ingestion?compile_only=1`, {
-                method: 'POST', headers: this.getAuthHeaders(), credentials: 'include',
+            const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/compile`, {
+                method: 'POST',
+                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ loader, splitter, vectorstore }),
             });
             const j = await resp.json().catch(() => ({}));
             if (j && j.success && j.data) {
+                code = j.data.code || '';
                 savedPath = j.data.path || '';
-                console.log('[WorkflowEditor] compiled ingestion script written to', savedPath);
             } else {
-                console.warn('[WorkflowEditor] compile-only failed:', j && j.error);
+                this.showToast('Compile failed: ' + ((j && j.error) || resp.status), 'error');
+                return;
             }
         } catch (e) {
-            console.warn('[WorkflowEditor] compile-only request failed:', e);
+            this.showToast('Compile failed: ' + (e?.message || e), 'error');
+            return;
         }
-        this._showLangGraphCodeModal(savedPath);
+        this._showLangGraphCodeModal(savedPath, code);
     }
 
     /**
@@ -2993,22 +3008,26 @@ class WorkflowEditor {
      * (/workflows/<id>/generate-python) backs the Generate action that
      * downloads the file.
      */
-    async _showLangGraphCodeModal(savedPath = '') {
+    async _showLangGraphCodeModal(savedPath = '', providedCode = null) {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        let code;
-        try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            code = await resp.text();
-        } catch (e) {
-            alert(`Could not fetch the generated code: ${e?.message || e}`);
-            return;
+        // Ingestion passes the already-compiled code directly; the agent path
+        // fetches its LangGraph script from generate-python.
+        let code = providedCode;
+        if (code === null) {
+            try {
+                const resp = await fetch(
+                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
+                    { headers: this.getAuthHeaders() }
+                );
+                if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+                code = await resp.text();
+            } catch (e) {
+                alert(`Could not fetch the generated code: ${e?.message || e}`);
+                return;
+            }
         }
 
         const backdrop = document.createElement('div');
