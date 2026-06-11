@@ -283,6 +283,149 @@ class WorkflowController
     }
 
     /**
+     * POST /api/v1/workflows/{id}/run-ingestion
+     * Generate a RAG ingestion script from the workflow, write it under
+     * langchain_runner/, run it with the venv python, and return the JSON
+     * result the script prints (json.dumps(result)) on its last stdout line.
+     *
+     * Returns:
+     *   - {success: true, result: <parsed json>} on exit 0
+     *   - {success: false, error: <stderr/stdout tail>} on non-zero exit
+     */
+    public function runIngestion(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (!$workflowId) {
+            return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
+        }
+
+        try {
+            if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
+                return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
+            }
+
+            // 1) Generate the ingestion script ({filename, code}).
+            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            $gen = new \AgentTeam\Services\LangGraphGenerator(
+                $this->db,
+                $this->workflowRepository,
+                $this->graphRepository,
+                $agentRepo
+            );
+            $result = $gen->generate($workflowId, (string) $userId);
+
+            // 2) Write code to <langchain_runner_dir>/<filename>.
+            // Controllers live at backend/src/AgentTeam/Controllers -> repo root is 4 up.
+            $runnerDir = dirname(__DIR__, 4) . '/langchain_runner';
+            $venvPython = $runnerDir . '/.venv/bin/python';
+            if (!is_file($venvPython)) {
+                return [
+                    'success' => false,
+                    'error' => 'langchain_runner venv python not found at ' . $venvPython,
+                    'status_code' => 500,
+                ];
+            }
+
+            $filename = basename((string) $result['filename']); // defensive: no path traversal
+            $scriptPath = $runnerDir . '/' . $filename;
+            if (file_put_contents($scriptPath, (string) $result['code']) === false) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to write ingestion script to ' . $scriptPath,
+                    'status_code' => 500,
+                ];
+            }
+
+            // 3) Build the subprocess environment.
+            // VECTOR_DB_DSN comes from the loaded .env ($_ENV / getenv).
+            // OPENAI_API_KEY: the backend resolves the OpenAI key into
+            // $this->config['openai']['api_key'] (env via getenv('OPENAI_API_KEY')
+            // or DB-overlaid by LLMProviderResolver::applyDbSettings); export it
+            // under the name langchain_openai's OpenAIEmbeddings expects.
+            $env = [
+                'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
+                'HOME' => getenv('HOME') ?: $runnerDir,
+            ];
+            $vectorDsn = $_ENV['VECTOR_DB_DSN'] ?? getenv('VECTOR_DB_DSN') ?: '';
+            if ($vectorDsn !== '') {
+                $env['VECTOR_DB_DSN'] = $vectorDsn;
+            }
+            $openaiKey = $this->config['openai']['api_key']
+                ?? ($_ENV['OPENAI_API_KEY'] ?? (getenv('OPENAI_API_KEY') ?: ''));
+            if ($openaiKey !== '' && $openaiKey !== null) {
+                $env['OPENAI_API_KEY'] = $openaiKey;
+            }
+
+            // 4) Run it with proc_open, capturing stdout/stderr/exit code.
+            $cmd = escapeshellarg($venvPython) . ' ' . escapeshellarg($scriptPath);
+            $descriptors = [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ];
+            $proc = proc_open($cmd, $descriptors, $pipes, $runnerDir, $env);
+            if (!is_resource($proc)) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to start ingestion subprocess',
+                    'status_code' => 500,
+                ];
+            }
+
+            fclose($pipes[0]);
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exitCode = proc_close($proc);
+
+            if ($exitCode !== 0) {
+                $tail = trim($stderr) !== '' ? trim($stderr) : trim((string) $stdout);
+                error_log('[WorkflowController] runIngestion exit ' . $exitCode . ': ' . substr($tail, 0, 2000));
+                return [
+                    'success' => false,
+                    'error' => $tail !== '' ? $tail : 'Ingestion script exited with code ' . $exitCode,
+                    'status_code' => 500,
+                ];
+            }
+
+            // 5) Parse the LAST non-empty stdout line as JSON.
+            $lines = preg_split('/\r?\n/', (string) $stdout) ?: [];
+            $lastJsonLine = '';
+            for ($i = count($lines) - 1; $i >= 0; $i--) {
+                if (trim($lines[$i]) !== '') {
+                    $lastJsonLine = trim($lines[$i]);
+                    break;
+                }
+            }
+
+            $parsed = json_decode($lastJsonLine, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                error_log('[WorkflowController] runIngestion: could not parse JSON result: ' . substr((string) $stdout, 0, 2000));
+                return [
+                    'success' => false,
+                    'error' => 'Ingestion succeeded but result was not valid JSON: ' . $lastJsonLine,
+                    'status_code' => 500,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'result' => $parsed,
+                'status_code' => 200,
+            ];
+        } catch (\Throwable $e) {
+            error_log('[WorkflowController] runIngestion failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
+        }
+    }
+
+    /**
      * GET /api/v1/workflows/{id}
      * Get a specific workflow
      */
