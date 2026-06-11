@@ -2046,12 +2046,14 @@ class WorkflowEditor {
             this.styleConnections();
             // Graph changed — flip the Output node variant if needed.
             this.refreshOutputNodeVariant();
+            this.refreshStartNodeVariant();
         });
 
         // Connection removed — graph changed, refresh the Output node variant.
         this.editor.on('connectionRemoved', (connection) => {
             console.log('[WorkflowEditor] Connection removed:', connection);
             this.refreshOutputNodeVariant();
+            this.refreshStartNodeVariant();
         });
 
         // Connection start (dragging from output)
@@ -2070,6 +2072,7 @@ class WorkflowEditor {
             // Removing the last ingestion node flips the Output node back to
             // the agent variant.
             this.refreshOutputNodeVariant();
+            this.refreshStartNodeVariant();
         });
 
         // Click event for debugging
@@ -2083,6 +2086,7 @@ class WorkflowEditor {
             this.hideHelpOverlay();
             // A new node may make this an ingestion workflow — flip the variant.
             this.refreshOutputNodeVariant();
+            this.refreshStartNodeVariant();
         });
 
         // Track selected connection
@@ -2358,6 +2362,10 @@ class WorkflowEditor {
                 e.stopPropagation();
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
+                } else if (this._isIngestionWorkflow()) {
+                    // Ingestion pipelines need no user prompt — run directly
+                    // (executeWorkflow routes ingestion graphs to run-ingestion).
+                    this.executeWorkflow('');
                 } else if (this.lastUserPrompt) {
                     this.executeWorkflow(this.lastUserPrompt);
                 } else {
@@ -3552,6 +3560,33 @@ class WorkflowEditor {
             const node = nodes[nodeId];
             if (node.name === 'output') {
                 const newHtml = this.createOutputNodeHtml();
+                const nodeElement = document.getElementById(`node-${nodeId}`);
+                if (nodeElement) {
+                    const contentDiv = nodeElement.querySelector('.drawflow_content_node');
+                    if (contentDiv) {
+                        contentDiv.innerHTML = newHtml;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    /**
+     * Re-render the Start node in place so it shows the variant (agent vs
+     * ingestion) matching what it's connected to — mirrors
+     * refreshOutputNodeVariant(). createStartNodeHtml() picks the variant.
+     */
+    refreshStartNodeVariant() {
+        if (!this.editor) return;
+
+        const nodes = this.editor.drawflow?.drawflow?.Home?.data;
+        if (!nodes) return;
+
+        for (const nodeId in nodes) {
+            const node = nodes[nodeId];
+            if (node.name === 'start') {
+                const newHtml = this.createStartNodeHtml();
                 const nodeElement = document.getElementById(`node-${nodeId}`);
                 if (nodeElement) {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
@@ -5611,6 +5646,7 @@ class WorkflowEditor {
         // The Output node is usually already on the canvas; dragging an
         // ingestion node must immediately flip it to the ingestion variant.
         this.refreshOutputNodeVariant();
+        this.refreshStartNodeVariant();
 
         return drawflowId;
     }
@@ -5793,21 +5829,10 @@ class WorkflowEditor {
      * Add a Start node (user input trigger)
      */
     addStartNode(x, y) {
-        const html = `
-            <div class="workflow-node start-node" data-accepts-documents="true">
-                <div class="node-header">
-                    <span class="node-icon">▶</span>
-                    <span class="node-title">${this.t('workflow.nodes.start')}</span>
-                </div>
-                <div class="node-body">
-                    <small>${this.t('workflow.messages.userPromptInput')}</small>
-                </div>
-                <div class="node-documents-zone">
-                    <div class="documents-list"></div>
-                    <div class="documents-drop-hint">📎 ${this.t('workflow.documents.dropHint') || 'Drop files or click to attach'}</div>
-                </div>
-            </div>
-        `;
+        // Use the full template (it includes the ▶ play button and picks the
+        // agent vs ingestion variant). Previously this was a stripped-down
+        // version without the play button.
+        const html = this.createStartNodeHtml();
 
         // Start node: 0 inputs, 1 output
         this.editor.addNode('start', 0, 1, x, y, 'start', { type: 'start', documents: [] }, html);
@@ -6629,6 +6654,7 @@ class WorkflowEditor {
      * Create HTML for start node
      */
     createStartNodeHtml() {
+        if (this._startConnectedToIngestion()) return this.createIngestionStartNodeHtml();
         return `
             <div class="workflow-node start-node" data-accepts-documents="true">
                 <div class="node-header">
@@ -6642,6 +6668,30 @@ class WorkflowEditor {
                 <div class="node-documents-zone">
                     <div class="documents-list"></div>
                     <div class="documents-drop-hint">📎 ${this.t('workflow.documents.dropHint') || 'Drop files or click to attach'}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Start node variant for ingestion pipelines (start → loader): no user
+     * prompt is needed, so it shows just the ▶ play button (+ the document
+     * drop zone for the file to ingest), recoloured to match the ingestion
+     * nodes. Picked by createStartNodeHtml() when the start is wired to a loader.
+     */
+    createIngestionStartNodeHtml() {
+        return `
+            <div class="workflow-node start-node ingestion-start" data-accepts-documents="true">
+                <div class="node-header">
+                    <span class="node-icon">▶</span>
+                    <span class="node-title">${this.t('workflow.nodes.start') || 'Start'}</span>
+                </div>
+                <div class="node-body">
+                    <button class="node-play-btn" title="Run the ingestion pipeline">▶</button>
+                </div>
+                <div class="node-documents-zone">
+                    <div class="documents-list"></div>
+                    <div class="documents-drop-hint">📎 ${this.t('workflow.documents.dropHint') || 'Drop the document to ingest'}</div>
                 </div>
             </div>
         `;
@@ -6709,6 +6759,31 @@ class WorkflowEditor {
                 const inputs = n.inputs || {};
                 for (const key in inputs) {
                     for (const conn of (inputs[key].connections || [])) {
+                        if (['loader', 'splitter', 'vectorstore'].includes(this._nodeTypeById(conn.node))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (_) { /* editor not ready */ }
+        return false;
+    }
+
+    /**
+     * True when the start node's output is wired to an ingestion component
+     * (a loader, normally) — i.e. this starts an ingestion pipeline, which
+     * needs no user prompt. The start node uses this to switch to the
+     * prompt-less, recoloured ingestion variant.
+     */
+    _startConnectedToIngestion() {
+        try {
+            const data = this.editor.export().drawflow.Home.data;
+            for (const id in data) {
+                const n = data[id];
+                if (n.name !== 'start') continue;
+                const outputs = n.outputs || {};
+                for (const key in outputs) {
+                    for (const conn of (outputs[key].connections || [])) {
                         if (['loader', 'splitter', 'vectorstore'].includes(this._nodeTypeById(conn.node))) {
                             return true;
                         }

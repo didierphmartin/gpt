@@ -1013,6 +1013,11 @@ svg.connection.selected .main-path,
 .workflow-node.output-node.ingestion-output .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
 .workflow-node.output-node.ingestion-output .node-icon { color: #0284c7; }
 
+/* Ingestion start node (start → loader): recoloured like the ingestion nodes,
+   prompt-less, just the ▶ play button. */
+.workflow-node.start-node.ingestion-start .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
+.workflow-node.start-node.ingestion-start .node-icon { color: #0284c7; }
+
 /* Output node with results available */
 .workflow-node.output-node.has-results {
     box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
