@@ -270,13 +270,13 @@
 /* Template cards (new unconfigured templates) */
 .workflow-agent-card.template {
     border-style: dashed;
-    border-color: #fbbf24;
-    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border-color: #cbd5e1;
+    background: #ffffff;
 }
 
 .workflow-agent-card.template:hover {
-    border-color: #f59e0b;
-    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-color: #3b82f6;
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
 }
 
 /* Saved templates (configured and reusable) */
