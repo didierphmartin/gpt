@@ -313,11 +313,11 @@ class WorkflowEditor {
                     </div>
                     <div class="workflow-section-content ${collapsedSections.ingestion ? 'collapsed' : ''}" data-section="ingestion">
                         <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="loader">
-                            <div class="agent-icon">📥</div><div class="agent-info"><div class="agent-name">Loader</div><div class="agent-type">Load a document (PDF)</div></div></div>
+                            <span class="ingestion-order" title="Step 1 — place first">1</span><div class="agent-icon">📥</div><div class="agent-info"><div class="agent-name">Loader</div><div class="agent-type">Load a document (PDF)</div></div></div>
                         <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="splitter">
-                            <div class="agent-icon">✂️</div><div class="agent-info"><div class="agent-name">Splitter</div><div class="agent-type">Chunk the text</div></div></div>
+                            <span class="ingestion-order" title="Step 2 — after the loader">2</span><div class="agent-icon">✂️</div><div class="agent-info"><div class="agent-name">Splitter</div><div class="agent-type">Chunk the text</div></div></div>
                         <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="vectorstore">
-                            <div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
+                            <span class="ingestion-order" title="Step 3 — after the splitter">3</span><div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
                     </div>
                 </div>
 

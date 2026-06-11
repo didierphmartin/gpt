@@ -340,6 +340,23 @@
     color: #0284c7;
 }
 
+/* Pipeline order badge (1·2·3) on the ingestion palette cards — a hint that
+   these nodes go on the canvas in this order (loader → splitter → vectorstore). */
+.workflow-agent-card.ingestion-node .ingestion-order {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #0284c7;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
 /* ============================================
    Action Buttons
    ============================================ */
