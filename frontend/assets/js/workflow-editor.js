@@ -6832,9 +6832,9 @@ class WorkflowEditor {
                     <span class="node-icon">■</span>
                     <span class="node-title">${this.t('workflow.nodes.output') || 'Output'}</span>
                 </div>
-                <button class="node-langgraph" title="Compile this ingestion pipeline to a standalone Python script" data-action="ingestion-compile">
-                    <span class="gen-label">⚙ Compile to Python</span>
-                </button>
+                <div class="node-body">
+                    <button class="ingestion-compile-btn" title="Compile this ingestion pipeline to a standalone Python script" data-action="ingestion-compile">⚙ Compile to Python</button>
+                </div>
             </div>
         `;
     }

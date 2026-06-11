@@ -1019,10 +1019,29 @@ svg.connection.selected .main-path,
 .workflow-node.output-node.ingestion-output {
     border-radius: 10px;
     overflow: hidden;
-    min-width: 140px;
+    min-width: 150px;
 }
-.workflow-node.output-node.ingestion-output .node-langgraph {
-    border-radius: 0 0 10px 10px;
+.workflow-node.output-node.ingestion-output .node-body {
+    padding: 8px;
+    background: #ffffff;
+}
+/* Compile-to-Python sits INSIDE the node body (under the light-blue title),
+   as a compact button — not a full-width bar hanging under the node. */
+.ingestion-compile-btn {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid #7dd3fc;
+    border-radius: 6px;
+    background: #f0f9ff;
+    color: #0369a1;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.ingestion-compile-btn:hover {
+    background: #e0f2fe;
+    border-color: #38bdf8;
 }
 
 /* Ingestion start node (start → loader): recoloured like the ingestion nodes,
