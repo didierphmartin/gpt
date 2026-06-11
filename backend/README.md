@@ -1858,6 +1858,37 @@ Generates a LangGraph Python script that mirrors the workflow.
 
 Returns 404 if the workflow does not exist or is not owned by the user.
 
+### Ingestion Workflows (RAG → standalone Python)
+
+A workflow whose canvas contains the **ingestion component nodes** (`loader → splitter → vectorstore`) is *compile-only*: it is **not** interpreted by `GraphWorkflowRunner`. Instead it is **compiled to a self-contained Python script** and executed in the `langchain_runner` venv.
+
+**Where the code is produced (backend):** `LangGraphGenerator::generateIngestionScript()` (PHP). When `generate()` detects an ingestion graph (a `vectorstore` + `loader` node, no agent/tool/skill nodes), it returns `{ filename: "ingestion_<id>.py", code: <standalone python> }` instead of the normal LangGraph script. The generator is **dispatch-driven** — per-choice fragments (`$loaderDispatch` / `$splitterDispatch` / `$embeddingsDispatch` / `$storeDispatch`) compose a choice-agnostic skeleton, so adding a loader source / splitter strategy / store / embeddings provider is one table entry plus the editor dropdown. Only the chosen backend's import is emitted; an unregistered choice throws.
+
+**v1 backends:** loader `pdf`/`text`, splitter `recursive`, embeddings `openai:text-embedding-3-small` (online), store `pgvector`. More (`web`/`sql`/MCP loaders, file-type-aware/`auto` splitter, FAISS/Chroma/MCP stores, offline embeddings) are deferred — see `docs/superpowers/specs/2026-06-10-rag-ingestion-components-design.md`.
+
+**Where the produced code is stored:** `WorkflowController::runIngestion()` writes `code` to **`langchain_runner/ingestion_<id>.py`** (repo-root `langchain_runner/`; filename `basename()`-guarded against traversal), overwriting per workflow id, then runs it with `langchain_runner/.venv/bin/python` (`proc_open`, cwd = `langchain_runner/`). The file is a **runtime artifact** — **gitignored** (`langchain_runner/ingestion_*.py`), not stored in the DB. The workflow DSL itself is persisted in the DB as usual.
+
+**Endpoint:** `POST /api/v1/workflows/{id}/run-ingestion` | **Auth:** Yes — generates the script, runs it, returns the parsed result:
+```json
+{ "success": true, "result": { "store": "pgvector", "collection": "manual_qa", "chunks": 128 } }
+```
+
+**Runtime requirements:** the deps in `langchain_runner/requirements-ingestion.txt` (`langchain-community`, `langchain-text-splitters`, `langchain-openai`, `langchain-postgres`, `pypdf`, `psycopg`) plus env vars **`VECTOR_DB_DSN`** (Postgres + pgvector) and **`OPENAI_API_KEY`** (online embeddings).
+
+**Generated script shape** (self-contained — downloadable and runnable anywhere those deps + env exist):
+```python
+import json, os
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_postgres import PGVector
+
+LOADER = {"source": "pdf", "path": "manuals/x.pdf"}
+SPLITTER = {"strategy": "recursive", "chunk_size": 1000, "overlap": 150}
+STORE = {"store": "pgvector", "embeddings": "openai:text-embedding-3-small", "collection": "manual_qa"}
+# load → split → embed → PGVector.from_documents(...) → print(json.dumps(result))
+```
+
 ### List Workflow Outputs
 
 **Endpoint:** `GET /api/v1/workflows/{id}/outputs` | **Auth:** Yes
@@ -3782,6 +3813,10 @@ Response
 11. End-user MCP preference layer (tier 3 of the [visibility cascade](#mcp-server-visibility-cascade)) — currently unimplemented. Today the chat-side `/mcp/servers/toggle` is a no-op for global servers (only flips the user's own private servers); a dedicated `user_mcp_preferences` table + filter pass in `MCPToolsLoader` would let end-users pick a subset of the admin-allowed set.
 
 ## Changelog
+
+### 2026-06-11 — RAG ingestion workflows → standalone Python
+
+`loader → splitter → vectorstore` graphs compile to a **self-contained Python script** (`LangGraphGenerator::generateIngestionScript`, dispatch-driven per loader/splitter/store/embeddings choice) and run via `POST /workflows/{id}/run-ingestion` (`WorkflowController::runIngestion`). The produced code is written to `langchain_runner/ingestion_<id>.py` (gitignored runtime artifact) and executed in the venv; it loads → recursive-splits → embeds (OpenAI) → writes to **pgvector**. v1 backends: pdf/text · recursive · openai · pgvector. See [Ingestion Workflows](#ingestion-workflows-rag--standalone-python).
 
 ### 2026-05-24 — Multi-tool-call client dispatch + URL-fetch status mapping
 - **`chat.js::dispatchClientToolCall` now handles N `tool_use` blocks per assistant turn.** Previously the frontend strictly threw on `payload.tool_calls.length > 1` with *"V1 supports one per turn"*, killing every multi-step orchestration (e.g. an audit skill that batched 4 `run_skill_script` calls). The backend already passes `pending_tool_calls` as an array (`ChatController::chat` returns it whole) — the frontend cap was the bottleneck. The dispatcher now extracts each call into a new `_executeSingleClientToolCall` helper, runs them sequentially through Pyodide (single shared instance), collects all tool_results, and posts them back to `/api/v1/chat` in **one** continuation with N `tool_calls` in the assistant message and N `role: "tool"` entries paired by `tool_use_id` — the standard Anthropic/OpenAI tool-use shape. Single-call flows are bit-identical to the pre-change behavior; the depth counter still counts continuation rounds, not individual calls.
