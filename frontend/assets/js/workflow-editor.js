@@ -5456,7 +5456,7 @@ class WorkflowEditor {
      * one-line summary, mirroring the agent-template node so that
      * connections, the ⚙ config hint, and saving all work.
      */
-    addIngestionNode(x, y, nodeType) {
+    addIngestionNode(x, y, nodeType, config = null) {
         const INGESTION_DEFAULTS = {
             loader:      { source: 'pdf', path: '' },
             splitter:    { strategy: 'recursive', chunk_size: 1000, overlap: 150 },
@@ -5470,9 +5470,14 @@ class WorkflowEditor {
         const meta = META[nodeType];
         if (!meta) return;
 
-        // Copy defaults so each node owns its own config object.
-        const config = JSON.parse(JSON.stringify(INGESTION_DEFAULTS[nodeType]));
-        const summary = this.ingestionNodeSummary(nodeType, config);
+        // Copy defaults so each node owns its own config object. When a saved
+        // config is supplied (re-hydration from backend DSL), merge it over the
+        // type defaults so any missing keys still have a sensible value.
+        const defaults = JSON.parse(JSON.stringify(INGESTION_DEFAULTS[nodeType]));
+        const nodeConfig = config
+            ? { ...defaults, ...config }
+            : defaults;
+        const summary = this.ingestionNodeSummary(nodeType, nodeConfig);
 
         const html = `
             <div class="workflow-node ingestion-node configurable" data-ingestion-type="${nodeType}">
@@ -5488,7 +5493,7 @@ class WorkflowEditor {
             </div>
         `;
 
-        this.editor.addNode(
+        const drawflowId = this.editor.addNode(
             nodeType,
             1, // inputs
             1, // outputs
@@ -5498,12 +5503,14 @@ class WorkflowEditor {
                 type: 'ingestion',
                 node_type: nodeType,
                 name: meta.name,
-                config: config
+                config: nodeConfig
             },
             html
         );
 
         this.hideHelpOverlay();
+
+        return drawflowId;
     }
 
     /**
@@ -6347,6 +6354,24 @@ class WorkflowEditor {
                 let html, inputs, outputs;
 
                 switch (type) {
+                    case 'loader':
+                    case 'splitter':
+                    case 'vectorstore': {
+                        // Ingestion nodes manage their own addNode() call (custom
+                        // HTML + config modal), so they don't flow through the
+                        // shared addNode path below. Recreate from saved config,
+                        // register the id mappings exactly like the shared path,
+                        // then skip the rest of this iteration.
+                        const x = node.position?.x || node.pos_x || 100;
+                        const y = node.position?.y || node.pos_y || 100;
+                        const dbNodeId = node.db_id || node.id;
+                        const drawflowId = this.addIngestionNode(x, y, type, node.config || {});
+                        idMap[node.id] = String(drawflowId);
+                        if (dbNodeId) {
+                            this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+                        }
+                        return; // next forEach iteration
+                    }
                     case 'realtime-start':
                         html = this.createRealtimeStartNodeHtml();
                         inputs = 0;
