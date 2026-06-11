@@ -54,3 +54,6 @@ tmp/
 
 # Vendored library with its own git repo (install separately)
 frontend/driver.js/
+
+# Runtime-generated ingestion scripts (Plan 1)
+langchain_runner/ingestion_*.py
