@@ -1017,12 +1017,10 @@ svg.connection.selected .main-path,
    (.ingestion-output .node-header above), with "Compile to Python" as its single
    action button below the header (default white button styling). */
 .workflow-node.output-node.ingestion-output {
-    border-radius: 10px;
-    overflow: hidden;
-    min-width: 150px;
+    min-width: 190px;
 }
 .workflow-node.output-node.ingestion-output .node-body {
-    padding: 8px;
+    padding: 12px 16px 14px;
     background: #ffffff;
 }
 /* Compile-to-Python sits INSIDE the node body (under the light-blue title),

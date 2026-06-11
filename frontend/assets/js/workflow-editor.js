@@ -3551,6 +3551,10 @@ class WorkflowEditor {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
                     if (contentDiv) {
                         contentDiv.innerHTML = newHtml;
+                        // The variant change alters the node's height, which moves
+                        // its input/output ports — recalc its connections so the
+                        // connector still reaches the endpoints.
+                        try { this.editor.updateConnectionNodes('node-' + nodeId); } catch (_) {}
                     }
                 }
                 break;
@@ -3581,6 +3585,10 @@ class WorkflowEditor {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
                     if (contentDiv) {
                         contentDiv.innerHTML = newHtml;
+                        // The variant change alters the node's height, which moves
+                        // its input/output ports — recalc its connections so the
+                        // connector still reaches the endpoints.
+                        try { this.editor.updateConnectionNodes('node-' + nodeId); } catch (_) {}
                     }
                 }
                 break;
@@ -3608,6 +3616,10 @@ class WorkflowEditor {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
                     if (contentDiv) {
                         contentDiv.innerHTML = newHtml;
+                        // The variant change alters the node's height, which moves
+                        // its input/output ports — recalc its connections so the
+                        // connector still reaches the endpoints.
+                        try { this.editor.updateConnectionNodes('node-' + nodeId); } catch (_) {}
                     }
                 }
                 break;
