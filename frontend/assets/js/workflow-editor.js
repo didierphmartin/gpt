@@ -6829,11 +6829,11 @@ class WorkflowEditor {
         return `
             <div class="workflow-node output-node ingestion-output">
                 <div class="node-header">
-                    <span class="node-icon">🗄️</span>
-                    <span class="node-title">${this.t('workflow.nodes.vectorStore') || 'Vector store'}</span>
+                    <span class="node-icon">■</span>
+                    <span class="node-title">${this.t('workflow.nodes.output') || 'Output'}</span>
                 </div>
                 <div class="node-body">
-                    <small>Embeddings → pgvector</small>
+                    <small>End of the ingestion pipeline</small>
                 </div>
                 <button class="node-langgraph" title="Compile this ingestion pipeline to a standalone Python script" data-action="ingestion-compile">
                     <span class="gen-label">⚙ Compile to Python</span>
