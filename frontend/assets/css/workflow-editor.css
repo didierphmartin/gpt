@@ -1046,6 +1046,10 @@ svg.connection.selected .main-path,
    prompt-less, just the ▶ play button. */
 .workflow-node.start-node.ingestion-start .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
 .workflow-node.start-node.ingestion-start .node-icon { color: #0284c7; }
+/* The green ▶ play button is hidden by default (agents only show it once a prompt
+   is set). Ingestion needs no prompt, so always show it — same green button as
+   the agent workflow, under the title. */
+.workflow-node.start-node.ingestion-start .node-play-btn { display: flex; }
 
 /* Output node with results available */
 .workflow-node.output-node.has-results {
