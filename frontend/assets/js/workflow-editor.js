@@ -5871,7 +5871,7 @@ class WorkflowEditor {
             panels.forEach(p => { p.style.display = p.dataset.panel === tab ? '' : 'none'; });
             if (tab === 'output' && !outputLoaded) {
                 outputLoaded = true;
-                this.loadIngestionNodeOutput(nodeType);
+                this.loadIngestionNodeOutput(nodeId);
             }
         };
         tabBtns.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -5934,7 +5934,7 @@ class WorkflowEditor {
      * runs nothing. Only 'loader' returns code so far — other node types get
      * the backend's "not implemented yet" message shown as the output text.
      */
-    async loadIngestionNodeOutput(nodeType) {
+    async loadIngestionNodeOutput(nodeId) {
         const pre = document.getElementById('ingestion-output-code');
         if (!pre) return;
 
@@ -5943,11 +5943,24 @@ class WorkflowEditor {
             return;
         }
 
+        // Ingestion compiles from the node's OWN config (its form attributes),
+        // read straight from the canvas — NO saved-graph lookup (that's the agent
+        // paradigm). This hits the standalone IngestionCompiler endpoint.
+        const node = this.editor.getNodeFromId(nodeId);
+        const nodeType = node?.data?.node_type;
+        const config = node?.data?.config || {};
+        if (!nodeType) { pre.textContent = 'Not an ingestion node.'; return; }
+
         pre.textContent = 'Loading…';
         try {
             const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion-node-code?node=${encodeURIComponent(nodeType)}`,
-                { headers: this.getAuthHeaders(), credentials: 'include' }
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/node-code`,
+                {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ node_type: nodeType, config }),
+                }
             );
             const json = await resp.json().catch(() => ({}));
             if (resp.ok && json && json.success && json.data && typeof json.data.code === 'string') {
