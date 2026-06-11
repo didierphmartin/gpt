@@ -6002,6 +6002,8 @@ class WorkflowEditor {
         // before Save — change the document type and the code re-generates.
         // Each node is just parameters → code.
         const config = this._readIngestionFormConfig(nodeType, node?.data?.config || {});
+        // Ordered stages (start → … → this node) so Input = the upstream Output.
+        const stages = this._gatherIngestionStages(nodeType, config);
         const nodeEl = document.getElementById('node-' + nodeId);
 
         setAll('Loading…');
@@ -6012,7 +6014,7 @@ class WorkflowEditor {
                     method: 'POST',
                     headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
                     credentials: 'include',
-                    body: JSON.stringify({ node_type: nodeType, config }),
+                    body: JSON.stringify({ stages }),
                 }
             );
             const json = await resp.json().catch(() => ({}));
@@ -6053,13 +6055,53 @@ class WorkflowEditor {
      */
     _readIngestionFormConfig(nodeType, fallback = {}) {
         const val = (id, def) => { const el = document.getElementById(id); return el ? el.value : def; };
+        const num = (id, def) => { const el = document.getElementById(id); const n = el ? parseInt(el.value, 10) : NaN; return Number.isFinite(n) ? n : def; };
         if (nodeType === 'loader') {
             return {
                 source: val('ingestion-loader-source', fallback.source || 'pdf'),
                 path: (val('ingestion-loader-path', fallback.path || '') || '').trim(),
             };
         }
+        if (nodeType === 'splitter') {
+            return {
+                strategy: val('ingestion-splitter-strategy', fallback.strategy || 'recursive'),
+                chunk_size: num('ingestion-splitter-chunk', fallback.chunk_size ?? 1000),
+                overlap: num('ingestion-splitter-overlap', fallback.overlap ?? 150),
+            };
+        }
+        if (nodeType === 'vectorstore') {
+            return {
+                store: val('ingestion-vs-store', fallback.store || 'pgvector'),
+                embeddings: (val('ingestion-vs-embeddings', fallback.embeddings || '') || '').trim(),
+                collection: (val('ingestion-vs-collection', fallback.collection || '') || '').trim(),
+            };
+        }
         return fallback;
+    }
+
+    /**
+     * Build the ORDERED ingestion stages (start → … → target) so the backend can
+     * compute the cumulative Input/Output. The target's config is read LIVE from
+     * its form; upstream stages use their saved canvas config (their forms aren't
+     * open). Start carries no config (it's the common header).
+     */
+    _gatherIngestionStages(targetType, targetConfig) {
+        const data = this.editor.drawflow?.drawflow?.Home?.data || {};
+        const cfgByType = {};
+        for (const id in data) {
+            const nt = data[id]?.data?.node_type;
+            if (['loader', 'splitter', 'vectorstore'].includes(nt)) cfgByType[nt] = data[id].data.config || {};
+        }
+        const order = ['start', 'loader', 'splitter', 'vectorstore'];
+        const targetIdx = order.indexOf(targetType);
+        const stages = [];
+        for (let i = 0; i <= targetIdx; i++) {
+            const kind = order[i];
+            if (kind === 'start') { stages.push({ node_type: 'start', config: {} }); continue; }
+            const config = (kind === targetType) ? targetConfig : (cfgByType[kind] || {});
+            stages.push({ node_type: kind, config });
+        }
+        return stages;
     }
 
     /**

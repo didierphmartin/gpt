@@ -53,11 +53,19 @@ final class IngestionController
         }
 
         $body = $request['body'] ?? [];
-        $nodeType = $body['node_type'] ?? 'loader';
-        $config = $body['config'] ?? [];
+        $stages = $body['stages'] ?? null;
 
         try {
-            $view = IngestionCompiler::compileNodeView((string) $nodeType, (array) $config);
+            if (is_array($stages) && !empty($stages)) {
+                // Ordered pipeline stages (start … target) → cumulative view.
+                $view = IngestionCompiler::compileView($stages);
+                $last = end($stages);
+                $nodeType = (string) ($last['node_type'] ?? $last['type'] ?? 'loader');
+            } else {
+                // Single node fallback.
+                $nodeType = (string) ($body['node_type'] ?? 'loader');
+                $view = IngestionCompiler::compileNodeView($nodeType, (array) ($body['config'] ?? []));
+            }
             return [
                 'success'     => true,
                 'data'        => array_merge(['node' => $nodeType], $view),

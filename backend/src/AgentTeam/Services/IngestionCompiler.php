@@ -244,6 +244,32 @@ final class IngestionCompiler
     }
 
     /**
+     * Compile the Input / Generated / Output view for a node given the ORDERED
+     * pipeline stages from start through that node. Input = the cumulative code
+     * of all UPSTREAM stages; Generated = the target (last) stage's own chunk;
+     * Output = Input + Generated. So a stage's Output is the next stage's Input.
+     *
+     * @param array<int,array{node_type?:string,type?:string,config?:array}> $stages
+     * @return array{input:string,generated:string,output:string}
+     */
+    public static function compileView(array $stages): array
+    {
+        if (empty($stages)) {
+            return ['input' => '', 'generated' => '', 'output' => ''];
+        }
+        $chunks = [];
+        foreach ($stages as $s) {
+            $kind = (string) ($s['node_type'] ?? $s['type'] ?? '');
+            $cfg = (array) ($s['config'] ?? []);
+            $chunks[] = self::compileNodeChunk($kind, $cfg);
+        }
+        $generated = (string) array_pop($chunks);   // the target (last) stage
+        $input = implode("\n\n", $chunks);           // all upstream stages
+        $output = $input === '' ? $generated : $input . "\n\n" . $generated;
+        return ['input' => $input, 'generated' => $generated, 'output' => $output];
+    }
+
+    /**
      * Compile the full, self-contained, runnable ingestion script from the
      * three node configs.
      *
