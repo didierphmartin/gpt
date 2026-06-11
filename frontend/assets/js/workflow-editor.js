@@ -304,6 +304,23 @@ class WorkflowEditor {
                     </div>
                 </div>
 
+                <!-- Ingestion Section -->
+                <div class="workflow-section">
+                    <div class="workflow-section-header" data-section="ingestion">
+                        <span class="section-toggle">${collapsedSections.ingestion ? '▶' : '▼'}</span>
+                        <span class="section-title">Ingestion</span>
+                        <span class="section-count">3</span>
+                    </div>
+                    <div class="workflow-section-content ${collapsedSections.ingestion ? 'collapsed' : ''}" data-section="ingestion">
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="loader">
+                            <div class="agent-icon">📥</div><div class="agent-info"><div class="agent-name">Loader</div><div class="agent-type">Load a document (PDF)</div></div></div>
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="splitter">
+                            <div class="agent-icon">✂️</div><div class="agent-info"><div class="agent-name">Splitter</div><div class="agent-type">Chunk the text</div></div></div>
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="vectorstore">
+                            <div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
+                    </div>
+                </div>
+
                 <!-- Agents Section -->
                 <div class="workflow-section">
                     <div class="workflow-section-header" data-section="agents">
@@ -5372,6 +5389,11 @@ class WorkflowEditor {
                 // Create an empty agent node that will be configured
                 this.addAgentTemplateNode(x, y);
                 break;
+            case 'loader':
+            case 'splitter':
+            case 'vectorstore':
+                this.addIngestionNode(x, y, nodeType);
+                break;
             case 'realtime-start':
                 this.addRealtimeStartNode(x, y);
                 break;
@@ -5413,6 +5435,78 @@ class WorkflowEditor {
         );
 
         this.hideHelpOverlay();
+    }
+
+    /**
+     * Add an Ingestion component node (loader / splitter / vectorstore).
+     * Each is a 1-input / 1-output node with a config object and a
+     * one-line summary, mirroring the agent-template node so that
+     * connections, the ⚙ config hint, and saving all work.
+     */
+    addIngestionNode(x, y, nodeType) {
+        const INGESTION_DEFAULTS = {
+            loader:      { source: 'pdf', path: '' },
+            splitter:    { strategy: 'recursive', chunk_size: 1000, overlap: 150 },
+            vectorstore: { store: 'pgvector', embeddings: 'openai:text-embedding-3-small', collection: '' },
+        };
+        const META = {
+            loader:      { icon: '📥', name: 'Loader' },
+            splitter:    { icon: '✂️', name: 'Splitter' },
+            vectorstore: { icon: '🗄️', name: 'Vector store' },
+        };
+        const meta = META[nodeType];
+        if (!meta) return;
+
+        // Copy defaults so each node owns its own config object.
+        const config = JSON.parse(JSON.stringify(INGESTION_DEFAULTS[nodeType]));
+        const summary = this.ingestionNodeSummary(nodeType, config);
+
+        const html = `
+            <div class="workflow-node ingestion-node configurable" data-ingestion-type="${nodeType}">
+                <div class="node-header">
+                    <span class="node-icon">${meta.icon}</span>
+                    <span class="node-title">${this.escapeHtml(meta.name)}</span>
+                    <span class="node-config-hint" title="Click to configure">⚙</span>
+                    <button class="node-delete-btn" title="Delete node">×</button>
+                </div>
+                <div class="node-body">
+                    <small class="node-config-display">${this.escapeHtml(summary)}</small>
+                </div>
+            </div>
+        `;
+
+        this.editor.addNode(
+            nodeType,
+            1, // inputs
+            1, // outputs
+            x, y,
+            'ingestion',
+            {
+                type: 'ingestion',
+                node_type: nodeType,
+                name: meta.name,
+                config: config
+            },
+            html
+        );
+
+        this.hideHelpOverlay();
+    }
+
+    /**
+     * Build the one-line summary shown on an ingestion node's body.
+     */
+    ingestionNodeSummary(nodeType, config) {
+        switch (nodeType) {
+            case 'loader':
+                return config.source || 'pdf';
+            case 'splitter':
+                return `${config.strategy || 'recursive'} ${config.chunk_size}/${config.overlap}`;
+            case 'vectorstore':
+                return config.store || 'pgvector';
+            default:
+                return '';
+        }
     }
 
     /**
