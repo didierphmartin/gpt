@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-10
 - **Project:** `gpt` (workflow system: editor + simple language + `compile.py` + `GraphWorkflowRunner` + `LangGraphGenerator` + `langchain_runner`)
-- **Status:** Design (from a collaborative design dialogue) — for review before planning
+- **Status:** Design locked. **v1 ships the strict minimum** — `pdf loader → recursive splitter → pgvector store (online OpenAI embeddings)`, built‑in only. The richer options in this spec (MCP backends, content‑kind typed ports, auto‑splitter, multiple strategies, SQL/rows, the agent‑MCP query side) are **deferred until v1 is debugged** — see §13.5.
 
 ## 1. Goal
 
@@ -140,6 +140,7 @@ The editor's **Run** button is target‑aware: `interpretable` → existing run�
   - `splitter` → **Strategy** (`auto` default; `markdown_header`/`language:<lang>`/`rows`/…), Chunk size / Max tokens, Overlap, Row template/PK (when `rows`).
   - `vectorstore` → **Store** (`faiss`/`chroma`/`pgvector` **+ `mcp:<srv>`**), Path/Connection/Index, **Embeddings** (`openai:…`/`ollama:…`/`hf:…`).
   So the **config schema is the single source of truth**: it validates the DSL *and* renders the form — the same way agent fields (provider, instructions, tools…) render today.
+  - **Every field is editable/modifiable.** Defaults are pre‑filled (e.g. `strategy: auto`, `chunk_size: 1000`, `embeddings: openai:text-embedding-3-small`) but the user can change any of them in the form; the edited values are written back into the node's `config` in the DSL (and re‑validated). Nothing is read‑only — exactly like editing an agent's instructions/provider today.
   - **Retrieval is not a component form** — it's a normal **agent** node whose `tools` include the vector‑store's MCP retrieve tool (existing agent form, unchanged).
 - **Typed ports** with the content‑kind set; connection validation; **auto‑default splitter** on connect (the splitter form's Strategy pre‑fills from the upstream loader's kind).
 - Target badge on the canvas (`interpretable` / `python`); Run button adapts.
@@ -175,4 +176,7 @@ The editor's **Run** button is target‑aware: `interpretable` → existing run�
 2. **Embeddings default = online** (`openai:text-embedding-3-small`) — **decided**; offline/local stays available. **Vector store = pgvector — decided.** ⚠️ New infra: a **Postgres** instance with the **`pgvector`** extension (alongside the existing MySQL); connection via an env var (e.g. `VECTOR_DB_DSN`), consumed by `langchain_postgres.PGVector` in `langchain_runner`. FAISS/Chroma can be added later via the same `store` field.
 3. **Port typing strictness**: the fixed content‑kind set only (recommended) vs. richer typing.
 4. **Run endpoint**: server‑side subprocess in `langchain_runner` (recommended) vs. download‑and‑run the script.
-5. **Scope of v1**: ship **pure ingestion** end‑to‑end — the 3 components (`loader`/`splitter`/`vectorstore`) + generator templates + the `langchain_runner` run endpoint, populating a vector store. The **query side needs no new nodes** (agent + the store's MCP `retrieve` tool, already interpretable), so it's mostly wiring/docs in v2.
+5. **v1 = STRICT MINIMUM (locked), then iterate once debugged.** Exactly one working path end‑to‑end:
+   `loader(source=pdf)` → `splitter(strategy=recursive)` → `vectorstore(store=pgvector, embeddings=openai:text-embedding-3-small)`.
+   v1 includes only: the **3 nodes + their editable forms**, the **simple→DSL compile + layout**, a **linear LangChain script**, the **pgvector** write, and the **run endpoint**.
+   **Deferred until the pipeline is debugged** (everything else in this spec): MCP‑backed loaders/stores, multiple splitter strategies + the **auto‑splitter / content‑kind typed ports**, **SQL/rows**, multi‑source fan‑in, offline embeddings, and the **agent‑MCP query side**. v1 just assumes the linear `load→split→store` order — no general port type system yet.
