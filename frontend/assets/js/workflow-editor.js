@@ -321,18 +321,8 @@ class WorkflowEditor {
                     </div>
                 </div>
 
-                <!-- Agents Section -->
-                <div class="workflow-section">
-                    <div class="workflow-section-header" data-section="agents">
-                        <span class="section-toggle">${collapsedSections.agents ? '▶' : '▼'}</span>
-                        <span class="section-title">${this.t('workflow.agents')}</span>
-                        <span class="section-count">${workflowAgents.length}</span>
-                        <button class="section-add-btn" data-action="add-agent" title="${this.t('agentTeams.addTemplate')}">+</button>
-                    </div>
-                    <div class="workflow-section-content ${collapsedSections.agents ? 'collapsed' : ''}" data-section="agents">
-                        ${agentsHtml}
-                    </div>
-                </div>
+                <!-- Agents are added by dragging from the left sidebar's Agents
+                     list onto the canvas, so the palette no longer duplicates them. -->
             </div>
 
             <!-- Action Buttons — symmetric with audio workflows: execution
