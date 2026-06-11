@@ -5803,6 +5803,9 @@ class WorkflowEditor {
         const existingModal = document.getElementById('ingestion-config-modal');
         if (existingModal) existingModal.remove();
 
+        // Two-tab layout: "Config" (the existing form) and "Output" (the
+        // Python code this node generates, fetched on demand). Minimal tab
+        // toggle — no need for the agent edit form's richer tab system.
         const modalHtml = `
             <div id="ingestion-config-modal" class="storage-config-overlay">
                 <div class="storage-config-modal">
@@ -5811,7 +5814,19 @@ class WorkflowEditor {
                         <button class="storage-config-close" id="ingestion-config-close">×</button>
                     </div>
                     <div class="storage-config-body">
-                        ${fieldsHtml}
+                        <div class="ingestion-config-tabs" style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.12);">
+                            <button type="button" class="ingestion-tab-btn active" data-tab="config"
+                                style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;">Config</button>
+                            <button type="button" class="ingestion-tab-btn" data-tab="output"
+                                style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;opacity:0.7;">Output</button>
+                        </div>
+                        <div class="ingestion-tab-panel" data-panel="config">
+                            ${fieldsHtml}
+                        </div>
+                        <div class="ingestion-tab-panel" data-panel="output" style="display:none;">
+                            <pre id="ingestion-output-code"
+                                style="margin:0;padding:12px;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto;">Loading…</pre>
+                        </div>
                     </div>
                     <div class="storage-config-footer">
                         <button class="storage-config-btn cancel" id="ingestion-config-cancel">${this.t('common.cancel')}</button>
@@ -5828,11 +5843,40 @@ class WorkflowEditor {
         const cancelBtn = document.getElementById('ingestion-config-cancel');
         const saveBtn = document.getElementById('ingestion-config-save');
 
+        // Orange active halo: clear any existing, then mark this node.
+        document.querySelectorAll('.drawflow-node.node-active').forEach(n => n.classList.remove('node-active'));
+        const haloEl = document.getElementById('node-' + nodeId);
+        if (haloEl) haloEl.classList.add('node-active');
+
         const closeModal = () => {
+            // Remove the halo on every close path (X, Cancel, overlay, Save, Escape).
+            const el = document.getElementById('node-' + nodeId);
+            if (el) el.classList.remove('node-active');
             modal.remove();
             document.removeEventListener('keydown', escHandler);
         };
         const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
+
+        // --- Tab toggling + lazy Output fetch ---
+        const tabBtns = modal.querySelectorAll('.ingestion-tab-btn');
+        const panels = modal.querySelectorAll('.ingestion-tab-panel');
+        let outputLoaded = false;
+        const showTab = (tab) => {
+            tabBtns.forEach(b => {
+                const on = b.dataset.tab === tab;
+                b.classList.toggle('active', on);
+                b.style.borderBottomColor = on ? '#ff8c00' : 'transparent';
+                b.style.opacity = on ? '1' : '0.7';
+            });
+            panels.forEach(p => { p.style.display = p.dataset.panel === tab ? '' : 'none'; });
+            if (tab === 'output' && !outputLoaded) {
+                outputLoaded = true;
+                this.loadIngestionNodeOutput(nodeType);
+            }
+        };
+        tabBtns.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+        // Initialise the active-tab underline colour.
+        showTab('config');
 
         // Close on background click, X, Cancel, Escape.
         modal.addEventListener('click', (e) => {
@@ -5882,6 +5926,38 @@ class WorkflowEditor {
 
             closeModal();
         });
+    }
+
+    /**
+     * Fetch the Python code a single ingestion node generates and render it
+     * in the Output tab's <pre>. Read-only; the backend writes nothing and
+     * runs nothing. Only 'loader' returns code so far — other node types get
+     * the backend's "not implemented yet" message shown as the output text.
+     */
+    async loadIngestionNodeOutput(nodeType) {
+        const pre = document.getElementById('ingestion-output-code');
+        if (!pre) return;
+
+        if (!this.currentWorkflowId) {
+            pre.textContent = this.t('workflow.output.saveFirst') || 'Save the workflow first.';
+            return;
+        }
+
+        pre.textContent = 'Loading…';
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion-node-code?node=${encodeURIComponent(nodeType)}`,
+                { headers: this.getAuthHeaders(), credentials: 'include' }
+            );
+            const json = await resp.json().catch(() => ({}));
+            if (resp.ok && json && json.success && json.data && typeof json.data.code === 'string') {
+                pre.textContent = json.data.code;
+            } else {
+                pre.textContent = (json && json.error) ? json.error : `Failed to load code (HTTP ${resp.status}).`;
+            }
+        } catch (e) {
+            pre.textContent = 'Failed to load code: ' + (e?.message || String(e));
+        }
     }
 
     /**

@@ -283,6 +283,45 @@ class WorkflowController
     }
 
     /**
+     * GET /api/v1/workflows/{id}/ingestion-node-code?node=<kind>
+     * Return the Python code a single ingestion node generates — without
+     * writing to disk or running anything. Powers the per-node "Output" tab
+     * in the workflow editor. Only 'loader' is implemented so far.
+     */
+    public function ingestionNodeCode(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+        $node = $request['query']['node'] ?? 'loader';
+
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (!$workflowId) {
+            return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
+        }
+
+        if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
+            return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
+        }
+
+        try {
+            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            $gen = new \AgentTeam\Services\LangGraphGenerator(
+                $this->db,
+                $this->workflowRepository,
+                $this->graphRepository,
+                $agentRepo
+            );
+            $result = $gen->generateIngestionNodeCode($workflowId, (string) $node, (string) $userId);
+
+            return ['success' => true, 'data' => $result, 'status_code' => 200];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 400];
+        }
+    }
+
+    /**
      * POST /api/v1/workflows/{id}/run-ingestion
      * Generate a RAG ingestion script from the workflow, write it under
      * langchain_runner/, run it with the venv python, and return the JSON

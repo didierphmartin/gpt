@@ -1180,6 +1180,99 @@ PY;
     }
 
     /**
+     * Return the Python code fragment a single ingestion node generates —
+     * WITHOUT writing to disk or running anything. Used by the incremental
+     * per-node code viewer ("Output" tab) in the workflow editor.
+     *
+     * Only 'loader' is implemented in this step; the loader's runtime output
+     * is `docs` (a list[Document]) handed to the splitter. Splitter and
+     * vectorstore fragments will be added later.
+     *
+     * @return array{node: string, code: string}
+     */
+    public function generateIngestionNodeCode(int $workflowId, string $nodeKind, ?string $userId = null): array
+    {
+        $workflow = $this->workflowRepo->findById($workflowId);
+        if (!$workflow) {
+            throw new RuntimeException("Workflow $workflowId not found.");
+        }
+
+        $graph = $this->graphRepo->getGraph($workflowId);
+        $nodes = $graph['nodes'] ?? [];
+
+        // Start node's first document → loader path fallback.
+        $startNodes = array_values(array_filter($nodes, fn($n) => self::nodeType($n) === 'start'));
+        $startCfg = $startNodes ? self::nodeConfig($startNodes[0]) : [];
+        $startDocuments = $startCfg['documents'] ?? [];
+        if (!is_array($startDocuments)) {
+            $startDocuments = [];
+        }
+        $firstDoc = $startDocuments[0] ?? null;
+        if (is_array($firstDoc)) {
+            // Start documents may be stored as {path: ...} objects.
+            $firstDoc = $firstDoc['path'] ?? null;
+        }
+
+        // Find the node of the requested kind.
+        $node = null;
+        foreach ($nodes as $n) {
+            if (self::nodeType($n) === $nodeKind) {
+                $node = $n;
+                break;
+            }
+        }
+        if ($node === null) {
+            throw new RuntimeException("No {$nodeKind} node found.");
+        }
+
+        if ($nodeKind === 'loader') {
+            $cfg = self::nodeConfig($node);
+            $source = (string) ($cfg['source'] ?? 'pdf');
+            $path = $cfg['path'] ?? $firstDoc;
+
+            // Loader dispatch: document type → {import line, docs = ...load() line}.
+            $loaderDispatch = [
+                'pdf' => [
+                    'import' => 'from langchain_community.document_loaders import PyPDFLoader',
+                    'load'   => 'docs = PyPDFLoader(LOADER["path"]).load()',
+                ],
+                'word' => [
+                    'import' => 'from langchain_community.document_loaders import Docx2txtLoader',
+                    'load'   => 'docs = Docx2txtLoader(LOADER["path"]).load()',
+                ],
+                'text' => [
+                    'import' => 'from langchain_community.document_loaders import TextLoader',
+                    'load'   => 'docs = TextLoader(LOADER["path"], encoding="utf-8").load()',
+                ],
+                'csv' => [
+                    'import' => 'from langchain_community.document_loaders import CSVLoader',
+                    'load'   => 'docs = CSVLoader(LOADER["path"]).load()',
+                ],
+            ];
+            if (!isset($loaderDispatch[$source])) {
+                throw new RuntimeException("Unsupported loader document type '{$source}'");
+            }
+            $L = $loaderDispatch[$source];
+
+            $loaderJson = ['source' => $source, 'path' => $path];
+            $loaderLit = json_encode($loaderJson, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+            $code = <<<PY
+# Loader — document type: {$source}
+{$L['import']}
+
+LOADER = {$loaderLit}
+{$L['load']}
+# docs : list[Document]  → handed to the Splitter
+PY;
+
+            return ['node' => 'loader', 'code' => $code];
+        }
+
+        throw new RuntimeException("Per-node code for '{$nodeKind}' is not implemented yet.");
+    }
+
+    /**
      * Render a list of strings the way Python's repr(sorted([...])) does:
      *   ['a', 'b', 'c']
      * Note: Python repr uses single quotes unless the string contains a

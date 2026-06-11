@@ -289,6 +289,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows', ['AgentTeam:WorkflowController', 'create']);
         $r->get('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'show']);
         $r->get('/api/v1/workflows/{id:\d+}/generate-python', ['AgentTeam:WorkflowController', 'generatePython']);
+        $r->get('/api/v1/workflows/{id:\d+}/ingestion-node-code', ['AgentTeam:WorkflowController', 'ingestionNodeCode']);
         $r->post('/api/v1/workflows/{id:\d+}/run-ingestion', ['AgentTeam:WorkflowController', 'runIngestion']);
         $r->put('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'update']);
         $r->delete('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'destroy']);
