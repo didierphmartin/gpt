@@ -5822,7 +5822,7 @@ class WorkflowEditor {
                      draggable="true"
                      data-template-id="${template.id}"
                      data-node-type="agent-template">
-                    <div class="agent-icon" style="background: #fef3c7; color: #f59e0b;">🤖</div>
+                    <div class="agent-icon">🤖</div>
                     <div class="agent-info">
                         <div class="agent-name">${this.escapeHtml(name)}</div>
                         <div class="agent-type">${this.escapeHtml(type)}</div>
@@ -5864,16 +5864,27 @@ class WorkflowEditor {
             console.log(`[WorkflowEditor] Exporting node ${id} - node.data:`, JSON.stringify(node.data));
             console.log(`[WorkflowEditor] Exporting node ${id} - node.data.type:`, node.data?.type);
             // Extract node info in backend format
+            // Ingestion component nodes carry their specific type in
+            // node.data.node_type ('loader'/'splitter'/'vectorstore') and their
+            // real config in node.data.config — export those directly so the DSL
+            // the engine reads has the right node_type + config (not the
+            // 'ingestion' group tag, and not the config nested one level deep).
+            const isIngestion = node.data?.type === 'ingestion';
+            const resolvedType = isIngestion
+                ? (node.data?.node_type || 'ingestion')
+                : (node.data?.type || 'agent');
             const nodeExport = {
                 id: id,
-                node_type: node.data?.type || 'agent',
-                type: node.data?.type || 'agent', // For validation
+                node_type: resolvedType,
+                type: resolvedType, // For validation
                 agent_id: node.data?.agent_id || null,
                 agent_name: node.data?.agent_name || null,
-                config: {
-                    agent_type: node.data?.agent_type || null,
-                    ...node.data
-                },
+                config: isIngestion
+                    ? { ...(node.data?.config || {}) }
+                    : {
+                        agent_type: node.data?.agent_type || null,
+                        ...node.data
+                    },
                 position: { x: node.pos_x, y: node.pos_y },
                 pos_x: node.pos_x,
                 pos_y: node.pos_y
