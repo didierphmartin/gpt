@@ -24,5 +24,26 @@ def test_parity():
                 f"mismatch cs={cs} ov={ov}\n exp={expected}\n got={got}")
     print("PARITY OK")
 
+def test_overlap_precondition():
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from ingestion_splitter import recursive_split
+    # overlap > chunk_size: both raise ValueError
+    raised = False
+    try:
+        recursive_split("some text here", chunk_size=20, overlap=30)
+    except ValueError:
+        raised = True
+    assert raised, "recursive_split must raise when overlap > chunk_size"
+    lc_raised = False
+    try:
+        RecursiveCharacterTextSplitter(chunk_size=20, chunk_overlap=30)
+    except ValueError:
+        lc_raised = True
+    assert lc_raised
+    # overlap == chunk_size: neither raises (parity preserved)
+    recursive_split("some text here", chunk_size=20, overlap=20)
+    print("PRECONDITION OK")
+
 if __name__ == "__main__":
     test_parity()
+    test_overlap_precondition()

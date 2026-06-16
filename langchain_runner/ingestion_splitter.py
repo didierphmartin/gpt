@@ -150,4 +150,9 @@ def recursive_split(text, chunk_size=1000, overlap=150, separators=None):
     """Vendored from langchain RecursiveCharacterTextSplitter (MIT). Returns list[str]."""
     if separators is None:
         separators = list(DEFAULT_SEPARATORS)
+    if overlap > chunk_size:
+        raise ValueError(
+            f"Got a larger chunk overlap ({overlap}) than chunk size "
+            f"({chunk_size}), should be smaller."
+        )
     return _split_text(text, separators, chunk_size, overlap)
