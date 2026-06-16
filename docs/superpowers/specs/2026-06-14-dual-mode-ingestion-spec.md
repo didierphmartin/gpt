@@ -100,10 +100,31 @@ error JSON (store) in that node's Output tab; run stops. Reset/abort reused.
 registration+listing, Pyodide runner, `IngestionCompiler`/`compileView`, end‑node
 compile menu.
 
-## Open (spike resolves)
-- Does `langchain-community` load in Pyodide? If no/heavy → both modes use light
-  loaders (`pypdf`/`docx2txt` + `langchain_core.documents.Document`), maximizing
-  reuse; if yes → loader chunk fully shared.
+## Spike result — RESOLVED 2026-06-15 (DECISION-LOADER / DECISION-SPLITTER)
+Spike (`frontend/spike/ingestion-pyodide-spike.*`) findings:
+- ✅ `pypdf`, `docx2txt` load in Pyodide (pure‑Python). pyfetch reaches backend
+  (status 401 = reached).
+- ❌ `langchain-text-splitters` / `langchain-core` / `langchain-community` do NOT
+  load: they pull `uuid-utils` (Rust, no pure‑Python wheel). langchain is
+  unusable in Pyodide.
+
+**DECISION = Unified + vendored splitter (Option A):**
+- **Loaders:** pure‑Python BOTH modes — `pypdf.PdfReader` (pdf), `docx2txt.process`
+  (word), plain read (text). NO langchain loaders anywhere.
+- **Splitter:** **vendor langchain's `RecursiveCharacterTextSplitter` split
+  algorithm** (MIT, with attribution) as a standalone pure‑Python module operating
+  on `str` — no `langchain_core`/`uuid-utils` import. Canonical source =
+  `langchain_runner/ingestion_splitter.py`, unit‑tested to match langchain's
+  `split_text` output. The compiler **inlines** this module into the splitter
+  chunk so both the Pyodide cell and the standalone compiled script are
+  self‑contained. Used in BOTH modes → preview chunks == compiled chunks.
+- **Store:** branches by mode (compile → MCP‑adapter; interpret → `pyfetch`).
+- Net: loader + splitter chunks are **shared** across modes; only store branches.
+- Pyodide deps for interpreted cells: `pypdf`, `docx2txt` (via micropip). No
+  langchain in the browser.
+- ⚠️ The spike's shared‑namespace assertion failed only because it imported
+  `langchain_text_splitters`; the namespace mechanism itself is unverified —
+  re‑test with pure Python before building the orchestrator (Task 7).
 
 ## Risks / mitigations
 - Pyodide dep loading → spike + light loaders.

@@ -14,6 +14,30 @@
 
 ---
 
+## Plan Amendment — post-spike (2026-06-15)
+
+Task 1's spike resolved DECISION-LOADER/DECISION-SPLITTER: **langchain does NOT
+load in Pyodide** (`uuid-utils` Rust dep); `pypdf`/`docx2txt` do. Approved
+direction = **Unified + vendored splitter (Option A)**. This changes the plan:
+
+- **NEW Task 1b (do before Task 6):** create `langchain_runner/ingestion_splitter.py`
+  — a standalone, pure-Python `recursive_split(text, chunk_size, overlap, separators)`
+  vendored from langchain's `RecursiveCharacterTextSplitter.split_text` (MIT, add
+  attribution header), operating on `str`, NO `langchain_core` import. Test
+  (`langchain_runner/.venv` has langchain) that its output matches
+  `RecursiveCharacterTextSplitter(...).split_text(sample)` for ≥3 sample texts.
+- **CHANGED Task 6 (compiler):** loader chunk = pure `pypdf.PdfReader`/`docx2txt.process`/plain
+  read (BOTH modes, no langchain loaders); splitter chunk = **inline the contents
+  of `ingestion_splitter.py`** + a `chunks = recursive_split(text, ...)` call (BOTH
+  modes — self-contained); only the **store** chunk branches by `$mode` (compile →
+  MCP-adapter; interpret → `pyfetch`). So loader+splitter are shared, store branches.
+- **CHANGED interpreted deps:** `_ingestionInterpretDeps()` returns `['pypdf','docx2txt']`
+  (NOT langchain-text-splitters). The splitter needs no dep (inlined pure Python).
+- **Task 1 follow-up (before Task 7):** fix the spike's shared-namespace assertion
+  to use pure Python (e.g. `chunks = recursive_split(docs[0], 12, 0)` after defining
+  it inline, or a trivial `docs[0].split('. ')`) and have the user re-run to confirm
+  the namespace mechanism. Tasks 1b–6 do not depend on this.
+
 ## File Structure (decomposition)
 
 **New files**
