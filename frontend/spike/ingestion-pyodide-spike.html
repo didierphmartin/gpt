@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Ingestion Pyodide Spike</title>
+<pre id="out" style="font:13px monospace;white-space:pre-wrap"></pre>
+<script>
+  const out = document.getElementById('out');
+  const w = new Worker('ingestion-pyodide-spike.worker.js');
+  w.onmessage = (e) => { if (e.data.type === 'log') out.textContent += e.data.line + '\n'; };
+  w.postMessage('run');
+</script>
