@@ -57,4 +57,6 @@ frontend/driver.js/
 
 # Runtime-generated ingestion scripts (Plan 1)
 langchain_runner/ingestion_*.py
+# ...but the vendored splitter is real source, not generated
+!langchain_runner/ingestion_splitter.py
 langchain_runner/ingestion.log
