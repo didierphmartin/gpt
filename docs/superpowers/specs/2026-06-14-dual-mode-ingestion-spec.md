@@ -126,6 +126,38 @@ Spike (`frontend/spike/ingestion-pyodide-spike.*`) findings:
   `langchain_text_splitters`; the namespace mechanism itself is unverified —
   re‑test with pure Python before building the orchestrator (Task 7).
 
+## Qdrant MCP + adaptive store strategy — RESOLVED 2026-06-15
+Concrete vector store = **`mcp-server-qdrant` 0.8.1** over **Streamable HTTP**.
+- Endpoint **`http://127.0.0.1:8000/mcp/`** (TRAILING SLASH required; `/mcp`
+  307-redirects). Session flow: POST `initialize` → response header
+  `Mcp-Session-Id` → POST `notifications/initialized` → `tools/call` (all carry
+  the session id). Responses are `text/event-stream` (`event: message\ndata:{…}`).
+- Tools (verified via tools/list): `qdrant-store` props `{information, metadata}`
+  required `[information]`; `qdrant-find` props `{query}`. **No vector arg → the
+  server embeds (FastEmbed `all-MiniLM-L6-v2`).** Collection fixed via
+  `COLLECTION_NAME` env (dev = `learn_docs`); not a per-call arg here.
+- **Adapt to both (user req):** the embed-store endpoint **detects strategy from
+  the chosen store tool's cached `input_schema`** — a text field
+  (`information`/`text`/`content`/`document`) & no vector → **SELF** (send text,
+  server embeds, e.g. Qdrant); a `vector`/`embedding` field → **EXTERNAL** (we
+  embed via OpenAI using the store-node embeddings field, send vectors, e.g. a
+  future pgvector MCP). v1 builds SELF concretely; EXTERNAL is the detected seam,
+  implemented against a real pgvector MCP's contract when available. Store node
+  **keeps the embeddings field** (used only by EXTERNAL stores).
+- **Transport gap (Task 3):** `MCPToolsLoader::executeTool()` does HTTP POST +
+  SSE parse but is STATELESS (no `Mcp-Session-Id`, no redirect-follow). Qdrant
+  Streamable HTTP needs the initialize→session handshake + the `/mcp/` slash.
+  Task 3 must invoke session-aware (reuse `MCPProxyController`'s session logic, or
+  add session capture to `callMCPServer`).
+- **VectorMcpStore (revise Task 2):** `store($storeTool, $chunks, $cfg, $strategy,
+  ?$embedder)` — SELF: loop chunks → `executeTool($storeTool, {information:chunk,
+  metadata:{chunk_index:i}})`; EXTERNAL: `$vec=$embedder(chunk)` then send the
+  server's vector arg. Returns `{stored:N, collection}`.
+- **Dev server:** `~/qdrant-mcp/` (venv + `storage/`), run
+  `~/qdrant-mcp/venv/bin/mcp-server-qdrant --transport streamable-http` with
+  `QDRANT_LOCAL_PATH`/`COLLECTION_NAME`/`FASTMCP_HOST=127.0.0.1`/`FASTMCP_PORT=8000`;
+  swap to `QDRANT_URL`+`QDRANT_API_KEY` for Qdrant Cloud. Log `~/qdrant-mcp/server.log`.
+
 ## Risks / mitigations
 - Pyodide dep loading → spike + light loaders.
 - Kernel memory/state → one session namespace; reset on structural edit.
