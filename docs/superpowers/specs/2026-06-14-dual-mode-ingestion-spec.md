@@ -144,11 +144,14 @@ Concrete vector store = **`mcp-server-qdrant` 0.8.1** over **Streamable HTTP**.
   future pgvector MCP). v1 builds SELF concretely; EXTERNAL is the detected seam,
   implemented against a real pgvector MCP's contract when available. Store node
   **keeps the embeddings field** (used only by EXTERNAL stores).
-- **Transport gap (Task 3):** `MCPToolsLoader::executeTool()` does HTTP POST +
-  SSE parse but is STATELESS (no `Mcp-Session-Id`, no redirect-follow). Qdrant
-  Streamable HTTP needs the initialize→session handshake + the `/mcp/` slash.
-  Task 3 must invoke session-aware (reuse `MCPProxyController`'s session logic, or
-  add session capture to `callMCPServer`).
+- **Transport (RESOLVED — stateless):** run the server with
+  `FASTMCP_STATELESS_HTTP=true` + `FASTMCP_SERVER_STATELESS_HTTP=true`. Verified: a
+  `tools/list`/`tools/call` POST with **NO `Mcp-Session-Id` and NO `initialize`**
+  succeeds. So the existing **stateless** `MCPToolsLoader::executeTool()` (HTTP
+  POST JSON-RPC + SSE parse) works **directly** — no session handshake to add.
+  Only caveat: register the URL **with the trailing slash** `…/mcp/` (the gpt MCP
+  registration tool's Test Connection handles the connectivity check). Per the
+  user, MCP interaction MUST stay stateless — do not add per-call session state.
 - **VectorMcpStore (revise Task 2):** `store($storeTool, $chunks, $cfg, $strategy,
   ?$embedder)` — SELF: loop chunks → `executeTool($storeTool, {information:chunk,
   metadata:{chunk_index:i}})`; EXTERNAL: `$vec=$embedder(chunk)` then send the
