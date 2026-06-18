@@ -841,7 +841,14 @@ class SettingsPanel {
             }
 
             if (result?.success) {
-                this.showNotification(this.editingServerId ? 'Server updated' : 'Server added', 'success');
+                if (this.editingServerId) {
+                    this.showNotification('Server updated', 'success');
+                } else {
+                    // Discovery is kicked off in the background by mcpClient.addServer;
+                    // tell the user the tool count will populate momentarily so the
+                    // initial "0 tools" row doesn't look broken.
+                    this.showNotification('Server added — discovering tools…', 'info');
+                }
                 this.hideAddServerForm();
                 this.loadMCPData();
             } else if (!this.editingServerId && /already exists/i.test(result?.error || '')) {
@@ -854,13 +861,22 @@ class SettingsPanel {
                     .find(s => s.name === name);
                 if (existing) {
                     this.showNotification('Server already saved — discovering tools…', 'info');
-                    const disc = await window.mcpClient?.discoverTools(url, existing.id);
-                    if (disc?.success) {
-                        this.showNotification(`Found ${disc.tools?.length || 0} tools`, 'success');
+                    // discoverTools can reject (e.g. a transient HTTP 404 from the
+                    // proxy). Guard it so a failure shows a clear message and still
+                    // closes the form + refreshes — never leaving the user stuck on
+                    // a stale form with a raw "HTTP 404".
+                    try {
+                        const disc = await window.mcpClient?.discoverTools(url, existing.id);
+                        if (disc?.success) {
+                            this.showNotification(`Found ${disc.tools?.length || 0} tools`, 'success');
+                        } else {
+                            this.showNotification(disc?.error?.message || disc?.error || 'Discovery failed', 'error');
+                        }
+                    } catch (e) {
+                        this.showNotification(`Discovery failed: ${e.message}`, 'error');
+                    } finally {
                         this.hideAddServerForm();
                         this.loadMCPData();
-                    } else {
-                        this.showNotification(disc?.error?.message || disc?.error || 'Discovery failed', 'error');
                     }
                 } else {
                     this.showNotification(result?.error || 'Failed to save server', 'error');
@@ -940,8 +956,8 @@ class SettingsPanel {
                      data-server-id="${server.id}"
                      title="${server.enabled ? 'Disable' : 'Enable'}">
                 </div>
-                <button class="mcp-server-btn refresh" data-server-id="${server.id}" title="Refresh tools">
-                    🔄
+                <button class="mcp-server-btn refresh" data-action="rediscover" data-server-id="${server.id}" data-server-url="${this.escapeHtml(server.url)}" title="Rediscover tools">
+                    ⟳ Rediscover
                 </button>
                 ${isGlobal ? '' : `
                 <button class="mcp-server-btn edit" data-server-id="${server.id}" title="Edit">
@@ -960,7 +976,10 @@ class SettingsPanel {
         });
 
         this.mcpServerList.querySelectorAll('.mcp-server-btn.refresh').forEach(btn => {
-            btn.addEventListener('click', (e) => this.refreshMCPServer(e.target.dataset.serverId));
+            btn.addEventListener('click', (e) => {
+                const el = e.currentTarget;
+                this.rediscoverMCPServer(el.dataset.serverId, el.dataset.serverUrl);
+            });
         });
 
         this.mcpServerList.querySelectorAll('.mcp-server-btn.edit').forEach(btn => {
@@ -1027,21 +1046,25 @@ class SettingsPanel {
     }
 
     /**
-     * Refresh tools from MCP server
+     * Re-run tool discovery for a single server. Carries the URL directly from
+     * the button's data-server-url so it works even if the in-memory server map
+     * lookup is stale/empty (e.g. a server that finished with 0 tools because it
+     * still required auth when first added). Always refreshes the panel so the
+     * tool count updates regardless of the discovery outcome.
      */
-    async refreshMCPServer(serverId) {
-        const server = window.mcpClient?.servers?.get(parseInt(serverId));
-        if (!server) return;
-
-        this.showNotification('Discovering tools...', 'info');
-
-        const result = await window.mcpClient?.discoverTools(server.url, serverId);
-
-        if (result?.success) {
-            this.showNotification(`Found ${result.tools?.length || 0} tools`, 'success');
-            this.loadMCPData();
-        } else {
-            this.showNotification(result?.error || 'Failed to refresh tools', 'error');
+    async rediscoverMCPServer(serverId, serverUrl) {
+        this.showNotification('Discovering tools…', 'info');
+        try {
+            const res = await window.mcpClient?.discoverTools(serverUrl, serverId);
+            if (res?.success) {
+                this.showNotification(`Found ${res.tools?.length || 0} tools`, 'success');
+            } else {
+                this.showNotification(res?.error?.message || res?.error || 'Discovery failed', 'error');
+            }
+        } catch (e) {
+            this.showNotification(`Discovery failed: ${e.message}`, 'error');
+        } finally {
+            this.loadMCPData(); // refresh the tool count regardless
         }
     }
 
@@ -1067,6 +1090,12 @@ class SettingsPanel {
 
         if (result?.success) {
             this.showNotification('Server deleted', 'success');
+            // If the add/edit form was open for the server we just deleted, close
+            // it — otherwise the user is stranded in a stale form with no
+            // "Add server" button (the button is hidden while a form is open).
+            if (this.editingServerId != null && String(this.editingServerId) === String(serverId)) {
+                this.hideAddServerForm();
+            }
             this.loadMCPData();
         } else {
             this.showNotification(result?.error || 'Failed to delete server', 'error');
