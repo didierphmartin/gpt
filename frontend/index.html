@@ -2858,6 +2858,11 @@
                                 <label data-i18n="settings.mcpServerDescription">Description (optional)</label>
                                 <textarea id="mcp-server-description" rows="2" placeholder="What does this server provide?"></textarea>
                             </div>
+                            <div class="mcp-form-row">
+                                <label data-i18n="settings.mcpServerAuth">Authorization (optional)</label>
+                                <input type="text" id="mcp-server-auth"
+                                       placeholder="Bearer ufs_xxx…  (only for servers that need a key)">
+                            </div>
                             <div class="mcp-form-actions">
                                 <span id="mcp-test-status" class="mcp-test-status" role="status" aria-live="polite"></span>
                                 <button id="mcp-cancel-add" class="mcp-btn mcp-btn-secondary" data-i18n="common.cancel">Cancel</button>
@@ -3914,12 +3919,12 @@
     <script src="assets/js/audio-streamer.js"></script>
     <script src="assets/js/gemini-live-client.js"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/mcp-client.js"></script>
+    <script src="assets/js/mcp-client.js?v=20260617-mcpauth"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260610-voicedictate2"></script>
+    <script src="assets/js/settings-panel.js?v=20260617-mcpauth"></script>
     <script src="assets/js/agent-teams-panel.js"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>

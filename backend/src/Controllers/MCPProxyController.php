@@ -47,7 +47,7 @@ class MCPProxyController
                 return $this->proxyRequest($serverUrl, $serverId, $input['jsonrpc'] ?? null, $userId);
 
             case 'test_connection':
-                return $this->testConnection($serverUrl);
+                return $this->testConnection($serverUrl, $this->normalizeHeaders($input['headers'] ?? null));
 
             case 'discover_tools':
                 if (!is_string($serverUrl) || $serverUrl === '') {
@@ -168,7 +168,7 @@ class MCPProxyController
     /**
      * Test connection to an MCP server
      */
-    private function testConnection(?string $serverUrl): array
+    private function testConnection(?string $serverUrl, array $extraHeaders = []): array
     {
         if (!$serverUrl) {
             return [
@@ -193,7 +193,7 @@ class MCPProxyController
             ]
         ];
 
-        $response = $this->sendToMCPServer($serverUrl, $initRequest);
+        $response = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders);
 
         if ($response === null) {
             $trimmed = rtrim($serverUrl, '/');
@@ -459,6 +459,27 @@ class MCPProxyController
             error_log('[MCPProxy] getServerHeaders failed: ' . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Convert a request-supplied headers map (e.g. {"Authorization": "Bearer x"})
+     * into the "Name: value" string array CURLOPT_HTTPHEADER expects. Mirrors the
+     * sanitization in getServerHeaders(). Returns [] for empty/invalid input.
+     */
+    private function normalizeHeaders($headers): array
+    {
+        if (!is_array($headers) || !$headers) {
+            return [];
+        }
+        $out = [];
+        foreach ($headers as $name => $value) {
+            if (!is_string($name) || $name === '') continue;
+            if (!is_scalar($value)) continue;
+            $name = preg_replace('/[\r\n:]/', '', $name);
+            $value = preg_replace('/[\r\n]/', '', (string)$value);
+            $out[] = $name . ': ' . $value;
+        }
+        return $out;
     }
 
     /**

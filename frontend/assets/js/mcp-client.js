@@ -98,17 +98,21 @@ class MCPClient {
     /**
      * Add a new MCP server
      */
-    async addServer(name, url, description = '') {
+    async addServer(name, url, description = '', headers = {}) {
         try {
+            const body = {
+                action: 'add',
+                user_id: this.getUserId(),
+                name,
+                url,
+                description
+            };
+            if (headers && Object.keys(headers).length) {
+                body.headers = headers;
+            }
             const data = await this.request('/mcp/servers', {
                 method: 'POST',
-                body: JSON.stringify({
-                    action: 'add',
-                    user_id: this.getUserId(),
-                    name,
-                    url,
-                    description
-                })
+                body: JSON.stringify(body)
             });
 
             if (data.success && data.server_id) {
@@ -232,14 +236,18 @@ class MCPClient {
     /**
      * Test connection to an MCP server
      */
-    async testConnection(serverUrl) {
+    async testConnection(serverUrl, headers = {}) {
         try {
+            const body = {
+                action: 'test_connection',
+                server_url: serverUrl
+            };
+            if (headers && Object.keys(headers).length) {
+                body.headers = headers;
+            }
             const data = await this.request('/mcp/proxy', {
                 method: 'POST',
-                body: JSON.stringify({
-                    action: 'test_connection',
-                    server_url: serverUrl
-                })
+                body: JSON.stringify(body)
             });
 
             return data;

@@ -257,6 +257,11 @@ class MCPServerController
         $url = trim($input['url'] ?? '');
         $description = trim($input['description'] ?? '');
 
+        // Optional custom headers (e.g. Authorization) for authenticated servers.
+        // Empty/absent => NULL => no headers => existing behavior unchanged.
+        $headers = $input['headers'] ?? null;
+        $headersJson = (is_array($headers) && $headers) ? json_encode($headers) : null;
+
         if (!$name || !$url) {
             return [
                 'success' => false,
@@ -276,10 +281,10 @@ class MCPServerController
 
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO mcp_servers (user_id, name, url, description)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO mcp_servers (user_id, name, url, description, headers)
+                VALUES (?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$userId, $name, $url, $description]);
+            $stmt->execute([$userId, $name, $url, $description, $headersJson]);
 
             $serverId = $this->db->lastInsertId();
 

@@ -697,10 +697,12 @@ class SettingsPanel {
         const nameInput = document.getElementById('mcp-server-name');
         const urlInput = document.getElementById('mcp-server-url');
         const descInput = document.getElementById('mcp-server-description');
+        const authInput = document.getElementById('mcp-server-auth');
 
         if (nameInput) nameInput.value = server?.name || '';
         if (urlInput) urlInput.value = server?.url || '';
         if (descInput) descInput.value = server?.description || '';
+        if (authInput) authInput.value = '';
 
         this.setMCPTestStatus('', null);
         urlInput?.addEventListener('input', () => this.setMCPTestStatus('', null), { once: true });
@@ -722,10 +724,12 @@ class SettingsPanel {
         const nameInput = document.getElementById('mcp-server-name');
         const urlInput = document.getElementById('mcp-server-url');
         const descInput = document.getElementById('mcp-server-description');
+        const authInput = document.getElementById('mcp-server-auth');
 
         if (nameInput) nameInput.value = '';
         if (urlInput) urlInput.value = '';
         if (descInput) descInput.value = '';
+        if (authInput) authInput.value = '';
 
         this.setMCPTestStatus('', null);
 
@@ -750,9 +754,21 @@ class SettingsPanel {
         el.classList.add('visible', state || 'pending');
     }
 
+    /**
+     * Read the optional Authorization field and build a headers object.
+     * Empty field => {} (no headers => exactly today's behavior).
+     */
+    getMCPAuthHeaders() {
+        const auth = document.getElementById('mcp-server-auth')?.value.trim() || '';
+        return auth
+            ? { Authorization: /^(Bearer|Basic|Token)\s/i.test(auth) ? auth : ('Bearer ' + auth) }
+            : {};
+    }
+
     async testMCPConnection() {
         const urlInput = document.getElementById('mcp-server-url');
         const url = urlInput?.value.trim();
+        const authHeaders = this.getMCPAuthHeaders();
 
         if (!url) {
             this.setMCPTestStatus('Please enter a server URL', 'error');
@@ -768,7 +784,7 @@ class SettingsPanel {
         this.setMCPTestStatus('Testing connection…', 'pending');
 
         try {
-            const result = await window.mcpClient?.testConnection(url);
+            const result = await window.mcpClient?.testConnection(url, authHeaders);
             console.log('MCP connection test result:', result);
 
             if (result?.success) {
@@ -802,6 +818,7 @@ class SettingsPanel {
         const name = nameInput?.value.trim();
         const url = urlInput?.value.trim();
         const description = descInput?.value.trim();
+        const authHeaders = this.getMCPAuthHeaders();
 
         if (!name || !url) {
             this.showNotification('Name and URL are required', 'warning');
@@ -820,7 +837,7 @@ class SettingsPanel {
             if (this.editingServerId) {
                 result = await window.mcpClient?.updateServer(this.editingServerId, name, url, description);
             } else {
-                result = await window.mcpClient?.addServer(name, url, description);
+                result = await window.mcpClient?.addServer(name, url, description, authHeaders);
             }
 
             if (result?.success) {
