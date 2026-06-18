@@ -1,7 +1,9 @@
 # Dual‑Mode Ingestion — Spec (synthetic)
 
 Source of truth for implementation. Human prose companion:
-`2026-06-14-dual-mode-ingestion-overview.md`. Repo: `htdocs/gpt`. Branch off
+`2026-06-14-dual-mode-ingestion-overview.md`. **Execution model** (event router +
+`triggerEvent`, loader iterator, store‑clocks‑loader, silence‑terminates, the
+interpreted/compiled lowerings): `2026-06-18-ingestion-execution-model.md`. Repo: `htdocs/gpt`. Branch off
 `feat/rag-ingestion-full` (current ingestion work) or its successor.
 
 ## Goal

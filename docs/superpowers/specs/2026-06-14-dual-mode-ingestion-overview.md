@@ -2,7 +2,9 @@
 
 > Companion to the synthetic spec `2026-06-14-dual-mode-ingestion-spec.md`. This
 > document explains the *why* and the shape of the design in plain language. The
-> spec document is the terse, technical source of truth for implementation.
+> spec document is the terse, technical source of truth for implementation. The
+> **execution semantics** (event‑driven loop, loader‑as‑iterator, the two faithful
+> lowerings) are in `2026-06-18-ingestion-execution-model.md`.
 
 ## What we're building, in one sentence
 
