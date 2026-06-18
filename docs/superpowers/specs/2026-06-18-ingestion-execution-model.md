@@ -59,8 +59,10 @@ The loader OWNS the "am I done?" state — it is the enumerator.
 ```
 loader.onEvent({type:'next'}):
   if not enumerated:                       # first stimulate (from ▶ Play)
-     files  = enumerate(source)            # single file → [file]; folder → list_files(type-filtered)
-     cursor = 0                            # (or hold a lazy directory iterator for huge folders)
+     files  = enumerate(source)            # single file → [file];
+                                           # folder → RECURSIVE walk (descend EVERY
+                                           # nested subfolder, any depth), type-filtered
+     cursor = 0                            # (or hold a lazy recursive iterator for huge trees)
   if cursor < len(files):
      text = load_for(files[cursor])        # Auto → loader by extension; explicit → forced
      triggerEvent(splitterId, { text, source: files[cursor] })
@@ -101,10 +103,12 @@ on resolve, `triggerEvent(loaderId, {next})`. The loader holds `{files, cursor}`
 
 **Compiled (standalone Python):** a linear+loop graph collapses to:
 ```python
-for path in files:                              # the enumeration (filtered)
+for path in root.rglob('*'):                    # RECURSIVE enumeration (all subfolders)
+    if not path.is_file() or not matches(path):  # type filter (explicit) / supported (auto)
+        continue
     docs   = load_for(path)                      # Auto: by ext; explicit: forced
     chunks = splitter.split_documents(docs)
-    store(chunks, metadata={"source": path})     # blocks; next file only after
+    store(chunks, metadata={"source": str(path)})  # full path; blocks; next file only after
 ```
 Arbitrary event graphs (bridges, fan‑in, inter‑workflow) would lower to a
 generated **event‑driven harness** — a later step; **v1 compile = this loop.**
@@ -125,9 +129,11 @@ generated **event‑driven harness** — a later step; **v1 compile = this loop.
   - **explicit + FOLDER ⇒ extension filter** (only matching files are looped);
   - **Auto + folder ⇒** all supported files, each by its own extension;
   - ext map: `pdf→pdf, docx/doc→word, txt→text, csv→csv`; unsupported skipped.
-- **Source** = a single file (1‑item iteration) or a folder (iterate the filtered
-  files). **Per‑file provenance:** the filename is carried into the store's
-  `metadata` (so retrieved chunks know their source file).
+- **Source** = a single file (1‑item iteration) or a folder — **recursively** walk
+  the folder and ALL nested subfolders (any depth), iterating the filtered files;
+  skip symlink cycles and cap absurd depth. **Per‑file provenance:** the full
+  (relative) path is carried into the store's `metadata`, so identically‑named
+  files in different subfolders (`a/x.pdf` vs `b/x.pdf`) stay distinct.
 
 ## 9. Open / future
 
