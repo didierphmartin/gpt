@@ -1,217 +1,248 @@
 # langfs — LangChain blob-provider MCP server (design)
 
-- **Date:** 2026-06-20
+- **Date:** 2026-06-20 (rev. 2026-06-21)
 - **Status:** Approved for implementation (spec)
 - **Branch context:** `feat/rag-ingestion-full`
 
 ## 1. Summary
 
-A standalone Python HTTP server that exposes **LangChain blob providers** to gpt
-through a **stateless MCP (streamable-HTTP) interface**. It serves the ingestion
-**read path** — enumerate a source, then return each document's **text** — and
-registers in the same MCP slot the PHP `UniversalFS` server occupies today.
+A standalone Python HTTP server that **encapsulates LangChain blob loaders** and
+exposes them to gpt through an **MCP (streamable-HTTP) interface**. It serves the
+ingestion **read path**: enumerate a source, then hand back **one document at a
+time** — preferably as extracted **text**, falling back to a raw **blob** when a
+type can't be parsed.
 
-It replaces UniversalFS **for the read path only**. Its first (and only, at
-launch) provider is the **local filesystem**, backed by LangChain's
-`FileSystemBlobLoader`. The contract is designed so cloud providers and
-per-request access keys slot in later without changing the tool shapes.
+It is **read-only**. It only *gets* blobs/text from LangChain drivers; it never
+deletes, updates, renames, or otherwise mutates the enumerated elements.
 
-Two properties drive the design:
+Launch provider: the **local filesystem** (`FileSystemBlobLoader`). The contract
+is designed so additional providers and a per-request access key slot in later
+without changing the tool shapes.
 
-1. **Text out, not blobs.** Where the file type is parseable (pdf/docx/html/
-   txt/csv), `read_file` returns extracted **text**. gpt's PHP decode layer
-   (`IngestionLoader::decode`) collapses to a passthrough. A `format="base64"`
-   fallback remains for non-parseable binaries.
-2. **One document per call, clocked by the pipeline.** `list_files` enumerates
-   the whole (filtered, recursive) tree in a single cheap call that reads no file
-   contents; `read_file` then returns **one document's text per call**. The
-   ingestion pipeline pulls exactly one file, processes it fully (split → embed →
-   store), and only then asks for the next — the existing **store-clocks-loader**
-   semantics (§5.1). The server never streams a batch; it hands back one file at
-   a time, on demand.
+Defining properties (each ties to a stated requirement):
+
+1. **Encapsulates LangChain blob loaders** — the server is the only thing that
+   touches LangChain; gpt talks plain MCP.
+2. **Text preferred, blob fallback** — `read_next` returns extracted text where
+   possible (pdf/docx/html/txt/csv), else base64 bytes.
+3. **The server keeps the enumeration cursor** and returns one document per
+   iteration call — the caller does not track an index.
+4. **The function takes the provider name** as a parameter.
+5. **Per-client cursor** — the server may serve several clients at once, so the
+   cursor is kept **per `client_id`** (§6).
+6. **Read-only** — no delete/update/rename/move; getting blobs/text is the whole
+   job (§10).
+7. **Provider discovery** — a `list_providers` tool returns all available
+   blob/text providers (§5.1).
 
 ## 2. Motivation
 
 Today the ingestion loader reads through the PHP `UniversalFS` MCP server, which
-returns **base64 blobs** that gpt then parses itself in PHP (`Smalot\PdfParser`,
-`ZipArchive` for docx, `League\HTMLToMarkdown` for html). LangChain already has
-mature blob loaders + parsers that:
-
-- enumerate filesystem (and later S3/GCS/Azure/Drive) sources uniformly, and
-- parse pdf/docx/html/… to clean text.
-
-Moving the read path to a LangChain-backed server lets us (a) return text
-directly, (b) delete gpt's bespoke decode code path over time, and (c) gain new
-providers by swapping a single source class rather than writing a new adapter.
+returns **base64 blobs** that gpt parses itself in PHP (`Smalot\PdfParser`,
+`ZipArchive` for docx, `League\HTMLToMarkdown`). LangChain already has mature
+blob loaders + parsers that enumerate filesystem (and later cloud) sources
+uniformly and parse pdf/docx/html to clean text. Moving the read path onto a
+LangChain-backed server lets us return text directly, retire gpt's bespoke decode
+path over time, and gain new providers by adding one source class.
 
 ## 3. Scope
 
 ### In scope (launch)
 
 - Standalone FastAPI app at `/Applications/XAMPP/xamppfiles/htdocs/langfs/`.
-- Stateless MCP streamable-HTTP transport (mirrors the `vector/` Qdrant server).
-- Two tools: `list_files`, `read_file`.
+- MCP streamable-HTTP transport (mirrors the `vector/` Qdrant server).
+- Three tools: `list_providers`, `read_next`, `reset` (§5).
 - **Local filesystem provider only**, via `FileSystemBlobLoader`.
 - Recursive enumeration with a **document-type filter**.
-- Text extraction via `MimeTypeBasedParser` for pdf/docx/html/txt/csv, with a
-  `base64` fallback.
+- **Server-held cursor per `client_id`**, with collision verification (§6).
+- Text extraction via `MimeTypeBasedParser` (pdf/docx/html/txt/csv); `base64`
+  fallback for non-parseable binaries.
 - Path-traversal guard against a configured root.
 - Pytest suite over a fixture tree + one live round-trip from gpt.
 
 ### Out of scope (future phases — designed for, not built)
 
-- **Write / copy / move / delete** and workflow-output storage — UniversalFS
-  keeps these.
-- **Cloud providers** (S3, Google Drive, OneDrive) — the `provider` arg is the
-  extension point; only `"local"` is accepted at launch.
-- **Per-request access keys / credentials** — the loader form will later supply
-  an access key forwarded as a tool arg (see §9). No credential handling now.
+- **Any mutation** — write, copy, move, rename, delete. langfs is read-only by
+  charter (§10); these stay with UniversalFS.
+- **Cloud providers** (S3, Google Drive, OneDrive). The `provider` arg and
+  `list_providers` are the extension points; only `"local"` ships now.
+- **Per-request access keys / credentials** — the workflow loader form will later
+  supply an access key forwarded as a tool arg (§11). No credential handling now.
 
 ## 4. Architecture
 
 ```
-gpt PHP                                   langfs (FastAPI / MCP, stateless)
+gpt PHP                                   langfs (FastAPI / MCP)
   │                                              │
-  │  MCPToolsLoader->executeTool(...)            │
-  ├── POST /mcp  list_files(path, types) ───────▶│  LocalBlobSource
-  │                                              │    └─ FileSystemBlobLoader.yield_blobs()
-  │  ◀── {files:[{id,name,type:"file"}...]} ─────┤        (drained server-side; no reads)
+  │  MCPToolsLoader->executeTool(...)            │   cursor store
+  ├── POST /mcp list_providers() ───────────────▶│   { client_id → {owner,
+  │  ◀── {providers:[{name:"local",...}]} ───────┤        fingerprint,
+  │                                              │        sources, cursor} }
+  ├── POST /mcp read_next(provider, path,        │
+  │              types, client_id) ─────────────▶│   verify owner+fingerprint
+  │                                              │   → sources[cursor] → parse
+  │  ◀── {index, count, source, content, done} ──┤   → cursor += 1
   │                                              │
-  ├── POST /mcp  read_file(file_id, format) ────▶│  Blob.from_path → MimeTypeBasedParser
-  │  ◀──────────── "<parsed text>" ──────────────┤        (bytes read + parsed HERE)
-  │                                              │
-  └── …one read_file call per file…             │
+  └── …one read_next per pipeline round…         │
 ```
 
-gpt's existing wiring is unchanged: `IngestionController::buildLoaderClosures`
-injects `list_files` / `read_file` callables into `IngestionLoader`, dispatched
-through `MCPToolsLoader->executeTool()`. We point that MCP registration at
-`langfs` instead of UniversalFS.
-
-### Component layering (one job per unit)
+Internally the server is layered so each unit has one job and cloud providers
+slot in without touching the rest:
 
 ```
 langfs/
-  server.py            # FastAPI app + MCP JSON-RPC routing; thin glue only
+  server.py            # FastAPI + MCP JSON-RPC routing; thin glue
+  cursors.py           # per-client cursor store: get/create/verify/reset, TTL
   sources/
-    base.py            # BlobSource protocol: list(path, suffixes) / open(file_id)
-    local.py           # LocalBlobSource — FileSystemBlobLoader + one root guard
+    base.py            # BlobSource protocol: enumerate(path, suffixes) / open(file_id)
+    registry.py        # provider name → BlobSource; powers list_providers
+    local.py           # LocalBlobSource — FileSystemBlobLoader + root guard
   parsing/
-    registry.py        # MimeTypeBasedParser config + doc-type→suffix mapping
-  config.py            # allowed root(s), host/port, parser registry
-  tests/
-    fixtures/          # small tree: pdf, docx, html, txt, csv + nested folders
-    test_list.py
-    test_read.py
+    registry.py        # MimeTypeBasedParser + doc-type→suffix map
+  config.py            # allowed root(s), host/port, TTL
+  tests/ …
   requirements.txt
   README.md
 ```
 
-- **`BlobSource`** — protocol with two methods: `list(path, suffixes) -> [descriptor]`
-  and `open(file_id) -> Blob`. One impl now (`LocalBlobSource`); cloud sources
-  add new impls without touching `server.py` or `parsing/`.
-- **`parsing/registry.py`** — owns the `MimeTypeBasedParser` and the
-  doc-type→suffix map; the single source of truth for "what types we support."
-- **`server.py`** — maps an MCP tool call to `source.list/open` + parser. No
-  business logic.
-
 ## 5. Tool contract
 
-Stateless: every call is self-contained; no session handshake. Errors are
-returned as `{"error": true, "message": "..."}` (gpt already checks
-`$res['error']`).
+MCP tools. Errors return `{"error": true, "code": "...", "message": "..."}` (gpt
+already checks `$res['error']`).
 
-### `list_files`
+### 5.1 `list_providers`
 
-Enumerate a source recursively, filtered by document type. Reads **no file
-contents**.
+Discovery. Returns every available blob/text provider.
+
+- **Arguments:** none.
+- **Result:**
+
+```json
+{ "providers": [
+    { "name": "local", "kind": "text",
+      "description": "Local filesystem via LangChain FileSystemBlobLoader",
+      "requires_credentials": false }
+] }
+```
+
+`kind` is `"text"` when the provider's reads are parsed to text, `"blob"` when
+only bytes are available. Future providers (s3, gdrive, onedrive) appear here with
+`requires_credentials: true`.
+
+### 5.2 `read_next`
+
+Return the **next** document for this client's enumeration of `(provider, path,
+types)`, advancing the **server-held cursor**. The first call for a `client_id`
+enumerates and returns item 0; each subsequent call returns the next item.
 
 **Arguments**
 
-| arg        | type       | required | notes                                                        |
-|------------|------------|----------|--------------------------------------------------------------|
-| `provider` | string     | yes      | `"local"` only at launch; validated. Extension point.        |
-| `path`     | string     | yes      | Root folder (or a single file) to enumerate.                 |
-| `types`    | string[]   | no       | Doc-type checkboxes: `pdf,word,text,csv,html`. Empty/absent → all supported. |
+| arg         | type     | required | notes                                                            |
+|-------------|----------|----------|------------------------------------------------------------------|
+| `provider`  | string   | yes      | Provider name from `list_providers`. `"local"` only at launch.   |
+| `path`      | string   | yes      | Root folder (or single file) to enumerate.                       |
+| `client_id` | string   | yes      | Caller-named id; keys the cursor (§6). E.g. `{userId}:{runId}`.  |
+| `types`     | string[] | no       | Doc-type filter `pdf,word,text,csv,html`. Empty/absent → all.    |
+| `format`    | string   | no       | `"text"` (default) or `"base64"`.                                |
+| `reset`     | bool     | no       | `true` re-enumerates from item 0 (and overrides a collision).    |
 
 **Result**
 
 ```json
-{ "files": [ { "id": "/docs/a.pdf", "name": "a.pdf", "type": "file" },
-             { "id": "/docs/sub/c.docx", "name": "c.docx", "type": "file" } ] }
+{ "index": 0, "count": 12,
+  "source": "/docs/sub/c.docx", "name": "c.docx",
+  "format": "text", "content": "<extracted text>",
+  "done": false }
 ```
 
-- **Recursive, flattened, files only.** Subfolders are descended into but never
-  returned as entries (a `Blob` is always a file). `id` is the absolute path
-  (provenance); `name` is the basename. `type` is always `"file"` at launch.
-- A single `path` that is itself a file yields one descriptor (or none if its
-  type is unsupported/filtered).
-- gpt's `IngestionLoader::enumerateFiles` consumes this list directly: it sees
-  only `type:"file"` rows, so its PHP per-folder recursion no-ops (its
-  cycle/depth guards become dead code — harmless; prune in a later cleanup).
+- **`done: true`** with no `content` once the cursor passes the last item — the
+  pipeline's stop signal.
+- **Per-file parse failure** → `{ "index", "count", "source",
+  "error": true, "message", "done": false }`; the cursor still advances so one
+  bad file does not stall the run (mirrors `readRound`'s `current.error`).
+- **Collision** (`client_id` reused for a different owner/source) →
+  `{ "error": true, "code": "client_id_conflict", "message": ... }` unless
+  `reset: true` (§6).
 
-### `read_file`
+### 5.3 `reset`
 
-Return one document's text (preferred) or raw bytes.
+Drop a client's cursor explicitly (optional; cursors also expire by TTL).
 
-**Arguments**
+- **Arguments:** `client_id` (string, required).
+- **Result:** `{ "reset": true }` (idempotent — succeeds even if unknown).
 
-| arg        | type   | required | notes                                                         |
-|------------|--------|----------|---------------------------------------------------------------|
-| `provider` | string | yes      | `"local"` only at launch.                                     |
-| `file_id`  | string | yes      | Absolute path from a `list_files` `id`.                       |
-| `format`   | string | no       | `"text"` (default) → parsed text; `"base64"` → raw bytes b64. |
+### 5.4 Consumption: one file at a time into the ingestion pipeline
 
-**Result** — a **string**: the parsed text (default) or base64 bytes. On a parse
-failure for that one file: `{"error": true, "message": "..."}` (mirrors
-`readRound`'s per-file `current.error` — one bad file does not abort the batch).
-
-### 5.1 Consumption: one file at a time into the ingestion pipeline
-
-The server exposes *capability* (enumerate, read-one); the **pipeline owns the
-clock**. The loop, driven by gpt's `IngestionLoader::readRound` and the
-store-clocks-loader execution model:
+The server exposes capability; the **pipeline owns the clock** — the
+store-clocks-loader model is preserved, the cursor simply lives server-side now:
 
 ```
-cursor = 0
-sources = list_files(provider, path, types).files     # once; cheap, no reads
-while cursor < len(sources):
-    text = read_file(provider, sources[cursor].id)    # ONE file's text
-    pipeline.process(text, source=sources[cursor].id) # split → embed → store, to completion
-    cursor += 1                                        # store advances the clock
+providers = list_providers()                 # once, for the loader form / validation
+loop:
+    doc = read_next(provider, path, types, client_id)   # ONE document, server advances cursor
+    if doc.done: break
+    pipeline.process(doc.content, source=doc.source)     # split → embed → store, to completion
 ```
 
-- **The server is stateless and holds no cursor.** "A file at a time" is the
-  *caller's* pull rhythm: one `read_file` per pipeline round. The cursor lives in
-  gpt (`readRound`), exactly as today.
-- `readRound` re-runs enumeration each round to report "file k of N"; because
-  `list_files` reads no contents, re-enumerating is cheap. (An optional later
-  optimization: cache the enumerated `sources` for a run so `list_files` is
-  called once rather than per round — not required for launch.)
-- This is why there is **no** "next document" iterator tool: the two-tool
-  contract (`list_files` + `read_file`) already yields one file per call and
-  stays a drop-in for gpt's injected `listFiles` / `readFile` closures.
+The store decides *when* to call `read_next` (it clocks the loop); the server
+decides *which* document is next (it holds the cursor). "A file at a time" is the
+result of the store pulling exactly one per round.
 
-## 6. Enumeration semantics (how the blob provider lists a hierarchy)
+## 6. Client identity, cursor state & collision handling
+
+The server keeps, per `client_id`:
+
+```
+store[client_id] = { owner, fingerprint, sources, cursor, created_at }
+fingerprint = sha256( owner ‖ provider ‖ normalized_path ‖ sorted(types) )
+```
+
+- **Client-named id.** The caller supplies `client_id`, reusing an id it already
+  owns — the ingestion **run / thread id**, namespaced by user (`{userId}:{runId}`).
+  No server-minted handle, so no extra round-trip, and the id is meaningful in
+  logs.
+- **Cursor as a rebuildable cache, not authoritative state.** Enumeration is
+  deterministic from `(provider, path, types)`. If the entry is missing (TTL
+  eviction, server restart), the next `read_next` re-enumerates and continues —
+  the interaction self-heals. (A fully stateless variant — client also passes the
+  index — remains possible later for horizontal scaling; not needed at launch.)
+- **Collision verification on every call:**
+  1. **Owner check** — caller principal must equal `store[client_id].owner`;
+     mismatch → `client_id_conflict`.
+  2. **Fingerprint check** — call's `(provider, path, types)` must match the
+     stored fingerprint; a reused id pointing at a *different* source →
+     `client_id_conflict`.
+  3. **Match** → serve `sources[cursor]`, advance.
+  4. **Unknown id** → create (fresh enumeration). Not a collision.
+  - `reset: true` overrides 1–2 by replacing the entry — the explicit "I really do
+    mean to restart this id" escape hatch.
+- **Concurrency** — a per-`client_id` lock serializes the read-modify-write of the
+  cursor so two racing calls can't skip or double-serve an item.
+- **Lifecycle** — entries expire after an idle TTL (config, default 1h); `reset`
+  frees one eagerly. Launch runs a single uvicorn process with an in-memory store;
+  multi-process/horizontal scaling (shared store or the stateless variant) is a
+  later concern, noted in §16.
+
+## 7. Enumeration semantics (how the blob provider lists a hierarchy)
 
 `FileSystemBlobLoader` is a thin wrapper over `pathlib.Path.glob()`:
 
-1. `Path(root).glob("**/[!.]*")` walks the tree; `**` makes it **recursive**,
-   the `[!.]` skips dotfiles.
-2. Only `path.is_file()` survives — **directories are filtered out**, so folders
-   are traversed but never emitted.
-3. The `suffixes` filter keeps only the requested extensions.
-4. It `yield`s a **lazy** `Blob` per file (a generator; bytes are not read until
-   `.as_bytes()`).
+1. `Path(root).glob("**/[!.]*")` walks the tree; `**` makes it **recursive**, the
+   `[!.]` skips dotfiles.
+2. Only `path.is_file()` survives — **directories are traversed but never
+   emitted** (a `Blob` is always a file).
+3. The `suffixes` filter keeps only requested extensions.
+4. It `yield`s a **lazy** `Blob` per file (bytes unread until `.as_bytes()`).
 
-`list_files` **drains that generator once** inside the call and returns the full
-path list — cheap because enumeration reads no contents. The generator never
-crosses the wire; gpt receives a plain JSON list.
+The server drains that generator **once** when it first builds `sources` for a
+`client_id` (cheap — no contents read), then serves from the cached list. The
+hierarchy is flattened to a stream of files with **full-path** ids (provenance);
+folders are never returned as entries.
 
-## 7. Document-type filter
+## 8. Document-type filter
 
 The blob loader filters by **suffix**; gpt's checkboxes speak **doc-type**. The
-parser registry owns the mapping:
+parser registry owns the map:
 
 ```python
 TYPE_SUFFIXES = {
@@ -223,81 +254,94 @@ TYPE_SUFFIXES = {
 }
 ```
 
-`list_files(types=["pdf","word"])` → `suffixes=[".pdf",".docx",".doc"]` passed to
-`FileSystemBlobLoader`. Empty/absent `types` → all supported suffixes
-("no restriction", matching gpt's current behavior). Filtering happens **at the
-source**, so a 5,000-file folder with one pdf enumerates fast.
+`types=["pdf","word"]` → `suffixes=[".pdf",".docx",".doc"]`. Empty/absent → all
+supported suffixes ("no restriction"). Filtering happens **at the source**, so a
+5,000-file folder with one pdf enumerates fast. The filter is part of the
+fingerprint, so changing it under the same `client_id` is a deliberate reset, not
+a silent cursor reuse.
 
-## 8. Text extraction
+## 9. Text extraction
 
-`read_file(format="text")` runs the blob through a `MimeTypeBasedParser`:
+`read_next(format="text")` runs the blob through a `MimeTypeBasedParser`:
 
-| mime / type                                   | parser              |
-|-----------------------------------------------|---------------------|
-| `application/pdf`                             | `PyMuPDFParser`     |
-| `application/vnd.openxmlformats-…wordprocessingml.document` (docx) | `Docx2txtParser` |
-| `text/html`                                   | `BS4HTMLParser`     |
-| `text/plain` (txt)                            | `TextParser`        |
-| `text/csv`                                    | `TextParser`        |
+| mime / type                                                     | parser           |
+|-----------------------------------------------------------------|------------------|
+| `application/pdf`                                               | `PyMuPDFParser`  |
+| `…wordprocessingml.document` (docx)                            | `Docx2txtParser` |
+| `text/html`                                                    | `BS4HTMLParser`  |
+| `text/plain` (txt)                                             | `TextParser`     |
+| `text/csv`                                                     | `TextParser`     |
 
-The parser yields `Document`s; `read_file` returns
-`"\n\n".join(d.page_content for d in docs)`.
+Result text = `"\n\n".join(d.page_content for d in docs)`. `format="base64"` skips
+the parser and returns `base64(blob.as_bytes())` — the fallback for images /
+unparseable binaries. An unsupported mime under `format="text"` → error.
 
-- `format="base64"` skips the parser and returns `base64(blob.as_bytes())` — the
-  fallback for images / unparseable binaries.
-- An unsupported mime with `format="text"` → `{"error", "message"}`.
+## 10. Read-only guarantee
 
-This makes gpt's `IngestionLoader::decode` a **passthrough** for text responses:
-the loader receives text, not bytes. (Decode logic stays as defensive fallback
-for the `base64` path; full removal is a later cleanup, not this spec.)
+langfs **only reads**. It exposes no tool that writes, copies, moves, renames, or
+deletes, and the `BlobSource` protocol has no mutating method — `enumerate` and
+`open` are the entire surface. The local source opens files read-only and is
+confined to a configured root (no traversal above it). This is a charter
+constraint, not just an omission: mutation belongs to UniversalFS, never here.
 
-## 9. Forward compatibility (designed for, not built)
+## 11. Forward compatibility (designed for, not built)
 
-- **Cloud providers.** Add a `BlobSource` impl (e.g. `S3BlobSource` wrapping
-  `CloudBlobLoader`) keyed by `provider`. `server.py`, `parsing/`, and the tool
-  shapes are untouched.
+- **Cloud providers.** Add a `BlobSource` impl (e.g. `S3BlobSource` over
+  `CloudBlobLoader`) and register it under a provider name. `list_providers`,
+  `read_next`, the cursor store, and `parsing/` are untouched; the new provider
+  shows up in discovery with `requires_credentials: true`.
 - **Access key from the loader form.** A later phase adds an optional
-  `credentials` / `access_key` arg to both tools, supplied by the workflow
-  loader form and forwarded by gpt. The server stays stateless — credentials
-  ride on each request. No credential storage is introduced; `"local"` needs
-  none, so launch carries zero secrets.
+  `credentials` / `access_key` arg to `read_next`, supplied by the workflow loader
+  form and forwarded by gpt. The server still keys the cursor by `client_id`; the
+  key rides on each request. `"local"` needs none, so launch carries zero secrets.
 
-## 10. Error handling
+## 12. Error handling
 
-- **Unknown provider / tool** → `{"error", "message"}`.
-- **Path traversal** — every `path` / `file_id` is resolved and confirmed to sit
-  under a configured allowed root; escapes → error (no reads outside the root).
-- **Per-file parse failure** → that one `read_file` returns an error object; the
-  batch continues (gpt's `readRound` already renders `current.error`).
-- **Unsupported type** under `format="text"` → error; gpt's type filter normally
-  prevents reaching this.
+- **Unknown provider / tool** → `{error, code, message}`.
+- **`client_id_conflict`** → owner/fingerprint mismatch (§6); caller resolves by
+  using a distinct id or `reset: true`.
+- **Path traversal** — every `path` / `file_id` resolves under a configured root;
+  escapes → error.
+- **Per-file parse failure** → error object for that one item, cursor advances,
+  run continues.
+- **Unsupported type** under `format="text"` → error (the type filter normally
+  prevents reaching this).
 
-## 11. Integration with gpt
+## 13. Integration with gpt
 
-- Register `langfs` as the MCP server providing `list_files` / `read_file` (the
-  slot UniversalFS holds today). No change to `buildLoaderClosures`,
-  `IngestionLoader::enumerateFiles`, or `readRound`.
-- `read_file` now returns **text**; the injected `readFile` closure currently
-  base64-decodes — it switches to `format="text"` and returns the string as-is
-  (no decode). The `format="base64"` branch is retained for binary fallback.
-- `provider` continues to flow from the loader form (`"local"` for now).
+The cursor moves from gpt's PHP into langfs, so this is **not** a pure drop-in for
+the old `list_files`/`read_file` closures — it is a deliberate change of the read
+contract:
 
-## 12. Testing
+- Register `langfs` as the ingestion read MCP server (the slot UniversalFS holds).
+- `IngestionController` / `IngestionLoader` shift from "enumerate + read by PHP
+  cursor" to "call `read_next(provider, path, types, client_id)` per round." The
+  `client_id` is `{userId}:{runId}` from the existing run/thread context.
+- `readRound` becomes a thin wrapper over `read_next`, surfacing `index` / `count`
+  / `done` for the loader Output tab. gpt's PHP recursion and `decode()` for the
+  text path become dead code (removed in a follow-up cleanup, not this spec).
+- `list_providers` backs the loader form's provider dropdown.
 
-1. **Unit (pytest over `tests/fixtures/`):** a tree with pdf/docx/html/txt/csv
-   and nested subfolders.
-   - `list_files` returns the **flattened recursive** file set; subfolders are
-     not entries; dotfiles excluded.
-   - `types` filter narrows to the requested suffixes; empty → all.
-   - `read_file(text)` extracts non-empty text per type; `read_file(base64)`
-     round-trips bytes.
-   - Path-traversal attempt → error.
-   - Corrupt file → per-file error, no crash.
-2. **Live round-trip:** point gpt's loader MCP registration at `langfs`, run
-   `IngestionController::loaderPreview` / `readRound` against the fixture tree,
-   confirm text appears in the loader Output tab.
+## 14. Testing
 
-## 13. Dependencies
+1. **Unit (pytest over `tests/fixtures/`)** — a tree with pdf/docx/html/txt/csv
+   and nested subfolders:
+   - Recursive enumeration is flattened; subfolders are not entries; dotfiles
+     excluded.
+   - `types` filter narrows to requested suffixes; empty → all.
+   - `read_next` walks items 0..N-1 then `done:true`; cursor is per `client_id`
+     (two ids over the same path iterate independently).
+   - **Collision:** same `client_id`, different `path`/owner → `client_id_conflict`;
+     `reset:true` overrides.
+   - TTL/eviction → next call re-enumerates and resumes.
+   - `read_next(text)` extracts non-empty text per type; `base64` round-trips bytes.
+   - Path-traversal attempt → error; corrupt file → per-file error, no crash.
+   - `list_providers` returns `local`.
+2. **Live round-trip** — point gpt's loader MCP registration at `langfs`, run the
+   loader preview against the fixture tree, confirm one-file-at-a-time text in the
+   Output tab.
+
+## 15. Dependencies
 
 - `fastapi`, `uvicorn`
 - `langchain-community` (`FileSystemBlobLoader`, `MimeTypeBasedParser`, parsers)
@@ -305,9 +349,12 @@ for the `base64` path; full removal is a later cleanup, not this spec.)
 - Pinned in `langfs/requirements.txt`, isolated venv (separate from
   `langchain_runner`).
 
-## 14. Open items
+## 16. Open items
 
-- Exact MCP registration mechanism in gpt's server registry (reuse the
-  Qdrant/`vector` registration path) — confirm during implementation.
-- Whether to prune gpt's now-redundant PHP recursion + decode immediately or in
-  a follow-up cleanup — **follow-up**, to keep this change drop-in.
+- **Multi-process cursor store.** Launch is single-process in-memory. If langfs is
+  ever scaled horizontally, either pin clients (sticky) or adopt the fully
+  stateless variant (client passes the index) or a shared store. Deferred.
+- **MCP registration mechanism** in gpt's server registry — reuse the
+  Qdrant/`vector` registration path; confirm during implementation.
+- **Cleanup of gpt's now-dead PHP recursion + text-path `decode()`** — follow-up,
+  to keep this change focused.
