@@ -448,6 +448,30 @@ provider's package installed?). The loader node renders the entire form —
 credential inputs, scope inputs, pre-checked format boxes — dynamically from this
 payload. No provider-specific UI is hard-coded.
 
+### 19.1 Provider catalog
+
+`list_providers` surfaces one entry per descriptor present in `langfs/providers/`.
+The full set of candidate providers, the LangChain loader each maps to, its auth
+method, and the phase it lands in:
+
+| Provider | `kind` | LangChain loader | `auth_method` | Phase |
+|---|---|---|---|---|
+| Local filesystem | `object_store` | `FileSystemBlobLoader` | `none` | 1 ✅ shipped |
+| Amazon S3 | `object_store` | `CloudBlobLoader` (`s3://`) | `api_key` | 1 |
+| Google Cloud Storage | `object_store` | `CloudBlobLoader` (`gs://`) | `service_account_json` | 1 |
+| Azure Blob Storage | `object_store` | `CloudBlobLoader` (`az://`) | `connection_string` | 1 |
+| Google Drive | `drive` | `GoogleDriveLoader` | `oauth2` | 2 |
+| OneDrive | `drive` | `OneDriveLoader` | `oauth2` | 2 |
+| SharePoint | `drive` | `SharePointLoader` | `oauth2` | 2 |
+| Dropbox | `drive` | `DropboxLoader` | `api_key` | 3 |
+| Box | `drive` | `BoxLoader` | `oauth2` | 3 |
+| GitHub / Git | `knowledge_store` | `GithubFileLoader` / `GitLoader` | `api_key` | 3 |
+
+Phase 1 ships the first four — and S3/GCS/Azure are one `CloudBlobSource` adapter
+(§21), so the Phase-1 provider work is **one** new source class plus four
+descriptors. A provider whose package is not installed still appears in
+`list_providers` with `available: false` (the install story is §25).
+
 ## 20. Session store (evolves the cursor store)
 
 Part I's per-`client_id` cursor store (§6) becomes a **session store**. Each entry
@@ -541,7 +565,9 @@ before running ingestion.
   pinned versions, and surfaced failures. Lower-risk on the LAN (§17), but
   reliability-guarded (system-dep providers are flagged un-installable). **Not**
   silent arbitrary install of anything LangChain names.
-- **Provider roadmap** after Phase 1's S3/GCS/Azure: Drive, OneDrive, SharePoint
-  (Phase 2); Dropbox, Box, GitHub/Git, Notion, Confluence (Phase 3 long tail).
+- **Provider roadmap** — see the catalog in §19.1 for the full phased list
+  (Drive/OneDrive/SharePoint in Phase 2; Dropbox/Box/GitHub and the long tail in
+  Phase 3). Notion and Confluence (`knowledge_store`) are candidate Phase-3
+  additions beyond the catalog's file-storage focus.
 
 Each future phase is its own spec → plan → implementation cycle.
