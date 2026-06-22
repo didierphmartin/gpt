@@ -1,8 +1,17 @@
 # langfs — LangChain blob-provider MCP server (design)
 
-- **Date:** 2026-06-20 (rev. 2026-06-21)
-- **Status:** Approved for implementation (spec)
+- **Date:** 2026-06-20 (rev. 2026-06-22)
+- **Status:** Part I (filesystem provider) **shipped** — langfs `master`, 45 tests
+  passing. Part II (multi-provider extension, Phase 1) **designed**, pending
+  implementation plan.
 - **Branch context:** `feat/rag-ingestion-full`
+
+> **Reading guide:** Part I (§§1–16) is the shipped single-provider (local
+> filesystem) design — it remains the baseline and is unchanged. Part II
+> (§§17–25) is the multi-provider extension scoped to **Phase 1** (object stores
+> with key/connection-string auth), with OAuth and package-install noted as
+> future phases (§25). Where Part II evolves a Part I component, it says so
+> explicitly.
 
 ## 1. Summary
 
@@ -358,3 +367,181 @@ contract:
   Qdrant/`vector` registration path; confirm during implementation.
 - **Cleanup of gpt's now-dead PHP recursion + text-path `decode()`** — follow-up,
   to keep this change focused.
+
+---
+
+# Part II — Multi-provider extension (Phase 1)
+
+## 17. Goal & deployment context
+
+Part I serves one provider (local filesystem). Part II lets the workflow
+**loader node** choose among several **document-storage backends** reachable via
+LangChain — and enter that backend's **credentials** and **scope** in the node
+form. Storage and file format stay **orthogonal**: a `.docx` in S3 is read by the
+exact same `extract_text` layer (§9) as a `.docx` on disk; Part II adds *sources*,
+not parsers.
+
+**Deployment context (drives the whole security posture):** ingestion runs on a
+**single enterprise's local network**, used by that enterprise's own trusted
+users — it is **not** a public internet service. Consequences:
+
+- Holding provider credentials in server memory for the duration of a session is
+  acceptable; no public-internet at-rest / zero-trust machinery is introduced.
+- The session owner/fingerprint check (§6) guards against accidental cross-run
+  cursor mix-ups, not hostile multi-tenancy.
+
+**Phase 1 scope:** local (done) + a single `CloudBlobSource` covering **S3, GCS,
+and Azure Blob** via key / connection-string auth. **OAuth** providers (Drive,
+OneDrive) and **package install-on-demand** are explicitly **future phases**
+(§25); Phase 1 only reserves room for them in the descriptor schema.
+
+## 18. The provider descriptor (JSON "rules" file)
+
+Each provider is declared by one JSON file in `langfs/providers/*.json`, loaded
+and **schema-validated at startup** (an invalid descriptor fails fast, not at use
+time). The descriptor is the **single source of truth** that drives the dynamic
+loader-node form. Fields:
+
+- **Identity:** `name` (id), `label`, `kind` (`object_store` | `drive` | `web` |
+  `knowledge_store`), `description`.
+- **Capabilities:** `enumerable` (bool), `recursive` (bool), and `scope_schema` —
+  what "scope" means for this provider and the form field(s) to collect it
+  (local: one `path`; object store: `bucket` + `prefix`; drive: a folder id; …).
+- **Auth:** `auth_method` (`none` | `api_key` | `connection_string` | `oauth2` |
+  `service_account_json`) + `credential_fields[]`, each
+  `{name, label, type (text|password|file|oauth), required, mask, help}`. The
+  loader node renders its credential inputs directly from this list.
+- **Formats:** `default_formats[]` — the doc-types this storage is *expected* to
+  hold. These **pre-check** the type-filter boxes but are **not enforced**
+  (§22).
+- **Provisioning (reserved for Phase 3):** `pip_packages[]` (pinned) and a
+  `system_deps` flag. Present in the schema from Phase 1 so the install story
+  (§25) needs no descriptor rework; unused at launch (Phase 1 packages are
+  pre-installed).
+
+Example (`providers/s3.json`, abridged):
+
+```json
+{
+  "name": "s3", "label": "Amazon S3", "kind": "object_store",
+  "description": "S3 / GCS / Azure object storage via LangChain CloudBlobLoader",
+  "enumerable": true, "recursive": true,
+  "scope_schema": { "fields": [
+    { "name": "bucket", "label": "Bucket / container", "required": true },
+    { "name": "prefix", "label": "Prefix (folder)", "required": false } ] },
+  "auth_method": "api_key",
+  "credential_fields": [
+    { "name": "access_key", "label": "Access key", "type": "text", "required": true },
+    { "name": "secret_key", "label": "Secret key", "type": "password", "required": true, "mask": true },
+    { "name": "region", "label": "Region", "type": "text", "required": false } ],
+  "default_formats": ["pdf", "word", "text", "csv", "html"],
+  "pip_packages": [], "system_deps": false
+}
+```
+
+## 19. `list_providers` becomes the UI's data source
+
+Part I's `list_providers` (§5.1) returns only `{name, kind, description,
+requires_credentials}`. Part II expands each entry to include the descriptor's
+**credential schema, scope schema, default formats, and `available`** (is the
+provider's package installed?). The loader node renders the entire form —
+credential inputs, scope inputs, pre-checked format boxes — dynamically from this
+payload. No provider-specific UI is hard-coded.
+
+## 20. Session store (evolves the cursor store)
+
+Part I's per-`client_id` cursor store (§6) becomes a **session store**. Each entry
+grows from `{owner, fingerprint, sources, cursor, …}` to:
+
+```
+{ owner, fingerprint, credentials, live_connection, descriptors, cursor, updated_at }
+```
+
+- **Authenticate once, reuse the connection.** On session start (first
+  `read_next`, or an explicit `test_connection`), the source **logs in once** and
+  the **live authenticated connection** (SDK client / token) is cached in the
+  entry. Every later `read_next` in the session **reuses** it — no re-login (the
+  expensive part is the handshake, not sending the credential).
+- **Lifecycle.** The connection is **closed** when the entry is evicted by TTL or
+  dropped by `reset`. (OAuth token refresh is a Phase 2 concern, §25.)
+- **Fingerprint** (§6) gains a **non-secret account identity** (bucket / account
+  name / drive id — never the secret) so switching accounts under one `client_id`
+  is a detected `client_id_conflict`.
+- **Credentials in memory only** — never logged, masked in any trace; acceptable
+  at rest per the LAN context (§17). The per-`client_id` lock (§6) also serializes
+  access to connections that aren't thread-safe.
+
+## 21. `BlobSource` interface + `CloudBlobSource`
+
+The `BlobSource` protocol (§4) gains two methods, keeping the read-only charter
+(§10) intact:
+
+- `connect(credentials) -> connection` — establish/return the session connection.
+- `test_connection(credentials, scope) -> ok | error` — validate before a run.
+
+`LocalBlobSource` implements both as no-ops (no auth, no connection). A new
+**`CloudBlobSource`** wraps LangChain's **`CloudBlobLoader`** (the cloud sibling
+of `FileSystemBlobLoader`, built on `cloudpathlib`) to cover **S3, GCS, and Azure
+in one adapter** — `s3://bucket/prefix`, `gs://…`, `az://…` — exposing the same
+`enumerate` / `read_bytes` it already defines.
+
+New MCP tool **`test_connection`** (provider, credentials, scope) → mirrors the
+existing MCP-server "test" affordance so the loader node validates credentials
+before running ingestion.
+
+## 22. Scope & format semantics
+
+- **Scope** is the descriptor's `scope_schema` generalized: local `path`, object
+  store `bucket`+`prefix`, etc. Enumeration is recursive within scope (an S3
+  prefix is naturally a recursive subtree).
+- **Format** is a **UI default, not a restriction.** `default_formats`
+  pre-checks the loader's type boxes, but the user may tick others; the server
+  skips a file **only** when no extractor exists for it (the §9 `extract_text`
+  raising `UnsupportedType`). A stray `.pdf` in a "text" bucket still ingests.
+
+## 23. New runtime constraints (don't exist for local FS)
+
+- **Pagination / caps.** Object stores can hold millions of keys. Cloud
+  enumeration must page and honor a configurable cap rather than draining the
+  whole listing into the session entry at once (Part I's full-drain is fine for a
+  folder, not for a bucket). The cap is surfaced (logged / returned) so truncation
+  is never silent.
+- **MIME-based format detection.** Items may lack file extensions (e.g. Drive
+  returns MIME types, not suffixes). Detection becomes **provider-aware**: use the
+  storage-reported MIME when there is no usable suffix, then dispatch into the
+  same `extract_text` (§9).
+- **Provenance as a URI.** A source id is now `s3://bucket/key` (or `gdrive://id`
+  later), not a local path — this is what the store records as provenance.
+
+## 24. Testing (Phase 1)
+
+- **Unit:** descriptor load + schema-validation (a malformed descriptor fails at
+  startup); `CloudBlobSource` enumerate/read against a mocked store; session
+  connection **reuse** (connect called once across several `read_next`);
+  `test_connection` good/bad credentials; pagination cap honored; MIME dispatch
+  for an extension-less item; fingerprint conflict on account switch.
+- **Live (creds permitting):** a real S3 (and/or GCS/Azure) bucket — `read_next`
+  walks items as text with a working cursor; smoke script extended for one cloud
+  provider.
+- **End-to-end:** the loader node renders its form dynamically from
+  `list_providers` for local + one cloud provider; selecting a provider, entering
+  credentials, choosing scope, and running ingestion returns text into the
+  pipeline.
+
+## 25. Forward compatibility (Phase 2 / Phase 3 — designed for, not built)
+
+- **Phase 2 — OAuth providers (Google Drive, OneDrive/SharePoint).** Descriptor
+  `auth_method: oauth2` already reserves the slot; adds an OAuth redirect flow and
+  **token refresh** inside a long session (the session store's connection entry is
+  where a refreshed token lives). No Phase 1 rework needed.
+- **Phase 3 — install on demand from a vetted allowlist.** The descriptor's
+  `pip_packages` (pinned) + `system_deps` fields drive it: a provider whose package
+  is absent shows `available: false` and "needs admin install" rather than failing
+  mid-run; installs come from the **curated allowlist only**, with a lock, timeout,
+  pinned versions, and surfaced failures. Lower-risk on the LAN (§17), but
+  reliability-guarded (system-dep providers are flagged un-installable). **Not**
+  silent arbitrary install of anything LangChain names.
+- **Provider roadmap** after Phase 1's S3/GCS/Azure: Drive, OneDrive, SharePoint
+  (Phase 2); Dropbox, Box, GitHub/Git, Notion, Confluence (Phase 3 long tail).
+
+Each future phase is its own spec → plan → implementation cycle.
