@@ -6431,11 +6431,44 @@ class WorkflowEditor {
             toggleEmbeddings();
         };
 
+        // Show a status/diagnostic line in the provider host (while probing or
+        // when nothing answers) so the box is never a silent empty.
+        const showProviderStatus = (msg, color) => {
+            providerHost.style.display = 'block';
+            providerHost.innerHTML = `<span style="font-size:12px;color:${color || '#9ca3af'};">${this.escapeHtml(msg)}</span>`;
+        };
+
+        // Probe the registered vector-store servers and adopt the FIRST that
+        // answers list_providers — the old qdrant double (no list_providers,
+        // session-stateful) is skipped automatically. Sets `chosen` to the winner.
         const refreshProviders = async () => {
-            const rpc = await this._mcpProxyToolCall(chosen, 'list_providers', {});
-            if (!rpc) return;
-            const parsed = this._parseListProviders(rpc);
-            if (parsed && parsed.length) { providers = parsed; renderProviders(); }
+            const servers = collectServers();
+            if (!servers.length) {
+                showProviderStatus('No vector-store MCP server registered. Register the mcp_qrant server (e.g. http://127.0.0.1:8008/mcp) in MCP servers, then reopen.', '#f59e0b');
+                return;
+            }
+            // Order: saved first, then mcp_qrant/8008/vector-ish names, then the rest.
+            const ordered = [];
+            const pushUnique = (s) => { if (s && !ordered.some(o => String(o.id) === String(s.id))) ordered.push(s); };
+            servers.filter(s => savedId && String(s.id) === savedId).forEach(pushUnique);
+            servers.filter(s => /mcp_qrant|8008|vector/i.test(`${s.name || ''} ${s.url || ''}`)).forEach(pushUnique);
+            servers.forEach(pushUnique);
+
+            for (const s of ordered) {
+                const cand = { id: String(s.id), url: s.url || '', name: s.name || `server ${s.id}` };
+                const rpc = await this._mcpProxyToolCall(cand, 'list_providers', {});
+                const parsed = this._parseListProviders(rpc);
+                if (parsed && parsed.length) {
+                    chosen = cand;
+                    storeInput.value = `mcp:${cand.id}`;
+                    storeInput.dataset.url = cand.url;
+                    providers = parsed;
+                    renderProviders();
+                    return;
+                }
+            }
+            const tried = ordered.map(s => `${s.name || s.id} (${s.url || '?'})`).join(', ');
+            showProviderStatus(`No registered vector-store MCP answered list_providers. Tried: ${tried}. Point the store node at the new mcp_qrant server (http://127.0.0.1:8008/mcp).`, '#f59e0b');
         };
 
         // Wire the Test connection button.
@@ -6462,17 +6495,20 @@ class WorkflowEditor {
             if (testOut) { testOut.textContent = ok ? '✓ OK' : `✗ ${msg}`; testOut.style.color = ok ? '#34d399' : '#f87171'; }
         });
 
-        // Resolve + render synchronously, then refresh from the live server list.
+        // Resolve a default sync (for the hidden input), show a probing status,
+        // then refresh from the live server list — the probe in refreshProviders
+        // authoritatively adopts whichever registered server answers list_providers.
         resolveServer();
-        renderProviders();
+        showProviderStatus('Discovering vector-store providers…');
         try {
             if (window.mcpClient && typeof window.mcpClient.loadServers === 'function') {
                 window.mcpClient.loadServers()
-                    .then(() => { resolveServer(); refreshProviders(); })
-                    .catch(e => console.warn('[ingestion/store] loadServers failed:', e));
+                    .then(() => refreshProviders())
+                    .catch(e => { console.warn('[ingestion/store] loadServers failed:', e); refreshProviders(); });
+            } else {
+                refreshProviders();
             }
-        } catch (e) { console.warn('[ingestion/store] loadServers threw:', e); }
-        refreshProviders();
+        } catch (e) { console.warn('[ingestion/store] loadServers threw:', e); refreshProviders(); }
     }
 
     /** Gather the store node's connection form into a {field: value} object. */
