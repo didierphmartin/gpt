@@ -6392,13 +6392,15 @@ class WorkflowEditor {
                 const checked = loaderTypes.length === 0 || loaderTypes.includes(o.v);
                 return `<label class="ingestion-type-check"><input type="checkbox" class="ingestion-loader-type" value="${o.v}" ${checked ? 'checked' : ''}><span>${o.label}</span></label>`;
             }).join('');
-            // 2-column layout: row 1 = File storage | Disable execution,
-            // row 2 = File types (checkbox filter) | Provider (vertical radios);
-            // the key box and the Source picker span full width below.
+            // 2-column layout: row 1 = Parallel workers | Disable execution,
+            // row 2 = File types (checkbox filter) | Provider (radios). The
+            // storage-server selector is kept HIDDEN (the loader resolves which
+            // MCP server to use under the hood — not user-facing). The key box and
+            // the Source picker span full width below.
             fieldsHtml = `
-                <div class="storage-config-folder" id="ingestion-loader-storage-wrap">
-                    <label>File storage <span style="font-weight:400;color:#6b7280;">(via UniversalFS MCP)</span></label>
-                    <div id="ingestion-loader-storage-host"></div>
+                <div class="storage-config-folder">
+                    <label for="ingestion-loader-workers">Parallel workers <span style="font-weight:400;color:#6b7280;">(▶ Start runs this many in parallel — defaults to your CPU cores)</span></label>
+                    <input type="number" id="ingestion-loader-workers" min="1" max="32" value="${this.escapeHtml(config.workers != null && config.workers !== '' ? String(config.workers) : String(Math.min((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4, 8)))}" placeholder="auto (≈ CPU cores)">
                 </div>
                 ${disableHtml}
                 <div class="storage-config-folder">
@@ -6411,9 +6413,8 @@ class WorkflowEditor {
                     <label>Provider</label>
                     <div id="ingestion-loader-provider-host" class="ingestion-loader-provider-radios"></div>
                 </div>
-                <div class="storage-config-folder">
-                    <label for="ingestion-loader-workers">Parallel workers <span style="font-weight:400;color:#6b7280;">(▶ Start runs this many in parallel — defaults to your CPU cores)</span></label>
-                    <input type="number" id="ingestion-loader-workers" min="1" max="32" value="${this.escapeHtml(config.workers != null && config.workers !== '' ? String(config.workers) : String(Math.min((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4, 8)))}" placeholder="auto (≈ CPU cores)">
+                <div id="ingestion-loader-storage-wrap" style="display:none;">
+                    <div id="ingestion-loader-storage-host"></div>
                 </div>
                 <div class="storage-config-folder full" id="ingestion-loader-ufskey-wrap" style="display:none;">
                     <label for="ingestion-loader-ufskey">UniversalFS key <span style="font-weight:400;color:#6b7280;">(required for this provider)</span></label>
