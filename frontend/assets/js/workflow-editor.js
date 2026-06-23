@@ -6197,11 +6197,16 @@ class WorkflowEditor {
         };
 
         const renderProviders = () => {
+            // Lay the providers out in a 2-column grid filling the allocated space.
+            providerHost.style.display = 'grid';
+            providerHost.style.gridTemplateColumns = '1fr 1fr';
+            providerHost.style.columnGap = '16px';
+            providerHost.style.rowGap = '8px';
             providerHost.innerHTML = providers.map(p => {
                 const disabled = !p.available;          // not-yet-implemented → greyed/inactive
                 const checked = (p.name === savedProvider && !disabled) ? 'checked' : '';
                 const suffix = disabled ? ' (coming soon)' : '';
-                const style = `display:inline-flex;align-items:center;gap:6px;margin-right:14px;`
+                const style = `display:flex;align-items:center;gap:6px;`
                     + (disabled ? 'opacity:.5;cursor:not-allowed;' : '');
                 return `<label class="ingestion-loader-provider-radio${disabled ? ' disabled' : ''}" style="${style}">`
                     + `<input type="radio" name="ingestion-loader-provider" value="${this.escapeHtml(p.name)}" ${checked} ${disabled ? 'disabled' : ''}>`
