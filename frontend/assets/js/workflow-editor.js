@@ -7045,10 +7045,12 @@ class WorkflowEditor {
         const idByType = {};
         let loaderCfg = null, splitterCfg = null, storeCfg = null;
         for (const id of Object.keys(nodes)) {
-            const nt = nodes[id].data?.node_type;
-            if (nt === 'loader' && !idByType.loader) { idByType.loader = id; loaderCfg = nodes[id].data.config || {}; }
-            if (nt === 'splitter' && !idByType.splitter) { idByType.splitter = id; splitterCfg = nodes[id].data.config || {}; }
-            if (nt === 'vectorstore' && !idByType.vectorstore) { idByType.vectorstore = id; storeCfg = nodes[id].data.config || {}; }
+            const d = nodes[id].data || {};
+            if (d.config && d.config.disabled) continue;   // disabled nodes are excluded from the pipeline
+            const nt = d.node_type;
+            if (nt === 'loader' && !idByType.loader) { idByType.loader = id; loaderCfg = d.config || {}; }
+            if (nt === 'splitter' && !idByType.splitter) { idByType.splitter = id; splitterCfg = d.config || {}; }
+            if (nt === 'vectorstore' && !idByType.vectorstore) { idByType.vectorstore = id; storeCfg = d.config || {}; }
         }
         if (!idByType.loader) { this.showToast?.('No loader node in this pipeline.', 'error'); return; }
         if (!loaderCfg.path) { this.showToast?.('Open the loader and pick a Source (Browse storage…), then Save before running.', 'error'); return; }
