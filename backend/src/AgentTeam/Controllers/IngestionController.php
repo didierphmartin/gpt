@@ -340,6 +340,9 @@ final class IngestionController
         if (!$srv) {
             return ['success' => false, 'error' => "Vector MCP server #{$serverId} not found or disabled.", 'status_code' => 400];
         }
+        if ($collection === '') {
+            return ['success' => false, 'error' => 'Set a collection name in the store node.', 'status_code' => 400];
+        }
 
         [$listFiles, $readFile] = $this->buildLoaderClosures($userId, (string) ($loaderCfg['storage_mcp_id'] ?? ''));
         @set_time_limit(180);
@@ -472,6 +475,10 @@ final class IngestionController
             $srv = $stmt->fetch(\PDO::FETCH_ASSOC);
             if (!$srv) {
                 $sse(['type' => 'error', 'error' => "Vector MCP server #{$serverId} not found or disabled."]);
+                return $done();
+            }
+            if ($collection === '') {
+                $sse(['type' => 'error', 'error' => 'Set a collection name in the store node.']);
                 return $done();
             }
         }
@@ -607,6 +614,9 @@ final class IngestionController
         if (!$srv) {
             return ['success' => false, 'error' => "Vector MCP server #{$serverId} not found or disabled.", 'status_code' => 400];
         }
+        if ($collection === '') {
+            return ['success' => false, 'error' => 'Set a collection name in the store node.', 'status_code' => 400];
+        }
 
         @set_time_limit(60);
         $vs = new VectorMcpStore(function (int $sid, string $tool, array $args) use ($srv): array {
@@ -685,6 +695,9 @@ final class IngestionController
             $srv = $stmt->fetch(\PDO::FETCH_ASSOC);
             if (!$srv) {
                 return ['success' => false, 'error' => "Vector MCP server #{$serverId} not found or disabled.", 'status_code' => 400];
+            }
+            if (trim((string) ($storeCfg['collection'] ?? '')) === '') {
+                return ['success' => false, 'error' => 'Set a collection name in the store node.', 'status_code' => 400];
             }
         }
 

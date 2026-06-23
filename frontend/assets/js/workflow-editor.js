@@ -7154,7 +7154,7 @@ class WorkflowEditor {
     }
 
     /**
-     * Retrieval test: run qdrant-find against the store node's vector-DB MCP and
+     * Retrieval test: run find against the store node's vector-DB MCP and
      * show the matched chunks (with their source file). Read-only.
      */
     async searchVectorStore(nodeId) {
@@ -7192,7 +7192,7 @@ class WorkflowEditor {
         }
     }
 
-    /** Format qdrant-find results for the Search panel. */
+    /** Format find results for the Search panel. */
     _renderSearchResults(data) {
         const results = Array.isArray(data.results) ? data.results : [];
         const q = data.query || '';
