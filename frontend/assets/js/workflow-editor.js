@@ -6412,8 +6412,8 @@ class WorkflowEditor {
                     <div id="ingestion-loader-provider-host" class="ingestion-loader-provider-radios"></div>
                 </div>
                 <div class="storage-config-folder">
-                    <label for="ingestion-loader-workers">Parallel workers <span style="font-weight:400;color:#6b7280;">(▶ Start runs this many in parallel)</span></label>
-                    <input type="number" id="ingestion-loader-workers" min="1" max="32" value="${this.escapeHtml(config.workers != null && config.workers !== '' ? String(config.workers) : '')}" placeholder="auto (≈ CPU cores)">
+                    <label for="ingestion-loader-workers">Parallel workers <span style="font-weight:400;color:#6b7280;">(▶ Start runs this many in parallel — defaults to your CPU cores)</span></label>
+                    <input type="number" id="ingestion-loader-workers" min="1" max="32" value="${this.escapeHtml(config.workers != null && config.workers !== '' ? String(config.workers) : String(Math.min((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4, 8)))}" placeholder="auto (≈ CPU cores)">
                 </div>
                 <div class="storage-config-folder full" id="ingestion-loader-ufskey-wrap" style="display:none;">
                     <label for="ingestion-loader-ufskey">UniversalFS key <span style="font-weight:400;color:#6b7280;">(required for this provider)</span></label>
