@@ -5730,7 +5730,7 @@ class WorkflowEditor {
         const INGESTION_DEFAULTS = {
             loader:      { types: [], path: '' },
             splitter:    { strategy: 'recursive', chunk_size: 1000, overlap: 150 },
-            vectorstore: { store: 'pgvector', embeddings: 'openai:text-embedding-3-small', collection: '' },
+            vectorstore: { store: '', provider: 'qdrant', connection: {}, embedding: '', collection: '' },
         };
         const META = {
             loader:      { icon: '📥', name: 'Loader' },
@@ -6272,7 +6272,14 @@ class WorkflowEditor {
             ? arr.map(x => {
                 if (typeof x === 'string') return { name: x, available: true };
                 const name = x && (x.name || x.id);
-                return name ? { name, available: x.available !== false } : null;
+                if (!name) return null;
+                return {
+                    name,
+                    label: x.label || name,
+                    available: x.available !== false,
+                    embeds_internally: x.embeds_internally === true,
+                    connection_schema: (x.connection_schema && typeof x.connection_schema === 'object') ? x.connection_schema : null,
+                };
             }).filter(Boolean)
             : [];
         try {
@@ -6305,35 +6312,212 @@ class WorkflowEditor {
         return [];
     }
 
-    async _populateVectorStoreMcpOptions(selected) {
-        const sel = document.getElementById('ingestion-vs-store');
-        if (!sel) return;
-        let servers = [];
-        try {
-            const res = await fetch(`${this.apiBase}/mcp/servers`, { headers: this.getAuthHeaders() });
-            if (res.ok) {
-                const data = await res.json();
-                servers = data.servers || data.data || (Array.isArray(data) ? data : []);
+    /** Heuristic: is this MCP server a vector-store server? (name/desc/url). */
+    _isVectorStoreMcpServer(server) {
+        if (!server) return false;
+        const hay = `${server.name || ''} ${server.description || ''} ${server.url || ''}`.toLowerCase();
+        return /\b(vector|qdrant|qdant|mcp_qrant|pgvector)\b/.test(hay)
+            || /vector|qdrant|mcp_qrant|pgvector/.test(hay);
+    }
+
+    /**
+     * Wire the store node's "Vector DB" provider radios + dynamic connection form
+     * + conditional embeddings dropdown + Test connection. Mirrors the loader:
+     * the vector-store MCP server is auto-resolved into a hidden input (store:
+     * "mcp:<id>"); providers/connection/embeddings come from list_providers /
+     * connection_schema / list_embeddings. Everything degrades gracefully — a
+     * missing mcpClient or a failing call must never throw.
+     */
+    _wireStoreProviderAndConnection(config = {}) {
+        const storeInput = document.getElementById('ingestion-vs-store');
+        const providerHost = document.getElementById('ingestion-vs-provider-host');
+        const connHost = document.getElementById('ingestion-vs-connection-host');
+        const embWrap = document.getElementById('ingestion-vs-embeddings-wrap');
+        const embSel = document.getElementById('ingestion-vs-embedding');
+        if (!storeInput || !providerHost || !connHost) return;
+
+        const savedConn = (config.connection && typeof config.connection === 'object') ? config.connection : {};
+        const savedProvider = config.provider || '';
+        const savedEmbedding = config.embedding || '';
+
+        // --- 1. Resolve the vector-store MCP server (sync, from mcpClient.servers). ---
+        const collectServers = () => {
+            const out = [];
+            try {
+                const map = window.mcpClient && window.mcpClient.servers;
+                if (map && typeof map.forEach === 'function') {
+                    map.forEach(s => { if (this._isVectorStoreMcpServer(s)) out.push(s); });
+                }
+            } catch (e) { console.warn('[ingestion/store] server collect failed:', e); }
+            return out;
+        };
+        const savedId = String(config.store || '').startsWith('mcp:') ? String(config.store).slice(4) : '';
+        let chosen = null; // {id, url, name}
+        const resolveServer = () => {
+            const servers = collectServers();
+            const pick = servers.find(s => savedId && String(s.id) === savedId)
+                || servers.find(s => /mcp_qrant|qdrant/i.test(`${s.name || ''} ${s.url || ''}`))
+                || servers[0] || null;
+            chosen = pick ? { id: String(pick.id), url: pick.url || '', name: pick.name || `server ${pick.id}` } : null;
+            storeInput.value = chosen ? `mcp:${chosen.id}` : '';
+            if (chosen) storeInput.dataset.url = chosen.url;
+        };
+
+        // --- providers (from list_providers; gated on `available`). ---
+        let providers = [];
+        const providerByName = (name) => providers.find(p => p.name === name) || null;
+
+        const renderConnection = () => {
+            const checked = providerHost.querySelector('input[name="ingestion-vs-provider"]:checked');
+            const prov = checked ? providerByName(checked.value) : null;
+            const fields = (prov && prov.connection_schema && Array.isArray(prov.connection_schema.fields))
+                ? prov.connection_schema.fields : [];
+            connHost.innerHTML = fields.map(f => {
+                const name = f.name;
+                const label = this.escapeHtml(f.label || name);
+                const req = f.required ? ' *' : '';
+                const cur = savedConn[name] != null ? String(savedConn[name]) : '';
+                if (f.type === 'select' && Array.isArray(f.options)) {
+                    const opts = f.options.map(o => `<option value="${this.escapeHtml(String(o))}" ${cur === String(o) ? 'selected' : ''}>${this.escapeHtml(String(o))}</option>`).join('');
+                    return `<div style="margin-bottom:8px;"><label style="display:block;font-size:12px;color:#9ca3af;">${label}${req}</label>`
+                        + `<select data-conn-field="${this.escapeHtml(name)}">${opts}</select></div>`;
+                }
+                const inputType = (f.mask || f.type === 'password') ? 'password' : (f.type === 'number' ? 'number' : 'text');
+                return `<div style="margin-bottom:8px;"><label style="display:block;font-size:12px;color:#9ca3af;">${label}${req}</label>`
+                    + `<input type="${inputType}" data-conn-field="${this.escapeHtml(name)}" value="${this.escapeHtml(cur)}"></div>`;
+            }).join('') || '<span style="font-size:12px;color:#6b7280;">No connection fields for this provider.</span>';
+        };
+
+        const toggleEmbeddings = () => {
+            const checked = providerHost.querySelector('input[name="ingestion-vs-provider"]:checked');
+            const prov = checked ? providerByName(checked.value) : null;
+            // Self-embedding providers (Qdrant) hide the dropdown; others show it.
+            if (!prov || prov.embeds_internally) {
+                if (embWrap) embWrap.style.display = 'none';
+                return;
             }
-        } catch (e) {
-            console.warn('[ingestion] MCP server load failed:', e);
-        }
-        // Vector-DB MCP servers, recognised by a vector/qdrant-ish name. The id
-        // is shown so look-alike names (e.g. a broken remote vs a local double)
-        // can be told apart.
-        const vectorServers = servers.filter(s => /vector|qdrant|qdant/i.test(String(s.name || '')));
-        if (!vectorServers.length) {
-            sel.insertAdjacentHTML('beforeend',
-                `<option value="" disabled>${this.escapeHtml(this.t('workflow.ingestion.noVectorMcp') || 'No vector-DB MCP servers — name them vector_…')}</option>`);
-            return;
-        }
-        const opts = vectorServers.map(s => {
-            const val = `mcp:${s.id}`;
-            const display = String(s.name || '').replace(/^vector[_-]/i, '') || `server ${s.id}`;
-            return `<option value="${val}" ${selected === val ? 'selected' : ''}>${this.escapeHtml(display)} (vector MCP #${s.id})</option>`;
-        }).join('');
-        sel.insertAdjacentHTML('beforeend', opts);
-        if (selected && String(selected).startsWith('mcp:')) sel.value = selected;
+            if (embWrap) embWrap.style.display = '';
+            if (embSel && embSel.options.length === 0) {
+                this._mcpProxyToolCall(chosen, 'list_embeddings', {}).then(rpc => {
+                    const embs = this._parseListEmbeddings(rpc);
+                    embSel.innerHTML = embs.map(e =>
+                        `<option value="${this.escapeHtml(e.id)}" ${e.id === savedEmbedding ? 'selected' : ''}>${this.escapeHtml(e.label || e.id)}</option>`).join('');
+                });
+            }
+        };
+
+        const renderProviders = () => {
+            providerHost.style.display = 'grid';
+            providerHost.style.gridTemplateColumns = '1fr 1fr';
+            providerHost.style.columnGap = '16px';
+            providerHost.style.rowGap = '8px';
+            providerHost.innerHTML = providers.map(p => {
+                const disabled = !p.available;
+                const checked = (p.name === savedProvider && !disabled) ? 'checked' : '';
+                const suffix = disabled ? ' (coming soon)' : '';
+                const style = `display:flex;align-items:center;gap:6px;` + (disabled ? 'opacity:.5;cursor:not-allowed;' : '');
+                return `<label class="ingestion-loader-provider-radio${disabled ? ' disabled' : ''}" style="${style}">`
+                    + `<input type="radio" name="ingestion-vs-provider" value="${this.escapeHtml(p.name)}" ${checked} ${disabled ? 'disabled' : ''}>`
+                    + `<span>${this.escapeHtml(p.label || p.name)}${suffix}</span></label>`;
+            }).join('');
+            if (!providerHost.querySelector('input[name="ingestion-vs-provider"]:checked')) {
+                const firstEnabled = providerHost.querySelector('input[name="ingestion-vs-provider"]:not([disabled])');
+                if (firstEnabled) firstEnabled.checked = true;
+            }
+            providerHost.querySelectorAll('input[name="ingestion-vs-provider"]').forEach(r => {
+                r.addEventListener('change', () => { renderConnection(); toggleEmbeddings(); });
+            });
+            renderConnection();
+            toggleEmbeddings();
+        };
+
+        const refreshProviders = async () => {
+            const rpc = await this._mcpProxyToolCall(chosen, 'list_providers', {});
+            if (!rpc) return;
+            const parsed = this._parseListProviders(rpc);
+            if (parsed && parsed.length) { providers = parsed; renderProviders(); }
+        };
+
+        // Wire the Test connection button.
+        const testBtn = document.getElementById('ingestion-vs-test');
+        const testOut = document.getElementById('ingestion-vs-test-result');
+        if (testBtn) testBtn.addEventListener('click', async () => {
+            const checked = providerHost.querySelector('input[name="ingestion-vs-provider"]:checked');
+            const provider = checked ? checked.value : '';
+            if (!provider) { if (testOut) testOut.textContent = 'Pick a provider first.'; return; }
+            if (testOut) testOut.textContent = 'Testing…';
+            const rpc = await this._mcpProxyToolCall(chosen, 'test_connection', { provider, connection: this._readStoreConnection() });
+            let ok = false, msg = 'no response';
+            try {
+                // test_connection payload is {ok:bool,message?} inside content[0].text.
+                const result = (rpc && rpc.result !== undefined) ? rpc.result : rpc;
+                let payload = result;
+                const content = result && result.content;
+                if (Array.isArray(content) && content[0] && typeof content[0].text === 'string') {
+                    try { payload = JSON.parse(content[0].text); } catch (e) { /* ignore */ }
+                }
+                ok = !!(payload && payload.ok);
+                msg = (payload && payload.message) ? payload.message : (ok ? 'OK' : 'failed');
+            } catch (e) { msg = String(e); }
+            if (testOut) { testOut.textContent = ok ? '✓ OK' : `✗ ${msg}`; testOut.style.color = ok ? '#34d399' : '#f87171'; }
+        });
+
+        // Resolve + render synchronously, then refresh from the live server list.
+        resolveServer();
+        renderProviders();
+        try {
+            if (window.mcpClient && typeof window.mcpClient.loadServers === 'function') {
+                window.mcpClient.loadServers()
+                    .then(() => { resolveServer(); refreshProviders(); })
+                    .catch(e => console.warn('[ingestion/store] loadServers failed:', e));
+            }
+        } catch (e) { console.warn('[ingestion/store] loadServers threw:', e); }
+        refreshProviders();
+    }
+
+    /** Gather the store node's connection form into a {field: value} object. */
+    _readStoreConnection() {
+        const host = document.getElementById('ingestion-vs-connection-host');
+        const out = {};
+        if (!host) return out;
+        host.querySelectorAll('[data-conn-field]').forEach(el => {
+            const k = el.getAttribute('data-conn-field');
+            const v = (el.value != null ? String(el.value) : '').trim();
+            if (k && v !== '') out[k] = v;
+        });
+        return out;
+    }
+
+    /**
+     * Defensively parse a list_embeddings result into [{id,label}]. Handles the
+     * MCP content[0].text JSON framing and {embeddings:[...]}. Returns [] on fail.
+     */
+    _parseListEmbeddings(res) {
+        const norm = (arr) => Array.isArray(arr)
+            ? arr.map(x => {
+                const id = x && (x.id || x.name);
+                return id ? { id, label: x.label || id } : null;
+            }).filter(Boolean)
+            : [];
+        try {
+            if (!res) return [];
+            const result = (res.result !== undefined) ? res.result : res;
+            if (!result) return [];
+            if (Array.isArray(result.embeddings)) return norm(result.embeddings);
+            const content = result.content;
+            if (Array.isArray(content)) {
+                for (const part of content) {
+                    if (part && typeof part.text === 'string') {
+                        try {
+                            const obj = JSON.parse(part.text);
+                            if (Array.isArray(obj)) return norm(obj);
+                            if (obj && Array.isArray(obj.embeddings)) return norm(obj.embeddings);
+                        } catch (e) { /* not JSON */ }
+                    }
+                }
+            }
+        } catch (e) { console.warn('[ingestion/store] parse list_embeddings failed:', e); }
+        return [];
     }
 
     showIngestionConfigModal(nodeId) {
@@ -6449,19 +6633,26 @@ class WorkflowEditor {
             `;
         } else if (nodeType === 'vectorstore') {
             fieldsHtml = `
-                <div class="storage-config-folder">
-                    <label for="ingestion-vs-store">Vector DB</label>
-                    <select id="ingestion-vs-store">
-                        <option value="pgvector" ${(config.store || 'pgvector') === 'pgvector' ? 'selected' : ''}>pgvector (built-in)</option>
-                    </select>
+                <div class="storage-config-folder" id="ingestion-vs-provider-wrap">
+                    <label>Vector DB</label>
+                    <div id="ingestion-vs-provider-host" class="ingestion-loader-provider-radios"></div>
+                    <input type="hidden" id="ingestion-vs-store" value="${this.escapeHtml(config.store || '')}">
+                </div>
+                <div class="storage-config-folder full" id="ingestion-vs-connection-wrap">
+                    <label>Connection</label>
+                    <div id="ingestion-vs-connection-host"></div>
+                </div>
+                <div class="storage-config-folder" id="ingestion-vs-embeddings-wrap" style="display:none;">
+                    <label for="ingestion-vs-embedding">Embeddings</label>
+                    <select id="ingestion-vs-embedding"></select>
                 </div>
                 <div class="storage-config-folder">
-                    <label for="ingestion-vs-embeddings">Embeddings</label>
-                    <input type="text" id="ingestion-vs-embeddings" value="${this.escapeHtml(config.embeddings || '')}" placeholder="openai:text-embedding-3-small">
-                </div>
-                <div class="storage-config-folder full">
                     <label for="ingestion-vs-collection">Collection</label>
                     <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
+                </div>
+                <div class="storage-config-folder full">
+                    <button type="button" id="ingestion-vs-test" class="storage-config-btn cancel" style="padding:4px 14px;">Test connection</button>
+                    <span id="ingestion-vs-test-result" style="margin-left:8px;font-size:12px;color:#9ca3af;"></span>
                 </div>
             `;
         }
@@ -6557,12 +6748,9 @@ class WorkflowEditor {
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        // Vector store: list the user's registered MCP servers as Vector DB
-        // options (value "mcp:<id>", the convention VectorMcpStore reads),
-        // alongside the built-in pgvector. Populated async after insert.
         if (nodeType === 'vectorstore') {
-            this._populateVectorStoreMcpOptions(config.store || 'pgvector');
-            // Retrieval test panel: query the vector store via qdrant-find.
+            this._wireStoreProviderAndConnection(config);
+            // Retrieval test panel: query the vector store via `find`.
             const searchBtn = document.getElementById('ingestion-search-btn');
             const searchInput = document.getElementById('ingestion-search-query');
             if (searchBtn) searchBtn.addEventListener('click', () => this.searchVectorStore(nodeId));
@@ -6675,11 +6863,7 @@ class WorkflowEditor {
                     overlap: Number.isFinite(overlap) ? overlap : 150,
                 };
             } else if (nodeType === 'vectorstore') {
-                newConfig = {
-                    store: document.getElementById('ingestion-vs-store').value,
-                    embeddings: document.getElementById('ingestion-vs-embeddings').value.trim(),
-                    collection: document.getElementById('ingestion-vs-collection').value.trim(),
-                };
+                newConfig = this._readIngestionFormConfig('vectorstore', config);
             } else {
                 newConfig = { ...config };
             }
@@ -7289,9 +7473,23 @@ class WorkflowEditor {
             };
         }
         if (nodeType === 'vectorstore') {
+            const storeEl = document.getElementById('ingestion-vs-store');
+            const store = storeEl ? (storeEl.value || '') : (fallback.store || '');
+            const provEl = document.querySelector('input[name="ingestion-vs-provider"]:checked');
+            const provider = provEl ? provEl.value : (fallback.provider || '');
+            const connection = document.getElementById('ingestion-vs-connection-host')
+                ? this._readStoreConnection()
+                : (fallback.connection || {});
+            const embWrap = document.getElementById('ingestion-vs-embeddings-wrap');
+            const embSel = document.getElementById('ingestion-vs-embedding');
+            const embedding = (embWrap && embWrap.style.display !== 'none' && embSel)
+                ? (embSel.value || '')
+                : (fallback.embedding || '');
             return {
-                store: val('ingestion-vs-store', fallback.store || 'pgvector'),
-                embeddings: (val('ingestion-vs-embeddings', fallback.embeddings || '') || '').trim(),
+                store,
+                provider,
+                connection,
+                embedding,
                 collection: (val('ingestion-vs-collection', fallback.collection || '') || '').trim(),
                 disabled,
             };
