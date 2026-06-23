@@ -1220,25 +1220,40 @@ final class IngestionController
             return is_array($decoded) ? $decoded : ['files' => []];
         };
 
-        // langfs read_file returns already-extracted text: {"content": "...",
-        // "format": "text"} as JSON in result. Consume the text directly.
-        $readFile = static function (string $provider, string $fileId) use ($mcp): string {
+        // Read one file, tolerant of BOTH backends and surfacing real errors:
+        //  - langfs: {"content":"<text>","format":"text"} (already extracted)
+        //    → ['is_text' => true].
+        //  - langfs error: {"error":true,"message":...} → throw that message
+        //    (e.g. "path outside allowed roots"), not a generic one.
+        //  - UniversalFS (legacy): base64 of raw bytes → ['is_text' => false]
+        //    so the caller decodes (PDF/DOCX/…).
+        // Sending both `format` and `encoding` lets each server use the param it
+        // understands.
+        $readFile = static function (string $provider, string $fileId) use ($mcp): array {
             $res = $mcp->executeTool('read_file', [
                 'provider' => $provider,
                 'file_id'  => $fileId,
-                'format'   => 'text',
+                'format'   => 'text',     // langfs: extracted text
+                'encoding' => 'base64',   // UniversalFS: base64 raw bytes
             ]);
             if (!empty($res['error'])) {
                 throw new \RuntimeException((string) ($res['message'] ?? 'read_file failed'));
             }
-            $decoded = json_decode((string) ($res['result'] ?? ''), true);
-            if (!is_array($decoded) || !array_key_exists('content', $decoded)) {
-                throw new \RuntimeException('read_file did not return {content,format}');
+            $raw = (string) ($res['result'] ?? '');
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                if (!empty($decoded['error'])) {
+                    throw new \RuntimeException((string) ($decoded['message'] ?? 'read_file error'));
+                }
+                if (array_key_exists('content', $decoded)) {
+                    return ['is_text' => true, 'data' => (string) $decoded['content']];
+                }
             }
-            if (!empty($decoded['error'])) {
-                throw new \RuntimeException((string) ($decoded['message'] ?? 'read_file error'));
+            $bytes = base64_decode($raw, true);
+            if ($bytes === false) {
+                throw new \RuntimeException('read_file returned neither {content,format} nor valid base64');
             }
-            return (string) $decoded['content'];
+            return ['is_text' => false, 'data' => $bytes];
         };
 
         return [$listFiles, $readFile];

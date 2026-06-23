@@ -195,16 +195,23 @@ final class IngestionLoader
     /**
      * Read one enumerated file via the injected $readFile.
      *
-     * The reader (langfs) already returns extracted TEXT, so no decode step is
-     * needed — running decode() on already-text would mis-parse (e.g. treat a
-     * PDF's extracted text as raw PDF bytes). decode() is retained for the legacy
-     * base64/bytes path but is no longer used here.
+     * $readFile returns ['is_text'=>bool, 'data'=>string]: langfs already
+     * extracts text (is_text=true → passthrough, since decode() would mis-parse
+     * a PDF's extracted text as raw bytes); UniversalFS returns raw bytes
+     * (is_text=false → decode here). A plain string return is treated as raw
+     * bytes for backward compatibility.
      *
      * @param array{provider:string,file_id:string,name:string,doc_type:string} $descriptor
      */
     public static function loadFile(callable $readFile, array $descriptor): string
     {
-        return $readFile($descriptor['provider'], $descriptor['file_id']);
+        $r = $readFile($descriptor['provider'], $descriptor['file_id']);
+        if (is_array($r)) {
+            return !empty($r['is_text'])
+                ? (string) ($r['data'] ?? '')
+                : self::decode($descriptor['name'], (string) ($r['data'] ?? ''), $descriptor['doc_type']);
+        }
+        return self::decode($descriptor['name'], (string) $r, $descriptor['doc_type']);
     }
 
     /**
