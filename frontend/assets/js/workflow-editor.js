@@ -6668,23 +6668,28 @@ class WorkflowEditor {
                 </div>
             `;
         } else if (nodeType === 'vectorstore') {
+            // 2-column layout: row 1 = Vector DB (provider) | Connection (the
+            // selected provider's connection params), row 2 = Collection | Disable
+            // execution. Embeddings (shown only for non-self-embedding providers)
+            // and Test connection span the full width below.
             fieldsHtml = `
                 <div class="storage-config-folder" id="ingestion-vs-provider-wrap">
                     <label>Vector DB</label>
                     <div id="ingestion-vs-provider-host" class="ingestion-loader-provider-radios"></div>
                     <input type="hidden" id="ingestion-vs-store" value="${this.escapeHtml(config.store || '')}">
                 </div>
-                <div class="storage-config-folder full" id="ingestion-vs-connection-wrap">
+                <div class="storage-config-folder" id="ingestion-vs-connection-wrap">
                     <label>Connection</label>
                     <div id="ingestion-vs-connection-host"></div>
-                </div>
-                <div class="storage-config-folder" id="ingestion-vs-embeddings-wrap" style="display:none;">
-                    <label for="ingestion-vs-embedding">Embeddings</label>
-                    <select id="ingestion-vs-embedding"></select>
                 </div>
                 <div class="storage-config-folder">
                     <label for="ingestion-vs-collection">Collection</label>
                     <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
+                </div>
+                ${disableHtml}
+                <div class="storage-config-folder full" id="ingestion-vs-embeddings-wrap" style="display:none;">
+                    <label for="ingestion-vs-embedding">Embeddings</label>
+                    <select id="ingestion-vs-embedding"></select>
                 </div>
                 <div class="storage-config-folder full">
                     <button type="button" id="ingestion-vs-test" class="storage-config-btn cancel" style="padding:4px 14px;">Test connection</button>
@@ -6768,7 +6773,7 @@ class WorkflowEditor {
                         </div>
                         <div class="ingestion-tab-panel" data-panel="config">
                             <div class="storage-config-grid">
-                                ${nodeType === 'loader' ? '' : disableHtml}
+                                ${(nodeType === 'loader' || nodeType === 'vectorstore') ? '' : disableHtml}
                                 ${fieldsHtml}
                             </div>
                         </div>
