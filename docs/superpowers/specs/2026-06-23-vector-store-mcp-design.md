@@ -38,7 +38,7 @@ rest of LangChain's vector DBs) reachable through one interface.
 ### In scope (Phase 1)
 - Standalone Python/LangChain MCP at `mcp_qrant/` (replacing the PHP code).
 - MCP streamable-HTTP transport (mirrors langfs: handler at `/` **and** `/mcp`).
-- Tools: `list_providers`, `test_connection`, `store`, `find`.
+- Tools: `list_providers`, `list_embeddings`, `test_connection`, `store`, `find`.
 - **Provider descriptors** (JSON, one per vector DB) — the 10 popular DBs, each
   with `available` and `embeds_internally` flags + a connection schema.
 - **Qdrant provider functional end-to-end** (local), self-embedding.
@@ -119,6 +119,13 @@ envelope gpt expects. Errors → `{"error":true,"code"?,"message"}`.
 
 - **`list_providers()`** → `{"providers":[{name,label,description,available,
   embeds_internally,connection_schema}]}` — drives the store node's dynamic form.
+- **`list_embeddings()`** → `{"embeddings":[{id,label,provider,dimensions,
+  requires_credentials}]}` — the embedding models the store node may offer the user
+  (e.g. `openai:text-embedding-3-small` 1536, `hf:all-MiniLM-L6-v2` 384,
+  `fastembed:bge-small-en-v1.5` 384). The store node shows this as a **dropdown only
+  when the chosen provider has `embeds_internally: false`** (Qdrant self-embeds, so
+  it's hidden there). `requires_credentials` lets the UI flag models that need a key
+  (e.g. OpenAI). The chosen `id` is what gets passed as `embedding` to `store`/`find`.
 - **`test_connection(provider, connection)`** → `{"ok":bool,"message"?}` — validate
   before a run (the store node's test affordance).
 - **`store(provider, connection, collection, items, embedding?)`** — `items` is a
@@ -142,11 +149,14 @@ Embedding behavior is **declared per provider**, not global:
   then stores the vector. This is the "we process the embedding ourselves"
   requirement.
 
-The **embedding model choice is deferred to Phase 2** (pgvector), because Phase 1's
-only active provider self-embeds. When pgvector lands, the embedder is supplied via
-config/connection (e.g. an `embedding: "provider:model"` field) and instantiated
-through `embedding.py` (a LangChain `Embeddings` factory). **Invariant:** a
-collection's store and query must use the same model/dimension.
+The **catalog of selectable models is exposed by `list_embeddings`** (§7) from
+Phase 1, so the store node can render the dropdown — but it's only *used* for
+`embeds_internally: false` providers. The chosen model `id` is passed as `embedding`
+on `store`/`find`, and `embedding.py` instantiates the matching LangChain
+`Embeddings`. Since Phase 1's only active provider (Qdrant) self-embeds, **the
+actual embedding computation isn't exercised until Phase 2 (pgvector)** — and which
+model is the *default* is decided then. **Invariant:** a collection's store and
+query must use the same model/dimension.
 
 ## 9. Connection handling
 
@@ -161,7 +171,10 @@ pgvector = `{dsn}`. No credentials are stored in this MCP; they ride per request
 Mirrors the langfs gpt integration:
 - Store node renders the **provider list from `list_providers`** (10 entries, Qdrant
   active, 8+pgvector greyed) + a **dynamic connection form** from
-  `connection_schema`, plus a **Test connection** button.
+  `connection_schema`, plus a **Test connection** button. When the chosen provider
+  has `embeds_internally: false`, it also shows an **embeddings dropdown populated
+  from `list_embeddings`** (hidden for Qdrant). The store node already has an
+  `embeddings` free-text field today — this replaces it with the discovered list.
 - Backend `VectorMcpStore` / `storeChunks` / `storeFind` call the unified
   **`store`/`find`** (passing provider + connection) instead of the fixed
   `qdrant-store`/`qdrant-find`. (A `qdrant-store`/`qdrant-find` alias MAY be kept on
