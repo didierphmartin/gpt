@@ -6208,32 +6208,12 @@ class WorkflowEditor {
         //        answered by a different registered server, and doesn't depend on
         //        the global tool-map being fresh. ---
         const refreshAvailability = async () => {
-            try {
-                if (!chosen || !chosen.url || !window.mcpClient
-                    || typeof window.mcpClient.request !== 'function') return;
-                const data = await window.mcpClient.request('/mcp/proxy', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        action: 'proxy',
-                        server_url: chosen.url,
-                        server_id: chosen.id,
-                        user_id: (typeof window.mcpClient.getUserId === 'function')
-                            ? window.mcpClient.getUserId() : undefined,
-                        jsonrpc: {
-                            jsonrpc: '2.0', id: 1, method: 'tools/call',
-                            params: { name: 'list_providers', arguments: {} },
-                        },
-                    }),
-                });
-                const rpc = (data && data.response) ? data.response : data;
-                const parsed = this._parseListProviders(rpc);
-                if (parsed && parsed.length) {
-                    providers = parsed;      // the langfs default package (all 10, with `available`)
-                    renderProviders();
-                }
-            } catch (e) {
-                console.warn('[ingestion/loader] list_providers failed:', e);
-                // Leave the default (local-only) list — no crash.
+            const rpc = await this._mcpProxyToolCall(chosen, 'list_providers', {});
+            if (!rpc) return;             // no chosen server / call failed — keep defaults
+            const parsed = this._parseListProviders(rpc);
+            if (parsed && parsed.length) {
+                providers = parsed;       // the langfs default package (all 10, with `available`)
+                renderProviders();
             }
         };
 
@@ -6249,6 +6229,37 @@ class WorkflowEditor {
             }
         } catch (e) { console.warn('[ingestion/loader] loadServers threw:', e); }
         refreshAvailability();
+    }
+
+    /**
+     * Call ONE tool on a specific MCP server via the backend /mcp/proxy gateway,
+     * scoped by server_url + server_id so a different registered server can't
+     * answer. Returns the JSON-RPC result object (data.response || data), or null
+     * on any failure — callers must tolerate null and never throw.
+     */
+    async _mcpProxyToolCall(chosen, toolName, args = {}) {
+        try {
+            if (!chosen || !chosen.url || !window.mcpClient
+                || typeof window.mcpClient.request !== 'function') return null;
+            const data = await window.mcpClient.request('/mcp/proxy', {
+                method: 'POST',
+                body: JSON.stringify({
+                    action: 'proxy',
+                    server_url: chosen.url,
+                    server_id: chosen.id,
+                    user_id: (typeof window.mcpClient.getUserId === 'function')
+                        ? window.mcpClient.getUserId() : undefined,
+                    jsonrpc: {
+                        jsonrpc: '2.0', id: 1, method: 'tools/call',
+                        params: { name: toolName, arguments: args || {} },
+                    },
+                }),
+            });
+            return (data && data.response) ? data.response : data;
+        } catch (e) {
+            console.warn(`[ingestion] ${toolName} proxy call failed:`, e);
+            return null;
+        }
     }
 
     /**
