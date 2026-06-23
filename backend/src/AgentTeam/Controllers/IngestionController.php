@@ -323,7 +323,7 @@ final class IngestionController
         $chunkSize = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
         $overlap = max(0, (int) ($splitterCfg['overlap'] ?? 150));
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
-        $provider = trim((string) ($storeCfg['provider'] ?? ''));
+        $vsProvider = trim((string) ($storeCfg['provider'] ?? ''));
         $connection = (array) ($storeCfg['connection'] ?? []);
         $embedding = trim((string) ($storeCfg['embedding'] ?? ''));
 
@@ -372,7 +372,7 @@ final class IngestionController
                     return $this->callMcpTool((string) $srv['url'], $sessHeaders, $tool, $args);
                 });
                 $r = $vs->store($serverId, $chunks, [
-                    'provider'   => $provider,
+                    'provider'   => $vsProvider,
                     'connection' => $connection,
                     'collection' => $collection !== '' ? $collection : null,
                     'embedding'  => $embedding !== '' ? $embedding : null,
@@ -449,7 +449,7 @@ final class IngestionController
         $chunkSize = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
         $overlap = max(0, (int) ($splitterCfg['overlap'] ?? 150));
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
-        $provider = trim((string) ($storeCfg['provider'] ?? ''));
+        $vsProvider = trim((string) ($storeCfg['provider'] ?? ''));
         $connection = (array) ($storeCfg['connection'] ?? []);
         $embedding = trim((string) ($storeCfg['embedding'] ?? ''));
 
@@ -537,7 +537,7 @@ final class IngestionController
                 $sse(['type' => 'node', 'node' => 'vectorstore', 'state' => 'active']);
                 try {
                     $r = $vs->store($serverId, $ch, [
-                        'provider'   => $provider,
+                        'provider'   => $vsProvider,
                         'connection' => $connection,
                         'collection' => $collection !== '' ? $collection : null,
                         'embedding'  => $embedding !== '' ? $embedding : null,
