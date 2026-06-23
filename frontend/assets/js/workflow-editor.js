@@ -271,6 +271,13 @@ class WorkflowEditor {
         const collapsedSections = JSON.parse(localStorage.getItem('workflowPanelCollapsed') || '{}');
 
         this.agentsPanel.innerHTML = `
+            <!-- Panel header with collapse/expand toggle -->
+            <div class="workflow-panel-header">
+                <span class="panel-title">Nodes</span>
+                <button id="workflow-panel-toggle" class="workflow-panel-toggle"
+                        title="Collapse panel" aria-label="Collapse panel">▶</button>
+            </div>
+
             <!-- All Nodes with collapsible sections -->
             <div class="workflow-agents-list" id="workflow-agents-list">
                 <!-- Essentials Section -->
@@ -353,6 +360,30 @@ class WorkflowEditor {
             });
         });
 
+        // Panel collapse/expand toggle. The .collapsed class lives on the
+        // panel container (not rebuilt by innerHTML), so its state survives
+        // re-renders; we still re-apply from localStorage to stay in sync.
+        const panelToggleBtn = this.agentsPanel.querySelector('#workflow-panel-toggle');
+        if (panelToggleBtn) {
+            const applyToggleState = () => {
+                const collapsed = this.agentsPanel.classList.contains('collapsed');
+                // Match the left sidebar's glyphs (◀/▶). On this right-side
+                // panel ▶ collapses (toward the right edge); ◀ expands.
+                panelToggleBtn.textContent = collapsed ? '◀' : '▶';
+                panelToggleBtn.title = collapsed ? 'Expand panel' : 'Collapse panel';
+                panelToggleBtn.setAttribute('aria-label', panelToggleBtn.title);
+            };
+            if (localStorage.getItem('workflowPanelHidden') === '1') {
+                this.agentsPanel.classList.add('collapsed');
+            }
+            applyToggleState();
+            panelToggleBtn.onclick = () => {
+                const nowCollapsed = this.agentsPanel.classList.toggle('collapsed');
+                localStorage.setItem('workflowPanelHidden', nowCollapsed ? '1' : '0');
+                applyToggleState();
+            };
+        }
+
         // Set up section add button handlers
         this.agentsPanel.querySelectorAll('.section-add-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -399,10 +430,12 @@ class WorkflowEditor {
             this.showNewWorkflowTypeSelector(e.target.closest('button'));
         });
 
-        // Sidebar Import Workflow button — same flow as the form's Import action
-        document.getElementById('sidebar-import-workflow-btn')?.addEventListener('click', () => {
-            this._handleImportWorkflow();
-        });
+        // Sidebar Import Workflow button — same flow as the form's Import action.
+        // Use onclick (single slot) NOT addEventListener: this setup re-runs on
+        // every editor re-init, and addEventListener would stack a new listener
+        // each time → one click fires N file pickers (Cancel reveals the next).
+        const sidebarImportBtn = document.getElementById('sidebar-import-workflow-btn');
+        if (sidebarImportBtn) sidebarImportBtn.onclick = () => this._handleImportWorkflow();
 
         // Load existing workflows into left panel
         this.loadWorkflowsList();
@@ -1272,12 +1305,12 @@ class WorkflowEditor {
         // Import / Export — JSON interchange. Export reuses the existing
         // _showWorkflowJson() modal (with a Download .json button added);
         // Import re-hydrates the canvas from a pasted/uploaded JSON file.
-        document.getElementById('workflow-import-btn')?.addEventListener('click', () => {
-            this._handleImportWorkflow();
-        });
-        document.getElementById('workflow-export-btn')?.addEventListener('click', () => {
-            this._showWorkflowJson();
-        });
+        // onclick (single slot), not addEventListener — this binding code re-runs
+        // on re-init; addEventListener would stack listeners → duplicate pickers.
+        const importBtn = document.getElementById('workflow-import-btn');
+        if (importBtn) importBtn.onclick = () => this._handleImportWorkflow();
+        const exportBtn = document.getElementById('workflow-export-btn');
+        if (exportBtn) exportBtn.onclick = () => this._showWorkflowJson();
 
         // Delete button handler
         const deleteBtn = document.getElementById('workflow-delete-btn');
@@ -2216,6 +2249,13 @@ class WorkflowEditor {
                 const drawflowNode = editBtn.closest('.drawflow-node');
                 const nodeId = drawflowNode ? drawflowNode.id.replace('node-', '') : null;
 
+                // Ingestion nodes (loader / splitter / vectorstore) use the same
+                // pen affordance as agent nodes, but open their own config modal.
+                if (editBtn.dataset.ingestion === 'true' && nodeId) {
+                    this.showIngestionConfigModal(nodeId);
+                    return;
+                }
+
                 // Check if this is a realtime agent node
                 if (editBtn.dataset.rtNode === 'true' && nodeId) {
                     this.showRealtimeAgentEditForm(nodeId);
@@ -2367,9 +2407,10 @@ class WorkflowEditor {
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
                 } else if (this._isIngestionWorkflow()) {
-                    // Ingestion pipelines need no user prompt — run directly
-                    // (executeWorkflow routes ingestion graphs to run-ingestion).
-                    this.executeWorkflow('');
+                    // Ingestion: run the PHP interpreter from the Start node —
+                    // it drives the loader node round-by-round (one file at a
+                    // time), the same loop the store will later clock.
+                    this._runIngestionFromStart();
                 } else if (this.lastUserPrompt) {
                     this.executeWorkflow(this.lastUserPrompt);
                 } else {
@@ -3419,24 +3460,39 @@ class WorkflowEditor {
      * a fresh row instead of overwriting whatever was previously loaded.
      */
     _handleImportWorkflow() {
+        // Re-entrancy guard: only ever one picker open at a time. Even if some
+        // path invokes this more than once in a burst, the duplicates bail.
+        if (this._importPickerOpen) return;
+        this._importPickerOpen = true;
+
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = 'application/json,.json';
         input.style.display = 'none';
+
+        const done = () => {
+            this._importPickerOpen = false;
+            if (input.parentNode) document.body.removeChild(input);
+        };
+
         input.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
-            if (!file) return;
             try {
-                const text = await file.text();
-                const payload = JSON.parse(text);
-                this._applyImportedWorkflow(payload);
+                if (file) this._applyImportedWorkflow(JSON.parse(await file.text()));
             } catch (err) {
                 console.error('[WorkflowEditor] Import failed:', err);
                 alert(`Import failed: ${err.message}`);
-            } finally {
-                document.body.removeChild(input);
             }
+            done();
         });
+        // Cancel path: the 'cancel' event (Chrome 113+) plus a window-focus
+        // fallback for browsers that don't fire it — both release the guard so
+        // a later import still works. The 500ms delay lets 'change' win first.
+        input.addEventListener('cancel', done);
+        window.addEventListener('focus', () => {
+            setTimeout(() => { if (this._importPickerOpen) done(); }, 500);
+        }, { once: true });
+
         document.body.appendChild(input);
         input.click();
     }
@@ -5672,7 +5728,7 @@ class WorkflowEditor {
      */
     addIngestionNode(x, y, nodeType, config = null) {
         const INGESTION_DEFAULTS = {
-            loader:      { source: 'pdf', path: '' },
+            loader:      { types: [], path: '' },
             splitter:    { strategy: 'recursive', chunk_size: 1000, overlap: 150 },
             vectorstore: { store: 'pgvector', embeddings: 'openai:text-embedding-3-small', collection: '' },
         };
@@ -5694,15 +5750,15 @@ class WorkflowEditor {
         const summary = this.ingestionNodeSummary(nodeType, nodeConfig);
 
         const html = `
-            <div class="workflow-node ingestion-node configurable" data-ingestion-type="${nodeType}">
+            <div class="workflow-node ingestion-node configurable ${nodeConfig.disabled ? 'node-disabled' : ''}" data-ingestion-type="${nodeType}">
                 <div class="node-header">
                     <span class="node-icon">${meta.icon}</span>
                     <span class="node-title">${this.escapeHtml(meta.name)}</span>
-                    <span class="node-config-hint" title="Click to configure">⚙</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
                 <div class="node-body">
                     <small class="node-config-display">${this.escapeHtml(summary)}</small>
+                    <button class="node-edit-btn" data-ingestion="true" title="Edit">✏️</button>
                 </div>
             </div>
         `;
@@ -5749,12 +5805,523 @@ class WorkflowEditor {
     }
 
     /**
-     * Show an editable config modal for an ingestion node
-     * (loader / splitter / vectorstore). Mirrors showStorageConfigModal:
-     * an overlay with header / body / footer, close on background click,
-     * X button, Cancel, Escape; Save writes the edited config back into
-     * the Drawflow node data and refreshes the on-canvas summary.
+     * Wire the loader's single "Browse…" button to the native OS file picker
+     * (File System Access API). The pick MUST live inside the user's mounted
+     * workspace root; we store the path RELATIVE to it via root.resolve(). The
+     * selection's kind (file vs folder) comes straight from handle.kind; for a
+     * path that's typed in, _pathIsFile() decides via its extension. The right
+     * column shows the file path or, for a folder, its contents.
      */
+    _wireLoaderPathPicker() {
+        document.getElementById('ingestion-browse')
+            ?.addEventListener('click', () => this._pickLoaderPath());
+        const input = document.getElementById('ingestion-loader-path');
+        input?.addEventListener('input', () => this._refreshLoaderSelection());
+        // Reflect a saved value when the modal re-opens.
+        if (input && input.value.trim()) this._refreshLoaderSelection();
+    }
+
+    /** Right-column placeholder shown until something is selected. */
+    _loaderHelpHtml() {
+        return `
+            <div class="ingestion-folder-help">
+                <p class="muted">Nothing selected yet.</p>
+                <p class="muted">Click “Browse storage…” to pick a folder or a file, or type a path on the left.</p>
+            </div>`;
+    }
+
+    /**
+     * Algorithm to tell a file from a folder when we only have a path string:
+     * a final segment carrying a file extension is a file, otherwise a folder.
+     */
+    _pathIsFile(path) {
+        return /\.[A-Za-z0-9]{1,8}$/.test(String(path).trim().replace(/[\/\\]+$/, ''));
+    }
+
+    /**
+     * Browse the storage provider THROUGH UniversalFS (`list_files`) and pick a
+     * folder OR a file. We only need the PATH — UniversalFS does the actual
+     * reading — so this never touches the browser's local file system (which
+     * can't supply absolute provider paths anyway).
+     */
+    async _pickLoaderPath() {
+        const input = document.getElementById('ingestion-loader-path');
+        // Resume browsing from the current value if it's a folder, else root.
+        const start = (input && input.dataset.isDir === '1' && input.value.trim()) ? input.value.trim() : null;
+        await this._browseLoaderStorage(start);
+    }
+
+    /** Fetch + render one folder level of the storage provider. */
+    async _browseLoaderStorage(path = null) {
+        const box = document.getElementById('ingestion-folder-list');
+        const title = document.getElementById('ingestion-sel-title');
+        if (!box) return;
+        if (!window.mcpClient || typeof window.mcpClient.callTool !== 'function') {
+            box.innerHTML = `<div class="ingestion-folder-help"><p class="muted">Storage browser unavailable — type a path on the left instead.</p></div>`;
+            return;
+        }
+        const providerEl = document.querySelector('input[name="ingestion-loader-provider"]:checked');
+        const provider = providerEl ? providerEl.value : 'local';
+        if (title) title.textContent = 'Browse storage';
+        box.innerHTML = `<div class="ingestion-folder-help"><p class="muted">Loading…</p></div>`;
+        let parsed, mcpError = '';
+        try {
+            const args = { provider };
+            if (path) args.path = path;
+            const res = await window.mcpClient.callTool('list_files', args);
+            mcpError = this._extractMcpError(res);
+            parsed = this._parseListFiles(res);
+        } catch (e) {
+            box.innerHTML = `<div class="ingestion-folder-help"><p class="muted">Could not list files: ${this.escapeHtml(e?.message || String(e))}</p></div>`;
+            return;
+        }
+        this._loaderBrowsePath = (parsed.folder_id !== '' ? parsed.folder_id : (path || ''));
+        // Keep the Source field in sync with the folder we're viewing, so the
+        // current folder is ALREADY the selected source even if the user never
+        // clicks "Use this folder" (clicking a file overrides with that file).
+        const pathInput = document.getElementById('ingestion-loader-path');
+        if (pathInput && this._loaderBrowsePath) {
+            pathInput.value = this._loaderBrowsePath;
+            pathInput.dataset.isDir = '1';
+        }
+        // A non-empty folder we can't read returns an MCP error, not zero files —
+        // surface it (with a permissions hint) instead of a misleading "(empty)".
+        if (parsed.items.length === 0 && mcpError) {
+            this._renderStorageBrowserError(provider, mcpError);
+            return;
+        }
+        this._renderStorageBrowser(parsed, provider);
+    }
+
+    /**
+     * Defensively parse a list_files result into { folder_id, items:[{id,name,
+     * type}] }. Handles the callTool wrapper, the MCP content[0].text JSON
+     * framing and structuredContent. Returns empties on failure.
+     */
+    _parseListFiles(res) {
+        try {
+            const result = (res && res.result !== undefined) ? res.result : res;
+            let obj = null;
+            if (result && Array.isArray(result.files)) obj = result;
+            else if (result && Array.isArray(result.content)) {
+                for (const part of result.content) {
+                    if (part && typeof part.text === 'string') {
+                        try { const o = JSON.parse(part.text); if (o && Array.isArray(o.files)) { obj = o; break; } } catch (_) { /* not JSON */ }
+                    }
+                }
+            } else if (result && result.structuredContent && Array.isArray(result.structuredContent.files)) {
+                obj = result.structuredContent;
+            }
+            if (!obj) return { folder_id: '', items: [] };
+            const items = obj.files
+                .map(f => ({ id: f.id, name: f.name || f.id, type: f.type }))
+                .filter(x => x.id);
+            return { folder_id: obj.folder_id || '', items };
+        } catch (e) {
+            console.warn('[ingestion/loader] parse list_files failed:', e);
+            return { folder_id: '', items: [] };
+        }
+    }
+
+    /** Dig an error message out of an MCP/callTool result, or '' if none. */
+    _extractMcpError(res) {
+        try {
+            if (!res || typeof res === 'string') return '';
+            if (res.error) return (typeof res.error === 'string') ? res.error : (res.error.message || '');
+            if (res.success === false && typeof res.message === 'string') return res.message;
+            const result = (res.result !== undefined) ? res.result : res;
+            if (result) {
+                if (result.error) return (typeof result.error === 'string') ? result.error : (result.error.message || '');
+                if (result.isError && Array.isArray(result.content)) {
+                    const t = result.content.map(c => c && c.text).filter(Boolean).join(' ');
+                    if (t) return t;
+                }
+            }
+        } catch (_) { /* ignore */ }
+        return '';
+    }
+
+    /** Render a browse-level error (e.g. permission denied) with a hint + Up. */
+    _renderStorageBrowserError(provider, msg) {
+        const box = document.getElementById('ingestion-folder-list');
+        if (!box) return;
+        const cur = (this._loaderBrowsePath || '').replace(/\/+$/, '');
+        const parent = cur ? cur.split('/').slice(0, -1).join('/') : '';
+        const denied = /not permitted|failed to open directory|permission/i.test(msg);
+        const body = denied
+            ? `⚠️ Can’t read this folder. The web server (Apache/UniversalFS) isn’t allowed to access it — on macOS, <strong>Documents</strong>, <strong>Desktop</strong> and <strong>Downloads</strong> need <strong>Full Disk Access</strong> granted to Apache (System Settings → Privacy &amp; Security → Full Disk Access), then restart Apache. Or point the loader at a readable location.`
+            : `⚠️ ${this.escapeHtml(msg)}`;
+        box.innerHTML = `
+            <div class="ingestion-browse-bar">
+                <button type="button" class="ingestion-browse-up" data-path="${this.escapeHtml(parent)}" ${cur === '' ? 'disabled' : ''}>⬆ Up</button>
+            </div>
+            <p class="muted ingestion-browse-cur">${this.escapeHtml(provider)} : /${this.escapeHtml(cur)}</p>
+            <div class="ingestion-folder-help"><p class="muted">${body}</p></div>`;
+        const up = box.querySelector('.ingestion-browse-up');
+        if (up && !up.disabled) up.addEventListener('click', () => this._browseLoaderStorage(up.dataset.path || null));
+    }
+
+    /** Render the storage browser (Up · Use-this-folder · folders · files). */
+    _renderStorageBrowser(parsed, provider) {
+        const box = document.getElementById('ingestion-folder-list');
+        if (!box) return;
+        const cur = (this._loaderBrowsePath || '').replace(/\/+$/, '');
+        const parent = cur ? cur.split('/').slice(0, -1).join('/') : '';
+        const folders = parsed.items.filter(i => i.type === 'folder').sort((a, b) => a.name.localeCompare(b.name));
+        const files = parsed.items.filter(i => i.type !== 'folder').sort((a, b) => a.name.localeCompare(b.name));
+
+        const list = [];
+        for (const d of folders) list.push(`<li class="ingestion-browse-folder" data-path="${this.escapeHtml(d.id)}">📁 ${this.escapeHtml(d.name)}</li>`);
+        for (const f of files) list.push(`<li class="ingestion-browse-file" data-path="${this.escapeHtml(f.id)}">📄 ${this.escapeHtml(f.name)}</li>`);
+
+        box.innerHTML = `
+            <div class="ingestion-browse-bar">
+                <button type="button" class="ingestion-browse-up" data-path="${this.escapeHtml(parent)}" ${cur === '' ? 'disabled' : ''}>⬆ Up</button>
+                <button type="button" class="ingestion-browse-usefolder" data-path="${this.escapeHtml(cur)}">✓ Use this folder</button>
+            </div>
+            <p class="muted ingestion-browse-cur">${this.escapeHtml(provider)} : /${this.escapeHtml(cur)}</p>
+            <ul class="ingestion-folder-files">${list.join('') || '<li class="muted">(empty)</li>'}</ul>`;
+
+        box.querySelectorAll('.ingestion-browse-folder').forEach(el =>
+            el.addEventListener('click', () => this._browseLoaderStorage(el.dataset.path)));
+        box.querySelectorAll('.ingestion-browse-file').forEach(el =>
+            el.addEventListener('click', () => this._selectLoaderPath(el.dataset.path, false)));
+        const up = box.querySelector('.ingestion-browse-up');
+        if (up && !up.disabled) up.addEventListener('click', () => this._browseLoaderStorage(up.dataset.path || null));
+        const useF = box.querySelector('.ingestion-browse-usefolder');
+        if (useF) useF.addEventListener('click', () => this._selectLoaderPath(useF.dataset.path, true));
+    }
+
+    /** Commit a browsed path (folder or file) into the loader's Source field. */
+    _selectLoaderPath(path, isDir) {
+        const input = document.getElementById('ingestion-loader-path');
+        if (!input) return;
+        input.value = path || '';
+        input.dataset.isDir = isDir ? '1' : '';
+        this.showToast?.(isDir ? `Folder selected: /${path}` : `File selected: /${path}`, 'success');
+        this._refreshLoaderSelection();
+    }
+
+    /**
+     * Recompute the selection's kind and update the right-column display:
+     * a file shows its path; a folder shows its contents.
+     */
+    async _refreshLoaderSelection(dirHandle = null) {
+        const input = document.getElementById('ingestion-loader-path');
+        const box = document.getElementById('ingestion-folder-list');
+        const title = document.getElementById('ingestion-sel-title');
+        if (!input || !box) return;
+
+        const path = input.value.trim();
+        if (!path) {
+            input.dataset.isDir = '';
+            if (title) title.textContent = 'Selection';
+            box.innerHTML = this._loaderHelpHtml();
+            return;
+        }
+
+        // handle.kind wins; otherwise fall back to the path-extension algorithm.
+        const isDir = (input.dataset.isDir === '1') || !this._pathIsFile(path);
+        input.dataset.isDir = isDir ? '1' : '';
+
+        if (isDir) {
+            if (title) title.textContent = 'Folder contents';
+            const dh = dirHandle || await this._resolveDir(path);
+            if (dh) {
+                this._renderFolderListing(dh);
+            } else {
+                box.innerHTML = `<div class="ingestion-folder-help">`
+                    + `<p>📁 Folder: <code class="ingestion-path-code">${this.escapeHtml(path)}</code></p>`
+                    + `<p class="muted">Its contents are read when the pipeline runs.</p></div>`;
+            }
+        } else {
+            if (title) title.textContent = 'Selected file';
+            // The type is detected from the extension; the File-types checkboxes
+            // filter which formats are processed. Flag when the picked file's
+            // type isn't among the checked formats so it's clear it'll be skipped.
+            const ext = (path.split('.').pop() || '').toLowerCase();
+            const map = { pdf: 'pdf', docx: 'word', doc: 'word', txt: 'text', csv: 'csv', html: 'html', htm: 'html' };
+            const detected = map[ext] || null;
+            const checked = Array.from(document.querySelectorAll('.ingestion-loader-type:checked')).map(c => c.value);
+            const allowed = checked.length === 0 || (detected && checked.includes(detected));
+            let note = '';
+            if (!detected) note = `<p class="muted">⚠️ Unsupported type (.${this.escapeHtml(ext)}) — it will be skipped.</p>`;
+            else if (!allowed) note = `<p class="muted">⚠️ ${detected} isn't in the checked File types — it will be skipped.</p>`;
+            box.innerHTML = `<div class="ingestion-folder-help">`
+                + `<p>📄 File:</p>`
+                + `<p><code class="ingestion-path-code">${this.escapeHtml(path)}</code></p>${note}</div>`;
+        }
+    }
+
+    /** Render the entries of a directory handle into the right-column panel. */
+    async _renderFolderListing(dirHandle) {
+        const box = document.getElementById('ingestion-folder-list');
+        if (!box) return;
+        box.innerHTML = '<div class="ingestion-folder-help"><p class="muted">Reading folder…</p></div>';
+        const items = [];
+        try {
+            for await (const [name, handle] of dirHandle.entries()) {
+                items.push({ name, kind: handle.kind });
+            }
+        } catch (e) {
+            box.innerHTML = `<div class="ingestion-folder-help"><p class="muted">Could not read folder: ${this.escapeHtml(e?.message || String(e))}</p></div>`;
+            return;
+        }
+        if (!items.length) {
+            box.innerHTML = '<div class="ingestion-folder-help"><p class="muted">This folder is empty.</p></div>';
+            return;
+        }
+        items.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : (a.kind === 'directory' ? -1 : 1)));
+        box.innerHTML = '<ul class="ingestion-folder-files">'
+            + items.map(it => `<li>${it.kind === 'directory' ? '📁' : '📄'} ${this.escapeHtml(it.name)}</li>`).join('')
+            + '</ul>';
+    }
+
+    /** Resolve a folder path under the workspace root, or null. */
+    async _resolveDir(relPath) {
+        try {
+            const fs = window.localFs;
+            if (!fs || !fs.isSupported()) return null;
+            return await fs.resolvePath(relPath, { kind: 'directory' });
+        } catch (_) { return null; }
+    }
+
+    /**
+     * Append the user's registered MCP servers to the Vector store node's
+     * "Vector DB" dropdown. Sourced the same way the agent node forms get their
+     * tools — GET /mcp/servers (returns enabled servers, `{servers:[...]}`).
+     * Each option's value is "mcp:<id>" (the convention VectorMcpStore reads).
+     * @param {string} selected the currently-saved store value
+     */
+    /**
+     * Heuristic: is this MCP server a file-storage / UniversalFS server?
+     * Mirrors the vector-MCP filtering convention but matches on storage-ish
+     * keywords in the server name/description/url. Defensive against bad shapes.
+     */
+    _isFileStorageMcpServer(server) {
+        if (!server) return false;
+        const hay = `${server.name || ''} ${server.description || ''} ${server.url || ''}`.toLowerCase();
+        return /\b(file|storage|universalfs|filesystem|drive|onedrive|s3|gdrive)\b/.test(hay)
+            || /universalfs|filesystem|onedrive|gdrive/.test(hay);
+    }
+
+    /**
+     * The full UniversalFS provider set. `local` needs no key; the rest need a
+     * UniversalFS `ufs_…` key unless list_providers reports them as available.
+     */
+    get _ufsKnownProviders() { return ['local', 'gdrive', 's3', 'onedrive']; }
+
+    /**
+     * Wire the loader's "File storage" picker + "Provider" radios + conditional
+     * UniversalFS key box. SCOPE: provider-selection UI only — no file reading.
+     *
+     * Everything degrades gracefully: missing mcpClient, no file-storage servers,
+     * or a failing list_providers must never throw. Radios render SYNCHRONOUSLY
+     * from the known set; the async list_providers call only refines which
+     * providers are marked "(needs key)".
+     */
+    _wireLoaderStorageAndProvider(config = {}) {
+        const storageHost = document.getElementById('ingestion-loader-storage-host');
+        const providerHost = document.getElementById('ingestion-loader-provider-host');
+        const keyWrap = document.getElementById('ingestion-loader-ufskey-wrap');
+        if (!storageHost || !providerHost) return;
+
+        // --- 1. Discover registered file-storage MCP servers (sync, from the
+        //        already-loaded mcpClient.servers map; refresh async best-effort). ---
+        const collectServers = () => {
+            const out = [];
+            try {
+                const map = window.mcpClient && window.mcpClient.servers;
+                if (map && typeof map.forEach === 'function') {
+                    map.forEach(s => { if (this._isFileStorageMcpServer(s)) out.push(s); });
+                }
+            } catch (e) { console.warn('[ingestion/loader] server collect failed:', e); }
+            return out;
+        };
+
+        const savedId = config.storage_mcp_id != null ? String(config.storage_mcp_id) : '';
+        let chosen = null; // {id, url, name}
+
+        const renderStorage = () => {
+            const servers = collectServers();
+            if (!servers.length) {
+                chosen = null;
+                storageHost.innerHTML =
+                    `<p class="ingestion-loader-explain" style="margin:4px 0;color:#9ca3af;">`
+                    + `Register a UniversalFS MCP server in Settings → MCP.</p>`
+                    + `<input type="hidden" id="ingestion-loader-storage" value="">`;
+                return;
+            }
+            if (servers.length === 1) {
+                const s = servers[0];
+                chosen = { id: String(s.id), url: s.url || '', name: s.name || `server ${s.id}` };
+                storageHost.innerHTML =
+                    `<div style="padding:6px 0;">${this.escapeHtml(chosen.name)}</div>`
+                    + `<input type="hidden" id="ingestion-loader-storage" value="${this.escapeHtml(chosen.id)}"`
+                    + ` data-url="${this.escapeHtml(chosen.url)}" data-name="${this.escapeHtml(chosen.name)}">`;
+                return;
+            }
+            // Several: a <select>.
+            const opts = servers.map(s => {
+                const id = String(s.id);
+                const sel = (savedId && savedId === id) ? 'selected' : '';
+                return `<option value="${this.escapeHtml(id)}" data-url="${this.escapeHtml(s.url || '')}"`
+                    + ` data-name="${this.escapeHtml(s.name || ('server ' + id))}" ${sel}>`
+                    + `${this.escapeHtml(s.name || ('server ' + id))}</option>`;
+            }).join('');
+            storageHost.innerHTML = `<select id="ingestion-loader-storage">${opts}</select>`;
+            const sel = document.getElementById('ingestion-loader-storage');
+            const syncChosen = () => {
+                const opt = sel.options[sel.selectedIndex];
+                chosen = { id: sel.value, url: opt ? opt.dataset.url || '' : '', name: opt ? opt.dataset.name || '' : '' };
+            };
+            // Pick the saved server if present, else first.
+            if (savedId) { try { sel.value = savedId; } catch (e) {} }
+            syncChosen();
+            sel.addEventListener('change', () => { syncChosen(); refreshAvailability(); });
+        };
+
+        // --- 2. Provider radios — the LIST comes from langfs `list_providers`
+        //        (the default package). Until it loads, show just `local`.
+        //        This cut: only `local` ingests; every other provider is listed
+        //        but DISABLED ("coming soon") until its credential form ships. ---
+        const ENABLED = new Set(['local']);
+        const savedProvider = config.provider || 'local';
+        // Provider list, refined async from list_providers. Each: {name, available}.
+        let providers = [{ name: 'local', available: true }];
+
+        const toggleKeyBox = () => {
+            const checked = providerHost.querySelector('input[name="ingestion-loader-provider"]:checked');
+            const prov = checked ? checked.value : 'local';
+            if (keyWrap) keyWrap.style.display = (prov !== 'local') ? '' : 'none';
+        };
+
+        const renderProviders = () => {
+            providerHost.innerHTML = providers.map(p => {
+                const disabled = !ENABLED.has(p.name);
+                const checked = (p.name === savedProvider && !disabled) ? 'checked' : '';
+                const suffix = disabled ? ' (coming soon)' : '';
+                const style = `display:inline-flex;align-items:center;gap:6px;margin-right:14px;`
+                    + (disabled ? 'opacity:.5;cursor:not-allowed;' : '');
+                return `<label class="ingestion-loader-provider-radio${disabled ? ' disabled' : ''}" style="${style}">`
+                    + `<input type="radio" name="ingestion-loader-provider" value="${this.escapeHtml(p.name)}" ${checked} ${disabled ? 'disabled' : ''}>`
+                    + `<span data-prov="${this.escapeHtml(p.name)}">${this.escapeHtml(p.name)}${suffix}</span></label>`;
+            }).join('');
+            // Guarantee an enabled radio is checked (fall back to the first enabled).
+            if (!providerHost.querySelector('input[name="ingestion-loader-provider"]:checked')) {
+                const firstEnabled = providerHost.querySelector('input[name="ingestion-loader-provider"]:not([disabled])');
+                if (firstEnabled) firstEnabled.checked = true;
+            }
+            providerHost.querySelectorAll('input[name="ingestion-loader-provider"]').forEach(r => {
+                r.addEventListener('change', toggleKeyBox);
+            });
+            toggleKeyBox();
+        };
+
+        // --- 3. Async, NON-blocking list_providers refresh. ---
+        const refreshAvailability = async () => {
+            try {
+                if (!window.mcpClient || typeof window.mcpClient.callTool !== 'function') return;
+                const res = await window.mcpClient.callTool('list_providers', {});
+                const parsed = this._parseListProviders(res);
+                if (parsed && parsed.length) {
+                    providers = parsed;      // the langfs default package (all 10)
+                    renderProviders();
+                }
+            } catch (e) {
+                console.warn('[ingestion/loader] list_providers failed:', e);
+                // Leave the default (local-only) list — no crash.
+            }
+        };
+
+        // Render synchronously, then kick the async refresh.
+        renderStorage();
+        renderProviders();
+        // Refresh from the live server list too (map may load late), then query.
+        try {
+            if (window.mcpClient && typeof window.mcpClient.loadServers === 'function') {
+                window.mcpClient.loadServers()
+                    .then(() => { renderStorage(); refreshAvailability(); })
+                    .catch(e => console.warn('[ingestion/loader] loadServers failed:', e));
+            }
+        } catch (e) { console.warn('[ingestion/loader] loadServers threw:', e); }
+        refreshAvailability();
+    }
+
+    /**
+     * Defensively parse an MCP list_providers result into a string[] of provider
+     * names. Handles: { providers:[...] }, result.content[0].text JSON, plain
+     * arrays, and the callTool wrapper { success, result }. Returns [] on failure.
+     */
+    _parseListProviders(res) {
+        const norm = (arr) => Array.isArray(arr)
+            ? arr.map(x => {
+                if (typeof x === 'string') return { name: x, available: true };
+                const name = x && (x.name || x.id);
+                return name ? { name, available: x.available !== false } : null;
+            }).filter(Boolean)
+            : [];
+        try {
+            if (!res) return [];
+            // callTool wrapper { success, result }.
+            const result = (res.result !== undefined) ? res.result : res;
+            if (!result) return [];
+            // Direct providers array.
+            if (Array.isArray(result.providers)) return norm(result.providers);
+            if (Array.isArray(result)) return norm(result);
+            // MCP content framing: result.content[0].text = JSON string.
+            const content = result.content;
+            if (Array.isArray(content)) {
+                for (const part of content) {
+                    if (part && typeof part.text === 'string') {
+                        try {
+                            const obj = JSON.parse(part.text);
+                            if (Array.isArray(obj)) return norm(obj);
+                            if (obj && Array.isArray(obj.providers)) return norm(obj.providers);
+                        } catch (e) { /* not JSON — ignore */ }
+                    }
+                }
+            }
+            // structuredContent fallback.
+            const sc = result.structuredContent;
+            if (sc && Array.isArray(sc.providers)) return norm(sc.providers);
+        } catch (e) {
+            console.warn('[ingestion/loader] parse list_providers failed:', e);
+        }
+        return [];
+    }
+
+    async _populateVectorStoreMcpOptions(selected) {
+        const sel = document.getElementById('ingestion-vs-store');
+        if (!sel) return;
+        let servers = [];
+        try {
+            const res = await fetch(`${this.apiBase}/mcp/servers`, { headers: this.getAuthHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                servers = data.servers || data.data || (Array.isArray(data) ? data : []);
+            }
+        } catch (e) {
+            console.warn('[ingestion] MCP server load failed:', e);
+        }
+        // Vector-DB MCP servers, recognised by a vector/qdrant-ish name. The id
+        // is shown so look-alike names (e.g. a broken remote vs a local double)
+        // can be told apart.
+        const vectorServers = servers.filter(s => /vector|qdrant|qdant/i.test(String(s.name || '')));
+        if (!vectorServers.length) {
+            sel.insertAdjacentHTML('beforeend',
+                `<option value="" disabled>${this.escapeHtml(this.t('workflow.ingestion.noVectorMcp') || 'No vector-DB MCP servers — name them vector_…')}</option>`);
+            return;
+        }
+        const opts = vectorServers.map(s => {
+            const val = `mcp:${s.id}`;
+            const display = String(s.name || '').replace(/^vector[_-]/i, '') || `server ${s.id}`;
+            return `<option value="${val}" ${selected === val ? 'selected' : ''}>${this.escapeHtml(display)} (vector MCP #${s.id})</option>`;
+        }).join('');
+        sel.insertAdjacentHTML('beforeend', opts);
+        if (selected && String(selected).startsWith('mcp:')) sel.value = selected;
+    }
+
     showIngestionConfigModal(nodeId) {
         const nodeData = this.editor.getNodeFromId(nodeId);
         if (!nodeData) return;
@@ -5771,23 +6338,81 @@ class WorkflowEditor {
         const meta = META[nodeType] || { icon: '⚙', name: nodeType };
 
         // Build type-specific, pre-filled fields.
+        // "Disable execution" is shared chrome. For the loader we place it inside
+        // the 2-column grid (row 1, right of the File storage box) per the
+        // requested layout; other node types keep it at the top.
+        const disableHtml = `
+                <div class="storage-config-folder storage-config-disable">
+                    <label for="ingestion-node-disabled" class="storage-config-disable-row">
+                        <input type="checkbox" id="ingestion-node-disabled" ${config.disabled ? 'checked' : ''}>
+                        <span>Disable execution</span>
+                    </label>
+                    <small>This node is skipped when the pipeline compiles or runs — handy for debugging.</small>
+                </div>`;
         let fieldsHtml = '';
         if (nodeType === 'loader') {
+            // File-type FILTER: the checked formats are the only ones processed.
+            // Empty set = no restriction (every supported type). Migrate the old
+            // single `source` field: 'auto' -> [] (all), an explicit type -> [it].
+            let loaderTypes = Array.isArray(config.types) ? config.types.slice() : null;
+            if (loaderTypes === null) {
+                loaderTypes = (config.source && config.source !== 'auto') ? [config.source] : [];
+            }
+            const typeOpts = [
+                { v: 'pdf',  label: 'PDF (.pdf)' },
+                { v: 'word', label: 'Word (.docx)' },
+                { v: 'text', label: 'Text (.txt)' },
+                { v: 'csv',  label: 'CSV (.csv)' },
+                { v: 'html', label: 'HTML (.html)' },
+            ];
+            const typeChecksHtml = typeOpts.map(o => {
+                const checked = loaderTypes.length === 0 || loaderTypes.includes(o.v);
+                return `<label class="ingestion-type-check"><input type="checkbox" class="ingestion-loader-type" value="${o.v}" ${checked ? 'checked' : ''}><span>${o.label}</span></label>`;
+            }).join('');
+            // 2-column layout: row 1 = File storage | Disable execution,
+            // row 2 = File types (checkbox filter) | Provider (vertical radios);
+            // the key box and the Source picker span full width below.
             fieldsHtml = `
+                <div class="storage-config-folder" id="ingestion-loader-storage-wrap">
+                    <label>File storage <span style="font-weight:400;color:#6b7280;">(via UniversalFS MCP)</span></label>
+                    <div id="ingestion-loader-storage-host"></div>
+                </div>
+                ${disableHtml}
                 <div class="storage-config-folder">
-                    <label for="ingestion-loader-source">Document type</label>
-                    <select id="ingestion-loader-source">
-                        ${[
-                            { v: 'pdf',  label: 'PDF (.pdf)' },
-                            { v: 'word', label: 'Word (.docx)' },
-                            { v: 'text', label: 'Text (.txt)' },
-                            { v: 'csv',  label: 'CSV (.csv)' },
-                        ].map(o => `<option value="${o.v}" ${(config.source || 'pdf') === o.v ? 'selected' : ''}>${o.label}</option>`).join('')}
-                    </select>
+                    <label>File types <span style="font-weight:400;color:#6b7280;">(only the checked formats are processed)</span></label>
+                    <div id="ingestion-loader-types" class="ingestion-loader-type-checks">
+                        ${typeChecksHtml}
+                    </div>
+                </div>
+                <div class="storage-config-folder" id="ingestion-loader-provider-wrap">
+                    <label>Provider</label>
+                    <div id="ingestion-loader-provider-host" class="ingestion-loader-provider-radios"></div>
                 </div>
                 <div class="storage-config-folder">
-                    <label for="ingestion-loader-path">Path</label>
-                    <input type="text" id="ingestion-loader-path" value="${this.escapeHtml(config.path || '')}" placeholder="Path to document(s)">
+                    <label for="ingestion-loader-workers">Parallel workers <span style="font-weight:400;color:#6b7280;">(▶ Start runs this many in parallel)</span></label>
+                    <input type="number" id="ingestion-loader-workers" min="1" max="32" value="${this.escapeHtml(config.workers != null && config.workers !== '' ? String(config.workers) : '')}" placeholder="auto (≈ CPU cores)">
+                </div>
+                <div class="storage-config-folder full" id="ingestion-loader-ufskey-wrap" style="display:none;">
+                    <label for="ingestion-loader-ufskey">UniversalFS key <span style="font-weight:400;color:#6b7280;">(required for this provider)</span></label>
+                    <input type="text" id="ingestion-loader-ufskey" value="${this.escapeHtml(config.ufskey || '')}" placeholder="ufs_…">
+                </div>
+                <div class="storage-config-folder full">
+                    <label>Source <span style="font-weight:400;color:#6b7280;">(inside your workspace folder)</span></label>
+                    <div class="ingestion-loader-split">
+                        <div class="ingestion-loader-left">
+                            <button type="button" class="ingestion-browse-btn" id="ingestion-browse">📂 Browse storage…</button>
+                            <p class="ingestion-loader-explain">
+                                Browse your storage provider (via UniversalFS) and pick a <strong>folder</strong>
+                                — every file inside it (recursively) is processed — or a single <strong>file</strong>.
+                                You can also type a path directly. UniversalFS reads it; only the path is needed.
+                            </p>
+                            <input type="text" id="ingestion-loader-path" class="ingestion-path-input" value="${this.escapeHtml(config.path || '')}" data-is-dir="${config.is_dir ? '1' : ''}" placeholder="Path to a file or folder — or click Browse storage…">
+                        </div>
+                        <div class="ingestion-loader-right">
+                            <div class="ingestion-folder-list-title" id="ingestion-sel-title">Selection</div>
+                            <div id="ingestion-folder-list" class="ingestion-folder-list">${this._loaderHelpHtml()}</div>
+                        </div>
+                    </div>
                 </div>
             `;
         } else if (nodeType === 'splitter') {
@@ -5810,16 +6435,16 @@ class WorkflowEditor {
         } else if (nodeType === 'vectorstore') {
             fieldsHtml = `
                 <div class="storage-config-folder">
-                    <label for="ingestion-vs-store">Store</label>
+                    <label for="ingestion-vs-store">Vector DB</label>
                     <select id="ingestion-vs-store">
-                        <option value="pgvector" selected>pgvector</option>
+                        <option value="pgvector" ${(config.store || 'pgvector') === 'pgvector' ? 'selected' : ''}>pgvector (built-in)</option>
                     </select>
                 </div>
                 <div class="storage-config-folder">
                     <label for="ingestion-vs-embeddings">Embeddings</label>
                     <input type="text" id="ingestion-vs-embeddings" value="${this.escapeHtml(config.embeddings || '')}" placeholder="openai:text-embedding-3-small">
                 </div>
-                <div class="storage-config-folder">
+                <div class="storage-config-folder full">
                     <label for="ingestion-vs-collection">Collection</label>
                     <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
                 </div>
@@ -5830,16 +6455,64 @@ class WorkflowEditor {
         const existingModal = document.getElementById('ingestion-config-modal');
         if (existingModal) existingModal.remove();
 
-        // Four-tab layout: "Config" (the existing form), "Input" (the code this
-        // node RECEIVES from the previous stage), "Generated code" (ONLY this
-        // node's own chunk) and "Output" (Input + Generated = code up to and
-        // including this stage). The three code panels are filled together by
-        // loadIngestionNodeOutput, fetched on demand. Minimal tab toggle — no
-        // need for the agent edit form's richer tab system.
+        // Tab layout. Compiler nodes (splitter / vectorstore) keep the four-tab
+        // view: "Config", "Input" (code received from the previous stage),
+        // "Generated code" (this node's own chunk) and "Output" (Input +
+        // Generated). The LOADER is interpreted — its Input/Generated-code tabs
+        // are irrelevant, so it shows only "Config" and "Output", where Output
+        // displays the file CONTENT extracted to text (not compiler code).
+        // Loader and splitter are INTERPRETED nodes: Config + Output only, where
+        // Output is per-round (one file at a time) with a Prev/Next stepper —
+        // loader shows the file's text, splitter shows that text's chunks.
+        const isInterpretedNode = (nodeType === 'loader' || nodeType === 'splitter' || nodeType === 'vectorstore');
+        const outputHint = nodeType === 'splitter'
+            ? 'Open this tab to chunk the first file.'
+            : nodeType === 'vectorstore'
+                ? 'Open this tab to preview what will be stored (▶ Start writes).'
+                : 'Open this tab to extract the first file to text.';
         const codePreStyle = "margin:0;padding:12px;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto;";
         const tabBtn = (tab, label, active) =>
             `<button type="button" class="ingestion-tab-btn${active ? ' active' : ''}" data-tab="${tab}"
                 style="background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:inherit;cursor:pointer;font-size:13px;${active ? '' : 'opacity:0.7;'}">${label}</button>`;
+        const isStoreNode = nodeType === 'vectorstore';
+        const tabsHtml = isInterpretedNode
+            ? `${tabBtn('config', 'Config', true)}${tabBtn('output', 'Output', false)}${isStoreNode ? tabBtn('search', 'Search', false) : ''}${tabBtn('logs', 'Logs', false)}`
+            : `${tabBtn('config', 'Config', true)}${tabBtn('input', 'Input', false)}${tabBtn('generated', 'Generated code', false)}${tabBtn('output', 'Output', false)}`;
+        const searchPanel = isStoreNode
+            ? `<div class="ingestion-tab-panel" data-panel="search" style="display:none;">
+                   <div style="display:flex;gap:8px;margin-bottom:8px;">
+                       <input type="text" id="ingestion-search-query" placeholder="Search the vector store (semantic)…" style="flex:1;padding:6px 10px;border:1px solid rgba(255,255,255,0.18);border-radius:6px;background:#1e1e1e;color:#d4d4d4;">
+                       <button type="button" id="ingestion-search-btn" class="storage-config-btn save" style="padding:4px 14px;">Search</button>
+                   </div>
+                   <pre id="ingestion-search-results" style="${codePreStyle}">Type a query and Search to retrieve the most similar chunks from the vector store.</pre>
+               </div>`
+            : '';
+        const codePanels = isInterpretedNode
+            ? `<div class="ingestion-tab-panel" data-panel="output" style="display:none;">
+                   <div class="ingestion-loader-roundbar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                       <button type="button" id="ingestion-round-prev" class="storage-config-btn cancel" style="padding:4px 10px;">◀ Prev</button>
+                       <button type="button" id="ingestion-round-next" class="storage-config-btn cancel" style="padding:4px 10px;">Next file ▶</button>
+                       <span id="ingestion-round-info" style="color:#9ca3af;font-size:12px;"></span>
+                   </div>
+                   <pre id="ingestion-output-code" style="${codePreStyle}">${outputHint}</pre>
+               </div>
+               ${searchPanel}
+               <div class="ingestion-tab-panel" data-panel="logs" style="display:none;">
+                   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                       <span style="color:#9ca3af;font-size:12px;">Logs published by this node (and its upstream stages).</span>
+                       <button type="button" id="ingestion-logs-clear" class="storage-config-btn cancel" style="padding:4px 10px;">Clear</button>
+                   </div>
+                   <pre id="ingestion-logs-pre" style="${codePreStyle}">No logs yet — run this node (Output tab) or ▶ Start.</pre>
+               </div>`
+            : `<div class="ingestion-tab-panel" data-panel="input" style="display:none;">
+                   <pre id="ingestion-input-code" style="${codePreStyle}">Loading…</pre>
+               </div>
+               <div class="ingestion-tab-panel" data-panel="generated" style="display:none;">
+                   <pre id="ingestion-generated-code" style="${codePreStyle}">Loading…</pre>
+               </div>
+               <div class="ingestion-tab-panel" data-panel="output" style="display:none;">
+                   <pre id="ingestion-output-code" style="${codePreStyle}">Loading…</pre>
+               </div>`;
         const modalHtml = `
             <div id="ingestion-config-modal" class="storage-config-overlay">
                 <div class="storage-config-modal">
@@ -5849,23 +6522,15 @@ class WorkflowEditor {
                     </div>
                     <div class="storage-config-body">
                         <div class="ingestion-config-tabs" style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.12);">
-                            ${tabBtn('config', 'Config', true)}
-                            ${tabBtn('input', 'Input', false)}
-                            ${tabBtn('generated', 'Generated code', false)}
-                            ${tabBtn('output', 'Output', false)}
+                            ${tabsHtml}
                         </div>
                         <div class="ingestion-tab-panel" data-panel="config">
-                            ${fieldsHtml}
+                            <div class="storage-config-grid">
+                                ${nodeType === 'loader' ? '' : disableHtml}
+                                ${fieldsHtml}
+                            </div>
                         </div>
-                        <div class="ingestion-tab-panel" data-panel="input" style="display:none;">
-                            <pre id="ingestion-input-code" style="${codePreStyle}">Loading…</pre>
-                        </div>
-                        <div class="ingestion-tab-panel" data-panel="generated" style="display:none;">
-                            <pre id="ingestion-generated-code" style="${codePreStyle}">Loading…</pre>
-                        </div>
-                        <div class="ingestion-tab-panel" data-panel="output" style="display:none;">
-                            <pre id="ingestion-output-code" style="${codePreStyle}">Loading…</pre>
-                        </div>
+                        ${codePanels}
                     </div>
                     <div class="storage-config-footer">
                         <button class="storage-config-btn cancel" id="ingestion-config-cancel">${this.t('common.cancel')}</button>
@@ -5876,6 +6541,51 @@ class WorkflowEditor {
         `;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Vector store: list the user's registered MCP servers as Vector DB
+        // options (value "mcp:<id>", the convention VectorMcpStore reads),
+        // alongside the built-in pgvector. Populated async after insert.
+        if (nodeType === 'vectorstore') {
+            this._populateVectorStoreMcpOptions(config.store || 'pgvector');
+            // Retrieval test panel: query the vector store via qdrant-find.
+            const searchBtn = document.getElementById('ingestion-search-btn');
+            const searchInput = document.getElementById('ingestion-search-query');
+            if (searchBtn) searchBtn.addEventListener('click', () => this.searchVectorStore(nodeId));
+            if (searchInput) searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this.searchVectorStore(nodeId); }
+            });
+        }
+        if (nodeType === 'loader') {
+            this._wireLoaderPathPicker();
+            this._wireLoaderStorageAndProvider(config);
+        }
+        if (nodeType === 'loader' || nodeType === 'splitter' || nodeType === 'vectorstore') {
+            // Per-round Output stepper, shared by loader (text), splitter
+            // (chunks) and store (write preview). Each round = one file.
+            this._nodeRound = 0;
+            this._nodeRoundCount = null;
+            const runRound = () => this._loadNodeRound(nodeId, nodeType);
+            const prevBtn = document.getElementById('ingestion-round-prev');
+            const nextBtn = document.getElementById('ingestion-round-next');
+            if (prevBtn) prevBtn.addEventListener('click', () => {
+                if (this._nodeRound > 0) { this._nodeRound--; runRound(); }
+            });
+            if (nextBtn) nextBtn.addEventListener('click', () => {
+                const max = (this._nodeRoundCount ?? 1) - 1;
+                if (this._nodeRound < max) { this._nodeRound++; runRound(); }
+            });
+            // Logs tab: per-node-type buffer (persists across opens within a
+            // session), populated by node runs and ▶ Start. Track the open node
+            // type so live appends re-render the right modal.
+            this._ingestionLogs = this._ingestionLogs || { loader: [], splitter: [], vectorstore: [] };
+            this._openIngestionNodeType = nodeType;
+            this._renderIngestionLogs(nodeType);
+            const clearLogsBtn = document.getElementById('ingestion-logs-clear');
+            if (clearLogsBtn) clearLogsBtn.addEventListener('click', () => {
+                if (this._ingestionLogs[nodeType]) this._ingestionLogs[nodeType] = [];
+                this._renderIngestionLogs(nodeType);
+            });
+        }
 
         const modal = document.getElementById('ingestion-config-modal');
         const closeBtn = document.getElementById('ingestion-config-close');
@@ -5891,6 +6601,7 @@ class WorkflowEditor {
             // Remove the halo on every close path (X, Cancel, overlay, Save, Escape).
             const el = document.getElementById('node-' + nodeId);
             if (el) el.classList.remove('node-active');
+            this._openIngestionNodeType = null;
             modal.remove();
             document.removeEventListener('keydown', escHandler);
         };
@@ -5907,6 +6618,14 @@ class WorkflowEditor {
                 b.style.opacity = on ? '1' : '0.7';
             });
             panels.forEach(p => { p.style.display = p.dataset.panel === tab ? '' : 'none'; });
+            if (isInterpretedNode) {
+                // Interpreted node: Output shows real results (loader=text,
+                // splitter=chunks), NOT compiler code — so don't hit the
+                // compiler endpoint; run the node live per round.
+                if (tab === 'output') this._loadNodeRound(nodeId, nodeType);
+                if (tab === 'logs') this._renderIngestionLogs(nodeType);
+                return;
+            }
             if (tab === 'input' || tab === 'generated' || tab === 'output') {
                 // Always re-generate from the current form so changing an
                 // attribute (e.g. document type) updates the code. One fetch
@@ -5931,10 +6650,7 @@ class WorkflowEditor {
         saveBtn.addEventListener('click', () => {
             let newConfig;
             if (nodeType === 'loader') {
-                newConfig = {
-                    source: document.getElementById('ingestion-loader-source').value,
-                    path: document.getElementById('ingestion-loader-path').value.trim(),
-                };
+                newConfig = this._readIngestionFormConfig('loader', config);
             } else if (nodeType === 'splitter') {
                 const chunk = parseInt(document.getElementById('ingestion-splitter-chunk').value, 10);
                 const overlap = parseInt(document.getElementById('ingestion-splitter-overlap').value, 10);
@@ -5953,6 +6669,9 @@ class WorkflowEditor {
                 newConfig = { ...config };
             }
 
+            // The disable toggle is common to every ingestion node type.
+            newConfig.disabled = !!document.getElementById('ingestion-node-disabled')?.checked;
+
             // Write back to the Drawflow node data, mirroring the agent
             // path's use of updateNodeDataFromId.
             const updatedData = { ...nodeData.data, config: newConfig };
@@ -5963,6 +6682,8 @@ class WorkflowEditor {
             const nodeElement = document.getElementById(`node-${nodeId}`);
             const displayEl = nodeElement?.querySelector('.node-config-display');
             if (displayEl) displayEl.textContent = summary;
+            // Grey the node out on the canvas when disabled.
+            nodeElement?.querySelector('.workflow-node')?.classList.toggle('node-disabled', newConfig.disabled);
 
             closeModal();
         });
@@ -6049,6 +6770,438 @@ class WorkflowEditor {
     }
 
     /**
+     * Loader node interpreter, ONE ROUND: enumerate the source via the
+     * UniversalFS MCP and read + decode the file at the current cursor — the
+     * loader's actual role (turn a file into text for the splitter). Each round
+     * REPLACES the Output with the new file's text, mirroring the live loop
+     * where the store clocks the loader one file at a time.
+     */
+    /** Dispatch an interpreted node's Output round to the right runner. */
+    _loadNodeRound(nodeId, nodeType) {
+        if (nodeType === 'splitter') return this.loadSplitterChunks(nodeId);
+        if (nodeType === 'vectorstore') return this.loadStorePreview(nodeId);
+        return this.loadLoaderText(nodeId);
+    }
+
+    /** Find a node's saved config by node_type (the upstream pipeline input). */
+    _findNodeConfig(nodeType) {
+        const nodes = this.editor.drawflow.drawflow.Home.data || {};
+        for (const id of Object.keys(nodes)) {
+            if (nodes[id].data?.node_type === nodeType) return nodes[id].data.config || {};
+        }
+        return null;
+    }
+
+    _findLoaderConfig() { return this._findNodeConfig('loader'); }
+    _findSplitterConfig() { return this._findNodeConfig('splitter'); }
+
+    /** Map a tagged log line ([loader]/[splitter]/[store]) to a node type. */
+    _logTypeFromTag(line) {
+        const s = String(line);
+        if (s.startsWith('[loader]')) return 'loader';
+        if (s.startsWith('[splitter]')) return 'splitter';
+        if (s.startsWith('[store]')) return 'vectorstore';
+        return null;
+    }
+
+    /**
+     * Append node-published log lines to their per-type buffers (routed by the
+     * [loader]/[splitter]/[store] tag), and live-refresh the open node's Logs
+     * tab if it was touched. Called from node runs and ▶ Start.
+     */
+    _appendIngestionLogs(lines) {
+        if (!Array.isArray(lines) || !lines.length) return;
+        this._ingestionLogs = this._ingestionLogs || { loader: [], splitter: [], vectorstore: [] };
+        let stamp = '';
+        try { stamp = new Date().toLocaleTimeString(); } catch (_) { stamp = ''; }
+        const touched = new Set();
+        for (const line of lines) {
+            const type = this._logTypeFromTag(line);
+            if (!type) continue;
+            const buf = this._ingestionLogs[type];
+            buf.push(stamp ? `${stamp}  ${line}` : String(line));
+            if (buf.length > 500) buf.shift();
+            touched.add(type);
+        }
+        if (this._openIngestionNodeType && touched.has(this._openIngestionNodeType)) {
+            this._renderIngestionLogs(this._openIngestionNodeType);
+        }
+    }
+
+    /** Render a node type's log buffer into the open modal's Logs panel. */
+    _renderIngestionLogs(nodeType) {
+        const pre = document.getElementById('ingestion-logs-pre');
+        if (!pre) return;
+        const buf = (this._ingestionLogs && this._ingestionLogs[nodeType]) || [];
+        pre.textContent = buf.length ? buf.join('\n') : 'No logs yet — run this node (Output tab) or ▶ Start.';
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    /**
+     * Generic per-round Output runner for interpreted nodes. `opts.url` is the
+     * node endpoint, `opts.body` the request body (gets `cursor` added), and
+     * `opts.render(data)` formats the panel text. Drives glow + the round bar.
+     */
+    async _runNodeRound(nodeId, opts) {
+        const outputPre = document.getElementById('ingestion-output-code');
+        if (!outputPre) return;
+        const nodeEl = document.getElementById('node-' + nodeId);
+        const info = document.getElementById('ingestion-round-info');
+
+        if (!this.currentWorkflowId) {
+            outputPre.textContent = this.t('workflow.output.saveFirst') || 'Save the workflow first.';
+            return;
+        }
+        if (opts.precheck) {
+            const msg = opts.precheck();
+            if (msg) { outputPre.textContent = msg; return; }
+        }
+
+        const cursor = this._nodeRound || 0;
+        outputPre.textContent = opts.loading || 'Running…';
+        if (nodeEl) nodeEl.classList.add('node-active');
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/${opts.endpoint}`,
+                {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ ...opts.body, cursor }),
+                }
+            );
+            const json = await resp.json().catch(() => ({}));
+            if (nodeEl) nodeEl.classList.remove('node-active');
+            const data = (json && json.data) || {};
+            if (resp.ok && json && json.success) {
+                this._nodeRoundCount = data.count || 0;
+                outputPre.textContent = opts.render(data);
+                this._updateRoundBar(data);
+                this._appendIngestionLogs(data.logs);
+                if (nodeEl) { nodeEl.classList.remove('node-error'); nodeEl.classList.add('node-completed'); }
+            } else {
+                outputPre.textContent = (json && json.error) ? json.error : `Failed (HTTP ${resp.status}).`;
+                if (info) info.textContent = '';
+                if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
+            }
+        } catch (e) {
+            if (nodeEl) nodeEl.classList.remove('node-active');
+            outputPre.textContent = 'Failed: ' + (e?.message || String(e));
+            if (nodeEl) { nodeEl.classList.remove('node-completed'); nodeEl.classList.add('node-error'); }
+        }
+    }
+
+    /**
+     * Loader node interpreter, ONE ROUND: enumerate the source via the
+     * UniversalFS MCP and read + decode the file at the current cursor — the
+     * loader's actual role (turn a file into text for the splitter). Each round
+     * REPLACES the Output with the new file's text.
+     */
+    async loadLoaderText(nodeId) {
+        const node = this.editor.getNodeFromId(nodeId);
+        const config = this._readIngestionFormConfig('loader', node?.data?.config || {});
+        return this._runNodeRound(nodeId, {
+            endpoint: 'loader-text',
+            body: { config },
+            loading: 'Reading and extracting text…',
+            precheck: () => config.path ? '' : 'Choose a file or folder in the Config tab first.',
+            render: (data) => this._renderLoaderRound(data),
+        });
+    }
+
+    /**
+     * Splitter node interpreter, ONE ROUND: take the upstream loader's text for
+     * the file at the current cursor and chunk it (recursive splitter). Output
+     * shows that file's chunks.
+     */
+    async loadSplitterChunks(nodeId) {
+        const node = this.editor.getNodeFromId(nodeId);
+        const splitter = this._readIngestionFormConfig('splitter', node?.data?.config || {});
+        const loader = this._findLoaderConfig();
+        return this._runNodeRound(nodeId, {
+            endpoint: 'splitter-chunks',
+            body: { loader: loader || {}, splitter },
+            loading: 'Chunking the file…',
+            precheck: () => {
+                if (!loader) return 'Add a loader node upstream first.';
+                if (!loader.path) return 'The upstream loader has no Source set — open it and pick a file or folder.';
+                return '';
+            },
+            render: (data) => this._renderSplitterRound(data),
+        });
+    }
+
+    /**
+     * Store node Output = a SAFE preview (no write): per file, how many chunks
+     * WOULD be written and to which collection/server. The real write happens on
+     * ▶ Start. Reuses splitter-chunks for the chunk count.
+     */
+    async loadStorePreview(nodeId) {
+        const node = this.editor.getNodeFromId(nodeId);
+        const store = this._readIngestionFormConfig('vectorstore', node?.data?.config || {});
+        const loader = this._findLoaderConfig();
+        const splitter = this._findSplitterConfig();
+        return this._runNodeRound(nodeId, {
+            endpoint: 'splitter-chunks',
+            body: { loader: loader || {}, splitter: splitter || {} },
+            loading: 'Previewing what will be stored…',
+            precheck: () => {
+                if (!loader || !loader.path) return 'The upstream loader has no Source set.';
+                if (!String(store.store || '').startsWith('mcp:')) return 'Pick a vector-DB MCP server in this node’s Config tab.';
+                return '';
+            },
+            render: (data) => this._renderStoreRound(data, store),
+        });
+    }
+
+    /**
+     * Retrieval test: run qdrant-find against the store node's vector-DB MCP and
+     * show the matched chunks (with their source file). Read-only.
+     */
+    async searchVectorStore(nodeId) {
+        const resultsPre = document.getElementById('ingestion-search-results');
+        const queryEl = document.getElementById('ingestion-search-query');
+        if (!resultsPre || !queryEl) return;
+        const query = queryEl.value.trim();
+        if (!query) { resultsPre.textContent = 'Enter a query.'; return; }
+        if (!this.currentWorkflowId) { resultsPre.textContent = this.t('workflow.output.saveFirst') || 'Save the workflow first.'; return; }
+        const node = this.editor.getNodeFromId(nodeId);
+        const store = this._readIngestionFormConfig('vectorstore', node?.data?.config || {});
+        if (!String(store.store || '').startsWith('mcp:')) {
+            resultsPre.textContent = 'Pick a vector-DB MCP server in the Config tab first.';
+            return;
+        }
+        resultsPre.textContent = 'Searching…';
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/store-find`,
+                {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ vectorstore: store, query }),
+                }
+            );
+            const json = await resp.json().catch(() => ({}));
+            if (resp.ok && json && json.success) {
+                resultsPre.textContent = this._renderSearchResults(json.data || {});
+            } else {
+                resultsPre.textContent = (json && json.error) ? json.error : `Search failed (HTTP ${resp.status}).`;
+            }
+        } catch (e) {
+            resultsPre.textContent = 'Search failed: ' + (e?.message || String(e));
+        }
+    }
+
+    /** Format qdrant-find results for the Search panel. */
+    _renderSearchResults(data) {
+        const results = Array.isArray(data.results) ? data.results : [];
+        const q = data.query || '';
+        if (!results.length) return `No matches for “${q}”.`;
+        const hasScores = results.some(r => typeof r.score === 'number');
+        const out = [`${results.length} result(s) for “${q}”${hasScores ? ' (score = similarity)' : ''}:\n`];
+        results.forEach((r, i) => {
+            const score = (typeof r.score === 'number') ? `${r.score.toFixed(3)}  ` : '';
+            const src = r.source ? `[${String(r.source).split('/').pop()}] ` : '';
+            const text = String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+            out.push(`▸ ${i + 1}. ${score}${src}`, text, '');
+        });
+        return out.join('\n');
+    }
+
+    /**
+     * Run the ingestion interpreter from the ▶ Start node — the CLOSED event
+     * loop. The backend enumerates the source ONCE and loops loader→split→store
+     * itself (the store's completion clocks the loader to the next file: true
+     * backpressure, no browser cursor, no re-enumeration). We just open the SSE
+     * stream and reflect its events live — node glow + per-file logs.
+     */
+    async _runIngestionFromStart() {
+        if (!this.currentWorkflowId) { alert(this.t('workflow.messages.saveFirst')); return; }
+        const nodes = this.editor.drawflow.drawflow.Home.data || {};
+        const idByType = {};
+        let loaderCfg = null, splitterCfg = null, storeCfg = null;
+        for (const id of Object.keys(nodes)) {
+            const nt = nodes[id].data?.node_type;
+            if (nt === 'loader' && !idByType.loader) { idByType.loader = id; loaderCfg = nodes[id].data.config || {}; }
+            if (nt === 'splitter' && !idByType.splitter) { idByType.splitter = id; splitterCfg = nodes[id].data.config || {}; }
+            if (nt === 'vectorstore' && !idByType.vectorstore) { idByType.vectorstore = id; storeCfg = nodes[id].data.config || {}; }
+        }
+        if (!idByType.loader) { this.showToast?.('No loader node in this pipeline.', 'error'); return; }
+        if (!loaderCfg.path) { this.showToast?.('Open the loader and pick a Source (Browse storage…), then Save before running.', 'error'); return; }
+        if (idByType.vectorstore && !String(storeCfg.store || '').startsWith('mcp:')) {
+            this.showToast?.('The store node needs a vector-DB MCP server selected — open it and pick one, then Save.', 'error'); return;
+        }
+
+        // Reset glow on the wired nodes; the SSE events will drive it from here.
+        const glow = (type, state) => {
+            const id = idByType[type];
+            if (!id) return;
+            const el = document.getElementById('node-' + id);
+            if (!el) return;
+            el.classList.remove('node-active', 'node-completed', 'node-error');
+            el.classList.add(state === 'active' ? 'node-active' : state === 'done' ? 'node-completed' : 'node-error');
+        };
+        for (const t of Object.keys(idByType)) {
+            const el = document.getElementById('node-' + idByType[t]);
+            if (el) el.classList.remove('node-completed', 'node-error', 'node-active');
+        }
+
+        const body = { loader: loaderCfg };
+        if (idByType.splitter) body.splitter = splitterCfg || {};
+        if (idByType.vectorstore) body.vectorstore = storeCfg || {};
+        const glowAll = (state) => { for (const t of Object.keys(idByType)) glow(t, state); };
+
+        try {
+            // 1. Enumerate once + create the shared run (cursor on disk).
+            const startResp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/run-start`,
+                { method: 'POST', headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) }
+            );
+            const startJson = await startResp.json().catch(() => ({}));
+            if (!startResp.ok || !startJson.success) throw new Error((startJson && startJson.error) || `run-start HTTP ${startResp.status}`);
+            const runId = startJson.data?.run_id;
+            const count = startJson.data?.count || 0;
+            if (!runId || count === 0) {
+                this.showToast?.('No matching files — check the Source and the File-types filter.', 'error');
+                return;
+            }
+
+            // 2. Open K concurrent worker streams (true multi-core — each is a
+            //    separate PHP process pulling files from the shared cursor).
+            //    K = the loader's "Parallel workers" field, or auto (~CPU cores).
+            const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+            const declared = parseInt(loaderCfg.workers, 10);
+            const wanted = Number.isFinite(declared) && declared > 0 ? declared : Math.min(cores, 8);
+            const K = Math.max(1, Math.min(count, wanted));
+            glowAll('active');
+            this.showToast?.(`Ingesting ${count} file(s) across ${K} parallel worker(s)…`, 'info');
+
+            const totals = { files: 0, chunks: 0, stored: 0, errors: 0 };
+            let wrote = false;
+            const workerErrors = [];
+            const onEvent = (ev) => {
+                if (ev.type === 'log') this._appendIngestionLogs(ev.lines);
+                else if (ev.type === 'done') {
+                    totals.files += ev.files || 0; totals.chunks += ev.chunks || 0;
+                    totals.stored += ev.stored || 0; totals.errors += ev.errors || 0;
+                    wrote = wrote || !!ev.wrote;
+                } else if (ev.type === 'error') {
+                    workerErrors.push(ev.error || 'worker error');
+                }
+            };
+            const workers = [];
+            for (let k = 0; k < K; k++) workers.push(this._streamIngestionWorker(runId, onEvent));
+            await Promise.all(workers);
+
+            if (totals.files === 0 && workerErrors.length) {
+                glowAll('error');
+                this.showToast?.(workerErrors[0], 'error');
+                return;
+            }
+            glowAll('done');
+            let msg;
+            if (wrote) {
+                msg = `Ingested: ${totals.files} file(s) → ${totals.chunks.toLocaleString()} chunk(s) → ${totals.stored.toLocaleString()} stored${totals.errors ? `, ${totals.errors} error(s)` : ''} · ${K} workers.`;
+            } else if (idByType.splitter) {
+                msg = `Run: ${totals.files} file(s) → ${totals.chunks.toLocaleString()} chunk(s)${totals.errors ? `, ${totals.errors} error(s)` : ''} · ${K} workers. Add a store node to ingest.`;
+            } else {
+                msg = `Loader run: ${totals.files} file(s) read${totals.errors ? `, ${totals.errors} error(s)` : ''} · ${K} workers.`;
+            }
+            this.showToast?.(msg, (totals.errors && !totals.files) ? 'error' : 'success');
+        } catch (e) {
+            glowAll('error');
+            this.showToast?.('Run failed: ' + (e?.message || String(e)), 'error');
+        }
+    }
+
+    /** Open ONE worker SSE stream (run-worker), dispatching each event to onEvent. */
+    async _streamIngestionWorker(runId, onEvent) {
+        const resp = await fetch(
+            `${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/run-worker`,
+            {
+                method: 'POST',
+                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                credentials: 'include',
+                body: JSON.stringify({ run_id: runId }),
+            }
+        );
+        if (!resp.ok || !resp.body) throw new Error(`worker HTTP ${resp.status}`);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6).trim();
+                if (data === '' || data === '[DONE]') continue;
+                let ev; try { ev = JSON.parse(data); } catch (_) { continue; }
+                try { onEvent(ev); } catch (_) { /* ignore */ }
+            }
+        }
+    }
+
+    /** Render one round (one file's extracted text) for the Output panel. */
+    _renderLoaderRound(data) {
+        const count = data.count || 0;
+        if (count === 0) {
+            return 'No matching files found — check the Source and the File-types filter.';
+        }
+        const c = data.current;
+        if (!c) return 'No more files.';
+        if (c.error) return `── ${c.source} [ERROR] ──\n⚠️ ${c.error}`;
+        const hdr = `── ${c.source} (${c.type}, ${c.chars} chars${c.clipped ? ', clipped' : ''}) ──`;
+        return `${hdr}\n${c.text}`;
+    }
+
+    /** Render one round (one file's chunks) for the splitter Output panel. */
+    _renderSplitterRound(data) {
+        const count = data.count || 0;
+        if (count === 0) return 'No matching files found — check the loader’s Source and File-types.';
+        const c = data.current;
+        if (!c) return 'No more files.';
+        if (c.error) return `── ${c.source} [ERROR] ──\n⚠️ ${c.error}`;
+        const chunks = Array.isArray(c.chunks) ? c.chunks : [];
+        const out = [`── ${c.source} (${c.type}) → ${c.chunk_count} chunk(s) ──\n`];
+        chunks.forEach((ch, i) => {
+            out.push(`▸ chunk ${i + 1} (${ch.chars} chars${ch.clipped ? ', clipped' : ''})`, ch.text, '');
+        });
+        if (c.truncated) out.push(`… ${c.chunk_count - chunks.length} more chunk(s) not shown.`);
+        return out.join('\n');
+    }
+
+    /** Render one round of the store node's write PREVIEW (no write). */
+    _renderStoreRound(data, store) {
+        const count = data.count || 0;
+        if (count === 0) return 'No matching files — check the loader’s Source and File-types.';
+        const c = data.current;
+        if (!c) return 'No more files.';
+        if (c.error) return `── ${c.source} [ERROR] ──\n⚠️ ${c.error}`;
+        const coll = (store && store.collection) ? store.collection : '(server default)';
+        const server = (store && String(store.store || '').startsWith('mcp:')) ? store.store : '(none)';
+        return `── ${c.source} (${c.type}) ──\n`
+            + `Will store ${c.chunk_count} chunk(s) → collection "${coll}" on ${server}.\n\n`
+            + `Preview only — click ▶ Start on the Start node to embed + write all files.`;
+    }
+
+    /** Sync the round toolbar (file k of N + Prev/Next enabled state). */
+    _updateRoundBar(data) {
+        const info = document.getElementById('ingestion-round-info');
+        const prevBtn = document.getElementById('ingestion-round-prev');
+        const nextBtn = document.getElementById('ingestion-round-next');
+        const count = data.count || 0;
+        const cursor = data.cursor || 0;
+        if (info) info.textContent = count ? `File ${cursor + 1} of ${count}` : 'No files';
+        if (prevBtn) prevBtn.disabled = cursor <= 0;
+        if (nextBtn) nextBtn.disabled = count === 0 || cursor >= count - 1;
+    }
+
+    /**
      * Read an ingestion node's CURRENT form-field values into a config object so
      * the Output reflects unsaved edits (change the document type → code updates).
      * Falls back to the saved config for fields/node-types not yet wired.
@@ -6056,17 +7209,66 @@ class WorkflowEditor {
     _readIngestionFormConfig(nodeType, fallback = {}) {
         const val = (id, def) => { const el = document.getElementById(id); return el ? el.value : def; };
         const num = (id, def) => { const el = document.getElementById(id); const n = el ? parseInt(el.value, 10) : NaN; return Number.isFinite(n) ? n : def; };
+        const disEl = document.getElementById('ingestion-node-disabled');
+        const disabled = disEl ? disEl.checked : !!fallback.disabled;
         if (nodeType === 'loader') {
-            return {
-                source: val('ingestion-loader-source', fallback.source || 'pdf'),
+            const pEl = document.getElementById('ingestion-loader-path');
+            // File-type FILTER: the checked formats. [] = no restriction (all
+            // supported). Read from the checkboxes; fall back to the saved set.
+            const typeBoxes = document.querySelectorAll('.ingestion-loader-type');
+            const types = typeBoxes.length
+                ? Array.from(typeBoxes).filter(c => c.checked).map(c => c.value)
+                : (Array.isArray(fallback.types) ? fallback.types : []);
+            // Parallel workers: blank = auto. Read defensively; clamp 1..32.
+            const wEl = document.getElementById('ingestion-loader-workers');
+            let workers = '';
+            if (wEl) {
+                const w = parseInt(wEl.value, 10);
+                workers = (wEl.value.trim() !== '' && Number.isFinite(w)) ? Math.max(1, Math.min(32, w)) : '';
+            } else if (fallback.workers != null) {
+                workers = fallback.workers;
+            }
+            const cfg = {
+                types,
                 path: (val('ingestion-loader-path', fallback.path || '') || '').trim(),
+                is_dir: pEl ? pEl.dataset.isDir === '1' : !!fallback.is_dir,
+                workers,
+                disabled,
             };
+            // File-storage MCP selection (provider-selection UI; read defensively).
+            const storageEl = document.getElementById('ingestion-loader-storage');
+            if (storageEl) {
+                const id = (storageEl.value || '').trim();
+                cfg.storage_mcp_id = id || (fallback.storage_mcp_id || '');
+                // For a <select>, the URL/name live on the chosen <option>; for the
+                // single-server hidden input they live in data-* on the input itself.
+                let url = '';
+                if (storageEl.tagName === 'SELECT') {
+                    const opt = storageEl.options[storageEl.selectedIndex];
+                    url = opt ? (opt.dataset.url || '') : '';
+                } else {
+                    url = storageEl.dataset.url || '';
+                }
+                cfg.storage_mcp_url = url || (fallback.storage_mcp_url || '');
+            } else {
+                if (fallback.storage_mcp_id != null) cfg.storage_mcp_id = fallback.storage_mcp_id;
+                if (fallback.storage_mcp_url != null) cfg.storage_mcp_url = fallback.storage_mcp_url;
+            }
+            // Provider from the checked radio.
+            const provEl = document.querySelector('input[name="ingestion-loader-provider"]:checked');
+            cfg.provider = provEl ? provEl.value : (fallback.provider || 'local');
+            // UniversalFS key — include only when non-empty.
+            const keyEl = document.getElementById('ingestion-loader-ufskey');
+            const keyVal = keyEl ? (keyEl.value || '').trim() : (fallback.ufskey || '');
+            if (keyVal) cfg.ufskey = keyVal;
+            return cfg;
         }
         if (nodeType === 'splitter') {
             return {
                 strategy: val('ingestion-splitter-strategy', fallback.strategy || 'recursive'),
                 chunk_size: num('ingestion-splitter-chunk', fallback.chunk_size ?? 1000),
                 overlap: num('ingestion-splitter-overlap', fallback.overlap ?? 150),
+                disabled,
             };
         }
         if (nodeType === 'vectorstore') {
@@ -6074,6 +7276,7 @@ class WorkflowEditor {
                 store: val('ingestion-vs-store', fallback.store || 'pgvector'),
                 embeddings: (val('ingestion-vs-embeddings', fallback.embeddings || '') || '').trim(),
                 collection: (val('ingestion-vs-collection', fallback.collection || '') || '').trim(),
+                disabled,
             };
         }
         return fallback;
@@ -7898,6 +9101,30 @@ class WorkflowEditor {
                 readOutputs: Array.isArray(input.read_outputs) && input.read_outputs.length > 0 ? input.read_outputs : null,
             });
 
+            // Capture this skill run's logs so the node modal's Logs tab can
+            // show what the script actually did (stdout + log_messages), which
+            // dir/script/argv ran, the exit code and duration. This is the
+            // richest signal when a node misbehaves — far more than a red glow.
+            try {
+                const logNodeId = this.dbNodeToDrawflowMap?.[event.node_id] || event.node_id;
+                if (logNodeId != null) {
+                    if (!this.nodeExecutionData[logNodeId]) this.nodeExecutionData[logNodeId] = {};
+                    if (!Array.isArray(this.nodeExecutionData[logNodeId].logs)) this.nodeExecutionData[logNodeId].logs = [];
+                    this.nodeExecutionData[logNodeId].logs.push({
+                        dirName,
+                        script: input.script || '',
+                        argv: Array.isArray(input.argv) ? input.argv : [],
+                        exitCode: result?.exitCode ?? 0,
+                        stdout: result?.stdout || '',
+                        logMessages: result?.stderr || '',
+                        durationMs: Math.round(result?.durationMs ?? 0),
+                    });
+                    this.updateModalInputOutput(logNodeId);
+                }
+            } catch (e) {
+                console.warn('[WorkflowEditor] failed to capture skill logs:', e);
+            }
+
             // Capture the latest renderable artifact (HTML/MD) for the
             // end-node display. Reuses chat's existing selector so the
             // detection logic stays in one place. The pane itself is
@@ -8075,6 +9302,10 @@ class WorkflowEditor {
                     nodeData.inputTokens = event.input_tokens || 0;
                     nodeData.outputTokens = event.output_tokens || 0;
                     nodeData.totalTokens = nodeData.inputTokens + nodeData.outputTokens;
+                    // Backend-computed USD cost (from centralized system_llm_settings
+                    // pricing). null when pricing is unknown for the provider.
+                    nodeData.costUsd = (event.cost_usd !== undefined && event.cost_usd !== null)
+                        ? Number(event.cost_usd) : null;
                     // Calculate execution time
                     if (nodeData.startTime) {
                         nodeData.executionTime = Date.now() - nodeData.startTime;
@@ -8103,6 +9334,8 @@ class WorkflowEditor {
 
             case 'workflow_complete':
                 console.log('[WorkflowEditor] Workflow completed:', event);
+                // Post-run self-heal hook (Auto mode only; debounced + threshold'd).
+                try { window.healSystem && window.healSystem.autoAfterRun && window.healSystem.autoAfterRun(); } catch (_) {}
                 // Hide abort button and show reset button with token stats
                 this.hideAbortButton();
                 const tokenInfo = {
@@ -9573,6 +10806,9 @@ class WorkflowEditor {
                             <button id="tab-statistics" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
                                 ${tf('tabs.statistics')}
                             </button>
+                            <button id="tab-logs" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
+                                ${tf('tabs.logs') || 'Logs'}
+                            </button>
                             ` : ''}
                         </div>
 
@@ -9810,6 +11046,16 @@ class WorkflowEditor {
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Logs Tab Content (hidden by default) — node status,
+                             error text, and the skill's stdout/log_messages. -->
+                        <div id="logs-tab-content" class="tab-content hidden">
+                            <div class="border border-gray-200 rounded-lg bg-gray-50 p-4" style="min-height: 400px; max-height: 500px; overflow-y: auto;">
+                                <div id="agent-logs-display">
+                                    ${this.getNodeLogsHtml(this.editingNodeId)}
+                                </div>
+                            </div>
+                        </div>
                         ` : ''}
                     </div>
 
@@ -9837,6 +11083,12 @@ class WorkflowEditor {
 
         // Set up event listeners
         this.setupAgentModalEvents();
+
+        // If this node failed in the last run, open straight to the Logs tab
+        // so the error is visible immediately instead of just a red glow.
+        if (this.editingNodeId && this.nodeExecutionData?.[this.editingNodeId]?.success === false) {
+            this.switchAgentModalTab('logs');
+        }
     }
 
     /**
@@ -9923,6 +11175,9 @@ class WorkflowEditor {
         });
         document.getElementById('tab-statistics')?.addEventListener('click', () => {
             this.switchAgentModalTab('statistics');
+        });
+        document.getElementById('tab-logs')?.addEventListener('click', () => {
+            this.switchAgentModalTab('logs');
         });
 
         // Skills tab: tree-style skill picker. The user picks a skill
@@ -10069,6 +11324,7 @@ class WorkflowEditor {
         const inputTab = document.getElementById('tab-input');
         const outputTab = document.getElementById('tab-output');
         const statisticsTab = document.getElementById('tab-statistics');
+        const logsTab = document.getElementById('tab-logs');
         const settingsContent = document.getElementById('settings-tab-content');
         const systemPromptContent = document.getElementById('system-prompt-tab-content');
         const skillsContent = document.getElementById('skills-tab-content');
@@ -10076,19 +11332,20 @@ class WorkflowEditor {
         const inputContent = document.getElementById('input-tab-content');
         const outputContent = document.getElementById('output-tab-content');
         const statisticsContent = document.getElementById('statistics-tab-content');
+        const logsContent = document.getElementById('logs-tab-content');
 
         // Settings + System Prompt are always rendered; the rest are workflow-only.
         // We must NOT require input/output tabs here or library-mode clicks no-op.
         if (!settingsTab || !settingsContent) return;
 
         // Deactivate all tabs
-        [settingsTab, systemPromptTab, skillsTab, schemaTab, inputTab, outputTab, statisticsTab].filter(Boolean).forEach(tab => {
+        [settingsTab, systemPromptTab, skillsTab, schemaTab, inputTab, outputTab, statisticsTab, logsTab].filter(Boolean).forEach(tab => {
             tab.classList.remove('text-blue-600', 'border-blue-600');
             tab.classList.add('text-gray-500', 'border-transparent');
         });
 
         // Hide all content
-        [settingsContent, systemPromptContent, skillsContent, schemaContent, inputContent, outputContent, statisticsContent].filter(Boolean).forEach(content => {
+        [settingsContent, systemPromptContent, skillsContent, schemaContent, inputContent, outputContent, statisticsContent, logsContent].filter(Boolean).forEach(content => {
             content.classList.add('hidden');
         });
 
@@ -10124,6 +11381,11 @@ class WorkflowEditor {
             statisticsTab.classList.add('text-blue-600', 'border-blue-600');
             statisticsTab.classList.remove('text-gray-500', 'border-transparent');
             statisticsContent.classList.remove('hidden');
+        } else if (tabName === 'logs' && logsTab && logsContent) {
+            logsTab.classList.add('text-blue-600', 'border-blue-600');
+            logsTab.classList.remove('text-gray-500', 'border-transparent');
+            logsContent.classList.remove('hidden');
+            this._renderNodeLogs(this.editingNodeId);
         }
     }
 
@@ -10532,6 +11794,99 @@ Based on the analysis...
         if (statisticsDisplay) {
             statisticsDisplay.innerHTML = this.getNodeStatisticsHtml(drawflowId);
         }
+        if (document.getElementById('agent-logs-display')) {
+            this._renderNodeLogs(drawflowId);
+        }
+    }
+
+    /**
+     * Render the Logs panel for a node and wire its Close button. Re-rendered
+     * on every update (live during a run), so the close handler is re-attached
+     * each time.
+     * @param {string|number} drawflowId
+     */
+    _renderNodeLogs(drawflowId) {
+        const el = document.getElementById('agent-logs-display');
+        if (!el) return;
+        el.innerHTML = this.getNodeLogsHtml(drawflowId);
+        el.querySelector('#logs-close-btn')?.addEventListener('click', () => this.closeAgentEditModal());
+    }
+
+    /**
+     * Build the Logs tab HTML for a node: status badge, error box (for failed
+     * nodes — the error string arrives as the node output), and each skill
+     * run's stdout / log_messages with exit code and duration.
+     * @param {string|number} drawflowId
+     * @returns {string}
+     */
+    getNodeLogsHtml(drawflowId) {
+        const data = this.nodeExecutionData?.[drawflowId];
+        const esc = (s) => this.escapeHtml(String(s ?? ''));
+        const tl = (k) => this.t('workflow.agentForm.logs.' + k);
+        const closeBtn = `<button id="logs-close-btn" class="px-2 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition" title="${tl('close')}">✕ ${tl('close')}</button>`;
+
+        if (!data || (data.success === undefined && !Array.isArray(data.logs) && !data.output)) {
+            return `<div class="flex items-center justify-between mb-3">
+                    <span class="text-sm font-semibold text-gray-600">${tl('title')}</span>${closeBtn}
+                </div>
+                <p class="text-sm text-gray-400 italic">${tl('empty')}</p>`;
+        }
+
+        const failed = data.success === false;
+        const statusBadge = failed
+            ? `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700">✕ ${tl('statusFailed')}</span>`
+            : (data.success === true
+                ? `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-700">✓ ${tl('statusCompleted')}</span>`
+                : `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-600">… ${tl('statusPending')}</span>`);
+
+        let html = `<div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">${statusBadge}${data.agentName ? `<span class="text-xs text-gray-500">${esc(data.agentName)}</span>` : ''}</div>
+            ${closeBtn}
+        </div>`;
+
+        // Error box — the failed node's error string lands in its output.
+        if (failed && data.output) {
+            html += `<div class="mb-3">
+                <div class="text-xs font-semibold text-red-700 mb-1">${tl('error')}</div>
+                <pre class="whitespace-pre-wrap text-xs text-red-800 font-mono bg-red-50 border border-red-200 rounded p-3">${esc(data.output)}</pre>
+            </div>`;
+        }
+
+        // Skill execution logs (stdout + log_messages per run).
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        if (logs.length) {
+            html += `<div class="text-xs font-semibold text-gray-700 mb-1">${tl('skillExecution')}</div>`;
+            logs.forEach((lg) => {
+                const argv = Array.isArray(lg.argv) ? lg.argv.join(' ') : '';
+                const exitOk = (lg.exitCode ?? 0) === 0;
+                html += `<div class="mb-3 border border-gray-200 rounded bg-white">
+                    <div class="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-200 text-xs gap-2">
+                        <span class="font-mono text-gray-700 truncate">${esc(lg.dirName || '')} · ${esc(lg.script || '')} ${esc(argv)}</span>
+                        <span class="${exitOk ? 'text-green-600' : 'text-red-600'} font-semibold whitespace-nowrap">exit ${esc(lg.exitCode ?? 0)} · ${esc(lg.durationMs ?? 0)}ms</span>
+                    </div>`;
+                if (lg.stdout) {
+                    html += `<pre class="whitespace-pre-wrap text-xs text-gray-800 font-mono p-3 max-h-60 overflow-y-auto">${esc(lg.stdout)}</pre>`;
+                }
+                if (lg.logMessages) {
+                    html += `<div class="border-t border-gray-100">
+                        <div class="text-[10px] uppercase tracking-wide text-gray-400 px-3 pt-2">${tl('logMessages')}</div>
+                        <pre class="whitespace-pre-wrap text-xs text-gray-600 font-mono px-3 pb-3 max-h-40 overflow-y-auto">${esc(lg.logMessages)}</pre>
+                    </div>`;
+                }
+                html += `</div>`;
+            });
+        } else if (!failed) {
+            html += `<p class="text-xs text-gray-400 italic">${tl('noSkillLogs')}</p>`;
+        }
+
+        // Metadata footer.
+        const meta = [];
+        if (data.executionTime) meta.push(`${tl('duration')}: ${(data.executionTime / 1000).toFixed(1)}s`);
+        if (data.totalTokens) meta.push(`${tl('tokens')}: ${data.totalTokens}`);
+        if (data.costUsd != null) meta.push(`${tl('cost')}: $${Number(data.costUsd).toFixed(4)}`);
+        if (meta.length) html += `<div class="mt-2 text-[11px] text-gray-400">${esc(meta.join(' · '))}</div>`;
+
+        return html;
     }
 
     /**
@@ -10636,6 +11991,8 @@ Based on the analysis...
         const totalTokens = execData.totalTokens || (inputTokens + outputTokens);
         const agentName = execData.agentName || 'Agent';
         const success = execData.success !== false;
+        const costUsd = (execData.costUsd !== undefined && execData.costUsd !== null) ? execData.costUsd : null;
+        const formatCost = (c) => c == null ? '—' : (c < 0.01 ? `$${c.toFixed(5)}` : `$${c.toFixed(4)}`);
 
         // Format execution time
         const formatTime = (ms) => {
@@ -10691,6 +12048,18 @@ Based on the analysis...
                         </div>
                         <div class="text-2xl font-bold text-orange-600">${outputTokens.toLocaleString()}</div>
                         <div class="text-xs text-gray-500 mt-1">${tf('generatedByLLM')}</div>
+                    </div>
+
+                    <!-- Estimated Cost (full width) -->
+                    <div class="bg-white rounded-lg border border-gray-200 p-4 col-span-2">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-2xl">💲</span>
+                            <span class="text-sm font-medium text-gray-600">${tf('estimatedCost') || 'Estimated Cost'}</span>
+                        </div>
+                        <div class="text-2xl font-bold text-gray-900">${formatCost(costUsd)}</div>
+                        <div class="text-xs text-gray-500 mt-1">${costUsd == null
+                            ? (tf('costUnavailable') || 'Pricing not set for this provider')
+                            : (tf('costBasis') || 'Based on centralized per-token pricing')}</div>
                     </div>
                 </div>
 
