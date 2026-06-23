@@ -6142,43 +6142,23 @@ class WorkflowEditor {
         const savedId = config.storage_mcp_id != null ? String(config.storage_mcp_id) : '';
         let chosen = null; // {id, url, name}
 
-        const renderStorage = () => {
+        // We use ONLY the langfs (LangChain loaders) MCP — no UniversalFS, no
+        // user-facing storage picker. Auto-resolve the langfs server and stash
+        // its id in a hidden input so the backend can scope dispatch to it.
+        const resolveStorage = () => {
             const servers = collectServers();
-            if (!servers.length) {
-                chosen = null;
-                storageHost.innerHTML =
-                    `<p class="ingestion-loader-explain" style="margin:4px 0;color:#9ca3af;">`
-                    + `Register a UniversalFS MCP server in Settings → MCP.</p>`
-                    + `<input type="hidden" id="ingestion-loader-storage" value="">`;
-                return;
-            }
-            if (servers.length === 1) {
-                const s = servers[0];
-                chosen = { id: String(s.id), url: s.url || '', name: s.name || `server ${s.id}` };
-                storageHost.innerHTML =
-                    `<div style="padding:6px 0;">${this.escapeHtml(chosen.name)}</div>`
-                    + `<input type="hidden" id="ingestion-loader-storage" value="${this.escapeHtml(chosen.id)}"`
-                    + ` data-url="${this.escapeHtml(chosen.url)}" data-name="${this.escapeHtml(chosen.name)}">`;
-                return;
-            }
-            // Several: a <select>.
-            const opts = servers.map(s => {
-                const id = String(s.id);
-                const sel = (savedId && savedId === id) ? 'selected' : '';
-                return `<option value="${this.escapeHtml(id)}" data-url="${this.escapeHtml(s.url || '')}"`
-                    + ` data-name="${this.escapeHtml(s.name || ('server ' + id))}" ${sel}>`
-                    + `${this.escapeHtml(s.name || ('server ' + id))}</option>`;
-            }).join('');
-            storageHost.innerHTML = `<select id="ingestion-loader-storage">${opts}</select>`;
-            const sel = document.getElementById('ingestion-loader-storage');
-            const syncChosen = () => {
-                const opt = sel.options[sel.selectedIndex];
-                chosen = { id: sel.value, url: opt ? opt.dataset.url || '' : '', name: opt ? opt.dataset.name || '' : '' };
-            };
-            // Pick the saved server if present, else first.
-            if (savedId) { try { sel.value = savedId; } catch (e) {} }
-            syncChosen();
-            sel.addEventListener('change', () => { syncChosen(); refreshAvailability(); });
+            // Prefer the saved server, then anything that looks like langfs, then
+            // the first available file-storage server.
+            const pick = servers.find(s => savedId && String(s.id) === savedId)
+                || servers.find(s => /langfs/i.test(`${s.name || ''} ${s.url || ''}`))
+                || servers[0] || null;
+            chosen = pick
+                ? { id: String(pick.id), url: pick.url || '', name: pick.name || `server ${pick.id}` }
+                : null;
+            storageHost.innerHTML = `<input type="hidden" id="ingestion-loader-storage"`
+                + ` value="${chosen ? this.escapeHtml(chosen.id) : ''}"`
+                + (chosen ? ` data-url="${this.escapeHtml(chosen.url)}" data-name="${this.escapeHtml(chosen.name)}"` : '')
+                + `>`;
         };
 
         // --- 2. Provider radios — the LIST comes from langfs `list_providers`
@@ -6257,14 +6237,14 @@ class WorkflowEditor {
             }
         };
 
-        // Render synchronously, then kick the async refresh.
-        renderStorage();
+        // Resolve the langfs server synchronously, then kick the async refresh.
+        resolveStorage();
         renderProviders();
         // Refresh from the live server list too (map may load late), then query.
         try {
             if (window.mcpClient && typeof window.mcpClient.loadServers === 'function') {
                 window.mcpClient.loadServers()
-                    .then(() => { renderStorage(); refreshAvailability(); })
+                    .then(() => { resolveStorage(); refreshAvailability(); })
                     .catch(e => console.warn('[ingestion/loader] loadServers failed:', e));
             }
         } catch (e) { console.warn('[ingestion/loader] loadServers threw:', e); }
