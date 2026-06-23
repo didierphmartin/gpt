@@ -6101,8 +6101,8 @@ class WorkflowEditor {
     _isFileStorageMcpServer(server) {
         if (!server) return false;
         const hay = `${server.name || ''} ${server.description || ''} ${server.url || ''}`.toLowerCase();
-        return /\b(file|storage|universalfs|filesystem|drive|onedrive|s3|gdrive)\b/.test(hay)
-            || /universalfs|filesystem|onedrive|gdrive/.test(hay);
+        return /\b(file|storage|universalfs|filesystem|drive|onedrive|s3|gdrive|langfs|blob)\b/.test(hay)
+            || /universalfs|filesystem|onedrive|gdrive|langfs/.test(hay);
     }
 
     /**
@@ -6182,10 +6182,10 @@ class WorkflowEditor {
         };
 
         // --- 2. Provider radios — the LIST comes from langfs `list_providers`
-        //        (the default package). Until it loads, show just `local`.
-        //        This cut: only `local` ingests; every other provider is listed
-        //        but DISABLED ("coming soon") until its credential form ships. ---
-        const ENABLED = new Set(['local']);
+        //        (the default package). Each entry carries `available`: true = the
+        //        loader is implemented and selectable; false = not yet implemented
+        //        → rendered greyed/inactive ("coming soon"). Until the list loads,
+        //        show just `local`. ---
         const savedProvider = config.provider || 'local';
         // Provider list, refined async from list_providers. Each: {name, available}.
         let providers = [{ name: 'local', available: true }];
@@ -6193,12 +6193,12 @@ class WorkflowEditor {
         const toggleKeyBox = () => {
             const checked = providerHost.querySelector('input[name="ingestion-loader-provider"]:checked');
             const prov = checked ? checked.value : 'local';
-            if (keyWrap) keyWrap.style.display = (prov !== 'local') ? '' : 'none';
+            if (keyWrap) keyWrap.style.display = (prov && prov !== 'local') ? '' : 'none';
         };
 
         const renderProviders = () => {
             providerHost.innerHTML = providers.map(p => {
-                const disabled = !ENABLED.has(p.name);
+                const disabled = !p.available;          // not-yet-implemented → greyed/inactive
                 const checked = (p.name === savedProvider && !disabled) ? 'checked' : '';
                 const suffix = disabled ? ' (coming soon)' : '';
                 const style = `display:inline-flex;align-items:center;gap:6px;margin-right:14px;`
@@ -6218,14 +6218,32 @@ class WorkflowEditor {
             toggleKeyBox();
         };
 
-        // --- 3. Async, NON-blocking list_providers refresh. ---
+        // --- 3. Async, NON-blocking list_providers refresh, SCOPED to the chosen
+        //        storage server (langfs) via the MCP proxy — so it can't be
+        //        answered by a different registered server, and doesn't depend on
+        //        the global tool-map being fresh. ---
         const refreshAvailability = async () => {
             try {
-                if (!window.mcpClient || typeof window.mcpClient.callTool !== 'function') return;
-                const res = await window.mcpClient.callTool('list_providers', {});
-                const parsed = this._parseListProviders(res);
+                if (!chosen || !chosen.url || !window.mcpClient
+                    || typeof window.mcpClient.request !== 'function') return;
+                const data = await window.mcpClient.request('/mcp/proxy', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action: 'proxy',
+                        server_url: chosen.url,
+                        server_id: chosen.id,
+                        user_id: (typeof window.mcpClient.getUserId === 'function')
+                            ? window.mcpClient.getUserId() : undefined,
+                        jsonrpc: {
+                            jsonrpc: '2.0', id: 1, method: 'tools/call',
+                            params: { name: 'list_providers', arguments: {} },
+                        },
+                    }),
+                });
+                const rpc = (data && data.response) ? data.response : data;
+                const parsed = this._parseListProviders(rpc);
                 if (parsed && parsed.length) {
-                    providers = parsed;      // the langfs default package (all 10)
+                    providers = parsed;      // the langfs default package (all 10, with `available`)
                     renderProviders();
                 }
             } catch (e) {
