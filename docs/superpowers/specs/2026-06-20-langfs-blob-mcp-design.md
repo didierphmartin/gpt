@@ -504,10 +504,18 @@ The `BlobSource` protocol (§4) gains two methods, keeping the read-only charter
 - `test_connection(credentials, scope) -> ok | error` — validate before a run.
 
 `LocalBlobSource` implements both as no-ops (no auth, no connection). A new
-**`CloudBlobSource`** wraps LangChain's **`CloudBlobLoader`** (the cloud sibling
-of `FileSystemBlobLoader`, built on `cloudpathlib`) to cover **S3, GCS, and Azure
-in one adapter** — `s3://bucket/prefix`, `gs://…`, `az://…` — exposing the same
-`enumerate` / `read_bytes` it already defines.
+**`CloudBlobSource`** covers **S3, GCS, and Azure in one adapter** —
+`s3://bucket/prefix`, `gs://…`, `az://…` — exposing the same `enumerate` /
+`read_bytes` it already defines.
+
+> **Implementation note (verified during build):** enumeration uses cloudpathlib's
+> **paginated `_list_dir`** lister directly, *not* LangChain's `CloudBlobLoader`.
+> `CloudBlobLoader` is built on `CloudPath.glob()`, which **materializes the entire
+> prefix in memory before yielding** — incompatible with the §23 cap (it would
+> bound only the result list, not the memory/network drain). `_list_dir` is a true
+> paginated generator, so iterating it and breaking early at `max_files` keeps a
+> million-key bucket bounded. Per-session credentials still ride a client-bound
+> `CloudPath` (§21 isolation), and reads use `CloudPath.read_bytes()`.
 
 New MCP tool **`test_connection`** (provider, credentials, scope) → mirrors the
 existing MCP-server "test" affordance so the loader node validates credentials
@@ -526,14 +534,19 @@ before running ingestion.
 ## 23. New runtime constraints (don't exist for local FS)
 
 - **Pagination / caps.** Object stores can hold millions of keys. Cloud
-  enumeration must page and honor a configurable cap rather than draining the
-  whole listing into the session entry at once (Part I's full-drain is fine for a
-  folder, not for a bucket). The cap is surfaced (logged / returned) so truncation
-  is never silent.
+  enumeration pages via cloudpathlib's `_list_dir` and **breaks early** at a
+  configurable `max_files` cap, so a huge bucket never drains fully into memory
+  (Part I's full-drain is fine for a folder, not for a bucket). On truncation the
+  cap is **both logged and surfaced to the caller** — `read_next`'s `done` payload
+  carries a `truncated` flag — so it is never silent. *(Implemented in Phase 1.)*
 - **MIME-based format detection.** Items may lack file extensions (e.g. Drive
-  returns MIME types, not suffixes). Detection becomes **provider-aware**: use the
+  returns MIME types, not suffixes). Detection is **provider-aware**: use the
   storage-reported MIME when there is no usable suffix, then dispatch into the
-  same `extract_text` (§9).
+  same `extract_text` (§9). *Phase-1 status:* `extract_text(name, data, mime=…)`
+  accepts the MIME hint, but the **wiring** (capturing a blob's MIME into the
+  descriptor and passing it through `read_next`) **lands in Phase 2 with Google
+  Drive**, the first provider whose items routinely lack suffixes. S3/GCS/Azure
+  objects in Phase 1 carry extensions, so suffix dispatch suffices.
 - **Provenance as a URI.** A source id is now `s3://bucket/key` (or `gdrive://id`
   later), not a local path — this is what the store records as provenance.
 
