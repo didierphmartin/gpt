@@ -291,9 +291,9 @@ final class IngestionController
      * POST /api/v1/workflows/{id}/ingestion/store-chunks
      *
      * The STORE node's interpreter (terminal node): loader round → split →
-     * write each chunk to the chosen vector-DB MCP (`qdrant-store`, self-embed).
+     * write each chunk to the chosen vector-DB MCP (store/find contract).
      * WRITES. Body: { loader, splitter, vectorstore: { store:"mcp:<id>",
-     * collection, model? }, cursor }.
+     * collection, provider, connection, embedding }, cursor }.
      */
     public function storeChunks(array $request): array
     {
@@ -323,7 +323,9 @@ final class IngestionController
         $chunkSize = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
         $overlap = max(0, (int) ($splitterCfg['overlap'] ?? 150));
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
-        $model = trim((string) ($storeCfg['model'] ?? ''));
+        $provider = trim((string) ($storeCfg['provider'] ?? ''));
+        $connection = (array) ($storeCfg['connection'] ?? []);
+        $embedding = trim((string) ($storeCfg['embedding'] ?? ''));
 
         if ($path === '') {
             return ['success' => false, 'error' => 'The upstream loader has no Source set.', 'status_code' => 400];
@@ -369,14 +371,13 @@ final class IngestionController
                 $vs = new VectorMcpStore(function (int $sid, string $tool, array $args) use ($srv, $sessHeaders): array {
                     return $this->callMcpTool((string) $srv['url'], $sessHeaders, $tool, $args);
                 });
-                $storeBatch = function (array $argsList) use ($srv, $sessHeaders): array {
-                    return $this->callMcpToolBatch((string) $srv['url'], $sessHeaders, 'qdrant-store', $argsList);
-                };
-                $r = $vs->storeParallel($serverId, $chunks, [
+                $r = $vs->store($serverId, $chunks, [
+                    'provider'   => $provider,
+                    'connection' => $connection,
                     'collection' => $collection !== '' ? $collection : null,
+                    'embedding'  => $embedding !== '' ? $embedding : null,
                     'metadata'   => ['source' => $cur['source']],
-                    'model'      => $model !== '' ? $model : null,
-                ], $storeBatch);
+                ]);
                 $out['current'] = [
                     'source'      => $cur['source'],
                     'type'        => $cur['type'],
@@ -385,7 +386,7 @@ final class IngestionController
                     'collection'  => $r['collection'],
                 ];
                 $coll = $r['collection'] ?? '(server default)';
-                $logs[] = "[store] {$cur['source']}: wrote {$r['stored']} chunk(s) → collection \"{$coll}\" on mcp:{$serverId}";
+                $logs[] = "[store] {$cur['source']}: wrote {$r['stored']} chunk(s)" . ($r['errors'] ? " ({$r['errors']} failed)" : '') . " → collection \"{$coll}\" on mcp:{$serverId}";
             }
             $out['logs'] = $logs;
             return ['success' => true, 'data' => $out, 'status_code' => 200];
@@ -448,7 +449,9 @@ final class IngestionController
         $chunkSize = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
         $overlap = max(0, (int) ($splitterCfg['overlap'] ?? 150));
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
-        $model = trim((string) ($storeCfg['model'] ?? ''));
+        $provider = trim((string) ($storeCfg['provider'] ?? ''));
+        $connection = (array) ($storeCfg['connection'] ?? []);
+        $embedding = trim((string) ($storeCfg['embedding'] ?? ''));
 
         if ($path === '') {
             $sse(['type' => 'error', 'error' => 'The loader has no Source set.']);
@@ -490,7 +493,6 @@ final class IngestionController
         // then every chunk write reuses it — fired CONCURRENTLY via curl_multi
         // (fan-out first cut: the network-bound writes overlap).
         $vs = null;
-        $storeBatch = null;
         if ($hasStore) {
             $sess = $this->openMcpSession((string) $srv['url'], $this->mcpBaseHeaders($srv['headers'] ?? null));
             if (!empty($sess['error'])) {
@@ -501,9 +503,6 @@ final class IngestionController
             $vs = new VectorMcpStore(function (int $sid, string $tool, array $args) use ($srv, $sessHeaders): array {
                 return $this->callMcpTool((string) $srv['url'], $sessHeaders, $tool, $args);
             });
-            $storeBatch = function (array $argsList) use ($srv, $sessHeaders): array {
-                return $this->callMcpToolBatch((string) $srv['url'], $sessHeaders, 'qdrant-store', $argsList);
-            };
         }
 
         $files = 0; $chunks = 0; $stored = 0; $errors = 0;
@@ -537,11 +536,13 @@ final class IngestionController
             if ($hasStore && $vs !== null) {
                 $sse(['type' => 'node', 'node' => 'vectorstore', 'state' => 'active']);
                 try {
-                    $r = $vs->storeParallel($serverId, $ch, [
+                    $r = $vs->store($serverId, $ch, [
+                        'provider'   => $provider,
+                        'connection' => $connection,
                         'collection' => $collection !== '' ? $collection : null,
+                        'embedding'  => $embedding !== '' ? $embedding : null,
                         'metadata'   => ['source' => $desc['source']],
-                        'model'      => $model !== '' ? $model : null,
-                    ], $storeBatch);
+                    ]);
                     $stored += $r['stored'];
                     $errors += $r['errors'];
                     $sse(['type' => 'log', 'lines' => ["[store] {$desc['source']}: wrote {$r['stored']} chunk(s)" . ($r['errors'] ? " ({$r['errors']} failed)" : '') . ($collection !== '' ? " → \"{$collection}\"" : '') . " on mcp:{$serverId}"]]);
@@ -566,9 +567,9 @@ final class IngestionController
     /**
      * POST /api/v1/workflows/{id}/ingestion/store-find
      *
-     * Retrieval test panel: run `qdrant-find` against the store node's vector-DB
+     * Retrieval test panel: run `find` against the store node's vector-DB
      * MCP and return the matched chunks. Body: { vectorstore: { store:"mcp:<id>",
-     * collection? }, query }.
+     * collection?, provider?, connection?, embedding? }, query }.
      */
     public function storeFind(array $request): array
     {
@@ -589,6 +590,9 @@ final class IngestionController
         $storeCfg = (array) ($body['vectorstore'] ?? []);
         $query = trim((string) ($body['query'] ?? ''));
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
+        $provider = trim((string) ($storeCfg['provider'] ?? ''));
+        $connection = (array) ($storeCfg['connection'] ?? []);
+        $embedding = trim((string) ($storeCfg['embedding'] ?? ''));
 
         if ($query === '') {
             return ['success' => false, 'error' => 'Enter a search query.', 'status_code' => 400];
@@ -604,71 +608,32 @@ final class IngestionController
             return ['success' => false, 'error' => "Vector MCP server #{$serverId} not found or disabled.", 'status_code' => 400];
         }
 
-        // The local Qdrant double accepts ONLY `query` (collection fixed by env);
-        // send collection_name only when the user set one (PHP/cloud servers).
-        $args = ['query' => $query];
-        if ($collection !== '') {
-            $args['collection_name'] = $collection;
-        }
-
         @set_time_limit(60);
-        $res = $this->callMcpServer((string) $srv['url'], $srv['headers'] ?? null, 'qdrant-find', $args);
-        if (!empty($res['error'])) {
-            return ['success' => false, 'error' => (string) $res['message'], 'status_code' => 400];
+        $vs = new VectorMcpStore(function (int $sid, string $tool, array $args) use ($srv): array {
+            return $this->callMcpServer((string) $srv['url'], $srv['headers'] ?? null, $tool, $args);
+        });
+        try {
+            $find = $vs->find($serverId, $query, [
+                'provider'   => $provider,
+                'connection' => $connection,
+                'collection' => $collection,
+                'embedding'  => $embedding !== '' ? $embedding : null,
+                'limit'      => 5,
+            ]);
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 400];
         }
+        // Map the MCP's {text,metadata,score} to the Search panel's {content,source,score}.
+        $results = array_map(static fn(array $r): array => [
+            'content' => $r['text'],
+            'source'  => $r['metadata']['source'] ?? null,
+            'score'   => $r['score'],
+        ], $find['results']);
         return [
             'success' => true,
-            'data'    => ['query' => $query, 'results' => $this->parseQdrantFind($res)],
+            'data'    => ['query' => $query, 'results' => $results],
             'status_code' => 200,
         ];
-    }
-
-    /**
-     * Parse a qdrant-find MCP result into [{content, source}]. The tool returns
-     * content[0].text = a JSON array: [header, "<entry><content>…</content>
-     * <metadata>{…}</metadata></entry>", …].
-     *
-     * @param array<string,mixed> $res
-     * @return list<array{content:string,source:?string}>
-     */
-    private function parseQdrantFind(array $res): array
-    {
-        $text = $res['content'][0]['text'] ?? '';
-        $arr = json_decode((string) $text, true);
-        if (!is_array($arr)) {
-            return [];
-        }
-        $out = [];
-        foreach ($arr as $entry) {
-            if (!is_string($entry) || strpos($entry, '<entry>') === false) {
-                continue; // skip the "Results for…" header
-            }
-            $content = '';
-            $source = null;
-            $score = null;
-            if (preg_match('#<content>(.*?)</content>#s', $entry, $cm)) {
-                $content = trim(html_entity_decode($cm[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-            }
-            // Similarity score, if the server emits it — either a <score> tag or
-            // a `score` key in the metadata. (mcp-server-qdrant omits it by
-            // default; the real vector server / a patched double can include it.)
-            if (preg_match('#<score>([0-9.eE+-]+)</score>#', $entry, $sm)) {
-                $score = (float) $sm[1];
-            }
-            if (preg_match('#<metadata>(.*?)</metadata>#s', $entry, $mm)) {
-                $meta = json_decode($mm[1], true);
-                if (is_array($meta)) {
-                    if (isset($meta['source'])) {
-                        $source = (string) $meta['source'];
-                    }
-                    if ($score === null && isset($meta['score']) && is_numeric($meta['score'])) {
-                        $score = (float) $meta['score'];
-                    }
-                }
-            }
-            $out[] = ['content' => $content, 'source' => $source, 'score' => $score];
-        }
-        return $out;
     }
 
     /**
@@ -743,7 +708,9 @@ final class IngestionController
             'chunk_size'     => max(1, (int) ($splitterCfg['chunk_size'] ?? 1000)),
             'overlap'        => max(0, (int) ($splitterCfg['overlap'] ?? 150)),
             'collection'     => trim((string) ($storeCfg['collection'] ?? '')),
-            'model'          => trim((string) ($storeCfg['model'] ?? '')),
+            'provider'       => trim((string) ($storeCfg['provider'] ?? '')),
+            'connection'     => (array) ($storeCfg['connection'] ?? []),
+            'embedding'      => trim((string) ($storeCfg['embedding'] ?? '')),
             'server_id'      => $serverId,
             'server_url'     => $srv['url'] ?? null,
             'server_headers' => $srv['headers'] ?? null,
@@ -809,7 +776,6 @@ final class IngestionController
         [$listFiles, $readFile] = $this->buildLoaderClosures($userId, (string) (($config['loader']['storage_mcp_id']) ?? ''));
 
         $vs = null;
-        $storeBatch = null;
         $serverId = (int) ($config['server_id'] ?? 0);
         if (!empty($config['has_store'])) {
             $url = (string) ($config['server_url'] ?? '');
@@ -823,16 +789,15 @@ final class IngestionController
             $vs = new VectorMcpStore(function (int $sid, string $tool, array $args) use ($url, $sessHeaders): array {
                 return $this->callMcpTool($url, $sessHeaders, $tool, $args);
             });
-            $storeBatch = function (array $argsList) use ($url, $sessHeaders): array {
-                return $this->callMcpToolBatch($url, $sessHeaders, 'qdrant-store', $argsList);
-            };
         }
 
         @set_time_limit(0);
         $chunkSize = (int) $config['chunk_size'];
         $overlap = (int) $config['overlap'];
         $collection = (string) ($config['collection'] ?? '');
-        $model = (string) ($config['model'] ?? '');
+        $provider = (string) ($config['provider'] ?? '');
+        $connection = (array) ($config['connection'] ?? []);
+        $embedding = (string) ($config['embedding'] ?? '');
         $hasSplitter = !empty($config['has_splitter']);
 
         $files = 0; $chunks = 0; $stored = 0; $errors = 0;
@@ -861,11 +826,13 @@ final class IngestionController
             }
             if ($vs !== null) {
                 try {
-                    $r = $vs->storeParallel($serverId, $ch, [
+                    $r = $vs->store($serverId, $ch, [
+                        'provider'   => $provider,
+                        'connection' => $connection,
                         'collection' => $collection !== '' ? $collection : null,
+                        'embedding'  => $embedding !== '' ? $embedding : null,
                         'metadata'   => ['source' => $src],
-                        'model'      => $model !== '' ? $model : null,
-                    ], $storeBatch);
+                    ]);
                     $stored += $r['stored'];
                     $errors += $r['errors'];
                     $sse(['type' => 'log', 'lines' => ["[store] {$src}: wrote {$r['stored']} chunk(s)" . ($r['errors'] ? " ({$r['errors']} failed)" : '') . " on mcp:{$serverId}"]]);
@@ -1119,69 +1086,6 @@ final class IngestionController
             return ['error' => true, 'message' => $msg !== '' ? $msg : 'MCP tool error'];
         }
         return is_array($result) ? $result : ['ok' => true];
-    }
-
-    /**
-     * Fire many `tools/call` of the SAME tool CONCURRENTLY on an already‑open
-     * session (curl_multi), windowed at $maxConcurrent. This is the fan‑out
-     * "first cut": the network‑bound store writes overlap instead of running
-     * one‑after‑another. Returns one result per args entry, in order (each the
-     * tool result or ['error'=>...]).
-     *
-     * @param list<string>            $callHeaders  carry the Mcp-Session-Id
-     * @param list<array<string,mixed>> $argsList
-     * @return list<array<string,mixed>>
-     */
-    private function callMcpToolBatch(string $url, array $callHeaders, string $tool, array $argsList, int $maxConcurrent = 12): array
-    {
-        $n = count($argsList);
-        if ($n === 0) {
-            return [];
-        }
-        $results = array_fill(0, $n, ['error' => true, 'message' => 'no result']);
-        $mh = curl_multi_init();
-        $idx = [];   // spl_object_id(handle) → args index
-        $next = 0;
-        $launch = function () use (&$next, &$idx, $mh, $url, $callHeaders, $tool, $argsList, $n) {
-            if ($next >= $n) {
-                return;
-            }
-            $i = $next++;
-            $args = $argsList[$i] === [] ? new \stdClass() : $argsList[$i];
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_POST           => true,
-                CURLOPT_POSTFIELDS     => json_encode(['jsonrpc' => '2.0', 'id' => 1000 + $i, 'method' => 'tools/call', 'params' => ['name' => $tool, 'arguments' => $args]]),
-                CURLOPT_HTTPHEADER     => $callHeaders,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT        => 60,
-                CURLOPT_CONNECTTIMEOUT => 10,
-            ]);
-            curl_multi_add_handle($mh, $ch);
-            $idx[spl_object_id($ch)] = $i;
-        };
-
-        for ($k = 0, $kn = min($maxConcurrent, $n); $k < $kn; $k++) {
-            $launch();
-        }
-        do {
-            curl_multi_exec($mh, $running);
-            if ($running > 0) {
-                curl_multi_select($mh, 1.0);
-            }
-            while ($info = curl_multi_info_read($mh)) {
-                $ch = $info['handle'];
-                $i = $idx[spl_object_id($ch)] ?? -1;
-                if ($i >= 0) {
-                    $results[$i] = $this->interpretToolResult($this->normalizeMcpBody(curl_multi_getcontent($ch)));
-                }
-                curl_multi_remove_handle($mh, $ch);
-                curl_close($ch);
-                $launch();   // backfill the window
-            }
-        } while ($running > 0 || $next < $n);
-        curl_multi_close($mh);
-        return $results;
     }
 
     /**
