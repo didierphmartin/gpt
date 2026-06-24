@@ -8366,7 +8366,8 @@ class WorkflowEditor {
                             agentProvider = agentData?.provider || agentData?.llm_provider || '';
                         }
                         const nodeMergeStrategy = node.config?.merge_strategy || 'labeled';
-                        html = this.createAgentNodeHtml(node.agent_id, agentName, agentType, agentProvider, nodeMergeStrategy);
+                        const nodeDisabled = node.config?.disabled ?? false;
+                        html = this.createAgentNodeHtml(node.agent_id, agentName, agentType, agentProvider, nodeMergeStrategy, nodeDisabled);
                         inputs = 1;
                         outputs = 1;
                 }
@@ -8667,7 +8668,7 @@ class WorkflowEditor {
     /**
      * Create HTML for agent node
      */
-    createAgentNodeHtml(agentId, agentName, agentType, agentProvider = '', mergeStrategy = 'labeled') {
+    createAgentNodeHtml(agentId, agentName, agentType, agentProvider = '', mergeStrategy = 'labeled', disabled = false) {
         const typeIcon = agentType === 'worker' ? '⚙️' : '🤖';
         const providerDisplay = agentProvider ? `<span class="node-provider">${this.escapeHtml(agentProvider)}</span>` : '';
 
@@ -8679,7 +8680,7 @@ class WorkflowEditor {
         }
 
         return `
-            <div class="workflow-node agent-node ${agentType}" data-agent-id="${agentId}" data-merge-strategy="${mergeStrategy}" data-accepts-documents="true">
+            <div class="workflow-node agent-node ${agentType}${disabled ? ' node-disabled' : ''}" data-agent-id="${agentId}" data-merge-strategy="${mergeStrategy}" data-accepts-documents="true">
                 <div class="node-header">
                     <span class="node-icon">${typeIcon}</span>
                     <span class="node-title">${this.escapeHtml(agentName)}</span>
@@ -11057,7 +11058,8 @@ class WorkflowEditor {
                         settings: data.settings ?? { temperature: 0.7, max_tokens: 4096 },
                         merge_strategy: data.merge_strategy ?? 'labeled',
                         output_schema_id: data.output_schema_id ?? null,
-                        output_schema: data.output_schema ?? null
+                        output_schema: data.output_schema ?? null,
+                        disabled: data.disabled ?? false
                     };
                 } else {
                     // Node is still a template or unconfigured - fall back to template data
@@ -11074,7 +11076,8 @@ class WorkflowEditor {
                         settings: data.settings || agent?.settings || { temperature: 0.7, max_tokens: 4096 },
                         merge_strategy: data.merge_strategy ?? 'labeled',
                         output_schema_id: data.output_schema_id ?? null,
-                        output_schema: data.output_schema ?? null
+                        output_schema: data.output_schema ?? null,
+                        disabled: data.disabled ?? false
                     };
                 }
                 console.log('[WorkflowEditor] Loaded agent data:', agent);
@@ -11231,6 +11234,19 @@ class WorkflowEditor {
                                         <div>
                                             <span class="text-sm font-medium text-gray-700">${tf('saveAsTemplateLabel')}</span>
                                             <p class="text-xs text-gray-500">${tf('saveAsTemplateDesc')}</p>
+                                        </div>
+                                    </label>
+                                </div>
+                                ` : ''}
+
+                                <!-- Disable execution (shown only when editing a workflow node) -->
+                                ${this.editingNodeId ? `
+                                <div class="border-t border-gray-200 pt-4 mt-2">
+                                    <label class="flex items-center gap-3 cursor-pointer">
+                                        <input type="checkbox" id="agent-node-disabled" class="w-4 h-4 text-gray-600 rounded focus:ring-gray-500" ${agent.disabled ? 'checked' : ''}>
+                                        <div>
+                                            <span class="text-sm font-medium text-gray-700">Disable execution</span>
+                                            <p class="text-xs text-gray-500">This node is skipped when the workflow runs (returns 'disabled node') — handy for debugging.</p>
                                         </div>
                                     </label>
                                 </div>
@@ -12606,7 +12622,9 @@ Based on the analysis...
             // Output schema for constrained decoding (node-specific, always inline)
             output_schema: outputSchemaInline,
             // Cleared for new flow — kept null to overwrite any legacy reference
-            output_schema_id: null
+            output_schema_id: null,
+            // Disabled flag (node-specific; backend skips node and returns "disabled node")
+            disabled: document.getElementById('agent-node-disabled')?.checked || false
         };
 
         // If user opted in, save the schema to the workflow library too.
@@ -12686,7 +12704,9 @@ Based on the analysis...
                         merge_strategy: agentData.merge_strategy,
                         // Output schema for constrained decoding
                         output_schema_id: agentData.output_schema_id,
-                        output_schema: agentData.output_schema
+                        output_schema: agentData.output_schema,
+                        // Disabled flag for node-level skip
+                        disabled: agentData.disabled
                     };
 
                     // Update node locally in Drawflow
@@ -12701,6 +12721,10 @@ Based on the analysis...
 
                     // Update the visual display of the node
                     this.updateAgentNodeVisual(this.editingNodeId, agentData, newNodeData);
+
+                    // Grey the node out on the canvas when disabled (mirrors ingestion pattern).
+                    const _agentNodeEl = document.getElementById(`node-${this.editingNodeId}`);
+                    _agentNodeEl?.querySelector('.workflow-node')?.classList.toggle('node-disabled', agentData.disabled);
 
                     // If linked to a template OR user wants to save as template, sync to backend
                     if (isLinkedToTemplate || saveAsTemplate) {

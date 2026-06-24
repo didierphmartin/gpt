@@ -1364,6 +1364,16 @@ svg.connection.selected .main-path,
     text-decoration: line-through;
 }
 
+/* Disabled agent node: same visual treatment as ingestion disabled nodes. */
+.workflow-node.agent-node.node-disabled {
+    opacity: 0.5;
+    filter: grayscale(0.7);
+}
+
+.workflow-node.agent-node.node-disabled .node-title {
+    text-decoration: line-through;
+}
+
 /* Selected node - blue border with gradient halo like Drawflow demo */
 .drawflow .drawflow-node.selected .workflow-node {
     border: 2px solid #3b82f6;
