@@ -1203,11 +1203,15 @@ class GraphWorkflowRunner
                 'dir_name' => $runContext['skill_metadata']['dir_name'] ?? null,
             ]);
 
-            $bridgeResult = $bridge->awaitResult($toolCallId);
+            // Same cap as the parallel path: don't let a stuck browser skill
+            // hang this node for the full 5-minute default.
+            $seqTimeoutMs = (int) ($this->config['parallel_skill_timeout_ms'] ?? 60000);
+            $bridgeResult = $bridge->awaitResult($toolCallId, $seqTimeoutMs);
             if ($bridgeResult === null) {
-                error_log("[GraphWorkflowRunner] bridge timed out waiting for tool_call_id={$toolCallId}");
-                $this->nodeLog($node, 'error', 'skill', \AgentTeam\Services\NodeLogFormat::skillTimedOut(300));
-                throw new \RuntimeException("Browser timed out running skill script. Make sure the workflow editor stayed open during the run.");
+                $seqTimeoutSec = (int) round($seqTimeoutMs / 1000);
+                error_log("[GraphWorkflowRunner] bridge timed out ({$seqTimeoutSec}s) waiting for tool_call_id={$toolCallId}");
+                $this->nodeLog($node, 'error', 'skill', \AgentTeam\Services\NodeLogFormat::skillTimedOut($seqTimeoutSec));
+                throw new \RuntimeException("Skill did not return within {$seqTimeoutSec}s — it may be unable to run in the browser (e.g. heavy/blocked network fetches). Check the editor console.");
             }
             $seqStdoutBytes = strlen(is_string($bridgeResult['output']['stdout'] ?? null) ? $bridgeResult['output']['stdout'] : '');
             $this->nodeLog($node, 'info', 'skill',
