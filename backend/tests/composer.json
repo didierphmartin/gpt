@@ -23,7 +23,8 @@
     },
     "autoload": {
         "psr-4": {
-            "Quantis\\AIPortfolioAssistant\\": "src/"
+            "Quantis\\AIPortfolioAssistant\\": "src/",
+            "AgentTeam\\": "../src/AgentTeam/"
         }
     },
     "autoload-dev": {
