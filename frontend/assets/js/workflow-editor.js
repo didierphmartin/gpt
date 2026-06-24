@@ -8823,6 +8823,14 @@ class WorkflowEditor {
             return this._runIngestion();
         }
 
+        // Agent workflows now run BROWSER-DRIVEN (each node = a chat unit,
+        // concurrent, non-blocking) instead of the old server run-stream that
+        // blocked on the skill bridge. The server path stays below as a
+        // fallback (set window.WF_SERVER_RUN = true to force it).
+        if (!window.WF_SERVER_RUN) {
+            return this.executeWorkflowInBrowser(userPrompt);
+        }
+
         this.updateStartNodeIndicator(true);
 
         console.log('[WorkflowEditor] executeWorkflow - currentWorkflowId:', this.currentWorkflowId);
@@ -9589,6 +9597,97 @@ class WorkflowEditor {
             this.updateModalInputOutput(dfId);
             return { success: false, output: 'Error: ' + msg };
         }
+    }
+
+    // ---- Browser-driven concurrent orchestrator ---------------------------
+    // Runs the whole graph as N chat-units: seed Start with the prompt, then
+    // run each node when all its upstream are done (allSettled per ready layer,
+    // so the 6 dimensions run concurrently and one failure never sinks the
+    // rest). Fan-in nodes (geo-report) get the merged upstream outputs. No
+    // server blocking — each node is its own chat conversation.
+
+    _wfUpstreamIds(nodeId, nodes) {
+        const ins = nodes[nodeId]?.inputs || {};
+        const out = [];
+        for (const k in ins) for (const c of (ins[k].connections || [])) out.push(String(c.node));
+        return out;
+    }
+
+    _wfNodeKind(nodeId, nodes) {
+        const n = nodes[nodeId] || {};
+        const d = n.data || {};
+        const t = d.type || d.node_type || n.name || '';
+        if (t === 'start' || (n.class || '').includes('start-node')) return 'start';
+        if (t === 'output' || (n.class || '').includes('output-node')) return 'output';
+        return 'agent';
+    }
+
+    _wfBuildContext(nodeId, nodes) {
+        const ups = this._wfUpstreamIds(nodeId, nodes);
+        const parts = [];
+        for (const u of ups) {
+            const out = this._wfOutputs?.[u];
+            if (out == null || out === '') continue;
+            if (this._wfNodeKind(u, nodes) === 'start') { parts.push(out); continue; }
+            const name = nodes[u]?.data?.agent_name || nodes[u]?.data?.name || `node ${u}`;
+            parts.push(`## ${name}\n${out}`);
+        }
+        return parts.join('\n\n');
+    }
+
+    async executeWorkflowInBrowser(userPrompt) {
+        this.lastUserPrompt = userPrompt;
+        this.updateStartNodeIndicator(true);
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        const ids = Object.keys(nodes);
+        this._wfOutputs = {};
+        const done = new Set();
+        const remaining = new Set();
+
+        // Seed Start node(s) with the prompt; reset agent node UI.
+        for (const id of ids) {
+            const kind = this._wfNodeKind(id, nodes);
+            if (kind === 'start') { this._wfOutputs[id] = userPrompt; done.add(id); }
+            else {
+                remaining.add(id);
+                if (kind === 'agent') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
+            }
+        }
+
+        let guard = 0;
+        while (remaining.size && guard++ < 100) {
+            const ready = [...remaining].filter(id => this._wfUpstreamIds(id, nodes).every(u => done.has(u)));
+            if (!ready.length) break; // cycle or orphan — stop
+            await Promise.allSettled(ready.map(async (id) => {
+                const node = { id, data: nodes[id].data || {} };
+                try {
+                    if (node.data && node.data.disabled) {
+                        this._wfOutputs[id] = 'disabled node';
+                        this.highlightNode(id, 'completed', id, 'agent');
+                    } else if (this._wfNodeKind(id, nodes) === 'output') {
+                        this._wfOutputs[id] = this._wfBuildContext(id, nodes);
+                    } else {
+                        const ctx = this._wfBuildContext(id, nodes) || userPrompt;
+                        const res = await this._runNodeAsChatUnit(node, ctx);
+                        this._wfOutputs[id] = res.output;
+                    }
+                } catch (e) {
+                    this._wfOutputs[id] = 'Error: ' + (e?.message || e);
+                    this.highlightNode(id, 'error', id, 'agent');
+                }
+                done.add(id);
+                remaining.delete(id);
+            }));
+        }
+
+        this.updateStartNodeIndicator(false);
+        const outId = ids.find(id => this._wfNodeKind(id, nodes) === 'output');
+        const finalOutput = outId ? this._wfOutputs[outId] : '';
+        console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
+        if (typeof this.showWorkflowResults === 'function' && finalOutput) {
+            try { this.showWorkflowResults({ output: finalOutput, node_outputs: this._wfOutputs }); } catch (_) {}
+        }
+        return this._wfOutputs;
     }
 
     // Console test entry: wfEditor.runNodeChatUnitTest('<drawflowId>', 'input text')
