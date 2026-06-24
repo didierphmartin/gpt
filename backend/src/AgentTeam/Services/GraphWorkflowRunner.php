@@ -60,6 +60,11 @@ class GraphWorkflowRunner
     /** @var array<int,array> skill round-trip result (output/script/argv) keyed by node id */
     private array $skillResultByNode = [];
 
+    // Per-run JSONL event log (docs/superpowers/specs/2026-06-24-...). Every
+    // emitted event is persisted here before SSE, so a run is debuggable
+    // after it ends/dies even with no browser attached.
+    private WorkflowRunLog $runLog;
+
     // Template processor for dynamic prompt variables
     private ?PromptTemplateProcessor $templateProcessor = null;
 
@@ -81,6 +86,7 @@ class GraphWorkflowRunner
         $this->config = $config;
         $this->outputStorage = new WorkflowOutputStorage($db, $config);
         $this->schemaRepository = new WorkflowSchemaRepository($db);
+        $this->runLog = new WorkflowRunLog(WorkflowRunLog::defaultDir($config));
     }
 
     /**
@@ -167,10 +173,6 @@ class GraphWorkflowRunner
      */
     private function emitNodeEvent(string $type, array $node, ?array $extra = null): void
     {
-        if (!$this->streamContext) {
-            return;
-        }
-
         $data = [
             'type' => $type,
             'node_id' => $node['id'],
@@ -185,7 +187,14 @@ class GraphWorkflowRunner
             $data = array_merge($data, $extra);
         }
 
-        $this->streamContext->emit($data);
+        // Persist first so the event survives even with no SSE / a dead run.
+        if ($this->runId !== '') {
+            $this->runLog->append($this->runId, $data);
+        }
+
+        if ($this->streamContext) {
+            $this->streamContext->emit($data);
+        }
     }
 
     /**
@@ -193,10 +202,6 @@ class GraphWorkflowRunner
      */
     private function emitWorkflowEvent(string $type, Workflow $workflow, ?array $extra = null): void
     {
-        if (!$this->streamContext) {
-            return;
-        }
-
         $data = [
             'type' => $type,
             'workflow_id' => $workflow->getId(),
@@ -208,7 +213,13 @@ class GraphWorkflowRunner
             $data = array_merge($data, $extra);
         }
 
-        $this->streamContext->emit($data);
+        if ($this->runId !== '') {
+            $this->runLog->append($this->runId, $data);
+        }
+
+        if ($this->streamContext) {
+            $this->streamContext->emit($data);
+        }
     }
 
     /**
@@ -281,6 +292,7 @@ class GraphWorkflowRunner
 
             // Emit workflow_start event
             $this->emitWorkflowEvent('workflow_start', $workflow, [
+                'run_id' => $this->runId,
                 'execution_id' => $this->executionId,
                 'total_nodes' => count($nodes),
             ]);
