@@ -67,6 +67,15 @@ final class VectorMcpStore
         if (!empty($payload['error'])) {
             throw new \RuntimeException((string) ($payload['message'] ?? 'store failed'));
         }
+        // A valid store result MUST carry `stored`. Anything else (empty body,
+        // a redirect/HTML page, a non-MCP response) is a transport/endpoint
+        // failure — surface it loudly instead of silently reporting 0 stored.
+        if (!array_key_exists('stored', $payload)) {
+            throw new \RuntimeException(
+                'store: the vector MCP returned no {stored} field — likely a transport/endpoint problem '
+                . '(e.g. a redirect from a trailing-slash URL, a wrong endpoint, or a non-MCP response).'
+            );
+        }
         return [
             'stored'     => (int) ($payload['stored'] ?? 0),
             'errors'     => (int) ($payload['errors'] ?? 0),
@@ -98,6 +107,14 @@ final class VectorMcpStore
         $payload = $this->decode(($this->dispatch)($serverId, 'find', $args));
         if (!empty($payload['error'])) {
             throw new \RuntimeException((string) ($payload['message'] ?? 'find failed'));
+        }
+        // A valid find result MUST carry `results`. Anything else is a
+        // transport/endpoint failure — surface it, don't return "0 matches".
+        if (!array_key_exists('results', $payload)) {
+            throw new \RuntimeException(
+                'find: the vector MCP returned no {results} field — likely a transport/endpoint problem '
+                . '(e.g. a redirect from a trailing-slash URL, a wrong endpoint, or a non-MCP response).'
+            );
         }
         $results = [];
         foreach ((array) ($payload['results'] ?? []) as $r) {

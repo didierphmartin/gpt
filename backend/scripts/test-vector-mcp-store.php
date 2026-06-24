@@ -126,5 +126,36 @@ try {
 }
 check('find payload error throws', $threwF);
 
+// --- store: a response with NO {stored} field is a hard error (not silent 0) ---
+// This is the class of bug a 307 redirect / wrong endpoint produced: an empty
+// or non-MCP body that used to map to {stored:0} with no error.
+$threwEmpty = false;
+try {
+    (new VectorMcpStore(fn($s, $t, $a) => []))   // {} — e.g. a redirect/non-MCP body
+        ->store(1, ['x'], ['provider' => 'qdrant', 'connection' => [], 'collection' => 'c']);
+} catch (\RuntimeException $e) {
+    $threwEmpty = str_contains($e->getMessage(), 'no {stored}');
+}
+check('store: empty/non-MCP response throws (no silent stored:0)', $threwEmpty);
+
+$threwOk = false;
+try {
+    (new VectorMcpStore(fn($s, $t, $a) => envelope(['ok' => true])))   // valid-looking, no `stored`
+        ->store(1, ['x'], ['provider' => 'qdrant', 'connection' => [], 'collection' => 'c']);
+} catch (\RuntimeException $e) {
+    $threwOk = str_contains($e->getMessage(), 'no {stored}');
+}
+check('store: response without {stored} throws', $threwOk);
+
+// --- find: a response with NO {results} field is a hard error (not "0 matches") ---
+$threwFindEmpty = false;
+try {
+    (new VectorMcpStore(fn($s, $t, $a) => []))
+        ->find(1, 'q', ['provider' => 'qdrant', 'connection' => [], 'collection' => 'c']);
+} catch (\RuntimeException $e) {
+    $threwFindEmpty = str_contains($e->getMessage(), 'no {results}');
+}
+check('find: empty/non-MCP response throws (no silent 0 matches)', $threwFindEmpty);
+
 echo "\n$checks checks, $failures failures\n";
 exit($failures === 0 ? 0 : 1);
