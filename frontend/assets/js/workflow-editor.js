@@ -9629,6 +9629,22 @@ class WorkflowEditor {
                 }
                 break;
 
+        case 'node_log': {
+            const dfId = this.dbNodeToDrawflowMap?.[event.node_id] || event.drawflow_id || event.node_id;
+            if (dfId != null) {
+                if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
+                if (!Array.isArray(this.nodeExecutionData[dfId].activity)) this.nodeExecutionData[dfId].activity = [];
+                this.nodeExecutionData[dfId].activity.push({
+                    ts: event.timestamp || 0,
+                    level: event.level || 'info',
+                    phase: event.phase || '',
+                    message: event.message || '',
+                });
+                this.updateModalInputOutput(dfId);
+            }
+            break;
+        }
+
             case 'node_error':
                 this.highlightNode(event.node_id, 'error', event.drawflow_id, event.node_type);
                 this.stopNodeTimer(event.node_id);
@@ -12138,6 +12154,15 @@ Based on the analysis...
                 });
                 if (event.success === false && event.error_text) nd.error = event.error_text;
                 break;
+            case 'node_log':
+                if (!Array.isArray(nd.activity)) nd.activity = [];
+                nd.activity.push({
+                    ts: event.timestamp || 0,
+                    level: event.level || 'info',
+                    phase: event.phase || '',
+                    message: event.message || '',
+                });
+                break;
             default:
                 break; // client_tool_call logs already arrive live; ignore here
         }
@@ -12243,6 +12268,26 @@ Based on the analysis...
                 <pre class="whitespace-pre-wrap text-xs text-red-800 font-mono bg-red-50 border border-red-200 rounded p-3">${esc(data.output)}</pre>
             </div>`;
         }
+
+        // Per-node activity timeline (node_log events), interleaved with skill
+        // runs by timestamp. Empty array => render nothing (no behavior change
+        // for nodes that produced no activity).
+        const nd = this.nodeExecutionData[drawflowId] || {};
+        const activity = Array.isArray(nd.activity) ? nd.activity : [];
+        const timelineRows = activity
+            .slice()
+            .sort((a, b) => (a.ts || 0) - (b.ts || 0))
+            .map(a => {
+                const color = a.level === 'error' ? '#e5534b' : (a.level === 'warn' ? '#d9a23a' : '#8a8f98');
+                const icon = a.phase === 'skill' ? '▶' : (a.phase === 'done' ? '✓' : (a.phase === 'error' ? '✗' : '→'));
+                return `<div style="font-family:monospace;font-size:12px;color:${color};white-space:pre-wrap;">`
+                    + `${icon} ${this.escapeHtml(a.message)}</div>`;
+            })
+            .join('');
+        const timelineHtml = timelineRows
+            ? `<div style="margin:6px 0;padding:6px;background:#1116;border-radius:4px;">${timelineRows}</div>`
+            : '';
+        html += timelineHtml;
 
         // Skill execution logs (stdout + log_messages per run).
         const logs = Array.isArray(data.logs) ? data.logs : [];
