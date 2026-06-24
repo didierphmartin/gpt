@@ -11482,6 +11482,22 @@ class WorkflowEditor {
         // Save button
         document.getElementById('save-agent-btn')?.addEventListener('click', () => this.saveAgent());
 
+        // Disable switch: write to the node the INSTANT it's toggled (not only
+        // on Save). This makes it survive the slow save→reload cycle — the flag
+        // is already in the node's data before any export/persist, so a reload
+        // from the DB restores it. Avoids the save-vs-toggle race.
+        document.getElementById('agent-node-disabled')?.addEventListener('change', (e) => {
+            const on = !!e.target.checked;
+            const idStr = String(this.editingNodeId);
+            const node = this.editor?.drawflow?.drawflow?.Home?.data?.[idStr];
+            if (node && node.data) {
+                node.data.disabled = on;
+            }
+            document.getElementById(`node-${idStr}`)
+                ?.querySelector('.workflow-node')
+                ?.classList.toggle('node-disabled', on);
+        });
+
         // Delete agent button (for template agents)
         document.getElementById('delete-agent-btn')?.addEventListener('click', () => this.deleteAgent());
 
