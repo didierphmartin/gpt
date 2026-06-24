@@ -6686,7 +6686,13 @@ class WorkflowEditor {
                     <label for="ingestion-vs-collection">Collection</label>
                     <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
                 </div>
-                ${disableHtml}
+                <div class="storage-config-folder">
+                    <label for="ingestion-node-disabled" class="storage-config-disable-row">
+                        <input type="checkbox" id="ingestion-node-disabled" ${config.disabled ? 'checked' : ''}>
+                        <span>Disable execution</span>
+                    </label>
+                    <small>This node is skipped when the pipeline compiles or runs — handy for debugging.</small>
+                </div>
                 <div class="storage-config-folder full" id="ingestion-vs-embeddings-wrap" style="display:none;">
                     <label for="ingestion-vs-embedding">Embeddings</label>
                     <select id="ingestion-vs-embedding"></select>
