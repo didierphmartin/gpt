@@ -894,6 +894,8 @@ class GraphWorkflowRunner
         // Run the agent. If the LLM emits run_skill_script, B3 short-
         // circuits and we round-trip through the browser before
         // re-calling the agent with the tool_result in history.
+        $this->nodeLog($node, 'info', 'llm',
+            \AgentTeam\Services\NodeLogFormat::callingProvider($agent->getProvider(), $agent->getModel()));
         $result = $this->runAgentWithClientToolBridge(
             $agent,
             $task,
@@ -904,6 +906,7 @@ class GraphWorkflowRunner
         );
 
         $rawOutput = $result['text'] ?? $result['output'] ?? '';
+        $this->nodeLog($node, 'info', 'analysis', 'generating final output');
         $structured = null;
         if ($outputSchema !== null && is_string($rawOutput) && $rawOutput !== '') {
             $decoded = json_decode($rawOutput, true);
@@ -1182,6 +1185,9 @@ class GraphWorkflowRunner
             ];
             $assistantText = $result['pending_assistant_text'] ?? '';
 
+            $this->nodeLog($node, 'info', 'skill',
+                \AgentTeam\Services\NodeLogFormat::runningSkill(
+                    $runContext['skill_metadata']['dir_name'] ?? 'skill'));
             $this->emitNodeEvent('client_tool_call', $node, [
                 'tool_call_id' => $toolCallId,
                 'tool_calls' => [$callForFrontend],
@@ -1192,8 +1198,12 @@ class GraphWorkflowRunner
             $bridgeResult = $bridge->awaitResult($toolCallId);
             if ($bridgeResult === null) {
                 error_log("[GraphWorkflowRunner] bridge timed out waiting for tool_call_id={$toolCallId}");
+                $this->nodeLog($node, 'error', 'skill', \AgentTeam\Services\NodeLogFormat::skillTimedOut(300));
                 throw new \RuntimeException("Browser timed out running skill script. Make sure the workflow editor stayed open during the run.");
             }
+            $seqStdoutBytes = strlen(is_string($bridgeResult['output']['stdout'] ?? null) ? $bridgeResult['output']['stdout'] : '');
+            $this->nodeLog($node, 'info', 'skill',
+                \AgentTeam\Services\NodeLogFormat::skillFinished($bridgeResult['output']['exit_code'] ?? null, $seqStdoutBytes));
 
             // Phase 0: stash the skill stdout/script/argv for the execution trace.
             $this->skillResultByNode[(int)($node['id'] ?? 0)] = [
