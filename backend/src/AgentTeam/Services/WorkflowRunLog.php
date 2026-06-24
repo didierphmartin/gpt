@@ -49,7 +49,10 @@ class WorkflowRunLog
                 error_log("[WorkflowRunLog] json_encode failed for runId={$runId}");
                 return;
             }
-            file_put_contents($this->pathFor($runId), $line . "\n", FILE_APPEND | LOCK_EX);
+            $bytes = @file_put_contents($this->pathFor($runId), $line . "\n", FILE_APPEND | LOCK_EX);
+            if ($bytes === false) {
+                error_log("[WorkflowRunLog] write failed for runId={$runId}");
+            }
         } catch (\Throwable $e) {
             error_log("[WorkflowRunLog] append failed for runId={$runId}: " . $e->getMessage());
         }
