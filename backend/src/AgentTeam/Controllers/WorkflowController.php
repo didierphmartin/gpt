@@ -899,7 +899,15 @@ class WorkflowController
     /**
      * GET /api/v1/workflows/runs/{runId}/events
      * Return the persisted per-run event log (JSONL) for the node form to
-     * replay. Run files are addressable only by their unguessable 128-bit id.
+     * replay.
+     *
+     * Access model (intentional — see spec 2026-06-24 §A5): every backend
+     * request already carries a login-issued auth token (enforced upstream by
+     * the auth middleware), so only logged-in users reach this handler. There
+     * is deliberately no per-run ownership check, unlike the workflow-id
+     * endpoints: a run is addressable only by its unguessable 128-bit id, which
+     * is not enumerable and never leaves the owner's own session. This is a
+     * conscious choice for an authenticated app, not a missing guard.
      */
     public function runEvents(array $request): array
     {
