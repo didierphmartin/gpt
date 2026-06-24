@@ -6689,16 +6689,16 @@ class WorkflowEditor {
                     </div>
                 </div>
                 <div class="ingestion-vs-col">
-                    <div class="storage-config-folder" id="ingestion-vs-connection-wrap">
-                        <label>Connection</label>
-                        <div id="ingestion-vs-connection-host"></div>
-                    </div>
                     <div class="storage-config-folder">
                         <label for="ingestion-node-disabled" class="storage-config-disable-row">
                             <input type="checkbox" id="ingestion-node-disabled" ${config.disabled ? 'checked' : ''}>
                             <span>Disable execution</span>
                         </label>
                         <small>This node is skipped when the pipeline compiles or runs — handy for debugging.</small>
+                    </div>
+                    <div class="storage-config-folder" id="ingestion-vs-connection-wrap">
+                        <label>Connection</label>
+                        <div id="ingestion-vs-connection-host"></div>
                     </div>
                 </div>
                 <div class="storage-config-folder full" id="ingestion-vs-embeddings-wrap" style="display:none;">
