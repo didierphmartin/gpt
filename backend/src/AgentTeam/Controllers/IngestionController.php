@@ -143,6 +143,67 @@ final class IngestionController
     }
 
     /**
+     * POST /api/v1/workflows/{id}/ingestion/save-script
+     *
+     * Store an already-compiled ingestion script to a chosen location. The
+     * default target is the `langchain_runner/` Python environment (the field
+     * the UI pre-fills); the user may point it anywhere they can write (LAN /
+     * authenticated context — no path sandbox). Body: { code, dest?, filename? }.
+     */
+    public function saveScript(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (!$workflowId || !$this->workflowRepository->canUserAccess($userId, $workflowId)) {
+            return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
+        }
+
+        $body = $request['body'] ?? [];
+        $code = (string) ($body['code'] ?? '');
+        $dest = trim((string) ($body['dest'] ?? ''));
+        $filename = basename(trim((string) ($body['filename'] ?? '')));
+        if ($code === '') {
+            return ['success' => false, 'error' => 'Nothing to save (empty script).', 'status_code' => 400];
+        }
+        if ($filename === '') {
+            $filename = 'ingestion_pipeline.py';
+        }
+        if (!str_ends_with($filename, '.py')) {
+            $filename .= '.py';
+        }
+
+        $repoRoot = dirname(__DIR__, 4);            // …/gpt
+        $defaultDir = $repoRoot . '/langchain_runner';
+
+        // Resolve the destination: blank → default env; a path ending in .py is a
+        // full file path; an absolute dir is used as-is; a relative dir resolves
+        // against the gpt repo root.
+        if ($dest === '') {
+            $dir = $defaultDir;
+        } elseif (str_ends_with($dest, '.py')) {
+            $dir = dirname($dest);
+            $filename = basename($dest);
+        } elseif ($dest[0] === '/' || $dest[0] === '~') {
+            $dir = str_starts_with($dest, '~') ? (getenv('HOME') . substr($dest, 1)) : $dest;
+        } else {
+            $dir = $repoRoot . '/' . $dest;
+        }
+        $dir = rtrim($dir, '/');
+
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return ['success' => false, 'error' => "Could not create directory: {$dir}", 'status_code' => 400];
+        }
+        $path = $dir . '/' . $filename;
+        if (@file_put_contents($path, $code) === false) {
+            return ['success' => false, 'error' => "Could not write to: {$path}", 'status_code' => 400];
+        }
+        return ['success' => true, 'data' => ['path' => $path, 'default_dir' => $defaultDir], 'status_code' => 200];
+    }
+
+    /**
      * POST /api/v1/workflows/{id}/ingestion/loader-text
      *
      * The LOADER node's interpreter (first node of the PHP interpreter, built

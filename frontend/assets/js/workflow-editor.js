@@ -3027,7 +3027,7 @@ class WorkflowEditor {
             else if (nt === 'vectorstore') vectorstore = data[id].data.config || {};
         }
 
-        let code = '', savedPath = '';
+        let code = '', savedPath = '', filename = '';
         try {
             const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/compile`, {
                 method: 'POST',
@@ -3039,6 +3039,7 @@ class WorkflowEditor {
             if (j && j.success && j.data) {
                 code = j.data.code || '';
                 savedPath = j.data.path || '';
+                filename = j.data.filename || '';
             } else {
                 this.showToast('Compile failed: ' + ((j && j.error) || resp.status), 'error');
                 return;
@@ -3047,7 +3048,7 @@ class WorkflowEditor {
             this.showToast('Compile failed: ' + (e?.message || e), 'error');
             return;
         }
-        this._showLangGraphCodeModal(savedPath, code);
+        this._showLangGraphCodeModal(savedPath, code, filename);
     }
 
     /**
@@ -3057,7 +3058,7 @@ class WorkflowEditor {
      * (/workflows/<id>/generate-python) backs the Generate action that
      * downloads the file.
      */
-    async _showLangGraphCodeModal(savedPath = '', providedCode = null) {
+    async _showLangGraphCodeModal(savedPath = '', providedCode = null, filename = '') {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3079,6 +3080,13 @@ class WorkflowEditor {
             }
         }
 
+        // Ingestion passes the code directly → offer a "Store location" field
+        // (pre-filled with the default langchain_runner env) so the user can save
+        // the script wherever they want.
+        const isIngestion = providedCode !== null;
+        const defaultDir = savedPath ? savedPath.replace(/\/[^\/]*$/, '') : 'langchain_runner';
+        const saveFilename = filename || (savedPath ? savedPath.replace(/^.*\//, '') : 'ingestion_pipeline.py');
+
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -3087,7 +3095,14 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
-                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
+                ${isIngestion ? `
+                <div class="flex items-center gap-2 mb-2">
+                    <label class="text-xs text-gray-500 whitespace-nowrap">Store location</label>
+                    <input type="text" class="code-dest-input flex-1 text-xs border border-gray-300 rounded px-2 py-1 font-mono" value="${this.escapeHtml(defaultDir)}" title="Folder (or full .py path) to copy the script to. Default: the langchain_runner Python environment.">
+                    <button class="code-save-btn text-xs px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded whitespace-nowrap">Save here</button>
+                    <span class="code-save-status text-xs text-gray-500 whitespace-nowrap"></span>
+                </div>`
+                : (savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : '')}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
                 <div class="flex justify-end mt-3">
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -3107,6 +3122,30 @@ class WorkflowEditor {
                 btn.textContent = 'Copied!';
                 setTimeout(() => { btn.textContent = prev; }, 1200);
             } catch (e) { /* user just selects + copies manually */ }
+        });
+        // Ingestion: save the script to the chosen location (default langchain_runner).
+        const saveBtn = backdrop.querySelector('.code-save-btn');
+        if (saveBtn) saveBtn.addEventListener('click', async () => {
+            const destEl = backdrop.querySelector('.code-dest-input');
+            const statusEl = backdrop.querySelector('.code-save-status');
+            const dest = (destEl?.value || '').trim();
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.className = 'code-save-status text-xs text-gray-500 whitespace-nowrap'; }
+            try {
+                const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/ingestion/save-script`, {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ code, dest, filename: saveFilename }),
+                });
+                const j = await resp.json().catch(() => ({}));
+                if (resp.ok && j && j.success && j.data) {
+                    if (statusEl) { statusEl.textContent = '✓ ' + (j.data.path || 'saved'); statusEl.className = 'code-save-status text-xs text-green-600 whitespace-nowrap'; }
+                } else {
+                    if (statusEl) { statusEl.textContent = '✗ ' + ((j && j.error) || `HTTP ${resp.status}`); statusEl.className = 'code-save-status text-xs text-red-600 whitespace-nowrap'; }
+                }
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = '✗ ' + (e?.message || e); statusEl.className = 'code-save-status text-xs text-red-600 whitespace-nowrap'; }
+            }
         });
     }
 

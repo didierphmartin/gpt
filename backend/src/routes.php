@@ -308,6 +308,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // chunks/scripts are compiled from the node configs the frontend sends.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/node-code', ['AgentTeam:IngestionController', 'nodeCode']);
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/compile', ['AgentTeam:IngestionController', 'compile']);
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/save-script', ['AgentTeam:IngestionController', 'saveScript']);
         // Interpreter (node-by-node): the loader node runs live and returns the
         // files-as-text shown in its Output tab; the splitter chunks that text.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/loader-text', ['AgentTeam:IngestionController', 'loaderText']);
