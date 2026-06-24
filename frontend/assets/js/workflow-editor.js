@@ -12242,7 +12242,7 @@ Based on the analysis...
         const tl = (k) => this.t('workflow.agentForm.logs.' + k);
         const closeBtn = `<button id="logs-close-btn" class="px-2 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition" title="${tl('close')}">✕ ${tl('close')}</button>`;
 
-        if (!data || (data.success === undefined && !Array.isArray(data.logs) && !data.output)) {
+        if (!data || (data.success === undefined && !Array.isArray(data.logs) && !data.output && !Array.isArray(data.activity))) {
             return `<div class="flex items-center justify-between mb-3">
                     <span class="text-sm font-semibold text-gray-600">${tl('title')}</span>${closeBtn}
                 </div>
