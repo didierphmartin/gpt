@@ -9564,6 +9564,13 @@ class WorkflowEditor {
                 console.log('[WorkflowEditor] Workflow started:', event.workflow_name);
                 // Clear previous execution data for fresh run
                 this.nodeExecutionData = {};
+                if (event.run_id) {
+                    this.currentRunId = event.run_id;
+                    try {
+                        const wfKey = this.currentWorkflowId || 'unsaved';
+                        localStorage.setItem('lastRunId:' + wfKey, event.run_id);
+                    } catch (e) { /* localStorage may be unavailable; non-fatal */ }
+                }
                 this.lastProducedArtifact = null;
                 break;
 
@@ -10966,6 +10973,25 @@ class WorkflowEditor {
         // Store the node ID for saving node-specific config
         this.editingNodeId = nodeId;
 
+        // If we have no live execution data for this node (e.g. the editor was
+        // reopened, the SSE dropped, or the run died), pull it from the
+        // persisted run log so Input/Output/Logs are still debuggable.
+        const _hasLive = this.nodeExecutionData?.[nodeId] &&
+            (this.nodeExecutionData[nodeId].input != null ||
+             this.nodeExecutionData[nodeId].output != null ||
+             Array.isArray(this.nodeExecutionData[nodeId].logs));
+        if (!_hasLive) {
+            const wfKey = this.currentWorkflowId || 'unsaved';
+            const runId = this.currentRunId || (() => {
+                try { return localStorage.getItem('lastRunId:' + wfKey); } catch (e) { return null; }
+            })();
+            if (runId) {
+                this.hydrateNodeDataFromRun(runId).then((ok) => {
+                    if (ok) this.updateModalInputOutput(nodeId);
+                });
+            }
+        }
+
         // Find the agent if editing
         let agent = null;
         if (agentId) {
@@ -12075,6 +12101,67 @@ Based on the analysis...
         const countElement = document.getElementById('tools-selected-count');
         if (countElement) {
             countElement.textContent = count;
+        }
+    }
+
+    // Map one persisted run event into this.nodeExecutionData, mirroring the
+    // live SSE handlers, so a node form can be populated from the JSONL log.
+    _applyRunEventToNodeData(event) {
+        const dfId = this.dbNodeToDrawflowMap?.[event.node_id] || event.drawflow_id || event.node_id;
+        if (dfId == null) return;
+        if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
+        const nd = this.nodeExecutionData[dfId];
+
+        switch (event.type) {
+            case 'node_start':
+                if (event.input != null) nd.input = event.input;
+                break;
+            case 'node_complete':
+                if (event.output !== undefined) nd.output = event.output;
+                nd.inputTokens = event.input_tokens || 0;
+                nd.outputTokens = event.output_tokens || 0;
+                nd.totalTokens = nd.inputTokens + nd.outputTokens;
+                nd.costUsd = (event.cost_usd !== undefined && event.cost_usd !== null) ? Number(event.cost_usd) : null;
+                nd.agentName = event.agent_name || nd.agentName || null;
+                nd.success = event.success !== false;
+                break;
+            case 'node_trace':
+                if (!Array.isArray(nd.logs)) nd.logs = [];
+                nd.logs.push({
+                    dirName: event.skill_dir || '',
+                    script: '',
+                    argv: [],
+                    exitCode: event.skill_exit_code ?? 0,
+                    stdout: event.skill_stdout || '',
+                    logMessages: event.skill_log_messages || '',
+                    durationMs: 0,
+                });
+                if (event.success === false && event.error_text) nd.error = event.error_text;
+                break;
+            default:
+                break; // client_tool_call logs already arrive live; ignore here
+        }
+    }
+
+    // Fetch the persisted event log for a run and replay it into
+    // nodeExecutionData. Cached per runId so reopening a form is cheap.
+    async hydrateNodeDataFromRun(runId) {
+        if (!runId) return false;
+        if (this._hydratedRunId === runId) return true;
+        try {
+            const resp = await fetch(`${this.apiBase}/workflows/runs/${runId}/events`, {
+                headers: this.getAuthHeaders(),
+                credentials: 'include',
+            });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            const events = Array.isArray(data?.events) ? data.events : [];
+            for (const ev of events) this._applyRunEventToNodeData(ev);
+            this._hydratedRunId = runId;
+            return true;
+        } catch (e) {
+            console.warn('[WorkflowEditor] hydrateNodeDataFromRun failed:', e);
+            return false;
         }
     }
 
