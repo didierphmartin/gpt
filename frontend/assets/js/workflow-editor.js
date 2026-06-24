@@ -9493,6 +9493,11 @@ class WorkflowEditor {
         this.nodeExecutionData[dfId].input = inputText;
         this.nodeExecutionData[dfId].activity = [];
         this.nodeExecutionData[dfId].logs = [];
+        this.nodeExecutionData[dfId].agentName = data.agent_name || data.name || null;
+        const _startedAt = Date.now();
+        this.nodeExecutionData[dfId].startTime = _startedAt;
+        let _inTok = 0, _outTok = 0;
+        try { this.startNodeTimer(dfId, dfId); } catch (_) {}
         this.highlightNode(dfId, 'active', dfId, 'agent');
         this.updateModalInputOutput(dfId);
         this._wfNodeLog(dfId, 'llm', `calling ${provider}${model ? ' (' + model + ')' : ''}`);
@@ -9529,6 +9534,9 @@ class WorkflowEditor {
                 });
                 if (!resp.ok) throw new Error(`chat HTTP ${resp.status}`);
                 const r = await resp.json();
+                const _u = r.usage || {};
+                _inTok += (_u.input_tokens ?? _u.prompt_tokens ?? 0);
+                _outTok += (_u.output_tokens ?? _u.completion_tokens ?? 0);
 
                 if (r.pending_client_tool_call) {
                     const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
@@ -9537,10 +9545,15 @@ class WorkflowEditor {
                     conversationHistory.push({
                         role: 'assistant',
                         content: assistantText || null,
+                        // Preserve provider-specific fields. Gemini REQUIRES its
+                        // thought_signature echoed back on the next turn or the
+                        // continuation 400s (→ empty output). Keep any other
+                        // extra keys the provider attached too.
                         tool_calls: calls.map(c => ({
                             id: c.id,
                             type: 'function',
                             function: { name: c.name || 'run_skill_script', arguments: JSON.stringify(c.input || {}) },
+                            ...(c.thought_signature ? { thought_signature: c.thought_signature } : {}),
                         })),
                     });
                     for (const c of calls) {
@@ -9579,9 +9592,13 @@ class WorkflowEditor {
                     }
                 } else {
                     const finalText = r.text || r.assistant_text || '';
-                    this.nodeExecutionData[dfId].output = finalText;
-                    this.nodeExecutionData[dfId].success = true;
-                    this._wfNodeLog(dfId, 'done', 'completed');
+                    const nd = this.nodeExecutionData[dfId];
+                    nd.output = finalText;
+                    nd.success = true;
+                    nd.inputTokens = _inTok; nd.outputTokens = _outTok; nd.totalTokens = _inTok + _outTok;
+                    nd.executionTime = Date.now() - _startedAt;
+                    try { this.stopNodeTimer(dfId); } catch (_) {}
+                    this._wfNodeLog(dfId, 'done', `completed (${_inTok + _outTok} tok)`);
                     this.highlightNode(dfId, 'completed', dfId, 'agent');
                     this.updateModalInputOutput(dfId);
                     return { success: true, output: finalText };
@@ -9590,8 +9607,12 @@ class WorkflowEditor {
             throw new Error(`did not finish within ${MAX_ROUNDS} rounds`);
         } catch (e) {
             const msg = String(e?.message || e);
-            this.nodeExecutionData[dfId].output = 'Error: ' + msg;
-            this.nodeExecutionData[dfId].success = false;
+            const nd = this.nodeExecutionData[dfId];
+            nd.output = 'Error: ' + msg;
+            nd.success = false;
+            nd.inputTokens = _inTok; nd.outputTokens = _outTok; nd.totalTokens = _inTok + _outTok;
+            nd.executionTime = Date.now() - _startedAt;
+            try { this.stopNodeTimer(dfId); } catch (_) {}
             this._wfNodeLog(dfId, 'error', msg, 'error');
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
