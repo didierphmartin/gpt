@@ -198,6 +198,23 @@ class GraphWorkflowRunner
     }
 
     /**
+     * Narrate one per-node processing milestone: write it to the server log
+     * (unchanged low-level record) AND emit a structured node_log event that
+     * v1's pipeline persists to the run JSONL and streams over SSE. Never
+     * throws into the run path.
+     */
+    private function nodeLog(array $node, string $level, string $phase, string $message, array $data = []): void
+    {
+        error_log("[GraphWorkflowRunner] node " . ($node['id'] ?? '?') . " {$phase}: {$message}");
+        $this->emitNodeEvent('node_log', $node, [
+            'level'   => $level,
+            'phase'   => $phase,
+            'message' => $message,
+            'data'    => $data,
+        ]);
+    }
+
+    /**
      * Emit a workflow event via SSE
      */
     private function emitWorkflowEvent(string $type, Workflow $workflow, ?array $extra = null): void
