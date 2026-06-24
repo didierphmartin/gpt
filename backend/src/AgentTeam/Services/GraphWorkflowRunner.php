@@ -664,6 +664,14 @@ class GraphWorkflowRunner
     {
         $nodeType = $node['node_type'];
 
+        // Disabled node: a debugging no-op. Skip all work and return a sentinel
+        // output so downstream nodes still receive an input. Lets you bisect a
+        // failing workflow by disabling nodes until the minimum set runs.
+        if (!empty($node['config']['disabled'])) {
+            $this->nodeLog($node, 'info', 'done', 'disabled node — skipped');
+            return ['type' => $nodeType, 'output' => 'disabled node', 'success' => true];
+        }
+
         return match ($nodeType) {
             'agent' => $this->executeAgentNode($node, $userId, $userPrompt, $edges, $executedNodes),
             'agent-template' => throw new \RuntimeException("Unconfigured agent template node found. Please configure all agent nodes before running the workflow."),
@@ -1721,6 +1729,25 @@ class GraphWorkflowRunner
 
             $agentId = $node['agent_id'] ?? null;
             $config = $node['config'] ?? [];
+
+            // Disabled node: debugging no-op. Skip the LLM/skill entirely and
+            // emit a sentinel completion so the fan-out continues and downstream
+            // still gets an input. Not added to $agentStates → no provider call.
+            if (!empty($config['disabled'])) {
+                $label = $config['agent_name'] ?? $config['name'] ?? 'Disabled';
+                $this->emitNodeEvent('node_start', $node, ['input' => '']);
+                $this->nodeLog($node, 'info', 'done', 'disabled node — skipped');
+                $results[$nodeId] = [
+                    'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $label,
+                    'input' => '', 'output' => 'disabled node', 'success' => true, 'usage' => null,
+                ];
+                $this->emitNodeEvent('node_complete', $node, [
+                    'agent_name' => $label, 'success' => true, 'output' => 'disabled node',
+                    'input_tokens' => 0, 'output_tokens' => 0, 'cost_usd' => null,
+                ]);
+                $this->parallelEmitted[$nodeId] = true;
+                continue;
+            }
 
             // Build initial context and task BEFORE emitting node_start (with merge strategy from config)
             $mergeStrategy = $config['merge_strategy'] ?? 'labeled';
