@@ -59,6 +59,8 @@ class GraphWorkflowRunner
     private ?int $currentWorkflowId = null;
     /** @var array<int,array> skill round-trip result (output/script/argv) keyed by node id */
     private array $skillResultByNode = [];
+    /** @var array<int,bool> parallel nodes already finalized/emitted this run */
+    private array $parallelEmitted = [];
 
     // Per-run JSONL event log (docs/superpowers/specs/2026-06-24-...). Every
     // emitted event is persisted here before SSE, so a run is debuggable
@@ -249,6 +251,7 @@ class GraphWorkflowRunner
         $this->runId = bin2hex(random_bytes(16));
         $this->currentWorkflowId = method_exists($workflow, 'getId') ? $workflow->getId() : null;
         $this->skillResultByNode = [];
+        $this->parallelEmitted = [];
         $this->currentUserId = $userId;
         $this->clientSkills = $clientSkills;
         $this->inlineDocuments = $inlineDocuments;
@@ -1628,6 +1631,59 @@ class GraphWorkflowRunner
     }
 
     /**
+     * Finalize one parallel node: accumulate its tokens once, record the
+     * result, and emit node_complete + node_trace + a terminal node_log.
+     * Idempotent — a node is emitted at most once whether it finishes inside
+     * the round loop (immediate) or is swept by the final loop (defensive).
+     */
+    private function finalizeParallelNode(int $nodeId, array $state, array &$results): void
+    {
+        if (!empty($this->parallelEmitted[$nodeId])) {
+            return;
+        }
+        $this->parallelEmitted[$nodeId] = true;
+
+        $agent = $state['agent'];
+        $usage = $state['usage'] ?? null;
+        $inputTokens = $usage['input_tokens'] ?? $usage['prompt_tokens'] ?? 0;
+        $outputTokens = $usage['output_tokens'] ?? $usage['completion_tokens'] ?? 0;
+        $this->totalInputTokens += $inputTokens;
+        $this->totalOutputTokens += $outputTokens;
+
+        $success = (bool) ($state['success'] ?? false);
+        $output = $state['output'] ?? null;
+        $cost = $this->computeNodeCost($agent->getProvider(), $inputTokens, $outputTokens);
+
+        $results[$nodeId] = [
+            'type' => 'agent',
+            'agent_id' => $agent->getId(),
+            'agent_name' => $agent->getName(),
+            'input' => $state['input'] ?? '',
+            'output' => $output,
+            'success' => $success,
+            'usage' => $usage,
+        ];
+
+        if ($success) {
+            $this->nodeLog($state['node'], 'info', 'done',
+                \AgentTeam\Services\NodeLogFormat::completed($inputTokens + $outputTokens, $cost));
+        }
+
+        $this->emitNodeEvent('node_complete', $state['node'], [
+            'agent_name' => $agent->getName(),
+            'success' => $success,
+            'output' => $output,
+            'input_tokens' => $inputTokens,
+            'output_tokens' => $outputTokens,
+            'cost_usd' => $cost,
+        ]);
+
+        $this->recordExecutionTrace($state['node'], $agent->getProvider(),
+            method_exists($agent, 'getModel') ? $agent->getModel() : null,
+            $success, $output, $inputTokens, $outputTokens);
+    }
+
+    /**
      * Execute multiple agent nodes in TRUE parallel with tool support
      * Uses curl_multi for parallel HTTP calls, handles tool execution in rounds
      */
@@ -1806,6 +1862,7 @@ class GraphWorkflowRunner
                     $state['success'] = false;
                     $this->nodeLog($state['node'], 'error', 'error',
                         $response['error'] ?? 'Unknown error');
+                    $this->finalizeParallelNode((int) $nodeId, $state, $results);
                     continue;
                 }
 
@@ -1886,6 +1943,7 @@ class GraphWorkflowRunner
 
                     $responseTime = (microtime(true) - $state['start_time']) * 1000;
                     error_log("[GraphWorkflowRunner] Agent {$agent->getName()} completed in {$responseTime}ms");
+                    $this->finalizeParallelNode((int) $nodeId, $state, $results);
                 }
             }
         }
@@ -1893,14 +1951,16 @@ class GraphWorkflowRunner
         // IMPORTANT: Unset the reference to avoid PHP reference corruption in next loop
         unset($state);
 
-        // Collect final results
+        // Collect final results. Most nodes already finalized inside the round
+        // loop (immediate emit); this sweep handles any never-completed node
+        // (e.g. still pending at maxRounds) so it still reports an outcome.
         error_log("[GraphWorkflowRunner] Final agentStates keys: " . implode(',', array_keys($agentStates)));
         foreach ($agentStates as $nodeId => $finalState) {
-            $agent = $finalState['agent'];
-
-            // A node still pending at maxRounds never completed. Surface the
-            // last assistant text (or an explicit message) instead of an empty
-            // result, and mark it failed — so the node form shows *something*.
+            if (!empty($this->parallelEmitted[$nodeId])) {
+                continue;
+            }
+            // Never completed: surface the last assistant text (or an explicit
+            // message) instead of an empty result, and mark it failed.
             if (empty($finalState['completed'])) {
                 $lastText = '';
                 foreach (array_reverse($finalState['messages'] ?? []) as $m) {
@@ -1913,41 +1973,10 @@ class GraphWorkflowRunner
                     ? $lastText
                     : 'Agent did not finish within the tool-round limit (likely stuck calling its skill).';
                 $finalState['success'] = false;
+                $this->nodeLog($finalState['node'], 'error', 'error',
+                    'did not finish within the tool-round limit');
             }
-
-            $usage = $finalState['usage'] ?? null;
-
-            // Accumulate tokens
-            $inputTokens = $usage['input_tokens'] ?? $usage['prompt_tokens'] ?? 0;
-            $outputTokens = $usage['output_tokens'] ?? $usage['completion_tokens'] ?? 0;
-            $this->totalInputTokens += $inputTokens;
-            $this->totalOutputTokens += $outputTokens;
-
-            $results[$nodeId] = [
-                'type' => 'agent',
-                'agent_id' => $agent->getId(),
-                'agent_name' => $agent->getName(),
-                'input' => $finalState['input'] ?? '',
-                'output' => $finalState['output'],
-                'success' => $finalState['success'] ?? false,
-                'usage' => $usage,
-            ];
-
-            error_log("[GraphWorkflowRunner] EMITTING node_complete for node {$nodeId} ({$agent->getName()})");
-            $this->emitNodeEvent('node_complete', $finalState['node'], [
-                'agent_name' => $agent->getName(),
-                'success' => $finalState['success'] ?? false,
-                'output' => $finalState['output'] ?? null,
-                'input_tokens' => $inputTokens,
-                'output_tokens' => $outputTokens,
-                'cost_usd' => $this->computeNodeCost($agent->getProvider(), $inputTokens, $outputTokens),
-            ]);
-
-            // Phase 0: record an execution trace for this parallel agent node.
-            $this->recordExecutionTrace($finalState['node'], $agent->getProvider(),
-                method_exists($agent, 'getModel') ? $agent->getModel() : null,
-                (bool)($finalState['success'] ?? false), $finalState['output'] ?? null,
-                $inputTokens, $outputTokens);
+            $this->finalizeParallelNode((int) $nodeId, $finalState, $results);
         }
 
         error_log("[GraphWorkflowRunner] Parallel execution complete. Results for " . count($results) . " agents");
