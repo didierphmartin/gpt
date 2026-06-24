@@ -9,19 +9,20 @@ namespace AgentTeam\Services;
  *
  * Unlike LangGraphGenerator::generateIngestionScript (which re-reads the SAVED
  * graph and is buggy), this compiler is fed each node's OWN config directly by
- * the frontend. It is fully self-contained: dispatch tables for
- * loaders/splitters/embeddings/stores, plus two entry points:
+ * the frontend. It is fully self-contained: emits Python scripts that
+ * orchestrate langfs (load/extract) + mcp_qrant (embed/store), plus two entry
+ * points:
  *
  *   - compileNodeChunk(kind, config): the Python chunk for ONE node (the
  *     incremental per-node "Output" tab in the editor).
  *   - compileScript(loader, splitter, store): the full runnable standalone
  *     script (download / run-anywhere).
  *
- * EXTENSION POINTS (add a new loader source / splitter strategy / store /
- * embeddings provider): add ONE entry to the matching dispatch table below
- * (import + Python fragment) and the matching editor dropdown. Everything else
- * is choice-agnostic. Future: web/sql/mcp loaders, markdown/auto/rows
- * splitters, faiss/chroma stores, ollama/hf embeddings.
+ * EXTENSION POINTS (add a new loader source / store / embedding model):
+ * those changes are server-side in the langfs or mcp_qrant MCP servers. The
+ * only PHP dispatch table remaining is splitterDispatch (strategy → Python
+ * fragment); adding a new splitter strategy requires adding an entry there
+ * and in the editor dropdown.
  */
 final class IngestionCompiler
 {
@@ -198,13 +199,12 @@ final class IngestionCompiler
      * Compile the full, self-contained, runnable ingestion script from the
      * three node configs.
      *
-     * @param array<string,mixed> $loaderCfg   {source,path}
+     * @param array<string,mixed> $loaderCfg   {storage_mcp_url,provider,path,types,is_dir,workers}
      * @param array<string,mixed> $splitterCfg {strategy,chunk_size,overlap}
-     * @param array<string,mixed> $storeCfg    {store,embeddings,collection}
+     * @param array<string,mixed> $storeCfg    {store,provider,connection,collection,embedding}
+     * @param array<string,mixed> $ctx         {langfs_url,mcpqrant_url}
      *
      * @return array{filename:string,code:string}
-     *
-     * @throws \RuntimeException on unknown source / strategy / store / provider
      */
     public static function compileScript(array $loaderCfg, array $splitterCfg, array $storeCfg, array $ctx = []): array
     {

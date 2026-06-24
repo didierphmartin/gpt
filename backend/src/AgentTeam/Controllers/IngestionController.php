@@ -147,8 +147,8 @@ final class IngestionController
      *
      * The LOADER node's interpreter (first node of the PHP interpreter, built
      * node-by-node): enumerate the source (single file, or a folder walked
-     * recursively) through the UniversalFS MCP and transform each file into
-     * TEXT — the content shown in the loader's Output tab and, later, fed to the
+     * recursively) through the langfs MCP and transform each file into TEXT —
+     * the content shown in the loader's Output tab and, later, fed to the
      * splitter. Body: { config: { provider, path, is_dir, types[],
      * storage_mcp_id, storage_mcp_url, ufskey } }.
      */
