@@ -26,6 +26,10 @@ class WorkflowEditor {
         // API base URL
         this.apiBase = window.CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
 
+        // Expose the live instance for console-driven testing of the new
+        // browser-driven node runner (wfEditor.runNodeChatUnitTest(...)).
+        window.wfEditor = this;
+
         // Agent form related
         this.providers = [];
         this.providersLoaded = false;
@@ -9454,6 +9458,147 @@ class WorkflowEditor {
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
         return r.result;
+    }
+
+    // ---- Browser-driven node execution (the "chat unit" model) -------------
+    // Run ONE agent node the way chat does: loop /api/v1/chat (non-streaming),
+    // and whenever the model asks for a skill, run it on the worker pool and
+    // re-call /chat with the result — until the model returns final text. No
+    // server-side blocking, no bridge, no timeout caps. Returns {success, output}.
+
+    _wfNodeLog(dfId, phase, message, level = 'info') {
+        if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
+        if (!Array.isArray(this.nodeExecutionData[dfId].activity)) this.nodeExecutionData[dfId].activity = [];
+        this.nodeExecutionData[dfId].activity.push({ ts: Date.now() / 1000, level, phase, message });
+        this.updateModalInputOutput(dfId);
+    }
+
+    async _runNodeAsChatUnit(node, inputText) {
+        const dfId = String(node.id);
+        const data = node.data || {};
+        const provider = data.agent_provider || data.provider || 'openai';
+        const model = data.model || null;
+        const instructions = data.instructions || '';
+        const dirName = data.bound_skill?.dir_name || null;
+
+        if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
+        this.nodeExecutionData[dfId].input = inputText;
+        this.nodeExecutionData[dfId].activity = [];
+        this.nodeExecutionData[dfId].logs = [];
+        this.highlightNode(dfId, 'active', dfId, 'agent');
+        this.updateModalInputOutput(dfId);
+        this._wfNodeLog(dfId, 'llm', `calling ${provider}${model ? ' (' + model + ')' : ''}`);
+
+        // Load the bound skill's body + scripts so the model can call it.
+        let skillContent = null, skillMetadata = null;
+        if (dirName && window.skillsFs) {
+            try {
+                skillContent = await window.skillsFs.getSkillContent(dirName);
+                const scripts = await window.skillsFs.listSkillScripts(dirName);
+                skillMetadata = { dir_name: dirName, scripts };
+            } catch (e) { console.warn('[wf-unit] skill load failed for', dirName, e); }
+        }
+
+        const conversationHistory = [];
+        const MAX_ROUNDS = 8;
+        try {
+            for (let round = 0; round < MAX_ROUNDS; round++) {
+                const body = {
+                    message: round === 0 ? inputText : '',
+                    conversation_history: conversationHistory,
+                    streaming: false,
+                    provider,
+                    model,
+                    system_prompt: instructions,
+                    skill_content: skillContent,
+                    skill_metadata: skillMetadata,
+                };
+                const resp = await fetch(`${this.apiBase}/chat`, {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(body),
+                });
+                if (!resp.ok) throw new Error(`chat HTTP ${resp.status}`);
+                const r = await resp.json();
+
+                if (r.pending_client_tool_call) {
+                    const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
+                    const assistantText = r.assistant_text || r.text || '';
+                    this._wfNodeLog(dfId, 'llm', 'model requested run_skill_script');
+                    conversationHistory.push({
+                        role: 'assistant',
+                        content: assistantText || null,
+                        tool_calls: calls.map(c => ({
+                            id: c.id,
+                            type: 'function',
+                            function: { name: c.name || 'run_skill_script', arguments: JSON.stringify(c.input || {}) },
+                        })),
+                    });
+                    for (const c of calls) {
+                        const input = c.input || {};
+                        this._wfNodeLog(dfId, 'skill', `running skill ${input.dir_name || dirName}`);
+                        const result = await this._runSkillPooledOrMain({
+                            dirName: input.dir_name || dirName,
+                            script: input.script,
+                            argv: Array.isArray(input.argv) ? input.argv : [],
+                            inputFiles: null,
+                            readOutputs: Array.isArray(input.read_outputs) && input.read_outputs.length ? input.read_outputs : null,
+                        });
+                        this._wfNodeLog(dfId, 'skill', `skill finished (exit ${result?.exitCode ?? 0})`);
+                        this.nodeExecutionData[dfId].logs.push({
+                            dirName: input.dir_name || dirName, script: input.script || '',
+                            argv: Array.isArray(input.argv) ? input.argv : [],
+                            exitCode: result?.exitCode ?? 0, stdout: result?.stdout || '',
+                            logMessages: result?.stderr || '', durationMs: Math.round(result?.durationMs ?? 0),
+                        });
+                        // Trim outputs to keep the tool result small.
+                        const outs = {};
+                        for (const [p, v] of Object.entries(result?.outputs || {})) {
+                            outs[p] = (typeof v === 'string') ? (v.length > 2000 ? v.slice(0, 2000) + ' …[truncated]' : v)
+                                : `[binary ${v?.byteLength ?? 0} bytes]`;
+                        }
+                        conversationHistory.push({
+                            role: 'tool',
+                            tool_call_id: c.id,
+                            name: c.name || 'run_skill_script',
+                            content: JSON.stringify({
+                                success: (result?.exitCode ?? 0) === 0,
+                                output: { exit_code: result?.exitCode ?? 0, stdout: result?.stdout || '', log_messages: result?.stderr || '', outputs: outs },
+                            }),
+                        });
+                        this.updateModalInputOutput(dfId);
+                    }
+                } else {
+                    const finalText = r.text || r.assistant_text || '';
+                    this.nodeExecutionData[dfId].output = finalText;
+                    this.nodeExecutionData[dfId].success = true;
+                    this._wfNodeLog(dfId, 'done', 'completed');
+                    this.highlightNode(dfId, 'completed', dfId, 'agent');
+                    this.updateModalInputOutput(dfId);
+                    return { success: true, output: finalText };
+                }
+            }
+            throw new Error(`did not finish within ${MAX_ROUNDS} rounds`);
+        } catch (e) {
+            const msg = String(e?.message || e);
+            this.nodeExecutionData[dfId].output = 'Error: ' + msg;
+            this.nodeExecutionData[dfId].success = false;
+            this._wfNodeLog(dfId, 'error', msg, 'error');
+            this.highlightNode(dfId, 'error', dfId, 'agent');
+            this.updateModalInputOutput(dfId);
+            return { success: false, output: 'Error: ' + msg };
+        }
+    }
+
+    // Console test entry: wfEditor.runNodeChatUnitTest('<drawflowId>', 'input text')
+    async runNodeChatUnitTest(drawflowId, inputText) {
+        const node = this.editor.getNodeFromId(drawflowId);
+        if (!node) { console.error('[wf-unit] no node', drawflowId); return; }
+        console.log('[wf-unit] running node', drawflowId, node.data?.agent_name || node.data?.name);
+        const out = await this._runNodeAsChatUnit(node, inputText);
+        console.log('[wf-unit] result:', out);
+        return out;
     }
 
     async handleClientToolCall(event) {
