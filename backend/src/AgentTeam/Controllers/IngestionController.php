@@ -106,18 +106,18 @@ final class IngestionController
         $splitter = (array) ($body['splitter'] ?? []);
         $store = (array) ($body['vectorstore'] ?? []);
 
-        // Resolve the runtime URLs the emitted script needs: UniversalFS (from
-        // the loader's storage MCP) and the vector-DB MCP (from store:"mcp:<id>").
+        // Resolve the runtime URLs the emitted script needs: langfs (from the
+        // loader's storage MCP) and mcp_qrant (from store:"mcp:<id>").
         $ctx = [];
         if (!empty($loader['storage_mcp_url'])) {
-            $ctx['ufs_url'] = (string) $loader['storage_mcp_url'];
+            $ctx['langfs_url'] = (string) $loader['storage_mcp_url'];
         }
         if (preg_match('/^mcp:(\d+)$/', (string) ($store['store'] ?? ''), $m)) {
             $stmt = $this->db->prepare("SELECT url FROM mcp_servers WHERE id = ? AND enabled = 1");
             $stmt->execute([(int) $m[1]]);
             $row = $stmt->fetch(\PDO::FETCH_ASSOC);
             if ($row) {
-                $ctx['qdrant_url'] = (string) $row['url'];
+                $ctx['mcpqrant_url'] = (string) $row['url'];
             }
         }
 

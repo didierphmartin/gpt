@@ -322,47 +322,58 @@ final class IngestionCompiler
     {
         $js = static fn($v): string => (string) json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-        $ufsUrl    = (string) ($ctx['ufs_url'] ?? $loaderCfg['storage_mcp_url'] ?? 'http://localhost/UniversalFS/mcp/server.php');
-        $qdrantUrl = (string) ($ctx['qdrant_url'] ?? '');
-        $provider  = ((string) ($loaderCfg['provider'] ?? 'local')) ?: 'local';
-        $path      = (string) ($loaderCfg['path'] ?? '');
-        $isDir     = !empty($loaderCfg['is_dir']) ? 'True' : 'False';
-        $types     = array_values(array_filter((array) ($loaderCfg['types'] ?? []), 'is_string'));
-        $chunk     = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
-        $overlap   = max(0, (int) ($splitterCfg['overlap'] ?? 150));
+        $langfsUrl  = (string) ($ctx['langfs_url'] ?? $loaderCfg['storage_mcp_url'] ?? '');
+        $mcpqUrl    = (string) ($ctx['mcpqrant_url'] ?? '');
+        $provider   = ((string) ($loaderCfg['provider'] ?? 'local')) ?: 'local';
+        $path       = (string) ($loaderCfg['path'] ?? '');
+        $isDir      = !empty($loaderCfg['is_dir']) ? 'True' : 'False';
+        $types      = array_values(array_filter((array) ($loaderCfg['types'] ?? []), 'is_string'));
+        $chunk      = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
+        $overlap    = max(0, (int) ($splitterCfg['overlap'] ?? 150));
+        $vsProvider = ((string) ($storeCfg['provider'] ?? 'qdrant')) ?: 'qdrant';
+        $connection = (array) ($storeCfg['connection'] ?? []);
         $collection = trim((string) ($storeCfg['collection'] ?? ''));
+        $embedding  = trim((string) ($storeCfg['embedding'] ?? ''));
         $workersInt = (int) ($loaderCfg['workers'] ?? 0);
 
-        $pyUfs     = $js($ufsUrl);
-        $pyQdrant  = $js($qdrantUrl);
+        $pyLangfs  = $js($langfsUrl);
+        $pyMcpq    = $js($mcpqUrl);
         $pyProv    = $js($provider);
         $pyPath    = $js($path);
         $pyTypes   = $types === [] ? '[]' : $js($types);
-        $pyColl    = $collection !== '' ? $js($collection) : 'None';
+        $pyVsProv  = $js($vsProvider);
+        $pyConn    = $connection === [] ? '{}' : $js($connection);
+        $pyColl    = $js($collection);
+        $pyEmb     = $js($embedding);
         $pyWorkers = $workersInt > 0 ? (string) $workersInt : 'None';
 
         $code = <<<PY
 #!/usr/bin/env python3
 """Standalone RAG ingestion — generated from the workflow nodes.
-Mirrors the interpreter: UniversalFS loader -> langchain recursive split ->
-qdrant-store MCP, parallelized with a process pool (work-stealing).
-Deps: langchain-text-splitters, pypdf, docx2txt, markdownify."""
-import os, io, json, base64, re, urllib.request
-from concurrent.futures import ProcessPoolExecutor
+Orchestrates langfs (extract) + mcp_qrant (embed/store); the only in-process
+LangChain is the recursive splitter. Independent of the PHP interpreter.
+Deps: langchain-text-splitters (+ Python stdlib)."""
+import json, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-UFS        = {$pyUfs}
-QDRANT     = {$pyQdrant}
-PROVIDER   = {$pyProv}
-PATH       = {$pyPath}
-IS_DIR     = {$isDir}
-TYPES      = {$pyTypes}
-CHUNK      = {$chunk}
-OVERLAP    = {$overlap}
+LANGFS = {$pyLangfs}
+MCPQRANT = {$pyMcpq}
+PROVIDER = {$pyProv}
+PATH = {$pyPath}
+IS_DIR = {$isDir}
+TYPES = {$pyTypes}
+CHUNK = {$chunk}
+OVERLAP = {$overlap}
+VS_PROVIDER = {$pyVsProv}
+CONNECTION = {$pyConn}
 COLLECTION = {$pyColl}
-WORKERS    = {$pyWorkers}
+EMBEDDING = {$pyEmb}
+WORKERS = {$pyWorkers}
 
 EXT_TYPE = {"pdf": "pdf", "docx": "word", "doc": "word", "txt": "text", "csv": "csv", "html": "html", "htm": "html"}
+
+_split = RecursiveCharacterTextSplitter(chunk_size=CHUNK, chunk_overlap=OVERLAP)
 
 
 def _parse(raw):
@@ -381,22 +392,31 @@ def _parse(raw):
     return {}
 
 
-def _mcp(url, payload, headers=None):
-    data = json.dumps(payload).encode("utf-8")
-    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    if headers:
-        h.update(headers)
-    req = urllib.request.Request(url, data=data, headers=h, method="POST")
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        raw = resp.read().decode("utf-8", "replace")
-        sid = resp.headers.get("Mcp-Session-Id")
-    return _parse(raw), sid
-
-
-def ufs(tool, args):
-    obj, _ = _mcp(UFS, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                        "params": {"name": tool, "arguments": args}})
-    return (((obj.get("result") or {}).get("content") or [{}])[0]).get("text", "")
+def _payload(url, tool, args):
+    """Call an MCP tool and return the decoded payload from the
+    {content:[{text:json}]} envelope. Raises on JSON-RPC error."""
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": tool, "arguments": args}}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        obj = _parse(resp.read().decode("utf-8", "replace"))
+    if isinstance(obj, dict) and obj.get("error"):
+        raise RuntimeError(f"{tool}: {(obj['error'] or {}).get('message', 'MCP error')}")
+    result = obj.get("result") if isinstance(obj, dict) else None
+    result = result if result is not None else obj
+    text = None
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list) and content and isinstance(content[0], dict):
+            text = content[0].get("text")
+    if isinstance(text, str):
+        try:
+            return json.loads(text)
+        except Exception:
+            return {"content": text}
+    return result if isinstance(result, dict) else {}
 
 
 def detect(name):
@@ -404,7 +424,8 @@ def detect(name):
     return EXT_TYPE.get(ext)
 
 
-def enumerate_files():
+def list_files():
+    """Recursive walk via langfs list_files (one level per call)."""
     out, seen = [], set()
 
     def walk(folder, depth):
@@ -414,20 +435,19 @@ def enumerate_files():
         args = {"provider": PROVIDER}
         if folder:
             args["path"] = folder
-        try:
-            data = json.loads(ufs("list_files", args))
-        except Exception:
-            data = {}
+        data = _payload(LANGFS, "list_files", args)
         for it in (data.get("files") or []):
-            fid = it.get("id")
+            if not isinstance(it, dict):
+                continue
+            fid = it.get("id") or it.get("source")
             nm = it.get("name") or (fid or "")
             if it.get("type") == "folder":
                 if fid:
                     walk(fid, depth + 1)
             else:
                 t = detect(nm)
-                if t and (not TYPES or t in TYPES):
-                    out.append({"provider": PROVIDER, "file_id": fid, "name": nm, "source": fid, "doc_type": t})
+                if t and (not TYPES or t in TYPES) and fid:
+                    out.append(fid)
 
     if IS_DIR:
         walk(PATH, 0)
@@ -435,76 +455,45 @@ def enumerate_files():
         nm = PATH.rsplit("/", 1)[-1]
         t = detect(nm)
         if t and (not TYPES or t in TYPES):
-            out.append({"provider": PROVIDER, "file_id": PATH, "name": nm, "source": PATH, "doc_type": t})
+            out.append(PATH)
     return out
 
 
-def read_file(provider, fid):
-    return base64.b64decode(ufs("read_file", {"provider": provider, "file_id": fid, "encoding": "base64"}))
+def read_text(src):
+    """langfs read_file with format=text — langfs returns extracted text."""
+    data = _payload(LANGFS, "read_file", {"provider": PROVIDER, "file_id": src, "format": "text"})
+    return str((data.get("content") if isinstance(data, dict) else "") or "")
 
 
-def decode(name, data):
-    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    if ext in ("txt", "csv"):
-        return data.decode("utf-8", "replace")
-    if ext == "pdf":
-        import pypdf
-        r = pypdf.PdfReader(io.BytesIO(data))
-        return "\\n".join((p.extract_text() or "") for p in r.pages)
-    if ext in ("docx", "doc"):
-        import docx2txt
-        return docx2txt.process(io.BytesIO(data))
-    if ext in ("html", "htm"):
-        html = data.decode("utf-8", "replace")
-        try:
-            from markdownify import markdownify
-            return markdownify(html)
-        except Exception:
-            return re.sub(r"<[^>]+>", " ", html)
-    return data.decode("utf-8", "replace")
+def store(items):
+    args = {"provider": VS_PROVIDER, "connection": CONNECTION, "collection": COLLECTION, "items": items}
+    if EMBEDDING:
+        args["embedding"] = EMBEDDING
+    data = _payload(MCPQRANT, "store", args)
+    if not isinstance(data, dict) or "stored" not in data:
+        raise RuntimeError("store: response had no {stored} field (transport/endpoint problem)")
+    if data.get("error"):
+        raise RuntimeError(f"store: {data.get('message', 'store failed')}")
+    return int(data.get("stored", 0))
 
 
-_split = RecursiveCharacterTextSplitter(chunk_size=CHUNK, chunk_overlap=OVERLAP)
-
-
-def qdrant_session():
-    _, sid = _mcp(QDRANT, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                           "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                                      "clientInfo": {"name": "ingest", "version": "1"}}})
-    if sid:
-        _mcp(QDRANT, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-             {"Mcp-Session-Id": sid})
-    return sid
-
-
-def qdrant_store(sid, text, source):
-    args = {"information": text, "metadata": {"source": source}}
-    if COLLECTION:
-        args["collection_name"] = COLLECTION
-    h = {"Mcp-Session-Id": sid} if sid else None
-    _mcp(QDRANT, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                  "params": {"name": "qdrant-store", "arguments": args}}, h)
-
-
-def process_file(desc):
+def process_file(src):
     try:
-        text = decode(desc["name"], read_file(desc["provider"], desc["file_id"]))
-        chunks = _split.split_text(text)
-        if QDRANT:
-            sid = qdrant_session()
-            for c in chunks:
-                if c.strip():
-                    qdrant_store(sid, c, desc["source"])
-        return desc["source"], len(chunks), None
+        chunks = [c for c in _split.split_text(read_text(src)) if c.strip()]
+        if not chunks:
+            return src, 0, None
+        n = store([{"text": c, "metadata": {"source": src}} for c in chunks])
+        return src, n, None
     except Exception as e:
-        return desc["source"], 0, str(e)
+        return src, 0, str(e)
 
 
 if __name__ == "__main__":
-    files = enumerate_files()
-    print(f"{len(files)} file(s) to ingest with {WORKERS or os.cpu_count()} worker(s)")
+    files = list_files()
+    workers = WORKERS or 8
+    print(f"{len(files)} file(s) to ingest with {workers} worker(s)")
     total = 0
-    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         for src, n, err in ex.map(process_file, files):
             total += n
             print(f"  {src}: {n} chunk(s)" + (f"  ERROR: {err}" if err else ""))
@@ -514,10 +503,7 @@ PY;
         $slug = self::slugify($collection);
         $filename = 'ingestion_' . ($slug !== '' ? $slug : 'pipeline') . '.py';
 
-        return [
-            'filename' => $filename,
-            'code'     => $code,
-        ];
+        return ['filename' => $filename, 'code' => $code];
     }
 
     private static function slugify(string $name): string
