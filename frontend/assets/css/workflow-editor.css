@@ -51,6 +51,56 @@
     flex-direction: column;
     overflow: hidden;
     box-shadow: -4px 0 20px rgba(0, 0, 0, 0.05);
+    transition: width 0.2s ease;
+}
+
+/* Collapsed: shrink to a thin rail, keep only the expand toggle visible.
+   The canvas (flex:1) grows to fill the reclaimed space automatically. */
+.workflow-agents-panel.collapsed {
+    width: 40px;
+}
+.workflow-agents-panel.collapsed .panel-title,
+.workflow-agents-panel.collapsed .workflow-agents-list,
+.workflow-agents-panel.collapsed .workflow-actions {
+    display: none;
+}
+.workflow-agents-panel.collapsed .workflow-panel-header {
+    justify-content: center;
+    padding: 12px 0;
+}
+
+/* Panel header bar holding the collapse/expand toggle */
+.workflow-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    flex-shrink: 0;
+}
+.workflow-panel-header .panel-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.workflow-panel-toggle {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #64748b;
+    font-size: 15px;
+    line-height: 1;
+    padding: 4px 7px;
+    border-radius: 6px;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.workflow-panel-toggle:hover {
+    background: #e2e8f0;
+    color: #1e293b;
 }
 
 .workflow-agents-header {
@@ -1008,10 +1058,9 @@ svg.connection.selected .main-path,
     background: rgba(245, 158, 11, 0.15);
 }
 
-/* Ingestion (vector store) end node — visually distinct from the agent
-   Output node so the two variants are easy to tell apart. */
-.workflow-node.output-node.ingestion-output .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
-.workflow-node.output-node.ingestion-output .node-icon { color: #0284c7; }
+/* Ingestion (vector store) end node keeps the SAME header colour as the normal
+   agent Output node (amber) so Start/End read as the usual workflow endpoints;
+   only the body content (Compile to Python) differs. */
 
 /* Ingestion output node: same light-blue header as the other ingestion nodes
    (.ingestion-output .node-header above), with "Compile to Python" as its single
@@ -1042,10 +1091,9 @@ svg.connection.selected .main-path,
     border-color: #38bdf8;
 }
 
-/* Ingestion start node (start → loader): recoloured like the ingestion nodes,
-   prompt-less, just the ▶ play button. */
-.workflow-node.start-node.ingestion-start .node-header { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); }
-.workflow-node.start-node.ingestion-start .node-icon { color: #0284c7; }
+/* Ingestion start node (start → loader): keeps the SAME header colour as the
+   normal Start node (blue) so it reads as the usual workflow start; it's just
+   prompt-less with the ▶ play button always shown. */
 /* The green ▶ play button is hidden by default (agents only show it once a prompt
    is set). Ingestion needs no prompt, so always show it — same green button as
    the agent workflow, under the title. */
@@ -1303,6 +1351,17 @@ svg.connection.selected .main-path,
 .workflow-node.ingestion-node .node-icon {
     color: #0284c7;
     background: rgba(2, 132, 199, 0.15);
+}
+
+/* Disabled ingestion node: greyed out so it's clearly skipped while debugging.
+   The pen edit button stays clickable so it can be re-enabled. */
+.workflow-node.ingestion-node.node-disabled {
+    opacity: 0.5;
+    filter: grayscale(0.7);
+}
+
+.workflow-node.ingestion-node.node-disabled .node-title {
+    text-decoration: line-through;
 }
 
 /* Selected node - blue border with gradient halo like Drawflow demo */
@@ -1971,7 +2030,13 @@ svg.connection.selected .main-path,
     background: white;
     border-radius: 12px;
     width: 90%;
-    max-width: 450px;
+    /* Match the agent node edit modal (Tailwind max-w-4xl / max-h-[90vh]) so the
+       ingestion forms read as the same class of dialog. Amber accent is kept on
+       the header to preserve the storage-node identity. */
+    max-width: 56rem;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
     animation: modalSlideIn 0.2s ease-out;
@@ -1984,6 +2049,7 @@ svg.connection.selected .main-path,
     padding: 16px 20px;
     border-bottom: 1px solid #e5e7eb;
     background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    flex-shrink: 0;
 }
 
 .storage-config-header h3 {
@@ -2017,6 +2083,223 @@ svg.connection.selected .main-path,
 
 .storage-config-body {
     padding: 20px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+}
+
+/* Two-column field layout, matching the agent modal's grid-cols-2 settings tab. */
+.storage-config-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.storage-config-grid .storage-config-folder.full {
+    grid-column: 1 / -1;
+}
+
+/* Vector-store node: each grid column is a vertical stack of folders
+   (left = Vector DB / Collection / Test connection; right = Connection / Disable). */
+.storage-config-grid .ingestion-vs-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+/* Loader provider picker: radios stacked vertically (one per row). */
+.ingestion-loader-provider-radios {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ingestion-loader-provider-radios label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 400;
+    cursor: pointer;
+}
+.ingestion-loader-provider-radios input[type="radio"] {
+    width: auto;
+    margin: 0;
+}
+
+/* File-type filter: one checkbox per format, the checked set = what's processed. */
+.ingestion-loader-type-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ingestion-loader-type-checks .ingestion-type-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 400;
+    cursor: pointer;
+}
+.ingestion-loader-type-checks input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    margin: 0;
+}
+
+/* Disable toggle: sits in the right column; checkbox + label on one line with
+   the explanatory text underneath. */
+.storage-config-folder input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+
+/* Disable toggle pinned to the top-right cell so it sits level with the first
+   field in the left column. */
+.storage-config-disable {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.storage-config-disable-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px 0;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+/* Loader Path: two columns — left = file/folder selector, right = the picked
+   folder's contents (or guidance). Both columns top-aligned at the same level. */
+.ingestion-loader-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.ingestion-loader-left,
+.ingestion-loader-right {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ingestion-browse-btn {
+    align-self: flex-start;
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+    color: #374151;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.ingestion-browse-btn:hover {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+}
+
+.ingestion-loader-explain {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #6b7280;
+}
+
+.ingestion-path-code {
+    font-family: Menlo, Monaco, 'Courier New', monospace;
+    font-size: 12px;
+    color: #1f2937;
+    word-break: break-all;
+}
+
+.ingestion-folder-list-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+    /* Align with the path input row on the left (which has no label above it). */
+    line-height: 1;
+}
+
+/* The right panel matches the left column's height so both sit level. */
+.ingestion-folder-list {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    padding: 10px 12px;
+    min-height: 96px;
+    max-height: 200px;
+    overflow: auto;
+    font-size: 13px;
+}
+
+.ingestion-folder-help p {
+    margin: 0 0 6px 0;
+    color: #4b5563;
+    line-height: 1.45;
+}
+
+.ingestion-folder-help p.muted {
+    color: #9ca3af;
+    font-size: 12px;
+}
+
+.ingestion-folder-files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ingestion-folder-files li {
+    padding: 3px 2px;
+    color: #374151;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Storage browser (UniversalFS list_files): pick a folder or a file. */
+.ingestion-browse-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.ingestion-browse-bar button {
+    font-size: 12px;
+    padding: 3px 8px;
+    cursor: pointer;
+}
+.ingestion-browse-bar button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.ingestion-browse-cur {
+    font-size: 11px;
+    word-break: break-all;
+    white-space: normal;
+    margin: 2px 0 6px;
+}
+.ingestion-browse-folder,
+.ingestion-browse-file {
+    cursor: pointer;
+    border-radius: 4px;
+}
+.ingestion-browse-folder:hover,
+.ingestion-browse-file:hover {
+    background: rgba(255, 140, 0, 0.12);
+}
+.ingestion-browse-folder {
+    font-weight: 500;
 }
 
 .storage-config-toggle {
@@ -2113,7 +2396,8 @@ svg.connection.selected .main-path,
     margin-bottom: 8px;
 }
 
-.storage-config-folder input {
+.storage-config-folder input,
+.storage-config-folder select {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid #d1d5db;
@@ -2124,7 +2408,8 @@ svg.connection.selected .main-path,
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.storage-config-folder input:focus {
+.storage-config-folder input:focus,
+.storage-config-folder select:focus {
     outline: none;
     border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
@@ -2149,6 +2434,7 @@ svg.connection.selected .main-path,
     padding: 16px 20px;
     border-top: 1px solid #e5e7eb;
     background: #f9fafb;
+    flex-shrink: 0;
 }
 
 .storage-config-btn {

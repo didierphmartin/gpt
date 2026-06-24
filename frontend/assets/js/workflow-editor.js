@@ -6668,38 +6668,42 @@ class WorkflowEditor {
                 </div>
             `;
         } else if (nodeType === 'vectorstore') {
-            // 2-column layout: row 1 = Vector DB (provider) | Connection (the
-            // selected provider's connection params), row 2 = Collection | Disable
-            // execution. Embeddings (shown only for non-self-embedding providers)
-            // and Test connection span the full width below.
+            // Two column stacks inside the 2-col grid:
+            //   LEFT  = Vector DB (provider) → Collection → Test connection
+            //   RIGHT = Connection (provider's DB params) → Disable execution
+            // Embeddings (non-self-embedding providers only) spans full width below.
             fieldsHtml = `
-                <div class="storage-config-folder" id="ingestion-vs-provider-wrap">
-                    <label>Vector DB</label>
-                    <div id="ingestion-vs-provider-host" class="ingestion-loader-provider-radios"></div>
-                    <input type="hidden" id="ingestion-vs-store" value="${this.escapeHtml(config.store || '')}">
+                <div class="ingestion-vs-col">
+                    <div class="storage-config-folder" id="ingestion-vs-provider-wrap">
+                        <label>Vector DB</label>
+                        <div id="ingestion-vs-provider-host" class="ingestion-loader-provider-radios"></div>
+                        <input type="hidden" id="ingestion-vs-store" value="${this.escapeHtml(config.store || '')}">
+                    </div>
+                    <div class="storage-config-folder">
+                        <label for="ingestion-vs-collection">Collection</label>
+                        <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
+                    </div>
+                    <div class="storage-config-folder">
+                        <button type="button" id="ingestion-vs-test" class="storage-config-btn cancel" style="padding:4px 14px;">Test connection</button>
+                        <span id="ingestion-vs-test-result" style="margin-left:8px;font-size:12px;color:#9ca3af;"></span>
+                    </div>
                 </div>
-                <div class="storage-config-folder" id="ingestion-vs-connection-wrap">
-                    <label>Connection</label>
-                    <div id="ingestion-vs-connection-host"></div>
-                </div>
-                <div class="storage-config-folder">
-                    <label for="ingestion-vs-collection">Collection</label>
-                    <input type="text" id="ingestion-vs-collection" value="${this.escapeHtml(config.collection || '')}" placeholder="Collection name">
-                </div>
-                <div class="storage-config-folder">
-                    <label for="ingestion-node-disabled" class="storage-config-disable-row">
-                        <input type="checkbox" id="ingestion-node-disabled" ${config.disabled ? 'checked' : ''}>
-                        <span>Disable execution</span>
-                    </label>
-                    <small>This node is skipped when the pipeline compiles or runs — handy for debugging.</small>
+                <div class="ingestion-vs-col">
+                    <div class="storage-config-folder" id="ingestion-vs-connection-wrap">
+                        <label>Connection</label>
+                        <div id="ingestion-vs-connection-host"></div>
+                    </div>
+                    <div class="storage-config-folder">
+                        <label for="ingestion-node-disabled" class="storage-config-disable-row">
+                            <input type="checkbox" id="ingestion-node-disabled" ${config.disabled ? 'checked' : ''}>
+                            <span>Disable execution</span>
+                        </label>
+                        <small>This node is skipped when the pipeline compiles or runs — handy for debugging.</small>
+                    </div>
                 </div>
                 <div class="storage-config-folder full" id="ingestion-vs-embeddings-wrap" style="display:none;">
                     <label for="ingestion-vs-embedding">Embeddings</label>
                     <select id="ingestion-vs-embedding"></select>
-                </div>
-                <div class="storage-config-folder full">
-                    <button type="button" id="ingestion-vs-test" class="storage-config-btn cancel" style="padding:4px 14px;">Test connection</button>
-                    <span id="ingestion-vs-test-result" style="margin-left:8px;font-size:12px;color:#9ca3af;"></span>
                 </div>
             `;
         }
