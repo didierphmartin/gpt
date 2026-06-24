@@ -12660,14 +12660,14 @@ Based on the analysis...
             .slice()
             .sort((a, b) => (a.ts || 0) - (b.ts || 0))
             .map(a => {
-                const color = a.level === 'error' ? '#e5534b' : (a.level === 'warn' ? '#d9a23a' : '#8a8f98');
+                const color = a.level === 'error' ? '#c0392b' : (a.level === 'warn' ? '#b8860b' : '#111');
                 const icon = a.phase === 'skill' ? '▶' : (a.phase === 'done' ? '✓' : (a.phase === 'error' ? '✗' : '→'));
-                return `<div style="font-family:monospace;font-size:12px;color:${color};white-space:pre-wrap;">`
+                return `<div style="font-family:monospace;font-size:12px;line-height:1.5;color:${color};white-space:pre-wrap;">`
                     + `${icon} ${this.escapeHtml(a.message)}</div>`;
             })
             .join('');
         const timelineHtml = timelineRows
-            ? `<div style="margin:6px 0;padding:6px;background:#1116;border-radius:4px;">${timelineRows}</div>`
+            ? `<div style="margin:6px 0;padding:8px;background:#ffffff;border:1px solid #d0d0d0;border-radius:4px;">${timelineRows}</div>`
             : '';
         html += timelineHtml;
 
