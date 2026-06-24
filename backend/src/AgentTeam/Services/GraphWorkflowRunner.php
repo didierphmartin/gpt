@@ -1892,7 +1892,9 @@ class GraphWorkflowRunner
             // Make parallel LLM calls
             $responses = $this->makeParallelLLMCalls($pendingAgents);
 
-            // Process responses
+            // Process responses. Skill calls are emitted during this pass and
+            // awaited concurrently right after (see $pendingClientAwaits).
+            $pendingClientAwaits = [];
             foreach ($responses as $nodeId => $response) {
                 $state = &$agentStates[$nodeId];
                 $agent = $state['agent'];
@@ -1938,39 +1940,53 @@ class GraphWorkflowRunner
                         'tool_calls' => $toolCalls,
                     ];
 
-                    // Execute tools and add results. Client tools round-trip
-                    // to the browser (mirrors the sequential bridge); server
-                    // tools run via ToolsManager as before.
+                    // Execute tools and add results. Client (skill) tools are
+                    // EMITTED here but awaited AFTER this foreach, so every
+                    // agent's skill is dispatched before we block — the browser
+                    // worker pool then runs them concurrently. Server tools run
+                    // inline via ToolsManager as before.
                     foreach ($toolCalls as $toolCall) {
                         $functionName = $toolCall['function']['name'] ?? $toolCall['name'] ?? 'function';
                         if ($this->isClientSideToolName($functionName)) {
                             if (!empty($state['skill_ran'])) {
                                 // Run-once: the model already executed this
-                                // node's skill. In AUTO mode (no forced
-                                // tool_choice here) some models keep re-calling
-                                // run_skill_script, burning the round budget.
-                                // Nudge it to summarize from the result it
-                                // already has instead of looping.
-                                $toolResult = json_encode([
-                                    'note' => 'You have already run this skill — its output is in the previous tool result. Do NOT call run_skill_script again. Write your final analysis now using that output.',
-                                ]);
+                                // node's skill. Nudge it to summarize instead of
+                                // re-calling run_skill_script.
+                                $state['messages'][] = [
+                                    'role' => 'tool',
+                                    'tool_call_id' => $toolCall['id'],
+                                    'name' => $functionName,
+                                    'content' => json_encode([
+                                        'note' => 'You have already run this skill — its output is in the previous tool result. Do NOT call run_skill_script again. Write your final analysis now using that output.',
+                                    ]),
+                                ];
                             } else {
-                                $toolResult = $this->roundTripClientToolInParallel(
-                                    $toolCall,
-                                    $state['node'],
-                                    $parsed['text'] ?? ''
-                                );
+                                // Emit now; the result is filled in during the
+                                // concurrent await pass after this foreach.
+                                $this->emitClientToolCallInParallel($toolCall, $state['node'], $parsed['text'] ?? '');
                                 $state['skill_ran'] = true;
+                                $state['messages'][] = [
+                                    'role' => 'tool',
+                                    'tool_call_id' => $toolCall['id'],
+                                    'name' => $functionName,
+                                    'content' => '', // filled by the await pass below
+                                ];
+                                $pendingClientAwaits[] = [
+                                    'nodeId'   => $nodeId,
+                                    'toolCall' => $toolCall,
+                                    'node'     => $state['node'],
+                                    'msgIndex' => count($state['messages']) - 1,
+                                ];
                             }
                         } else {
                             $toolResult = $this->executeToolForParallel($toolCall, $state['tools_filter']);
+                            $state['messages'][] = [
+                                'role' => 'tool',
+                                'tool_call_id' => $toolCall['id'],
+                                'name' => $functionName,  // Needed for Gemini
+                                'content' => is_string($toolResult) ? $toolResult : json_encode($toolResult),
+                            ];
                         }
-                        $state['messages'][] = [
-                            'role' => 'tool',
-                            'tool_call_id' => $toolCall['id'],
-                            'name' => $functionName,  // Needed for Gemini
-                            'content' => is_string($toolResult) ? $toolResult : json_encode($toolResult),
-                        ];
                     }
                     // Agent needs another round
                 } else {
@@ -1985,6 +2001,22 @@ class GraphWorkflowRunner
                     $responseTime = (microtime(true) - $state['start_time']) * 1000;
                     error_log("[GraphWorkflowRunner] Agent {$agent->getName()} completed in {$responseTime}ms");
                     $this->finalizeParallelNode((int) $nodeId, $state, $results);
+                }
+            }
+            unset($state); // drop the reference before indexing $agentStates directly
+
+            // Concurrent await pass: every skill in this round was already
+            // emitted above, so the browser pool ran them in parallel. Awaiting
+            // them here fills each agent's placeholder tool message; total wait
+            // is ~max(skill) not sum.
+            if (!empty($pendingClientAwaits)) {
+                error_log("[GraphWorkflowRunner] Awaiting " . count($pendingClientAwaits) . " parallel skill results concurrently");
+                foreach ($pendingClientAwaits as $pend) {
+                    $result = $this->awaitClientToolResultInParallel($pend['toolCall'], $pend['node']);
+                    if (isset($agentStates[$pend['nodeId']]['messages'][$pend['msgIndex']])) {
+                        $agentStates[$pend['nodeId']]['messages'][$pend['msgIndex']]['content'] =
+                            is_string($result) ? $result : json_encode($result);
+                    }
                 }
             }
         }
@@ -2211,9 +2243,15 @@ class GraphWorkflowRunner
      * The blocking awaitResult() serialises skill execution across agents in
      * the same round, but the LLM calls themselves remain parallel.
      */
-    private function roundTripClientToolInParallel(array $toolCall, array $node, string $assistantText): string
+    /**
+     * Emit a parallel client-tool call WITHOUT waiting. The round loop emits
+     * every agent's skill call first, then awaits them all
+     * (awaitClientToolResultInParallel) — so the browser's worker pool runs
+     * them concurrently instead of one-at-a-time. Splitting emit from await is
+     * what turns the fan-out from serial into actually-parallel.
+     */
+    private function emitClientToolCallInParallel(array $toolCall, array $node, string $assistantText): void
     {
-        $bridge = new SkillToolBridge();
         $toolCallId = $toolCall['id']; // already a bridge-compatible hex
         $name = $toolCall['function']['name'] ?? $toolCall['name'] ?? 'run_skill_script';
         $args = $toolCall['function']['arguments'] ?? $toolCall['input'] ?? [];
@@ -2236,18 +2274,32 @@ class GraphWorkflowRunner
             'assistant_text' => $assistantText,
             'dir_name' => $dirName,
         ]);
+    }
 
-        // Cap the per-skill wait so one stuck skill (e.g. a browser-side fetch
-        // that never returns) can't freeze the whole serial round for the full
-        // 5-minute default. Configurable; 60s is ample for a normal skill while
-        // failing fast enough that the node reports an error and the run moves on.
-        $timeoutMs = (int) ($this->config['parallel_skill_timeout_ms'] ?? 60000);
+    /**
+     * Block until a previously-emitted parallel client-tool call returns (or
+     * times out). Because all of a round's calls were emitted first and run
+     * concurrently on the browser pool, awaiting them sequentially here still
+     * completes in ~max(skill) rather than sum. 120s default leaves room for a
+     * worker cold start (each worker loads its own Pyodide) plus the skill run;
+     * safe because a concurrent batch means one slow skill no longer blocks the
+     * others.
+     */
+    private function awaitClientToolResultInParallel(array $toolCall, array $node): string
+    {
+        $bridge = new SkillToolBridge();
+        $toolCallId = $toolCall['id'];
+        $args = $toolCall['function']['arguments'] ?? $toolCall['input'] ?? [];
+        if (is_string($args)) {
+            $args = json_decode($args, true) ?: [];
+        }
+        $timeoutMs = (int) ($this->config['parallel_skill_timeout_ms'] ?? 120000);
         $bridgeResult = $bridge->awaitResult($toolCallId, $timeoutMs);
         if ($bridgeResult === null) {
             $timeoutSec = (int) round($timeoutMs / 1000);
             error_log("[GraphWorkflowRunner] parallel client-tool bridge timed out ({$timeoutSec}s) for tool_call_id={$toolCallId}");
             $this->nodeLog($node, 'error', 'skill', \AgentTeam\Services\NodeLogFormat::skillTimedOut($timeoutSec));
-            return json_encode(['error' => "Skill did not return within {$timeoutSec}s — it may be unable to run in the browser (e.g. heavy/blocked network fetches). Check the editor console."]);
+            return json_encode(['error' => "Skill did not return within {$timeoutSec}s — check the editor console for a worker/Pyodide error."]);
         }
         $stdoutBytes = strlen(is_string($bridgeResult['output']['stdout'] ?? null) ? $bridgeResult['output']['stdout'] : '');
         $this->nodeLog($node, 'info', 'skill',
