@@ -6700,10 +6700,10 @@ class WorkflowEditor {
                         <label>Connection</label>
                         <div id="ingestion-vs-connection-host"></div>
                     </div>
-                </div>
-                <div class="storage-config-folder full" id="ingestion-vs-embeddings-wrap" style="display:none;">
-                    <label for="ingestion-vs-embedding">Embeddings</label>
-                    <select id="ingestion-vs-embedding"></select>
+                    <div class="storage-config-folder" id="ingestion-vs-embeddings-wrap" style="display:none;">
+                        <label for="ingestion-vs-embedding">Embeddings</label>
+                        <select id="ingestion-vs-embedding"></select>
+                    </div>
                 </div>
             `;
         }
