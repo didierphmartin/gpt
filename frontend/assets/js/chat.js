@@ -4663,41 +4663,16 @@ class ChatApp {
             throw new Error('_continueAfterClientToolResults: results array required');
         }
 
-        // ONE assistant tool_use turn carrying N tool_calls. Standard
-        // multi-tool-use protocol — matches both Anthropic's content-blocks
-        // and OpenAI's tool_calls array on a single assistant message.
-        const assistantToolCalls = results.map(({ call }) => ({
-            id: call.id,
-            type: 'function',
-            function: {
-                name: call.name,
-                arguments: JSON.stringify(call.input || {}),
-            },
-            // Gemini 2.5+ requires this opaque per-call signature to be
-            // preserved when the tool_use turn is replayed in
-            // conversation_history. Other providers ignore it.
-            ...(call.thought_signature ? { thought_signature: call.thought_signature } : {}),
-        }));
-
-        // N role:'tool' turns — one per tool_use_id, in order. Carry the
-        // function name on each tool entry so providers whose native shape
-        // requires it (Gemini's functionResponse) can match each tool_result
-        // to its prior tool_use cleanly.
-        const toolResultTurns = results.map(({ call, toolResultPayload }) => ({
-            role: 'tool',
-            tool_call_id: call.id,
-            name: call.name,
-            content: JSON.stringify(toolResultPayload),
-        }));
+        // Provider-correct tool-round turns. Shared with the workflow runner
+        // (window.AgentTurn) so the format — incl. Gemini's thought_signature
+        // and per-tool function name — lives in ONE place and never drifts.
+        const { assistantTurn, toolResultTurns } =
+            window.AgentTurn.buildToolRoundTurns(results, payload.assistant_text);
 
         const continuationHistory = [
             ...this.conversationHistory,
             ctx.userMessage,
-            {
-                role: 'assistant',
-                content: payload.assistant_text || '',
-                tool_calls: assistantToolCalls,
-            },
+            assistantTurn,
             ...toolResultTurns,
         ];
 

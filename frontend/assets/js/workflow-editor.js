@@ -9542,20 +9542,10 @@ class WorkflowEditor {
                     const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
                     const assistantText = r.assistant_text || r.text || '';
                     this._wfNodeLog(dfId, 'llm', 'model requested run_skill_script');
-                    conversationHistory.push({
-                        role: 'assistant',
-                        content: assistantText || null,
-                        // Preserve provider-specific fields. Gemini REQUIRES its
-                        // thought_signature echoed back on the next turn or the
-                        // continuation 400s (→ empty output). Keep any other
-                        // extra keys the provider attached too.
-                        tool_calls: calls.map(c => ({
-                            id: c.id,
-                            type: 'function',
-                            function: { name: c.name || 'run_skill_script', arguments: JSON.stringify(c.input || {}) },
-                            ...(c.thought_signature ? { thought_signature: c.thought_signature } : {}),
-                        })),
-                    });
+                    // Run each skill (pool), collect results, then build the
+                    // continuation turns via the SHARED helper so the provider
+                    // format (Gemini thought_signature, etc.) matches chat exactly.
+                    const roundResults = [];
                     for (const c of calls) {
                         const input = c.input || {};
                         this._wfNodeLog(dfId, 'skill', `running skill ${input.dir_name || dirName}`);
@@ -9573,23 +9563,23 @@ class WorkflowEditor {
                             exitCode: result?.exitCode ?? 0, stdout: result?.stdout || '',
                             logMessages: result?.stderr || '', durationMs: Math.round(result?.durationMs ?? 0),
                         });
-                        // Trim outputs to keep the tool result small.
                         const outs = {};
                         for (const [p, v] of Object.entries(result?.outputs || {})) {
                             outs[p] = (typeof v === 'string') ? (v.length > 2000 ? v.slice(0, 2000) + ' …[truncated]' : v)
                                 : `[binary ${v?.byteLength ?? 0} bytes]`;
                         }
-                        conversationHistory.push({
-                            role: 'tool',
-                            tool_call_id: c.id,
-                            name: c.name || 'run_skill_script',
-                            content: JSON.stringify({
+                        roundResults.push({
+                            call: c,
+                            toolResultPayload: {
                                 success: (result?.exitCode ?? 0) === 0,
                                 output: { exit_code: result?.exitCode ?? 0, stdout: result?.stdout || '', log_messages: result?.stderr || '', outputs: outs },
-                            }),
+                            },
                         });
                         this.updateModalInputOutput(dfId);
                     }
+                    const { assistantTurn, toolResultTurns } =
+                        window.AgentTurn.buildToolRoundTurns(roundResults, assistantText);
+                    conversationHistory.push(assistantTurn, ...toolResultTurns);
                 } else {
                     const finalText = r.text || r.assistant_text || '';
                     const nd = this.nodeExecutionData[dfId];
