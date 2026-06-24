@@ -330,6 +330,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows/{id:\d+}/run-stream', ['AgentTeam:WorkflowController', 'runStream']);
         $r->post('/api/v1/workflows/tool-result', ['AgentTeam:WorkflowController', 'toolResult']);
         $r->get('/api/v1/workflows/{id:\d+}/executions', ['AgentTeam:WorkflowController', 'executions']);
+        $r->get('/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ['AgentTeam:WorkflowController', 'runEvents']);
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
         $r->post('/api/v1/workflows/{id:\d+}/duplicate', ['AgentTeam:WorkflowController', 'duplicate']);
 

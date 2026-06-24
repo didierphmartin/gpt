@@ -897,6 +897,37 @@ class WorkflowController
     }
 
     /**
+     * GET /api/v1/workflows/runs/{runId}/events
+     * Return the persisted per-run event log (JSONL) for the node form to
+     * replay. Run files are addressable only by their unguessable 128-bit id.
+     */
+    public function runEvents(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        if (!$userId) {
+            http_response_code(401);
+            return ['error' => 'Authentication required'];
+        }
+
+        $runId = (string) ($request['params']['runId'] ?? '');
+        if (!preg_match('/^[a-f0-9]{32}$/', $runId)) {
+            http_response_code(400);
+            return ['error' => 'Invalid runId'];
+        }
+
+        $log = new \AgentTeam\Services\WorkflowRunLog(
+            \AgentTeam\Services\WorkflowRunLog::defaultDir($this->config)
+        );
+        $events = $log->read($runId);
+        if ($events === null) {
+            http_response_code(404);
+            return ['error' => 'Run not found'];
+        }
+
+        return ['run_id' => $runId, 'events' => $events];
+    }
+
+    /**
      * POST /api/v1/workflows/{id}/toggle
      * Toggle workflow enabled/disabled
      */
