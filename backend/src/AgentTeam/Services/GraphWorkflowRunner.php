@@ -1731,6 +1731,21 @@ class GraphWorkflowRunner
             $toolsFilter = !empty($config['tools']) ? $config['tools'] : ($agent->getTools() ?? []);
             $tools = $this->buildToolsForParallelAgent($agent, $toolsFilter);
 
+            // If the node is bound to a folder-backed skill, declare
+            // run_skill_script here too (the sequential path does this in
+            // runAgentNode). Without it the agent has no way to run its
+            // skill in a fan-out and loops empty tool-call rounds to the cap.
+            $forceSkillFirstRound = false;
+            $skillScripts = $this->getBoundSkillScripts($config);
+            $skillDirName = $config['bound_skill']['dir_name'] ?? null;
+            if (!empty($skillScripts) && is_string($skillDirName) && $skillDirName !== '') {
+                $tools[] = $this->buildRunSkillScriptTool([
+                    'dir_name' => $skillDirName,
+                    'scripts'  => $skillScripts,
+                ]);
+                $forceSkillFirstRound = true;
+            }
+
             // Debug: Log agent setup
             $toolNames = array_map(fn($t) => $t['name'], $tools);
             error_log("[GraphWorkflowRunner] Agent {$agent->getName()} setup: provider={$agent->getProvider()}, model={$agent->getModel()}, tools=[" . implode(',', $toolNames) . "], toolsFilter=[" . implode(',', $toolsFilter ?: []) . "]");
@@ -1746,6 +1761,7 @@ class GraphWorkflowRunner
                 ],
                 'tools' => $tools,
                 'tools_filter' => $toolsFilter,
+                'force_skill' => $forceSkillFirstRound,
                 'completed' => false,
                 'output' => '',
                 'start_time' => microtime(true),
@@ -1856,6 +1872,24 @@ class GraphWorkflowRunner
         error_log("[GraphWorkflowRunner] Final agentStates keys: " . implode(',', array_keys($agentStates)));
         foreach ($agentStates as $nodeId => $finalState) {
             $agent = $finalState['agent'];
+
+            // A node still pending at maxRounds never completed. Surface the
+            // last assistant text (or an explicit message) instead of an empty
+            // result, and mark it failed — so the node form shows *something*.
+            if (empty($finalState['completed'])) {
+                $lastText = '';
+                foreach (array_reverse($finalState['messages'] ?? []) as $m) {
+                    if (($m['role'] ?? '') === 'assistant' && is_string($m['content'] ?? null) && $m['content'] !== '') {
+                        $lastText = $m['content'];
+                        break;
+                    }
+                }
+                $finalState['output'] = $lastText !== ''
+                    ? $lastText
+                    : 'Agent did not finish within the tool-round limit (likely stuck calling its skill).';
+                $finalState['success'] = false;
+            }
+
             $usage = $finalState['usage'] ?? null;
 
             // Accumulate tokens
@@ -1906,6 +1940,16 @@ class GraphWorkflowRunner
         foreach ($agentStates as $nodeId => $state) {
             $request = $this->buildAgentLLMRequestWithTools($state['agent'], $state['messages'], $state['tools']);
             if (!$request) continue;
+
+            // Force the skill call until it has run once. The parallel path
+            // builds requests via ProviderRequestFactory (no tool_choice
+            // param), so inject the provider-shaped value into the payload.
+            if (!empty($state['force_skill']) && empty($state['skill_ran'])) {
+                $toolChoice = \AgentTeam\Services\SkillToolChoice::forProvider($request['provider']);
+                if ($toolChoice !== null) {
+                    $request['payload']['tool_choice'] = $toolChoice;
+                }
+            }
 
             $ch = curl_init($request['url']);
             curl_setopt_array($ch, [
