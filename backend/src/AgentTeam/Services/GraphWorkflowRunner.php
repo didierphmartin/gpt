@@ -1804,6 +1804,8 @@ class GraphWorkflowRunner
                     $state['completed'] = true;
                     $state['output'] = 'Error: ' . ($response['error'] ?? 'Unknown error');
                     $state['success'] = false;
+                    $this->nodeLog($state['node'], 'error', 'error',
+                        $response['error'] ?? 'Unknown error');
                     continue;
                 }
 
@@ -1812,6 +1814,10 @@ class GraphWorkflowRunner
                 // Check for tool calls
                 if (!empty($parsed['tool_calls'])) {
                     error_log("[GraphWorkflowRunner] Agent {$agent->getName()} requested " . count($parsed['tool_calls']) . " tool calls");
+                    $this->nodeLog($state['node'], 'info', 'llm',
+                        \AgentTeam\Services\NodeLogFormat::modelRequestedTool(
+                            $parsed['tool_calls'][0]['function']['name']
+                                ?? $parsed['tool_calls'][0]['name'] ?? 'a tool'));
 
                     // Client-side tools (run_skill_script etc.) cannot run on
                     // the server — they execute in the browser's Pyodide. For
@@ -1875,6 +1881,8 @@ class GraphWorkflowRunner
                     $state['output'] = $parsed['text'] ?? '';
                     $state['success'] = true;
                     $state['usage'] = $parsed['usage'] ?? null;
+                    $this->nodeLog($state['node'], 'info', 'llm',
+                        \AgentTeam\Services\NodeLogFormat::modelRespondedText());
 
                     $responseTime = (microtime(true) - $state['start_time']) * 1000;
                     error_log("[GraphWorkflowRunner] Agent {$agent->getName()} completed in {$responseTime}ms");
@@ -2145,6 +2153,9 @@ class GraphWorkflowRunner
         $config = $node['config'] ?? [];
         $dirName = $config['bound_skill']['dir_name'] ?? null;
 
+        $this->nodeLog($node, 'info', 'skill',
+            \AgentTeam\Services\NodeLogFormat::runningSkill($dirName ?? 'skill'),
+            ['dir_name' => $dirName]);
         $this->emitNodeEvent('client_tool_call', $node, [
             'tool_call_id' => $toolCallId,
             'tool_calls' => [[
@@ -2159,8 +2170,12 @@ class GraphWorkflowRunner
         $bridgeResult = $bridge->awaitResult($toolCallId);
         if ($bridgeResult === null) {
             error_log("[GraphWorkflowRunner] parallel client-tool bridge timed out for tool_call_id={$toolCallId}");
+            $this->nodeLog($node, 'error', 'skill', \AgentTeam\Services\NodeLogFormat::skillTimedOut(300));
             return json_encode(['error' => 'Browser timed out running skill script. Keep the workflow editor open during the run.']);
         }
+        $stdoutBytes = strlen(is_string($bridgeResult['output']['stdout'] ?? null) ? $bridgeResult['output']['stdout'] : '');
+        $this->nodeLog($node, 'info', 'skill',
+            \AgentTeam\Services\NodeLogFormat::skillFinished($bridgeResult['output']['exit_code'] ?? null, $stdoutBytes));
         // Phase 0: stash the skill stdout/script/argv for the execution trace.
         $this->skillResultByNode[(int)($node['id'] ?? 0)] = [
             'output' => is_array($bridgeResult['output'] ?? null) ? $bridgeResult['output'] : [],
