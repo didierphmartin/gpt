@@ -25,65 +25,6 @@ namespace AgentTeam\Services;
  */
 final class IngestionCompiler
 {
-    /**
-     * Loader dispatch: source → { import, load } where `load` sets `docs`.
-     *
-     * @return array<string,array{import:string,load:string}>
-     */
-    private static function loaderDispatch(): array
-    {
-        return [
-            'pdf' => [
-                'import' => 'from langchain_community.document_loaders import PyPDFLoader',
-                'load'   => 'docs = PyPDFLoader(LOADER["path"]).load()',
-            ],
-            'word' => [
-                'import' => 'from langchain_community.document_loaders import Docx2txtLoader',
-                'load'   => 'docs = Docx2txtLoader(LOADER["path"]).load()',
-            ],
-            'text' => [
-                'import' => 'from langchain_community.document_loaders import TextLoader',
-                'load'   => 'docs = TextLoader(LOADER["path"], encoding="utf-8").load()',
-            ],
-            'csv' => [
-                'import' => 'from langchain_community.document_loaders import CSVLoader',
-                'load'   => 'docs = CSVLoader(LOADER["path"]).load()',
-            ],
-        ];
-    }
-
-    /**
-     * Resolve the loader fragment for a source, choosing a single-file loader or
-     * a whole-folder DirectoryLoader when $isDir is true. For a folder we reuse
-     * the per-type loader class (PyPDFLoader, …) with a matching glob so every
-     * file of that type in the folder is loaded.
-     *
-     * @return array{import:string,load:string}
-     * @throws \RuntimeException on unknown source
-     */
-    private static function loaderFragment(string $source, bool $isDir): array
-    {
-        $table = self::loaderDispatch();
-        if (!isset($table[$source])) {
-            throw new \RuntimeException(
-                "IngestionCompiler: no fragment for loader source '{$source}' yet — add it to the loader dispatch table."
-            );
-        }
-        if (!$isDir) {
-            return $table[$source];
-        }
-        // Folder load: DirectoryLoader + the single-file loader class as loader_cls.
-        $dir = [
-            'pdf'  => ['cls' => 'PyPDFLoader',    'glob' => '**/*.pdf'],
-            'word' => ['cls' => 'Docx2txtLoader', 'glob' => '**/*.docx'],
-            'text' => ['cls' => 'TextLoader',     'glob' => '**/*.txt'],
-            'csv'  => ['cls' => 'CSVLoader',      'glob' => '**/*.csv'],
-        ][$source];
-        return [
-            'import' => "from langchain_community.document_loaders import DirectoryLoader\n" . $table[$source]['import'],
-            'load'   => "docs = DirectoryLoader(LOADER[\"path\"], glob=\"{$dir['glob']}\", loader_cls={$dir['cls']}).load()",
-        ];
-    }
 
     /**
      * Splitter dispatch: strategy → { import, body } where `body` sets `chunks`.
@@ -99,54 +40,11 @@ final class IngestionCompiler
                     . "    chunk_size=int(SPLITTER.get(\"chunk_size\", 1000)),\n"
                     . "    chunk_overlap=int(SPLITTER.get(\"overlap\", 150)),\n"
                     . ")\n"
-                    . "chunks = splitter.split_documents(docs)",
+                    . "chunks = [c for c in splitter.split_text(text) if c.strip()]",
             ],
         ];
     }
 
-    /**
-     * Embeddings dispatch: provider → { import, body } where `body` sets
-     * `embeddings`.
-     *
-     * @return array<string,array{import:string,body:string}>
-     */
-    private static function embeddingsDispatch(): array
-    {
-        return [
-            'openai' => [
-                'import' => 'from langchain_openai import OpenAIEmbeddings',
-                'body'   => "emb_model = (STORE.get(\"embeddings\") or \"openai:text-embedding-3-small\").partition(\":\")[2]\n"
-                    . "embeddings = OpenAIEmbeddings(model=emb_model or \"text-embedding-3-small\")",
-            ],
-        ];
-    }
-
-    /**
-     * Store dispatch: store → { import, body } where `body` writes chunks and
-     * sets `result`.
-     *
-     * @return array<string,array{import:string,body:string}>
-     */
-    private static function storeDispatch(): array
-    {
-        return [
-            'pgvector' => [
-                'import' => 'from langchain_postgres import PGVector',
-                'body'   => "dsn = os.environ.get(\"VECTOR_DB_DSN\")\n"
-                    . "if not dsn:\n"
-                    . "    raise RuntimeError(\"VECTOR_DB_DSN is not set\")\n"
-                    . "collection = STORE.get(\"collection\") or \"default\"\n"
-                    . "PGVector.from_documents(\n"
-                    . "    documents=chunks,\n"
-                    . "    embedding=embeddings,\n"
-                    . "    collection_name=collection,\n"
-                    . "    connection=dsn,\n"
-                    . "    use_jsonb=True,\n"
-                    . ")\n"
-                    . "result = {\"store\": \"pgvector\", \"collection\": collection, \"chunks\": len(chunks)}",
-            ],
-        ];
-    }
 
     private static function jsonLit(array $data): string
     {
@@ -177,19 +75,21 @@ final class IngestionCompiler
                 return "import json, os\n# (common header — shared by the stages below)";
 
             case 'loader':
-                $source = (string) ($config['source'] ?? 'pdf');
+                $provider = (string) ($config['provider'] ?? 'local') ?: 'local';
                 $isDir = !empty($config['is_dir']);
-                $L = self::loaderFragment($source, $isDir);
+                $types = array_values(array_filter((array) ($config['types'] ?? []), 'is_string'));
                 $json = self::jsonLit([
-                    'source' => $source,
-                    'path'   => $config['path'] ?? null,
-                    'is_dir' => $isDir,
+                    'provider' => $provider,
+                    'path'     => $config['path'] ?? '',
+                    'is_dir'   => $isDir,
+                    'types'    => $types,
                 ]);
-                return "# Loader — document type: {$source}" . ($isDir ? ' (whole folder)' : '') . "\n"
-                    . "{$L['import']}\n\n"
+                return "# Loader — langfs (provider: {$provider}" . ($isDir ? ', recursive folder' : '') . ")\n"
+                    . "# langfs enumerates + EXTRACTS text; no local decoders here.\n"
                     . "LOADER = {$json}\n"
-                    . "{$L['load']}\n"
-                    . "# docs : list[Document]  -> handed to the Splitter";
+                    . "# files  = list_files(provider, path, types)        -> [source, ...]\n"
+                    . "# text   = read_file(provider, file_id, format='text')  -> extracted text\n"
+                    . "# (text per file) -> handed to the Splitter";
 
             case 'splitter':
                 $strategy = (string) ($config['strategy'] ?? 'recursive');
@@ -209,34 +109,22 @@ final class IngestionCompiler
                     . "{$S['import']}\n\n"
                     . "SPLITTER = {$json}\n"
                     . "{$S['body']}\n"
-                    . "# chunks : list[Document]  -> handed to the Vector store";
+                    . "# chunks : list[str]  -> handed to the Vector store";
 
             case 'vectorstore':
-                $store = (string) ($config['store'] ?? 'pgvector');
-                $storeTable = self::storeDispatch();
-                if (!isset($storeTable[$store])) {
-                    throw new \RuntimeException(
-                        "IngestionCompiler: no fragment for vector store '{$store}' yet — add it to the store dispatch table."
-                    );
-                }
-                $embeddings = (string) ($config['embeddings'] ?? 'openai:text-embedding-3-small');
+                $vsProvider = (string) ($config['provider'] ?? 'qdrant') ?: 'qdrant';
                 $json = self::jsonLit([
-                    'store'      => $store,
-                    'embeddings' => $embeddings,
-                    'collection' => $config['collection'] ?? null,
+                    'provider'   => $vsProvider,
+                    'connection' => (object) ((array) ($config['connection'] ?? [])),
+                    'collection' => (string) ($config['collection'] ?? ''),
+                    'embedding'  => (string) ($config['embedding'] ?? ''),
                 ]);
-                return "# Vector store — {$store} (embeddings {$embeddings})\n"
-                    . "from langchain_openai import OpenAIEmbeddings\n"
-                    . "from langchain_postgres import PGVector\n\n"
+                return "# Vector store — mcp_qrant \"store\" (provider: {$vsProvider})\n"
+                    . "# mcp_qrant EMBEDS + upserts; no embeddings/vector-store libs here.\n"
                     . "STORE = {$json}\n"
-                    . "emb_model = (STORE.get(\"embeddings\") or \"openai:text-embedding-3-small\").partition(\":\")[2]\n"
-                    . "embeddings = OpenAIEmbeddings(model=emb_model or \"text-embedding-3-small\")\n"
-                    . "dsn = os.environ.get(\"VECTOR_DB_DSN\")\n"
-                    . "if not dsn:\n"
-                    . "    raise RuntimeError(\"VECTOR_DB_DSN is not set\")\n"
-                    . "collection = STORE.get(\"collection\") or \"default\"\n"
-                    . "PGVector.from_documents(documents=chunks, embedding=embeddings, collection_name=collection, connection=dsn, use_jsonb=True)\n"
-                    . "result = {\"store\": \"pgvector\", \"collection\": collection, \"chunks\": len(chunks)}";
+                    . "# \"store\"(provider, connection, collection,\n"
+                    . "#          items=[{\"text\": c, \"metadata\": {\"source\": src}} for c in chunks],\n"
+                    . "#          embedding) -> {\"stored\": int, \"errors\": int}";
 
             default:
                 throw new \RuntimeException(

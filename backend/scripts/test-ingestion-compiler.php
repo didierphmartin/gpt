@@ -49,5 +49,24 @@ exec('python3 -m py_compile ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
 @unlink($tmp);
 check('emitted script py_compiles', $rc === 0);
 
+// --- per-node fragments (editor "Generated code" tab) match the new stack ---
+$ld = IngestionCompiler::compileNodeChunk('loader', ['provider' => 'local', 'path' => '/srv/docs', 'is_dir' => true, 'types' => ['pdf']]);
+check('loader fragment calls langfs list_files/read_file', str_contains($ld, 'list_files') && str_contains($ld, 'read_file'));
+check('loader fragment has no langchain_community', !str_contains($ld, 'langchain_community') && !str_contains($ld, 'PyPDFLoader'));
+
+$sp = IngestionCompiler::compileNodeChunk('splitter', ['chunk_size' => 800, 'overlap' => 120]);
+check('splitter fragment uses split_text', str_contains($sp, 'RecursiveCharacterTextSplitter') && str_contains($sp, 'split_text'));
+
+$vs = IngestionCompiler::compileNodeChunk('vectorstore', ['store' => 'mcp:45', 'provider' => 'qdrant', 'connection' => [], 'collection' => 'docs', 'embedding' => '']);
+check('vectorstore fragment calls mcp_qrant store', str_contains($vs, '"store"') && str_contains($vs, 'items'));
+check('vectorstore fragment has no pgvector/OpenAIEmbeddings', !str_contains($vs, 'PGVector') && !str_contains($vs, 'OpenAIEmbeddings'));
+
+$view = IngestionCompiler::compileView([
+    ['node_type' => 'start', 'config' => []],
+    ['node_type' => 'loader', 'config' => ['provider' => 'local', 'path' => '/srv/docs', 'is_dir' => true]],
+    ['node_type' => 'splitter', 'config' => ['chunk_size' => 800, 'overlap' => 120]],
+]);
+check('compileView output = upstream + target', str_contains($view['output'], 'list_files') && str_contains($view['generated'], 'split_text'));
+
 echo "\n$checks checks, $failures failures\n";
 exit($failures === 0 ? 0 : 1);
