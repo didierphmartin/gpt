@@ -7812,7 +7812,10 @@ class WorkflowEditor {
                     ? { ...(node.data?.config || {}) }
                     : {
                         agent_type: node.data?.agent_type || null,
-                        ...node.data
+                        ...node.data,
+                        // Hoist disabled explicitly so JSON.stringify never drops it
+                        // (undefined values in a spread are omitted by JSON.stringify).
+                        disabled: node.data?.disabled ?? false
                     },
                 position: { x: node.pos_x, y: node.pos_y },
                 pos_x: node.pos_x,
@@ -10990,6 +10993,15 @@ class WorkflowEditor {
         // Store the node ID for saving node-specific config
         this.editingNodeId = nodeId;
 
+        // Cancel any pending structure-save timer. A background saveWorkflow()
+        // call would trigger loadWorkflow() which clears and rebuilds the canvas,
+        // invalidating editingNodeId and causing the non-node (library) path to
+        // run instead of the canvas-node path — dropping the disabled flag.
+        if (nodeId) {
+            clearTimeout(this._structureSaveTimer);
+            this._structureSaveTimer = null;
+        }
+
         // If we have no live execution data for this node (e.g. the editor was
         // reopened, the SSE dropped, or the run died), pull it from the
         // persisted run log so Input/Output/Logs are still debuggable.
@@ -11059,7 +11071,9 @@ class WorkflowEditor {
                         merge_strategy: data.merge_strategy ?? 'labeled',
                         output_schema_id: data.output_schema_id ?? null,
                         output_schema: data.output_schema ?? null,
-                        disabled: data.disabled ?? false
+                        // Read disabled from flat data (post-reload path) OR from
+                        // nested data.config (legacy/edge-case path).
+                        disabled: data.disabled ?? data.config?.disabled ?? false
                     };
                 } else {
                     // Node is still a template or unconfigured - fall back to template data
@@ -11077,7 +11091,7 @@ class WorkflowEditor {
                         merge_strategy: data.merge_strategy ?? 'labeled',
                         output_schema_id: data.output_schema_id ?? null,
                         output_schema: data.output_schema ?? null,
-                        disabled: data.disabled ?? false
+                        disabled: data.disabled ?? data.config?.disabled ?? false
                     };
                 }
                 console.log('[WorkflowEditor] Loaded agent data:', agent);
