@@ -9364,6 +9364,98 @@ class WorkflowEditor {
      * POST the result to /workflows/tool-result so the runner can
      * resume.
      */
+    /**
+     * Run a skill off the main thread via the Pyodide worker pool when possible.
+     * This is what makes workflow skills reliable under fan-out: the single
+     * main-thread Pyodide can't keep up with several skills running while it also
+     * services the SSE stream and posts results, so skills blow the bridge
+     * timeout. Each pool worker loads its own Pyodide and runs concurrently.
+     * Skills that need main-thread URL prefetch (fetches_urls:true) stay on the
+     * main thread; the GEO skills are fetches_urls:false (they self-fetch through
+     * the auth'd backend proxy) so they pool fine. Any pool/permission failure
+     * falls back to the main-thread runner so a run can never get worse.
+     */
+    async _runSkillPooledOrMain(req) {
+        try {
+            let fetchesUrls = false;
+            try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName); } catch (_) {}
+            if (!fetchesUrls && typeof Worker !== 'undefined' && window.PyodideWorkerPool && window.localFs) {
+                if (!this._pyodidePool) this._pyodidePool = this._makePyodidePool();
+                return await this._runViaPool(req);
+            }
+        } catch (e) {
+            console.warn('[WorkflowEditor] worker-pool path failed, falling back to main thread:', e);
+        }
+        return await window.pyodideRunner.runSkillScript(req);
+    }
+
+    // Pool factory — mirrors chat.js so workflow skills use the same workers.
+    _makePyodidePool() {
+        let workerN = 0;
+        return new window.PyodideWorkerPool({
+            workerFactory: () => {
+                const wid = ++workerN;
+                const w = new Worker('assets/js/pyodide.worker.js?v=20260612-writtenoutputs');
+                console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
+                let seq = 0;
+                const pending = new Map();
+                w.onmessage = (e) => {
+                    const d = e.data || {};
+                    if (d.type === 'progress') { console.log(`[wf-pool w${wid}] ${d.msg}`); return; }
+                    const { id, ok, result, error } = d;
+                    const p = pending.get(id);
+                    if (!p) return;
+                    pending.delete(id);
+                    ok ? p.resolve(result) : p.reject(new Error(error));
+                };
+                w.onerror = (e) => {
+                    const err = new Error('pyodide worker error: ' + (e.message || e.filename || ''));
+                    for (const p of pending.values()) p.reject(err);
+                    pending.clear();
+                };
+                return {
+                    run: (payload) => new Promise((resolve, reject) => {
+                        const id = ++seq;
+                        pending.set(id, { resolve, reject });
+                        w.postMessage({ id, verb: 'runSkillScript', payload });
+                    }),
+                    terminate: () => w.terminate(),
+                };
+            },
+        });
+    }
+
+    // Resolve FSA handles + deps on the main thread, then run one skill in a
+    // worker. Mirrors chat.js _runViaPool. Throws on any failure so the caller
+    // falls back to the main-thread runner.
+    async _runViaPool(req) {
+        if (!window.localFs) throw new Error('localFs unavailable for pool path');
+        this._poolHandleCache = this._poolHandleCache || new Map();
+        const resolveCached = (path, opts) => {
+            if (!this._poolHandleCache.has(path)) {
+                this._poolHandleCache.set(path, window.localFs.resolvePath(path, opts));
+            }
+            return this._poolHandleCache.get(path);
+        };
+        const skillHandle = await resolveCached(`skills/${req.dirName}`);
+        const outputsHandle = await resolveCached('outputs', { create: true });
+        if (!skillHandle || !outputsHandle) throw new Error('could not resolve skill/outputs handles for pool path');
+        for (const h of [skillHandle, outputsHandle]) {
+            if ((await h.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+                if ((await h.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+                    throw new Error('readwrite permission denied for pool path');
+                }
+            }
+        }
+        const dependencies = await window.pyodideRunner.getSkillDependencies(req.dirName);
+        const authToken = window.authManager?.token || null;
+        const [r] = await this._pyodidePool.runBatch([{
+            ...req, dependencies, authToken, skillHandle, outputsHandle, prefetched: [],
+        }]);
+        if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
+        return r.result;
+    }
+
     async handleClientToolCall(event) {
         const toolCallId = event.tool_call_id;
         const calls = Array.isArray(event.tool_calls) ? event.tool_calls : [];
@@ -9402,7 +9494,7 @@ class WorkflowEditor {
         const mergedInputFiles = { ...llmInputFiles, ...stashed };
         const finalInputFiles = Object.keys(mergedInputFiles).length > 0 ? mergedInputFiles : null;
         try {
-            const result = await window.pyodideRunner.runSkillScript({
+            const result = await this._runSkillPooledOrMain({
                 dirName,
                 script: input.script,
                 argv: Array.isArray(input.argv) ? input.argv : [],
