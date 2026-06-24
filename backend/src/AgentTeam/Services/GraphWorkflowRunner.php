@@ -993,6 +993,18 @@ class GraphWorkflowRunner
             'tokens_out'         => $outTok,
             'cost_usd'           => $this->computeNodeCost($provider, $inTok, $outTok),
         ]);
+        // Mirror the skill stdout/logs into the per-run event log so the node
+        // form can show them after the fact (the DB trace isn't read back by
+        // the frontend). emitNodeEvent persists + streams.
+        $this->emitNodeEvent('node_trace', $node, [
+            'skill_dir'          => $config['bound_skill']['dir_name'] ?? null,
+            'skill_exit_code'    => $out['exit_code'] ?? null,
+            'skill_stdout'       => $out['stdout'] ?? null,
+            'skill_log_messages' => $out['log_messages'] ?? null,
+            'final_text'         => $outputText,
+            'success'            => $success,
+            'error_text'         => $success ? null : $outputText,
+        ]);
     }
 
     private function computeNodeCost(?string $provider, int $inputTokens, int $outputTokens): ?float
