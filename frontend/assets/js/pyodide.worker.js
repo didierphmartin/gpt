@@ -373,6 +373,9 @@ async function runSkillScript(payload) {
     for (const fs of flushables) await fs.syncfs();
   }
 
+  const stdout = pyodide.globals.get('_runner_stdout') ?? '';
+  const stderr = pyodide.globals.get('_runner_stderr') ?? '';
+
   const outputs = {};
   for (const rel of (payload.readOutputs || [])) {
     let val = readOutput(resolveAbs(rel));
@@ -392,6 +395,26 @@ async function runSkillScript(payload) {
       }
     }
     outputs[rel] = val;
+  }
+
+  // Platform safety net: surface the files the script ACTUALLY wrote, even when
+  // the model set NO read_outputs (or guessed the wrong filename). Skill scripts
+  // announce writes to stdout/stderr as `wrote <path>` (e.g. `[geo-content] … —
+  // wrote /outputs/GEO/GEO-CONTENT-EXTRACT.md`). Read those back so the model
+  // always has concrete proof its deliverable exists on disk and never re-runs a
+  // skill that already succeeded. Additive — never overwrites a model-requested
+  // key, and capped so a chatty script can't blow up the result.
+  const writtenRe = /\bwrote\s+(\/[^\s'"]+\.[A-Za-z0-9]+)/g;
+  let wroteCount = 0;
+  for (const src of [stderr, stdout]) {
+    let m;
+    while ((m = writtenRe.exec(src)) !== null && wroteCount < 12) {
+      const p = m[1];
+      if (!(p in outputs)) {
+        const v = readOutput(p);
+        if (v != null) { outputs[p] = v; wroteCount++; report(`auto-surfaced written output ${p}`); }
+      }
+    }
   }
 
   return {

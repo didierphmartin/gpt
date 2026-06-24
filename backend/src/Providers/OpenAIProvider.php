@@ -340,6 +340,11 @@ class OpenAIProvider implements AIProviderInterface, HttpRequestBuilderInterface
         // Enable streaming if SSE client is available
         if ($streaming) {
             $payload['stream'] = true;
+            // Without this, OpenAI streamed responses omit the usage block
+            // entirely, so token counts (and therefore cost) come back as 0.
+            // The final SSE chunk then carries a usage object we capture in
+            // handleStreamingResponse().
+            $payload['stream_options'] = ['include_usage' => true];
         }
 
         // Debug: Log the full payload to help diagnose 400 errors

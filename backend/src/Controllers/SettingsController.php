@@ -892,6 +892,114 @@ class SettingsController
         }
     }
 
+    // ─── Auto-heal settings (self-healing mode + cost guards) ───────────────
+    // Persisted per-user as columns on `users` (mirrors storage settings).
+    // Default mode 'off' = the system only diagnoses (free), never spends.
+
+    private function healDefaults(): array
+    {
+        return [
+            'heal_mode'                 => 'off',   // off | ask | auto
+            'heal_daily_budget_usd'     => 5.00,    // hard cap on heal spend/day
+            'heal_per_heal_ceiling_usd' => 1.00,    // auto only heals if estimate < this
+            'heal_proposer_provider'    => 'claude',// PROPOSER: rewrites SKILL.md (strong model)
+            'heal_eval_provider'        => 'kimi',  // EVALUATOR fallback (runs skill; the failing provider is used when known)
+            'heal_judge_provider'       => 'kimi',  // JUDGE: scores transcripts (cheap, reliable)
+            'heal_max_iterations'       => 3,       // SkillOpt I
+            'heal_runs_per_query'       => 3,       // SkillOpt R
+        ];
+    }
+
+    private function ensureHealColumnsExist(): void
+    {
+        try {
+            // Include a newer column so adding the proposer/judge split to an
+            // existing install (heal_mode already present) still triggers the
+            // ALTERs — each is idempotent (already-exists fails silently).
+            $this->db->query("SELECT heal_mode, heal_proposer_provider FROM users LIMIT 1");
+        } catch (\PDOException $e) {
+            $alters = [
+                "ALTER TABLE users ADD COLUMN heal_mode VARCHAR(8) DEFAULT 'off'",
+                "ALTER TABLE users ADD COLUMN heal_daily_budget_usd DECIMAL(8,2) DEFAULT 5.00",
+                "ALTER TABLE users ADD COLUMN heal_per_heal_ceiling_usd DECIMAL(8,2) DEFAULT 1.00",
+                "ALTER TABLE users ADD COLUMN heal_eval_provider VARCHAR(40) DEFAULT 'kimi'",
+                "ALTER TABLE users ADD COLUMN heal_proposer_provider VARCHAR(40) DEFAULT 'claude'",
+                "ALTER TABLE users ADD COLUMN heal_judge_provider VARCHAR(40) DEFAULT 'kimi'",
+                "ALTER TABLE users ADD COLUMN heal_max_iterations INT DEFAULT 3",
+                "ALTER TABLE users ADD COLUMN heal_runs_per_query INT DEFAULT 3",
+            ];
+            foreach ($alters as $sql) {
+                try { $this->db->exec($sql); } catch (\PDOException $e2) { /* already exists */ }
+            }
+        }
+    }
+
+    public function getHealSettings(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $defaults = $this->healDefaults();
+        try {
+            $this->ensureHealColumnsExist();
+            $stmt = $this->db->prepare(
+                "SELECT heal_mode, heal_daily_budget_usd, heal_per_heal_ceiling_usd,
+                        heal_proposer_provider, heal_eval_provider, heal_judge_provider,
+                        heal_max_iterations, heal_runs_per_query
+                 FROM users WHERE id = ?"
+            );
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $s = $defaults;
+            foreach ($defaults as $k => $def) {
+                if (isset($row[$k]) && $row[$k] !== null) {
+                    $s[$k] = is_int($def) ? (int) $row[$k] : (is_float($def) ? (float) $row[$k] : (string) $row[$k]);
+                }
+            }
+            return ['success' => true, 'settings' => $s];
+        } catch (\Throwable $e) {
+            error_log('[SettingsController] getHealSettings failed: ' . $e->getMessage());
+            return ['success' => true, 'settings' => $defaults];
+        }
+    }
+
+    public function saveHealSettings(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $b = $request['body'] ?? [];
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+        $mode    = in_array($b['heal_mode'] ?? '', ['off', 'ask', 'auto'], true) ? $b['heal_mode'] : 'off';
+        $eval    = in_array($b['heal_eval_provider'] ?? '', $validProviders, true) ? $b['heal_eval_provider'] : 'kimi';
+        $proposer = in_array($b['heal_proposer_provider'] ?? '', $validProviders, true) ? $b['heal_proposer_provider'] : 'claude';
+        $judge    = in_array($b['heal_judge_provider'] ?? '', $validProviders, true) ? $b['heal_judge_provider'] : 'kimi';
+        $budget  = max(0.0, min(1000.0, (float) ($b['heal_daily_budget_usd'] ?? 5.0)));
+        $ceiling = max(0.0, min(1000.0, (float) ($b['heal_per_heal_ceiling_usd'] ?? 1.0)));
+        $iters   = max(1, min(10, (int) ($b['heal_max_iterations'] ?? 3)));
+        $runs    = max(1, min(5, (int) ($b['heal_runs_per_query'] ?? 3)));
+        try {
+            $this->ensureHealColumnsExist();
+            $stmt = $this->db->prepare(
+                "UPDATE users SET heal_mode = ?, heal_daily_budget_usd = ?, heal_per_heal_ceiling_usd = ?,
+                        heal_proposer_provider = ?, heal_eval_provider = ?, heal_judge_provider = ?,
+                        heal_max_iterations = ?, heal_runs_per_query = ? WHERE id = ?"
+            );
+            $stmt->execute([$mode, $budget, $ceiling, $proposer, $eval, $judge, $iters, $runs, $userId]);
+            return ['success' => true, 'settings' => [
+                'heal_mode' => $mode, 'heal_daily_budget_usd' => $budget,
+                'heal_per_heal_ceiling_usd' => $ceiling, 'heal_proposer_provider' => $proposer,
+                'heal_eval_provider' => $eval, 'heal_judge_provider' => $judge,
+                'heal_max_iterations' => $iters, 'heal_runs_per_query' => $runs,
+            ]];
+        } catch (\Throwable $e) {
+            error_log('[SettingsController] saveHealSettings failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => 'Save failed', 'status_code' => 500];
+        }
+    }
+
     /**
      * Get user's storage settings
      */

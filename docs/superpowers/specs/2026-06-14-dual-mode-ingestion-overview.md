@@ -1,5 +1,19 @@
 # Dual‑Mode Ingestion — Overview (human‑readable)
 
+> ⚠️ **SUPERSEDED (2026‑06‑18) on the interpreter substrate.** The sections below
+> say interpreted mode runs the loader/splitter **in the browser via Pyodide**
+> with a `pyfetch` store hop. That is **no longer the plan.** The workflow engine
+> is **PHP**: the **interpreter runs server‑side in PHP** (like agent workflows'
+> `GraphWorkflowRunner`) and the **compiler emits Python** — "the interpreter does
+> in PHP what the compiler does in Python." The Pyodide/browser orchestrator,
+> `pyfetch` store cell, and "run cells in the browser" framing are dropped. The
+> **execution SEMANTICS** (event‑driven loop, loader‑as‑iterator, store clocks the
+> loader, recursive folder enumeration, silence = done) are UNCHANGED — see
+> `2026-06-18-ingestion-execution-model.md`, which is authoritative. Build order:
+> **interpreter (PHP) first, compiler later.** Read the rest of this file for the
+> *why* of two modes and the store/forms design, but mentally swap "Pyodide /
+> browser" → "PHP backend."
+
 > Companion to the synthetic spec `2026-06-14-dual-mode-ingestion-spec.md`. This
 > document explains the *why* and the shape of the design in plain language. The
 > spec document is the terse, technical source of truth for implementation. The

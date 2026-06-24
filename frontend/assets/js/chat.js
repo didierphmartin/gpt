@@ -14,7 +14,7 @@
 // Load marker — confirms which chat.js the browser is actually running.
 // If you do NOT see this line in the console, the browser is serving a CACHED
 // old chat.js (hard-reload, Cmd-Shift-R, to fetch the versioned file).
-console.log('%c[chat.js] LOADED build 20260608-readback', 'color:#063;font-weight:bold');
+console.log('%c[chat.js] LOADED build 20260612-writtenoutputs', 'color:#063;font-weight:bold');
 
 class ChatApp {
     // Per-file upload cap, in bytes. Must stay <= the matching limit in
@@ -3026,7 +3026,13 @@ class ChatApp {
      * intent of the constant this replaces.
      */
     _resolveRoundBudget(ctx, payload) {
-        const DEFAULT_MAX_ROUNDS = 6;
+        // Default raised from 6 → 10: multi-step orchestrations (geo-audit and
+        // friends) legitimately need several rounds, and the per-skill
+        // max_tool_rounds override only resolves when the orchestrator is the
+        // active/known skill — which isn't reliable in discover/no-chip mode.
+        // 10 gives real headroom for orchestration while still bounding a
+        // runaway model; skills can raise further via max_tool_rounds (≤ ceiling).
+        const DEFAULT_MAX_ROUNDS = 10;
         const HARD_CEILING = 24;
         const budgetOf = (skill) => {
             const n = Number.parseInt(skill?.max_tool_rounds, 10);
@@ -3077,7 +3083,7 @@ class ChatApp {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20260608-readback');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20260612-writtenoutputs');
                 console.log(`[pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -3277,6 +3283,21 @@ class ChatApp {
      * common single-call case this is always true, so behavior is bit-
      * identical to the pre-refactor single-call path.
      */
+    /**
+     * POST one chat execution trace to the backend (Phase 0 self-healing).
+     * Fire-and-forget — wrapped so it can never block or break the chat flow.
+     */
+    _postExecutionTrace(data) {
+        try {
+            fetch('/gpt/backend/api/v1/traces', {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify(data),
+                keepalive: true,
+            }).catch(() => {});
+        } catch (_) { /* tracing must never throw */ }
+    }
+
     async _executeSingleClientToolCall(call, ctx, depth, isLastCallInRound = true, runSkill = null) {
         // Resolve dir_name. Phase 6 multi-skill auto-routing: the model
         // picks the skill via the tool call's input.dir_name. Chip override
@@ -3284,6 +3305,11 @@ class ChatApp {
         // legacy single-skill path where the backend's tool schema doesn't
         // include dir_name.
         const activeSkill = ctx?.activeSkill || this.activeSkill;
+        // TRUE forced signal for tracing: only the GLOBAL chip (this.activeSkill)
+        // means the user drag-dropped the skill. discover_skill promotes
+        // ctx.activeSkill (local) on auto-discovery, so we must NOT read that —
+        // captured here at the start, before the finalize step can clear it.
+        const forcedSkill = !!this.activeSkill;
         const dirName = (typeof call.input?.dir_name === 'string' && call.input.dir_name.trim())
             ? call.input.dir_name.trim()
             : activeSkill?.dir_name;
@@ -3812,6 +3838,26 @@ class ChatApp {
         const skillName = chosenSkill?.name || chosenSkill?.dir_name || dirName || 'skill';
         const providerLabel = this.getProviderDisplayName(this.currentProvider);
         this._updateB3OverlayPhase(`Working with ${skillName} — ${providerLabel} is responding…`);
+
+        // Phase 0 self-healing: record a chat execution trace. `activeSkill`
+        // set means the skill was drag-dropped (forced); otherwise the model
+        // discovered it from the catalog. Fire-and-forget — never blocks chat.
+        this._postExecutionTrace({
+            invocation_mode: forcedSkill ? 'forced' : 'auto_discovery',
+            provider: this.currentProvider,
+            skill_dir: dirName,
+            script: call.input?.script || null,
+            argv: Array.isArray(call.input?.argv) ? call.input.argv : [],
+            exit_code: result.exitCode ?? null,
+            stdout: (result.stdout || '').slice(0, 20000),
+            log_messages: (result.stderr || '').slice(0, 20000),
+            output_files: result.outputs ? Object.keys(result.outputs) : [],
+            success: succeeded,
+            run_id: ctx?.runId || ctx?.requestId || null,
+        });
+
+        // Post-run self-heal hook (Auto mode only; debounced + threshold'd).
+        try { window.healSystem && window.healSystem.autoAfterRun && window.healSystem.autoAfterRun([dirName]); } catch (_) {}
 
         return { toolResultPayload, followUpExtras: {} };
 

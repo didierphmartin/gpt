@@ -161,7 +161,14 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
 
         try {
         $systemPrompt = $this->buildSystemPrompt($options);
-        $tools = $this->functionExecutor ? ($options['tools'] ?? $this->getTools()) : [];
+        // Honor caller-supplied tools (e.g. the workflow's client-side
+        // run_skill_script) REGARDLESS of functionExecutor — client tools run
+        // in the browser, not via a server executor. The functionExecutor gate
+        // only governs whether this provider advertises its OWN server tools
+        // (getTools()). Previously the gate dropped ALL tools to [] when no
+        // executor was set, which silently stripped run_skill_script in
+        // workflows → agents reported "tool not available".
+        $tools = $options['tools'] ?? ($this->functionExecutor ? $this->getTools() : []);
 
         if (!empty($options['client_tool_names']) && is_array($options['client_tool_names'])) {
             $this->setPerRequestClientSideToolNames($options['client_tool_names']);

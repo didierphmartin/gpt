@@ -31,7 +31,7 @@
     const HANDLE_KEY   = 'ufs-root-handle';
 
     // Show on every session during the test period.
-    const TEST_MODE = true;
+    const TEST_MODE = false;
 
     // ---- translations ---------------------------------------------
     const STRINGS = {
@@ -199,6 +199,12 @@
     const setSnoozed = () => {
         if (TEST_MODE) return;
         try { window.localStorage.setItem(SNOOZE_KEY, String(Date.now())); } catch {}
+    };
+    // Permanently mark the wizard as seen so it never auto-shows again. Called
+    // when the user finishes or dismisses the wizard, so it appears only on the
+    // first run (per browser) and never afterwards.
+    const dismissForever = () => {
+        try { window.localStorage.setItem(NEVER_KEY, '1'); } catch {}
     };
 
     // ---- listeners ------------------------------------------------
@@ -466,7 +472,7 @@
         overlay.addEventListener('click', (e) => {
             const action = e.target.closest('[data-pwa-action]')?.dataset.pwaAction;
             if (action === 'finish' || action === 'close' || e.target === overlay) {
-                setSnoozed();
+                dismissForever();
                 overlay.remove();
             }
         });
@@ -536,7 +542,7 @@
             return;
         }
         if (action === 'finish' || action === 'close') {
-            setSnoozed();
+            dismissForever();
             document.getElementById('pwa-install-overlay')?.remove();
             return;
         }

@@ -244,6 +244,16 @@ class SettingsPanel {
             memSave.addEventListener('click', () => this.saveMemory());
         }
 
+        // Auto-heal settings save
+        const healSave = document.getElementById('heal-save-btn');
+        if (healSave) {
+            healSave.addEventListener('click', () => this.saveHealSettings());
+        }
+        const healScan = document.getElementById('heal-scan-btn');
+        if (healScan) {
+            healScan.addEventListener('click', () => window.healSystem && window.healSystem.scan());
+        }
+
         // Memory auto-update: toggle + model dropdown
         const autoToggle = document.getElementById('memory-auto-toggle');
         const autoModel = document.getElementById('memory-auto-model');
@@ -298,6 +308,68 @@ class SettingsPanel {
             this.loadMemory();
         } else if (tabName === 'skills') {
             this.loadSkills();
+        } else if (tabName === 'auto') {
+            this.loadHealSettings();
+        }
+    }
+
+    /** Load the auto-heal settings into the Auto tab controls. */
+    async loadHealSettings() {
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/settings/heal?t=${Date.now()}`, {
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}` },
+                cache: 'no-store'
+            });
+            if (!res.ok) return;
+            const json = await res.json();
+            const s = json.settings || {};
+            const mode = s.heal_mode || 'off';
+            document.querySelectorAll('input[name="heal-mode"]').forEach(r => { r.checked = (r.value === mode); });
+            const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+            set('heal-daily-budget', s.heal_daily_budget_usd);
+            set('heal-per-heal-ceiling', s.heal_per_heal_ceiling_usd);
+            set('heal-eval-provider', s.heal_eval_provider);
+            set('heal-proposer-provider', s.heal_proposer_provider);
+            set('heal-judge-provider', s.heal_judge_provider);
+            set('heal-max-iterations', s.heal_max_iterations);
+            set('heal-runs-per-query', s.heal_runs_per_query);
+        } catch (e) {
+            console.warn('[settings] loadHealSettings failed:', e);
+        }
+    }
+
+    /** Save the auto-heal settings from the Auto tab controls. */
+    async saveHealSettings() {
+        const status = document.getElementById('heal-save-status');
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        const mode = document.querySelector('input[name="heal-mode"]:checked')?.value || 'off';
+        const body = {
+            heal_mode: mode,
+            heal_daily_budget_usd: num('heal-daily-budget', 5),
+            heal_per_heal_ceiling_usd: num('heal-per-heal-ceiling', 1),
+            heal_eval_provider: document.getElementById('heal-eval-provider')?.value || 'kimi',
+            heal_proposer_provider: document.getElementById('heal-proposer-provider')?.value || 'claude',
+            heal_judge_provider: document.getElementById('heal-judge-provider')?.value || 'kimi',
+            heal_max_iterations: num('heal-max-iterations', 3),
+            heal_runs_per_query: num('heal-runs-per-query', 3),
+        };
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/settings/heal`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const json = await res.json();
+            if (status) {
+                status.textContent = json.success
+                    ? (window.i18n?.t('settings.auto.saved') || 'Saved')
+                    : (window.i18n?.t('settings.auto.saveFailed') || 'Save failed');
+                status.className = json.success ? 'text-sm text-green-600' : 'text-sm text-red-600';
+                setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+            }
+        } catch (e) {
+            console.warn('[settings] saveHealSettings failed:', e);
+            if (status) { status.textContent = 'Save failed'; status.className = 'text-sm text-red-600'; }
         }
     }
 

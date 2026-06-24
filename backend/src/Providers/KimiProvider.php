@@ -144,7 +144,10 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->sendProgress("Preparing request...");
 
         $systemPrompt = $this->buildSystemPrompt($options);
-        $tools = $this->functionExecutor ? ($options['tools'] ?? $this->getTools()) : [];
+        // Honor caller-supplied tools (e.g. workflow client-side run_skill_script)
+        // regardless of functionExecutor — client tools run in the browser. The
+        // gate only governs this provider's OWN server tools (getTools()).
+        $tools = $options['tools'] ?? ($this->functionExecutor ? $this->getTools() : []);
         $userId = $options['user_id'] ?? null;
         $streaming = $options['streaming'] ?? false;
         $toolChoice = $options['tool_choice'] ?? 'auto';

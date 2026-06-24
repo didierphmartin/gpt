@@ -415,6 +415,12 @@ class AIPortfolioAssistant
             $claude->setLogger($this->logger);
         }
         $this->llmManager->registerProvider('claude', $claude);
+        // Alias: the workflow compiler (and saved workflow DSL) name this
+        // provider 'anthropic', while chat names it 'claude'. Register the
+        // same instance under both keys so getProvider() resolves either
+        // name. Without this, workflow agents with provider 'anthropic'
+        // fail with "Provider 'anthropic' not found" and emit empty output.
+        $this->llmManager->registerProvider('anthropic', $claude);
 
         // Initialize OpenAI provider if configured
         if ($this->config->isProviderConfigured('openai')) {

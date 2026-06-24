@@ -64,7 +64,7 @@
     <link rel="stylesheet" href="assets/css/mcp-apps.css">
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
-    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20260611-endnode16">
+    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20260617-ingestion8">
     <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect3">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
@@ -2622,6 +2622,12 @@
                         </svg>
                         <span data-i18n="settings.tabMemory">Memory</span>
                     </button>
+                    <button class="settings-tab" data-tab="auto">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        <span data-i18n="settings.tabAuto">Auto</span>
+                    </button>
                 </div>
 
                 <!-- Scrollable Tab Content Area -->
@@ -3408,6 +3414,93 @@
                     </div>
                 </div>
 
+                <!-- Auto (Self-Healing) Tab Content -->
+                <div id="settings-tab-auto" class="settings-tab-content">
+                    <div class="settings-section">
+                        <h3 data-i18n="settings.auto.title">Self-Healing</h3>
+                        <p class="text-sm text-gray-500 mb-4" data-i18n="settings.auto.intro">When a skill or workflow misbehaves, the system can diagnose it and optionally fix it. Diagnosis is always free; healing spends tokens, so it is off by default.</p>
+
+                        <label class="block text-sm font-medium text-gray-700 mb-2" data-i18n="settings.auto.mode">Mode</label>
+                        <div class="space-y-2 mb-5">
+                            <label class="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                                <input type="radio" name="heal-mode" value="off" class="mt-1">
+                                <span><span class="font-medium" data-i18n="settings.auto.offTitle">Off</span> — <span class="text-sm text-gray-500" data-i18n="settings.auto.offDesc">diagnose only, never spends tokens.</span></span>
+                            </label>
+                            <label class="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                                <input type="radio" name="heal-mode" value="ask" class="mt-1">
+                                <span><span class="font-medium" data-i18n="settings.auto.askTitle">Ask</span> — <span class="text-sm text-gray-500" data-i18n="settings.auto.askDesc">show the cost and ask before each fix.</span></span>
+                            </label>
+                            <label class="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                                <input type="radio" name="heal-mode" value="auto" class="mt-1">
+                                <span><span class="font-medium" data-i18n="settings.auto.autoTitle">Auto</span> — <span class="text-sm text-gray-500" data-i18n="settings.auto.autoDesc">fix automatically, within the budget and per-fix ceiling below.</span></span>
+                            </label>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.dailyBudget">Daily budget (USD)</label>
+                                <input id="heal-daily-budget" type="number" min="0" step="0.5" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.perHealCeiling">Per-fix ceiling (USD)</label>
+                                <input id="heal-per-heal-ceiling" type="number" min="0" step="0.25" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.proposerProvider">Proposer (strong)</label>
+                                <select id="heal-proposer-provider" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                    <option value="claude">Claude</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="grok">Grok</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="kimi">Kimi</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.judgeProvider">Judge (cheap)</label>
+                                <select id="heal-judge-provider" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                    <option value="kimi">Kimi</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="grok">Grok</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="claude">Claude</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.evalProvider">Evaluator fallback</label>
+                                <select id="heal-eval-provider" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                    <option value="kimi">Kimi</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="grok">Grok</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="claude">Claude</option>
+                                </select>
+                                <p class="text-[11px] text-gray-400 mt-1" data-i18n="settings.auto.evalNote">The failing provider is used automatically — this is the fallback when unknown.</p>
+                            </div>
+                            <div></div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.maxIterations">Max iterations</label>
+                                <input id="heal-max-iterations" type="number" min="1" max="10" step="1" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="settings.auto.runsPerQuery">Runs per check</label>
+                                <input id="heal-runs-per-query" type="number" min="1" max="5" step="1" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-3 mt-5">
+                            <button id="heal-save-btn" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium" data-i18n="settings.auto.save">Save</button>
+                            <span id="heal-save-status" class="text-sm text-gray-500"></span>
+                        </div>
+
+                        <hr class="my-5 border-gray-200">
+                        <p class="text-sm text-gray-500 mb-2" data-i18n="settings.auto.scanIntro">Run a scan now: diagnose recent traces and heal what's fixable, respecting the mode above (Off just shows what could be fixed).</p>
+                        <button id="heal-scan-btn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium">🩺 <span data-i18n="settings.auto.scanNow">Scan &amp; heal now</span></button>
+                    </div>
+                </div>
+
                 </div> <!-- End of settings-tab-body -->
             </div> <!-- End of settings-panel -->
 
@@ -3939,7 +4032,7 @@
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20260608-worker-exports"></script>
+    <script src="assets/js/pyodide-runner.js?v=20260612-writtenoutputs"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -3953,11 +4046,12 @@
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
     <script src="assets/js/skills-import.js?v=20260506-github-install"></script>
     <script src="assets/js/skills-manager.js?v=20260608-max-tool-rounds"></script>
-    <script src="assets/js/skillopt-panel.js?v=20260530-skillopt-2-model-picker"></script>
-    <script src="assets/js/workflow-editor.js?v=20260611-splittertabs"></script>
+    <script src="assets/js/skillopt-panel.js?v=20260614-selfheal"></script>
+    <script src="assets/js/heal-panel.js?v=20260614-3model"></script>
+    <script src="assets/js/workflow-editor.js?v=20260619-workers"></script>
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20260610-novoicepanel"></script>
+    <script src="assets/js/chat.js?v=20260614-autoheal"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

@@ -747,6 +747,53 @@ class AdminController
             }
         }
 
+        // Overlay the keys this user inherits from their package (role). A user
+        // without a personal key still has the keys their package grants at chat
+        // time (see ChatController::applyPackageDefaults). Surface those here —
+        // tagged `source: 'package'` with the package name — so the admin can see
+        // (and, by editing, override per-user) what the user effectively has.
+        try {
+            $resolver = new PackageResolver($this->db);
+            $packageName = $resolver->resolveRole($userId);
+            $package = $resolver->resolveForUser($userId);
+            $pkgProviders = $package['capabilities']['providers'] ?? [];
+            if (!is_array($pkgProviders)) {
+                $pkgProviders = [];
+            }
+            foreach ($validProviders as $provider) {
+                $userKey = $keys[$provider]['api_key'] ?? null;
+                if ($userKey !== null && $userKey !== '') {
+                    // Personal key set on the user — that wins over the package.
+                    $keys[$provider]['source'] = 'user';
+                    $keys[$provider]['available'] = true;
+                    $keys[$provider]['package_name'] = null;
+                    continue;
+                }
+                $pkg = is_array($pkgProviders[$provider] ?? null) ? $pkgProviders[$provider] : [];
+                $pkgEnabled = !empty($pkg['enabled']);
+                $pkgKey = $pkgEnabled && isset($pkg['default_api_key'])
+                    ? trim((string) $pkg['default_api_key']) : '';
+                $pkgModel = $pkgEnabled && isset($pkg['default_model'])
+                    ? trim((string) $pkg['default_model']) : '';
+                if ($pkgKey !== '') {
+                    $keys[$provider]['api_key'] = $pkgKey; // actual key for admin (display + reveal + edit)
+                    $keys[$provider]['masked_key'] = '****' . substr($pkgKey, -4);
+                    if (($keys[$provider]['model'] ?? null) === null && $pkgModel !== '') {
+                        $keys[$provider]['model'] = $pkgModel;
+                    }
+                    $keys[$provider]['source'] = 'package';
+                    $keys[$provider]['available'] = true;
+                    $keys[$provider]['package_name'] = $packageName;
+                } else {
+                    $keys[$provider]['source'] = 'none';
+                    $keys[$provider]['available'] = false;
+                    $keys[$provider]['package_name'] = null;
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[AdminController] package key overlay failed: ' . $e->getMessage());
+        }
+
         return [
             'success' => true,
             'user_id' => $userId,

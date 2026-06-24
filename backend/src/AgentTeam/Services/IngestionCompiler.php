@@ -53,6 +53,39 @@ final class IngestionCompiler
     }
 
     /**
+     * Resolve the loader fragment for a source, choosing a single-file loader or
+     * a whole-folder DirectoryLoader when $isDir is true. For a folder we reuse
+     * the per-type loader class (PyPDFLoader, …) with a matching glob so every
+     * file of that type in the folder is loaded.
+     *
+     * @return array{import:string,load:string}
+     * @throws \RuntimeException on unknown source
+     */
+    private static function loaderFragment(string $source, bool $isDir): array
+    {
+        $table = self::loaderDispatch();
+        if (!isset($table[$source])) {
+            throw new \RuntimeException(
+                "IngestionCompiler: no fragment for loader source '{$source}' yet — add it to the loader dispatch table."
+            );
+        }
+        if (!$isDir) {
+            return $table[$source];
+        }
+        // Folder load: DirectoryLoader + the single-file loader class as loader_cls.
+        $dir = [
+            'pdf'  => ['cls' => 'PyPDFLoader',    'glob' => '**/*.pdf'],
+            'word' => ['cls' => 'Docx2txtLoader', 'glob' => '**/*.docx'],
+            'text' => ['cls' => 'TextLoader',     'glob' => '**/*.txt'],
+            'csv'  => ['cls' => 'CSVLoader',      'glob' => '**/*.csv'],
+        ][$source];
+        return [
+            'import' => "from langchain_community.document_loaders import DirectoryLoader\n" . $table[$source]['import'],
+            'load'   => "docs = DirectoryLoader(LOADER[\"path\"], glob=\"{$dir['glob']}\", loader_cls={$dir['cls']}).load()",
+        ];
+    }
+
+    /**
      * Splitter dispatch: strategy → { import, body } where `body` sets `chunks`.
      *
      * @return array<string,array{import:string,body:string}>
@@ -131,24 +164,28 @@ final class IngestionCompiler
      */
     public static function compileNodeChunk(string $kind, array $config = []): string
     {
+        // A disabled node is a passthrough — it forwards its input unchanged so
+        // the rest of the pipeline still runs. Lets you isolate a faulty stage.
+        if ($kind !== 'start' && !empty($config['disabled'])) {
+            $label = ucfirst($kind);
+            return "# {$label} — DISABLED (skipped for debugging)\n"
+                . "# This stage is a passthrough; its input is forwarded unchanged.";
+        }
+
         switch ($kind) {
             case 'start':
                 return "import json, os\n# (common header — shared by the stages below)";
 
             case 'loader':
                 $source = (string) ($config['source'] ?? 'pdf');
-                $table = self::loaderDispatch();
-                if (!isset($table[$source])) {
-                    throw new \RuntimeException(
-                        "IngestionCompiler: no fragment for loader source '{$source}' yet — add it to the loader dispatch table."
-                    );
-                }
-                $L = $table[$source];
+                $isDir = !empty($config['is_dir']);
+                $L = self::loaderFragment($source, $isDir);
                 $json = self::jsonLit([
                     'source' => $source,
                     'path'   => $config['path'] ?? null,
+                    'is_dir' => $isDir,
                 ]);
-                return "# Loader — document type: {$source}\n"
+                return "# Loader — document type: {$source}" . ($isDir ? ' (whole folder)' : '') . "\n"
                     . "{$L['import']}\n\n"
                     . "LOADER = {$json}\n"
                     . "{$L['load']}\n"
@@ -281,97 +318,201 @@ final class IngestionCompiler
      *
      * @throws \RuntimeException on unknown source / strategy / store / provider
      */
-    public static function compileScript(array $loaderCfg, array $splitterCfg, array $storeCfg): array
+    public static function compileScript(array $loaderCfg, array $splitterCfg, array $storeCfg, array $ctx = []): array
     {
-        $loaderJson = [
-            'source' => (string) ($loaderCfg['source'] ?? 'pdf'),
-            'path'   => $loaderCfg['path'] ?? null,
-        ];
-        $splitterJson = [
-            'strategy'   => (string) ($splitterCfg['strategy'] ?? 'recursive'),
-            'chunk_size' => $splitterCfg['chunk_size'] ?? 1000,
-            'overlap'    => $splitterCfg['overlap'] ?? 150,
-        ];
-        $storeJson = [
-            'store'      => (string) ($storeCfg['store'] ?? 'pgvector'),
-            'embeddings' => (string) ($storeCfg['embeddings'] ?? 'openai:text-embedding-3-small'),
-            'collection' => $storeCfg['collection'] ?? 'default',
-        ];
+        $js = static fn($v): string => (string) json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-        $source = $loaderJson['source'];
-        $strategy = $splitterJson['strategy'];
-        $store = $storeJson['store'];
-        $embProvider = strtok($storeJson['embeddings'], ':') ?: 'openai';
+        $ufsUrl    = (string) ($ctx['ufs_url'] ?? $loaderCfg['storage_mcp_url'] ?? 'http://localhost/UniversalFS/mcp/server.php');
+        $qdrantUrl = (string) ($ctx['qdrant_url'] ?? '');
+        $provider  = ((string) ($loaderCfg['provider'] ?? 'local')) ?: 'local';
+        $path      = (string) ($loaderCfg['path'] ?? '');
+        $isDir     = !empty($loaderCfg['is_dir']) ? 'True' : 'False';
+        $types     = array_values(array_filter((array) ($loaderCfg['types'] ?? []), 'is_string'));
+        $chunk     = max(1, (int) ($splitterCfg['chunk_size'] ?? 1000));
+        $overlap   = max(0, (int) ($splitterCfg['overlap'] ?? 150));
+        $collection = trim((string) ($storeCfg['collection'] ?? ''));
+        $workersInt = (int) ($loaderCfg['workers'] ?? 0);
 
-        $loaderTable = self::loaderDispatch();
-        $splitterTable = self::splitterDispatch();
-        $embeddingsTable = self::embeddingsDispatch();
-        $storeTable = self::storeDispatch();
-
-        foreach ([
-            ['loader source', $source, $loaderTable],
-            ['splitter strategy', $strategy, $splitterTable],
-            ['embeddings provider', $embProvider, $embeddingsTable],
-            ['vector store', $store, $storeTable],
-        ] as [$label, $choice, $table]) {
-            if (!isset($table[$choice])) {
-                throw new \RuntimeException(
-                    "IngestionCompiler: no fragment for {$label} '{$choice}' yet — add it to the dispatch table."
-                );
-            }
-        }
-
-        $L = $loaderTable[$source];
-        $S = $splitterTable[$strategy];
-        $E = $embeddingsTable[$embProvider];
-        $V = $storeTable[$store];
-
-        // Dedup imports (json/os come from the skeleton header), stable order.
-        $importBlock = implode("\n", array_values(array_unique([
-            $L['import'],
-            $S['import'],
-            $E['import'],
-            $V['import'],
-        ])));
-
-        $loaderLit = self::jsonLit($loaderJson);
-        $splitterLit = self::jsonLit($splitterJson);
-        $storeLit = self::jsonLit($storeJson);
-
-        $loaderBlock = "if not LOADER.get(\"path\"):\n"
-            . "    raise RuntimeError(\"loader path is empty (set the loader Path or the Start node's document)\")\n"
-            . $L['load'];
-        $splitterBlock = $S['body'];
-        $embeddingsBlock = $E['body'];
-        $storeBlock = $V['body'];
+        $pyUfs     = $js($ufsUrl);
+        $pyQdrant  = $js($qdrantUrl);
+        $pyProv    = $js($provider);
+        $pyPath    = $js($path);
+        $pyTypes   = $types === [] ? '[]' : $js($types);
+        $pyColl    = $collection !== '' ? $js($collection) : 'None';
+        $pyWorkers = $workersInt > 0 ? (string) $workersInt : 'None';
 
         $code = <<<PY
-# Standalone RAG ingestion script — generated from node configs.
-# Composed from the chosen loader/splitter/embeddings/store fragments.
-import json, os
-{$importBlock}
+#!/usr/bin/env python3
+"""Standalone RAG ingestion — generated from the workflow nodes.
+Mirrors the interpreter: UniversalFS loader -> langchain recursive split ->
+qdrant-store MCP, parallelized with a process pool (work-stealing).
+Deps: langchain-text-splitters, pypdf, docx2txt, markdownify."""
+import os, io, json, base64, re, urllib.request
+from concurrent.futures import ProcessPoolExecutor
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-LOADER = {$loaderLit}
-SPLITTER = {$splitterLit}
-STORE = {$storeLit}
+UFS        = {$pyUfs}
+QDRANT     = {$pyQdrant}
+PROVIDER   = {$pyProv}
+PATH       = {$pyPath}
+IS_DIR     = {$isDir}
+TYPES      = {$pyTypes}
+CHUNK      = {$chunk}
+OVERLAP    = {$overlap}
+COLLECTION = {$pyColl}
+WORKERS    = {$pyWorkers}
 
-# 1. Load → docs
-{$loaderBlock}
+EXT_TYPE = {"pdf": "pdf", "docx": "word", "doc": "word", "txt": "text", "csv": "csv", "html": "html", "htm": "html"}
 
-# 2. Split → chunks
-{$splitterBlock}
 
-# 3. Embeddings → embeddings
-{$embeddingsBlock}
+def _parse(raw):
+    try:
+        return json.loads(raw)
+    except Exception:
+        for line in raw.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                d = line[5:].strip()
+                if d:
+                    try:
+                        return json.loads(d)
+                    except Exception:
+                        pass
+    return {}
 
-# 4. Store (writes chunks, sets `result`)
-{$storeBlock}
 
-print(json.dumps(result))
+def _mcp(url, payload, headers=None):
+    data = json.dumps(payload).encode("utf-8")
+    h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, data=data, headers=h, method="POST")
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+        sid = resp.headers.get("Mcp-Session-Id")
+    return _parse(raw), sid
+
+
+def ufs(tool, args):
+    obj, _ = _mcp(UFS, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": tool, "arguments": args}})
+    return (((obj.get("result") or {}).get("content") or [{}])[0]).get("text", "")
+
+
+def detect(name):
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return EXT_TYPE.get(ext)
+
+
+def enumerate_files():
+    out, seen = [], set()
+
+    def walk(folder, depth):
+        if depth > 64 or folder in seen:
+            return
+        seen.add(folder)
+        args = {"provider": PROVIDER}
+        if folder:
+            args["path"] = folder
+        try:
+            data = json.loads(ufs("list_files", args))
+        except Exception:
+            data = {}
+        for it in (data.get("files") or []):
+            fid = it.get("id")
+            nm = it.get("name") or (fid or "")
+            if it.get("type") == "folder":
+                if fid:
+                    walk(fid, depth + 1)
+            else:
+                t = detect(nm)
+                if t and (not TYPES or t in TYPES):
+                    out.append({"provider": PROVIDER, "file_id": fid, "name": nm, "source": fid, "doc_type": t})
+
+    if IS_DIR:
+        walk(PATH, 0)
+    else:
+        nm = PATH.rsplit("/", 1)[-1]
+        t = detect(nm)
+        if t and (not TYPES or t in TYPES):
+            out.append({"provider": PROVIDER, "file_id": PATH, "name": nm, "source": PATH, "doc_type": t})
+    return out
+
+
+def read_file(provider, fid):
+    return base64.b64decode(ufs("read_file", {"provider": provider, "file_id": fid, "encoding": "base64"}))
+
+
+def decode(name, data):
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext in ("txt", "csv"):
+        return data.decode("utf-8", "replace")
+    if ext == "pdf":
+        import pypdf
+        r = pypdf.PdfReader(io.BytesIO(data))
+        return "\\n".join((p.extract_text() or "") for p in r.pages)
+    if ext in ("docx", "doc"):
+        import docx2txt
+        return docx2txt.process(io.BytesIO(data))
+    if ext in ("html", "htm"):
+        html = data.decode("utf-8", "replace")
+        try:
+            from markdownify import markdownify
+            return markdownify(html)
+        except Exception:
+            return re.sub(r"<[^>]+>", " ", html)
+    return data.decode("utf-8", "replace")
+
+
+_split = RecursiveCharacterTextSplitter(chunk_size=CHUNK, chunk_overlap=OVERLAP)
+
+
+def qdrant_session():
+    _, sid = _mcp(QDRANT, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                           "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                                      "clientInfo": {"name": "ingest", "version": "1"}}})
+    if sid:
+        _mcp(QDRANT, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+             {"Mcp-Session-Id": sid})
+    return sid
+
+
+def qdrant_store(sid, text, source):
+    args = {"information": text, "metadata": {"source": source}}
+    if COLLECTION:
+        args["collection_name"] = COLLECTION
+    h = {"Mcp-Session-Id": sid} if sid else None
+    _mcp(QDRANT, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "qdrant-store", "arguments": args}}, h)
+
+
+def process_file(desc):
+    try:
+        text = decode(desc["name"], read_file(desc["provider"], desc["file_id"]))
+        chunks = _split.split_text(text)
+        if QDRANT:
+            sid = qdrant_session()
+            for c in chunks:
+                if c.strip():
+                    qdrant_store(sid, c, desc["source"])
+        return desc["source"], len(chunks), None
+    except Exception as e:
+        return desc["source"], 0, str(e)
+
+
+if __name__ == "__main__":
+    files = enumerate_files()
+    print(f"{len(files)} file(s) to ingest with {WORKERS or os.cpu_count()} worker(s)")
+    total = 0
+    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
+        for src, n, err in ex.map(process_file, files):
+            total += n
+            print(f"  {src}: {n} chunk(s)" + (f"  ERROR: {err}" if err else ""))
+    print(f"done -- {total} chunk(s) stored")
 PY;
 
-        $slug = self::slugify((string) ($storeJson['collection'] ?? ''));
-        $filename = 'ingestion_' . ($slug !== '' ? $slug : 'temp') . '.py';
+        $slug = self::slugify($collection);
+        $filename = 'ingestion_' . ($slug !== '' ? $slug : 'pipeline') . '.py';
 
         return [
             'filename' => $filename,

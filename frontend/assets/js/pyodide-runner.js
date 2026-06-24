@@ -1045,6 +1045,25 @@ _runner_stderr = _stderr_buf.getvalue()
             }
         }
 
+        // Platform safety net: surface the files the script ACTUALLY wrote, even
+        // when the caller set NO read_outputs (or the model guessed the wrong
+        // filename). Skill scripts announce writes as `wrote <path>` in stdout/
+        // stderr; read those back so the model always sees its deliverable on
+        // disk and never re-runs a skill that already succeeded. Additive (never
+        // overwrites a requested key) and capped against a chatty script.
+        const writtenRe = /\bwrote\s+(\/[^\s'"]+\.[A-Za-z0-9]+)/g;
+        let wroteCount = 0;
+        for (const src of [stderr, stdout]) {
+            let m;
+            while ((m = writtenRe.exec(src)) !== null && wroteCount < 12) {
+                const p = m[1];
+                if (!(p in outputs)) {
+                    const v = readOutput(p);
+                    if (v != null) { outputs[p] = v; wroteCount++; }
+                }
+            }
+        }
+
         if (persist) {
             // syncfs without specifying a mount flushes ALL mounts, so the
             // outputs/ writes get pushed back to the host folder along

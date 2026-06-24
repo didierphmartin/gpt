@@ -41,6 +41,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/compare', ['ChatController', 'compareOnly']);
         $r->post('/api/v1/chat/upload', ['ChatAttachmentController', 'upload']);
 
+        // Phase 0 self-healing: chat.js posts one execution trace here after a
+        // skill runs in conversation/forced mode (the workflow path captures
+        // its own traces server-side). See docs/specs/2026-06-13-phase0-*.
+        $r->post('/api/v1/traces', ['TracesController', 'create']);
+        $r->get('/api/v1/traces/diagnosis', ['TracesController', 'diagnose']);
+
         // Server-side URL fetcher used by the Pyodide interceptor when a skill
         // declares fetches_urls: true and the LLM passes a URL argument that
         // the browser can't reach due to CORS.
@@ -117,6 +123,15 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // Storage settings
         $r->get('/api/v1/settings/storage', ['SettingsController', 'getStorageSettings']);
         $r->post('/api/v1/settings/storage', ['SettingsController', 'saveStorageSettings']);
+
+        // Auto-heal settings (self-healing mode + cost guards)
+        $r->get('/api/v1/settings/heal', ['SettingsController', 'getHealSettings']);
+        $r->post('/api/v1/settings/heal', ['SettingsController', 'saveHealSettings']);
+
+        // Self-healing enforcement gate (mode/budget/ceiling)
+        $r->post('/api/v1/heal/authorize', ['HealController', 'authorize']);
+        $r->post('/api/v1/heal/record', ['HealController', 'record']);
+        $r->get('/api/v1/heal/status', ['HealController', 'status']);
 
         // ============================================
         // FILE STORAGE ROUTES (universalFS)
@@ -293,6 +308,20 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // chunks/scripts are compiled from the node configs the frontend sends.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/node-code', ['AgentTeam:IngestionController', 'nodeCode']);
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/compile', ['AgentTeam:IngestionController', 'compile']);
+        // Interpreter (node-by-node): the loader node runs live and returns the
+        // files-as-text shown in its Output tab; the splitter chunks that text.
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/loader-text', ['AgentTeam:IngestionController', 'loaderText']);
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/splitter-chunks', ['AgentTeam:IngestionController', 'splitterChunks']);
+        // Store node: loader→split→write each chunk to the chosen vector-DB MCP.
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/store-chunks', ['AgentTeam:IngestionController', 'storeChunks']);
+        // Store node retrieval test: qdrant-find against the chosen vector-DB MCP.
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/store-find', ['AgentTeam:IngestionController', 'storeFind']);
+        // Closed event loop: server-side run (enumerate once → loop loader→split→store), SSE progress.
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/run-stream', ['AgentTeam:IngestionController', 'runStream']);
+        // Parallel run (true multi-core): run-start enumerates + creates a shared
+        // cursor; K concurrent run-worker SSE streams pull files work-stealing.
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/run-start', ['AgentTeam:IngestionController', 'runStart']);
+        $r->post('/api/v1/workflows/{id:\d+}/ingestion/run-worker', ['AgentTeam:IngestionController', 'runWorker']);
         $r->put('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'update']);
         $r->delete('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'destroy']);
         $r->post('/api/v1/workflows/run', ['AgentTeam:WorkflowController', 'runByName']);

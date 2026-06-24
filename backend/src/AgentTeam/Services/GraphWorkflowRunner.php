@@ -51,6 +51,14 @@ class GraphWorkflowRunner
     // Token tracking across all nodes
     private int $totalInputTokens = 0;
     private int $totalOutputTokens = 0;
+    /** @var array<string,array{0:?float,1:?float}> provider => [priceIn, priceOut] per 1M tokens */
+    private array $pricingCache = [];
+    // Phase 0 self-healing trace capture (docs/specs/2026-06-13-phase0-trace-store.md)
+    private ExecutionTraceStore $traceStore;
+    private string $runId = '';
+    private ?int $currentWorkflowId = null;
+    /** @var array<int,array> skill round-trip result (output/script/argv) keyed by node id */
+    private array $skillResultByNode = [];
 
     // Template processor for dynamic prompt variables
     private ?PromptTemplateProcessor $templateProcessor = null;
@@ -66,6 +74,7 @@ class GraphWorkflowRunner
         array $config = []
     ) {
         $this->db = $db;
+        $this->traceStore = new ExecutionTraceStore($db);
         $this->agentRepository = $agentRepository;
         $this->agentRunner = $agentRunner;
         $this->graphRepository = $graphRepository;
@@ -208,6 +217,10 @@ class GraphWorkflowRunner
     public function run(Workflow $workflow, int $userId, array $inputVariables = [], array $clientSkills = [], array $inlineDocuments = [], array $scratchFiles = []): array
     {
         $this->nodeOutputs = [];
+        // Phase 0: one run_id correlates all node traces of this workflow run.
+        $this->runId = bin2hex(random_bytes(16));
+        $this->currentWorkflowId = method_exists($workflow, 'getId') ? $workflow->getId() : null;
+        $this->skillResultByNode = [];
         $this->currentUserId = $userId;
         $this->clientSkills = $clientSkills;
         $this->inlineDocuments = $inlineDocuments;
@@ -385,6 +398,15 @@ class GraphWorkflowRunner
                     $this->totalOutputTokens += $outputTokens;
                 }
 
+                // Derive node success from the executed output. Agent/MCP
+                // nodes set an explicit 'success'; nodes that don't (start,
+                // output) are successful unless they reported type 'error'.
+                // Previously this referenced an undefined $nodeSuccess, which
+                // emitted success=null and made failed nodes render as green.
+                $nodeSuccess = array_key_exists('success', $output)
+                    ? (bool)$output['success']
+                    : (($output['type'] ?? '') !== 'error');
+
                 // Emit node_complete event for all nodes with output content
                 $this->emitNodeEvent('node_complete', $node, [
                     'agent_name' => $output['agent_name'] ?? null,
@@ -393,7 +415,14 @@ class GraphWorkflowRunner
                     'output' => $output['output'] ?? null,
                     'input_tokens' => $inputTokens,
                     'output_tokens' => $outputTokens,
+                    'cost_usd' => $this->computeNodeCost($output['provider'] ?? null, $inputTokens, $outputTokens),
                 ]);
+
+                // Phase 0: record an execution trace for agent nodes.
+                if (($output['type'] ?? '') === 'agent') {
+                    $this->recordExecutionTrace($node, $output['provider'] ?? null, $output['model'] ?? null,
+                        $nodeSuccess, $output['output'] ?? null, $inputTokens, $outputTokens);
+                }
 
                 // If output node, capture final output
                 if ($node['node_type'] === 'output') {
@@ -655,13 +684,14 @@ class GraphWorkflowRunner
             $skillContent = trim((string) ($config['skill_content'] ?? ''));
         }
 
-        // User-level Hermes-style frozen memory: injected at runtime only.
-        // Deliberately NOT used by LangGraphGenerator so the exported Python
-        // stays user-agnostic and portable.
-        $userMemoryRepo = new UserMemoryRepository($this->db);
-        $userMemories = $userMemoryRepo->getBoth($userId);
-        $userMemoryBlock = trim($userMemories[UserMemoryRepository::SCOPE_MEMORY]);
-        $userProfileBlock = trim($userMemories[UserMemoryRepository::SCOPE_USER]);
+        // Memory is a CONVERSATION-ONLY feature. Workflows run memory-free:
+        // injecting the user's personal memory/profile into task-specific
+        // workflow nodes pollutes their context, wastes tokens, and skews
+        // self-heal evaluations. The LangGraph export was already user-agnostic
+        // for this reason — the runtime now matches it. (Conversation mode keeps
+        // memory; see ChatController.)
+        $userMemoryBlock = '';
+        $userProfileBlock = '';
 
         if ($agentId) {
             // Fetch agent from database
@@ -862,7 +892,103 @@ class GraphWorkflowRunner
             'schema_name' => $outputSchema['name'] ?? null,
             'success' => $result['success'] ?? true,
             'usage' => $result['usage'] ?? null,
+            'provider' => $agent->getProvider(),
         ];
+    }
+
+    /**
+     * Per-1M-token pricing [input, output] in USD for a provider, sourced from
+     * the centralized system_llm_settings table (the same place the app's
+     * usage-cost reporting reads), falling back to sane defaults. Cached per
+     * provider for the run. Handles the anthropic/claude alias.
+     */
+    private function getProviderPricing(string $provider): array
+    {
+        $provider = strtolower($provider);
+        $aliases = ['anthropic' => 'claude', 'google' => 'gemini'];
+        $key = $aliases[$provider] ?? $provider;
+
+        if (isset($this->pricingCache[$key])) {
+            return $this->pricingCache[$key];
+        }
+
+        // Keep in sync with SystemSettingsController::PRICE_DEFAULTS.
+        $defaults = [
+            'claude'   => [3.00, 15.00],
+            'openai'   => [2.50, 10.00],
+            'gemini'   => [0.30, 2.50],
+            'grok'     => [0.20, 0.50],
+            'deepseek' => [0.28, 0.42],
+            'kimi'     => [0.55, 2.20],
+        ];
+        [$priceIn, $priceOut] = $defaults[$key] ?? [null, null];
+
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT price_input_per_1m, price_output_per_1m
+                 FROM system_llm_settings WHERE provider_key = :k LIMIT 1"
+            );
+            $stmt->execute([':k' => $key]);
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+            if ($row) {
+                if ($row['price_input_per_1m'] !== null)  $priceIn  = (float)$row['price_input_per_1m'];
+                if ($row['price_output_per_1m'] !== null) $priceOut = (float)$row['price_output_per_1m'];
+            }
+        } catch (\Throwable $e) {
+            // Column/table may not exist yet — defaults already applied.
+        }
+
+        return $this->pricingCache[$key] = [$priceIn, $priceOut];
+    }
+
+    /**
+     * Compute USD cost for a node from its token usage and provider pricing.
+     * Returns null when pricing is unknown so the UI can show "—" rather
+     * than a misleading $0.00.
+     */
+    /**
+     * Phase 0: assemble + persist one execution trace for a workflow agent node.
+     * Pulls the skill stdout/script/argv stashed during the client-tool
+     * round-trip. Never throws (insert() swallows errors) — tracing must not
+     * break a workflow run. Spec: docs/specs/2026-06-13-phase0-trace-store.md
+     */
+    private function recordExecutionTrace(array $node, ?string $provider, ?string $model, bool $success, ?string $outputText, int $inTok, int $outTok): void
+    {
+        $nodeId = (int)($node['id'] ?? 0);
+        $config = $node['config'] ?? [];
+        $sr = $this->skillResultByNode[$nodeId] ?? [];
+        $out = is_array($sr['output'] ?? null) ? $sr['output'] : [];
+        $this->traceStore->insert([
+            'run_id'             => $this->runId,
+            'ts'                 => date('Y-m-d H:i:s'),
+            'env'                => 'workflow',
+            'invocation_mode'    => 'workflow_node',
+            'workflow_id'        => $this->currentWorkflowId,
+            'node_id'            => $nodeId,
+            'provider'           => $provider,
+            'model'              => $model,
+            'skill_dir'          => $config['bound_skill']['dir_name'] ?? null,
+            'script'             => $sr['script'] ?? null,
+            'argv'               => $sr['argv'] ?? [],
+            'skill_exit_code'    => $out['exit_code'] ?? null,
+            'skill_stdout'       => $out['stdout'] ?? null,
+            'skill_log_messages' => $out['log_messages'] ?? null,
+            'output_files'       => array_keys(is_array($out['outputs'] ?? null) ? $out['outputs'] : []),
+            'final_text'         => $outputText,
+            'success'            => $success,
+            'error_text'         => $success ? null : $outputText,
+            'tokens_in'          => $inTok,
+            'tokens_out'         => $outTok,
+            'cost_usd'           => $this->computeNodeCost($provider, $inTok, $outTok),
+        ]);
+    }
+
+    private function computeNodeCost(?string $provider, int $inputTokens, int $outputTokens): ?float
+    {
+        if (!$provider) return null;
+        [$priceIn, $priceOut] = $this->getProviderPricing($provider);
+        if ($priceIn === null && $priceOut === null) return null;
+        return ($inputTokens * ($priceIn ?? 0) + $outputTokens * ($priceOut ?? 0)) / 1_000_000;
     }
 
     /**
@@ -970,6 +1096,21 @@ class GraphWorkflowRunner
         for ($round = 0; $round < $MAX_ROUNDS + 1; $round++) {
             $result = $this->agentRunner->run($agent, $currentTask, $history, $userId, $runContext);
 
+            // INSTRUMENTATION: trace token usage per round so we can pinpoint
+            // where OpenAI/Gemini lose their usage in the client-tool bridge
+            // (Claude/Grok/Kimi/DeepSeek report tokens; OpenAI/Gemini emit 0).
+            $u = $result['usage'] ?? [];
+            error_log(sprintf(
+                "[BridgeUsage] node=%s provider=%s round=%d pending=%s in=%s out=%s keys=[%s]",
+                $node['id'] ?? '?',
+                $agent->getProvider(),
+                $round,
+                empty($result['pending_client_tool_call']) ? 'no' : 'yes',
+                (string)($u['input_tokens'] ?? $u['prompt_tokens'] ?? 'NULL'),
+                (string)($u['output_tokens'] ?? $u['completion_tokens'] ?? 'NULL'),
+                is_array($u) ? implode(',', array_keys($u)) : gettype($u)
+            ));
+
             if (empty($result['pending_client_tool_call'])) {
                 return $result;
             }
@@ -1010,22 +1151,40 @@ class GraphWorkflowRunner
                 throw new \RuntimeException("Browser timed out running skill script. Make sure the workflow editor stayed open during the run.");
             }
 
+            // Phase 0: stash the skill stdout/script/argv for the execution trace.
+            $this->skillResultByNode[(int)($node['id'] ?? 0)] = [
+                'output' => is_array($bridgeResult['output'] ?? null) ? $bridgeResult['output'] : [],
+                'script' => $callForFrontend['input']['script'] ?? null,
+                'argv'   => $callForFrontend['input']['argv'] ?? [],
+            ];
+
             // Build the continuation: assistant turn that called the
             // tool, followed by the tool result. Provider buildMessages
             // converts these to native shape (Claude content blocks,
             // OpenAI tool_calls, Gemini functionCall+functionResponse).
+            $assistantToolCall = [
+                'id' => $toolCallId,
+                'type' => 'function',
+                'function' => [
+                    'name' => $callForFrontend['name'],
+                    'arguments' => json_encode($callForFrontend['input'] ?? new \stdClass()),
+                ],
+            ];
+            // Gemini 2.5+/3 require the thoughtSignature from the original
+            // functionCall to be echoed back on the continuation turn, or
+            // the follow-up request 400s ("Function call is missing a
+            // thought_signature"). GeminiProvider stamps it onto the pending
+            // call; carry it through here so GeminiProvider::buildContents
+            // can re-emit it on the reconstructed assistant turn. Other
+            // providers don't set it, so this is a no-op for them.
+            if (!empty($call['thought_signature'])) {
+                $assistantToolCall['thought_signature'] = $call['thought_signature'];
+            }
             $history[] = ['role' => 'user', 'content' => $currentTask];
             $history[] = [
                 'role' => 'assistant',
                 'content' => $assistantText,
-                'tool_calls' => [[
-                    'id' => $toolCallId,
-                    'type' => 'function',
-                    'function' => [
-                        'name' => $callForFrontend['name'],
-                        'arguments' => json_encode($callForFrontend['input'] ?? new \stdClass()),
-                    ],
-                ]],
+                'tool_calls' => [$assistantToolCall],
             ];
             $history[] = [
                 'role' => 'tool',
@@ -1398,6 +1557,8 @@ class GraphWorkflowRunner
             // Recreate repositories with new connection
             $this->graphRepository = new WorkflowGraphRepository($this->db);
             $this->agentRepository = new AgentRepository($this->db);
+            // Trace store held the dead handle too — give it the fresh one.
+            $this->traceStore = new ExecutionTraceStore($this->db);
             error_log("[GraphWorkflowRunner] DB reconnected successfully");
         }
     }
@@ -1595,17 +1756,54 @@ class GraphWorkflowRunner
                 if (!empty($parsed['tool_calls'])) {
                     error_log("[GraphWorkflowRunner] Agent {$agent->getName()} requested " . count($parsed['tool_calls']) . " tool calls");
 
+                    // Client-side tools (run_skill_script etc.) cannot run on
+                    // the server — they execute in the browser's Pyodide. For
+                    // those, assign a bridge-compatible id so the /workflows/
+                    // tool-result endpoint accepts the round-trip post. Server
+                    // tools keep their provider-supplied id. Other keys
+                    // (incl. Gemini's thought_signature) are preserved.
+                    $toolCalls = $parsed['tool_calls'];
+                    foreach ($toolCalls as $i => $tc) {
+                        $fn = $tc['function']['name'] ?? $tc['name'] ?? '';
+                        if ($this->isClientSideToolName($fn)) {
+                            $toolCalls[$i]['id'] = SkillToolBridge::generateToolCallId();
+                        }
+                    }
+
                     // Add assistant message with tool calls
                     $state['messages'][] = [
                         'role' => 'assistant',
                         'content' => $parsed['text'] ?? null,
-                        'tool_calls' => $parsed['tool_calls'],
+                        'tool_calls' => $toolCalls,
                     ];
 
-                    // Execute tools and add results
-                    foreach ($parsed['tool_calls'] as $toolCall) {
-                        $toolResult = $this->executeToolForParallel($toolCall, $state['tools_filter']);
+                    // Execute tools and add results. Client tools round-trip
+                    // to the browser (mirrors the sequential bridge); server
+                    // tools run via ToolsManager as before.
+                    foreach ($toolCalls as $toolCall) {
                         $functionName = $toolCall['function']['name'] ?? $toolCall['name'] ?? 'function';
+                        if ($this->isClientSideToolName($functionName)) {
+                            if (!empty($state['skill_ran'])) {
+                                // Run-once: the model already executed this
+                                // node's skill. In AUTO mode (no forced
+                                // tool_choice here) some models keep re-calling
+                                // run_skill_script, burning the round budget.
+                                // Nudge it to summarize from the result it
+                                // already has instead of looping.
+                                $toolResult = json_encode([
+                                    'note' => 'You have already run this skill — its output is in the previous tool result. Do NOT call run_skill_script again. Write your final analysis now using that output.',
+                                ]);
+                            } else {
+                                $toolResult = $this->roundTripClientToolInParallel(
+                                    $toolCall,
+                                    $state['node'],
+                                    $parsed['text'] ?? ''
+                                );
+                                $state['skill_ran'] = true;
+                            }
+                        } else {
+                            $toolResult = $this->executeToolForParallel($toolCall, $state['tools_filter']);
+                        }
                         $state['messages'][] = [
                             'role' => 'tool',
                             'tool_call_id' => $toolCall['id'],
@@ -1659,7 +1857,14 @@ class GraphWorkflowRunner
                 'output' => $finalState['output'] ?? null,
                 'input_tokens' => $inputTokens,
                 'output_tokens' => $outputTokens,
+                'cost_usd' => $this->computeNodeCost($agent->getProvider(), $inputTokens, $outputTokens),
             ]);
+
+            // Phase 0: record an execution trace for this parallel agent node.
+            $this->recordExecutionTrace($finalState['node'], $agent->getProvider(),
+                method_exists($agent, 'getModel') ? $agent->getModel() : null,
+                (bool)($finalState['success'] ?? false), $finalState['output'] ?? null,
+                $inputTokens, $outputTokens);
         }
 
         error_log("[GraphWorkflowRunner] Parallel execution complete. Results for " . count($results) . " agents");
@@ -1820,6 +2025,64 @@ class GraphWorkflowRunner
 
         // Use the ProviderRequestFactory for unified response parsing
         return ProviderRequestFactory::parseResponse($provider, $decoded);
+    }
+
+    /**
+     * Whether a tool name is a client-side tool that must execute in the
+     * browser (Pyodide) rather than on the server. Mirrors the static list
+     * in ClientSideToolsTrait::getClientSideToolNames().
+     */
+    private function isClientSideToolName(string $name): bool
+    {
+        return in_array($name, ['run_skill_script', 'discover_skill', 'Task'], true);
+    }
+
+    /**
+     * Round-trip a client-side tool call to the browser during parallel
+     * (fan-out) execution. Emits a client_tool_call event and blocks on the
+     * skill bridge until the frontend posts the result back. This mirrors the
+     * sequential bridge in runAgentWithClientToolBridge() so the parallel
+     * path can run Pyodide skills too — without it, the parallel executor
+     * would server-execute run_skill_script and fail ("not registered").
+     *
+     * The blocking awaitResult() serialises skill execution across agents in
+     * the same round, but the LLM calls themselves remain parallel.
+     */
+    private function roundTripClientToolInParallel(array $toolCall, array $node, string $assistantText): string
+    {
+        $bridge = new SkillToolBridge();
+        $toolCallId = $toolCall['id']; // already a bridge-compatible hex
+        $name = $toolCall['function']['name'] ?? $toolCall['name'] ?? 'run_skill_script';
+        $args = $toolCall['function']['arguments'] ?? $toolCall['input'] ?? [];
+        if (is_string($args)) {
+            $args = json_decode($args, true) ?: [];
+        }
+        $config = $node['config'] ?? [];
+        $dirName = $config['bound_skill']['dir_name'] ?? null;
+
+        $this->emitNodeEvent('client_tool_call', $node, [
+            'tool_call_id' => $toolCallId,
+            'tool_calls' => [[
+                'id' => $toolCallId,
+                'name' => $name,
+                'input' => $args,
+            ]],
+            'assistant_text' => $assistantText,
+            'dir_name' => $dirName,
+        ]);
+
+        $bridgeResult = $bridge->awaitResult($toolCallId);
+        if ($bridgeResult === null) {
+            error_log("[GraphWorkflowRunner] parallel client-tool bridge timed out for tool_call_id={$toolCallId}");
+            return json_encode(['error' => 'Browser timed out running skill script. Keep the workflow editor open during the run.']);
+        }
+        // Phase 0: stash the skill stdout/script/argv for the execution trace.
+        $this->skillResultByNode[(int)($node['id'] ?? 0)] = [
+            'output' => is_array($bridgeResult['output'] ?? null) ? $bridgeResult['output'] : [],
+            'script' => $args['script'] ?? null,
+            'argv'   => $args['argv'] ?? [],
+        ];
+        return json_encode($bridgeResult, JSON_UNESCAPED_SLASHES);
     }
 
     /**

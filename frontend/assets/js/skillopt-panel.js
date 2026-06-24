@@ -252,6 +252,7 @@
             </div>
             <div class="flex items-center gap-3 mt-6 pt-4 border-t border-gray-200">
                 <button id="so-launch" class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">🚀 Launch</button>
+                <button id="so-selfheal" class="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-md hover:bg-emerald-700" title="Diagnose this skill from its traces and heal it through the cost gate (auto-picks description vs body; respects your Auto mode + budget)">🩺 Self-heal</button>
                 <button id="so-stop"   class="px-4 py-2 bg-gray-200 text-gray-800 text-sm font-semibold rounded-md hover:bg-gray-300 hidden">🛑 Stop (will finish current step)</button>
                 <span id="so-status" class="text-xs text-gray-600"></span>
             </div>
@@ -301,6 +302,14 @@
         });
 
         pane.querySelector('#so-launch').addEventListener('click', () => launchRun(skill));
+        // Diagnosis-driven, cost-gated heal for THIS skill (heal-panel.js).
+        pane.querySelector('#so-selfheal')?.addEventListener('click', () => {
+            if (window.healSystem && window.healSystem.healOne) {
+                window.healSystem.healOne(skill.dir_name);
+            } else {
+                updateStatus('Self-heal module not loaded.', 'error');
+            }
+        });
         pane.querySelector('#so-stop').addEventListener('click', () => {
             // We can't kill a runSkillScript in flight; just mark intent.
             updateStatus('Stop requested — the current step will finish, then the loop exits.');

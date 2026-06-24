@@ -1,0 +1,134 @@
+∴SELFHEAL/synmesh·v1·2026-06-13·companion⇄2026-06-13-self-healing-design.md
+∷LEGEND{ →:routes/implies ⇒:rule-then ⊢:emits ∈:in ¬:not ∥:parallel ≺:cheaper-than
+  ✓:safe-auto ⚠:human-gate ∅:none Δ:diff/edit ℓ:layer μ:mutate κ:cost ⊘:never
+  TR=per-exec-trace IM=invocation_mode WC=weakness-class ℓ∈{SK,WF,FN} }
+
+§0 THESIS
+  observed: real-fixes ≈ FN-code ⊕ ¬SK-text ⇒ naïve(ΔSK.md healer)=∅-coverage.
+  resolve: stratify(ℓ) by AXIS=⟨author×μ-safety⟩, share(TR), build(Phase0) first.
+
+§1 ℓ-TABLE  ⟨author|μ|blast|revert|gate|style⟩
+  SK ⟨LLM | auto✓ | med:shared-by-WF | SKILL.md.preopt.bak | run_body_eval | SelfHarness·textual⟩
+  WF ⟨LLM | auto✓ | sml:1-pipeline   | .dsl.bak           | wfcompile.validator | SelfHarness·structural⟩
+  FN ⟨human+Claude | PR⚠ | lrg:global | git-revert         | tests/CI≈∅          | diagnose→PR→merge⟩
+  inv: blast(SK>WF) ∵ SK shared, WF instance.   law: μ-auto ⟺ ∃cheap{revert∧gate}. FN⊬gate ⇒ ⊘auto-loop.
+
+§2 SUBSTRATE = TR  (one record ∀ env; node≡skill-exec-wrapper)
+  TR::={ run_id ts latency_ms IM env⟨chat|workflow⟩ workflow_id node_id provider model
+         skill_dir script argv input_snapshot tool_calls[] skill_exit_code skill_stdout
+         skill_log_messages output_files[] final_text success error_class error_text
+         rounds round_limit_hit loop_detected tokens_in tokens_out cost_usd
+         user_action⟨accept|retry|abort⟩ outcome_quality }
+  emit@: node_complete(workflow) ⊕ skill-invocation(chat).
+  IM∈{auto_discovery, forced, workflow_node}.
+  IM=ABLATION:  fail(auto)∧ok(forced|wf) ⇒ Δdescription ;  fail(forced) ⇒ Δbody/script ;
+                fail(only wf_node) ⇒ Δworkflow-config.    // "discovery-bogus" → measurable
+  3-READERS(aggregate-key→target):
+    SK: by skill_dir(∀wf+chat) → general prompt/script weakness(DRY)
+    WF: by workflow_id+node_id → struct/config weakness ∧ credit-assignment(which node)
+    FN: by error_class/code-site → recurring plumbing bug → localize
+  ⇒ 1-logsys·3-consumers (¬3 logsys). = Phase0.
+
+§3 DIAGNOSE-LAYER  [read-only ⇒ always✓; ≈80% of cognitive work]
+  WC(classifier, exactly-one):
+    a_skill_prompt   : model-misuse/desc-mismatch  ex:probe -h, ignore argv     → ℓ=SK(text)
+    b_skill_script   : python wrong                 ex:gather_audits scan        → ℓ=SK(script·code-iso)
+    c_workflow_config: provider/topo/force/merge    ex:parallel-flaky→sequential → ℓ=WF
+    d_foundation_code: runtime/plumbing              ex:include_usage,$nodeSuccess,thoughtSig → ℓ=FN(PR⚠)
+    e_transient_ext  : outage/ratelimit              ex:Gemini503,OpenAI429       → ℓ=∅(retry/backoff)
+  TRAP: classify(e as a|c) ⇒ κ-waste ∧ unfixable. classifier ⊨ loop-honesty.
+  OUTCOME_Q  (success≠good; "apology"=success✓∧bad):
+    free-signals := {skill_exit_code, loop_detected, round_limit_hit, output_files?, user_action}
+    LLM-judge := ONLY iff success ∧ suspicious(free-signal)   // minority
+  LOCALIZE⊢/cluster: ⟨WC, provider, IM, locus, failure_patterns[], candidate_eval_cases[]⟩
+    locus: FN→file/fn/line+hypo ; SK→{description|body} ; WF→{node,knob}
+    failure_patterns[] ≡ improve_body input-contract (reuse).
+    candidate_eval_cases := failing-run→regression-test (flywheel, §5.1).
+  ROUTER:
+    R1 IM=auto_discovery                      ⇒ SkillOpt.run_loop      (Δdescription)
+    R2 IM∈{forced,workflow_node} ∧ WC=a       ⇒ SkillOpt.run_body_loop (Δbody)
+    R3 WC=c                                    ⇒ WF-healer §5.2
+    R4 WC=d                                    ⇒ FN-diagnostician → PR⚠ §5.3
+    R5 WC=e                                    ⇒ retry/backoff ; ⊘fix
+    R6 ∀: pick(cheapest-safe ℓ that hits root). general→SK(DRY); pipeline-local→WF; plumbing→PR.
+    R7 mask-guard: WF-config-mitigation(c-shaped) ∧ root=d ⇒ STILL ⊢ FN-PR. (⊘paper-over-rot)
+
+§3.5 APPROVAL-GATE  [diagnose=free·auto ; heal=κ ⇒ opt-in/heal]
+  flow: diagnose(auto,free) → estimate → overlay⚠ → [approve] → heal
+  trigger: finding(WC∈{a,c})
+  estimate := calls(§6)·avg-tok/call·pricing(system_llm_settings, chosen-models) → ~tok+~$
+  overlay⊢{ problem:1-line+WC+provider ; plan:{loop,scope:1|N-prov,eval-model} ; est:~tok+~$(range) ;
+            actions:{ Approve | Decline | Approve-cheaper:↓R,↓I,cheap-eval ⇒ ↓est-live } }
+  approve ⇒ activate-healer.  decline ⇒ record-finding(κ0, for batch/trend).
+  post-run: actual-$ ← Σ node.cost_usd ⇒ est↔actual self-calibrate.
+  multi-finding ⇒ list+per-item+TOTAL-est ⇒ selective-approve vs budget.
+
+§4 HEALERS
+  §4.1 SK = SkillOpt[EXISTS]
+    loop: Baseline→propose→re-eval(eval_set)→strict-gate→{accept|revert}
+    parts: run_loop|run_body_loop ; proposer=improve_body/description(1 LLM/iter) ;
+           gate=run_body_eval(per-case: transcript+judge, majority-vote over R) ; revert=.preopt.bak ; UI=panel
+    SELFHARNESS-Δ: signal-src = eval_set ↦ REAL-TRACES(§2), per-provider ;
+                   use success_patterns[UNUSED-but-supported] ← providers-that-succeeded (contrastive) ;
+                   mined-weakness ↦ new eval_case (self-growing suite).
+  §4.2 WF = NEW·structural
+    action-space(knobs→fix): topology(∥↔seq) | provider/node | tool_choice/force-round1 |
+                             merge(labeled|json) | max_tool_rounds/budget | skill_binding
+    hard∵: combinatorial(struct≠line) ; eval=κ-max(whole N-node pipeline×providers) ;
+           credit-assign := SOLVED by per-node TR(node-lvl success/err/tok)
+    κ-lever: node-isolated-re-eval (re-run suspect node@candidate, ¬whole pipeline)
+    safe: .dsl.bak + wfcompile.validator(free struct-gate, rejects bad-graph) + e2e quality-eval
+  §4.3 FN = diagnose·¬auto-surgery
+    ⊘ loop-on-live-PHP(shared backend).
+    do: diagnose+localize(§3)✓ ; draft-fix∈isolated-worktree → lint+tests → PR⚠ ; executor=ClaudeCode/AgentSDK(sandbox)
+    PRECOND: reproduction+regression-harness (⊬ ⇒ "loop-until-fixed" impossible).
+    feasibility-boundary: unit-testable-PHP{alias,$nodeSuccess,include_usage}→healer-ownable(post-tests) ;
+                          needs-browser+live-provider{parallel-roundtrip,503}→diagnose-ONLY.
+
+§5 MISSING-INPUTS (log-quality audit)  [data≈exists; structure+labels=∅]
+  m1 ¬structured-store: flat∧interleaved php_error_log; ¬run_id-corr; encoding-breaks(awk-multibyte); stdout-trunc@2k
+  m2 ¬outcome-quality (success≠good)
+  m3 ¬weakness-classifier (a/b/c/d/e)
+  m4 ¬per-provider-attr + shared-SKILL.md(Gemini-fix ⇒ regress Claude) ⇒ need per-prov eval/conditional-Δ
+  m5 ¬trace→eval-case (validate+grow)
+  m6 ¬input_snapshot/output-file-verify
+  ★ biggest-missing ≠ algorithm ; = structured+classified+labeled TR. quality(TR) ⊨ κ(§6).
+
+§6 κ-MODEL  [run_body_eval = 2 LLM/run: transcript+judge]
+  calls(skill,provider) = Q·R·2·(1+I) + I    | Q=eval-size R=runs/query I=max-iter
+  ex(Q10 R3 I3): 10·3·2·4 + 3 = 243. eval/gate≈99% ∧ proposer=3.
+  κ-table ⟨cfg | tok | sonnet | cheap-eval⟩:
+    ⟨1sk·1prov | ~1.0M | ~$5  | ~$0.6⟩
+    ⟨1sk·6prov | ~6M   | ~$30 | ~$3-4⟩
+    ⟨+trace-judge N200 | +~1M | +$3 | +$0.5⟩
+  LEVERS↓impact:
+    L1 cheap-eval-model(Haiku/Flash/DS for transcript+judge; strong⇒proposer-only) = 5-10×  [BIGGEST]
+    L2 R=1 inner / R=3 final = 2-3×
+    L3 small targeted eval-set
+    L4 selective per-provider (only recurring a|c above freq-thresh)
+    L5 deterministic-mining = FREE iff structured+sig'd TR ; else LLM-reads-raw-logs(κ↑+noisy)  ★logQ↔κ link
+    L6 implicit-outcome-signals = FREE ; judge⇒ambiguous-minority
+    L7 node-isolated-re-eval(WF) + cached-baseline + early-exit(baseline_pass|all_pass)
+  κ-order: SK≺WF ; WF=κ-max(mitigate L5+L7) ; FN=¬loop.
+  EST: pre-run forecast=formula→overlay(§3.5) ; post-run actual=Σ node.cost_usd ; est↔actual calibrate.
+
+§7 INVARIANTS
+  i1 ∀auto-μ ⊨ cheap-revert(.preopt.bak|.dsl.bak)
+  i2 ∀auto-μ ⊨ validity-gate BEFORE quality-gate (run_body_eval | wfcompile.validator)
+  i3 FN ⊘auto-apply ; diagnose+PR+merge⚠ only
+  i4 config-heal ⊨ surface(masked-FN-bug) ; ⊘hide-root
+  i5 prefer auditable{text|struct}-Δ ≻ opaque-params   ⇒ reject(SIA·weights)
+  i6 WC=e ⊘fixed ; retry-only
+  i7 ⊘healer-loop ⊬ explicit-user-approval ; ∀spend gated-by overlay{problem+tok/$-est} ; decline=κ0∧recorded ; diagnose-exempt(free,RO)
+
+§8 PHASING
+  P0 [DO-FIRST·cheap·enabling]: TR-store + classifier + implicit-outcome-labels.
+     ∵ plumbing-over-emitted-data(cost_usd,provider,[BridgeUsage],node-Logs-stdout) ; powers ∀3 healers.
+  P1 SK-selfharness: mine_weaknesses.py⊢failure_patterns(per-prov)→improve_body ; 1-prov ; DRY-RUN(propose¬apply) ;
+     run_loop|run_body_loop ← R1/R2 ; SHIPS approval-overlay(§3.5)=first-spend-point.
+  P2 breadth: per-prov-loop + provider-conditional-Δ + success_patterns-contrastive + trace→eval flywheel ; then WF-healer.
+  P3 FN-diagnostician[gated]: localize→verified-PR via ClaudeCode/AgentSDK(sandbox). PRECOND=repro+regression-harness.
+  REC: build P0 now (cheapest∧safest∧bottleneck-exposed-this-week). ⊬structured-classified-labeled-TR ⇒ ∀downstream(¬afford∧¬trust).
+
+§9 REJECT(SIA): weight-updates ⇒ ⊘auditable-diff ∧ ⊘cheap-revert ∧ drift. product⊨invariant·i5. SIA=research¬prod.
+∎
