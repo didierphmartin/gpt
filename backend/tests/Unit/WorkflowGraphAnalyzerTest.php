@@ -42,4 +42,27 @@ class WorkflowGraphAnalyzerTest extends TestCase
         sort($a['children']['1']);
         $this->assertSame(['2', '3'], $a['children']['1']);
     }
+
+    public function testStartNodeAndOrderGuarantees(): void
+    {
+        $a = WorkflowGraphAnalyzer::analyzeGraph($this->diamond());
+        $this->assertSame('1', $a['startNodeId']);
+        $this->assertContains('1', $a['order']);
+        $this->assertContainsOnly('string', $a['order']);
+    }
+
+    public function testCycleThrowsRuntimeException(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        WorkflowGraphAnalyzer::analyzeGraph([
+            'nodes' => [
+                ['id' => '1', 'type' => 'agent'],
+                ['id' => '2', 'type' => 'agent'],
+            ],
+            'edges' => [
+                ['from' => '1', 'to' => '2'],
+                ['from' => '2', 'to' => '1'],
+            ],
+        ]);
+    }
 }

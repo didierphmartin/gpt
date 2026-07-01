@@ -123,10 +123,12 @@ class WorkflowGraphAnalyzer
         $layers = array_values($layers);
 
         // Locate start node.
+        // Cast to string: PHP auto-coerces numeric string array keys to int,
+        // so $id from foreach ($byId as $id => _) may be int without the cast.
         $startNodeId = '';
         foreach ($byId as $id => $n) {
             if (self::typeOf($n) === 'start') {
-                $startNodeId = $id;
+                $startNodeId = (string) $id;
                 break;
             }
         }
@@ -144,11 +146,13 @@ class WorkflowGraphAnalyzer
 
     /**
      * Canonical node type — accepts the DSL fields used across all code paths:
-     *   node['type'], node['node_type'], node['config']['type']
+     *   node['node_type'], node['type'], node['config']['type']
+     *
+     * Field precedence mirrors LangGraphGenerator::nodeType(): node_type first.
      */
     public static function typeOf(array $n): string
     {
-        return (string) ($n['type'] ?? $n['node_type'] ?? ($n['config']['type'] ?? 'agent'));
+        return (string) ($n['node_type'] ?? $n['type'] ?? ($n['config']['type'] ?? 'agent'));
     }
 
     // --------------------------------------------------------------------------
@@ -193,7 +197,41 @@ class WorkflowGraphAnalyzer
                 continue;
             }
             $c     = $n['config'] ?? [];
-            $tools = $c['selectedTools'] ?? $c['tools'] ?? [];
+            // Read agent_id from node root or config, matching LangGraphGenerator line 350.
+            $agentId = $n['agent_id'] ?? ($c['agent_id'] ?? null);
+            $tools   = $c['selectedTools'] ?? $c['tools'] ?? [];
+            if (!is_array($tools)) {
+                $tools = [];
+            }
+            // agent_id fallback: when inline tool list is empty, pull tools from
+            // the agent DB record — mirrors LangGraphGenerator lines 380–416.
+            if ($agentId !== null && $agentId !== '') {
+                try {
+                    $agent = $this->agentRepo->findById((int) $agentId);
+                    if ($agent !== null) {
+                        $agentArr   = $agent->toArray();
+                        $agentTools = $agentArr['tools'] ?? null;
+                        if (empty($tools) && is_array($agentTools)) {
+                            foreach ($agentTools as $tool) {
+                                $tname = null;
+                                if (is_string($tool)) {
+                                    $tname = $tool;
+                                } elseif (is_array($tool)) {
+                                    $tname = $tool['name'] ?? $tool['tool_name'] ?? null;
+                                }
+                                if ($tname) {
+                                    if (strpos($tname, 'mcp_') === 0) {
+                                        $tname = substr($tname, 4);
+                                    }
+                                    $tools[] = $tname;
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable $_) {
+                    // Swallow: matches Python's broad except in LangGraphGenerator.
+                }
+            }
             $agents[$id] = [
                 'name'             => (string) ($c['agent_name'] ?? "agent_$id"),
                 'systemPrompt'     => (string) ($c['systemPrompt'] ?? $c['instructions'] ?? ''),
