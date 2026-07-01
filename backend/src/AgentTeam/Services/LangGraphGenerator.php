@@ -77,6 +77,32 @@ class LangGraphGenerator
         return $out;
     }
 
+    /**
+     * Generous but provider-SAFE max_tokens used when an agent node didn't
+     * deliberately set a higher value. Each provider has a different output
+     * ceiling, so a single high number would error on the lower ones — these
+     * stay within each provider's real limit while being large enough that a
+     * full HTML report (~13-20K tokens) doesn't truncate.
+     */
+    private static function providerMaxTokensDefault(string $provider): int
+    {
+        switch ($provider) {
+            case 'claude':
+            case 'anthropic':
+                return 32000;   // Sonnet 4.5 supports 64K output
+            case 'openai':
+            case 'grok':
+                return 16000;   // GPT-4o / Grok ~16K
+            case 'gemini':
+            case 'google':
+            case 'kimi':
+            case 'moonshot':
+            case 'deepseek':
+            default:
+                return 8000;    // safe floor across the rest (~8K caps)
+        }
+    }
+
     private static function displayName(array $node): string
     {
         $cfg = $node['config'] ?? [];
@@ -162,28 +188,7 @@ class LangGraphGenerator
         return $order;
     }
 
-    /**
-     * Serialize a value to a Python-valid literal string.
-     *
-     * json_encode produces 'true'/'false'/'null' which are not valid Python.
-     * This converts to 'True'/'False'/'None'. Uses 4-space indent matching
-     * Python's json.dumps(indent=4) output.
-     *
-     * @param mixed $value
-     */
-    private static function jsonToPython($value, bool $forceObject = false): string
-    {
-        if ($forceObject && is_array($value)) {
-            // Cast top-level array to object so empty arrays encode as {}
-            // and associative arrays encode as object literals.
-            $value = (object) $value;
-        }
-        $raw = json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $raw = str_replace(': true', ': True', $raw);
-        $raw = str_replace(': false', ': False', $raw);
-        $raw = str_replace(': null', ': None', $raw);
-        return $raw;
-    }
+    // jsonToPython() moved to PythonEmitHelpers::jsonToPython() (Task 2).
 
     /**
      * Fetch MCP tools with server info (url, name, headers), matching
@@ -235,19 +240,18 @@ class LangGraphGenerator
         }
 
         $graph = $this->graphRepo->getGraph($workflowId);
-        $nodes = $graph['nodes'] ?? [];
-        $edges = $graph['edges'] ?? [];
-
-        $byId = [];
-        foreach ($nodes as $n) {
-            $byId[self::nodeId($n)] = $n;
-        }
-        $startNodes = array_values(array_filter($nodes, fn($n) => self::nodeType($n) === 'start'));
-        if (empty($startNodes)) {
+        // Route pure graph analysis through WorkflowGraphAnalyzer.
+        // Returns: byId, order (Kahn topo), edges (normalised), startNodeId.
+        $gdata   = WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $byId    = $gdata['byId'];
+        $order   = $gdata['order'];
+        $startId = $gdata['startNodeId'];
+        if ($startId === '') {
             throw new RuntimeException('No start node found.');
         }
-        $startNode = $startNodes[0];
-        $startId = self::nodeId($startNode);
+        // Normalised edges ({from, to}) are compatible with edgeFrom()/edgeTo().
+        $edges     = $gdata['edges'];
+        $startNode = $byId[$startId];
         $startCfg = $startNode['config'] ?? $startNode['data'] ?? [];
         if (!is_array($startCfg)) {
             $startCfg = [];
@@ -257,7 +261,6 @@ class LangGraphGenerator
         if (!is_array($startDocuments)) {
             $startDocuments = [];
         }
-        $order = self::topoOrder($startId, $edges);
 
         // Provider default models (system_llm_settings.model). Used when
         // an agent has no explicit `model` field set — same source the
@@ -412,6 +415,34 @@ class LangGraphGenerator
                 $systemPrompt = rtrim($systemPrompt) . "\n\n## Skill\n" . $skillContent;
             }
 
+            // HTML-output nudge. Some agent/skill prompts (e.g. the GEO report
+            // consolidator) ask for a "production-quality HTML file". In the
+            // browser the html skill's create.py turns that into a file; the
+            // compiled path has no create.py wiring in the prompt, so the model
+            // tends to emit Markdown instead (saved as .md). The runner saves a
+            // node's FINAL message verbatim and auto-detects HTML by signature,
+            // so the reliable fix is to force the final message to be the raw
+            // HTML document itself — and because it's the plain final message
+            // (not a JSON tool argument) it also sidesteps the big-HTML escaping
+            // bugs. Detect a strong "produce HTML" intent and append an explicit
+            // output-format instruction.
+            $pl = strtolower($systemPrompt);
+            $wantsHtml = strpos($pl, 'output only the html') !== false
+                || strpos($pl, 'production-quality html') !== false
+                || strpos($pl, '<!doctype') !== false
+                || (strpos($pl, 'self-contained') !== false && strpos($pl, '<style') !== false);
+            if ($wantsHtml) {
+                $systemPrompt = rtrim($systemPrompt)
+                    . "\n\n## Output format (CRITICAL — read carefully)\n"
+                    . "Your FINAL message MUST be the complete, self-contained HTML "
+                    . "document itself: start with `<!DOCTYPE html>` and end with "
+                    . "`</html>`. Output ONLY the raw HTML — no Markdown, no triple-backtick "
+                    . "code fences, no preamble, and no commentary before or after. Do NOT "
+                    . "narrate what you are about to do; produce the HTML directly as your "
+                    . "answer. The runtime saves your final message verbatim to an .html "
+                    . "file, so anything that is not HTML breaks the deliverable.";
+            }
+
             // Per-agent sampling/limits saved by the editor under `settings`.
             // Defaults mirror the editor form defaults so a regenerated
             // script behaves the same as the PHP runner.
@@ -420,7 +451,31 @@ class LangGraphGenerator
                 $cfgSettings = [];
             }
             $agentTemperature = (float) ($cfgSettings['temperature'] ?? 0.7);
-            $agentMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 4096);
+            // max_tokens: the browser/chat path ignores the node's value and
+            // lets each provider use its high config default, which is why a
+            // full HTML report renders there. The compiled script, however,
+            // bakes the node's value in — and the editor's legacy default of
+            // 4096 truncates large outputs (a GEO report stops mid-<style>).
+            // So: respect a value the user deliberately RAISED above 4096;
+            // otherwise substitute a generous, provider-appropriate cap (a
+            // ceiling, not a target — billing is on tokens actually used).
+            $explicitMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 0);
+            $agentMaxTokens = $explicitMaxTokens > 4096
+                ? $explicitMaxTokens
+                : self::providerMaxTokensDefault(strtolower($agentProvider));
+
+            // Skill-bound agents must be GIVEN the run_skill_script tool so
+            // they can actually execute their folder-backed skill. The browser
+            // auto-provides it whenever a node has a skill; the compiler never
+            // did — so every skill agent had 0 tools and FABRICATED its output
+            // (e.g. "Missing /llms.txt" when the file exists). Detect via the
+            // assembled prompt, which carries the skill's "call run_skill_script
+            // with dir_name …" instructions. The tool itself is a LOCAL
+            // subprocess runner registered into the catalog (see toolBuilderBlock).
+            if (strpos($systemPrompt, 'run_skill_script') !== false
+                && !in_array('run_skill_script', $toolNames, true)) {
+                $toolNames[] = 'run_skill_script';
+            }
 
             foreach ($toolNames as $tn) {
                 $allNeededTools[$tn] = true;
@@ -443,9 +498,27 @@ class LangGraphGenerator
                 $usedCatalog[$k] = $v;
             }
         }
-        // Flag tools that agents need but aren't available as MCP
+        // Filter MCP_SERVERS the same way. It's a baked registry that's never
+        // read at runtime (tool calls take their URL from each TOOL_CATALOG
+        // entry's server_url), so emitting the FULL server inventory was just
+        // noise — and leaked every configured MCP server into the script. Keep
+        // only the servers whose tools are actually used.
+        $usedServers = [];
+        foreach ($usedCatalog as $entry) {
+            $surl = $entry['server_url'] ?? '';
+            if ($surl !== '' && isset($serverRegistry[$surl])) {
+                $usedServers[$surl] = $serverRegistry[$surl];
+            }
+        }
+        // Flag tools that agents need but aren't available as MCP.
+        // run_skill_script is a LOCAL (non-MCP) tool registered directly into
+        // the catalog at runtime, so it's not in $toolCatalog — exclude it from
+        // the "missing" warning (it IS available).
         $missing = [];
         foreach (array_keys($allNeededTools) as $tn) {
+            if ($tn === 'run_skill_script') {
+                continue;
+            }
             if (!array_key_exists($tn, $toolCatalog)) {
                 $missing[] = $tn;
             }
@@ -549,7 +622,7 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import asyncio, json, os, sys, time';
+        $lines[] = 'import asyncio, json, os, subprocess, sys, threading, time';
         $lines[] = 'from typing import Annotated, Any, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';
@@ -659,7 +732,7 @@ class LangGraphGenerator
         $lines[] = "# Maps server URL -> metadata. If a server moves, update the URL here.";
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = 'MCP_SERVERS = ' . self::jsonToPython($serverRegistry, true);
+        $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($usedServers, true);
         $lines[] = '';
 
         // ---------- tool catalog (baked) ----------
@@ -672,7 +745,7 @@ class LangGraphGenerator
         $lines[] = "# agent's tool_names list in the AGENTS dict below.";
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = 'TOOL_CATALOG = ' . self::jsonToPython($usedCatalog, true);
+        $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($usedCatalog, true);
         $lines[] = '';
 
         // ---------- MCP JSON-RPC client ----------
@@ -690,7 +763,7 @@ class LangGraphGenerator
         $lines[] = '# plain JSON. The parser handles both formats transparently.';
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = self::mcpClientBlock();
+        $lines[] = PythonEmitHelpers::mcpClientBlock();
 
         // ---------- tool builder ----------
         $lines[] = '';
@@ -794,7 +867,7 @@ class LangGraphGenerator
         $lines[] = '""".strip()';
         $lines[] = '';
         if (!empty($startDocuments)) {
-            $lines[] = 'START_DOCUMENTS = ' . self::jsonToPython($startDocuments);
+            $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($startDocuments);
         } else {
             $lines[] = 'START_DOCUMENTS = []';
         }
@@ -864,8 +937,8 @@ class LangGraphGenerator
         $lines[] = "# NODE_TYPES: maps node_id -> type ('start', 'agent', 'output').";
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = 'EDGES = ' . self::jsonToPython($edgeList);
-        $lines[] = 'ORDER = ' . self::jsonToPython($order);
+        $lines[] = 'EDGES = ' . PythonEmitHelpers::jsonToPython($edgeList);
+        $lines[] = 'ORDER = ' . PythonEmitHelpers::jsonToPython($order);
         $lines[] = '';
         $lines[] = self::parentsChildrenBlock();
 
@@ -873,7 +946,7 @@ class LangGraphGenerator
         foreach ($order as $nid) {
             $typeMap[$nid] = self::nodeType($byId[$nid]);
         }
-        $lines[] = 'NODE_TYPES = ' . self::jsonToPython($typeMap, true);
+        $lines[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $lines[] = '';
 
         // ---------- main function ----------
@@ -924,128 +997,17 @@ class LangGraphGenerator
     // ---------- static Python code blocks ----------
     // These correspond to the textwrap.dedent('''...''') heredocs in the
     // Python generator. Reproduced here byte-for-byte as nowdoc strings.
-
-    private static function mcpClientBlock(): string
-    {
-        return <<<'PY'
-def _normalize_mcp_url(url: str) -> str:
-    """Ensure the URL points to the MCP endpoint.
-
-    - If it already ends with /mcp, leave it alone.
-    - If it ends with a .php file, it IS the endpoint already (XAMPP-style
-      MCP server scripts like mcp-server.php). Don't append anything.
-    - Otherwise, append /mcp per the MCP convention.
-    """
-    url = url.rstrip("/")
-    if url.endswith("/mcp") or url.endswith(".php"):
-        return url
-    return url + "/mcp"
-
-def _init_mcp_session(url: str, headers: dict) -> bool:
-    """Initialize an MCP session with the server.
-
-    The MCP protocol requires a handshake before tool calls:
-    1. Client sends 'initialize' with protocol version and capabilities
-    2. Server responds with its capabilities
-    3. Client sends 'notifications/initialized' to confirm
-
-    Returns True on success, False on failure.
-    """
-    mcp_url = _normalize_mcp_url(url)
-    init_req = {
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "clientInfo": {"name": "LangGraph-Workflow", "version": "1.0.0"},
-            "capabilities": {}
-        }
-    }
-    try:
-        with httpx.Client(timeout=30) as c:
-            r = c.post(mcp_url, json=init_req, headers=headers)
-            r.raise_for_status()
-            data = _parse_mcp_response(r.text)
-            if data is None or "error" in (data or {}):
-                return False
-            # Send initialized notification
-            c.post(mcp_url, json={
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {}
-            }, headers=headers)
-            return True
-    except Exception as e:
-        print(f"[warn] MCP init failed for {url}: {e}")
-        return False
-
-def _parse_mcp_response(text: str) -> dict | None:
-    """Parse a JSON-RPC response from an MCP server.
-
-    MCP servers may respond in two formats:
-    - Plain JSON: standard JSON-RPC response body
-    - SSE (Server-Sent Events): lines prefixed with 'data:' containing JSON
-    This function tries plain JSON first, then falls back to SSE parsing.
-    """
-    import json as _json
-    try:
-        return _json.loads(text)
-    except _json.JSONDecodeError:
-        pass
-    for line in text.split("\n"):
-        line = line.strip()
-        if line.startswith("data:"):
-            data = line[5:].strip()
-            if data:
-                try:
-                    return _json.loads(data)
-                except _json.JSONDecodeError:
-                    continue
-    return None
-
-def _call_mcp_tool(server_url: str, tool_name: str,
-                   arguments: dict) -> str:
-    """Call a tool on an MCP server via JSON-RPC 2.0.
-
-    Sequence: init session -> send tools/call -> parse response -> extract text.
-    The MCP response contains a 'content' array; we extract all text items
-    and join them. If no text is found, falls back to raw JSON.
-    """
-    mcp_url = _normalize_mcp_url(server_url)
-    headers = {"Content-Type": "application/json",
-               "Accept": "application/json, text/event-stream, */*"}
-
-    _init_mcp_session(server_url, headers)
-
-    request = {
-        "jsonrpc": "2.0", "id": int(time.time()),
-        "method": "tools/call",
-        "params": {"name": tool_name,
-                   "arguments": arguments or {}}
-    }
-    try:
-        with httpx.Client(timeout=180) as c:
-            r = c.post(mcp_url, json=request, headers=headers)
-            r.raise_for_status()
-            data = _parse_mcp_response(r.text)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-    if data is None:
-        return json.dumps({"error": "invalid response"})
-    if "error" in data:
-        return json.dumps({"error": data["error"].get("message", "unknown")})
-
-    content = (data.get("result") or {}).get("content", [])
-    texts = [c.get("text", "") for c in content
-             if isinstance(c, dict) and c.get("type") == "text"]
-    return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
-
-PY;
-    }
+    //
+    // mcpClientBlock()  → moved to PythonEmitHelpers::mcpClientBlock() (Task 2)
+    // skillDepsBlock()  → moved to PythonEmitHelpers::skillDepsBlock()  (Task 2)
 
     private static function toolBuilderBlock(): string
     {
-        return <<<'PY'
+        // Part A: _summarize_tool_result + build_tools_from_catalog
+        // Three blank lines after 'return catalog' produce content ending \n\n\n
+        // so that concatenating skillDepsBlock() (which starts with '# ---')
+        // yields the original two-blank-line separator.
+        $partA = <<<'PY'
 def _summarize_tool_result(result: str) -> str:
     """Short, informative summary of a tool result for logs.
 
@@ -1128,7 +1090,95 @@ def build_tools_from_catalog() -> dict[str, StructuredTool]:
         )
     return catalog
 
+
+
 PY;
+        // Part B: _run_skill_script + RUN_SKILL_SCRIPT_TOOL
+        // Two blank lines at start join to the two blank lines in skillDepsBlock's tail.
+        $partB = <<<'PY'
+
+
+def _run_skill_script(dir_name: str, script: str, argv=None,
+                      input_files=None, read_outputs=None) -> str:
+    if isinstance(argv, str):
+        try:
+            argv = json.loads(argv)
+        except Exception:
+            argv = [argv]
+    argv = list(argv) if argv else []
+    skill_dir = os.path.join(SKILLS_DIR, *str(dir_name).split("/"))
+    script_path = os.path.join(skill_dir, *str(script).split("/"))
+    if not os.path.isfile(script_path):
+        return f"ERROR: skill script not found: {dir_name}/{script} (looked in {script_path})"
+    # Install the skill's declared PyPI deps into the venv on first use, so
+    # scripts that need e.g. beautifulsoup4 don't exit with a missing-dep error.
+    _ensure_skill_deps(skill_dir)
+    # Optional input_files: write them so scripts that read a path still work.
+    # Absolute paths the host can't create (e.g. /scratch/...) are remapped
+    # into the skill dir and matching argv references are rewritten.
+    if isinstance(input_files, dict):
+        for raw_path, content in input_files.items():
+            try:
+                target = raw_path
+                parent = os.path.dirname(raw_path)
+                if raw_path.startswith("/") and not os.path.isdir(parent):
+                    target = os.path.join(skill_dir, os.path.basename(raw_path))
+                    argv = [target if a == raw_path else a for a in argv]
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(content if isinstance(content, str) else str(content))
+            except Exception as e:
+                print(f"  [run_skill_script] could not stage {raw_path}: {e}")
+    cmd = [sys.executable, script_path] + [str(a) for a in argv]
+    print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}", flush=True)
+    _t0 = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, cwd=skill_dir, capture_output=True,
+                              text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s", flush=True)
+        return f"ERROR: skill {dir_name}/{script} timed out after 300s"
+    _dt = time.monotonic() - _t0
+    out = proc.stdout or ""
+    # Result line mirrors the [tool] ←/→ pattern: exit code, stdout size, and
+    # a stderr tail so a failing or empty skill run is visible in the log
+    # (not just buried in the returned text).
+    _stderr = (proc.stderr or "").strip()
+    _head = out.replace(chr(10), " ")[:160]
+    print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
+          f"{len(out)} chars stdout, {_dt:.1f}s | {_head}", flush=True)
+    if proc.returncode != 0 and _stderr:
+        print(f"  [run_skill_script]   stderr tail: {_stderr[-400:]}", flush=True)
+    if proc.returncode != 0:
+        out = (out + f"\n[run_skill_script exit {proc.returncode}]\n"
+               + _stderr[-2000:]).strip()
+    return out or "(skill produced no stdout)"
+
+
+RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
+    func=_run_skill_script,
+    name="run_skill_script",
+    description=("Execute a folder-backed skill's Python script and return its "
+                 "stdout. Pass the dir_name/script/argv the skill instructions "
+                 "specify, e.g. dir_name='GEO/geo-llmstxt', "
+                 "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
+    args_schema=create_model(
+        "RunSkillScriptArgs",
+        dir_name=(str, ...),
+        script=(str, ...),
+        # list[str] (not bare list) so the generated JSON schema carries
+        # `items`. Gemini rejects array params without `items` (400
+        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+        # input_files as a bare dict — Gemini accepted that, and dict[str,str]
+        # would add additionalProperties which Gemini may reject.
+        argv=(list[str], []),
+        input_files=(dict, {}),
+        read_outputs=(list[str], []),
+    ),
+)
+
+PY;
+        return $partA . PythonEmitHelpers::skillDepsBlock() . $partB;
     }
 
     private static function stateBlock(): string
@@ -1382,7 +1432,11 @@ async def run(user_prompt: str):
     """
     print("[info] Building tools from embedded catalog...")
     catalog = build_tools_from_catalog()
-    print(f"[info] {len(catalog)} MCP tools ready: {sorted(catalog.keys())}")
+    # Local (non-MCP) tool: lets skill-bound agents run their folder-backed
+    # skill as a subprocess. Always registered; only agents whose tool_names
+    # include it (skill agents) actually receive it.
+    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL
+    print(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
 
 PY;
     }
@@ -1477,6 +1531,16 @@ PY;
                     )
                     print(f"[node] [{n}] done -- {len(text)} chars "
                           f"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)")
+                    # Preview of what the agent produced, so the log shows the
+                    # actual answer without opening the _debug dump.
+                    print(f"[node] [{n}] output head: {text[:240]!r}", flush=True)
+                    # High-signal red flag: a tool-bound agent that ran ZERO
+                    # tools almost certainly fabricated its answer (the exact
+                    # failure that produced "Missing /llms.txt"). Surface it.
+                    if tools and tool_results == 0:
+                        print(f"[node] [{n}] ⚠ answered with 0 tool calls despite "
+                              f"{len(tools)} tool(s) available — likely fabricated; "
+                              f"check the skill ran", flush=True)
 
                     try:
                         script_root = Path(__file__).resolve().parent.parent
