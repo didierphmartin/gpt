@@ -117,6 +117,7 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.genai import types
 PY;
     }
 
@@ -239,14 +240,14 @@ PY;
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
             $entry .= "    tools={$toolsPy},\n";
             if ($ag['temperature'] !== null || $ag['max_tokens'] !== null) {
-                $entry .= "    generate_content_config={\n";
+                $kwargs = [];
                 if ($ag['temperature'] !== null) {
-                    $entry .= "        \"temperature\": " . json_encode($ag['temperature']) . ",\n";
+                    $kwargs[] = "temperature=" . json_encode($ag['temperature']);
                 }
                 if ($ag['max_tokens'] !== null) {
-                    $entry .= "        \"max_output_tokens\": " . json_encode($ag['max_tokens']) . ",\n";
+                    $kwargs[] = "max_output_tokens=" . json_encode($ag['max_tokens']);
                 }
-                $entry .= "    },\n";
+                $entry .= "    generate_content_config=types.GenerateContentConfig(" . implode(", ", $kwargs) . "),\n";
             }
             $entry .= "    output_key=\"node_{$id}\",\n";
             $entry .= ")";

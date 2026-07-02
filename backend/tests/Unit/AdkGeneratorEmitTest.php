@@ -86,6 +86,35 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('You are A', $code);
     }
 
+    public function testGenerateContentConfigTyped(): void
+    {
+        // With temperature + max_tokens set → typed GenerateContentConfig emitted
+        $a = $this->analyzed();
+        $a['agents']['2']['temperature'] = 0.7;
+        $a['agents']['2']['max_tokens']  = 1024;
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('types.GenerateContentConfig(', $code);
+        $this->assertStringContainsString('temperature=0.7', $code);
+        $this->assertStringContainsString('max_output_tokens=1024', $code);
+
+        // With both null → no generate_content_config key at all
+        $code2 = ADKGenerator::emitAdk($this->analyzed());
+        $this->assertStringNotContainsString('generate_content_config', $code2);
+    }
+
+    public function testRunSkillScriptToolInAgentToolsList(): void
+    {
+        $a = $this->analyzed();
+        $a['agents']['2']['skill_content'] = "Use the skill: call run_skill_script with dir_name='html/create'";
+        $code = ADKGenerator::emitAdk($a);
+        // The LlmAgent block for node_2 must include RUN_SKILL_SCRIPT_TOOL in its tools list
+        $this->assertStringContainsString('node_2 = LlmAgent(', $code);
+        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL', $code);
+        // Confirm it's inside the tools=[...] assignment for node_2
+        $agentBlock = substr($code, strpos($code, 'node_2 = LlmAgent('));
+        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL', $agentBlock);
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
