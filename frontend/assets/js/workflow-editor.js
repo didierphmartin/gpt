@@ -2763,15 +2763,31 @@ class WorkflowEditor {
     }
 
     /**
-     * Download the Google ADK Python script for this workflow.
-     * Uses the same blob-anchor download mechanism as other file exports
-     * (no FSA setup required — file goes straight to the browser's Downloads).
+     * Generate the Google ADK Python script and write it into the local python
+     * environment at synergyAI/python/scripts/<name>_adk.py — mirroring
+     * downloadGeneratedPython() (the LangGraph "Generate"). Writing it into the
+     * runner's scripts/ dir is what lets the "Run" action find it via the
+     * runner's /api/run-file (which resolves against SCRIPTS_DIR). A browser
+     * download would never reach the python env, so Run would 400 "Script not found".
      */
     async generateAdkScript() {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
+        if (!window.localFs || !window.localFs.isSupported || !window.localFs.isSupported()) {
+            alert(this.t('workflow.output.fsaUnavailable')
+                || 'Local filesystem access is not available in this browser.');
+            return;
+        }
+
+        // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
+        const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
+        if (!runnerEntry) {
+            this._showAdkSetupModal();
+            return;
+        }
+
         try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
@@ -2786,15 +2802,23 @@ class WorkflowEditor {
             const m = dispo.match(/filename="([^"]+)"/);
             if (m) filename = m[1];
             const text = await resp.text();
-            const blob = new Blob([text], { type: 'text/x-python' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+
+            // Write into python/scripts/ so the runner can find and execute it.
+            const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+            if (!scriptsDir) {
+                throw new Error('Could not resolve synergyAI/python/scripts.');
+            }
+            const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(text);
+            await writable.close();
+
+            const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
+            console.log(`[WorkflowEditor] Saved generated ADK Python to ${rootName}/python/scripts/${filename}`);
+            this._showToast(
+                (this.t('workflow.output.savedTo') || 'Saved to')
+                + ` ${rootName}/python/scripts/${filename}`
+            );
         } catch (e) {
             console.error('[WorkflowEditor] generate-adk failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
