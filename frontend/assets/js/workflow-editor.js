@@ -2784,7 +2784,7 @@ class WorkflowEditor {
         // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
         const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
         if (!runnerEntry) {
-            this._showAdkSetupModal();
+            this._showRunnerSetupModal();
             return;
         }
 
@@ -3062,7 +3062,7 @@ class WorkflowEditor {
 
         menu.querySelector('[data-action="adk-setup"]')?.addEventListener('click', () => {
             menu.remove();
-            this._showAdkSetupModal();
+            this._showRunnerSetupModal();
         });
         menu.querySelector('[data-action="adk-generate"]')?.addEventListener('click', () => {
             menu.remove();
@@ -3796,7 +3796,10 @@ class WorkflowEditor {
      */
     _showRunnerSetupModal() {
         const setupPath = '/Applications/XAMPP/xamppfiles/htdocs/gpt/langchain_runner';
-        const cmd = `cd ${setupPath} && python3 setup.py`;
+        // --force re-copies requirements.txt + runtime files into the install so a
+        // re-run picks up new deps (e.g. google-adk/litellm). Without it, an existing
+        // install keeps the old requirements.txt and the setup is a no-op.
+        const cmd = `cd ${setupPath} && python3 setup.py --force`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -3814,7 +3817,7 @@ class WorkflowEditor {
                 </div>
                 <p class="text-xs text-gray-500 mb-4">
                     ${this.escapeHtml(this.t('workflow.runnerSetup.note')
-                        || 'This installs the LangGraph runtime plus the PyPI packages your skills declare (e.g. beautifulsoup4), so the compiled scripts can run them. After it finishes, click Generate Python again.')}
+                        || 'This installs both the LangGraph and Google ADK runtimes into one shared venv at ~/Documents/synergyAI/python/.venv (plus the PyPI packages your skills declare, e.g. beautifulsoup4). Re-run any time to pick up new dependencies. After it finishes, click Generate again.')}
                 </p>
                 <div class="flex justify-end">
                     <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">

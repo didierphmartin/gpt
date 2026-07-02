@@ -13,5 +13,11 @@ langchain-core>=0.3.0
 langchain-anthropic>=0.3.0
 langchain-openai>=0.2.0
 langchain-google-genai>=2.0.0
+# Google ADK runtime — the second compiler target. ADK-compiled scripts
+# import google.adk; non-Gemini providers route through litellm; MCP tools
+# use httpx (already above). Installed into the same venv so both LangGraph
+# and ADK compiled scripts run without a follow-up install.
+google-adk
+litellm
 pydantic>=2.8.0
 python-dotenv>=1.0.0

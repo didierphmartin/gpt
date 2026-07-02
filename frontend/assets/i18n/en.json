@@ -484,6 +484,7 @@
   },
   "common": {
     "cancel": "Cancel",
+    "close": "Close",
     "save": "Save",
     "delete": "Delete",
     "edit": "Edit",
@@ -798,6 +799,12 @@
       "generateFailed": "Code generation failed",
       "viewJson": "{ } View JSON",
       "viewJsonTitle": "View the JSON payload this workflow sends to the backend on save"
+    },
+    "runnerSetup": {
+      "title": "Python runtime not installed",
+      "body": "Compiled scripts run from ~/Documents/synergyAI/python/ (venv: .venv). Install or update the runtime once — open a terminal and run:",
+      "copy": "Copy command",
+      "note": "This installs both the LangGraph and Google ADK runtimes into one shared venv at ~/Documents/synergyAI/python/.venv (plus the PyPI packages your skills declare). Re-run any time to pick up new dependencies. After it finishes, click Generate again."
     },
     "worker": "worker",
     "mcpServers": "MCP SERVERS",

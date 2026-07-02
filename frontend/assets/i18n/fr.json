@@ -484,6 +484,7 @@
   },
   "common": {
     "cancel": "Annuler",
+    "close": "Fermer",
     "save": "Enregistrer",
     "delete": "Supprimer",
     "edit": "Modifier",
@@ -798,6 +799,12 @@
       "generateFailed": "Échec de la génération du code",
       "viewJson": "{ } Voir le JSON",
       "viewJsonTitle": "Afficher la charge JSON que ce workflow envoie au backend lors de l'enregistrement"
+    },
+    "runnerSetup": {
+      "title": "Runtime Python non installé",
+      "body": "Les scripts compilés s'exécutent depuis ~/Documents/synergyAI/python/ (venv : .venv). Installez ou mettez à jour le runtime une fois — ouvrez un terminal et exécutez :",
+      "copy": "Copier la commande",
+      "note": "Ceci installe les runtimes LangGraph et Google ADK dans un venv partagé à ~/Documents/synergyAI/python/.venv (ainsi que les paquets PyPI déclarés par vos skills). Relancez à tout moment pour récupérer les nouvelles dépendances. Une fois terminé, cliquez à nouveau sur Générer."
     },
     "worker": "worker",
     "mcpServers": "SERVEURS MCP",

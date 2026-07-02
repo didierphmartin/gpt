@@ -2,7 +2,9 @@
 
 Copies the runtime files into the user's local environment at
 ~/Documents/synergyAI/python/, builds a virtual environment there, and
-pip-installs the LangGraph stack.
+pip-installs both the LangGraph and Google ADK stacks (so LangGraph- and
+ADK-compiled scripts run from the same venv). Re-run with --force to pick up
+requirements.txt changes on an existing install.
 
 Usage:
     python3 setup.py                       # install at default location
@@ -19,6 +21,7 @@ After install, start the runner with:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -121,6 +124,41 @@ def copy_runtime(src_dir: Path, dst_dir: Path, force: bool) -> None:
     # something the installer manages.
 
 
+def _parse_skill_deps(skills_root: Path) -> list[str]:
+    """Scan installed skills for the PyPI packages they declare in SKILL.md.
+
+    Compiled scripts execute folder-backed skills via subprocess, so the venv
+    must contain the skills' own deps (e.g. beautifulsoup4) — not just the
+    LangGraph stack in requirements.txt. Returns the sorted union across every
+    SKILL.md found under ``skills_root``.
+    """
+    deps: set[str] = set()
+    if not skills_root.is_dir():
+        return []
+    for md in skills_root.rglob("SKILL.md"):
+        try:
+            lines = md.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        # Only the YAML frontmatter (between the leading '---' fences) is
+        # authoritative — a 'dependencies:' line in the prose body is not a
+        # real declaration and must not be installed.
+        if not lines or lines[0].strip() != "---":
+            continue
+        for line in lines[1:]:
+            s = line.strip()
+            if s == "---":
+                break  # end of frontmatter
+            if s.lower().startswith("dependencies:"):
+                val = s.split(":", 1)[1].strip().strip("[]")
+                for d in val.split(","):
+                    d = d.strip().strip("'").strip('"')
+                    if d:
+                        deps.add(d)
+                break
+    return sorted(deps)
+
+
 def build_venv(dst_dir: Path) -> None:
     venv_dir = dst_dir / ".venv"
     if venv_dir.exists():
@@ -133,10 +171,27 @@ def build_venv(dst_dir: Path) -> None:
     reqs = dst_dir / "requirements.txt"
     if not reqs.exists():
         print(f"  ! no requirements.txt at {reqs}, skipping install")
-        return
-    print(f"  installing requirements (this can take a minute)")
-    subprocess.run([str(pip), "install", "--upgrade", "pip"], check=True)
-    subprocess.run([str(pip), "install", "-r", str(reqs)], check=True)
+    else:
+        print(f"  installing requirements (this can take a minute)")
+        subprocess.run([str(pip), "install", "--upgrade", "pip"], check=True)
+        subprocess.run([str(pip), "install", "-r", str(reqs)], check=True)
+
+    # Install the dependencies the installed SKILLS declare. Compiled scripts
+    # run those skills as subprocesses, so the venv needs e.g. beautifulsoup4 —
+    # without this the GEO skills exited 1 with "beautifulsoup4 is required".
+    # Skills live as a sibling of the python install (~/Documents/synergyAI/),
+    # overridable via SYNERGYAI_SKILLS_DIR.
+    skills_root = Path(
+        os.environ.get("SYNERGYAI_SKILLS_DIR", str(dst_dir.parent / "skills"))
+    ).expanduser()
+    skill_deps = _parse_skill_deps(skills_root)
+    if skill_deps:
+        print(f"  installing skill dependencies ({len(skill_deps)}): {', '.join(skill_deps)}")
+        # check=False: a single bad/unavailable package shouldn't abort the
+        # whole install; the runtime auto-installer is a backstop.
+        subprocess.run([str(pip), "install", *skill_deps], check=False)
+    else:
+        print(f"  no skill dependencies found under {skills_root}")
 
 
 def main() -> int:
