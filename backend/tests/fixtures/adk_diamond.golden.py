@@ -5,7 +5,7 @@ in this program's own Python environment.
 requirements:
     pip install google-adk litellm httpx
 """
-import asyncio, json, os, subprocess, sys, threading, time, urllib.request
+import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
 from typing import Any
 
@@ -294,6 +294,8 @@ root_agent = SequentialAgent(
     node_4
     ],
 )
+WORKFLOW_NAME = "diamond"
+
 async def main(user_prompt: str = "GO"):
     if START_DOCUMENTS:
         doc_parts = []
@@ -315,14 +317,42 @@ async def main(user_prompt: str = "GO"):
                 + "\n\n---\n\n"
                 + user_prompt
             )
+    print(f"[workflow] {WORKFLOW_NAME} starting", flush=True)
+    print(f"[workflow] prompt: {user_prompt[:200]!r}", flush=True)
     session_service = InMemorySessionService()
     runner = Runner(agent=root_agent, app_name="workflow", session_service=session_service)
     session = await session_service.create_session(app_name="workflow", user_id="local", state={})
     final = ""
+    t0 = time.monotonic()
+    seen = set()
     content = types.Content(role="user", parts=[types.Part(text=user_prompt)])
-    async for event in runner.run_async(user_id="local", session_id=session.id, new_message=content):
-        if event.is_final_response() and event.content and event.content.parts:
-            final = event.content.parts[0].text or final
+    try:
+        async for event in runner.run_async(user_id="local", session_id=session.id, new_message=content):
+            author = getattr(event, "author", "?")
+            if author and author not in seen:
+                seen.add(author)
+                print(f"[node] > {author}", flush=True)
+            parts = (event.content.parts if event.content else None) or []
+            for p in parts:
+                fc = getattr(p, "function_call", None)
+                fr = getattr(p, "function_response", None)
+                if fc is not None:
+                    _a = str(getattr(fc, "args", ""))[:200]
+                    print(f"[tool] -> {fc.name}({_a})", flush=True)
+                elif fr is not None:
+                    _r = str(getattr(fr, "response", ""))[:200]
+                    print(f"[tool] <- {fr.name}: {_r}", flush=True)
+                else:
+                    txt = (getattr(p, "text", None) or "").strip()
+                    if txt:
+                        print(f"[{author}] {txt[:240]}", flush=True)
+            if event.is_final_response() and event.content and event.content.parts:
+                final = event.content.parts[0].text or final
+        print(f"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars", flush=True)
+    except Exception:
+        print("[workflow] ERROR:", flush=True)
+        traceback.print_exc()
+        raise
     os.makedirs("outputs", exist_ok=True)
     print(final)
     return final

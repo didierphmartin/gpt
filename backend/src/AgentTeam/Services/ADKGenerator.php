@@ -119,7 +119,7 @@ in this program's own Python environment.
 requirements:
     pip install google-adk litellm httpx
 """
-import asyncio, json, os, subprocess, sys, threading, time, urllib.request
+import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
 from typing import Any
 
@@ -373,7 +373,10 @@ PY;
     private static function mainBlock(array $analyzed): string
     {
         $sp = PythonEmitHelpers::pyStr($analyzed['startPrompt']);
+        $name = PythonEmitHelpers::pyStr($analyzed['workflow']['name']);
         return
+            "WORKFLOW_NAME = {$name}\n" .
+            "\n" .
             "async def main(user_prompt: str = {$sp}):\n" .
             "    if START_DOCUMENTS:\n" .
             "        doc_parts = []\n" .
@@ -395,14 +398,42 @@ PY;
             "                + \"\\n\\n---\\n\\n\"\n" .
             "                + user_prompt\n" .
             "            )\n" .
+            "    print(f\"[workflow] {WORKFLOW_NAME} starting\", flush=True)\n" .
+            "    print(f\"[workflow] prompt: {user_prompt[:200]!r}\", flush=True)\n" .
             "    session_service = InMemorySessionService()\n" .
             "    runner = Runner(agent=root_agent, app_name=\"workflow\", session_service=session_service)\n" .
             "    session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
             "    final = \"\"\n" .
+            "    t0 = time.monotonic()\n" .
+            "    seen = set()\n" .
             "    content = types.Content(role=\"user\", parts=[types.Part(text=user_prompt)])\n" .
-            "    async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
-            "        if event.is_final_response() and event.content and event.content.parts:\n" .
-            "            final = event.content.parts[0].text or final\n" .
+            "    try:\n" .
+            "        async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
+            "            author = getattr(event, \"author\", \"?\")\n" .
+            "            if author and author not in seen:\n" .
+            "                seen.add(author)\n" .
+            "                print(f\"[node] > {author}\", flush=True)\n" .
+            "            parts = (event.content.parts if event.content else None) or []\n" .
+            "            for p in parts:\n" .
+            "                fc = getattr(p, \"function_call\", None)\n" .
+            "                fr = getattr(p, \"function_response\", None)\n" .
+            "                if fc is not None:\n" .
+            "                    _a = str(getattr(fc, \"args\", \"\"))[:200]\n" .
+            "                    print(f\"[tool] -> {fc.name}({_a})\", flush=True)\n" .
+            "                elif fr is not None:\n" .
+            "                    _r = str(getattr(fr, \"response\", \"\"))[:200]\n" .
+            "                    print(f\"[tool] <- {fr.name}: {_r}\", flush=True)\n" .
+            "                else:\n" .
+            "                    txt = (getattr(p, \"text\", None) or \"\").strip()\n" .
+            "                    if txt:\n" .
+            "                        print(f\"[{author}] {txt[:240]}\", flush=True)\n" .
+            "            if event.is_final_response() and event.content and event.content.parts:\n" .
+            "                final = event.content.parts[0].text or final\n" .
+            "        print(f\"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars\", flush=True)\n" .
+            "    except Exception:\n" .
+            "        print(\"[workflow] ERROR:\", flush=True)\n" .
+            "        traceback.print_exc()\n" .
+            "        raise\n" .
             "    os.makedirs(\"outputs\", exist_ok=True)\n" .
             "    print(final)\n" .
             "    return final\n" .
