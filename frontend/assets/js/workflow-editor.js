@@ -2379,6 +2379,8 @@ class WorkflowEditor {
                 this._showLangGraphMenu(langgraphBtn);
                 return;
             }
+            const adkBtn = e.target.closest('[data-action="adk-menu"]');
+            if (adkBtn) { e.stopPropagation(); this._showAdkMenu(adkBtn); return; }
             const viewJsonBtn = e.target.closest('[data-action="view-json"]');
             if (viewJsonBtn) {
                 e.stopPropagation();
@@ -2929,9 +2931,6 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="display-code">
                 ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
             </button>
-            <button type="button" class="langgraph-menu-item" data-action="generate-adk">
-                ${this.escapeHtml(this.t('workflow.output.langgraphGenerateAdk') || 'Compile → ADK')}
-            </button>
         `;
         document.body.appendChild(menu);
 
@@ -2973,10 +2972,6 @@ class WorkflowEditor {
             menu.remove();
             this._showLangGraphCodeModal();
         });
-        menu.querySelector('[data-action="generate-adk"]')?.addEventListener('click', () => {
-            menu.remove();
-            this.generateAdkScript();
-        });
 
         // Dismiss on any outside click. Schedule on next tick so the
         // current click event (which opened the menu) doesn't close it.
@@ -2989,6 +2984,369 @@ class WorkflowEditor {
             };
             document.addEventListener('click', onDocClick, true);
         }, 0);
+    }
+
+    /**
+     * Dropdown menu for the "Google ADK - Python" button on the Output node.
+     * Mirrors _showLangGraphMenu exactly; differs only in endpoints and copy.
+     * For ingestion workflows ADK doesn't apply — we show only Generate and
+     * Display Code (harmless, non-breaking) rather than hiding the button.
+     */
+    _showAdkMenu(buttonEl) {
+        // Toggle: clicking the button a second time closes the menu.
+        const existing = document.querySelector('.langgraph-menu.adk-menu');
+        if (existing) { existing.remove(); return; }
+        // Also close any open LangGraph menu so only one is visible at a time.
+        document.querySelector('.langgraph-menu')?.remove();
+
+        const isIngestion = this._outputConnectedToIngestion();
+
+        const menu = document.createElement('div');
+        menu.className = 'langgraph-menu adk-menu';
+        menu.innerHTML = isIngestion
+            ? `
+            <button type="button" class="langgraph-menu-item" data-action="adk-generate">
+                ${this.escapeHtml(this.t('workflow.output.adkGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-display-code">
+                ${this.escapeHtml(this.t('workflow.output.adkDisplayCode') || 'Display Code')}
+            </button>
+        `
+            : `
+            <button type="button" class="langgraph-menu-item" data-action="adk-setup">
+                ${this.escapeHtml(this.t('workflow.output.adkSetup') || 'Setup')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-generate">
+                ${this.escapeHtml(this.t('workflow.output.adkGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-info">
+                ${this.escapeHtml(this.t('workflow.output.adkInfo') || 'Info')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-run">
+                ${this.escapeHtml(this.t('workflow.output.adkRun') || 'Run')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-display-code">
+                ${this.escapeHtml(this.t('workflow.output.adkDisplayCode') || 'Display Code')}
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        const r = buttonEl.getBoundingClientRect();
+        const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${r.bottom + 4}px`;
+
+        menu.querySelector('[data-action="adk-setup"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showAdkSetupModal();
+        });
+        menu.querySelector('[data-action="adk-generate"]')?.addEventListener('click', () => {
+            menu.remove();
+            this.generateAdkScript();
+        });
+        menu.querySelector('[data-action="adk-info"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showAdkInfoModal();
+        });
+        menu.querySelector('[data-action="adk-run"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._runAdkScript();
+        });
+        menu.querySelector('[data-action="adk-display-code"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showAdkCodeModal();
+        });
+
+        setTimeout(() => {
+            const onDocClick = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', onDocClick, true);
+                }
+            };
+            document.addEventListener('click', onDocClick, true);
+        }, 0);
+    }
+
+    /**
+     * Setup modal for the Google ADK runtime.
+     * Unlike LangGraph, the ADK-generated file is self-contained — no separate
+     * runner server is needed. The user just installs three packages and runs
+     * the downloaded file directly. Mirrors _showRunnerSetupModal visually.
+     */
+    _showAdkSetupModal() {
+        const cmd = 'pip install google-adk litellm httpx';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">
+                    ${this.escapeHtml(this.t('workflow.adkSetup.title') || 'Google ADK — one-time setup')}
+                </h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    ${this.escapeHtml(this.t('workflow.adkSetup.body')
+                        || 'The generated ADK script is self-contained — no separate runner server required. Install the three runtime packages once:')}
+                </p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.adkSetup.copy') || 'Copy command')}">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-2">
+                    ${this.escapeHtml(this.t('workflow.adkSetup.note')
+                        || 'After installing, click Generate to download the ADK Python file, then run it directly:')}
+                </p>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_adk.py "Your prompt here"</pre>
+                <p class="text-xs text-gray-500 mb-4">
+                    ${this.escapeHtml(this.t('workflow.adkSetup.runnerNote')
+                        || 'Unlike LangGraph, the ADK output needs no FastAPI runner — you run the generated file directly with the provider API keys in your environment.')}
+                </p>
+                <div class="flex justify-end">
+                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
+                        ${this.escapeHtml(this.t('common.close') || 'Close')}
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
+    }
+
+    /**
+     * Info modal for the Google ADK runtime.
+     * Describes the self-contained ADK program: install, run, API keys.
+     * Mirrors _showLangGraphInfoModal visually.
+     */
+    _showAdkInfoModal() {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Google ADK runtime</h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    Generated ADK workflows are self-contained Python programs — no separate runner server or
+                    FastAPI process needed. Download the file, install three packages, and run it directly.
+                </p>
+                <table class="w-full text-xs text-left mb-4">
+                    <tbody class="divide-y divide-gray-200">
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install google-adk litellm httpx</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">&lt;workflow&gt;_adk.py</code> (downloaded via Generate)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_adk.py "Your prompt here"</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Set provider keys in your environment (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">MCP &amp; skills</td><td>Run in the script's own environment — no external server required</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">vs LangGraph</td><td>No FastAPI runner needed — the ADK file IS the runtime</td></tr>
+                    </tbody>
+                </table>
+                <p class="text-xs text-gray-500 mb-4">
+                    The Output-node's <b>Run</b> menu item executes the ADK script through the same local runner
+                    (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
+                    used by LangGraph — ensure <code class="text-xs">google-adk litellm httpx</code> are installed
+                    in its venv, or run the file directly from a terminal instead.
+                </p>
+                <div class="flex justify-end">
+                    <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+    }
+
+    /**
+     * Display Code modal for the Google ADK script.
+     * Fetches from generate-adk (no download param) and shows the code
+     * in the same line-numbered scrollable modal as _showLangGraphCodeModal.
+     */
+    async _showAdkCodeModal() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        let code;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            // Endpoint may return JSON {data:{code,filename}} or raw text.
+            const contentType = resp.headers.get('Content-Type') || '';
+            if (contentType.includes('application/json')) {
+                const j = await resp.json();
+                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
+            } else {
+                code = await resp.text();
+            }
+        } catch (e) {
+            alert(`Could not fetch the ADK code: ${e?.message || e}`);
+            return;
+        }
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-gray-900">Generated Google ADK code</h3>
+                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
+                </div>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
+                <div class="flex justify-end mt-3">
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+
+        const preEl = backdrop.querySelector('pre');
+        const codeLines = code.split('\n');
+        const gutterCh = String(codeLines.length).length + 1;
+        const lnStyle = document.createElement('style');
+        lnStyle.textContent = `
+            .adk-code-modal .code-line { display: block; }
+            .adk-code-modal .code-ln {
+                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
+                text-align: right; color: #64748b; user-select: none;
+                position: sticky; left: 0; background: #111827;
+            }
+            .adk-code-modal .code-lc { white-space: pre; }
+        `;
+        backdrop.appendChild(lnStyle);
+        preEl.classList.add('adk-code-modal', 'code-with-lines');
+        preEl.innerHTML = codeLines.map((ln, i) =>
+            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
+            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
+        ).join('');
+
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
+        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(code);
+                const btn = backdrop.querySelector('.code-copy-btn');
+                const prev = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = prev; }, 1200);
+            } catch (e) { /* user selects + copies manually */ }
+        });
+    }
+
+    /**
+     * Run the ADK script via the local runner.
+     * Mirrors _runLangGraphScript: liveness-probe /health, derive the ADK
+     * filename from generate-adk Content-Disposition, prompt for argv, stream
+     * output into a modal. Falls back to a "run manually" hint if the runner
+     * isn't reachable, same as the LangGraph path.
+     */
+    async _runAdkScript() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        // Liveness probe so the failure mode is "runner not started" not silence.
+        try {
+            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (e) {
+            this._showAdkRunnerNotRunningModal();
+            return;
+        }
+
+        // Derive the ADK filename from generate-adk Content-Disposition.
+        let filename;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            filename = m ? m[1] : 'workflow_adk.py';
+            await resp.text(); // consume body
+        } catch (e) {
+            alert(`Could not resolve the ADK filename: ${e?.message || e}\nClick "Generate" first.`);
+            return;
+        }
+
+        const userPrompt = window.prompt(
+            (this.t('workflow.output.adkRunPrompt')
+                || `Prompt to pass to ${filename}? (will be sys.argv[1:])`),
+            ''
+        );
+        if (userPrompt === null) return; // cancelled
+
+        const { append } = this._openRunOutputModal(filename);
+
+        try {
+            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename,
+                    args: userPrompt ? userPrompt.trim().split(/\s+/) : [],
+                }),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
+                return;
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                append(decoder.decode(value, { stream: true }));
+            }
+        } catch (e) {
+            append(`\n[fetch failed: ${e?.message || e}]\n`);
+        }
+    }
+
+    /**
+     * Modal shown when the runner liveness probe fails while trying to run
+     * an ADK script. Mirrors _showRunnerNotRunningModal with ADK-specific copy
+     * (install google-adk litellm httpx in the runner venv, or run directly).
+     */
+    _showAdkRunnerNotRunningModal() {
+        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Runner isn't running (ADK)</h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    The local runner (<code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
+                    isn't responding. Start it from a terminal:
+                </p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-3">
+                    Also ensure <code class="text-xs">google-adk litellm httpx</code> are installed in the runner venv:
+                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install google-adk litellm httpx</code>
+                </p>
+                <p class="text-xs text-gray-500 mb-4">
+                    Alternatively, run the ADK script directly — no runner needed:
+                    <code class="text-xs bg-gray-100 px-1 rounded">python &lt;workflow&gt;_adk.py "Your prompt"</code>
+                </p>
+                <div class="flex justify-end">
+                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), startCmd);
     }
 
     /**
@@ -8733,6 +9091,10 @@ class WorkflowEditor {
                 </div>
                 <button class="node-langgraph" title="${this.t('workflow.output.langgraphTitle') || 'LangGraph: setup the runtime or generate the script'}" data-action="langgraph-menu">
                     <span class="gen-label">langGraph - Python</span>
+                    <span class="gen-caret" aria-hidden="true">▾</span>
+                </button>
+                <button class="node-langgraph node-adk" title="${this.t('workflow.output.adkTitle') || 'Google ADK: set up the runtime or generate the script'}" data-action="adk-menu">
+                    <span class="gen-label">Google ADK - Python</span>
                     <span class="gen-caret" aria-hidden="true">▾</span>
                 </button>
                 <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
