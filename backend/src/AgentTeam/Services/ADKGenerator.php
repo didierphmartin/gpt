@@ -58,7 +58,7 @@ class ADKGenerator
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
         $lines[] = PythonEmitHelpers::mcpClientBlock();
-        $lines[] = self::adkToolBuilderBlock();
+        $lines[] = self::adkToolBuilderBlock($analyzed);
 
         // Emit skill runner only when the workflow actually uses skills.
         // Mirror LangGraphGenerator's auto-detect: non-empty skill_content
@@ -389,30 +389,166 @@ PY;
     }
 
     /**
-     * Emit the ADK FunctionTool builder block.
+     * Emit concrete typed FunctionTool functions from TOOL_CATALOG input_schema.
      *
-     * Returns a top-level `build_tools_from_catalog() -> dict` function that
-     * iterates TOOL_CATALOG, resolves each tool's server URL from MCP_SERVERS,
-     * and wraps a `_call_mcp_tool` closure as a `FunctionTool`.
+     * For each tool in $analyzed['usedCatalog'] we emit a concrete Python
+     * function `_tool_<sanitized>` whose signature is derived from the tool's
+     * `input_schema.properties`.  ADK introspects the function signature to
+     * build the tool's parameter schema, so a concrete signature is required
+     * for the model to pass structured arguments.
      *
-     * Uses a nowdoc (<<<'PY') — no PHP interpolation; Python at column 0.
+     * JSON type → Python hint: string→str, integer→int, number→float,
+     * boolean→bool, array→list, object→dict, unknown→str.
+     * Required properties have no default; optional properties default to None.
+     * Required params are emitted before optional params (Python signature rule).
+     * Property names that are not valid Python identifiers are collected into
+     * a trailing **extra parameter (rare).
+     *
+     * A Google-style docstring (description + Args section) is emitted so ADK
+     * surfaces per-parameter descriptions to the model.
+     *
+     * The server URL is baked as a literal per-function (via pyStr()) so no
+     * closure binding is needed.
+     *
+     * `build_tools_from_catalog()` returns a plain dict keyed by the REAL tool
+     * name mapping to FunctionTool(<fn>).  When usedCatalog is empty, it
+     * returns {}.
      */
-    private static function adkToolBuilderBlock(): string
+    private static function adkToolBuilderBlock(array $analyzed): string
     {
-        return <<<'PY'
-def build_tools_from_catalog() -> dict:
-    tools = {}
-    for name, spec in TOOL_CATALOG.items():
-        url = spec.get("server_url", "")
-        def _make(_name=name, _url=url):
-            def _fn(**kwargs) -> str:
-                """MCP tool proxy."""
-                return _call_mcp_tool(_url, _name, kwargs)
-            _fn.__name__ = _name
-            _fn.__doc__ = TOOL_CATALOG.get(_name, {}).get("description", _name)
-            return FunctionTool(_fn)
-        tools[name] = _make()
-    return tools
-PY;
+        $typeMap = [
+            'string'  => 'str',
+            'integer' => 'int',
+            'number'  => 'float',
+            'boolean' => 'bool',
+            'array'   => 'list',
+            'object'  => 'dict',
+        ];
+
+        $functions      = [];
+        $catalogEntries = [];
+
+        foreach ($analyzed['usedCatalog'] as $toolName => $spec) {
+            $description = (string) ($spec['description'] ?? $toolName);
+            $inputSchema = is_array($spec['input_schema'] ?? null) ? $spec['input_schema'] : [];
+            $properties  = is_array($inputSchema['properties'] ?? null)
+                            ? (array) $inputSchema['properties'] : [];
+            $required    = is_array($inputSchema['required'] ?? null)
+                            ? $inputSchema['required'] : [];
+            $serverUrl   = (string) ($spec['server_url'] ?? '');
+
+            // Sanitize tool name to a valid Python identifier for the function name.
+            $safeName = preg_replace('/[^A-Za-z0-9_]/', '_', $toolName);
+            if (preg_match('/^[0-9]/', $safeName)) {
+                $safeName = '_' . $safeName;
+            }
+            $fnName = '_tool_' . $safeName;
+
+            $requiredSet = array_flip($required);
+
+            // Split properties into valid-identifier required vs optional.
+            // Properties whose names are not valid Python identifiers fall into **extra.
+            $validRequired = [];
+            $validOptional = [];
+            $hasExtra      = false;
+
+            foreach ($required as $pname) {
+                $pname = (string) $pname;
+                if (!array_key_exists($pname, $properties)) {
+                    continue;
+                }
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname)) {
+                    $validRequired[$pname] = is_array($properties[$pname]) ? $properties[$pname] : [];
+                } else {
+                    $hasExtra = true;
+                }
+            }
+
+            foreach ($properties as $pname => $pspec) {
+                $pname = (string) $pname;
+                if (isset($requiredSet[$pname])) {
+                    continue; // already handled
+                }
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname)) {
+                    $validOptional[$pname] = is_array($pspec) ? $pspec : [];
+                } else {
+                    $hasExtra = true;
+                }
+            }
+
+            // Build parameter list: required first (no default), optional second (default=None).
+            $params = [];
+            foreach ($validRequired as $pname => $pspec) {
+                $type     = $typeMap[$pspec['type'] ?? ''] ?? 'str';
+                $params[] = "{$pname}: {$type}";
+            }
+            foreach ($validOptional as $pname => $pspec) {
+                $type     = $typeMap[$pspec['type'] ?? ''] ?? 'str';
+                $params[] = "{$pname}: {$type} = None";
+            }
+            if ($hasExtra) {
+                $params[] = '**extra';
+            }
+
+            $paramStr      = implode(', ', $params);
+            $allValidProps = array_merge($validRequired, $validOptional);
+
+            // Build Google-style docstring.
+            $safeDesc = str_replace('"""', '\\"\\"\\"', $description);
+            $doc = "    \"\"\"{$safeDesc}";
+            if ($allValidProps) {
+                $doc .= "\n\n    Args:";
+                foreach ($allValidProps as $pname => $pspec) {
+                    $pDesc = (string) ($pspec['description'] ?? '');
+                    $doc  .= "\n        {$pname}: {$pDesc}";
+                }
+            }
+            $doc .= "\n    \"\"\"";
+
+            // Build body: assemble _args (omit None optional values), then call MCP.
+            $pyUrl  = PythonEmitHelpers::pyStr($serverUrl);
+            $pyName = PythonEmitHelpers::pyStr($toolName);
+
+            if ($allValidProps || $hasExtra) {
+                $argPairs = [];
+                foreach ($allValidProps as $pname => $pspec) {
+                    $argPairs[] = "\"{$pname}\": {$pname}";
+                }
+                if ($hasExtra) {
+                    $innerDict = '{' . implode(', ', $argPairs) . '}';
+                    $argDict   = "{**{$innerDict}, **extra}";
+                } else {
+                    $argDict = '{' . implode(', ', $argPairs) . '}';
+                }
+                $body  = "    _args = {k: v for k, v in {$argDict}.items() if v is not None}\n";
+                $body .= "    return _call_mcp_tool({$pyUrl}, {$pyName}, _args)";
+            } else {
+                // No properties — empty-schema tool; pass empty dict.
+                $body = "    return _call_mcp_tool({$pyUrl}, {$pyName}, {})";
+            }
+
+            $functions[]      = "def {$fnName}({$paramStr}) -> str:\n{$doc}\n{$body}";
+            $pyToolName       = PythonEmitHelpers::pyStr($toolName);
+            $catalogEntries[] = "        {$pyToolName}: FunctionTool({$fnName})";
+        }
+
+        // Emit concrete _tool_* functions at module scope before build_tools_from_catalog.
+        $out = '';
+        if ($functions) {
+            $out .= implode("\n\n", $functions) . "\n\n";
+        }
+
+        // build_tools_from_catalog always present; returns {} when no tools.
+        if ($catalogEntries) {
+            $out .= "def build_tools_from_catalog() -> dict:\n";
+            $out .= "    return {\n";
+            $out .= implode(",\n", $catalogEntries) . ",\n";
+            $out .= "    }";
+        } else {
+            $out .= "def build_tools_from_catalog() -> dict:\n";
+            $out .= "    return {}";
+        }
+
+        return $out;
     }
 }

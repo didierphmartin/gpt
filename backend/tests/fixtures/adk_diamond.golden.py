@@ -143,18 +143,7 @@ def _call_mcp_tool(server_url: str, tool_name: str,
     return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
 
 def build_tools_from_catalog() -> dict:
-    tools = {}
-    for name, spec in TOOL_CATALOG.items():
-        url = spec.get("server_url", "")
-        def _make(_name=name, _url=url):
-            def _fn(**kwargs) -> str:
-                """MCP tool proxy."""
-                return _call_mcp_tool(_url, _name, kwargs)
-            _fn.__name__ = _name
-            _fn.__doc__ = TOOL_CATALOG.get(_name, {}).get("description", _name)
-            return FunctionTool(_fn)
-        tools[name] = _make()
-    return tools
+    return {}
 catalog = build_tools_from_catalog()
 node_2 = LlmAgent(
     name="node_2",

@@ -50,6 +50,7 @@ class AdkGeneratorEmitTest extends TestCase
         // usedServers: keyed by URL, value = {name: ...}  — matches WorkflowGraphAnalyzer::buildToolCatalog
         $a['usedServers'] = ['http://localhost:9000/mcp' => ['name' => 'test-server']];
         // usedCatalog: entry carries server_url directly — matches buildToolCatalog $toolCatalog[$tname]
+        // Empty properties → no-arg concrete function.
         $a['usedCatalog'] = ['search' => ['server_url' => 'http://localhost:9000/mcp', 'description' => 'Search', 'input_schema' => ['type' => 'object', 'properties' => []]]];
         $code = ADKGenerator::emitAdk($a);
         $this->assertStringContainsString('MCP_SERVERS = {', $code);
@@ -59,11 +60,79 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('FunctionTool(', $code);
         // The URL must appear in TOOL_CATALOG (as server_url value) so the tool builder can read it
         $this->assertStringContainsString('http://localhost:9000/mcp', $code);
-        // The emitted tool builder must resolve the URL directly from the catalog entry (not MCP_SERVERS indirection)
-        $this->assertStringContainsString('spec.get("server_url"', $code);
+        // New concrete-function shape: URL baked directly into the _call_mcp_tool call
+        $this->assertStringContainsString('def _tool_search()', $code,
+            'No-arg concrete function must be emitted for empty-schema tool');
+        $this->assertStringContainsString('_call_mcp_tool("http://localhost:9000/mcp", "search"', $code,
+            'Server URL must be baked into the _call_mcp_tool call (not read from TOOL_CATALOG at runtime)');
+        $this->assertStringContainsString('"search": FunctionTool(_tool_search)', $code,
+            'build_tools_from_catalog must map real tool name to FunctionTool of the concrete function');
         // Confirm the URL is embedded in TOOL_CATALOG in the emitted code (it will be the server_url value)
         $this->assertMatchesRegularExpression('/"server_url":\s*"http:\/\/localhost:9000\/mcp"/', $code,
             'TOOL_CATALOG in emitted code must contain server_url with the actual URL');
+    }
+
+    /**
+     * I2: typed FunctionTool signatures from input_schema.
+     * A tool with required + optional properties must emit a concrete function
+     * whose Python signature matches the schema (required first, optional with
+     * default=None), a Google-style docstring, and the real server URL baked
+     * into the _call_mcp_tool call.
+     */
+    public function testTypedFunctionToolFromInputSchema(): void
+    {
+        $a = $this->analyzed();
+        $a['usedCatalog'] = [
+            'search' => [
+                'server_url'   => 'http://localhost:9001/mcp',
+                'description'  => 'Web search',
+                'input_schema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'query' => ['type' => 'string', 'description' => 'q'],
+                        'limit' => ['type' => 'integer'],
+                    ],
+                    'required'   => ['query'],
+                ],
+            ],
+        ];
+        $code = ADKGenerator::emitAdk($a);
+
+        // Test 1: concrete function with correct signature (required first, optional second)
+        $this->assertStringContainsString(
+            'def _tool_search(query: str, limit: int = None) -> str:',
+            $code,
+            'Required param must come first with no default; optional param must have default=None'
+        );
+        // Google-style docstring with Args section
+        $this->assertStringContainsString('Args:', $code, 'Docstring must include Args: section');
+        $this->assertStringContainsString('query: q', $code, 'Docstring must include param description');
+        // Real server URL baked into the _call_mcp_tool call (not resolved at runtime)
+        $this->assertStringContainsString(
+            '_call_mcp_tool("http://localhost:9001/mcp", "search"',
+            $code,
+            'Server URL must be baked as a literal into the _call_mcp_tool call'
+        );
+
+        // Test 2: build_tools_from_catalog maps the REAL tool name to FunctionTool of concrete fn
+        $this->assertStringContainsString(
+            '"search": FunctionTool(_tool_search)',
+            $code,
+            'build_tools_from_catalog must map "search" → FunctionTool(_tool_search)'
+        );
+    }
+
+    /**
+     * I2: empty catalog produces a no-op build_tools_from_catalog that returns {}.
+     */
+    public function testEmptyCatalogBuilderReturnsEmptyDict(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed()); // usedCatalog = []
+        $this->assertStringContainsString('def build_tools_from_catalog() -> dict:', $code);
+        $this->assertStringContainsString('return {}', $code);
+        // No concrete _tool_* functions should appear
+        $this->assertStringNotContainsString('def _tool_', $code,
+            'No concrete tool functions should be emitted when catalog is empty');
     }
 
     public function testSkillRunnerEmittedAndAsyncSafe(): void
