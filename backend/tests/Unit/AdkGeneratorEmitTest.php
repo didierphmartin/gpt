@@ -43,4 +43,18 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('return model', $code);          // gemini path
         $this->assertStringContainsString('return LiteLlm(model=', $code); // non-gemini path
     }
+
+    public function testMcpToolBuilderEmitted(): void
+    {
+        $a = $this->analyzed();
+        $a['usedServers'] = ['srv1' => ['url' => 'http://localhost:9000/mcp']];
+        $a['usedCatalog'] = ['search' => ['server' => 'srv1', 'description' => 'Search', 'input_schema' => ['type' => 'object', 'properties' => []]]];
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('MCP_SERVERS = {', $code);
+        $this->assertStringContainsString('TOOL_CATALOG = {', $code);
+        $this->assertStringContainsString('def _call_mcp_tool(', $code);
+        $this->assertStringContainsString('def build_tools_from_catalog()', $code);
+        $this->assertStringContainsString('FunctionTool(', $code);
+        $this->assertStringContainsString('http://localhost:9000/mcp', $code);
+    }
 }

@@ -55,8 +55,11 @@ class ADKGenerator
         $lines = [];
         $lines[] = self::headerBlock($analyzed);
         $lines[] = self::modelFactoryBlock();
-        // Later tasks append: mcp client, skill runner, tools,
-        // agents, layering/root, main.
+        $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
+        $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
+        $lines[] = PythonEmitHelpers::mcpClientBlock();
+        $lines[] = self::adkToolBuilderBlock();
+        // Later tasks append: skill runner, tools, agents, layering/root, main.
         return implode("\n", $lines) . "\n";
     }
 
@@ -119,6 +122,35 @@ def _make_model(provider: str, model: str):
     prefix = _LITELLM_PREFIX.get(p, p + "/")
     spec = model if "/" in model else prefix + model
     return LiteLlm(model=spec)
+PY;
+    }
+
+    /**
+     * Emit the ADK FunctionTool builder block.
+     *
+     * Returns a top-level `build_tools_from_catalog() -> dict` function that
+     * iterates TOOL_CATALOG, resolves each tool's server URL from MCP_SERVERS,
+     * and wraps a `_call_mcp_tool` closure as a `FunctionTool`.
+     *
+     * Uses a nowdoc (<<<'PY') — no PHP interpolation; Python at column 0.
+     */
+    private static function adkToolBuilderBlock(): string
+    {
+        return <<<'PY'
+def build_tools_from_catalog() -> dict:
+    tools = {}
+    for name, spec in TOOL_CATALOG.items():
+        server = MCP_SERVERS.get(spec.get("server", ""), {})
+        url = server.get("url", "")
+        def _make(_name=name, _url=url):
+            def _fn(**kwargs) -> str:
+                """MCP tool proxy."""
+                return _call_mcp_tool(_url, _name, kwargs)
+            _fn.__name__ = _name
+            _fn.__doc__ = TOOL_CATALOG.get(_name, {}).get("description", _name)
+            return FunctionTool(_fn)
+        tools[name] = _make()
+    return tools
 PY;
     }
 }
