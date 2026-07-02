@@ -54,7 +54,8 @@ class ADKGenerator
     {
         $lines = [];
         $lines[] = self::headerBlock($analyzed);
-        // Later tasks append: mcp client, skill runner, tools, model factory,
+        $lines[] = self::modelFactoryBlock();
+        // Later tasks append: mcp client, skill runner, tools,
         // agents, layering/root, main.
         return implode("\n", $lines) . "\n";
     }
@@ -66,7 +67,7 @@ class ADKGenerator
     /**
      * Emit the file header: module docstring + all top-level imports.
      *
-     * Uses a nowdoc (<<<'PY') with column-0 content — same convention as
+     * Uses a heredoc (<<<PY) with column-0 content — same convention as
      * PythonEmitHelpers::mcpClientBlock() — so the emitted Python lines carry
      * no stray PHP indentation.
      */
@@ -89,6 +90,35 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+PY;
+    }
+
+    /**
+     * Emit the provider→model factory function.
+     *
+     * Gemini/google/empty providers return a bare model string (ADK native).
+     * All other providers are mapped via LiteLlm with a known prefix table;
+     * unknown providers default to "<provider>/" as a passthrough prefix.
+     * If the model string already contains "/" it is used as-is (no prefix).
+     *
+     * Uses a nowdoc (<<<'PY') — no PHP interpolation needed.
+     */
+    private static function modelFactoryBlock(): string
+    {
+        return <<<'PY'
+_LITELLM_PREFIX = {
+    "claude": "anthropic/", "anthropic": "anthropic/",
+    "openai": "openai/", "grok": "xai/", "xai": "xai/",
+    "mistral": "mistral/", "groq": "groq/",
+}
+
+def _make_model(provider: str, model: str):
+    p = (provider or "").lower()
+    if p in ("gemini", "google", "google-genai", ""):
+        return model or "gemini-2.5-pro"
+    prefix = _LITELLM_PREFIX.get(p, p + "/")
+    spec = model if "/" in model else prefix + model
+    return LiteLlm(model=spec)
 PY;
     }
 }

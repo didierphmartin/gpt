@@ -34,4 +34,13 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent', $code);
         $this->assertStringContainsString('from google.adk.models.lite_llm import LiteLlm', $code);
     }
+
+    public function testModelFactoryMapsProviders(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed());
+        $this->assertStringContainsString('def _make_model(provider: str, model: str)', $code);
+        // Gemini => bare model string; others => LiteLlm(...)
+        $this->assertStringContainsString('return model', $code);          // gemini path
+        $this->assertStringContainsString('return LiteLlm(model=', $code); // non-gemini path
+    }
 }
