@@ -114,9 +114,10 @@ Auto-generated -- backend-independent. Self-contained: MCP + skills run
 in this program's own Python environment.
 
 requirements:
-    pip install google-adk litellm
+    pip install google-adk litellm httpx
 """
-import asyncio, json, os, subprocess, sys, threading, urllib.request
+import asyncio, json, os, subprocess, sys, threading, time, urllib.request
+import httpx
 from typing import Any
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent

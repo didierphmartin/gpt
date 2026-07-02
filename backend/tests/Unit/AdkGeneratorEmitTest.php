@@ -173,6 +173,25 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('model=_make_model("", "")', $code);
     }
 
+    /**
+     * Regression guard: mcpClientBlock() uses httpx.Client and time.time() at runtime.
+     * Both must be imported at module scope in the emitted header — even when the
+     * workflow has no MCP tools (mcpClientBlock is always emitted unconditionally).
+     */
+    public function testHeaderImportsHttpxAndTime(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed());
+        // httpx must appear as its own top-level import
+        $this->assertMatchesRegularExpression('/^import httpx$/m', $code,
+            '"import httpx" must be a top-level module-scope import in the emitted header');
+        // time must be on the stdlib import line (or any module-scope import)
+        $this->assertMatchesRegularExpression('/^import .*\btime\b/m', $code,
+            '"time" must be imported at module scope (mcpClientBlock uses time.time())');
+        // requirements docstring must mention httpx so installers know it is needed
+        $this->assertStringContainsString('pip install google-adk litellm httpx', $code,
+            'requirements pip-install line must include httpx');
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
