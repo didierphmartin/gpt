@@ -75,4 +75,38 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('_run_skill_script', $code);
         $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $code);
     }
+
+    public function testAgentEmittedWithOutputKeyAndParentInjection(): void
+    {
+        $a = $this->analyzed();
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('node_2 = LlmAgent(', $code);
+        $this->assertStringContainsString('output_key="node_2"', $code);
+        $this->assertStringContainsString('model=_make_model("claude", "claude-sonnet-4-6")', $code);
+        $this->assertStringContainsString('You are A', $code);
+    }
+
+    public function testParentOutputsInjectedIntoInstruction(): void
+    {
+        // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+                ['id' => '2', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+                ['id' => '3', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'B', 'systemPrompt' => 'B reads A', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3']],
+        ];
+        $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $a = array_merge($base, [
+            'workflow' => ['id' => 1, 'name' => 'w'], 'usedCatalog' => [], 'usedServers' => [],
+            'startPrompt' => 'GO', 'startDocuments' => [],
+            'agents' => [
+                '2' => ['name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'm', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+                '3' => ['name' => 'B', 'systemPrompt' => 'B reads A', 'provider' => 'claude', 'model' => 'm', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+            ],
+        ]);
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('{node_2}', $code); // node 3 instruction injects parent 2
+    }
 }

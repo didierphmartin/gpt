@@ -80,7 +80,10 @@ class ADKGenerator
             $lines[] = self::skillRunnerBlock();
         }
 
-        // Later tasks append: tools, agents, layering/root, main.
+        // catalog must be defined after build_tools_from_catalog() (from adkToolBuilderBlock).
+        $lines[] = 'catalog = build_tools_from_catalog()';
+        $lines[] = self::agentsBlock($analyzed);
+
         return implode("\n", $lines) . "\n";
     }
 
@@ -181,6 +184,76 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
 
 RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)
 PY;
+    }
+
+    /**
+     * Emit one `LlmAgent` per agent node in $analyzed['agents'].
+     *
+     * Instruction assembly:
+     *  1. systemPrompt
+     *  2. If skill_content non-empty: append "\n\n## Skill\n" + skill_content
+     *  3. For each parent that is itself an agent: append "\n\n## Input from node {p}\n{node_{p}}"
+     *     The `{node_<p>}` is an ADK state placeholder and must survive into the emitted Python
+     *     as a literal brace expression — PythonEmitHelpers::pyStr() produces a non-f-string, so
+     *     braces are safe.
+     *
+     * Tools: map each tool name to catalog["<name>"]; if instruction references run_skill_script,
+     * also add RUN_SKILL_SCRIPT_TOOL.
+     *
+     * generate_content_config is emitted only when temperature or max_tokens is non-null.
+     *
+     * All nodes emitted at column 0.
+     */
+    private static function agentsBlock(array $analyzed): string
+    {
+        $out = [];
+        foreach ($analyzed['agents'] as $id => $ag) {
+            $instr = $ag['systemPrompt'];
+            if ($ag['skill_content'] !== '') {
+                $instr .= "\n\n## Skill\n" . $ag['skill_content'];
+            }
+            // Only inject from parents that are themselves agent nodes.
+            $agentParents = array_values(array_filter(
+                $analyzed['parents'][$id] ?? [],
+                fn($p) => isset($analyzed['agents'][$p])
+            ));
+            foreach ($agentParents as $p) {
+                // PHP: {node_{$p}} → literal "{node_2}" (PHP only interpolates {$...}, not {word_{$...}}).
+                $instr .= "\n\n## Input from node {$p}\n{node_{$p}}";
+            }
+
+            $toolExprs = [];
+            foreach ($ag['tools'] as $t) {
+                $toolExprs[] = 'catalog["' . $t . '"]';
+            }
+            if (strpos($instr, 'run_skill_script') !== false) {
+                $toolExprs[] = 'RUN_SKILL_SCRIPT_TOOL';
+            }
+            $toolsPy = '[' . implode(', ', $toolExprs) . ']';
+
+            $model = '_make_model("' . $ag['provider'] . '", "' . $ag['model'] . '")';
+
+            $entry  = "node_{$id} = LlmAgent(\n";
+            $entry .= "    name=\"node_{$id}\",\n";
+            $entry .= "    model={$model},\n";
+            $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
+            $entry .= "    tools={$toolsPy},\n";
+            if ($ag['temperature'] !== null || $ag['max_tokens'] !== null) {
+                $entry .= "    generate_content_config={\n";
+                if ($ag['temperature'] !== null) {
+                    $entry .= "        \"temperature\": " . json_encode($ag['temperature']) . ",\n";
+                }
+                if ($ag['max_tokens'] !== null) {
+                    $entry .= "        \"max_output_tokens\": " . json_encode($ag['max_tokens']) . ",\n";
+                }
+                $entry .= "    },\n";
+            }
+            $entry .= "    output_key=\"node_{$id}\",\n";
+            $entry .= ")";
+
+            $out[] = $entry;
+        }
+        return implode("\n\n", $out);
     }
 
     /**
