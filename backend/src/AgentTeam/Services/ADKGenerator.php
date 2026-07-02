@@ -58,6 +58,7 @@ class ADKGenerator
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
         $lines[] = PythonEmitHelpers::mcpClientBlock();
+        $lines[] = PythonEmitHelpers::documentConverterBlock();
         $lines[] = self::adkToolBuilderBlock($analyzed);
 
         // Emit skill runner only when the workflow actually uses skills.
@@ -82,6 +83,8 @@ class ADKGenerator
 
         // catalog must be defined after build_tools_from_catalog() (from adkToolBuilderBlock).
         $lines[] = 'catalog = build_tools_from_catalog()';
+        // START_DOCUMENTS baked from the analyzed workflow; always present (empty list when none).
+        $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments']);
         $lines[] = self::agentsBlock($analyzed);
 
         $consolidators = self::outputConsolidatorsBlock($analyzed);
@@ -372,6 +375,26 @@ PY;
         $sp = PythonEmitHelpers::pyStr($analyzed['startPrompt']);
         return
             "async def main(user_prompt: str = {$sp}):\n" .
+            "    if START_DOCUMENTS:\n" .
+            "        doc_parts = []\n" .
+            "        for doc in START_DOCUMENTS:\n" .
+            "            name = doc.get(\"name\", \"Document\")\n" .
+            "            path = doc.get(\"path\", \"\")\n" .
+            "            if not path:\n" .
+            "                doc_parts.append(f\"### {name}\\n\\n_(no path on attachment record)_\")\n" .
+            "                continue\n" .
+            "            try:\n" .
+            "                md = _convert_doc_to_markdown(path)\n" .
+            "                doc_parts.append(f\"### {name}\\n\\n{md}\")\n" .
+            "            except Exception as e:\n" .
+            "                doc_parts.append(f\"### {name}\\n\\n_(conversion failed: {e})_\")\n" .
+            "        if doc_parts:\n" .
+            "            user_prompt = (\n" .
+            "                \"## Attached Documents\\n\\n\"\n" .
+            "                + \"\\n\\n---\\n\\n\".join(doc_parts)\n" .
+            "                + \"\\n\\n---\\n\\n\"\n" .
+            "                + user_prompt\n" .
+            "            )\n" .
             "    session_service = InMemorySessionService()\n" .
             "    runner = Runner(agent=root_agent, app_name=\"workflow\", session_service=session_service)\n" .
             "    session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .

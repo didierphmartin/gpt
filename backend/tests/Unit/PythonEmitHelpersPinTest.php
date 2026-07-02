@@ -38,4 +38,15 @@ class PythonEmitHelpersPinTest extends TestCase
             'skillDepsBlock content changed — this alters generated Python for both generators'
         );
     }
+
+    public function testDocumentConverterBlockUnchanged(): void
+    {
+        $block = PythonEmitHelpers::documentConverterBlock();
+        $this->assertSame(5127, strlen($block), 'documentConverterBlock byte length changed');
+        $this->assertSame(
+            '0d4241548ff1d929cc88d083501cb8e1d9df126b719bc258d2f1cca7400c8dd1',
+            hash('sha256', $block),
+            'documentConverterBlock content changed — this alters generated Python for both generators'
+        );
+    }
 }

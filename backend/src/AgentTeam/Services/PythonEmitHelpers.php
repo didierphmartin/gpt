@@ -13,9 +13,10 @@ namespace AgentTeam\Services;
  * All methods are pure static; no DB or state dependencies.
  *
  * Methods moved verbatim from LangGraphGenerator:
- *   - jsonToPython()   PHP value → Python literal (True/False/None)
- *   - mcpClientBlock() MCP JSON-RPC client Python functions
- *   - skillDepsBlock() SKILLS_DIR globals + _ensure_skill_deps Python function
+ *   - jsonToPython()            PHP value → Python literal (True/False/None)
+ *   - mcpClientBlock()          MCP JSON-RPC client Python functions
+ *   - skillDepsBlock()          SKILLS_DIR globals + _ensure_skill_deps Python function
+ *   - documentConverterBlock()  _convert_doc_to_markdown() Python function
  *
  * New helpers (not previously in LangGraphGenerator):
  *   - pyStr()          PHP string → Python double-quoted string literal
@@ -257,6 +258,142 @@ def _ensure_skill_deps(skill_dir: str) -> None:
                           f"{(r.stderr or '')[-300:]}", flush=True)
             except Exception as e:
                 print(f"  [run_skill_script] pip install {d} error: {e}", flush=True)
+
+PY;
+    }
+
+    /**
+     * Emit the document-to-markdown converter Python function.
+     *
+     * Returns _convert_doc_to_markdown(path) which reads a file and returns
+     * its contents as Markdown. Text-native formats pass through verbatim;
+     * binary office formats and PDFs are routed to their matching pure-Python
+     * parser with lazy imports.
+     *
+     * Moved verbatim from LangGraphGenerator::documentConverterBlock().
+     * Both generators call this so the emitted Python is identical.
+     */
+    public static function documentConverterBlock(): string
+    {
+        return <<<'PY'
+def _convert_doc_to_markdown(path: str) -> str:
+    """Read a file and return its contents as Markdown.
+
+    Text-native formats (HTML/MD/TXT/JSON/YAML/CSV/XML/source) are returned
+    verbatim. Binary office formats and PDFs are routed to their matching
+    pure-Python parser. Imports are lazy so the script doesn't pull in a
+    library unless the corresponding format is actually attached.
+
+    Raises FileNotFoundError if the path doesn't exist, ValueError for an
+    unsupported extension, ImportError if the format's library is missing.
+    """
+    from pathlib import Path
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"document not found: {path}")
+    ext = p.suffix.lower()
+
+    text_native = {
+        ".html", ".htm", ".md", ".markdown", ".txt", ".text",
+        ".json", ".yaml", ".yml", ".xml", ".csv", ".tsv",
+        ".css", ".scss", ".less",
+        ".js", ".mjs", ".ts", ".tsx", ".jsx",
+        ".py", ".rb", ".go", ".rs", ".java", ".c", ".cc", ".cpp", ".h", ".hpp",
+        ".sh", ".bash", ".zsh", ".sql", ".log", ".rtf", ".ini", ".toml",
+    }
+    if ext in text_native:
+        return p.read_text(encoding="utf-8", errors="replace")
+
+    if ext == ".docx":
+        import mammoth
+        with p.open("rb") as f:
+            return mammoth.convert_to_markdown(f).value
+
+    if ext == ".pptx":
+        from pptx import Presentation
+        prs = Presentation(str(p))
+        sections = [f"# {p.name}", f"_{len(prs.slides)} slide(s)_"]
+        for i, slide in enumerate(prs.slides, start=1):
+            layout = slide.slide_layout.name if slide.slide_layout else "?"
+            sections.append(f"## Slide {i} -- {layout}")
+            title_text = ""
+            if slide.shapes.title and slide.shapes.title.has_text_frame:
+                title_text = slide.shapes.title.text_frame.text.strip()
+            if title_text:
+                sections.append(f"### {title_text}")
+            body = []
+            for shape in slide.shapes:
+                if shape == slide.shapes.title:
+                    continue
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    line = "".join(run.text or "" for run in para.runs).strip()
+                    if not line and para.text:
+                        line = para.text.strip()
+                    if line:
+                        indent = "  " * (para.level or 0)
+                        body.append(f"{indent}- {line}")
+            if body:
+                sections.append("\n".join(body))
+            if slide.has_notes_slide:
+                notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if notes:
+                    sections.append("### Notes")
+                    sections.append(notes)
+        return "\n\n".join(sections) + "\n"
+
+    if ext in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        wb = load_workbook(str(p), data_only=True)
+        sections = [f"# {p.name}", f"_{len(wb.sheetnames)} sheet(s)_"]
+        max_rows = 200
+        for name in wb.sheetnames:
+            ws = wb[name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                row_vals = list(row)
+                while row_vals and (row_vals[-1] is None or row_vals[-1] == ""):
+                    row_vals.pop()
+                if row_vals or not rows:
+                    rows.append(row_vals)
+            while rows and not any(c not in (None, "") for c in rows[-1]):
+                rows.pop()
+            sections.append(f"## Sheet: {name}")
+            sections.append(f"_{len(rows)} row(s) -- {ws.max_column} col(s)_")
+            if not rows:
+                sections.append("_(empty)_")
+                continue
+            width = max(len(r) for r in rows)
+            rows = [list(r) + [""] * (width - len(r)) for r in rows]
+            truncated = len(rows) > max_rows
+            if truncated:
+                rows = rows[:max_rows]
+            def cell(v):
+                return ("" if v is None else str(v)).replace("|", "\\|").replace("\n", " ")
+            table = ["| " + " | ".join(cell(v) for v in rows[0]) + " |",
+                     "| " + " | ".join(["---"] * width) + " |"]
+            for r in rows[1:]:
+                table.append("| " + " | ".join(cell(v) for v in r) + " |")
+            if truncated:
+                table.append(f"\n_(showing first {max_rows} rows)_")
+            sections.append("\n".join(table))
+        return "\n\n".join(sections) + "\n"
+
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(str(p))
+        parts = [f"# {p.name} -- {len(reader.pages)} page(s)"]
+        for i, page in enumerate(reader.pages, start=1):
+            try:
+                t = (page.extract_text() or "").strip()
+            except Exception as e:
+                t = ""
+            parts.append(f"## Page {i}")
+            parts.append(t if t else "_(no extractable text)_")
+        return "\n\n".join(parts) + "\n"
+
+    raise ValueError(f"unsupported document format: {ext}")
 
 PY;
     }

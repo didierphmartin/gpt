@@ -220,4 +220,70 @@ class AdkGeneratorCompileTest extends TestCase
             "Full-featured fixture failed py_compile:\n{$output}"
         );
     }
+
+    /**
+     * I3: workflow with startDocuments must produce syntactically-valid Python.
+     *
+     * Covers: _convert_doc_to_markdown emitted, START_DOCUMENTS baked as a list,
+     * main() prepend block — all in one py_compile pass so indentation/syntax
+     * errors surface immediately.
+     */
+    public function testWithStartDocumentsCompiles(): void
+    {
+        if (!self::python3Available()) {
+            $this->markTestSkipped('python3 not found on PATH — skipping py_compile gate');
+        }
+
+        $base = WorkflowGraphAnalyzer::analyzeGraph([
+            'nodes' => [
+                ['id' => '1', 'type' => 'start',  'config' => ['type' => 'start', 'prompt' => 'Summarise the document']],
+                ['id' => '2', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'Summariser',
+                    'systemPrompt' => 'Summarise the attached document.', 'provider' => 'claude',
+                    'model' => 'claude-sonnet-4-6', 'selectedTools' => []]],
+                ['id' => '3', 'type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3']],
+        ]);
+        $a = array_merge($base, [
+            'workflow'       => ['id' => 42, 'name' => 'doc_summary'],
+            'usedCatalog'    => [],
+            'usedServers'    => [],
+            'startPrompt'    => 'Summarise the document',
+            'startDocuments' => [
+                ['name' => 'report.pdf', 'path' => '/uploads/reports/report.pdf'],
+            ],
+            'agents'         => [
+                '2' => [
+                    'name'             => 'Summariser',
+                    'systemPrompt'     => 'Summarise the attached document.',
+                    'provider'         => 'claude',
+                    'model'            => 'claude-sonnet-4-6',
+                    'temperature'      => null,
+                    'max_tokens'       => null,
+                    'tools'            => [],
+                    'skill_content'    => '',
+                    'output_schema_id' => null,
+                    'documents'        => [],
+                ],
+            ],
+        ]);
+
+        $code = ADKGenerator::emitAdk($a);
+
+        // Structural assertions: doc block present and correctly formed
+        $this->assertStringContainsString('def _convert_doc_to_markdown(', $code,
+            '_convert_doc_to_markdown must be emitted');
+        $this->assertMatchesRegularExpression('/START_DOCUMENTS = \[/', $code,
+            'START_DOCUMENTS must be a non-empty list');
+        $this->assertStringContainsString('"path": "/uploads/reports/report.pdf"', $code,
+            'Doc path must be baked into START_DOCUMENTS');
+        $this->assertStringContainsString('if START_DOCUMENTS:', $code,
+            'main() prepend guard must be emitted');
+
+        // py_compile gate: the emitted Python must be syntactically valid
+        [$rc, $output] = self::pyCompile($code, 'with_docs');
+        $this->assertSame(0, $rc,
+            "With-start-documents fixture failed py_compile:\n{$output}"
+        );
+    }
 }

@@ -356,6 +356,61 @@ class AdkGeneratorEmitTest extends TestCase
         );
     }
 
+    /**
+     * I3: documentConverterBlock always emitted + START_DOCUMENTS always baked.
+     */
+    public function testDocumentConverterBlockAlwaysEmitted(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed());
+        $this->assertStringContainsString('def _convert_doc_to_markdown(', $code,
+            '_convert_doc_to_markdown must always be emitted regardless of startDocuments');
+        $this->assertStringContainsString('START_DOCUMENTS = []', $code,
+            'START_DOCUMENTS must be emitted as empty list when startDocuments is empty');
+    }
+
+    /**
+     * I3: when startDocuments is non-empty, emitted code contains the baked list
+     * and the prepend block in main().
+     */
+    public function testStartDocumentsNonEmptyBakedAndPrepended(): void
+    {
+        $a = $this->analyzed();
+        $a['startDocuments'] = [
+            ['name' => 'spec.md', 'path' => '/uploads/spec.md'],
+        ];
+        $code = ADKGenerator::emitAdk($a);
+
+        // The baked list must contain the doc entry
+        $this->assertStringContainsString('START_DOCUMENTS = [', $code,
+            'START_DOCUMENTS must be a non-empty list when startDocuments is set');
+        $this->assertStringContainsString('"path": "/uploads/spec.md"', $code,
+            'Baked START_DOCUMENTS must include the doc path');
+
+        // The converter function must be present
+        $this->assertStringContainsString('def _convert_doc_to_markdown(', $code,
+            '_convert_doc_to_markdown must be emitted when docs exist');
+
+        // The prepend block must appear in main()
+        $this->assertStringContainsString('if START_DOCUMENTS:', $code,
+            'main() must check START_DOCUMENTS at runtime');
+        $this->assertStringContainsString('_convert_doc_to_markdown(path)', $code,
+            'main() must call _convert_doc_to_markdown for each doc');
+        $this->assertStringContainsString('"## Attached Documents\\n\\n"', $code,
+            'main() must prepend "## Attached Documents" header (mirrors LangGraph)');
+    }
+
+    /**
+     * I3: empty startDocuments still emits START_DOCUMENTS = [] and an always-present
+     * prepend guard (if START_DOCUMENTS:) so the golden is byte-stable.
+     */
+    public function testEmptyStartDocumentsEmitsEmptyListAndGuard(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed()); // startDocuments = []
+        $this->assertStringContainsString('START_DOCUMENTS = []', $code);
+        $this->assertStringContainsString('if START_DOCUMENTS:', $code,
+            'The guard must be emitted even when START_DOCUMENTS is empty (guard is always in main)');
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
