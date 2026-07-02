@@ -2724,6 +2724,9 @@ class WorkflowEditor {
             return;
         }
 
+        const overlay = this._showGeneratingOverlay(
+            this.t('workflow.output.generating') || 'Generating LangGraph Python script…'
+        );
         try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
@@ -2752,13 +2755,12 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
-            this._showToast(
-                (this.t('workflow.output.savedTo') || 'Saved to')
-                + ` ${rootName}/python/scripts/${filename}`
-            );
         } catch (e) {
             console.error('[WorkflowEditor] generate-python failed:', e);
             alert(this.t('workflow.output.generateFailed') + ': ' + (e.message || e));
+        } finally {
+            // Overlay disappears once the python doc is written (success or error).
+            overlay.close();
         }
     }
 
@@ -2788,6 +2790,9 @@ class WorkflowEditor {
             return;
         }
 
+        const overlay = this._showGeneratingOverlay(
+            this.t('workflow.output.generatingAdk') || 'Generating Google ADK script…'
+        );
         try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
@@ -2815,13 +2820,12 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated ADK Python to ${rootName}/python/scripts/${filename}`);
-            this._showToast(
-                (this.t('workflow.output.savedTo') || 'Saved to')
-                + ` ${rootName}/python/scripts/${filename}`
-            );
         } catch (e) {
             console.error('[WorkflowEditor] generate-adk failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
+        } finally {
+            // Overlay disappears once the python doc is written (success or error).
+            overlay.close();
         }
     }
 
@@ -3837,6 +3841,28 @@ class WorkflowEditor {
      * Lightweight toast notification (top-right). Used for "Saved to …"
      * confirmations. Auto-dismisses after 4 seconds.
      */
+    /**
+     * Transient centered overlay shown WHILE a script compiles/writes.
+     * Same visual family as the Setup modal (centered card on a dim backdrop),
+     * but it has no dismiss button — the caller closes it via the returned
+     * handle when the work completes, so it disappears automatically once the
+     * python doc is done (success or error).
+     * @returns {{close: () => void}}
+     */
+    _showGeneratingOverlay(label) {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm flex items-center gap-3" role="dialog" aria-modal="true" aria-live="polite">
+                <span class="inline-block w-5 h-5 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"></span>
+                <span class="text-sm text-gray-800">${this.escapeHtml(label)}</span>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        let closed = false;
+        return { close: () => { if (!closed) { closed = true; backdrop.remove(); } } };
+    }
+
     _showToast(message) {
         const toast = document.createElement('div');
         toast.className = 'fixed top-4 right-4 z-[1001] bg-gray-900 text-white text-sm px-4 py-2 rounded-md shadow-lg max-w-md break-all';

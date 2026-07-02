@@ -795,6 +795,8 @@
       "adkRun": "Run",
       "adkDisplayCode": "Display Code",
       "adkRunPrompt": "Prompt to pass to the ADK script (will be sys.argv[1:])",
+      "generating": "Generating LangGraph Python script…",
+      "generatingAdk": "Generating Google ADK script…",
       "saveFirst": "Save the workflow before generating Python code.",
       "generateFailed": "Code generation failed",
       "viewJson": "{ } View JSON",
