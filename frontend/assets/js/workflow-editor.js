@@ -671,7 +671,7 @@ class WorkflowEditor {
      * Resolves with the entered string, or null if the user cancelled
      * (Cancel button / Escape / backdrop click).
      */
-    _showRenameDialog(titleKey, promptKey, currentValue) {
+    _showRenameDialog(titleKey, promptKey, currentValue, saveKey = 'common.save') {
         return new Promise((resolve) => {
             const backdrop = document.createElement('div');
             backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
@@ -689,7 +689,7 @@ class WorkflowEditor {
                         </button>
                         <button type="button"
                                 class="rename-save-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
-                            ${this.escapeHtml(this.t('common.save'))}
+                            ${this.escapeHtml(this.t(saveKey))}
                         </button>
                     </div>
                 </div>
@@ -3302,10 +3302,8 @@ class WorkflowEditor {
             return;
         }
 
-        const userPrompt = window.prompt(
-            (this.t('workflow.output.adkRunPrompt')
-                || `Prompt to pass to ${filename}? (will be sys.argv[1:])`),
-            ''
+        const userPrompt = await this._showRenameDialog(
+            'workflow.output.adkRun', 'workflow.output.adkRunPrompt', '', 'workflow.output.adkRun'
         );
         if (userPrompt === null) return; // cancelled
 
@@ -3654,10 +3652,8 @@ class WorkflowEditor {
         }
 
         // Prompt the user for argv (most generated scripts read sys.argv[1:]).
-        const prompt = window.prompt(
-            (this.t('workflow.output.langgraphRunPrompt')
-                || `Prompt to pass to ${filename}? (will be sys.argv[1:])`),
-            ''
+        const prompt = await this._showRenameDialog(
+            'workflow.output.langgraphRun', 'workflow.output.langgraphRunPrompt', '', 'workflow.output.langgraphRun'
         );
         if (prompt === null) return; // user cancelled
 
