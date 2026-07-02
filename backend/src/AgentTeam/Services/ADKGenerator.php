@@ -84,6 +84,13 @@ class ADKGenerator
         $lines[] = 'catalog = build_tools_from_catalog()';
         $lines[] = self::agentsBlock($analyzed);
 
+        $consolidators = self::outputConsolidatorsBlock($analyzed);
+        if ($consolidators !== '') {
+            $lines[] = $consolidators;
+        }
+        $lines[] = self::rootBlock($analyzed);
+        $lines[] = self::mainBlock($analyzed);
+
         return implode("\n", $lines) . "\n";
     }
 
@@ -255,6 +262,117 @@ PY;
             $out[] = $entry;
         }
         return implode("\n\n", $out);
+    }
+
+    /**
+     * Emit LlmAgent consolidators for each `output` node.
+     *
+     * Each output node gets a dedicated LlmAgent whose instruction asks the model
+     * to consolidate all parent results.  The `{node_<p>}` tokens are ADK state
+     * placeholders; PythonEmitHelpers::pyStr() emits a non-f-string so braces
+     * survive into the generated Python verbatim.
+     *
+     * Returns an empty string when the workflow has no output nodes.
+     */
+    private static function outputConsolidatorsBlock(array $analyzed): string
+    {
+        $out = [];
+        foreach ($analyzed['byId'] as $id => $node) {
+            $id = (string) $id;
+            if (WorkflowGraphAnalyzer::typeOf($node) !== 'output') {
+                continue;
+            }
+            $parents = $analyzed['parents'][$id] ?? [];
+            $instr = "Consolidate the following results into the final answer.\n\n";
+            foreach ($parents as $p) {
+                // {$p} is PHP interpolation (gives e.g. "2").  The surrounding
+                // { and } are literal characters — not PHP interpolation — because
+                // there is no $ immediately after the opening {.
+                $instr .= "{node_{$p}}\n";
+            }
+            $instr = rtrim($instr);
+
+            $entry  = "node_{$id} = LlmAgent(\n";
+            $entry .= "    name=\"node_{$id}\",\n";
+            $entry .= "    model=_make_model(\"\", \"\"),\n";
+            $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
+            $entry .= "    tools=[],\n";
+            $entry .= "    output_key=\"node_{$id}\",\n";
+            $entry .= ")";
+            $out[] = $entry;
+        }
+        return implode("\n\n", $out);
+    }
+
+    /**
+     * Build `root_agent = SequentialAgent(...)` from the topological layers.
+     *
+     * Layer 0 (start node) is skipped because the start node only seeds state
+     * and is not itself an LlmAgent.  For each subsequent layer:
+     *  - Collect `node_<id>` var names of runnable nodes (agent / agent-template / output).
+     *  - A layer with exactly one runnable → use that var directly.
+     *  - A layer with >1 runnables → wrap in ParallelAgent.
+     * Empty layers (all structural nodes) are skipped.
+     */
+    private static function rootBlock(array $analyzed): string
+    {
+        $isRunnable = function (string $id) use ($analyzed): bool {
+            $t = WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$id]);
+            return in_array($t, ['agent', 'agent-template', 'output'], true);
+        };
+        $layerExprs = [];
+        foreach ($analyzed['layers'] as $k => $layer) {
+            $vars = [];
+            foreach ($layer as $id) {
+                if ($isRunnable($id)) {
+                    $vars[] = "node_{$id}";
+                }
+            }
+            if (!$vars) {
+                continue;
+            }
+            if (count($vars) === 1) {
+                $layerExprs[] = $vars[0];
+            } else {
+                $layerExprs[] = "ParallelAgent(name=\"layer_{$k}\", sub_agents=[" . implode(', ', $vars) . "])";
+            }
+        }
+        $body = implode(",\n    ", $layerExprs);
+        return "root_agent = SequentialAgent(\n    name=\"workflow\",\n    sub_agents=[\n    {$body}\n    ],\n)";
+    }
+
+    /**
+     * Emit `async def main(...)` + `if __name__ == "__main__"` block.
+     *
+     * Key correctness points:
+     *  - `await session_service.create_session(...)` — InMemorySessionService.create_session
+     *    is a coroutine; missing await causes "coroutine was never awaited".
+     *  - State is seeded via InMemorySessionService; user prompt is passed as
+     *    a types.Content message to runner.run_async().
+     *  - `from google.genai import types` is already in the header; the local
+     *    import here is harmless (re-importing a cached module is a no-op).
+     *
+     * Uses explicit string concatenation (column 0, no heredoc ambiguity).
+     */
+    private static function mainBlock(array $analyzed): string
+    {
+        $sp = PythonEmitHelpers::pyStr($analyzed['startPrompt']);
+        return
+            "async def main(user_prompt: str = {$sp}):\n" .
+            "    session_service = InMemorySessionService()\n" .
+            "    runner = Runner(agent=root_agent, app_name=\"workflow\", session_service=session_service)\n" .
+            "    session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
+            "    final = \"\"\n" .
+            "    content = types.Content(role=\"user\", parts=[types.Part(text=user_prompt)])\n" .
+            "    async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
+            "        if event.is_final_response() and event.content and event.content.parts:\n" .
+            "            final = event.content.parts[0].text or final\n" .
+            "    os.makedirs(\"outputs\", exist_ok=True)\n" .
+            "    print(final)\n" .
+            "    return final\n" .
+            "\n" .
+            "if __name__ == \"__main__\":\n" .
+            "    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else {$sp}))";
     }
 
     /**
