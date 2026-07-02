@@ -2753,6 +2753,9 @@ class WorkflowEditor {
             await writable.write(text);
             await writable.close();
 
+            // Refresh python/.env with the current provider keys so the script can auth.
+            await this._syncRunnerEnv();
+
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
         } catch (e) {
@@ -2761,6 +2764,64 @@ class WorkflowEditor {
         } finally {
             // Overlay disappears once the python doc is written (success or error).
             overlay.close();
+        }
+    }
+
+    /**
+     * Sync the enabled providers' API keys from the backend (system_llm_settings)
+     * into the local runner's python/.env via FSA, so the generated self-contained
+     * script can authenticate without the user hand-editing .env. Keys stay in the
+     * DB as source of truth; .env is refreshed on every Generate. Best-effort:
+     * silently skips if FSA/runner/endpoint is unavailable — never blocks Generate.
+     */
+    async _syncRunnerEnv() {
+        try {
+            if (!window.localFs || !window.localFs.isSupported || !window.localFs.isSupported()) return;
+            const pyDir = await window.localFs.resolvePath('python', { create: false });
+            if (!pyDir) return; // runner not installed yet
+            // Reuse the existing admin LLM-settings endpoint (system_llm_settings,
+            // returns the raw api_key per provider) — no dedicated endpoint.
+            const resp = await fetch(`${this.apiBase}/admin/llm-settings`, { headers: this.getAuthHeaders() });
+            if (!resp.ok) return;
+            const providers = (await resp.json())?.providers || [];
+            const MAP = {
+                claude: 'ANTHROPIC_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
+                openai: 'OPENAI_API_KEY', gemini: 'GOOGLE_API_KEY', google: 'GOOGLE_API_KEY',
+                grok: 'XAI_API_KEY', xai: 'XAI_API_KEY', kimi: 'KIMI_API_KEY', deepseek: 'DEEPSEEK_API_KEY',
+            };
+            const keys = {};
+            for (const p of providers) {
+                if (!p || p.enabled === false) continue;
+                const env = MAP[String(p.provider_key || '').toLowerCase()];
+                const ak = String(p.api_key || '').trim();
+                if (env && ak) keys[env] = ak;
+            }
+            if (!Object.keys(keys).length) return;
+
+            // Seed from existing .env (else .env.example) to preserve non-key lines.
+            let lines = [];
+            for (const fname of ['.env', '.env.example']) {
+                try {
+                    const fh = await pyDir.getFileHandle(fname, { create: false });
+                    lines = (await (await fh.getFile()).text()).split('\n');
+                    break;
+                } catch (_) { /* try next */ }
+            }
+            const seen = {};
+            lines = lines.map((ln) => {
+                const m = ln.match(/^([A-Z_]+_API_KEY)=/);
+                if (m && keys[m[1]] != null) { seen[m[1]] = true; return `${m[1]}=${keys[m[1]]}`; }
+                return ln;
+            });
+            for (const [k, v] of Object.entries(keys)) { if (!seen[k]) lines.push(`${k}=${v}`); }
+
+            const outFh = await pyDir.getFileHandle('.env', { create: true });
+            const w = await outFh.createWritable();
+            await w.write(lines.join('\n').replace(/\n*$/, '\n'));
+            await w.close();
+            console.log(`[WorkflowEditor] Synced ${Object.keys(keys).length} provider keys to python/.env`);
+        } catch (e) {
+            console.warn('[WorkflowEditor] runner .env sync skipped:', e);
         }
     }
 
@@ -2817,6 +2878,9 @@ class WorkflowEditor {
             const writable = await fileHandle.createWritable();
             await writable.write(text);
             await writable.close();
+
+            // Refresh python/.env with the current provider keys so the script can auth.
+            await this._syncRunnerEnv();
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated ADK Python to ${rootName}/python/scripts/${filename}`);
