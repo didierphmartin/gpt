@@ -76,6 +76,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/admin/affiliates/{id:\d+}', ['AffiliateController', 'adminDelete']);
         $r->get('/api/v1/admin/affiliates/{id:\d+}/transactions', ['AffiliateController', 'adminTransactions']);
         $r->post('/api/v1/admin/affiliates/{id:\d+}/accounts', ['AffiliateController', 'adminAddAccount']);
+        $r->put('/api/v1/admin/affiliates/{id:\d+}/accounts/{productId:\d+}', ['AffiliateController', 'adminUpdateAccount']);
         $r->delete('/api/v1/admin/affiliates/{id:\d+}/accounts/{productId:\d+}', ['AffiliateController', 'adminDeleteAccount']);
         $r->post('/api/v1/admin/affiliates/{id:\d+}/transactions/{saleId:\d+}/mark-paid', ['AffiliateController', 'adminMarkPaid']);
 
@@ -304,6 +305,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows', ['AgentTeam:WorkflowController', 'create']);
         $r->get('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'show']);
         $r->get('/api/v1/workflows/{id:\d+}/generate-python', ['AgentTeam:WorkflowController', 'generatePython']);
+        $r->get('/api/v1/workflows/{id:\d+}/generate-adk', ['AgentTeam:WorkflowController', 'generateAdk']);
         // Standalone config-driven ingestion compiler (separate from agent code) —
         // chunks/scripts are compiled from the node configs the frontend sends.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/node-code', ['AgentTeam:IngestionController', 'nodeCode']);

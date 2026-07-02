@@ -24,7 +24,7 @@ class WorkflowEditor {
         this.outputFolder = '';
 
         // API base URL
-        this.apiBase = window.CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
+        this.apiBase = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
 
         // Expose the live instance for console-driven testing of the new
         // browser-driven node runner (wfEditor.runNodeChatUnitTest(...)).
@@ -428,6 +428,7 @@ class WorkflowEditor {
         });
         document.getElementById('workflow-run-btn')?.addEventListener('click', () => this.runWorkflow());
         document.getElementById('workflow-clear-btn')?.addEventListener('click', () => this.clearWorkflow());
+        document.getElementById('workflow-reset-top-btn')?.addEventListener('click', () => this.resetWorkflowRun());
 
         // Set up "New Workflow" button in left sidebar — show Batch/Audio choice
         document.getElementById('new-workflow-btn')?.addEventListener('click', (e) => {
@@ -2760,6 +2761,45 @@ class WorkflowEditor {
     }
 
     /**
+     * Download the Google ADK Python script for this workflow.
+     * Uses the same blob-anchor download mechanism as other file exports
+     * (no FSA setup required — file goes straight to the browser's Downloads).
+     */
+    async generateAdkScript() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err || `HTTP ${resp.status}`);
+            }
+            let filename = 'workflow_adk.py';
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            if (m) filename = m[1];
+            const text = await resp.text();
+            const blob = new Blob([text], { type: 'text/x-python' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error('[WorkflowEditor] generate-adk failed:', e);
+            alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
+        }
+    }
+
+    /**
      * Persist a completed workflow's final output to the local FS so
      * the user has a permanent copy outside the browser tab. Path:
      *
@@ -2889,6 +2929,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="display-code">
                 ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="generate-adk">
+                ${this.escapeHtml(this.t('workflow.output.langgraphGenerateAdk') || 'Compile → ADK')}
+            </button>
         `;
         document.body.appendChild(menu);
 
@@ -2929,6 +2972,10 @@ class WorkflowEditor {
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._showLangGraphCodeModal();
+        });
+        menu.querySelector('[data-action="generate-adk"]')?.addEventListener('click', () => {
+            menu.remove();
+            this.generateAdkScript();
         });
 
         // Dismiss on any outside click. Schedule on next tick so the
@@ -3114,7 +3161,30 @@ class WorkflowEditor {
             </div>
         `;
         document.body.appendChild(backdrop);
-        backdrop.querySelector('pre').textContent = code;
+        // Render with a line-number gutter. Each line is a block row with a
+        // sticky, non-selectable number column so numbers stay visible on
+        // horizontal scroll and are excluded from manual text selection. The
+        // Copy button copies the raw `code` variable, so numbers never leak
+        // into copied text either.
+        const preEl = backdrop.querySelector('pre');
+        const codeLines = code.split('\n');
+        const gutterCh = String(codeLines.length).length + 1;
+        const lnStyle = document.createElement('style');
+        lnStyle.textContent = `
+            .code-with-lines .code-line { display: block; }
+            .code-with-lines .code-ln {
+                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
+                text-align: right; color: #64748b; user-select: none;
+                position: sticky; left: 0; background: #111827;
+            }
+            .code-with-lines .code-lc { white-space: pre; }
+        `;
+        backdrop.appendChild(lnStyle);
+        preEl.classList.add('code-with-lines');
+        preEl.innerHTML = codeLines.map((ln, i) =>
+            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
+            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
+        ).join('');
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
@@ -3362,7 +3432,7 @@ class WorkflowEditor {
                 </div>
                 <p class="text-xs text-gray-500 mb-4">
                     ${this.escapeHtml(this.t('workflow.runnerSetup.note')
-                        || 'After that finishes, click Generate Python again.')}
+                        || 'This installs the LangGraph runtime plus the PyPI packages your skills declare (e.g. beautifulsoup4), so the compiled scripts can run them. After it finishes, click Generate Python again.')}
                 </p>
                 <div class="flex justify-end">
                     <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
@@ -9387,7 +9457,42 @@ class WorkflowEditor {
      * the auth'd backend proxy) so they pool fine. Any pool/permission failure
      * falls back to the main-thread runner so a run can never get worse.
      */
+    // Filesystem-safe, sortable run timestamp: "2026-06-26_003113".
+    _fileTimestamp() {
+        const d = new Date();
+        const z = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+    }
+
+    // Make a run's OUTPUT files distinct so reports accumulate (and can be
+    // compared with the GEO compare skill) instead of overwriting each other.
+    // Appends a timestamp before the extension on every /outputs/ path found in
+    // argv (the `-o` target) and read_outputs, keeping the two in sync via one
+    // shared timestamp + rewrite map. /scratch/ inputs and non-output paths are
+    // left untouched. Returns a shallow-cloned req.
+    _timestampOutputPaths(req) {
+        if (!req || (!Array.isArray(req.argv) && !Array.isArray(req.readOutputs))) return req;
+        const ts = this._fileTimestamp();
+        const rewrites = new Map();
+        const stamp = (p) => {
+            if (typeof p !== 'string' || !p.startsWith('/outputs/')) return p;
+            if (rewrites.has(p)) return rewrites.get(p);
+            const slash = p.lastIndexOf('/');
+            const dot = p.lastIndexOf('.');
+            const out = (dot > slash) ? `${p.slice(0, dot)}_${ts}${p.slice(dot)}` : `${p}_${ts}`;
+            rewrites.set(p, out);
+            return out;
+        };
+        const argv = Array.isArray(req.argv) ? req.argv.map(stamp) : req.argv;
+        const readOutputs = Array.isArray(req.readOutputs) ? req.readOutputs.map(stamp) : req.readOutputs;
+        if (rewrites.size) {
+            console.log('[WorkflowEditor] timestamped output path(s):', Object.fromEntries(rewrites));
+        }
+        return { ...req, argv, readOutputs };
+    }
+
     async _runSkillPooledOrMain(req) {
+        req = this._timestampOutputPaths(req);
         try {
             let fetchesUrls = false;
             try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName); } catch (_) {}
@@ -9407,7 +9512,7 @@ class WorkflowEditor {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20260612-writtenoutputs');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20260626-unwrap');
                 console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -9481,6 +9586,25 @@ class WorkflowEditor {
         this.updateModalInputOutput(dfId);
     }
 
+    // Pick the last binary output (docx/pptx/xlsx/pdf — anything that isn't a
+    // string) from a skill run's outputs map, as a downloadable artifact for
+    // the Output node. Renderable text (html/md) is handled separately by
+    // _selectArtifactFromOutputs. Returns { relPath, bytes, size, kind:'binary' }.
+    _pickBinaryArtifact(outputs) {
+        if (!outputs || typeof outputs !== 'object') return null;
+        let picked = null;
+        for (const [path, value] of Object.entries(outputs)) {
+            if (typeof value === 'string' || value == null) continue;
+            let bytes = null;
+            if (value instanceof Uint8Array) bytes = value;
+            else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+            else if (value?.byteLength != null) { try { bytes = new Uint8Array(value); } catch (_) {} }
+            if (!bytes) continue;
+            picked = { relPath: path, bytes, size: bytes.byteLength, kind: 'binary' };
+        }
+        return picked;
+    }
+
     async _runNodeAsChatUnit(node, inputText) {
         const dfId = String(node.id);
         const data = node.data || {};
@@ -9542,21 +9666,126 @@ class WorkflowEditor {
                     const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
                     const assistantText = r.assistant_text || r.text || '';
                     this._wfNodeLog(dfId, 'llm', 'model requested run_skill_script');
+                    // Round-level diagnostics. A stop/finish reason of
+                    // max_tokens/length proves the model's tool-call payload was
+                    // CUT OFF at the output cap — the usual cause of a
+                    // stringified, unparseable input_files (a huge HTML body).
+                    const _roundOut = (r.usage?.output_tokens ?? r.usage?.completion_tokens ?? 0);
+                    const _stopReason = r.stop_reason || r.finish_reason || null;
+                    if (_stopReason && /max_tokens|length/i.test(_stopReason)) {
+                        this._wfNodeLog(dfId, 'llm', `⚠ model output TRUNCATED at the token cap (stop_reason=${_stopReason}, ${_roundOut} out tok) — the tool payload is incomplete; ask the model for a smaller document or raise max output tokens`, 'error');
+                    }
+                    console.log(`[wf-unit] round ${round}: tool_calls=${calls.length}, out_tok=${_roundOut}, stop_reason=${_stopReason ?? 'n/a'}, assistant_text_len=${assistantText.length}`);
                     // Run each skill (pool), collect results, then build the
                     // continuation turns via the SHARED helper so the provider
                     // format (Gemini thought_signature, etc.) matches chat exactly.
                     const roundResults = [];
                     for (const c of calls) {
                         const input = c.input || {};
+                        // WHICH skill to run is the model's choice: a
+                        // consolidator node bound to (say) the `html` skill may
+                        // legitimately call a DIFFERENT skill's script
+                        // (e.g. GEO/geo-report/gather_audits.py). So
+                        // input.dir_name wins; the node's bound dirName is only
+                        // a fallback when the model omits it. The runner
+                        // (resolveSkillDir) maps a bare leaf like "geo-report"
+                        // to its real group path "GEO/geo-report", so either
+                        // form the model passes resolves correctly.
                         this._wfNodeLog(dfId, 'skill', `running skill ${input.dir_name || dirName}`);
+                        // Stage the model's input_files into the run — exactly
+                        // like handleClientToolCall does. This is essential for
+                        // skills that read a model-authored file, e.g.
+                        // html/create.py reading `-i /scratch/in.html`. Without
+                        // it those files never reach Pyodide and the script
+                        // fails every round ("file staging" errors → the node
+                        // loops to MAX_ROUNDS and returns nothing usable). Merge
+                        // with any /scratch files pre-stashed at workflow start;
+                        // stashed entries win (binary docs the LLM can't resend).
+                        // Reuse chat's proven input_files recovery instead of a
+                        // naive JSON.parse. Claude emits input_files
+                        // inconsistently (object / over-escaped JSON string /
+                        // raw content); chat's _coerceInputFiles handles all
+                        // three (the over-escape pass is what salvages large
+                        // mis-escaped HTML payloads). Single source of truth so
+                        // chat and the workflow runner can't drift.
+                        const _argvForFiles = Array.isArray(input.argv) ? input.argv : [];
+                        const llmInputFilesObj = window.chatApp?._coerceInputFiles
+                            ? window.chatApp._coerceInputFiles(input.input_files, _argvForFiles)
+                            : ((input.input_files && typeof input.input_files === 'object') ? input.input_files : {});
+                        const stashed = this._scratchFileContents || {};
+                        const mergedInputFiles = { ...llmInputFilesObj, ...stashed };
+                        const finalInputFiles = Object.keys(mergedInputFiles).length > 0 ? mergedInputFiles : null;
+                        // Staging visibility: which files (and byte sizes) we're
+                        // writing before the script runs — the single most useful
+                        // signal when a script reports a missing -i input.
+                        const _fileSummary = Object.entries(mergedInputFiles).map(([p, v]) => {
+                            const size = typeof v === 'string' ? v.length : (v?.byteLength ?? 0);
+                            return `${p} (${size}B)`;
+                        });
+                        if (_fileSummary.length) {
+                            this._wfNodeLog(dfId, 'skill', `staging ${_fileSummary.length} input file(s): ${_fileSummary.join(', ')}`);
+                        } else {
+                            // No usable files — report EXACTLY what the model sent
+                            // so we can tell "absent" from "string/truncated".
+                            const raw = input.input_files;
+                            const shape = raw == null ? 'absent (model omitted the input_files key)'
+                                : typeof raw === 'string' ? `a string of len ${raw.length} that failed to parse → likely TRUNCATED mid-payload`
+                                : typeof raw === 'object' ? `an object with keys [${Object.keys(raw).join(', ')}]`
+                                : typeof raw;
+                            this._wfNodeLog(dfId, 'skill', `no usable input_files for ${input.script || '(no script)'} — model sent ${shape}`, 'error');
+                            // For the string case, log head + tail so the cutoff
+                            // is visible directly — a truncated HTML payload ends
+                            // mid-tag instead of with a closing brace/quote.
+                            if (typeof raw === 'string') {
+                                console.warn('[wf-unit] unparseable input_files string\n  HEAD:', raw.slice(0, 200), '\n  TAIL:', raw.slice(-200));
+                            }
+                        }
+                        console.log('[wf-unit] run_skill_script →', {
+                            dir: input.dir_name || dirName, script: input.script, argv: input.argv,
+                            inputFilesType: typeof input.input_files,
+                            inputFilesKeys: (input.input_files && typeof input.input_files === 'object') ? Object.keys(input.input_files) : null,
+                            inputFilesStrLen: typeof input.input_files === 'string' ? input.input_files.length : null,
+                            assistantTextLen: (assistantText || '').length,
+                            readOutputs: input.read_outputs,
+                        });
                         const result = await this._runSkillPooledOrMain({
                             dirName: input.dir_name || dirName,
                             script: input.script,
                             argv: Array.isArray(input.argv) ? input.argv : [],
-                            inputFiles: null,
+                            inputFiles: finalInputFiles,
                             readOutputs: Array.isArray(input.read_outputs) && input.read_outputs.length ? input.read_outputs : null,
                         });
-                        this._wfNodeLog(dfId, 'skill', `skill finished (exit ${result?.exitCode ?? 0})`);
+                        const _exit = result?.exitCode ?? 0;
+                        const _stderr = (result?.stderr || '').trim();
+                        this._wfNodeLog(dfId, 'skill', _exit === 0
+                            ? `skill finished (exit 0)`
+                            : `skill FAILED (exit ${_exit})${_stderr ? ': ' + _stderr.slice(0, 300) : ''}`,
+                            _exit === 0 ? 'info' : 'error');
+                        console.log('[wf-unit] skill result ←', {
+                            exit: _exit, stdoutHead: (result?.stdout || '').slice(0, 200),
+                            stderrHead: _stderr.slice(0, 500), outputKeys: Object.keys(result?.outputs || {}),
+                        });
+                        // Capture a renderable artifact (HTML/Markdown) the SAME
+                        // way the server path (handleClientToolCall) does, so the
+                        // Output node shows the actual generated file — e.g. the
+                        // html skill's /outputs/*.html — instead of only the
+                        // model's prose summary. The browser-driven path never
+                        // did this, which is why the Output node looked
+                        // misleading. Last renderable artifact wins.
+                        try {
+                            let _artifact = window.chatApp?._selectArtifactFromOutputs?.(result?.outputs);
+                            // Binary fallback: docx/pptx/xlsx/pdf come back as
+                            // bytes (not strings), so the renderable selector
+                            // skips them. Capture the last binary output as a
+                            // downloadable artifact so the Output node can offer
+                            // it as a file card.
+                            if (!_artifact) _artifact = this._pickBinaryArtifact(result?.outputs);
+                            if (_artifact) {
+                                this.lastProducedArtifact = { dirName: input.dir_name || dirName, ..._artifact };
+                            }
+                        } catch (e) {
+                            console.warn('[wf-unit] artifact selection failed:', e);
+                        }
                         this.nodeExecutionData[dfId].logs.push({
                             dirName: input.dir_name || dirName, script: input.script || '',
                             argv: Array.isArray(input.argv) ? input.argv : [],
@@ -9648,6 +9877,10 @@ class WorkflowEditor {
 
     async executeWorkflowInBrowser(userPrompt) {
         this.lastUserPrompt = userPrompt;
+        // Clear any artifact from a prior run so the Output node never shows a
+        // stale file (the SSE path resets this on 'workflow_start'; the
+        // browser-driven path must do it here).
+        this.lastProducedArtifact = null;
         this.updateStartNodeIndicator(true);
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const ids = Object.keys(nodes);
@@ -9691,7 +9924,11 @@ class WorkflowEditor {
             }));
         }
 
-        this.updateStartNodeIndicator(false);
+        // Restore the Start node's ▶ play button so the workflow can be re-run.
+        // updateStartNodeIndicator hides ▶ when its arg is falsy, so passing
+        // `false` here wrongly removed the re-run affordance after every run.
+        // The right signal is whether a prompt still exists, not "run done".
+        this.updateStartNodeIndicator(!!(this.lastUserPrompt && String(this.lastUserPrompt).trim()));
         const outId = ids.find(id => this._wfNodeKind(id, nodes) === 'output');
         const finalOutput = outId ? this._wfOutputs[outId] : '';
         console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
@@ -10230,6 +10467,25 @@ class WorkflowEditor {
                 timerEl.classList.remove('node-timer-active');
             }
         });
+    }
+
+    /**
+     * Persistent top-of-canvas Reset. Returns the workflow to a clean
+     * pre-run state WITHOUT deleting any nodes: clears node highlights and
+     * timers (resetNodeStates), drops captured per-node execution data
+     * (inputs/outputs/logs/token counts), and removes the transient
+     * abort/reset buttons. To remove the nodes themselves, use Clear
+     * Workflow instead.
+     */
+    resetWorkflowRun() {
+        this.resetNodeStates();
+        this.nodeExecutionData = {};
+        this.hideResetButton();
+        this.hideAbortButton();
+        // Reset must leave the canvas re-runnable: restore the Start node's ▶
+        // play button (shown whenever a prompt exists) instead of leaving it
+        // hidden from the prior run.
+        this.updateStartNodeIndicator(!!(this.lastUserPrompt && String(this.lastUserPrompt).trim()));
     }
 
     /**
@@ -11019,16 +11275,20 @@ class WorkflowEditor {
         });
         document.addEventListener('keydown', escHandler);
 
-        // Populate the artifact column. HTML goes through a sandboxed
-        // iframe (no scripts, no same-origin) so a malicious skill
-        // can't read parent-page state. Markdown goes through the
-        // existing in-app renderer.
+        // Populate the artifact column. HTML goes through a sandboxed iframe.
+        // sandbox="allow-scripts" (WITHOUT allow-same-origin) lets the
+        // generated report run its own JS — score-ring gauge, tab switching,
+        // scroll-reveal — so the preview matches the standalone file. Scripts
+        // run in an opaque origin, so they still can't read the app's page,
+        // cookies, or localStorage. (Plain sandbox="" blocked all JS, which is
+        // why the gauge showed "/100" and reveal-on-scroll content stayed
+        // hidden.) Markdown goes through the existing in-app renderer.
         if (artifact) {
             const artifactHost = document.getElementById('workflow-artifact-content');
             if (artifactHost) {
                 if (artifact.kind === 'html') {
                     const iframe = document.createElement('iframe');
-                    iframe.setAttribute('sandbox', '');
+                    iframe.setAttribute('sandbox', 'allow-scripts');
                     iframe.style.cssText = 'width:100%; height:100%; border:0; background:white;';
                     iframe.srcdoc = artifact.content || '';
                     artifactHost.appendChild(iframe);
@@ -11038,6 +11298,62 @@ class WorkflowEditor {
                     wrap.style.cssText = 'padding:16px; height:100%; overflow:auto; background:white;';
                     wrap.innerHTML = this.formatMarkdown(artifact.content || '');
                     artifactHost.appendChild(wrap);
+                } else if (artifact.kind === 'binary') {
+                    // Binary formatter output (docx/pptx/xlsx/pdf): show a file
+                    // header with a Download button, plus an inline preview
+                    // produced by the existing attachment converter (mammoth et
+                    // al., docx/pptx/xlsx/pdf → markdown). Browsers can't render
+                    // these natively; converting to markdown is how claude.ai
+                    // previews documents too. Formats the converter can't handle
+                    // fall back to download-only.
+                    const fileName = (artifact.relPath || 'file').split('/').pop();
+                    const ext = (fileName.split('.').pop() || '').toLowerCase();
+                    const dispPath = (artifact.relPath || '').replace(/^\//, '');
+                    const sizeStr = artifact.size >= 1024 ? `${(artifact.size / 1024).toFixed(0)} KB` : `${artifact.size || 0} B`;
+                    const esc = (s) => this.escapeHtml ? this.escapeHtml(String(s)) : String(s);
+                    const PREVIEWABLE = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
+                    const container = document.createElement('div');
+                    container.style.cssText = 'height:100%; overflow:auto; background:white;';
+                    container.innerHTML = `
+                        <div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid #e5e7eb; position:sticky; top:0; background:white; z-index:1;">
+                            <div style="font-size:28px; line-height:1;">📄</div>
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-weight:600; color:#111; word-break:break-all;">${esc(fileName)}</div>
+                                <div style="font-size:12px; color:#6b7280; word-break:break-all;">${sizeStr} · ${esc(ext.toUpperCase())} · ${esc(dispPath)}</div>
+                            </div>
+                            <button data-dl style="padding:8px 18px; background:#4F46E5; color:#fff; border:0; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; white-space:nowrap;">Download</button>
+                        </div>
+                        <div data-preview style="padding:16px;"></div>`;
+                    artifactHost.appendChild(container);
+                    const bytesOf = () => artifact.bytes instanceof Uint8Array ? artifact.bytes : new Uint8Array(artifact.bytes || []);
+                    container.querySelector('[data-dl]')?.addEventListener('click', () => {
+                        try {
+                            const blob = new Blob([bytesOf()], { type: 'application/octet-stream' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url; a.download = fileName;
+                            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                            setTimeout(() => URL.revokeObjectURL(url), 0);
+                        } catch (e) { console.warn('[workflow] artifact download failed:', e); }
+                    });
+                    const preview = container.querySelector('[data-preview]');
+                    if (PREVIEWABLE.has(ext) && window.attachmentConverter?.toMarkdown) {
+                        preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Converting preview…</div>';
+                        (async () => {
+                            try {
+                                const file = new File([bytesOf()], fileName);
+                                const res = await window.attachmentConverter.toMarkdown(file);
+                                const wrap = document.createElement('div');
+                                wrap.className = 'markdown-content';
+                                wrap.innerHTML = this.formatMarkdown(res?.markdown || '');
+                                preview.replaceChildren(wrap);
+                            } catch (e) {
+                                preview.innerHTML = `<div style="color:#9ca3af; font-size:13px;">Inline preview unavailable — use Download. (${esc(e?.message || e)})</div>`;
+                            }
+                        })();
+                    } else {
+                        preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">No inline preview for this format — use Download.</div>';
+                    }
                 }
             }
         }
