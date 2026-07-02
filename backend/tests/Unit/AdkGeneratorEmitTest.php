@@ -144,6 +144,35 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('Runner(', $code);
     }
 
+    public function testConsolidatorInheritsAgentParentModel(): void
+    {
+        // Diamond: nodes 2 and 3 are both claude/claude-sonnet-4-6 agents; node 4 is output.
+        // Consolidator for node 4 must use _make_model("claude", "claude-sonnet-4-6"), NOT _make_model("", "").
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'type' => 'start',  'config' => ['type' => 'start', 'prompt' => 'GO']],
+                ['id' => '2', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'selectedTools' => []]],
+                ['id' => '3', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'selectedTools' => []]],
+                ['id' => '4', 'type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '1', 'to' => '3'], ['from' => '2', 'to' => '4'], ['from' => '3', 'to' => '4']],
+        ];
+        $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $a = array_merge($base, [
+            'workflow' => ['id' => 2, 'name' => 'claude_diamond'], 'usedCatalog' => [], 'usedServers' => [],
+            'startPrompt' => 'GO', 'startDocuments' => [],
+            'agents' => [
+                '2' => ['name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+                '3' => ['name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+            ],
+        ]);
+        $code = ADKGenerator::emitAdk($a);
+        // Consolidator must use the inherited model, not the Gemini default.
+        $this->assertStringContainsString('node_4 = LlmAgent(', $code);
+        $this->assertStringContainsString('model=_make_model("claude", "claude-sonnet-4-6")', $code);
+        $this->assertStringNotContainsString('model=_make_model("", "")', $code);
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}

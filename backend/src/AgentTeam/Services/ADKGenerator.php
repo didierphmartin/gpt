@@ -292,9 +292,21 @@ PY;
             }
             $instr = rtrim($instr);
 
+            // Derive consolidator model from first agent parent; fall back to Gemini default.
+            $consolidatorModel = '_make_model("", "")';
+            foreach ($parents as $p) {
+                if (isset($analyzed['agents'][$p])) {
+                    $ag = $analyzed['agents'][$p];
+                    $prov = addslashes($ag['provider']);
+                    $mod  = addslashes($ag['model']);
+                    $consolidatorModel = "_make_model(\"{$prov}\", \"{$mod}\")";
+                    break;
+                }
+            }
+
             $entry  = "node_{$id} = LlmAgent(\n";
             $entry .= "    name=\"node_{$id}\",\n";
-            $entry .= "    model=_make_model(\"\", \"\"),\n";
+            $entry .= "    model={$consolidatorModel},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
             $entry .= "    tools=[],\n";
             $entry .= "    output_key=\"node_{$id}\",\n";
