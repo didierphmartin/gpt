@@ -59,7 +59,28 @@ class ADKGenerator
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
         $lines[] = PythonEmitHelpers::mcpClientBlock();
         $lines[] = self::adkToolBuilderBlock();
-        // Later tasks append: skill runner, tools, agents, layering/root, main.
+
+        // Emit skill runner only when the workflow actually uses skills.
+        // Mirror LangGraphGenerator's auto-detect: non-empty skill_content
+        // on any agent, OR any agent's systemPrompt already references
+        // run_skill_script (assembled by WorkflowGraphAnalyzer).
+        $needsSkills = false;
+        foreach ($analyzed['agents'] as $agent) {
+            if (!empty($agent['skill_content'])) {
+                $needsSkills = true;
+                break;
+            }
+            if (strpos((string) ($agent['systemPrompt'] ?? ''), 'run_skill_script') !== false) {
+                $needsSkills = true;
+                break;
+            }
+        }
+        if ($needsSkills) {
+            $lines[] = PythonEmitHelpers::skillDepsBlock();
+            $lines[] = self::skillRunnerBlock();
+        }
+
+        // Later tasks append: tools, agents, layering/root, main.
         return implode("\n", $lines) . "\n";
     }
 
@@ -85,7 +106,7 @@ in this program's own Python environment.
 requirements:
     pip install google-adk litellm
 """
-import asyncio, json, os, subprocess, sys, urllib.request
+import asyncio, json, os, subprocess, sys, threading, urllib.request
 from typing import Any
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent
@@ -122,6 +143,43 @@ def _make_model(provider: str, model: str):
     prefix = _LITELLM_PREFIX.get(p, p + "/")
     spec = model if "/" in model else prefix + model
     return LiteLlm(model=spec)
+PY;
+    }
+
+    /**
+     * Emit the ADK-specific async skill runner.
+     *
+     * Called only when any agent uses skills (see emitAdk()).
+     * Depends on PythonEmitHelpers::skillDepsBlock() being emitted first
+     * (provides SKILLS_DIR + _ensure_skill_deps).
+     *
+     * Uses asyncio.create_subprocess_exec so skill calls inside a
+     * ParallelAgent layer don't block the event loop (contrast: the
+     * LangGraphGenerator path uses blocking subprocess.run).
+     *
+     * Uses a nowdoc (<<<'PY') — no PHP interpolation; Python at column 0.
+     */
+    private static function skillRunnerBlock(): string
+    {
+        return <<<'PY'
+async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
+                            input_files: dict | None = None, read_outputs: bool = True) -> str:
+    """Run a skill's Python script as a subprocess in THIS environment."""
+    argv = argv or []
+    skill_path = os.path.join(SKILLS_DIR, dir_name)
+    _ensure_skill_deps(skill_path)  # ported: parse SKILL.md frontmatter, pip install once
+    script_path = os.path.join(skill_path, script)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, script_path, *[str(a) for a in argv],
+        cwd=skill_path,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        return f"[skill error rc={proc.returncode}] {err.decode('utf-8', 'replace')}"
+    return out.decode("utf-8", "replace")
+
+RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)
 PY;
     }
 

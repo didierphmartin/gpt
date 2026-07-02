@@ -57,4 +57,22 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('FunctionTool(', $code);
         $this->assertStringContainsString('http://localhost:9000/mcp', $code);
     }
+
+    public function testSkillRunnerEmittedAndAsyncSafe(): void
+    {
+        $a = $this->analyzed();
+        $a['agents']['2']['skill_content'] = "Use the skill: call run_skill_script with dir_name='html/create'";
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('SKILLS_DIR', $code);
+        $this->assertStringContainsString('def _run_skill_script(', $code);
+        $this->assertStringContainsString('asyncio.create_subprocess_exec', $code); // async-safe entry
+        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL = FunctionTool(', $code);
+    }
+
+    public function testSkillRunnerOmittedWhenNoSkills(): void
+    {
+        $code = ADKGenerator::emitAdk($this->analyzed());
+        $this->assertStringNotContainsString('_run_skill_script', $code);
+        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $code);
+    }
 }
