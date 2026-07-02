@@ -446,8 +446,26 @@ PY;
 
             $requiredSet = array_flip($required);
 
+            // Python reserved words: a property named after a keyword cannot be a named
+            // parameter (e.g. `def f(in: str)` is a SyntaxError).  Route them to **extra.
+            static $pyKeywords = [
+                'False' => true, 'None' => true, 'True' => true,
+                'and' => true, 'as' => true, 'assert' => true,
+                'async' => true, 'await' => true, 'break' => true,
+                'class' => true, 'continue' => true, 'def' => true,
+                'del' => true, 'elif' => true, 'else' => true,
+                'except' => true, 'finally' => true, 'for' => true,
+                'from' => true, 'global' => true, 'if' => true,
+                'import' => true, 'in' => true, 'is' => true,
+                'lambda' => true, 'nonlocal' => true, 'not' => true,
+                'or' => true, 'pass' => true, 'raise' => true,
+                'return' => true, 'try' => true, 'while' => true,
+                'with' => true, 'yield' => true,
+            ];
+
             // Split properties into valid-identifier required vs optional.
-            // Properties whose names are not valid Python identifiers fall into **extra.
+            // Properties whose names are not valid Python identifiers OR are Python
+            // keywords fall into **extra.
             $validRequired = [];
             $validOptional = [];
             $hasExtra      = false;
@@ -457,7 +475,7 @@ PY;
                 if (!array_key_exists($pname, $properties)) {
                     continue;
                 }
-                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname)) {
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname) && !isset($pyKeywords[$pname])) {
                     $validRequired[$pname] = is_array($properties[$pname]) ? $properties[$pname] : [];
                 } else {
                     $hasExtra = true;
@@ -469,7 +487,7 @@ PY;
                 if (isset($requiredSet[$pname])) {
                     continue; // already handled
                 }
-                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname)) {
+                if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $pname) && !isset($pyKeywords[$pname])) {
                     $validOptional[$pname] = is_array($pspec) ? $pspec : [];
                 } else {
                     $hasExtra = true;

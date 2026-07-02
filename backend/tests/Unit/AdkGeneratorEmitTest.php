@@ -269,6 +269,93 @@ class AdkGeneratorEmitTest extends TestCase
             'requirements pip-install line must include httpx');
     }
 
+    /**
+     * I2 Fix 2: adversarial property ordering.
+     * input_schema lists optional property BEFORE required one.
+     * The emitted signature must place required (no default) BEFORE optional (= None)
+     * regardless of dict-key order.
+     */
+    public function testRequiredParamOrderedBeforeOptionalRegardlessOfSchemaOrder(): void
+    {
+        $a = $this->analyzed();
+        $a['usedCatalog'] = [
+            'search' => [
+                'server_url'   => 'http://localhost:9002/mcp',
+                'description'  => 'Search',
+                'input_schema' => [
+                    'type'       => 'object',
+                    // Optional (limit) is listed FIRST in properties dict
+                    'properties' => [
+                        'limit' => ['type' => 'integer'],
+                        'query' => ['type' => 'string'],
+                    ],
+                    // But query is the required one
+                    'required'   => ['query'],
+                ],
+            ],
+        ];
+        $code = ADKGenerator::emitAdk($a);
+
+        // Required param must come first despite being listed second in properties
+        $this->assertStringContainsString(
+            'def _tool_search(query: str, limit: int = None)',
+            $code,
+            'Required param (query) must appear before optional param (limit) regardless of properties dict order'
+        );
+        // Sanity: the reverse ordering must NOT appear
+        $this->assertStringNotContainsString(
+            'def _tool_search(limit:',
+            $code,
+            'Optional param must not appear first in function signature'
+        );
+    }
+
+    /**
+     * I2 Fix 3: invalid identifier and Python keyword property names.
+     * A property named with a hyphen (user-id) and a property named after a
+     * Python keyword (in) must NOT appear as named parameters in the emitted
+     * function signature — they must route to the **extra fallback.
+     */
+    public function testInvalidIdentifierAndKeywordPropertiesRoutedToExtra(): void
+    {
+        $a = $this->analyzed();
+        $a['usedCatalog'] = [
+            'lookup' => [
+                'server_url'   => 'http://localhost:9003/mcp',
+                'description'  => 'Lookup',
+                'input_schema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'user-id' => ['type' => 'string'],  // invalid identifier (hyphen)
+                        'in'      => ['type' => 'string'],  // Python keyword
+                        'query'   => ['type' => 'string'],  // valid, non-keyword
+                    ],
+                    'required' => ['query'],
+                ],
+            ],
+        ];
+        $code = ADKGenerator::emitAdk($a);
+
+        // Valid non-keyword param must appear normally
+        $this->assertStringContainsString('query: str', $code,
+            'Valid non-keyword param must appear as named parameter');
+        // **extra must be present because two props are invalid/keyword
+        $this->assertStringContainsString('**extra', $code,
+            '**extra must be emitted when invalid-identifier or keyword-named props exist');
+        // Python keyword must NOT appear as a named parameter
+        $this->assertDoesNotMatchRegularExpression(
+            '/def _tool_lookup\([^)]*\bin:/',
+            $code,
+            'Python keyword "in" must not appear as a named param in the function signature'
+        );
+        // Hyphenated name must NOT appear as a named parameter
+        $this->assertDoesNotMatchRegularExpression(
+            '/def _tool_lookup\([^)]*user-id:/',
+            $code,
+            'Hyphenated property "user-id" must not appear as a named param in the function signature'
+        );
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
