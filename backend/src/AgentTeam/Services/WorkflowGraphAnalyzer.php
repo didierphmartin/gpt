@@ -246,6 +246,24 @@ class WorkflowGraphAnalyzer
             ];
         }
 
+        // Resolve empty models to the provider's default (system_llm_settings.model) —
+        // the same source LangGraphGenerator uses and the "Default: <name>" the editor
+        // shows. A provider-only node (blank model) then compiles to a real model
+        // instead of an empty one (which produced e.g. LiteLlm(model="kimi/") at runtime).
+        $providerDefaults = [];
+        try {
+            foreach ($this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1") as $rowP) {
+                $providerDefaults[strtolower((string) ($rowP['provider_key'] ?? ''))] = (string) ($rowP['model'] ?? '');
+            }
+        } catch (\Throwable $_) {
+            // Table missing/unreadable: leave models blank; _make_model raises loudly at runtime.
+        }
+        foreach ($agents as $aid => $ag) {
+            if ((string) ($ag['model'] ?? '') === '') {
+                $agents[$aid]['model'] = $providerDefaults[strtolower((string) $ag['provider'])] ?? '';
+            }
+        }
+
         // Reuse the exact same tool/server catalog logic LangGraphGenerator uses.
         [$usedCatalog, $usedServers] = $this->buildToolCatalog($agents);
 

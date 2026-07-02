@@ -145,19 +145,51 @@ PY;
     private static function modelFactoryBlock(): string
     {
         return <<<'PY'
-_LITELLM_PREFIX = {
-    "claude": "anthropic/", "anthropic": "anthropic/",
-    "openai": "openai/", "grok": "xai/", "xai": "xai/",
-    "mistral": "mistral/", "groq": "groq/",
-}
-
 def _make_model(provider: str, model: str):
-    p = (provider or "").lower()
-    if p in ("gemini", "google", "google-genai", ""):
-        return model or "gemini-2.5-pro"
-    prefix = _LITELLM_PREFIX.get(p, p + "/")
-    spec = model if "/" in model else prefix + model
-    return LiteLlm(model=spec)
+    """Resolve a (provider, model) pair to an ADK model.
+
+    Gemini -> native model string; everything else -> LiteLlm. Grok/DeepSeek/Kimi
+    are OpenAI-compatible endpoints (mirrors the PHP providers / LangGraph runner),
+    so they route through litellm's openai/ handler with a custom api_base. API keys
+    come from the environment (.env). The (provider, model) pair is resolved by the
+    generator — a blank model already fell back to the provider default upstream.
+    """
+    p = (provider or "claude").lower()
+    if not model:
+        raise RuntimeError(
+            f"No model for provider {p!r}. Set a model on the agent in the editor, "
+            "or a default in system_llm_settings."
+        )
+    if p in ("gemini", "google", "google-genai"):
+        return model
+    if p in ("claude", "anthropic"):
+        return LiteLlm(model=model if "/" in model else "anthropic/" + model)
+    if p == "openai":
+        return LiteLlm(model=model if "/" in model else "openai/" + model)
+    if p in ("grok", "xai"):
+        return LiteLlm(
+            model="openai/" + model,
+            api_base="https://api.x.ai/v1",
+            api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
+        )
+    if p == "deepseek":
+        return LiteLlm(
+            model="openai/" + model,
+            api_base="https://api.deepseek.com",
+            api_key=os.environ.get("DEEPSEEK_API_KEY"),
+        )
+    if p == "kimi":
+        kwargs = dict(
+            model="openai/" + model,
+            api_base="https://api.moonshot.ai/v1",
+            api_key=os.environ.get("KIMI_API_KEY"),
+        )
+        if model.startswith("kimi-k2"):
+            # K2 enforces non-thinking sampling; mirror the PHP KimiProvider.
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        return LiteLlm(**kwargs)
+    # Fallback: best-effort litellm prefixed spec.
+    return LiteLlm(model=model if "/" in model else p + "/" + model)
 PY;
     }
 
