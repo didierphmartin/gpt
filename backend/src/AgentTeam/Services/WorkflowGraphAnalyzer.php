@@ -251,7 +251,7 @@ class WorkflowGraphAnalyzer
 
         $startNode = $base['byId'][$base['startNodeId']] ?? [];
         return array_merge($base, [
-            'workflow'       => ['id' => $workflowId, 'name' => (string) ($wf['name'] ?? "workflow_$workflowId")],
+            'workflow'       => ['id' => $workflowId, 'name' => ($wf->getName() ?: "workflow_$workflowId")],
             'agents'         => $agents,
             'usedCatalog'    => $usedCatalog,
             'usedServers'    => $usedServers,
