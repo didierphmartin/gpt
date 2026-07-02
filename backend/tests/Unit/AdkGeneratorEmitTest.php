@@ -47,15 +47,23 @@ class AdkGeneratorEmitTest extends TestCase
     public function testMcpToolBuilderEmitted(): void
     {
         $a = $this->analyzed();
-        $a['usedServers'] = ['srv1' => ['url' => 'http://localhost:9000/mcp']];
-        $a['usedCatalog'] = ['search' => ['server' => 'srv1', 'description' => 'Search', 'input_schema' => ['type' => 'object', 'properties' => []]]];
+        // usedServers: keyed by URL, value = {name: ...}  — matches WorkflowGraphAnalyzer::buildToolCatalog
+        $a['usedServers'] = ['http://localhost:9000/mcp' => ['name' => 'test-server']];
+        // usedCatalog: entry carries server_url directly — matches buildToolCatalog $toolCatalog[$tname]
+        $a['usedCatalog'] = ['search' => ['server_url' => 'http://localhost:9000/mcp', 'description' => 'Search', 'input_schema' => ['type' => 'object', 'properties' => []]]];
         $code = ADKGenerator::emitAdk($a);
         $this->assertStringContainsString('MCP_SERVERS = {', $code);
         $this->assertStringContainsString('TOOL_CATALOG = {', $code);
         $this->assertStringContainsString('def _call_mcp_tool(', $code);
         $this->assertStringContainsString('def build_tools_from_catalog()', $code);
         $this->assertStringContainsString('FunctionTool(', $code);
+        // The URL must appear in TOOL_CATALOG (as server_url value) so the tool builder can read it
         $this->assertStringContainsString('http://localhost:9000/mcp', $code);
+        // The emitted tool builder must resolve the URL directly from the catalog entry (not MCP_SERVERS indirection)
+        $this->assertStringContainsString('spec.get("server_url"', $code);
+        // Confirm the URL is embedded in TOOL_CATALOG in the emitted code (it will be the server_url value)
+        $this->assertMatchesRegularExpression('/"server_url":\s*"http:\/\/localhost:9000\/mcp"/', $code,
+            'TOOL_CATALOG in emitted code must contain server_url with the actual URL');
     }
 
     public function testSkillRunnerEmittedAndAsyncSafe(): void

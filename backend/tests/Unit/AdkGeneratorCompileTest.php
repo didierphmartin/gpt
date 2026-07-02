@@ -106,10 +106,12 @@ class AdkGeneratorCompileTest extends TestCase
         $base = WorkflowGraphAnalyzer::analyzeGraph($graph);
         return array_merge($base, [
             'workflow'       => ['id' => 99, 'name' => 'full_featured'],
-            'usedServers'    => ['srv1' => ['url' => 'http://localhost:9001/mcp']],
+            // usedServers: keyed by URL, value = {name: ...}  — matches WorkflowGraphAnalyzer::buildToolCatalog
+            'usedServers'    => ['http://localhost:9001/mcp' => ['name' => 'mcp-server']],
+            // usedCatalog: entry carries server_url directly — matches buildToolCatalog $toolCatalog[$tname]
             'usedCatalog'    => [
                 'search' => [
-                    'server'       => 'srv1',
+                    'server_url'   => 'http://localhost:9001/mcp',
                     'description'  => 'Web search',
                     'input_schema' => ['type' => 'object', 'properties' => ['query' => ['type' => 'string']]],
                 ],

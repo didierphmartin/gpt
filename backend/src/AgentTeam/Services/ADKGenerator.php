@@ -403,8 +403,7 @@ PY;
 def build_tools_from_catalog() -> dict:
     tools = {}
     for name, spec in TOOL_CATALOG.items():
-        server = MCP_SERVERS.get(spec.get("server", ""), {})
-        url = server.get("url", "")
+        url = spec.get("server_url", "")
         def _make(_name=name, _url=url):
             def _fn(**kwargs) -> str:
                 """MCP tool proxy."""
