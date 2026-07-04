@@ -454,9 +454,13 @@ class AdkGeneratorEmitTest extends TestCase
         ]);
         $code = \AgentTeam\Services\ADKGenerator::emitAdk($a);
 
-        // main agent is separate and has NO skill tool
+        // main agent is separate and has NO skill tool. Check the main agent's own
+        // block (not the whole file: the module-level RUN_SKILL_SCRIPT_TOOL = FunctionTool(...)
+        // definition is emitted once needsSkills is on, and is unrelated to what the agent gets).
         $this->assertStringContainsString('node_2_agent = LlmAgent(', $code);
-        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $code);   // never given to the main agent
+        $mainStart = strpos($code, 'node_2_agent = LlmAgent(');
+        $mainBlock = substr($code, $mainStart, strpos($code, "\n)", $mainStart) - $mainStart);
+        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $mainBlock); // never given to the main agent
         // skill step: node model, dir-scoped tool, callable instruction seeded by the agent's result
         $this->assertStringContainsString('node_2_skill_1 = LlmAgent(', $code);
         $this->assertStringContainsString('_make_model("claude", "m")', $code);
