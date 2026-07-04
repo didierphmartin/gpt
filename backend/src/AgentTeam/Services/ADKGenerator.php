@@ -282,10 +282,22 @@ PY;
             $entry .= "    model={$model},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
             $entry .= "    tools={$toolsPy},\n";
-            if ($ag['temperature'] !== null || $ag['max_tokens'] !== null) {
+            // Kimi K2 only accepts temperature 0.6 (+ top_p 0.95) — mirror the PHP
+            // KimiProvider / LangGraph _make_llm and force it regardless of the node
+            // setting, else the API 400s ("only 0.6 is allowed for this model").
+            $temp = $ag['temperature'];
+            $topP = null;
+            if (strtolower($ag['provider']) === 'kimi' && strpos($ag['model'], 'kimi-k2') === 0) {
+                $temp = 0.6;
+                $topP = 0.95;
+            }
+            if ($temp !== null || $topP !== null || $ag['max_tokens'] !== null) {
                 $kwargs = [];
-                if ($ag['temperature'] !== null) {
-                    $kwargs[] = "temperature=" . json_encode($ag['temperature']);
+                if ($temp !== null) {
+                    $kwargs[] = "temperature=" . json_encode($temp);
+                }
+                if ($topP !== null) {
+                    $kwargs[] = "top_p=" . json_encode($topP);
                 }
                 if ($ag['max_tokens'] !== null) {
                     $kwargs[] = "max_output_tokens=" . json_encode($ag['max_tokens']);
@@ -467,6 +479,14 @@ PY;
             "        traceback.print_exc()\n" .
             "        raise\n" .
             "    os.makedirs(\"outputs\", exist_ok=True)\n" .
+            "    _head = final[:500].lower()\n" .
+            "    _ext = \"html\" if (\"<!doctype\" in _head or \"<html\" in _head) else \"md\"\n" .
+            "    _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
+            "    _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
+            "    _out = os.path.join(\"outputs\", f\"{_slug}_{_ts}.{_ext}\")\n" .
+            "    with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
+            "        _f.write(final)\n" .
+            "    print(f\"[workflow] result saved to {os.path.abspath(_out)}\", flush=True)\n" .
             "    print(final)\n" .
             "    return final\n" .
             "\n" .

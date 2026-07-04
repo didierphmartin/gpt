@@ -386,6 +386,14 @@ async def main(user_prompt: str = "GO"):
         traceback.print_exc()
         raise
     os.makedirs("outputs", exist_ok=True)
+    _head = final[:500].lower()
+    _ext = "html" if ("<!doctype" in _head or "<html" in _head) else "md"
+    _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
+    _ts = time.strftime("%Y%m%d-%H%M%S")
+    _out = os.path.join("outputs", f"{_slug}_{_ts}.{_ext}")
+    with open(_out, "w", encoding="utf-8") as _f:
+        _f.write(final)
+    print(f"[workflow] result saved to {os.path.abspath(_out)}", flush=True)
     print(final)
     return final
 
