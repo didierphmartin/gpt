@@ -297,7 +297,7 @@ class WorkflowGraphAnalyzer
             // Output-node storage setting: whether to persist the final result and where.
             // The compiled script honours these so its result lands in the same place the
             // browser interpreter uses (the Output node's advertised storage location).
-            'outputStorageEnabled' => $wf->getOutputStorageEnabled(),
+            'outputStorageEnabled' => $wf->isOutputStorageEnabled(),
             'outputFolder'         => $wf->getOutputFolder(),
         ]);
     }

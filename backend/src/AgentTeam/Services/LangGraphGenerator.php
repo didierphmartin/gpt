@@ -868,7 +868,7 @@ class LangGraphGenerator
         $ofolder = $workflow->getOutputFolder();
         $lines[] = 'WORKFLOW_ID = ' . (int) $workflowId;
         $lines[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
-        $lines[] = 'OUTPUT_STORAGE_ENABLED = ' . ($workflow->getOutputStorageEnabled() ? 'True' : 'False');
+        $lines[] = 'OUTPUT_STORAGE_ENABLED = ' . ($workflow->isOutputStorageEnabled() ? 'True' : 'False');
         $lines[] = 'OUTPUT_FOLDER = ' . (($ofolder !== null && $ofolder !== '') ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
         $lines[] = '';
         if (!empty($startDocuments)) {
