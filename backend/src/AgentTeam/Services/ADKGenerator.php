@@ -250,15 +250,16 @@ PY;
     private static function skillRunnerBlock(): string
     {
         $py = <<<'PY'
-# Skills read/write documents via SYNERGYAI_OUTPUT_DIR, exactly like the browser
-# interpreter. The interpreter mounts the host's ~/synergyAI/outputs/ at Pyodide's
-# "/outputs" and BUCKETS grouped skills into "/outputs/<group>" (the first path
-# segment of dir_name, e.g. "GEO/geo-content" -> outputs/GEO), also exporting
-# SYNERGYAI_SKILL_DIR_NAME + SYNERGYAI_SKILL_GROUP. We mirror that with real dirs so a
-# dimension skill's extract lands exactly where a downstream skill (gather_audits) reads.
-# Standalone Python has no virtual "/outputs" (a skill defaulting to it would write to
-# the filesystem root and fail), so this env is what makes the file handoff work.
+# Skills use the same virtual dirs the browser interpreter provides: "/outputs"
+# (persisted, mounted to the host outputs folder, bucketed per skill group) and
+# "/scratch" (staging for input files). Standalone Python has neither, so we (a) create
+# REAL outputs/scratch dirs, (b) remap "/outputs/..." and "/scratch/..." paths in argv
+# onto them, (c) stage input_files at those real paths before the run, and (d) export
+# SYNERGYAI_OUTPUT_DIR/SCRATCH_DIR/SKILL_DIR_NAME/SKILL_GROUP for scripts that read the
+# env. Without this a skill that hardcodes e.g. "-i /scratch/x -o /outputs/y" (like the
+# html skill's create.py) fails against the read-only filesystem root.
 SKILL_OUTPUTS_ROOT = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+SKILL_SCRATCH_DIR = os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch")
 
 
 def _skill_output_dir(dir_name: str) -> str:
@@ -268,19 +269,46 @@ def _skill_output_dir(dir_name: str) -> str:
     return SKILL_OUTPUTS_ROOT
 
 
+def _remap_virtual_path(p, out_dir: str) -> str:
+    """Map the interpreter's virtual "/outputs" and "/scratch" onto real host dirs so a
+    skill's hardcoded absolute paths resolve in standalone Python."""
+    p = str(p)
+    for virt, real in (("/outputs", out_dir), ("/scratch", SKILL_SCRATCH_DIR)):
+        if p == virt:
+            return real
+        if p.startswith(virt + "/"):
+            return os.path.join(real, p[len(virt) + 1:])
+    return p
+
+
 async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
-                            input_files: dict | None = None, read_outputs: bool = True) -> str:
-    """Run a skill's Python script as a subprocess in THIS environment."""
-    argv = argv or []
+                            input_files: dict | None = None,
+                            read_outputs: list[str] | None = None) -> str:
+    """Run a skill's Python script as a subprocess, mirroring the interpreter's skill
+    filesystem: real bucketed /outputs + /scratch, input_files staged first, requested
+    outputs read back after."""
+    argv = list(argv) if argv else []
     skill_path = os.path.join(SKILLS_DIR, dir_name)
-    _ensure_skill_deps(skill_path)  # ported: parse SKILL.md frontmatter, pip install once
+    _ensure_skill_deps(skill_path)  # parse SKILL.md frontmatter, pip install once
     script_path = os.path.join(skill_path, script)
     out_dir = _skill_output_dir(dir_name)
     os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(SKILL_SCRATCH_DIR, exist_ok=True)
+    argv = [_remap_virtual_path(a, out_dir) for a in argv]
+    if isinstance(input_files, dict):
+        for raw_path, content in input_files.items():
+            try:
+                target = _remap_virtual_path(raw_path, out_dir)
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(content if isinstance(content, str) else str(content))
+            except Exception as e:
+                print(f"[skill] could not stage {raw_path}: {e}", flush=True)
     group = dir_name.split("/")[0] if "/" in dir_name else ""
     env = dict(
         os.environ,
         SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
         SYNERGYAI_SKILL_DIR_NAME=dir_name,
         SYNERGYAI_SKILL_GROUP=group,
     )
@@ -290,9 +318,19 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     out, err = await proc.communicate()
+    result = out.decode("utf-8", "replace")
     if proc.returncode != 0:
-        return f"[skill error rc={proc.returncode}] {err.decode('utf-8', 'replace')}"
-    return out.decode("utf-8", "replace")
+        return (f"[skill error rc={proc.returncode}] "
+                + err.decode("utf-8", "replace") + "\n" + result).strip()
+    # Surface requested output files back to the model (interpreter parity).
+    if isinstance(read_outputs, list):
+        for rel in read_outputs:
+            try:
+                with open(_remap_virtual_path(rel, out_dir), "r", encoding="utf-8") as fh:
+                    result += f"\n\n[output file {rel}]\n" + fh.read()
+            except Exception:
+                pass
+    return result
 
 RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)
 PY;
@@ -328,10 +366,13 @@ def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
 
 
 def _make_skill_tool(dir_name: str) -> FunctionTool:
-    """run_skill_script scoped to one skill dir: the model chooses only the
-    script within the skill and its argv; the dir is fixed to this skill."""
-    async def run_skill_script(script: str, argv: list[str] | None = None) -> str:
-        return await _run_skill_script(dir_name, script, argv)
+    """run_skill_script scoped to one skill dir: the model chooses the script within the
+    skill, its argv, and optionally input_files (staged before the run, e.g. the HTML a
+    skill will render) and read_outputs (surfaced after); the dir is fixed to this skill."""
+    async def run_skill_script(script: str, argv: list[str] | None = None,
+                               input_files: dict | None = None,
+                               read_outputs: list[str] | None = None) -> str:
+        return await _run_skill_script(dir_name, script, argv, input_files, read_outputs)
     return FunctionTool(run_skill_script)
 PY;
         return $py;

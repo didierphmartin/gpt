@@ -435,8 +435,9 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('SKILLS_DIR', $code);          // reads from disk
         $this->assertStringContainsString('def _skill_instruction(', $code);
         $this->assertStringContainsString('def _make_skill_tool(', $code);
-        // dir-scoped: the per-skill tool binds dir_name and only exposes script+argv
-        $this->assertStringContainsString('return await _run_skill_script(dir_name, script, argv)', $code);
+        // dir-scoped tool passes through input_files + read_outputs (needed by file-based
+        // skills like html/create: stage HTML at /scratch, render to /outputs, read back)
+        $this->assertStringContainsString('return await _run_skill_script(dir_name, script, argv, input_files, read_outputs)', $code);
         // skill subprocess must get SYNERGYAI_OUTPUT_DIR (a real dir), else skills fall
         // back to "/outputs" (fs root) and their extract files silently fail to write.
         // Mirror the interpreter: bucket grouped skills into <root>/<group> + export the
@@ -448,6 +449,13 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('SYNERGYAI_SKILL_DIR_NAME=dir_name', $code);
         $this->assertStringContainsString('SYNERGYAI_SKILL_GROUP=group', $code);
         $this->assertStringContainsString('cwd=skill_path, env=env', $code);
+        // /scratch + /outputs virtual-path remap, input_files staging, read_outputs — the
+        // full interpreter skill-filesystem parity (so html/create's -i /scratch -o /outputs works)
+        $this->assertStringContainsString('SKILL_SCRATCH_DIR', $code);
+        $this->assertStringContainsString('def _remap_virtual_path(', $code);
+        $this->assertStringContainsString('SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR', $code);
+        $this->assertStringContainsString('_remap_virtual_path(raw_path, out_dir)', $code);   // input_files staged
+        $this->assertStringContainsString('[output file ', $code);                            // read_outputs surfaced
     }
 
     public function testSkillNodeCompilesToSequentialWithMandatorySkillStep(): void
