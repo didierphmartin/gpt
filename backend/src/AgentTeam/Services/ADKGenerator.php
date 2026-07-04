@@ -68,19 +68,12 @@ class ADKGenerator
         $lines[] = self::adkToolBuilderBlock($analyzed);
 
         // Emit skill runner only when the workflow actually uses skills.
-        // Mirror LangGraphGenerator's auto-detect: non-empty skill_content
-        // on any agent, OR any agent's systemPrompt already references
-        // run_skill_script (assembled by WorkflowGraphAnalyzer).
+        // Gated on the analyzer's 'skills' list (set by WorkflowGraphAnalyzer::skillsFromConfig)
+        // rather than the legacy skill_content/systemPrompt text check, so the helpers are
+        // emitted iff at least one agent has a non-empty skills list.
         $needsSkills = false;
         foreach ($analyzed['agents'] as $agent) {
-            if (!empty($agent['skill_content'])) {
-                $needsSkills = true;
-                break;
-            }
-            if (strpos((string) ($agent['systemPrompt'] ?? ''), 'run_skill_script') !== false) {
-                $needsSkills = true;
-                break;
-            }
+            if (!empty($agent['skills'])) { $needsSkills = true; break; }
         }
         if ($needsSkills) {
             $lines[] = '# --- Skills: run a skill folder Python script as a subprocess in this env ---';

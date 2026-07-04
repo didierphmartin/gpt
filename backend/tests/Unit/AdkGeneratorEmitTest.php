@@ -138,7 +138,10 @@ class AdkGeneratorEmitTest extends TestCase
     public function testSkillRunnerEmittedAndAsyncSafe(): void
     {
         $a = $this->analyzed();
-        $a['agents']['2']['skill_content'] = "Use the skill: call run_skill_script with dir_name='html/create'";
+        // Fixture updated: skills list (not skill_content) now triggers needsSkills.
+        $skillMd = "Use the skill: call run_skill_script with dir_name='html/create'";
+        $a['agents']['2']['skill_content'] = $skillMd;
+        $a['agents']['2']['skills'] = [['inline' => $skillMd]];
         $code = ADKGenerator::emitAdk($a);
         $this->assertStringContainsString('SKILLS_DIR', $code);
         $this->assertStringContainsString('def _run_skill_script(', $code);
@@ -181,18 +184,22 @@ class AdkGeneratorEmitTest extends TestCase
 
     public function testRunSkillScriptToolInAgentToolsList(): void
     {
-        // Legacy skill_content (no 'skills' list): skill runner is emitted at module level
-        // because skill_content triggers $needsSkills, but the main agent NEVER gets
-        // RUN_SKILL_SCRIPT_TOOL in its tools list — skills are separate SequentialAgent steps.
+        // Fixture updated for Task 4: needsSkills is now gated on the 'skills' list, not
+        // skill_content. When a skills list is present the node compiles to a SequentialAgent
+        // (main LlmAgent named node_2_agent + inline skill step), and the skill-runner helpers
+        // ARE emitted. The main agent (node_2_agent) must NEVER receive RUN_SKILL_SCRIPT_TOOL
+        // in its tools list — skills are separate SequentialAgent steps.
         $a = $this->analyzed();
-        $a['agents']['2']['skill_content'] = "Use the skill: call run_skill_script with dir_name='html/create'";
+        $skillMd = "Use the skill: call run_skill_script with dir_name='html/create'";
+        $a['agents']['2']['skill_content'] = $skillMd;
+        $a['agents']['2']['skills'] = [['inline' => $skillMd]];
         $code = ADKGenerator::emitAdk($a);
-        // No-skill path: still a bare LlmAgent (no SequentialAgent wrapper)
-        $this->assertStringContainsString('node_2 = LlmAgent(', $code);
-        // Skill runner IS emitted at module level (skill_content triggers needsSkills)
+        // With skills list: node_2 becomes a SequentialAgent; main LlmAgent is node_2_agent
+        $this->assertStringContainsString('node_2_agent = LlmAgent(', $code);
+        // Skill runner IS emitted at module level (skills list triggers needsSkills)
         $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL = FunctionTool(', $code);
         // The main agent must NOT carry RUN_SKILL_SCRIPT_TOOL in its tools list
-        $agentBlock = substr($code, strpos($code, 'node_2 = LlmAgent('));
+        $agentBlock = substr($code, strpos($code, 'node_2_agent = LlmAgent('));
         $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $agentBlock);
     }
 
@@ -493,5 +500,22 @@ class AdkGeneratorEmitTest extends TestCase
         ]);
         $code = ADKGenerator::emitAdk($a);
         $this->assertStringContainsString('{node_2}', $code); // node 3 instruction injects parent 2
+    }
+
+    public function testSkillHelpersEmittedWhenAgentHasSkillsList(): void
+    {
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+            ['id' => '2', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'R',
+                'systemPrompt' => 's', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+        ], 'edges' => [['from' => '1', 'to' => '2']]];
+        $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $a = array_merge($base, ['workflow' => ['id' => 1, 'name' => 'w'], 'usedCatalog' => [], 'usedServers' => [],
+            'startPrompt' => 'GO', 'startDocuments' => [], 'agents' => [
+            '2' => ['name' => 'R', 'systemPrompt' => 's', 'provider' => 'claude', 'model' => 'm',
+                'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '',
+                'skills' => [['dir' => 'GEO/geo-report']], 'output_schema_id' => null, 'documents' => []]]]);
+        $code = \AgentTeam\Services\ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('def _make_skill_tool(', $code);
     }
 }
