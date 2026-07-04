@@ -54,10 +54,16 @@ class ADKGenerator
     {
         $lines = [];
         $lines[] = self::headerBlock($analyzed);
+
+        $lines[] = '# --- Model factory: map a node provider+model to an ADK model ---';
         $lines[] = self::modelFactoryBlock();
+
+        $lines[] = '# --- MCP: baked server list + tool catalog, an HTTP JSON-RPC client, and';
+        $lines[] = '#     one FunctionTool per tool so the agents can call them ---';
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
         $lines[] = PythonEmitHelpers::mcpClientBlock();
+        $lines[] = '# --- Document converter: turn an attached file into markdown for the prompt ---';
         $lines[] = PythonEmitHelpers::documentConverterBlock();
         $lines[] = self::adkToolBuilderBlock($analyzed);
 
@@ -77,21 +83,29 @@ class ADKGenerator
             }
         }
         if ($needsSkills) {
+            $lines[] = '# --- Skills: run a skill folder Python script as a subprocess in this env ---';
             $lines[] = PythonEmitHelpers::skillDepsBlock();
             $lines[] = self::skillRunnerBlock();
         }
 
         // catalog must be defined after build_tools_from_catalog() (from adkToolBuilderBlock).
+        $lines[] = '# --- The tool objects agents reference by name as catalog["<tool>"] ---';
         $lines[] = 'catalog = build_tools_from_catalog()';
         // START_DOCUMENTS baked from the analyzed workflow; always present (empty list when none).
         $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments']);
+        $lines[] = '# --- Agents: one LlmAgent per workflow node. Each writes its result to';
+        $lines[] = '#     session.state["node_<id>"]; a child reads a parent via {node_<id>} ---';
         $lines[] = self::agentsBlock($analyzed);
 
         $consolidators = self::outputConsolidatorsBlock($analyzed);
         if ($consolidators !== '') {
+            $lines[] = '# --- Consolidator (fan-in) nodes: agents that merge their parents results ---';
             $lines[] = $consolidators;
         }
+        $lines[] = '# --- Orchestration: each topological layer runs as a ParallelAgent (independent';
+        $lines[] = '#     nodes concurrent), and the layers run in order inside a SequentialAgent ---';
         $lines[] = self::rootBlock($analyzed);
+        $lines[] = '# --- Entry point: seed prompt (+documents), run, stream trace, save to outputs/ ---';
         $lines[] = self::mainBlock($analyzed);
 
         return implode("\n", $lines) . "\n";
@@ -113,11 +127,40 @@ class ADKGenerator
         $name = $analyzed['workflow']['name'];
         return <<<PY
 """Standalone Google ADK workflow: {$name}
-Auto-generated -- backend-independent. Self-contained: MCP + skills run
-in this program's own Python environment.
 
-requirements:
+Auto-generated from the visual workflow editor. Backend-independent and
+self-contained: it calls the LLM providers, MCP servers, and folder-backed
+skills entirely from this one file -- no dependency on the app that produced it.
+
+HOW THIS FILE IS ORGANISED (top to bottom):
+  1. _make_model(provider, model)  -- maps a workflow node's provider+model to an
+                                      ADK model (Gemini = native string; every other
+                                      provider goes through LiteLLM, with Grok/Kimi/
+                                      DeepSeek routed to their OpenAI-compatible API).
+  2. MCP_SERVERS / TOOL_CATALOG    -- the MCP tools this workflow uses, baked in.
+  3. _call_mcp_tool + build_tools_from_catalog()
+                                   -- an HTTP JSON-RPC MCP client; each tool is wrapped
+                                      as an ADK FunctionTool the model can call.
+  4. Skill runner (only when the workflow uses skills)
+                                   -- runs a skill folder Python script as a subprocess here.
+  5. node_<id> = LlmAgent(...)     -- ONE agent per workflow node. Each agent writes its
+                                      answer to session.state["node_<id>"]; a downstream
+                                      agent reads a parent's output through the literal
+                                      {node_<id>} placeholder in its instruction (that is
+                                      ADK "state templating" -- the runtime substitutes it).
+  6. root_agent = SequentialAgent([...])
+                                   -- the workflow graph expressed as TOPOLOGICAL LAYERS:
+                                      independent nodes at the same depth run together in a
+                                      ParallelAgent; the layers themselves run in order.
+  7. main()                        -- seeds the prompt (plus any attached documents), runs
+                                      the graph via Runner, streams a [node]/[tool] trace to
+                                      stdout, and saves the final result under outputs/.
+
+TO RUN:
     pip install google-adk litellm httpx
+    # provide the API keys for the providers used, via the environment / a .env, e.g.:
+    #   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY
+    python this_file.py "your prompt here"
 """
 import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
@@ -277,7 +320,9 @@ PY;
 
             $model = '_make_model("' . $ag['provider'] . '", "' . $ag['model'] . '")';
 
-            $entry  = "node_{$id} = LlmAgent(\n";
+            $agentComment = str_replace(["\r", "\n"], ' ', (string) $ag['name']);
+            $entry  = "# Agent \"{$agentComment}\" ({$ag['provider']}/{$ag['model']}) -- workflow node {$id}\n";
+            $entry .= "node_{$id} = LlmAgent(\n";
             $entry .= "    name=\"node_{$id}\",\n";
             $entry .= "    model={$model},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
@@ -343,7 +388,8 @@ PY;
                 }
             }
 
-            $entry  = "node_{$id} = LlmAgent(\n";
+            $entry  = "# Consolidator (fan-in) for output node {$id} -- merges its parents' results\n";
+            $entry .= "node_{$id} = LlmAgent(\n";
             $entry .= "    name=\"node_{$id}\",\n";
             $entry .= "    model={$consolidatorModel},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";

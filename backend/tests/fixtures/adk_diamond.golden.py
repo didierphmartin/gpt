@@ -1,9 +1,38 @@
 """Standalone Google ADK workflow: diamond
-Auto-generated -- backend-independent. Self-contained: MCP + skills run
-in this program's own Python environment.
 
-requirements:
+Auto-generated from the visual workflow editor. Backend-independent and
+self-contained: it calls the LLM providers, MCP servers, and folder-backed
+skills entirely from this one file -- no dependency on the app that produced it.
+
+HOW THIS FILE IS ORGANISED (top to bottom):
+  1. _make_model(provider, model)  -- maps a workflow node's provider+model to an
+                                      ADK model (Gemini = native string; every other
+                                      provider goes through LiteLLM, with Grok/Kimi/
+                                      DeepSeek routed to their OpenAI-compatible API).
+  2. MCP_SERVERS / TOOL_CATALOG    -- the MCP tools this workflow uses, baked in.
+  3. _call_mcp_tool + build_tools_from_catalog()
+                                   -- an HTTP JSON-RPC MCP client; each tool is wrapped
+                                      as an ADK FunctionTool the model can call.
+  4. Skill runner (only when the workflow uses skills)
+                                   -- runs a skill folder Python script as a subprocess here.
+  5. node_<id> = LlmAgent(...)     -- ONE agent per workflow node. Each agent writes its
+                                      answer to session.state["node_<id>"]; a downstream
+                                      agent reads a parent's output through the literal
+                                      {node_<id>} placeholder in its instruction (that is
+                                      ADK "state templating" -- the runtime substitutes it).
+  6. root_agent = SequentialAgent([...])
+                                   -- the workflow graph expressed as TOPOLOGICAL LAYERS:
+                                      independent nodes at the same depth run together in a
+                                      ParallelAgent; the layers themselves run in order.
+  7. main()                        -- seeds the prompt (plus any attached documents), runs
+                                      the graph via Runner, streams a [node]/[tool] trace to
+                                      stdout, and saves the final result under outputs/.
+
+TO RUN:
     pip install google-adk litellm httpx
+    # provide the API keys for the providers used, via the environment / a .env, e.g.:
+    #   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY
+    python this_file.py "your prompt here"
 """
 import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
@@ -15,6 +44,7 @@ from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+# --- Model factory: map a node provider+model to an ADK model ---
 def _make_model(provider: str, model: str):
     """Resolve a (provider, model) pair to an ADK model.
 
@@ -60,6 +90,8 @@ def _make_model(provider: str, model: str):
         return LiteLlm(**kwargs)
     # Fallback: best-effort litellm prefixed spec.
     return LiteLlm(model=model if "/" in model else p + "/" + model)
+# --- MCP: baked server list + tool catalog, an HTTP JSON-RPC client, and
+#     one FunctionTool per tool so the agents can call them ---
 MCP_SERVERS = {}
 TOOL_CATALOG = {}
 def _normalize_mcp_url(url: str) -> str:
@@ -174,6 +206,7 @@ def _call_mcp_tool(server_url: str, tool_name: str,
              if isinstance(c, dict) and c.get("type") == "text"]
     return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
 
+# --- Document converter: turn an attached file into markdown for the prompt ---
 def _convert_doc_to_markdown(path: str) -> str:
     """Read a file and return its contents as Markdown.
 
@@ -295,8 +328,12 @@ def _convert_doc_to_markdown(path: str) -> str:
 
 def build_tools_from_catalog() -> dict:
     return {}
+# --- The tool objects agents reference by name as catalog["<tool>"] ---
 catalog = build_tools_from_catalog()
 START_DOCUMENTS = []
+# --- Agents: one LlmAgent per workflow node. Each writes its result to
+#     session.state["node_<id>"]; a child reads a parent via {node_<id>} ---
+# Agent "A" (claude/m) -- workflow node 2
 node_2 = LlmAgent(
     name="node_2",
     model=_make_model("claude", "m"),
@@ -305,6 +342,7 @@ node_2 = LlmAgent(
     output_key="node_2",
 )
 
+# Agent "B" (gemini/g) -- workflow node 3
 node_3 = LlmAgent(
     name="node_3",
     model=_make_model("gemini", "g"),
@@ -312,6 +350,8 @@ node_3 = LlmAgent(
     tools=[],
     output_key="node_3",
 )
+# --- Consolidator (fan-in) nodes: agents that merge their parents results ---
+# Consolidator (fan-in) for output node 4 -- merges its parents' results
 node_4 = LlmAgent(
     name="node_4",
     model=_make_model("claude", "m"),
@@ -319,6 +359,8 @@ node_4 = LlmAgent(
     tools=[],
     output_key="node_4",
 )
+# --- Orchestration: each topological layer runs as a ParallelAgent (independent
+#     nodes concurrent), and the layers run in order inside a SequentialAgent ---
 root_agent = SequentialAgent(
     name="workflow",
     sub_agents=[
@@ -326,6 +368,7 @@ root_agent = SequentialAgent(
     node_4
     ],
 )
+# --- Entry point: seed prompt (+documents), run, stream trace, save to outputs/ ---
 WORKFLOW_NAME = "diamond"
 
 async def main(user_prompt: str = "GO"):
