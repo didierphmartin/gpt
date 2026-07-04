@@ -862,6 +862,15 @@ class LangGraphGenerator
         }
         $lines[] = '""".strip()';
         $lines[] = '';
+        // Output-node storage setting baked in so the compiled script persists the final
+        // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
+        // folder) only when storage is enabled. Mirrors the ADK generator.
+        $ofolder = $workflow->getOutputFolder();
+        $lines[] = 'WORKFLOW_ID = ' . (int) $workflowId;
+        $lines[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
+        $lines[] = 'OUTPUT_STORAGE_ENABLED = ' . ($workflow->getOutputStorageEnabled() ? 'True' : 'False');
+        $lines[] = 'OUTPUT_FOLDER = ' . (($ofolder !== null && $ofolder !== '') ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
+        $lines[] = '';
         if (!empty($startDocuments)) {
             $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($startDocuments);
         } else {
@@ -1491,14 +1500,31 @@ if __name__ == "__main__":
     print("=" * 60)
     print(output)
 
-    # Save via script_io.write_output -- writes to <install>/outputs/
-    # with auto HTML/MD detection. The scripts/ folder stays scripts-only.
-    try:
-        from script_io import write_output
-        result_file = write_output(output, __file__, prompt=prompt)
-        print(f"\nResult saved to: {result_file}")
-    except Exception as e:
-        print(f"\n[warn] failed to save result via script_io: {e}")
+    # Honour the Output node's storage setting: when ON, save the final result where the
+    # app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via
+    # SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, don't save.
+    if OUTPUT_STORAGE_ENABLED:
+        try:
+            import os, time
+            _head = output[:500].lower()
+            _ext = "html" if ("<!doctype" in _head or "<html" in _head) else "md"
+            _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
+            _ts = time.strftime("%Y%m%d-%H%M%S")
+            _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+            if OUTPUT_FOLDER:
+                _cf = os.path.expanduser(OUTPUT_FOLDER)
+                _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)
+            else:
+                _save_dir = os.path.join(_root, "workflow")
+            os.makedirs(_save_dir, exist_ok=True)
+            _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
+            with open(_out, "w", encoding="utf-8") as _f:
+                _f.write(output)
+            print(f"\nResult saved to: {os.path.abspath(_out)}")
+        except Exception as e:
+            print(f"\n[warn] failed to save result: {e}")
+    else:
+        print("\n[info] output storage is OFF -- result printed above, not saved")
 
 PY;
     }
