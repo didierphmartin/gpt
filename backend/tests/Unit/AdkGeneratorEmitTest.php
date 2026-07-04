@@ -438,10 +438,15 @@ class AdkGeneratorEmitTest extends TestCase
         // dir-scoped: the per-skill tool binds dir_name and only exposes script+argv
         $this->assertStringContainsString('return await _run_skill_script(dir_name, script, argv)', $code);
         // skill subprocess must get SYNERGYAI_OUTPUT_DIR (a real dir), else skills fall
-        // back to "/outputs" (fs root) and their extract files silently fail to write
-        $this->assertStringContainsString('SKILL_OUTPUTS_DIR', $code);
-        $this->assertStringContainsString('os.makedirs(SKILL_OUTPUTS_DIR', $code);
-        $this->assertStringContainsString('env = dict(os.environ, SYNERGYAI_OUTPUT_DIR=SKILL_OUTPUTS_DIR)', $code);
+        // back to "/outputs" (fs root) and their extract files silently fail to write.
+        // Mirror the interpreter: bucket grouped skills into <root>/<group> + export the
+        // dir_name/group env vars, so a dimension skill's extract is where gather_audits reads.
+        $this->assertStringContainsString('SKILL_OUTPUTS_ROOT', $code);
+        $this->assertStringContainsString('def _skill_output_dir(', $code);
+        $this->assertStringContainsString('os.makedirs(out_dir', $code);
+        $this->assertStringContainsString('SYNERGYAI_OUTPUT_DIR=out_dir', $code);
+        $this->assertStringContainsString('SYNERGYAI_SKILL_DIR_NAME=dir_name', $code);
+        $this->assertStringContainsString('SYNERGYAI_SKILL_GROUP=group', $code);
         $this->assertStringContainsString('cwd=skill_path, env=env', $code);
     }
 

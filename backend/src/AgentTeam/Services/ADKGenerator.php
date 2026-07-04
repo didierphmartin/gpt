@@ -250,12 +250,22 @@ PY;
     private static function skillRunnerBlock(): string
     {
         $py = <<<'PY'
-# Skills read/write their output files via SYNERGYAI_OUTPUT_DIR. In the browser that
-# is a virtual "/outputs"; standalone Python has no such path, so a skill defaulting
-# to "/outputs" writes to the filesystem root and fails. Point every skill subprocess
-# at one real, shared dir (a sibling of SKILLS_DIR) so a dimension skill's extract is
-# exactly where a downstream skill (e.g. gather_audits) later reads it.
-SKILL_OUTPUTS_DIR = os.environ.get("SYNERGYAI_OUTPUT_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+# Skills read/write documents via SYNERGYAI_OUTPUT_DIR, exactly like the browser
+# interpreter. The interpreter mounts the host's ~/synergyAI/outputs/ at Pyodide's
+# "/outputs" and BUCKETS grouped skills into "/outputs/<group>" (the first path
+# segment of dir_name, e.g. "GEO/geo-content" -> outputs/GEO), also exporting
+# SYNERGYAI_SKILL_DIR_NAME + SYNERGYAI_SKILL_GROUP. We mirror that with real dirs so a
+# dimension skill's extract lands exactly where a downstream skill (gather_audits) reads.
+# Standalone Python has no virtual "/outputs" (a skill defaulting to it would write to
+# the filesystem root and fail), so this env is what makes the file handoff work.
+SKILL_OUTPUTS_ROOT = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+
+
+def _skill_output_dir(dir_name: str) -> str:
+    group = dir_name.split("/")[0] if "/" in dir_name else ""
+    if group and all(c.isalnum() or c in "._-" for c in group):
+        return os.path.join(SKILL_OUTPUTS_ROOT, group)
+    return SKILL_OUTPUTS_ROOT
 
 
 async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
@@ -265,8 +275,15 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
     skill_path = os.path.join(SKILLS_DIR, dir_name)
     _ensure_skill_deps(skill_path)  # ported: parse SKILL.md frontmatter, pip install once
     script_path = os.path.join(skill_path, script)
-    os.makedirs(SKILL_OUTPUTS_DIR, exist_ok=True)
-    env = dict(os.environ, SYNERGYAI_OUTPUT_DIR=SKILL_OUTPUTS_DIR)
+    out_dir = _skill_output_dir(dir_name)
+    os.makedirs(out_dir, exist_ok=True)
+    group = dir_name.split("/")[0] if "/" in dir_name else ""
+    env = dict(
+        os.environ,
+        SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SKILL_DIR_NAME=dir_name,
+        SYNERGYAI_SKILL_GROUP=group,
+    )
     proc = await asyncio.create_subprocess_exec(
         sys.executable, script_path, *[str(a) for a in argv],
         cwd=skill_path, env=env,
