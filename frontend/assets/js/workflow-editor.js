@@ -3371,7 +3371,7 @@ class WorkflowEditor {
         );
         if (userPrompt === null) return; // cancelled
 
-        const { append } = this._openRunOutputModal(filename);
+        const { append, showDiagnostic } = this._openRunOutputModal(filename);
 
         try {
             const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
@@ -3389,11 +3389,15 @@ class WorkflowEditor {
             }
             const reader = resp.body.getReader();
             const decoder = new TextDecoder();
+            let _runOut = '';
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                append(decoder.decode(value, { stream: true }));
+                const _chunk = decoder.decode(value, { stream: true });
+                _runOut += _chunk;
+                append(_chunk);
             }
+            showDiagnostic(this._diagnoseRunError(_runOut));
         } catch (e) {
             append(`\n[fetch failed: ${e?.message || e}]\n`);
         }
@@ -3722,7 +3726,7 @@ class WorkflowEditor {
         if (prompt === null) return; // user cancelled
 
         // Show a streaming-output modal up-front so the user sees progress.
-        const { backdrop, append, close } = this._openRunOutputModal(filename);
+        const { backdrop, append, close, showDiagnostic } = this._openRunOutputModal(filename);
 
         try {
             const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
@@ -3743,11 +3747,15 @@ class WorkflowEditor {
             // and a final result event the user can read directly.
             const reader = resp.body.getReader();
             const decoder = new TextDecoder();
+            let _runOut = '';
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                append(decoder.decode(value, { stream: true }));
+                const _chunk = decoder.decode(value, { stream: true });
+                _runOut += _chunk;
+                append(_chunk);
             }
+            showDiagnostic(this._diagnoseRunError(_runOut));
         } catch (e) {
             append(`\n[fetch failed: ${e?.message || e}]\n`);
         }
@@ -3837,11 +3845,13 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">Run output — <span class="font-mono text-sm">${this.escapeHtml(filename)}</span></h3>
                     <button class="run-close-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Close</button>
                 </div>
+                <div class="run-diag hidden mb-3 rounded-md border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900"></div>
                 <pre class="bg-gray-900 text-gray-100 text-xs rounded p-3 overflow-auto flex-1 whitespace-pre-wrap"></pre>
             </div>
         `;
         document.body.appendChild(backdrop);
         const pre = backdrop.querySelector('pre');
+        const diagEl = backdrop.querySelector('.run-diag');
         const close = () => backdrop.remove();
         backdrop.querySelector('.run-close-btn').addEventListener('click', close);
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
@@ -3850,7 +3860,109 @@ class WorkflowEditor {
             // Auto-scroll to bottom so the user sees the latest line.
             pre.scrollTop = pre.scrollHeight;
         };
-        return { backdrop, append, close };
+        // Actionable diagnostic banner (maps a runtime error to the agent/attribute to fix).
+        const showDiagnostic = (html) => {
+            if (!html) return;
+            diagEl.innerHTML = html;
+            diagEl.classList.remove('hidden');
+        };
+        return { backdrop, append, close, showDiagnostic };
+    }
+
+    /**
+     * Enumerate the workflow's agent nodes with the attributes a run error might
+     * point at (provider, model, temperature, max_tokens). Used to map a runtime
+     * error back to the specific agent(s) to update.
+     */
+    _collectAgentNodes() {
+        const out = [];
+        try {
+            const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+            for (const id of Object.keys(data)) {
+                const nd = data[id]?.data || {};
+                const t = nd.type;
+                if (t !== 'agent' && t !== 'agent-template' && t !== 'realtime-agent') continue;
+                out.push({
+                    id: String(id),
+                    name: nd.agent_name || `Agent ${id}`,
+                    provider: String(nd.agent_provider || nd.provider || nd.llm_provider || '').toLowerCase(),
+                    model: String(nd.model || ''),
+                    temperature: nd.settings?.temperature,
+                    maxTokens: nd.settings?.max_tokens,
+                });
+            }
+        } catch (_) { /* best-effort */ }
+        return out;
+    }
+
+    /**
+     * Inspect a finished run's output for a known error signature and return an
+     * actionable HTML banner: what failed + which agent(s)/attribute to update.
+     * Works for both LangGraph and ADK runs (same runner output). Returns '' when
+     * the run looks clean or the error is unrecognised-but-not-fatal.
+     */
+    _diagnoseRunError(output) {
+        if (!output) return '';
+        const low = output.toLowerCase();
+        const failed = /traceback|exception|error|exit\s*[\r\n]+data:\s*[1-9]/i.test(output);
+        if (!failed) return '';
+
+        const esc = (s) => this.escapeHtml(String(s));
+        const agents = this._collectAgentNodes();
+
+        // Provider tokens that can appear in an error → app provider key.
+        const provMap = {
+            anthropic: 'claude', claude: 'claude', openai: 'openai', 'gpt-': 'openai',
+            gemini: 'gemini', google: 'gemini', grok: 'grok', 'x.ai': 'grok', xai: 'grok',
+            kimi: 'kimi', moonshot: 'kimi', deepseek: 'deepseek',
+        };
+        const provs = new Set();
+        for (const [tok, prov] of Object.entries(provMap)) { if (low.includes(tok)) provs.add(prov); }
+        const modelToks = [...output.matchAll(/model[=:\s]+['"]?([a-z0-9._\/-]{2,})/gi)].map(m => m[1].toLowerCase());
+
+        let type = '', attr = '', hint = '';
+        if (/invalid temperature|only [\d.]+ is allowed|temperature.*(allowed|supported|must be)/i.test(output)) {
+            type = 'Invalid temperature'; attr = 'temperature';
+            hint = 'This model only accepts a specific temperature. Update <b>temperature</b> on the agent(s) below in the form, then re-Generate.';
+        } else if (/missing .* api key|authenticationerror|invalid.*api.?key|incorrect api key|no auth credentials/i.test(output)) {
+            type = 'Missing / invalid API key';
+            hint = 'The provider key is missing or invalid. Re-run <b>Generate</b> to refresh <code>python/.env</code>, or set the key. (Not a form attribute.)';
+        } else if (/llm provider not provided|provider not provided/i.test(output)) {
+            type = 'Model / provider not set'; attr = 'model';
+            hint = 'The model is empty or the provider is unknown. Set a valid <b>model</b> on the agent(s) below.';
+        } else if (/model.*(not found|does not exist)|notfounderror|invalid model|the model .* does not exist/i.test(output)) {
+            type = 'Model not found'; attr = 'model';
+            hint = 'The model name is not valid for its provider. Fix the <b>model</b> on the agent(s) below.';
+        } else if (/max_tokens|maximum context length|context_length_exceeded|reduce.*(length|tokens)/i.test(output)) {
+            type = 'Token limit'; attr = 'max_tokens';
+            hint = 'The request exceeded the model limit. Lower <b>max_tokens</b> (or shorten input) on the agent(s) below.';
+        } else if (/rate limit|ratelimiterror|\b429\b|quota/i.test(output)) {
+            type = 'Rate limit / quota';
+            hint = 'The provider is rate-limiting or out of quota. Retry later or check your plan. (Not a form attribute.)';
+        } else {
+            return `<b>⚠ The run failed.</b> See the trace below. If it names a provider/model, update that agent's <b>model</b> or <b>temperature</b> in the form and re-Generate.`;
+        }
+
+        let culprits = [];
+        if (modelToks.length) {
+            culprits = agents.filter(a => a.model && modelToks.some(m => {
+                const bare = m.replace(/^[a-z]+\//, '');
+                return bare === a.model.toLowerCase() || bare.includes(a.model.toLowerCase()) || a.model.toLowerCase().includes(bare);
+            }));
+        }
+        if (!culprits.length && provs.size) culprits = agents.filter(a => provs.has(a.provider));
+
+        const fmt = (a) => {
+            let extra = '';
+            if (attr === 'temperature' && a.temperature !== undefined) extra = `, temp=${esc(a.temperature)}`;
+            else if (attr === 'max_tokens' && a.maxTokens !== undefined) extra = `, max_tokens=${esc(a.maxTokens)}`;
+            return `<b>${esc(a.name)}</b> (${esc(a.provider)}/${esc(a.model)}${extra})`;
+        };
+        const list = culprits.length
+            ? culprits.map(fmt).join(', ')
+            : (provs.size ? `your ${[...provs].join('/')} agent(s)` : 'the agent(s) using that model');
+
+        return `<b>⚠ ${esc(type)}.</b> ${hint}<div class="mt-1">Agent(s): ${list}.</div>`;
     }
 
     /**
