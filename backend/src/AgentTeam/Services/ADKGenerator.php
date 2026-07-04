@@ -250,6 +250,14 @@ PY;
     private static function skillRunnerBlock(): string
     {
         $py = <<<'PY'
+# Skills read/write their output files via SYNERGYAI_OUTPUT_DIR. In the browser that
+# is a virtual "/outputs"; standalone Python has no such path, so a skill defaulting
+# to "/outputs" writes to the filesystem root and fails. Point every skill subprocess
+# at one real, shared dir (a sibling of SKILLS_DIR) so a dimension skill's extract is
+# exactly where a downstream skill (e.g. gather_audits) later reads it.
+SKILL_OUTPUTS_DIR = os.environ.get("SYNERGYAI_OUTPUT_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+
+
 async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
                             input_files: dict | None = None, read_outputs: bool = True) -> str:
     """Run a skill's Python script as a subprocess in THIS environment."""
@@ -257,9 +265,11 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
     skill_path = os.path.join(SKILLS_DIR, dir_name)
     _ensure_skill_deps(skill_path)  # ported: parse SKILL.md frontmatter, pip install once
     script_path = os.path.join(skill_path, script)
+    os.makedirs(SKILL_OUTPUTS_DIR, exist_ok=True)
+    env = dict(os.environ, SYNERGYAI_OUTPUT_DIR=SKILL_OUTPUTS_DIR)
     proc = await asyncio.create_subprocess_exec(
         sys.executable, script_path, *[str(a) for a in argv],
-        cwd=skill_path,
+        cwd=skill_path, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     out, err = await proc.communicate()

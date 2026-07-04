@@ -437,6 +437,12 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('def _make_skill_tool(', $code);
         // dir-scoped: the per-skill tool binds dir_name and only exposes script+argv
         $this->assertStringContainsString('return await _run_skill_script(dir_name, script, argv)', $code);
+        // skill subprocess must get SYNERGYAI_OUTPUT_DIR (a real dir), else skills fall
+        // back to "/outputs" (fs root) and their extract files silently fail to write
+        $this->assertStringContainsString('SKILL_OUTPUTS_DIR', $code);
+        $this->assertStringContainsString('os.makedirs(SKILL_OUTPUTS_DIR', $code);
+        $this->assertStringContainsString('env = dict(os.environ, SYNERGYAI_OUTPUT_DIR=SKILL_OUTPUTS_DIR)', $code);
+        $this->assertStringContainsString('cwd=skill_path, env=env', $code);
     }
 
     public function testSkillNodeCompilesToSequentialWithMandatorySkillStep(): void
