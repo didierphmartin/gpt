@@ -155,6 +155,24 @@ class WorkflowGraphAnalyzer
         return (string) ($n['node_type'] ?? $n['type'] ?? ($n['config']['type'] ?? 'agent'));
     }
 
+    /**
+     * Ordered skill bindings for an agent node's config. Prefers the structured
+     * bound_skill (dir-backed, read live from disk at runtime); falls back to the
+     * legacy inline skill_content string. Returns [] when the node has no skill.
+     * Phase 1 supports one skill; the return is a list so N skills need no change.
+     */
+    public static function skillsFromConfig(array $config): array
+    {
+        $out = [];
+        $bs = $config['bound_skill'] ?? null;
+        if (is_array($bs) && trim((string) ($bs['dir_name'] ?? '')) !== '') {
+            $out[] = ['dir' => trim((string) $bs['dir_name'])];
+        } elseif (trim((string) ($config['skill_content'] ?? '')) !== '') {
+            $out[] = ['inline' => (string) $config['skill_content']];
+        }
+        return $out;
+    }
+
     // --------------------------------------------------------------------------
     // Public instance: DB-backed full analysis
     // --------------------------------------------------------------------------
@@ -241,6 +259,7 @@ class WorkflowGraphAnalyzer
                 'max_tokens'       => $c['settings']['max_tokens'] ?? null,
                 'tools'            => array_values(array_map('strval', is_array($tools) ? $tools : [])),
                 'skill_content'    => (string) ($c['skill_content'] ?? ''),
+                'skills'           => self::skillsFromConfig($c),
                 'output_schema_id' => $c['output_schema_id'] ?? null,
                 'documents'        => $c['documents'] ?? [],
             ];

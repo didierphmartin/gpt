@@ -65,4 +65,34 @@ class WorkflowGraphAnalyzerTest extends TestCase
             ],
         ]);
     }
+
+    public function testAgentSurfacesBoundSkillDir(): void
+    {
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+                ['id' => '2', 'type' => 'agent', 'config' => [
+                    'type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 'do it',
+                    'provider' => 'claude', 'model' => 'm', 'selectedTools' => [],
+                    'bound_skill' => ['id' => null, 'source' => 'local', 'dir_name' => 'GEO/geo-report', 'name' => 'R'],
+                ]],
+            ],
+            'edges' => [['from' => '1', 'to' => '2']],
+        ];
+        $a = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        // analyzeGraph is structural; skills come from the config-aware path. Assert the helper directly:
+        $skills = \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig($graph['nodes'][1]['config']);
+        $this->assertSame([['dir' => 'GEO/geo-report']], $skills);
+    }
+
+    public function testLegacyInlineSkillContentBecomesInlineEntry(): void
+    {
+        $cfg = ['type' => 'agent', 'skill_content' => 'legacy instructions'];
+        $this->assertSame([['inline' => 'legacy instructions']], \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig($cfg));
+    }
+
+    public function testNoSkillYieldsEmptyList(): void
+    {
+        $this->assertSame([], \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig(['type' => 'agent']));
+    }
 }
