@@ -38,11 +38,12 @@ import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.re
 import httpx
 from typing import Any
 
-from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent
+from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.events import Event, EventActions
 from google.genai import types
 # --- Model factory: map a node provider+model to an ADK model ---
 def _make_model(provider: str, model: str):
@@ -350,15 +351,29 @@ node_3 = LlmAgent(
     tools=[],
     output_key="node_3",
 )
-# --- Consolidator (fan-in) nodes: agents that merge their parents results ---
-# Consolidator (fan-in) for output node 4 -- merges its parents' results
-node_4 = LlmAgent(
-    name="node_4",
-    model=_make_model("claude", "m"),
-    instruction="Consolidate the following results into the final answer.\n\n{node_2}\n{node_3}",
-    tools=[],
-    output_key="node_4",
-)
+# --- Output (fan-in) nodes: forward parent result(s) verbatim, no LLM (preserves HTML) ---
+class _PassThroughAgent(BaseAgent):
+    """Output (fan-in) node: emit the parent(s) result VERBATIM -- no LLM -- so
+    formatting such as HTML is preserved. A single parent is passed through
+    unchanged; multiple parents are joined with a separator. (An LlmAgent here
+    would re-summarise the parent and lose its original formatting, e.g. turning
+    a finished HTML report back into plain markdown.)
+    """
+    source_keys: list = []
+
+    async def _run_async_impl(self, ctx):
+        vals = [str(ctx.session.state.get(k, "")) for k in self.source_keys]
+        vals = [v for v in vals if v]
+        text = vals[0] if len(vals) == 1 else "\n\n---\n\n".join(vals)
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=text)]),
+            actions=EventActions(state_delta={self.name: text}),
+            turn_complete=True,
+        )
+# Output (fan-in) node 4 -- forwards its parent(s) result verbatim (no LLM),
+# so formatting such as HTML is preserved. Single parent = pass-through.
+node_4 = _PassThroughAgent(name="node_4", source_keys=["node_2", "node_3"])
 # --- Orchestration: each topological layer runs as a ParallelAgent (independent
 #     nodes concurrent), and the layers run in order inside a SequentialAgent ---
 root_agent = SequentialAgent(

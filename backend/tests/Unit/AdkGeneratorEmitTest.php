@@ -221,33 +221,39 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('Runner(', $code);
     }
 
-    public function testConsolidatorInheritsAgentParentModel(): void
+    public function testOutputNodeIsNonLlmPassThrough(): void
     {
-        // Diamond: nodes 2 and 3 are both claude/claude-sonnet-4-6 agents; node 4 is output.
-        // Consolidator for node 4 must use _make_model("claude", "claude-sonnet-4-6"), NOT _make_model("", "").
+        // Diamond: node 4 is an output (fan-in) node with parents 2 and 3. It must be
+        // emitted as a non-LLM _PassThroughAgent that forwards the parents' state
+        // verbatim -- NOT an LlmAgent (which would re-summarise and lose formatting
+        // such as a finished HTML report, turning it back into plain markdown).
         $graph = [
             'nodes' => [
                 ['id' => '1', 'type' => 'start',  'config' => ['type' => 'start', 'prompt' => 'GO']],
-                ['id' => '2', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'selectedTools' => []]],
-                ['id' => '3', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'selectedTools' => []]],
+                ['id' => '2', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+                ['id' => '3', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
                 ['id' => '4', 'type' => 'output', 'config' => ['type' => 'output']],
             ],
             'edges' => [['from' => '1', 'to' => '2'], ['from' => '1', 'to' => '3'], ['from' => '2', 'to' => '4'], ['from' => '3', 'to' => '4']],
         ];
         $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
         $a = array_merge($base, [
-            'workflow' => ['id' => 2, 'name' => 'claude_diamond'], 'usedCatalog' => [], 'usedServers' => [],
+            'workflow' => ['id' => 2, 'name' => 'diamond'], 'usedCatalog' => [], 'usedServers' => [],
             'startPrompt' => 'GO', 'startDocuments' => [],
             'agents' => [
-                '2' => ['name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
-                '3' => ['name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'claude-sonnet-4-6', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+                '2' => ['name' => 'A', 'systemPrompt' => 'A', 'provider' => 'claude', 'model' => 'm', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
+                '3' => ['name' => 'B', 'systemPrompt' => 'B', 'provider' => 'claude', 'model' => 'm', 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []],
             ],
         ]);
         $code = ADKGenerator::emitAdk($a);
-        // Consolidator must use the inherited model, not the Gemini default.
-        $this->assertStringContainsString('node_4 = LlmAgent(', $code);
-        $this->assertStringContainsString('model=_make_model("claude", "claude-sonnet-4-6")', $code);
-        $this->assertStringNotContainsString('model=_make_model("", "")', $code);
+        // The pass-through class is emitted and node_4 instantiates it with its parents' state keys.
+        $this->assertStringContainsString('class _PassThroughAgent(BaseAgent):', $code);
+        $this->assertMatchesRegularExpression('/node_4 = _PassThroughAgent\(name="node_4", source_keys=\[[^\]]*"node_2"[^\]]*"node_3"[^\]]*\]\)/', $code);
+        // Output node must NOT be an LlmAgent and must NOT re-summarise.
+        $this->assertStringNotContainsString('node_4 = LlmAgent(', $code);
+        $this->assertStringNotContainsString('Consolidate the following results', $code);
+        // Required imports for the custom agent.
+        $this->assertStringContainsString('from google.adk.events import Event, EventActions', $code);
     }
 
     /**

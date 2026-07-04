@@ -99,7 +99,8 @@ class ADKGenerator
 
         $consolidators = self::outputConsolidatorsBlock($analyzed);
         if ($consolidators !== '') {
-            $lines[] = '# --- Consolidator (fan-in) nodes: agents that merge their parents results ---';
+            $lines[] = '# --- Output (fan-in) nodes: forward parent result(s) verbatim, no LLM (preserves HTML) ---';
+            $lines[] = self::passThroughAgentBlock();
             $lines[] = $consolidators;
         }
         $lines[] = '# --- Orchestration: each topological layer runs as a ParallelAgent (independent';
@@ -166,11 +167,12 @@ import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.re
 import httpx
 from typing import Any
 
-from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent
+from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.events import Event, EventActions
 from google.genai import types
 PY;
     }
@@ -349,14 +351,41 @@ PY;
     }
 
     /**
-     * Emit LlmAgent consolidators for each `output` node.
-     *
-     * Each output node gets a dedicated LlmAgent whose instruction asks the model
-     * to consolidate all parent results.  The `{node_<p>}` tokens are ADK state
-     * placeholders; PythonEmitHelpers::pyStr() emits a non-f-string so braces
-     * survive into the generated Python verbatim.
-     *
-     * Returns an empty string when the workflow has no output nodes.
+     * The _PassThroughAgent class definition — a non-LLM fan-in used by output
+     * nodes. Emitted once, before the output nodes that instantiate it. Verified
+     * against google-adk 2.3.0: a custom BaseAgent yielding a content Event with
+     * turn_complete=True is captured by main()'s is_final_response() loop.
+     */
+    private static function passThroughAgentBlock(): string
+    {
+        return <<<'PY'
+class _PassThroughAgent(BaseAgent):
+    """Output (fan-in) node: emit the parent(s) result VERBATIM -- no LLM -- so
+    formatting such as HTML is preserved. A single parent is passed through
+    unchanged; multiple parents are joined with a separator. (An LlmAgent here
+    would re-summarise the parent and lose its original formatting, e.g. turning
+    a finished HTML report back into plain markdown.)
+    """
+    source_keys: list = []
+
+    async def _run_async_impl(self, ctx):
+        vals = [str(ctx.session.state.get(k, "")) for k in self.source_keys]
+        vals = [v for v in vals if v]
+        text = vals[0] if len(vals) == 1 else "\n\n---\n\n".join(vals)
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=text)]),
+            actions=EventActions(state_delta={self.name: text}),
+            turn_complete=True,
+        )
+PY;
+    }
+
+    /**
+     * Emit each `output` node as a non-LLM _PassThroughAgent that forwards its
+     * parent(s) output from session.state verbatim (single parent = pass-through,
+     * multiple = joined), preserving formatting like HTML. Returns '' when the
+     * workflow has no output nodes.
      */
     private static function outputConsolidatorsBlock(array $analyzed): string
     {
@@ -367,35 +396,15 @@ PY;
                 continue;
             }
             $parents = $analyzed['parents'][$id] ?? [];
-            $instr = "Consolidate the following results into the final answer.\n\n";
+            $keys = [];
             foreach ($parents as $p) {
-                // {$p} is PHP interpolation (gives e.g. "2").  The surrounding
-                // { and } are literal characters — not PHP interpolation — because
-                // there is no $ immediately after the opening {.
-                $instr .= "{node_{$p}}\n";
+                $keys[] = '"node_' . $p . '"';
             }
-            $instr = rtrim($instr);
+            $keysPy = '[' . implode(', ', $keys) . ']';
 
-            // Derive consolidator model from first agent parent; fall back to Gemini default.
-            $consolidatorModel = '_make_model("", "")';
-            foreach ($parents as $p) {
-                if (isset($analyzed['agents'][$p])) {
-                    $ag = $analyzed['agents'][$p];
-                    $prov = addslashes($ag['provider']);
-                    $mod  = addslashes($ag['model']);
-                    $consolidatorModel = "_make_model(\"{$prov}\", \"{$mod}\")";
-                    break;
-                }
-            }
-
-            $entry  = "# Consolidator (fan-in) for output node {$id} -- merges its parents' results\n";
-            $entry .= "node_{$id} = LlmAgent(\n";
-            $entry .= "    name=\"node_{$id}\",\n";
-            $entry .= "    model={$consolidatorModel},\n";
-            $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
-            $entry .= "    tools=[],\n";
-            $entry .= "    output_key=\"node_{$id}\",\n";
-            $entry .= ")";
+            $entry  = "# Output (fan-in) node {$id} -- forwards its parent(s) result verbatim (no LLM),\n";
+            $entry .= "# so formatting such as HTML is preserved. Single parent = pass-through.\n";
+            $entry .= "node_{$id} = _PassThroughAgent(name=\"node_{$id}\", source_keys={$keysPy})";
             $out[] = $entry;
         }
         return implode("\n\n", $out);
