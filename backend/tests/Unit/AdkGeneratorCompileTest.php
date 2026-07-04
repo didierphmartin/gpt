@@ -127,7 +127,8 @@ class AdkGeneratorCompileTest extends TestCase
                     'temperature'      => 0.5,
                     'max_tokens'       => 2048,
                     'tools'            => ['search'],
-                    'skill_content'    => "call run_skill_script dir_name=\"html/create\"",
+                    'skill_content'    => '',
+                    'skills'           => [['dir' => 'html/create']],
                     'output_schema_id' => null,
                     'documents'        => [],
                 ],
@@ -198,9 +199,13 @@ class AdkGeneratorCompileTest extends TestCase
 
         // Structural assertions (emit correctness, not just syntax)
         $this->assertStringContainsString('_run_skill_script', $code,
-            'Skill runner must be emitted when skill_content is non-empty');
-        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL', $code,
-            'RUN_SKILL_SCRIPT_TOOL must appear in agent tools list');
+            'Skill runtime must be emitted when an agent has a skill');
+        // The skill compiles to a mandatory post-agent step with a dir-scoped tool
+        // (main agent -> skill step inside a SequentialAgent), not a model-chosen tool.
+        $this->assertStringContainsString('_make_skill_tool("html/create")', $code,
+            'Skill must compile to a dir-scoped skill step');
+        $this->assertStringContainsString('node_2 = SequentialAgent(', $code,
+            'A skill node must compile to a SequentialAgent(main agent + skill steps)');
         $this->assertStringContainsString('http://localhost:9001/mcp', $code,
             'MCP server URL must be baked into output');
         $this->assertStringContainsString('FunctionTool(', $code,
