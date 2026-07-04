@@ -3335,6 +3335,22 @@ class WorkflowEditor {
      * output into a modal. Falls back to a "run manually" hint if the runner
      * isn't reachable, same as the LangGraph path.
      */
+    /**
+     * The workflow's Start-node prompt, used to pre-fill the Run dialog so the
+     * generated script runs with its baked-in start prompt by default (the user can
+     * still edit it to override). Returns '' when there is no start node or prompt.
+     */
+    _getStartPrompt() {
+        try {
+            const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+            for (const id of Object.keys(data)) {
+                const nd = data[id]?.data || {};
+                if (nd.type === 'start') return String(nd.prompt || '');
+            }
+        } catch (_) { /* best-effort */ }
+        return '';
+    }
+
     async _runAdkScript() {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
@@ -3367,7 +3383,7 @@ class WorkflowEditor {
         }
 
         const userPrompt = await this._showRenameDialog(
-            'workflow.output.adkRun', 'workflow.output.adkRunPrompt', '', 'workflow.output.adkRun'
+            'workflow.output.adkRun', 'workflow.output.adkRunPrompt', this._getStartPrompt(), 'workflow.output.adkRun'
         );
         if (userPrompt === null) return; // cancelled
 
@@ -3721,7 +3737,7 @@ class WorkflowEditor {
 
         // Prompt the user for argv (most generated scripts read sys.argv[1:]).
         const prompt = await this._showRenameDialog(
-            'workflow.output.langgraphRun', 'workflow.output.langgraphRunPrompt', '', 'workflow.output.langgraphRun'
+            'workflow.output.langgraphRun', 'workflow.output.langgraphRunPrompt', this._getStartPrompt(), 'workflow.output.langgraphRun'
         );
         if (prompt === null) return; // user cancelled
 
