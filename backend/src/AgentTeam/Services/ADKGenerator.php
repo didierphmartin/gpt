@@ -303,7 +303,7 @@ def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
 def _make_skill_tool(dir_name: str) -> FunctionTool:
     """run_skill_script scoped to one skill dir: the model chooses only the
     script within the skill and its argv; the dir is fixed to this skill."""
-    async def run_skill_script(script: str, argv=None) -> str:
+    async def run_skill_script(script: str, argv: list[str] | None = None) -> str:
         return await _run_skill_script(dir_name, script, argv)
     return FunctionTool(run_skill_script)
 PY;
