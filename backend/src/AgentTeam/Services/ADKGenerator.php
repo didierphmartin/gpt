@@ -238,6 +238,9 @@ def _make_model(provider: str, model: str):
 PY;
     }
 
+    /** Test seam: exposes skillRunnerBlock() output for unit testing. */
+    public static function skillRunnerBlockForTest(): string { return self::skillRunnerBlock(); }
+
     /**
      * Emit the ADK-specific async skill runner.
      *
@@ -253,7 +256,7 @@ PY;
      */
     private static function skillRunnerBlock(): string
     {
-        return <<<'PY'
+        $py = <<<'PY'
 async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
                             input_files: dict | None = None, read_outputs: bool = True) -> str:
     """Run a skill's Python script as a subprocess in THIS environment."""
@@ -273,6 +276,45 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
 
 RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)
 PY;
+        $py .= <<<'PY'
+
+
+def _read_skill_md(dir_name: str) -> str:
+    """Read the live SKILL.md body for a skill dir (progressive disclosure:
+    the skill's own instructions). Strips YAML frontmatter if present."""
+    path = os.path.join(SKILLS_DIR, *str(dir_name).split("/"), "SKILL.md")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return f"(SKILL.md not found for skill '{dir_name}' at {path})"
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            nl = text.find("\n", end + 1)
+            text = text[nl + 1:] if nl != -1 else ""
+    return text.strip()
+
+
+def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
+    """Return an ADK InstructionProvider (callable) for a skill step. Using a
+    callable makes ADK use the text verbatim (bypass_state_injection=True), so
+    SKILL.md braces are safe, and it can read the prior step's output from state."""
+    def _instr(ctx):
+        body = inline_md if inline_md else _read_skill_md(dir_name)
+        prior = ctx.state.get(input_key, "")
+        return body + "\n\n## Input to process (apply the skill to this)\n" + str(prior)
+    return _instr
+
+
+def _make_skill_tool(dir_name: str) -> FunctionTool:
+    """run_skill_script scoped to one skill dir: the model chooses only the
+    script within the skill and its argv; the dir is fixed to this skill."""
+    def run_skill_script(script: str, argv=None) -> str:
+        return _run_skill_script(dir_name, script, argv)
+    return FunctionTool(run_skill_script)
+PY;
+        return $py;
     }
 
     /**

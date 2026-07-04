@@ -417,6 +417,17 @@ class AdkGeneratorEmitTest extends TestCase
             'The guard must be emitted even when START_DOCUMENTS is empty (guard is always in main)');
     }
 
+    public function testSkillRunnerEmitsLiveSkillHelpers(): void
+    {
+        $code = \AgentTeam\Services\ADKGenerator::skillRunnerBlockForTest();
+        $this->assertStringContainsString('def _read_skill_md(', $code);
+        $this->assertStringContainsString('SKILLS_DIR', $code);          // reads from disk
+        $this->assertStringContainsString('def _skill_instruction(', $code);
+        $this->assertStringContainsString('def _make_skill_tool(', $code);
+        // dir-scoped: the per-skill tool binds dir_name and only exposes script+argv
+        $this->assertStringContainsString('return _run_skill_script(dir_name, script, argv)', $code);
+    }
+
     public function testParentOutputsInjectedIntoInstruction(): void
     {
         // node 3 (output) is child of 2; a downstream agent reading node 2 must see {node_2}
