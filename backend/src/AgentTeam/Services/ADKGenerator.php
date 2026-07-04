@@ -321,17 +321,25 @@ PY;
      * Emit one `LlmAgent` per agent node in $analyzed['agents'].
      *
      * Instruction assembly:
-     *  1. systemPrompt
-     *  2. If skill_content non-empty: append "\n\n## Skill\n" + skill_content
-     *  3. For each parent that is itself an agent: append "\n\n## Input from node {p}\n{node_{p}}"
+     *  1. systemPrompt (skill_content is NO LONGER appended here — skills are
+     *     now separate SequentialAgent steps, not prompt text)
+     *  2. For each parent that is itself an agent: append "\n\n## Input from node {p}\n{node_{p}}"
      *     The `{node_<p>}` is an ADK state placeholder and must survive into the emitted Python
      *     as a literal brace expression — PythonEmitHelpers::pyStr() produces a non-f-string, so
      *     braces are safe.
      *
-     * Tools: map each tool name to catalog["<name>"]; if instruction references run_skill_script,
-     * also add RUN_SKILL_SCRIPT_TOOL.
+     * Tools: map each tool name to catalog["<name>"]. The main agent NEVER receives
+     * RUN_SKILL_SCRIPT_TOOL — skills are mandatory post-agent SequentialAgent steps.
+     *
+     * For nodes with a non-empty `skills` list:
+     *  - The main agent variable is renamed to `node_<id>_agent` with output_key="node_<id>_agent".
+     *  - One `node_<id>_skill_<k>` LlmAgent is emitted per skill (using the node's provider/model).
+     *    The last skill step writes output_key="node_<id>"; intermediate steps write their own key.
+     *  - A `node_<id> = SequentialAgent(name="node_<id>", sub_agents=[...])` wrapper is emitted so
+     *    rootBlock() can reference `node_<id>` as before.
      *
      * generate_content_config is emitted only when temperature or max_tokens is non-null.
+     * Skill steps deliberately omit generate_content_config (default sampling).
      *
      * All nodes emitted at column 0.
      */
@@ -340,9 +348,9 @@ PY;
         $out = [];
         foreach ($analyzed['agents'] as $id => $ag) {
             $instr = $ag['systemPrompt'];
-            if ($ag['skill_content'] !== '') {
-                $instr .= "\n\n## Skill\n" . $ag['skill_content'];
-            }
+            // NOTE: ## Skill / skill_content is NOT appended — skills are now
+            // separate SequentialAgent steps, not prompt text.
+
             // Only inject from parents that are themselves agent nodes.
             $agentParents = array_values(array_filter(
                 $analyzed['parents'][$id] ?? [],
@@ -353,21 +361,25 @@ PY;
                 $instr .= "\n\n## Input from node {$p}\n{node_{$p}}";
             }
 
+            $skills = $ag['skills'] ?? [];
+            $hasSkills = count($skills) > 0;
+
+            // The main agent NEVER carries the skill tool. (Drop the old
+            // run_skill_script auto-add entirely — skills are separate steps now.)
             $toolExprs = [];
             foreach ($ag['tools'] as $t) {
                 $toolExprs[] = 'catalog["' . $t . '"]';
             }
-            if (strpos($instr, 'run_skill_script') !== false) {
-                $toolExprs[] = 'RUN_SKILL_SCRIPT_TOOL';
-            }
             $toolsPy = '[' . implode(', ', $toolExprs) . ']';
 
             $model = '_make_model("' . $ag['provider'] . '", "' . $ag['model'] . '")';
+            $agentVar    = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
+            $agentOutKey = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
 
             $agentComment = str_replace(["\r", "\n"], ' ', (string) $ag['name']);
             $entry  = "# Agent \"{$agentComment}\" ({$ag['provider']}/{$ag['model']}) -- workflow node {$id}\n";
-            $entry .= "node_{$id} = LlmAgent(\n";
-            $entry .= "    name=\"node_{$id}\",\n";
+            $entry .= "{$agentVar} = LlmAgent(\n";
+            $entry .= "    name=\"{$agentVar}\",\n";
             $entry .= "    model={$model},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
             $entry .= "    tools={$toolsPy},\n";
@@ -384,8 +396,41 @@ PY;
                 }
                 $entry .= "    generate_content_config=types.GenerateContentConfig(" . implode(", ", $kwargs) . "),\n";
             }
-            $entry .= "    output_key=\"node_{$id}\",\n";
+            $entry .= "    output_key=\"{$agentOutKey}\",\n";
             $entry .= ")";
+
+            if ($hasSkills) {
+                $prev      = "node_{$id}_agent";
+                $subAgents = ["node_{$id}_agent"];
+                foreach ($skills as $k => $skill) {
+                    $stepNo  = $k + 1;
+                    $isLast  = ($stepNo === count($skills));
+                    $stepVar = "node_{$id}_skill_{$stepNo}";
+                    $stepOut = $isLast ? "node_{$id}" : $stepVar;
+                    if (isset($skill['dir'])) {
+                        $dir      = addslashes($skill['dir']);
+                        $instrExpr = "_skill_instruction(\"{$dir}\", \"{$prev}\")";
+                        $toolPy    = "[_make_skill_tool(\"{$dir}\")]";
+                    } else {
+                        $inlineMd  = PythonEmitHelpers::pyStr((string) $skill['inline']);
+                        $instrExpr = "_skill_instruction(\"\", \"{$prev}\", inline_md={$inlineMd})";
+                        $toolPy    = "[]"; // legacy inline skill: no script folder
+                    }
+                    $entry .= "\n\n# Skill step {$stepNo} for node {$id} (mandatory; applies the skill to the prior result)\n";
+                    $entry .= "{$stepVar} = LlmAgent(\n";
+                    $entry .= "    name=\"{$stepVar}\",\n";
+                    $entry .= "    model={$model},\n";
+                    $entry .= "    instruction={$instrExpr},\n";
+                    $entry .= "    tools={$toolPy},\n";
+                    $entry .= "    output_key=\"{$stepOut}\",\n";
+                    $entry .= ")";
+                    $subAgents[] = $stepVar;
+                    $prev        = $stepVar;
+                }
+                $subList = implode(', ', $subAgents);
+                $entry .= "\n\n# Node {$id}: agent then mandatory skill pipeline (this is what the layering references)\n";
+                $entry .= "node_{$id} = SequentialAgent(\n    name=\"node_{$id}\",\n    sub_agents=[{$subList}],\n)";
+            }
 
             $out[] = $entry;
         }

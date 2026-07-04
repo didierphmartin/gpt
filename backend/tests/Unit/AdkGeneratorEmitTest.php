@@ -181,15 +181,19 @@ class AdkGeneratorEmitTest extends TestCase
 
     public function testRunSkillScriptToolInAgentToolsList(): void
     {
+        // Legacy skill_content (no 'skills' list): skill runner is emitted at module level
+        // because skill_content triggers $needsSkills, but the main agent NEVER gets
+        // RUN_SKILL_SCRIPT_TOOL in its tools list — skills are separate SequentialAgent steps.
         $a = $this->analyzed();
         $a['agents']['2']['skill_content'] = "Use the skill: call run_skill_script with dir_name='html/create'";
         $code = ADKGenerator::emitAdk($a);
-        // The LlmAgent block for node_2 must include RUN_SKILL_SCRIPT_TOOL in its tools list
+        // No-skill path: still a bare LlmAgent (no SequentialAgent wrapper)
         $this->assertStringContainsString('node_2 = LlmAgent(', $code);
-        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL', $code);
-        // Confirm it's inside the tools=[...] assignment for node_2
+        // Skill runner IS emitted at module level (skill_content triggers needsSkills)
+        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL = FunctionTool(', $code);
+        // The main agent must NOT carry RUN_SKILL_SCRIPT_TOOL in its tools list
         $agentBlock = substr($code, strpos($code, 'node_2 = LlmAgent('));
-        $this->assertStringContainsString('RUN_SKILL_SCRIPT_TOOL', $agentBlock);
+        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $agentBlock);
     }
 
     public function testRootLayeringAndMain(): void
@@ -426,6 +430,41 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('def _make_skill_tool(', $code);
         // dir-scoped: the per-skill tool binds dir_name and only exposes script+argv
         $this->assertStringContainsString('return await _run_skill_script(dir_name, script, argv)', $code);
+    }
+
+    public function testSkillNodeCompilesToSequentialWithMandatorySkillStep(): void
+    {
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+                ['id' => '2', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'R',
+                    'systemPrompt' => 'write the report', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+            ],
+            'edges' => [['from' => '1', 'to' => '2']],
+        ];
+        $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $a = array_merge($base, [
+            'workflow' => ['id' => 1, 'name' => 'w'], 'usedCatalog' => [], 'usedServers' => [],
+            'startPrompt' => 'GO', 'startDocuments' => [],
+            'agents' => [
+                '2' => ['name' => 'R', 'systemPrompt' => 'write the report', 'provider' => 'claude', 'model' => 'm',
+                    'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '',
+                    'skills' => [['dir' => 'GEO/geo-report']], 'output_schema_id' => null, 'documents' => []],
+            ],
+        ]);
+        $code = \AgentTeam\Services\ADKGenerator::emitAdk($a);
+
+        // main agent is separate and has NO skill tool
+        $this->assertStringContainsString('node_2_agent = LlmAgent(', $code);
+        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $code);   // never given to the main agent
+        // skill step: node model, dir-scoped tool, callable instruction seeded by the agent's result
+        $this->assertStringContainsString('node_2_skill_1 = LlmAgent(', $code);
+        $this->assertStringContainsString('_make_model("claude", "m")', $code);
+        $this->assertStringContainsString('_make_skill_tool("GEO/geo-report")', $code);
+        $this->assertStringContainsString('_skill_instruction("GEO/geo-report", "node_2_agent"', $code);
+        $this->assertStringContainsString('output_key="node_2"', $code);       // last step writes the node key
+        // wrapper the layering references
+        $this->assertMatchesRegularExpression('/node_2 = SequentialAgent\(\s*name="node_2",\s*sub_agents=\[node_2_agent, node_2_skill_1\]/s', $code);
     }
 
     public function testParentOutputsInjectedIntoInstruction(): void
