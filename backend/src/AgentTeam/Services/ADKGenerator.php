@@ -282,22 +282,13 @@ PY;
             $entry .= "    model={$model},\n";
             $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
             $entry .= "    tools={$toolsPy},\n";
-            // Kimi K2 only accepts temperature 0.6 (+ top_p 0.95) — mirror the PHP
-            // KimiProvider / LangGraph _make_llm and force it regardless of the node
-            // setting, else the API 400s ("only 0.6 is allowed for this model").
-            $temp = $ag['temperature'];
-            $topP = null;
-            if (strtolower($ag['provider']) === 'kimi' && strpos($ag['model'], 'kimi-k2') === 0) {
-                $temp = 0.6;
-                $topP = 0.95;
-            }
-            if ($temp !== null || $topP !== null || $ag['max_tokens'] !== null) {
+            // Emit the agent-form values verbatim — never override a form-stated
+            // parameter. If a value is invalid for a model (e.g. Kimi K2 requires
+            // temperature 0.6), that's surfaced to the user to fix in the form.
+            if ($ag['temperature'] !== null || $ag['max_tokens'] !== null) {
                 $kwargs = [];
-                if ($temp !== null) {
-                    $kwargs[] = "temperature=" . json_encode($temp);
-                }
-                if ($topP !== null) {
-                    $kwargs[] = "top_p=" . json_encode($topP);
+                if ($ag['temperature'] !== null) {
+                    $kwargs[] = "temperature=" . json_encode($ag['temperature']);
                 }
                 if ($ag['max_tokens'] !== null) {
                     $kwargs[] = "max_output_tokens=" . json_encode($ag['max_tokens']);
