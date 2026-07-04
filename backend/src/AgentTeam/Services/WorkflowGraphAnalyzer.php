@@ -294,6 +294,11 @@ class WorkflowGraphAnalyzer
             'usedServers'    => $usedServers,
             'startPrompt'    => (string) ($startNode['config']['prompt'] ?? ''),
             'startDocuments' => $startNode['config']['documents'] ?? [],
+            // Output-node storage setting: whether to persist the final result and where.
+            // The compiled script honours these so its result lands in the same place the
+            // browser interpreter uses (the Output node's advertised storage location).
+            'outputStorageEnabled' => $wf->getOutputStorageEnabled(),
+            'outputFolder'         => $wf->getOutputFolder(),
         ]);
     }
 

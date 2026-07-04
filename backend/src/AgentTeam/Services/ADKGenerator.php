@@ -612,8 +612,15 @@ PY;
     {
         $sp = PythonEmitHelpers::pyStr($analyzed['startPrompt']);
         $name = PythonEmitHelpers::pyStr($analyzed['workflow']['name']);
+        $wfId = (int) ($analyzed['workflow']['id'] ?? 0);
+        $storageEnabled = !empty($analyzed['outputStorageEnabled']) ? 'True' : 'False';
+        $folder = $analyzed['outputFolder'] ?? null;
+        $folderPy = ($folder !== null && $folder !== '') ? PythonEmitHelpers::pyStr((string) $folder) : 'None';
         return
             "WORKFLOW_NAME = {$name}\n" .
+            "WORKFLOW_ID = {$wfId}\n" .
+            "OUTPUT_STORAGE_ENABLED = {$storageEnabled}\n" .
+            "OUTPUT_FOLDER = {$folderPy}\n" .
             "\n" .
             "async def main(user_prompt: str = {$sp}):\n" .
             "    if START_DOCUMENTS:\n" .
@@ -672,15 +679,27 @@ PY;
             "        print(\"[workflow] ERROR:\", flush=True)\n" .
             "        traceback.print_exc()\n" .
             "        raise\n" .
-            "    os.makedirs(\"outputs\", exist_ok=True)\n" .
             "    _head = final[:500].lower()\n" .
             "    _ext = \"html\" if (\"<!doctype\" in _head or \"<html\" in _head) else \"md\"\n" .
             "    _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
             "    _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
-            "    _out = os.path.join(\"outputs\", f\"{_slug}_{_ts}.{_ext}\")\n" .
-            "    with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
-            "        _f.write(final)\n" .
-            "    print(f\"[workflow] result saved to {os.path.abspath(_out)}\", flush=True)\n" .
+            "    # Honour the Output node's storage setting: when ON, persist the final result\n" .
+            "    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,\n" .
+            "    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.\n" .
+            "    if OUTPUT_STORAGE_ENABLED:\n" .
+            "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n" .
+            "        if OUTPUT_FOLDER:\n" .
+            "            _cf = os.path.expanduser(OUTPUT_FOLDER)\n" .
+            "            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)\n" .
+            "        else:\n" .
+            "            _save_dir = os.path.join(_root, \"workflow\")\n" .
+            "        os.makedirs(_save_dir, exist_ok=True)\n" .
+            "        _out = os.path.join(_save_dir, f\"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}\")\n" .
+            "        with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
+            "            _f.write(final)\n" .
+            "        print(f\"[workflow] result saved to {os.path.abspath(_out)}\", flush=True)\n" .
+            "    else:\n" .
+            "        print(\"[workflow] output storage is OFF -- result printed below, not saved\", flush=True)\n" .
             "    print(final)\n" .
             "    return final\n" .
             "\n" .

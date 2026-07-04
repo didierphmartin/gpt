@@ -232,6 +232,51 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('Runner(', $code);
     }
 
+    public function testMainHonorsOutputStorageSetting(): void
+    {
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'type' => 'start',  'config' => ['type' => 'start', 'prompt' => 'GO']],
+                ['id' => '2', 'type' => 'agent',  'config' => ['type' => 'agent', 'agent_name' => 'A', 'systemPrompt' => 's', 'provider' => 'claude', 'model' => 'm', 'selectedTools' => []]],
+                ['id' => '3', 'type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3']],
+        ];
+        $base = \AgentTeam\Services\WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $mk = function (bool $enabled, ?string $folder) use ($base) {
+            return array_merge($base, [
+                'workflow' => ['id' => 42, 'name' => 'W'], 'usedCatalog' => [], 'usedServers' => [],
+                'startPrompt' => 'GO', 'startDocuments' => [],
+                'outputStorageEnabled' => $enabled, 'outputFolder' => $folder,
+                'agents' => ['2' => ['name' => 'A', 'systemPrompt' => 's', 'provider' => 'claude', 'model' => 'm',
+                    'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'skills' => [],
+                    'output_schema_id' => null, 'documents' => []]],
+            ]);
+        };
+
+        // Storage ON, default folder -> saves to <synergyAI>/outputs/workflow/<id>-<slug>_<ts>.<ext>
+        $on = ADKGenerator::emitAdk($mk(true, null));
+        $this->assertStringContainsString('WORKFLOW_ID = 42', $on);
+        $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $on);
+        $this->assertStringContainsString('OUTPUT_FOLDER = None', $on);
+        $this->assertStringContainsString('if OUTPUT_STORAGE_ENABLED:', $on);
+        $this->assertStringContainsString('~/Documents/synergyAI/outputs', $on);
+        $this->assertStringContainsString('os.path.join(_root, "workflow")', $on);
+        $this->assertStringContainsString('{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}', $on);
+        // The old unconditional cwd-relative save must be gone.
+        $this->assertStringNotContainsString('os.path.join("outputs", f"{_slug}', $on);
+
+        // Storage OFF -> the else branch skips saving.
+        $off = ADKGenerator::emitAdk($mk(false, null));
+        $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = False', $off);
+        $this->assertStringContainsString('output storage is OFF', $off);
+
+        // Custom folder -> baked as OUTPUT_FOLDER and used to override the default.
+        $custom = ADKGenerator::emitAdk($mk(true, 'client-reports'));
+        $this->assertStringContainsString('OUTPUT_FOLDER = "client-reports"', $custom);
+        $this->assertStringContainsString('os.path.join(_root, OUTPUT_FOLDER)', $custom);
+    }
+
     public function testOutputNodeIsNonLlmPassThrough(): void
     {
         // Diamond: node 4 is an output (fan-in) node with parents 2 and 3. It must be
