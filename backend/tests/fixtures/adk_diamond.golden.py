@@ -385,6 +385,9 @@ root_agent = SequentialAgent(
 )
 # --- Entry point: seed prompt (+documents), run, stream trace, save to outputs/ ---
 WORKFLOW_NAME = "diamond"
+WORKFLOW_ID = 1
+OUTPUT_STORAGE_ENABLED = False
+OUTPUT_FOLDER = None
 
 async def main(user_prompt: str = "GO"):
     if START_DOCUMENTS:
@@ -443,15 +446,27 @@ async def main(user_prompt: str = "GO"):
         print("[workflow] ERROR:", flush=True)
         traceback.print_exc()
         raise
-    os.makedirs("outputs", exist_ok=True)
     _head = final[:500].lower()
     _ext = "html" if ("<!doctype" in _head or "<html" in _head) else "md"
     _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
     _ts = time.strftime("%Y%m%d-%H%M%S")
-    _out = os.path.join("outputs", f"{_slug}_{_ts}.{_ext}")
-    with open(_out, "w", encoding="utf-8") as _f:
-        _f.write(final)
-    print(f"[workflow] result saved to {os.path.abspath(_out)}", flush=True)
+    # Honour the Output node's storage setting: when ON, persist the final result
+    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,
+    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.
+    if OUTPUT_STORAGE_ENABLED:
+        _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+        if OUTPUT_FOLDER:
+            _cf = os.path.expanduser(OUTPUT_FOLDER)
+            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)
+        else:
+            _save_dir = os.path.join(_root, "workflow")
+        os.makedirs(_save_dir, exist_ok=True)
+        _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
+        with open(_out, "w", encoding="utf-8") as _f:
+            _f.write(final)
+        print(f"[workflow] result saved to {os.path.abspath(_out)}", flush=True)
+    else:
+        print("[workflow] output storage is OFF -- result printed below, not saved", flush=True)
     print(final)
     return final
 
