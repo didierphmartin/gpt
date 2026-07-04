@@ -118,14 +118,13 @@ class LangGraphGenerator
 
     private static function safeVar(string $name): string
     {
-        $out = '';
-        $len = strlen($name);
-        for ($i = 0; $i < $len; $i++) {
-            $c = $name[$i];
-            $out .= ctype_alnum($c) ? $c : '_';
-        }
-        $out = trim($out, '_');
-        return strtolower($out);
+        // Replace every run of non-[A-Za-z0-9] (including the bytes of multibyte
+        // characters like an em-dash) with a single '_'. The old byte-by-byte
+        // ctype_alnum() loop was locale-dependent and kept a stray lead byte of a
+        // multibyte char (e.g. keeping \xe2 of "—" while dropping its continuation
+        // bytes), producing invalid UTF-8 that broke py_compile of the emitted script.
+        $out = preg_replace('/[^A-Za-z0-9]+/', '_', $name) ?? '';
+        return strtolower(trim($out, '_'));
     }
 
     /**
