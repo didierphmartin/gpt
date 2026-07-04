@@ -289,7 +289,7 @@ def _read_skill_md(dir_name: str) -> str:
     except OSError:
         return f"(SKILL.md not found for skill '{dir_name}' at {path})"
     if text.startswith("---"):
-        end = text.find("\n---", 3)
+        end = text.find("\n---\n", 3)
         if end != -1:
             nl = text.find("\n", end + 1)
             text = text[nl + 1:] if nl != -1 else ""
@@ -310,8 +310,8 @@ def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
 def _make_skill_tool(dir_name: str) -> FunctionTool:
     """run_skill_script scoped to one skill dir: the model chooses only the
     script within the skill and its argv; the dir is fixed to this skill."""
-    def run_skill_script(script: str, argv=None) -> str:
-        return _run_skill_script(dir_name, script, argv)
+    async def run_skill_script(script: str, argv=None) -> str:
+        return await _run_skill_script(dir_name, script, argv)
     return FunctionTool(run_skill_script)
 PY;
         return $py;
