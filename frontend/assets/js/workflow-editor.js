@@ -4279,7 +4279,7 @@ class WorkflowEditor {
                         </div>
                         <div class="storage-config-folder ${storageEnabled ? '' : 'disabled'}" id="storage-folder-section">
                             <label for="storage-folder-input">${this.t('workflow.storage.customFolder')}</label>
-                            <input type="text" id="storage-folder-input" value="${this.escapeHtml(outputFolder)}" placeholder="${this.t('workflow.storage.customFolderPlaceholder')}">
+                            <input type="text" id="storage-folder-input" value="${this.escapeHtml(outputFolder)}" placeholder="synergyAI/outputs/workflow/  (default)">
                             <small>${this.t('workflow.storage.customFolderHint')}</small>
                         </div>
                     </div>
@@ -4299,6 +4299,18 @@ class WorkflowEditor {
         const saveBtn = document.getElementById('storage-config-save');
         const enabledToggle = document.getElementById('storage-enabled-toggle');
         const folderSection = document.getElementById('storage-folder-section');
+
+        // Show the ACTUAL default storage location as the gray placeholder, so the user
+        // knows where the workflow's final output lands when no custom folder is set
+        // (this is the same folder where a produced HTML/document is stored). Resolve the
+        // real FSA root name — the user's chosen root may not literally be "synergyAI".
+        (async () => {
+            try {
+                const rootName = (await window.localFs?.getRootHandle?.())?.name;
+                const input = document.getElementById('storage-folder-input');
+                if (rootName && input) input.placeholder = `${rootName}/outputs/workflow/  (default)`;
+            } catch (_) { /* keep the fallback placeholder */ }
+        })();
 
         // Toggle folder section enable/disable
         enabledToggle.addEventListener('change', () => {
