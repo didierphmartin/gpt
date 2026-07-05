@@ -19,5 +19,13 @@ langchain-google-genai>=2.0.0
 # and ADK compiled scripts run without a follow-up install.
 google-adk>=2.3,<3
 litellm
+# Microsoft Agent Framework — the third compiler target. MAF-compiled scripts
+# import agent_framework; Claude → AnthropicClient, everything else (OpenAI +
+# Grok/Kimi/DeepSeek/Gemini via base_url) → OpenAIChatCompletionClient. Coexists
+# with langgraph + google-adk in the one venv (spike-verified 2026-07-05).
+agent-framework>=1.10,<2
+# MAF's anthropic client pulls anthropic ~0.80; langchain-anthropic warns it
+# wants >=0.96 but still works. Pin a floor both accept to keep the warning benign.
+anthropic>=0.80
 pydantic>=2.8.0
 python-dotenv>=1.0.0
