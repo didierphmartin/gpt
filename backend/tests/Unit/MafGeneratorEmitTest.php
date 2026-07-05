@@ -89,6 +89,13 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('_make_skill_tool', $code);
         // baked into AGENTS — jsonToPython pretty-prints, so match the dir key
         $this->assertStringContainsString('"dir": "html"', $code);
+        // Regression guard: MAF must NEVER pull in LangChain (the skill runtime uses
+        // MAF Agents + plain-callable tools, not StructuredTool / RUN_SKILL_SCRIPT_TOOL).
+        $block = MAFGenerator::skillRunnerBlockForTest();
+        $this->assertStringNotContainsString('langchain', $block);
+        $this->assertStringNotContainsString('StructuredTool', $block);
+        $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $block);
+        $this->assertStringNotContainsString('create_model', $block);
     }
 
     public function testNoSkillRuntimeWhenNoSkills(): void

@@ -156,6 +156,9 @@ def _make_skill_tool(dir_name: str):
     def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
         return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
     run_skill_script.__name__ = "run_skill_script"
+    run_skill_script.__doc__ = (
+        "Run a script in the '" + dir_name + "' skill (dir fixed). Stage authored "
+        "content via input_files and pass the output path(s) in read_outputs.")
     return run_skill_script
 
 
