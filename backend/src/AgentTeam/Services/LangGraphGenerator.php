@@ -407,12 +407,11 @@ class LangGraphGenerator
                 $agentModel = $providerDefaults[strtolower($agentProvider)] ?? '';
             }
 
-            // Append node-level skill content as a distinct "## Skill" section
-            // to mirror GraphWorkflowRunner::executeAgentNode behaviour.
-            $skillContent = trim((string) ($cfg['skill_content'] ?? ''));
-            if ($skillContent !== '') {
-                $systemPrompt = rtrim($systemPrompt) . "\n\n## Skill\n" . $skillContent;
-            }
+            // Skills are mandatory POST-agent steps (not prompt text, not an optional
+            // tool): the main agent runs, then each skill runs on its result and the last
+            // skill's produced deliverable becomes the node output. Surface the ordered
+            // skill bindings; skill_content is NO LONGER appended to the prompt. Mirrors ADK.
+            $skills = \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig($cfg);
 
             // HTML-output nudge. Some agent/skill prompts (e.g. the GEO report
             // consolidator) ask for a "production-quality HTML file". In the
@@ -430,7 +429,10 @@ class LangGraphGenerator
                 || strpos($pl, 'production-quality html') !== false
                 || strpos($pl, '<!doctype') !== false
                 || (strpos($pl, 'self-contained') !== false && strpos($pl, '<style') !== false);
-            if ($wantsHtml) {
+            // Only nudge the MAIN agent to emit HTML when the node has NO skill to render
+            // it. When a skill (e.g. html) is attached, that skill step produces the HTML
+            // deliverable, so the main agent should just write the report content.
+            if ($wantsHtml && empty($skills)) {
                 $systemPrompt = rtrim($systemPrompt)
                     . "\n\n## Output format (CRITICAL — read carefully)\n"
                     . "Your FINAL message MUST be the complete, self-contained HTML "
@@ -471,10 +473,8 @@ class LangGraphGenerator
             // assembled prompt, which carries the skill's "call run_skill_script
             // with dir_name …" instructions. The tool itself is a LOCAL
             // subprocess runner registered into the catalog (see toolBuilderBlock).
-            if (strpos($systemPrompt, 'run_skill_script') !== false
-                && !in_array('run_skill_script', $toolNames, true)) {
-                $toolNames[] = 'run_skill_script';
-            }
+            // NOTE: the main agent NEVER gets run_skill_script — skills run as separate
+            // mandatory steps after it (see the skill loop in the node function).
 
             foreach ($toolNames as $tn) {
                 $allNeededTools[$tn] = true;
@@ -487,6 +487,7 @@ class LangGraphGenerator
                 'model' => $agentModel,
                 'temperature' => $agentTemperature,
                 'max_tokens' => $agentMaxTokens,
+                'skills' => $skills,
             ];
         }
 
@@ -925,7 +926,14 @@ class LangGraphGenerator
                 $lines[] = $wl;
             }
             $lines[] = '""",';
+            $skillsJson = json_encode($ad['skills'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($skillsJson === false) {
+                $skillsJson = '[]';
+            }
             $lines[] = '        "tool_names": ' . $toolsList . ',';
+            // Ordered skill bindings ([{"dir": "..."}] / [{"inline": "..."}]) — the node
+            // runs each as a mandatory post-agent step; the last produces the node output.
+            $lines[] = '        "skills": ' . $skillsJson . ',';
             $lines[] = '    },';
         }
         $lines[] = '}';
@@ -1102,6 +1110,31 @@ PY;
         $partB = <<<'PY'
 
 
+# Skill filesystem (mirrors the browser interpreter + ADK): real bucketed /outputs and
+# /scratch dirs, virtual-path remap, env exposure, and a deliverable stash so a skill's
+# produced file (not the model's chatter) can become the node output.
+SKILL_OUTPUTS_ROOT = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+SKILL_SCRATCH_DIR = os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch")
+_LAST_SKILL_OUTPUTS = {}
+
+
+def _skill_output_dir(dir_name: str) -> str:
+    group = dir_name.split("/")[0] if "/" in dir_name else ""
+    if group and all(c.isalnum() or c in "._-" for c in group):
+        return os.path.join(SKILL_OUTPUTS_ROOT, group)
+    return SKILL_OUTPUTS_ROOT
+
+
+def _remap_virtual_path(p, out_dir: str) -> str:
+    p = str(p)
+    for virt, real in (("/outputs", out_dir), ("/scratch", SKILL_SCRATCH_DIR)):
+        if p == virt:
+            return real
+        if p.startswith(virt + "/"):
+            return os.path.join(real, p[len(virt) + 1:])
+    return p
+
+
 def _run_skill_script(dir_name: str, script: str, argv=None,
                       input_files=None, read_outputs=None) -> str:
     if isinstance(argv, str):
@@ -1114,39 +1147,40 @@ def _run_skill_script(dir_name: str, script: str, argv=None,
     script_path = os.path.join(skill_dir, *str(script).split("/"))
     if not os.path.isfile(script_path):
         return f"ERROR: skill script not found: {dir_name}/{script} (looked in {script_path})"
-    # Install the skill's declared PyPI deps into the venv on first use, so
-    # scripts that need e.g. beautifulsoup4 don't exit with a missing-dep error.
     _ensure_skill_deps(skill_dir)
-    # Optional input_files: write them so scripts that read a path still work.
-    # Absolute paths the host can't create (e.g. /scratch/...) are remapped
-    # into the skill dir and matching argv references are rewritten.
+    out_dir = _skill_output_dir(dir_name)
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(SKILL_SCRATCH_DIR, exist_ok=True)
+    # Remap the interpreter's virtual /outputs & /scratch in argv to real dirs.
+    argv = [_remap_virtual_path(a, out_dir) for a in argv]
+    # Stage input_files (e.g. HTML the skill will render) at their remapped paths.
     if isinstance(input_files, dict):
         for raw_path, content in input_files.items():
             try:
-                target = raw_path
-                parent = os.path.dirname(raw_path)
-                if raw_path.startswith("/") and not os.path.isdir(parent):
-                    target = os.path.join(skill_dir, os.path.basename(raw_path))
-                    argv = [target if a == raw_path else a for a in argv]
+                target = _remap_virtual_path(raw_path, out_dir)
                 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
                 with open(target, "w", encoding="utf-8") as fh:
                     fh.write(content if isinstance(content, str) else str(content))
             except Exception as e:
                 print(f"  [run_skill_script] could not stage {raw_path}: {e}")
+    env = dict(
+        os.environ,
+        SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
+        SYNERGYAI_SKILL_DIR_NAME=dir_name,
+        SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),
+    )
     cmd = [sys.executable, script_path] + [str(a) for a in argv]
     print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}", flush=True)
     _t0 = time.monotonic()
     try:
-        proc = subprocess.run(cmd, cwd=skill_dir, capture_output=True,
+        proc = subprocess.run(cmd, cwd=skill_dir, env=env, capture_output=True,
                               text=True, timeout=300)
     except subprocess.TimeoutExpired:
         print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s", flush=True)
         return f"ERROR: skill {dir_name}/{script} timed out after 300s"
     _dt = time.monotonic() - _t0
     out = proc.stdout or ""
-    # Result line mirrors the [tool] ←/→ pattern: exit code, stdout size, and
-    # a stderr tail so a failing or empty skill run is visible in the log
-    # (not just buried in the returned text).
     _stderr = (proc.stderr or "").strip()
     _head = out.replace(chr(10), " ")[:160]
     print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
@@ -1156,6 +1190,20 @@ def _run_skill_script(dir_name: str, script: str, argv=None,
     if proc.returncode != 0:
         out = (out + f"\n[run_skill_script exit {proc.returncode}]\n"
                + _stderr[-2000:]).strip()
+    # Read back requested outputs AND stash them so the skill step can use the produced
+    # document as the node output.
+    _produced = []
+    if isinstance(read_outputs, list):
+        for rel in read_outputs:
+            try:
+                with open(_remap_virtual_path(rel, out_dir), "r", encoding="utf-8") as fh:
+                    _content = fh.read()
+                out += f"\n\n[output file {rel}]\n" + _content
+                _produced.append(_content)
+            except Exception:
+                pass
+    if _produced:
+        _LAST_SKILL_OUTPUTS[dir_name] = _produced
     return out or "(skill produced no stdout)"
 
 
@@ -1180,6 +1228,70 @@ RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
         read_outputs=(list[str], []),
     ),
 )
+
+
+def _read_skill_md(dir_name: str) -> str:
+    """The live SKILL.md body (progressive disclosure); frontmatter stripped."""
+    path = os.path.join(SKILLS_DIR, *str(dir_name).split("/"), "SKILL.md")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return f"(SKILL.md not found for skill '{dir_name}')"
+    if text.startswith("---"):
+        end = text.find("\n---\n", 3)
+        if end != -1:
+            nl = text.find("\n", end + 1)
+            text = text[nl + 1:] if nl != -1 else ""
+    return text.strip()
+
+
+def _make_skill_tool(dir_name: str):
+    """run_skill_script scoped to ONE skill dir: the model picks only the script + argv
+    (and input_files/read_outputs); the dir is fixed to this skill."""
+    def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
+        return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
+    return StructuredTool.from_function(
+        func=run_skill_script, name="run_skill_script",
+        description=(f"Run a script in the '{dir_name}' skill (dir fixed). Stage authored "
+                     "content via input_files and pass the output path in read_outputs."),
+        args_schema=create_model(
+            "ScopedSkillArgs",
+            script=(str, ...), argv=(list[str], []),
+            input_files=(dict, {}), read_outputs=(list[str], []),
+        ),
+    )
+
+
+async def _run_skill_step(skill, prior, llm):
+    """Run ONE skill as a mandatory step on `prior` (the previous stage's output). A
+    dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to
+    the dir; the step output becomes the skill's produced deliverable file (via
+    read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform."""
+    dir_name = skill.get("dir", "")
+    body = skill.get("inline") or (_read_skill_md(dir_name) if dir_name else "")
+    system = (
+        "You are running the '" + (dir_name or "inline") + "' skill as a MANDATORY step in "
+        "a compiled workflow. Follow the skill instructions below and APPLY THE SKILL to the "
+        "INPUT. If the skill produces a document/file (e.g. an HTML report via a create/"
+        "render script), you MUST call run_skill_script -- stage your authored content via "
+        "input_files and pass the output path in read_outputs; the workflow captures that "
+        "produced file as this node's output. If the skill has no script, return the "
+        "transformed result as your response.\n\n=== SKILL INSTRUCTIONS ===\n" + body
+    )
+    tools = [_make_skill_tool(dir_name)] if dir_name else []
+    if dir_name:
+        _LAST_SKILL_OUTPUTS.pop(dir_name, None)
+    agent = create_react_agent(llm, tools)
+    msgs = [SystemMessage(content=system),
+            HumanMessage(content="## INPUT (apply the skill to this)\n" + str(prior))]
+    result = await agent.ainvoke({"messages": msgs})
+    final = result["messages"][-1]
+    text = final.content if isinstance(final, AIMessage) else str(final)
+    if isinstance(text, list):
+        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+    produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
+    return produced[-1] if produced else text
 
 PY;
         return $partA . PythonEmitHelpers::skillDepsBlock() . $partB;
@@ -1450,6 +1562,14 @@ PY;
                         print(f"[debug] [{n}] message history → outputs/_debug/{dump_path.name}")
                     except Exception as e:
                         print(f"[debug] [{n}] failed to dump message history: {e}")
+
+                    # Mandatory skill pipeline: each attached skill runs on the agent's
+                    # result in order; the last skill's produced deliverable (e.g. the html
+                    # skill's rendered HTML file) becomes this node's output.
+                    for _skill in ad.get("skills", []):
+                        text = await _run_skill_step(_skill, text, LLMS[n])
+                        print(f"[node] [{n}] after skill {_skill.get('dir') or 'inline'!r}: "
+                              f"{len(text)} chars", flush=True)
 
                     return {"node_outputs": {n: {"source": ad["display"], "text": text}}}
                 return _run
