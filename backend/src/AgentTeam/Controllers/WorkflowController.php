@@ -341,6 +341,64 @@ class WorkflowController
     }
 
     /**
+     * GET /api/v1/workflows/{id}/generate-maf
+     * Generate a standalone MAF Python script from the workflow.
+     *
+     * Returns either:
+     *   - Content-Type: text/x-python  (raw source) when ?download=1
+     *   - application/json {filename, code} otherwise (default)
+     */
+    public function generateMaf(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+        $download = ($request['query']['download'] ?? '0') === '1';
+
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (!$workflowId) {
+            return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
+        }
+
+        try {
+            if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
+                return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
+            }
+
+            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            $gen = new \AgentTeam\Services\MAFGenerator(
+                $this->db,
+                $this->workflowRepository,
+                $this->graphRepository,
+                $agentRepo
+            );
+            $result = $gen->generate($workflowId, (string) $userId);
+
+            if ($download) {
+                return [
+                    'success' => true,
+                    'raw_body' => $result['code'],
+                    'headers' => [
+                        'Content-Type' => 'text/x-python; charset=utf-8',
+                        'Content-Disposition' => 'attachment; filename="' . $result['filename'] . '"',
+                    ],
+                    'status_code' => 200,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'data' => $result,
+                'status_code' => 200,
+            ];
+        } catch (\Throwable $e) {
+            error_log('[WorkflowController] generateMaf failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
+        }
+    }
+
+    /**
      * GET /api/v1/workflows/{id}
      * Get a specific workflow
      */

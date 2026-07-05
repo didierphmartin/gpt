@@ -306,6 +306,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'show']);
         $r->get('/api/v1/workflows/{id:\d+}/generate-python', ['AgentTeam:WorkflowController', 'generatePython']);
         $r->get('/api/v1/workflows/{id:\d+}/generate-adk', ['AgentTeam:WorkflowController', 'generateAdk']);
+        $r->get('/api/v1/workflows/{id:\d+}/generate-maf', ['AgentTeam:WorkflowController', 'generateMaf']);
         // Standalone config-driven ingestion compiler (separate from agent code) —
         // chunks/scripts are compiled from the node configs the frontend sends.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/node-code', ['AgentTeam:IngestionController', 'nodeCode']);
