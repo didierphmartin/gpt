@@ -230,6 +230,9 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('node_4', $code);            // output consolidator
         $this->assertStringContainsString('async def main(', $code);
         $this->assertStringContainsString('Runner(', $code);
+        // Entry joins ALL argv (a multi-word prompt is one string), not just sys.argv[1].
+        $this->assertStringContainsString('" ".join(sys.argv[1:])', $code);
+        $this->assertStringNotContainsString('main(sys.argv[1] if', $code);
     }
 
     public function testMainHonorsOutputStorageSetting(): void

@@ -704,7 +704,9 @@ PY;
             "    return final\n" .
             "\n" .
             "if __name__ == \"__main__\":\n" .
-            "    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else {$sp}))";
+            "    # Join ALL argv (a prompt is one string even with spaces) -- the runner\n" .
+            "    # passes it space-split; sys.argv[1] alone would keep only the first word.\n" .
+            "    asyncio.run(main(\" \".join(sys.argv[1:]) if len(sys.argv) > 1 else {$sp}))";
     }
 
     /**

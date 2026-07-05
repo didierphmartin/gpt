@@ -471,4 +471,6 @@ async def main(user_prompt: str = "GO"):
     return final
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "GO"))
+    # Join ALL argv (a prompt is one string even with spaces) -- the runner
+    # passes it space-split; sys.argv[1] alone would keep only the first word.
+    asyncio.run(main(" ".join(sys.argv[1:]) if len(sys.argv) > 1 else "GO"))
