@@ -103,4 +103,21 @@ final class MafGeneratorEmitTest extends TestCase
         $code = MAFGenerator::emitMaf($this->analyzed());  // no skills
         $this->assertStringNotContainsString('def _run_skill_script(', $code);
     }
+
+    public function testMcpToolsEmitted(): void
+    {
+        $a = $this->analyzed();
+        $a['usedServers'] = ['https://mcp.example/mcp' => ['url' => 'https://mcp.example/mcp']];
+        $a['usedCatalog'] = ['web_search' => [
+            'server_url' => 'https://mcp.example/mcp', 'tool_name' => 'web_search',
+            'input_schema' => ['type'=>'object','properties'=>['q'=>['type'=>'string']],'required'=>['q']],
+        ]];
+        $a['agents']['2']['tools'] = ['web_search'];
+        $code = MAFGenerator::emitMaf($a);
+        $this->assertStringContainsString('MCP_SERVERS = {', $code);
+        $this->assertStringContainsString('def _call_mcp_tool(', $code);
+        $this->assertStringContainsString('def _tool_web_search(', $code);
+        $this->assertStringContainsString('catalog = build_tools_from_catalog()', $code);
+        $this->assertStringNotContainsString("catalog = {}", $code);   // placeholder replaced
+    }
 }

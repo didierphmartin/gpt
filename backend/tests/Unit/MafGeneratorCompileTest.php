@@ -58,4 +58,18 @@ final class MafGeneratorCompileTest extends TestCase
         [$rc, $out] = self::pyCompile(MAFGenerator::emitMaf($a), 'skill');
         $this->assertSame(0, $rc, "Skill MAF failed py_compile:\n{$out}");
     }
+
+    public function testMcpFixtureCompiles(): void
+    {
+        if (!self::python3Available()) { $this->markTestSkipped('python3 not on PATH'); }
+        $a = self::diamondAnalyzed();
+        $a['usedServers'] = ['https://mcp.example/mcp' => ['url' => 'https://mcp.example/mcp']];
+        $a['usedCatalog'] = ['web_search' => [
+            'server_url' => 'https://mcp.example/mcp', 'tool_name' => 'web_search',
+            'input_schema' => ['type'=>'object','properties'=>['q'=>['type'=>'string']],'required'=>['q']],
+        ]];
+        $a['agents']['2']['tools'] = ['web_search'];
+        [$rc, $out] = self::pyCompile(MAFGenerator::emitMaf($a), 'mcp');
+        $this->assertSame(0, $rc, "MCP MAF failed py_compile:\n{$out}");
+    }
 }
