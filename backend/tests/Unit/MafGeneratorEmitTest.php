@@ -76,4 +76,24 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $code);
         $this->assertStringContainsString('WORKFLOW_ID = 7', $code);
     }
+
+    public function testSkillRuntimeEmittedWhenSkillPresent(): void
+    {
+        $a = $this->analyzed();
+        $a['agents']['2']['skills'] = [['dir' => 'html']];
+        $code = MAFGenerator::emitMaf($a);
+        $this->assertStringContainsString('_LAST_SKILL_OUTPUTS', $code);
+        $this->assertStringContainsString('def _run_skill_script(', $code);
+        $this->assertStringContainsString('SYNERGYAI_OUTPUT_DIR', $code);
+        $this->assertStringContainsString('async def _run_skill_step(', $code);
+        $this->assertStringContainsString('_make_skill_tool', $code);
+        // baked into AGENTS — jsonToPython pretty-prints, so match the dir key
+        $this->assertStringContainsString('"dir": "html"', $code);
+    }
+
+    public function testNoSkillRuntimeWhenNoSkills(): void
+    {
+        $code = MAFGenerator::emitMaf($this->analyzed());  // no skills
+        $this->assertStringNotContainsString('def _run_skill_script(', $code);
+    }
 }

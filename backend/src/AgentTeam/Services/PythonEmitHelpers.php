@@ -263,6 +263,168 @@ PY;
     }
 
     /**
+     * Emit the synchronous skill filesystem Python block.
+     *
+     * Returns: SKILL_OUTPUTS_ROOT / SKILL_SCRATCH_DIR / _LAST_SKILL_OUTPUTS globals,
+     * _skill_output_dir(), _remap_virtual_path(), _run_skill_script() (synchronous
+     * subprocess.run with bucketed dirs, argv remap, input_files staging, SYNERGYAI_*
+     * env, and read_outputs → _LAST_SKILL_OUTPUTS stash), RUN_SKILL_SCRIPT_TOOL
+     * (LangGraph convenience; callers that don't use LangChain must import or stub
+     * StructuredTool/create_model/Field before this block), and _read_skill_md().
+     *
+     * Depends on SKILLS_DIR + _ensure_skill_deps from skillDepsBlock() being emitted
+     * first. Extracted verbatim from LangGraphGenerator::toolBuilderBlock() $partB
+     * lines 1111–1247 so LangGraph's generated output stays byte-identical.
+     *
+     * Framework-agnostic core (SKILL_OUTPUTS_ROOT … _read_skill_md) is shared by
+     * both LangGraphGenerator and MAFGenerator. MAFGenerator emits the LangChain
+     * imports for RUN_SKILL_SCRIPT_TOOL before this block (langchain-core is a
+     * transitive runner-venv dependency so it is always available).
+     */
+    public static function skillFsSyncBlock(): string
+    {
+        return <<<'PY'
+
+
+# Skill filesystem (mirrors the browser interpreter + ADK): real bucketed /outputs and
+# /scratch dirs, virtual-path remap, env exposure, and a deliverable stash so a skill's
+# produced file (not the model's chatter) can become the node output.
+SKILL_OUTPUTS_ROOT = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
+SKILL_SCRATCH_DIR = os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch")
+_LAST_SKILL_OUTPUTS = {}
+
+
+def _skill_output_dir(dir_name: str) -> str:
+    group = dir_name.split("/")[0] if "/" in dir_name else ""
+    if group and all(c.isalnum() or c in "._-" for c in group):
+        return os.path.join(SKILL_OUTPUTS_ROOT, group)
+    return SKILL_OUTPUTS_ROOT
+
+
+def _remap_virtual_path(p, out_dir: str) -> str:
+    p = str(p)
+    for virt, real in (("/outputs", out_dir), ("/scratch", SKILL_SCRATCH_DIR)):
+        if p == virt:
+            return real
+        if p.startswith(virt + "/"):
+            return os.path.join(real, p[len(virt) + 1:])
+    return p
+
+
+def _run_skill_script(dir_name: str, script: str, argv=None,
+                      input_files=None, read_outputs=None) -> str:
+    if isinstance(argv, str):
+        try:
+            argv = json.loads(argv)
+        except Exception:
+            argv = [argv]
+    argv = list(argv) if argv else []
+    skill_dir = os.path.join(SKILLS_DIR, *str(dir_name).split("/"))
+    script_path = os.path.join(skill_dir, *str(script).split("/"))
+    if not os.path.isfile(script_path):
+        return f"ERROR: skill script not found: {dir_name}/{script} (looked in {script_path})"
+    _ensure_skill_deps(skill_dir)
+    out_dir = _skill_output_dir(dir_name)
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(SKILL_SCRATCH_DIR, exist_ok=True)
+    # Remap the interpreter's virtual /outputs & /scratch in argv to real dirs.
+    argv = [_remap_virtual_path(a, out_dir) for a in argv]
+    # Stage input_files (e.g. HTML the skill will render) at their remapped paths.
+    if isinstance(input_files, dict):
+        for raw_path, content in input_files.items():
+            try:
+                target = _remap_virtual_path(raw_path, out_dir)
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(content if isinstance(content, str) else str(content))
+            except Exception as e:
+                print(f"  [run_skill_script] could not stage {raw_path}: {e}")
+    env = dict(
+        os.environ,
+        SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
+        SYNERGYAI_SKILL_DIR_NAME=dir_name,
+        SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),
+    )
+    cmd = [sys.executable, script_path] + [str(a) for a in argv]
+    print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}", flush=True)
+    _t0 = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, cwd=skill_dir, env=env, capture_output=True,
+                              text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s", flush=True)
+        return f"ERROR: skill {dir_name}/{script} timed out after 300s"
+    _dt = time.monotonic() - _t0
+    out = proc.stdout or ""
+    _stderr = (proc.stderr or "").strip()
+    _head = out.replace(chr(10), " ")[:160]
+    print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
+          f"{len(out)} chars stdout, {_dt:.1f}s | {_head}", flush=True)
+    if proc.returncode != 0 and _stderr:
+        print(f"  [run_skill_script]   stderr tail: {_stderr[-400:]}", flush=True)
+    if proc.returncode != 0:
+        out = (out + f"\n[run_skill_script exit {proc.returncode}]\n"
+               + _stderr[-2000:]).strip()
+    # Read back requested outputs AND stash them so the skill step can use the produced
+    # document as the node output.
+    _produced = []
+    if isinstance(read_outputs, list):
+        for rel in read_outputs:
+            try:
+                with open(_remap_virtual_path(rel, out_dir), "r", encoding="utf-8") as fh:
+                    _content = fh.read()
+                out += f"\n\n[output file {rel}]\n" + _content
+                _produced.append(_content)
+            except Exception:
+                pass
+    if _produced:
+        _LAST_SKILL_OUTPUTS[dir_name] = _produced
+    return out or "(skill produced no stdout)"
+
+
+RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
+    func=_run_skill_script,
+    name="run_skill_script",
+    description=("Execute a folder-backed skill's Python script and return its "
+                 "stdout. Pass the dir_name/script/argv the skill instructions "
+                 "specify, e.g. dir_name='GEO/geo-llmstxt', "
+                 "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
+    args_schema=create_model(
+        "RunSkillScriptArgs",
+        dir_name=(str, ...),
+        script=(str, ...),
+        # list[str] (not bare list) so the generated JSON schema carries
+        # `items`. Gemini rejects array params without `items` (400
+        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+        # input_files as a bare dict — Gemini accepted that, and dict[str,str]
+        # would add additionalProperties which Gemini may reject.
+        argv=(list[str], []),
+        input_files=(dict, {}),
+        read_outputs=(list[str], []),
+    ),
+)
+
+
+def _read_skill_md(dir_name: str) -> str:
+    """The live SKILL.md body (progressive disclosure); frontmatter stripped."""
+    path = os.path.join(SKILLS_DIR, *str(dir_name).split("/"), "SKILL.md")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return f"(SKILL.md not found for skill '{dir_name}')"
+    if text.startswith("---"):
+        end = text.find("\n---\n", 3)
+        if end != -1:
+            nl = text.find("\n", end + 1)
+            text = text[nl + 1:] if nl != -1 else ""
+    return text.strip()
+
+PY;
+    }
+
+    /**
      * Emit the document-to-markdown converter Python function.
      *
      * Returns _convert_doc_to_markdown(path) which reads a file and returns

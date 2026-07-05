@@ -49,4 +49,13 @@ final class MafGeneratorCompileTest extends TestCase
         [$rc, $out] = self::pyCompile(MAFGenerator::emitMaf(self::diamondAnalyzed()), 'diamond');
         $this->assertSame(0, $rc, "Diamond MAF failed py_compile:\n{$out}");
     }
+
+    public function testSkillFixtureCompiles(): void
+    {
+        if (!self::python3Available()) { $this->markTestSkipped('python3 not on PATH'); }
+        $a = self::diamondAnalyzed();
+        $a['agents']['4']['skills'] = [['dir' => 'html']];   // consolidator renders HTML
+        [$rc, $out] = self::pyCompile(MAFGenerator::emitMaf($a), 'skill');
+        $this->assertSame(0, $rc, "Skill MAF failed py_compile:\n{$out}");
+    }
 }

@@ -38,7 +38,16 @@ class MAFGenerator
         // Task 4 will insert MCP blocks here; Task 2 emits `catalog = {}` for now.
         $parts[] = 'catalog = {}';
         $parts[] = PythonEmitHelpers::documentConverterBlock();
-        // Task 3 inserts the skill runtime here (guarded by needsSkills).
+        // Skill runtime: emit BEFORE agentsBlock so _run_skill_step is defined
+        // when _run_node calls it. Gate on any agent having a non-empty skills list.
+        $needsSkills = false;
+        foreach ($analyzed['agents'] as $ag) {
+            if (!empty($ag['skills'])) { $needsSkills = true; break; }
+        }
+        if ($needsSkills) {
+            $parts[] = PythonEmitHelpers::skillDepsBlock();   // SKILLS_DIR + _ensure_skill_deps
+            $parts[] = self::skillRunnerBlock();
+        }
         $parts[] = self::agentsBlock($analyzed);
         // globalsBlock MUST precede orchestrationBlock: DEFAULT_PROMPT is used as
         // the default parameter value in `main()`'s signature, which Python resolves
@@ -49,6 +58,9 @@ class MAFGenerator
         $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
+
+    /** Expose skillRunnerBlock for test/inspection (test seam). */
+    public static function skillRunnerBlockForTest(): string { return self::skillRunnerBlock(); }
 
     private static function headerBlock(array $analyzed): string
     {
@@ -71,6 +83,7 @@ class MAFGenerator
         import os
         import subprocess
         import sys
+        import threading
         import time
         import traceback
         import urllib.request
@@ -113,6 +126,73 @@ class MAFGenerator
                     base_url="https://api.deepseek.com")
             raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
         PY;
+    }
+
+    /**
+     * Emit the MAF skill runtime block.
+     *
+     * Structure:
+     *  1. LangChain/pydantic imports needed by RUN_SKILL_SCRIPT_TOOL in the shared
+     *     skillFsSyncBlock (langchain-core is a transitive dependency of the runner
+     *     venv so it is always available).
+     *  2. PythonEmitHelpers::skillFsSyncBlock() — shared sync skill FS (globals,
+     *     bucketed dirs, argv remap, input_files staging, read_outputs → stash,
+     *     _read_skill_md). Depends on SKILLS_DIR + _ensure_skill_deps from
+     *     skillDepsBlock() which is emitted immediately before this block.
+     *  3. MAF-specific _make_skill_tool (plain callable — MAF auto-wraps) and
+     *     _run_skill_step (async, provider/model explicit, captures deliverable
+     *     via _LAST_SKILL_OUTPUTS).
+     */
+    private static function skillRunnerBlock(): string
+    {
+        // LangChain imports needed by RUN_SKILL_SCRIPT_TOOL in skillFsSyncBlock.
+        // langchain-core is installed in the shared runner venv (LangGraph dependency).
+        $lgCompat = <<<'PY'
+from langchain_core.tools import StructuredTool
+from pydantic import create_model, Field
+PY;
+
+        // MAF-specific: _make_skill_tool (plain callable auto-wrapped by MAF) +
+        // _run_skill_step (async, provider/model explicit, captures deliverable).
+        // Two leading blank lines complete the two-blank-line separator after
+        // _read_skill_md (skillFsSyncBlock ends with a single \n).
+        $mafSpecific = <<<'PY'
+
+
+def _make_skill_tool(dir_name: str):
+    """run_skill_script bound to ONE skill dir. Plain callable — MAF auto-wraps it."""
+    def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
+        return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
+    run_skill_script.__name__ = "run_skill_script"
+    return run_skill_script
+
+
+async def _run_skill_step(skill, prior, provider, model):
+    """Mandatory skill step on `prior` (previous stage output). A dir-backed skill
+    is a MAF Agent instructed by SKILL.md with a dir-scoped run_skill_script tool;
+    the step output becomes the produced deliverable file (via _LAST_SKILL_OUTPUTS)
+    when it wrote one, else the LLM text. Inline skill = an LLM transform."""
+    dir_name = skill.get("dir", "")
+    body = skill.get("inline") or (_read_skill_md(dir_name) if dir_name else "")
+    system = (
+        "You are running the '" + (dir_name or "inline") + "' skill as a MANDATORY "
+        "step. Apply the skill to the INPUT. If the skill produces a document/file "
+        "(e.g. HTML via a create/render script), you MUST call run_skill_script -- "
+        "stage authored content via input_files and pass the output path in "
+        "read_outputs; the workflow captures that produced file as this node's "
+        "output. If the skill has no script, return the transformed result.\n\n"
+        "=== SKILL INSTRUCTIONS ===\n" + body)
+    tools = [_make_skill_tool(dir_name)] if dir_name else []
+    if dir_name:
+        _LAST_SKILL_OUTPUTS.pop(dir_name, None)
+    agent = Agent(_make_client(provider, model), instructions=system,
+                  name="skill_step", tools=tools)
+    text = (await agent.run("## INPUT (apply the skill to this)\n" + str(prior))).text or ""
+    produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
+    return produced[-1] if produced else text
+PY;
+
+        return $lgCompat . PythonEmitHelpers::skillFsSyncBlock() . $mafSpecific;
     }
 
     /** Bake AGENTS metadata dict + the per-node async runner + fan-in helper. */
