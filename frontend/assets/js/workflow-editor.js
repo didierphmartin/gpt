@@ -3897,8 +3897,12 @@ class WorkflowEditor {
     _diagnoseRunError(output) {
         if (!output) return '';
         const low = output.toLowerCase();
-        const failed = /traceback|exception|error|exit\s*[\r\n]+data:\s*[1-9]/i.test(output);
-        if (!failed) return '';
+        // Only flag failure on a NON-ZERO exit code from the runner (event: exit /
+        // data: <n>). A successful report legitimately contains "error"/"traceback"
+        // (audit findings, non-fatal skill stderr), so matching those substrings gave
+        // false "run failed" banners on good runs that produced a complete report.
+        const exitMatch = output.match(/event:\s*exit\s*[\r\n]+data:\s*(-?\d+)/i);
+        if (!exitMatch || parseInt(exitMatch[1], 10) === 0) return '';
 
         const esc = (s) => this.escapeHtml(String(s));
         const agents = this._collectAgentNodes();
