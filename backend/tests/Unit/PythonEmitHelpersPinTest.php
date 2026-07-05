@@ -53,9 +53,9 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testSkillFsSyncBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::skillFsSyncBlock();
-        $this->assertSame(6104, strlen($block), 'skillFsSyncBlock byte length changed');
+        $this->assertSame(5092, strlen($block), 'skillFsSyncBlock byte length changed');
         $this->assertSame(
-            '87bfaf53a4e706e1ca9936fd814a86b4c52d14c7aabb16eb37b5ef2265890af4',
+            '9ca556157b3de294d64bb07cbd2fbaed6431bd95115becc7537d5b78b142c671',
             hash('sha256', $block),
             'skillFsSyncBlock content changed — this alters generated Python for both generators'
         );

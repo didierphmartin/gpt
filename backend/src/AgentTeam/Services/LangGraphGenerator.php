@@ -1105,12 +1105,35 @@ def build_tools_from_catalog() -> dict[str, StructuredTool]:
 
 
 PY;
-        // Part B: skillFsSyncBlock (shared) + LangGraph-specific _make_skill_tool + _run_skill_step.
-        // skillFsSyncBlock ends with "    return text.strip()\n" (one \n; PHP heredocs
-        // don't include the trailing blank line before PY;). The two blank lines that
-        // separate _read_skill_md from _make_skill_tool in the original $partB are
-        // provided by the two leading blank lines in $lgSpecific.
+        // Part B: skillFsSyncBlock (shared, LangChain-free) + LangGraph-specific tail.
+        // skillFsSyncBlock ends after _read_skill_md. The two blank lines that separate
+        // _read_skill_md from RUN_SKILL_SCRIPT_TOOL are provided by the two leading blank
+        // lines in $lgSpecific. RUN_SKILL_SCRIPT_TOOL lives here (not in the shared block)
+        // because it uses StructuredTool/create_model which are LangChain-only.
         $lgSpecific = <<<'PY'
+
+
+RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
+    func=_run_skill_script,
+    name="run_skill_script",
+    description=("Execute a folder-backed skill's Python script and return its "
+                 "stdout. Pass the dir_name/script/argv the skill instructions "
+                 "specify, e.g. dir_name='GEO/geo-llmstxt', "
+                 "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
+    args_schema=create_model(
+        "RunSkillScriptArgs",
+        dir_name=(str, ...),
+        script=(str, ...),
+        # list[str] (not bare list) so the generated JSON schema carries
+        # `items`. Gemini rejects array params without `items` (400
+        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+        # input_files as a bare dict — Gemini accepted that, and dict[str,str]
+        # would add additionalProperties which Gemini may reject.
+        argv=(list[str], []),
+        input_files=(dict, {}),
+        read_outputs=(list[str], []),
+    ),
+)
 
 
 def _make_skill_tool(dir_name: str):

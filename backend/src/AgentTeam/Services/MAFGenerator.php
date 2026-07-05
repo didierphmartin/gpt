@@ -132,26 +132,18 @@ class MAFGenerator
      * Emit the MAF skill runtime block.
      *
      * Structure:
-     *  1. LangChain/pydantic imports needed by RUN_SKILL_SCRIPT_TOOL in the shared
-     *     skillFsSyncBlock (langchain-core is a transitive dependency of the runner
-     *     venv so it is always available).
-     *  2. PythonEmitHelpers::skillFsSyncBlock() — shared sync skill FS (globals,
-     *     bucketed dirs, argv remap, input_files staging, read_outputs → stash,
+     *  1. PythonEmitHelpers::skillFsSyncBlock() — shared, LangChain-free sync skill FS
+     *     (globals, bucketed dirs, argv remap, input_files staging, read_outputs → stash,
      *     _read_skill_md). Depends on SKILLS_DIR + _ensure_skill_deps from
      *     skillDepsBlock() which is emitted immediately before this block.
-     *  3. MAF-specific _make_skill_tool (plain callable — MAF auto-wraps) and
+     *  2. MAF-specific _make_skill_tool (plain callable — MAF auto-wraps) and
      *     _run_skill_step (async, provider/model explicit, captures deliverable
      *     via _LAST_SKILL_OUTPUTS).
+     *
+     * No LangChain imports — MAF uses plain callables, not StructuredTool.
      */
     private static function skillRunnerBlock(): string
     {
-        // LangChain imports needed by RUN_SKILL_SCRIPT_TOOL in skillFsSyncBlock.
-        // langchain-core is installed in the shared runner venv (LangGraph dependency).
-        $lgCompat = <<<'PY'
-from langchain_core.tools import StructuredTool
-from pydantic import create_model, Field
-PY;
-
         // MAF-specific: _make_skill_tool (plain callable auto-wrapped by MAF) +
         // _run_skill_step (async, provider/model explicit, captures deliverable).
         // Two leading blank lines complete the two-blank-line separator after
@@ -192,7 +184,7 @@ async def _run_skill_step(skill, prior, provider, model):
     return produced[-1] if produced else text
 PY;
 
-        return $lgCompat . PythonEmitHelpers::skillFsSyncBlock() . $mafSpecific;
+        return PythonEmitHelpers::skillFsSyncBlock() . $mafSpecific;
     }
 
     /** Bake AGENTS metadata dict + the per-node async runner + fan-in helper. */

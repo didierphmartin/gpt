@@ -268,18 +268,14 @@ PY;
      * Returns: SKILL_OUTPUTS_ROOT / SKILL_SCRATCH_DIR / _LAST_SKILL_OUTPUTS globals,
      * _skill_output_dir(), _remap_virtual_path(), _run_skill_script() (synchronous
      * subprocess.run with bucketed dirs, argv remap, input_files staging, SYNERGYAI_*
-     * env, and read_outputs → _LAST_SKILL_OUTPUTS stash), RUN_SKILL_SCRIPT_TOOL
-     * (LangGraph convenience; callers that don't use LangChain must import or stub
-     * StructuredTool/create_model/Field before this block), and _read_skill_md().
+     * env, and read_outputs → _LAST_SKILL_OUTPUTS stash), and _read_skill_md().
+     *
+     * Framework-agnostic — contains NO LangChain/langchain_core symbols.
+     * LangGraphGenerator emits RUN_SKILL_SCRIPT_TOOL (StructuredTool wrapper) in its
+     * own LangChain-specific $lgSpecific block, immediately after this shared block.
      *
      * Depends on SKILLS_DIR + _ensure_skill_deps from skillDepsBlock() being emitted
-     * first. Extracted verbatim from LangGraphGenerator::toolBuilderBlock() $partB
-     * lines 1111–1247 so LangGraph's generated output stays byte-identical.
-     *
-     * Framework-agnostic core (SKILL_OUTPUTS_ROOT … _read_skill_md) is shared by
-     * both LangGraphGenerator and MAFGenerator. MAFGenerator emits the LangChain
-     * imports for RUN_SKILL_SCRIPT_TOOL before this block (langchain-core is a
-     * transitive runner-venv dependency so it is always available).
+     * first. Shared by LangGraphGenerator and MAFGenerator.
      */
     public static function skillFsSyncBlock(): string
     {
@@ -381,29 +377,6 @@ def _run_skill_script(dir_name: str, script: str, argv=None,
     if _produced:
         _LAST_SKILL_OUTPUTS[dir_name] = _produced
     return out or "(skill produced no stdout)"
-
-
-RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
-    func=_run_skill_script,
-    name="run_skill_script",
-    description=("Execute a folder-backed skill's Python script and return its "
-                 "stdout. Pass the dir_name/script/argv the skill instructions "
-                 "specify, e.g. dir_name='GEO/geo-llmstxt', "
-                 "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
-    args_schema=create_model(
-        "RunSkillScriptArgs",
-        dir_name=(str, ...),
-        script=(str, ...),
-        # list[str] (not bare list) so the generated JSON schema carries
-        # `items`. Gemini rejects array params without `items` (400
-        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
-        # input_files as a bare dict — Gemini accepted that, and dict[str,str]
-        # would add additionalProperties which Gemini may reject.
-        argv=(list[str], []),
-        input_files=(dict, {}),
-        read_outputs=(list[str], []),
-    ),
-)
 
 
 def _read_skill_md(dir_name: str) -> str:
