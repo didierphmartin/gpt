@@ -51,4 +51,29 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('https://api.x.ai/v1', $code);
         $this->assertStringContainsString('https://generativelanguage.googleapis.com/v1beta/openai/', $code);
     }
+
+    public function testAgentsAndOrchestrationEmitted(): void
+    {
+        $code = MAFGenerator::emitMaf($this->analyzed());
+        $this->assertStringContainsString('AGENTS = {', $code);
+        $this->assertStringContainsString('"2": {', $code);            // agent node baked
+        $this->assertStringContainsString('async def _run_node(', $code);
+        $this->assertStringContainsString('Agent(client, instructions=', $code);
+        $this->assertStringContainsString('.run(', $code);
+        $this->assertStringContainsString('@workflow', $code);
+        $this->assertStringContainsString('async def main(user_prompt', $code);
+        $this->assertStringContainsString('asyncio.gather(', $code);
+        $this->assertStringContainsString('OUTPUT_NODE_ID = "3"', $code);
+        $this->assertStringContainsString('asyncio.run(main.run(', $code);
+    }
+
+    public function testStartPromptAndStorageBaked(): void
+    {
+        $a = $this->analyzed();
+        $a['outputStorageEnabled'] = true; $a['outputFolder'] = null;
+        $code = MAFGenerator::emitMaf($a);
+        $this->assertStringContainsString('Analyze example.com', $code);      // start prompt baked
+        $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $code);
+        $this->assertStringContainsString('WORKFLOW_ID = 7', $code);
+    }
 }

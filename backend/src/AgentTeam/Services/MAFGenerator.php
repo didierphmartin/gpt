@@ -37,7 +37,16 @@ class MAFGenerator
         $parts[] = self::clientFactoryBlock();
         // Task 4 will insert MCP blocks here; Task 2 emits `catalog = {}` for now.
         $parts[] = 'catalog = {}';
-        // Task 2 inserts documentConverter, AGENTS, node runner, orchestration, main.
+        $parts[] = PythonEmitHelpers::documentConverterBlock();
+        // Task 3 inserts the skill runtime here (guarded by needsSkills).
+        $parts[] = self::agentsBlock($analyzed);
+        // globalsBlock MUST precede orchestrationBlock: DEFAULT_PROMPT is used as
+        // the default parameter value in `main()`'s signature, which Python resolves
+        // at def-execution time (when the `async def main` line runs), so it must
+        // exist before that line executes.
+        $parts[] = self::globalsBlock($analyzed);
+        $parts[] = self::orchestrationBlock($analyzed);
+        $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
 
@@ -103,6 +112,130 @@ class MAFGenerator
                 return OpenAIChatCompletionClient(model=model, api_key=os.environ.get("DEEPSEEK_API_KEY"),
                     base_url="https://api.deepseek.com")
             raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
+        PY;
+    }
+
+    /** Bake AGENTS metadata dict + the per-node async runner + fan-in helper. */
+    private static function agentsBlock(array $analyzed): string
+    {
+        $entries = [];
+        foreach ($analyzed['agents'] as $id => $ag) {
+            $instr = (string) ($ag['systemPrompt'] ?? '');
+            $tools = array_map(fn($t) => 'catalog.get(' . PythonEmitHelpers::pyStr($t) . ')', $ag['tools'] ?? []);
+            $toolsPy = '[' . implode(', ', array_filter($tools)) . ']';
+            // Skills baked for Task 3; empty list here is harmless.
+            $skillsPy = PythonEmitHelpers::jsonToPython($ag['skills'] ?? []);
+            $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $id) . ': {'
+                . '"provider": ' . PythonEmitHelpers::pyStr((string) ($ag['provider'] ?? 'claude')) . ', '
+                . '"model": ' . PythonEmitHelpers::pyStr((string) ($ag['model'] ?? '')) . ', '
+                . '"instructions": ' . PythonEmitHelpers::pyStr($instr) . ', '
+                . '"tools": ' . $toolsPy . ', '
+                . '"skills": ' . $skillsPy . '},';
+        }
+        $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
+
+        $runner = <<<'PY'
+        async def _run_node(nid, _input):
+            """Run one node: the output node is a pass-through (returns its merged input);
+            an agent node runs its LLM, then its mandatory skill pipeline (Task 3)."""
+            ad = AGENTS.get(nid)
+            if ad is None:                      # output / pass-through node
+                return _input
+            client = _make_client(ad["provider"], ad["model"])
+            agent = Agent(client, instructions=ad["instructions"],
+                          name=f"node_{nid}", tools=ad["tools"])
+            text = (await agent.run(_input)).text or ""
+            for _skill in ad.get("skills", []):
+                text = await _run_skill_step(_skill, text, ad["provider"], ad["model"])
+            return text
+
+
+        def _build_input(parents, node_outputs, user_prompt):
+            """Merge parent outputs (fan-in) as this node's input; the start node's
+            children get the user prompt."""
+            parts = []
+            for p in parents:
+                if p in node_outputs:
+                    parts.append(str(node_outputs[p]))
+            if not parts:
+                return user_prompt
+            if len(parts) == 1:
+                return parts[0]
+            return "\n\n---\n\n".join(parts)
+        PY;
+        return $agents . "\n\n\n" . $runner;
+    }
+
+    /** DEFAULT_PROMPT + workflow/storage globals.
+     *  MUST be emitted before orchestrationBlock because DEFAULT_PROMPT is
+     *  used as a default parameter value in `async def main`'s signature. */
+    private static function globalsBlock(array $analyzed): string
+    {
+        $sp      = PythonEmitHelpers::pyStr((string) $analyzed['startPrompt']);
+        $wfName  = PythonEmitHelpers::pyStr((string) $analyzed['workflow']['name']);
+        $wfId    = (int) $analyzed['workflow']['id'];
+        $enabled = !empty($analyzed['outputStorageEnabled']) ? 'True' : 'False';
+        $folder  = $analyzed['outputFolder'] ? PythonEmitHelpers::pyStr((string) $analyzed['outputFolder']) : 'None';
+        return "DEFAULT_PROMPT = {$sp}\n"
+             . "WORKFLOW_NAME = {$wfName}\n"
+             . "WORKFLOW_ID = {$wfId}\n"
+             . "OUTPUT_STORAGE_ENABLED = {$enabled}\n"
+             . "OUTPUT_FOLDER = {$folder}";
+    }
+
+    /** Topological LAYERS + PARENTS + OUTPUT_NODE_ID + the @workflow main function. */
+    private static function orchestrationBlock(array $analyzed): string
+    {
+        $layers  = PythonEmitHelpers::jsonToPython(array_values($analyzed['layers']));
+        $parents = PythonEmitHelpers::jsonToPython($analyzed['parents'], true);
+        // First node whose type == 'output' is the fan-in sink.
+        $outId = '';
+        foreach ($analyzed['byId'] as $id => $node) {
+            $t = $node['type'] ?? ($node['config']['type'] ?? '');
+            if ($t === 'output') { $outId = (string) $id; break; }
+        }
+        return "LAYERS = {$layers}\n"
+             . "PARENTS = {$parents}\n"
+             . 'OUTPUT_NODE_ID = ' . PythonEmitHelpers::pyStr($outId) . "\n\n\n"
+             . <<<'PY'
+        @workflow
+        async def main(user_prompt: str = DEFAULT_PROMPT) -> str:
+            node_outputs = {}
+            # Layer 0 is the start node; its prompt seeds the children via _build_input.
+            for layer in LAYERS[1:]:
+                ids = [n for n in layer if n in AGENTS or n == OUTPUT_NODE_ID]
+                if not ids:
+                    continue
+                inputs = [_build_input(PARENTS.get(n, []), node_outputs, user_prompt) for n in ids]
+                results = await asyncio.gather(*[_run_node(n, inp) for n, inp in zip(ids, inputs)])
+                for n, r in zip(ids, results):
+                    node_outputs[n] = r
+                    print(f"[node] {n}: {len(str(r))} chars", flush=True)
+            return node_outputs.get(OUTPUT_NODE_ID, "")
+        PY;
+    }
+
+    /** __main__ entry: read prompt from CLI args or DEFAULT_PROMPT, run, optionally save. */
+    private static function entryBlock(): string
+    {
+        return <<<'PY'
+        if __name__ == "__main__":
+            _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
+            _result = asyncio.run(main.run(_prompt))
+            _text = _result.text or ""
+            print("\n=== FINAL OUTPUT ===\n" + _text)
+            if OUTPUT_STORAGE_ENABLED:
+                _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+                _dir = OUTPUT_FOLDER or os.path.join(_root, "workflow")
+                os.makedirs(_dir, exist_ok=True)
+                _low = _text.lstrip().lower()
+                _ext = "html" if _low.startswith("<!doctype html") or _low.startswith("<html") else "md"
+                _slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
+                _ts = time.strftime("%Y%m%d-%H%M%S")
+                _path = os.path.join(_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
+                with open(_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(_text)
+                print(f"[output] saved to {_path}")
         PY;
     }
 }
