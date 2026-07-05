@@ -409,7 +409,7 @@ class _SkillCaptureAgent(BaseAgent):
 
     async def _run_async_impl(self, ctx):
         produced = _LAST_SKILL_OUTPUTS.pop(self.skill_dir, None)
-        final = produced[-1] if produced else str(ctx.state.get(self.llm_key, ""))
+        final = produced[-1] if produced else str(ctx.session.state.get(self.llm_key, ""))
         yield Event(
             author=self.name,
             content=types.Content(role="model", parts=[types.Part(text=final)]),
