@@ -329,9 +329,9 @@ class AdkGeneratorEmitTest extends TestCase
         // time must be on the stdlib import line (or any module-scope import)
         $this->assertMatchesRegularExpression('/^import .*\btime\b/m', $code,
             '"time" must be imported at module scope (mcpClientBlock uses time.time())');
-        // requirements docstring must mention httpx so installers know it is needed
-        $this->assertStringContainsString('pip install google-adk litellm httpx', $code,
-            'requirements pip-install line must include httpx');
+        // requirements docstring must pin google-adk to the 2.3.x line and include httpx
+        $this->assertStringContainsString('"google-adk>=2.3,<3" litellm httpx', $code,
+            'requirements pip-install line must pin google-adk 2.3.x and include httpx');
     }
 
     /**

@@ -17,7 +17,7 @@ langchain-google-genai>=2.0.0
 # import google.adk; non-Gemini providers route through litellm; MCP tools
 # use httpx (already above). Installed into the same venv so both LangGraph
 # and ADK compiled scripts run without a follow-up install.
-google-adk
+google-adk>=2.3,<3
 litellm
 pydantic>=2.8.0
 python-dotenv>=1.0.0

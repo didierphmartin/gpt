@@ -151,7 +151,7 @@ HOW THIS FILE IS ORGANISED (top to bottom):
                                       stdout, and saves the final result under outputs/.
 
 TO RUN:
-    pip install google-adk litellm httpx
+    pip install "google-adk>=2.3,<3" litellm httpx   # 2.3.x: SequentialAgent/ParallelAgent still supported
     # provide the API keys for the providers used, via the environment / a .env, e.g.:
     #   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY
     python this_file.py "your prompt here"
