@@ -261,6 +261,11 @@ PY;
 SKILL_OUTPUTS_ROOT = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs")
 SKILL_SCRATCH_DIR = os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch")
 
+# Deliverable files a skill produced this step (via run_skill_script read_outputs),
+# keyed by skill dir_name. The skill's capture step reads this so the NODE OUTPUT is
+# the produced document (e.g. the html skill's rendered HTML), not the model's chatter.
+_LAST_SKILL_OUTPUTS = {}
+
 
 def _skill_output_dir(dir_name: str) -> str:
     group = dir_name.split("/")[0] if "/" in dir_name else ""
@@ -322,14 +327,20 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
     if proc.returncode != 0:
         return (f"[skill error rc={proc.returncode}] "
                 + err.decode("utf-8", "replace") + "\n" + result).strip()
-    # Surface requested output files back to the model (interpreter parity).
+    # Surface requested output files back to the model (interpreter parity) AND stash
+    # them so the skill's capture step can use the produced document as the node output.
+    _produced = []
     if isinstance(read_outputs, list):
         for rel in read_outputs:
             try:
                 with open(_remap_virtual_path(rel, out_dir), "r", encoding="utf-8") as fh:
-                    result += f"\n\n[output file {rel}]\n" + fh.read()
+                    _content = fh.read()
+                result += f"\n\n[output file {rel}]\n" + _content
+                _produced.append(_content)
             except Exception:
                 pass
+    if _produced:
+        _LAST_SKILL_OUTPUTS[dir_name] = _produced
     return result
 
 RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)
@@ -361,7 +372,17 @@ def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
     def _instr(ctx):
         body = inline_md if inline_md else _read_skill_md(dir_name)
         prior = ctx.state.get(input_key, "")
-        return body + "\n\n## Input to process (apply the skill to this)\n" + str(prior)
+        return (
+            "You are running the '" + dir_name + "' skill as a MANDATORY step in a compiled "
+            "workflow. Follow the skill instructions below and APPLY THE SKILL to the INPUT. "
+            "If the skill produces a document/file (e.g. an HTML report via a create/render "
+            "script), you MUST call run_skill_script to generate it -- stage your authored "
+            "content via input_files and pass the output path in read_outputs; the workflow "
+            "captures that produced file as this node's output. If the skill has no script, "
+            "return the transformed result as your response.\n\n"
+            "=== SKILL INSTRUCTIONS ===\n" + body +
+            "\n\n=== INPUT (apply the skill to this) ===\n" + str(prior)
+        )
     return _instr
 
 
@@ -374,6 +395,27 @@ def _make_skill_tool(dir_name: str) -> FunctionTool:
                                read_outputs: list[str] | None = None) -> str:
         return await _run_skill_script(dir_name, script, argv, input_files, read_outputs)
     return FunctionTool(run_skill_script)
+
+
+class _SkillCaptureAgent(BaseAgent):
+    """Resolves a skill step's output: the NODE OUTPUT becomes the document the skill just
+    produced (captured via run_skill_script read_outputs -- e.g. the html skill's rendered
+    HTML) when it wrote one; otherwise the skill LLM's text. This is what makes a
+    file-producing skill (html/docx/pptx/xlsx) yield the actual deliverable as the node
+    result instead of the model's chatter. Follows the skill LLM in the SequentialAgent."""
+    skill_dir: str = ""
+    llm_key: str = ""
+    out_key: str = ""
+
+    async def _run_async_impl(self, ctx):
+        produced = _LAST_SKILL_OUTPUTS.pop(self.skill_dir, None)
+        final = produced[-1] if produced else str(ctx.state.get(self.llm_key, ""))
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=final)]),
+            actions=EventActions(state_delta={self.out_key: final}),
+            turn_complete=True,
+        )
 PY;
         return $py;
     }
@@ -466,30 +508,37 @@ PY;
                 foreach ($skills as $k => $skill) {
                     $stepNo  = $k + 1;
                     $isLast  = ($stepNo === count($skills));
-                    $stepVar = "node_{$id}_skill_{$stepNo}";
-                    $stepOut = $isLast ? "node_{$id}" : $stepVar;
+                    $llmVar  = "node_{$id}_skill_{$stepNo}_llm";       // the skill's LLM turn
+                    $capVar  = "node_{$id}_skill_{$stepNo}";           // capture = the step's output
+                    $stepOut = $isLast ? "node_{$id}" : $capVar;       // last capture writes the node key
                     if (isset($skill['dir'])) {
-                        $dir      = addslashes($skill['dir']);
-                        $instrExpr = "_skill_instruction(\"{$dir}\", \"{$prev}\")";
-                        $toolPy    = "[_make_skill_tool(\"{$dir}\")]";
+                        $dir        = addslashes($skill['dir']);
+                        $dirLiteral = "\"{$dir}\"";
+                        $instrExpr  = "_skill_instruction(\"{$dir}\", \"{$prev}\")";
+                        $toolPy     = "[_make_skill_tool(\"{$dir}\")]";
                     } else {
-                        $inlineMd  = PythonEmitHelpers::pyStr((string) $skill['inline']);
-                        $instrExpr = "_skill_instruction(\"\", \"{$prev}\", inline_md={$inlineMd})";
-                        $toolPy    = "[]"; // legacy inline skill: no script folder
+                        $dirLiteral = "\"\""; // inline skill: no dir to look up in the deliverable stash
+                        $inlineMd   = PythonEmitHelpers::pyStr((string) $skill['inline']);
+                        $instrExpr  = "_skill_instruction(\"\", \"{$prev}\", inline_md={$inlineMd})";
+                        $toolPy     = "[]"; // legacy inline skill: no script folder
                     }
-                    $entry .= "\n\n# Skill step {$stepNo} for node {$id} (mandatory; applies the skill to the prior result)\n";
-                    $entry .= "{$stepVar} = LlmAgent(\n";
-                    $entry .= "    name=\"{$stepVar}\",\n";
+                    // (a) the skill's LLM turn: applies the skill to the prior result, runs its script if any.
+                    $entry .= "\n\n# Skill step {$stepNo} for node {$id}: LLM applies the skill; capture makes the node output the produced deliverable (else the LLM text).\n";
+                    $entry .= "{$llmVar} = LlmAgent(\n";
+                    $entry .= "    name=\"{$llmVar}\",\n";
                     $entry .= "    model={$model},\n";
                     $entry .= "    instruction={$instrExpr},\n";
                     $entry .= "    tools={$toolPy},\n";
-                    $entry .= "    output_key=\"{$stepOut}\",\n";
+                    $entry .= "    output_key=\"{$llmVar}\",\n";
                     $entry .= ")";
-                    $subAgents[] = $stepVar;
-                    $prev        = $stepVar;
+                    // (b) capture: node output = the produced file (via run_skill_script read_outputs), else the LLM text.
+                    $entry .= "\n{$capVar} = _SkillCaptureAgent(name=\"{$capVar}\", skill_dir={$dirLiteral}, llm_key=\"{$llmVar}\", out_key=\"{$stepOut}\")";
+                    $subAgents[] = $llmVar;
+                    $subAgents[] = $capVar;
+                    $prev        = $capVar;   // next skill reads the capture's output
                 }
                 $subList = implode(', ', $subAgents);
-                $entry .= "\n\n# Node {$id}: agent then mandatory skill pipeline (this is what the layering references)\n";
+                $entry .= "\n\n# Node {$id}: agent then mandatory skill pipeline (LLM turn + capture per skill); this is what the layering references.\n";
                 $entry .= "node_{$id} = SequentialAgent(\n    name=\"node_{$id}\",\n    sub_agents=[{$subList}],\n)";
             }
 

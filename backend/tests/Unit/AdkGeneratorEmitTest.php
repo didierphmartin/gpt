@@ -535,14 +535,19 @@ class AdkGeneratorEmitTest extends TestCase
         $mainStart = strpos($code, 'node_2_agent = LlmAgent(');
         $mainBlock = substr($code, $mainStart, strpos($code, "\n)", $mainStart) - $mainStart);
         $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $mainBlock); // never given to the main agent
-        // skill step: node model, dir-scoped tool, callable instruction seeded by the agent's result
-        $this->assertStringContainsString('node_2_skill_1 = LlmAgent(', $code);
+        // Each skill step = an LLM turn (applies the skill) + a capture step (makes the node
+        // output the produced deliverable file, else the LLM text).
+        $this->assertStringContainsString('node_2_skill_1_llm = LlmAgent(', $code);
         $this->assertStringContainsString('_make_model("claude", "m")', $code);
         $this->assertStringContainsString('_make_skill_tool("GEO/geo-report")', $code);
         $this->assertStringContainsString('_skill_instruction("GEO/geo-report", "node_2_agent"', $code);
-        $this->assertStringContainsString('output_key="node_2"', $code);       // last step writes the node key
-        // wrapper the layering references
-        $this->assertMatchesRegularExpression('/node_2 = SequentialAgent\(\s*name="node_2",\s*sub_agents=\[node_2_agent, node_2_skill_1\]/s', $code);
+        // capture: the last step writes the node key (out_key), pulling the produced file.
+        $this->assertStringContainsString(
+            'node_2_skill_1 = _SkillCaptureAgent(name="node_2_skill_1", skill_dir="GEO/geo-report", llm_key="node_2_skill_1_llm", out_key="node_2")',
+            $code
+        );
+        // wrapper the layering references: main agent -> skill LLM -> capture
+        $this->assertMatchesRegularExpression('/node_2 = SequentialAgent\(\s*name="node_2",\s*sub_agents=\[node_2_agent, node_2_skill_1_llm, node_2_skill_1\]/s', $code);
     }
 
     public function testParentOutputsInjectedIntoInstruction(): void
