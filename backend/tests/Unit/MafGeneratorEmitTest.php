@@ -100,8 +100,11 @@ final class MafGeneratorEmitTest extends TestCase
 
     public function testNoSkillRuntimeWhenNoSkills(): void
     {
-        $code = MAFGenerator::emitMaf($this->analyzed());  // no skills
+        $code = MAFGenerator::emitMaf($this->analyzed());  // no skills, no tools
         $this->assertStringNotContainsString('def _run_skill_script(', $code);
+        // Tool-free workflow: the catalog placeholder fallback is emitted (no MCP block).
+        $this->assertStringContainsString('catalog = {}', $code);
+        $this->assertStringNotContainsString('build_tools_from_catalog()', $code);
     }
 
     public function testMcpToolsEmitted(): void
@@ -119,5 +122,9 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('def _tool_web_search(', $code);
         $this->assertStringContainsString('catalog = build_tools_from_catalog()', $code);
         $this->assertStringNotContainsString("catalog = {}", $code);   // placeholder replaced
+        // Load-bearing spec property: MCP tools are bound as PLAIN callables (MAF
+        // auto-wraps), never ADK's FunctionTool wrapper.
+        $this->assertStringNotContainsString('FunctionTool(', $code);
+        $this->assertStringContainsString('"web_search": _tool_web_search', $code);
     }
 }
