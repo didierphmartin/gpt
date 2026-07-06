@@ -32,6 +32,11 @@ class MAFGenerator
 
     public static function emitMaf(array $analyzed): string
     {
+        // The web SAPI's php.ini sets serialize_precision=100, which makes json_encode emit
+        // temperatures like 0.59999999999999997779… instead of 0.6. Models that validate the
+        // temperature against an exact allowed value then reject it ("only 0.6 is allowed").
+        // Force the shortest round-tripping representation for all float emission here.
+        ini_set('serialize_precision', '-1');
         $parts = [];
         $parts[] = self::headerBlock($analyzed);
         $parts[] = self::clientFactoryBlock();

@@ -52,6 +52,10 @@ class ADKGenerator
      */
     public static function emitAdk(array $analyzed): string
     {
+        // Force shortest round-tripping floats: the web SAPI's serialize_precision=100 makes
+        // json_encode emit temperatures like 0.5999999999999999… which strict models reject
+        // ("only 0.6 is allowed"). See MAFGenerator::emitMaf for the full note.
+        ini_set('serialize_precision', '-1');
         $lines = [];
         $lines[] = self::headerBlock($analyzed);
 
