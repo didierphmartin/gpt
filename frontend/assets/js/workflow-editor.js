@@ -9761,7 +9761,7 @@ class WorkflowEditor {
                     <span class="gen-caret" aria-hidden="true">▾</span>
                 </button>
                 <button class="node-langgraph node-maf" title="${this.t('workflow.output.mafTitle') || 'Microsoft Agent Framework: set up the runtime or generate the script'}" data-action="maf-menu">
-                    <span class="gen-label">Microsoft Agent Framework</span>
+                    <span class="gen-label">Microsoft Agent Framework - Python</span>
                     <span class="gen-caret" aria-hidden="true">▾</span>
                 </button>
                 <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
