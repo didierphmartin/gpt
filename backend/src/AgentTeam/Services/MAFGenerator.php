@@ -366,7 +366,7 @@ def _make_skill_tool(dir_name: str):
     return run_skill_script
 
 
-async def _run_skill_step(skill, prior, provider, model):
+async def _run_skill_step(skill, prior, user_prompt, provider, model):
     """Mandatory skill step on `prior` (previous stage output). A dir-backed skill
     is a MAF Agent instructed by SKILL.md with a dir-scoped run_skill_script tool;
     the step output becomes the produced deliverable file (via _LAST_SKILL_OUTPUTS)
@@ -390,8 +390,19 @@ async def _run_skill_step(skill, prior, provider, model):
         _LAST_SKILL_OUTPUTS.pop(dir_name, None)
     agent = Agent(_make_client(provider, model), instructions=system,
                   name="skill_step", tools=tools)
+    # Context order (recency-optimised): SKILL.md is the system prompt (above); the user
+    # message puts a short task framing first, then the MATERIAL to transform, then the
+    # ORIGINAL REQUEST last -- so the workflow's authoritative target/parameters (e.g. the
+    # exact URL) stay salient at the moment the model chooses the tool's arguments, instead
+    # of being lost in the middle before a long material block.
+    _user_msg = (
+        "Task: apply the '" + (dir_name or "inline") + "' skill to the MATERIAL below. The "
+        "ORIGINAL REQUEST at the very end is authoritative for the target and parameters "
+        "(e.g. the exact URL) -- take them from there, never from an example in the skill "
+        "instructions.\n\n## Material to process\n" + str(prior) +
+        "\n\n## Original request (authoritative -- apply the skill for THIS)\n" + str(user_prompt))
     try:
-        text = (await agent.run("## INPUT (apply the skill to this)\n" + str(prior))).text or ""
+        text = (await agent.run(_user_msg)).text or ""
     except Exception:
         # A retry-cap abort raised inside the tool surfaces here (or the agent errored).
         if _SKILL_ABORT:
@@ -444,7 +455,7 @@ PY;
                           name=f"node_{nid}", tools=_tools)
             text = (await agent.run(_agent_input(parents, node_outputs, user_prompt))).text or ""
             for _skill in ad.get("skills", []):
-                text = await _run_skill_step(_skill, text, ad["provider"], ad["model"])
+                text = await _run_skill_step(_skill, text, user_prompt, ad["provider"], ad["model"])
             return text
 
 
