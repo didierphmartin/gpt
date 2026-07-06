@@ -261,7 +261,7 @@ class MAFGenerator
 
         import httpx
         from dotenv import load_dotenv
-        from agent_framework import Agent, workflow, FunctionTool
+        from agent_framework import Agent, workflow, FunctionTool, ChatOptions
         from agent_framework.anthropic import AnthropicClient
         from agent_framework.openai import OpenAIChatCompletionClient
 
@@ -374,7 +374,7 @@ def _make_skill_tool(dir_name: str):
                         description=run_skill_script.__doc__, max_invocation_exceptions=1)
 
 
-async def _run_skill_step(skill, prior, user_prompt, provider, model):
+async def _run_skill_step(skill, prior, user_prompt, provider, model, max_tokens, temperature):
     """Mandatory skill step on `prior` (previous stage output). A dir-backed skill
     is a MAF Agent instructed by SKILL.md with a dir-scoped run_skill_script tool;
     the step output becomes the produced deliverable file (via _LAST_SKILL_OUTPUTS)
@@ -396,8 +396,9 @@ async def _run_skill_step(skill, prior, user_prompt, provider, model):
     tools = [_make_skill_tool(dir_name)] if dir_name else []
     if dir_name:
         _LAST_SKILL_OUTPUTS.pop(dir_name, None)
-    agent = Agent(_make_client(provider, model), instructions=system,
-                  name="skill_step", tools=tools)
+    agent = Agent(_make_client(provider, model), instructions=system, name="skill_step",
+                  tools=tools,
+                  default_options=ChatOptions(max_tokens=max_tokens, temperature=temperature))
     # Context order (recency-optimised): SKILL.md is the system prompt (above); the user
     # message puts a short task framing first, then the MATERIAL to transform, then the
     # ORIGINAL REQUEST last -- so the workflow's authoritative target/parameters (e.g. the
@@ -442,7 +443,11 @@ PY;
                 . '"model": ' . PythonEmitHelpers::pyStr((string) ($ag['model'] ?? '')) . ', '
                 . '"instructions": ' . PythonEmitHelpers::pyStr($instr) . ', '
                 . '"tools": ' . $toolsPy . ', '
-                . '"skills": ' . $skillsPy . '},';
+                . '"skills": ' . $skillsPy . ', '
+                // Form values VERBATIM (no substitution) -- if output truncates, raise
+                // max_tokens in that node's form.
+                . '"max_tokens": ' . (int) ($ag['max_tokens'] ?? 4096) . ', '
+                . '"temperature": ' . json_encode((float) ($ag['temperature'] ?? 0.7)) . '},';
         }
         $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
@@ -460,11 +465,13 @@ PY;
             client = _make_client(ad["provider"], ad["model"])
             # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
             _tools = [t for t in ad["tools"] if t is not None]
-            agent = Agent(client, instructions=ad["instructions"],
-                          name=f"node_{nid}", tools=_tools)
+            _opts = ChatOptions(max_tokens=ad["max_tokens"], temperature=ad["temperature"])
+            agent = Agent(client, instructions=ad["instructions"], name=f"node_{nid}",
+                          tools=_tools, default_options=_opts)
             text = (await agent.run(_agent_input(parents, node_outputs, user_prompt))).text or ""
             for _skill in ad.get("skills", []):
-                text = await _run_skill_step(_skill, text, user_prompt, ad["provider"], ad["model"])
+                text = await _run_skill_step(_skill, text, user_prompt, ad["provider"],
+                                             ad["model"], ad["max_tokens"], ad["temperature"])
             return text
 
 

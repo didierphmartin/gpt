@@ -452,18 +452,10 @@ class LangGraphGenerator
                 $cfgSettings = [];
             }
             $agentTemperature = (float) ($cfgSettings['temperature'] ?? 0.7);
-            // max_tokens: the browser/chat path ignores the node's value and
-            // lets each provider use its high config default, which is why a
-            // full HTML report renders there. The compiled script, however,
-            // bakes the node's value in — and the editor's legacy default of
-            // 4096 truncates large outputs (a GEO report stops mid-<style>).
-            // So: respect a value the user deliberately RAISED above 4096;
-            // otherwise substitute a generous, provider-appropriate cap (a
-            // ceiling, not a target — billing is on tokens actually used).
-            $explicitMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 0);
-            $agentMaxTokens = $explicitMaxTokens > 4096
-                ? $explicitMaxTokens
-                : self::providerMaxTokensDefault(strtolower($agentProvider));
+            // max_tokens comes from the agent form VERBATIM -- no substitution. If a node's
+            // output truncates (e.g. a full HTML report needs more than 4096), raise it in
+            // that node's form; the compiler never overrides a form-stated value.
+            $agentMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 4096);
 
             // Skill-bound agents must be GIVEN the run_skill_script tool so
             // they can actually execute their folder-backed skill. The browser
