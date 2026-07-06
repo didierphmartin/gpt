@@ -13135,11 +13135,9 @@ class WorkflowEditor {
                                 <span>🗑️</span> ${tf('deleteNode')}
                             </button>` : (!isNew ? `<button id="delete-agent-btn" class="text-red-500 hover:text-red-700 text-xs">${tf('deleteAgent')}</button>` : '')}
                         </div>
-                        <div class="flex gap-2">
+                        <div class="flex gap-2 items-center">
                             ${this.editingNodeId ? `
-                            <button id="done-agent-btn" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm shadow-sm transition">
-                                ${this.t('common.done') && this.t('common.done') !== 'common.done' ? this.t('common.done') : 'Done'}
-                            </button>
+                            <span class="text-xs text-gray-400">${this.t('workflow.agentForm.autoSaved') && this.t('workflow.agentForm.autoSaved') !== 'workflow.agentForm.autoSaved' ? this.t('workflow.agentForm.autoSaved') : 'Changes apply automatically — save the workflow to persist'}</span>
                             ` : `
                             <button id="cancel-agent-btn" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium transition">
                                 ${this.t('common.cancel')}
@@ -13173,16 +13171,17 @@ class WorkflowEditor {
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
 
-        // X (header) close: for a WORKFLOW NODE, apply the edits to the node
-        // in-memory (no DB round-trip) so nothing is lost; the workflow-level Save
-        // persists. For a LIBRARY agent, close just discards (Cancel/Save present).
-        document.getElementById('close-agent-modal')?.addEventListener('click', () => {
-            if (this.editingNodeId) this.saveAgent(false); else this.closeAgentEditModal();
-        });
+        // LIVE-BIND (workflow node): every field edit writes straight into the in-memory
+        // node model, immediately -- no per-form save, no button. The workflow-level Save
+        // is the only thing that writes to the DB. For a library agent (no editingNodeId)
+        // _syncAgentFormToNode is a no-op and Cancel/Save handle persistence.
+        if (this.editingNodeId) {
+            ['input', 'change'].forEach(evt =>
+                modal.addEventListener(evt, () => this._syncAgentFormToNode()));
+        }
+        // X (header) / Cancel just close -- for a node the values are already in the model.
+        document.getElementById('close-agent-modal')?.addEventListener('click', () => this.closeAgentEditModal());
         document.getElementById('cancel-agent-btn')?.addEventListener('click', () => this.closeAgentEditModal());
-
-        // Node "Done": apply the form to the node in-memory + close (no per-form save).
-        document.getElementById('done-agent-btn')?.addEventListener('click', () => this.saveAgent(false));
         // Library "Save": full save to the agents backend.
         document.getElementById('save-agent-btn')?.addEventListener('click', () => this.saveAgent());
 
@@ -14282,6 +14281,45 @@ Based on the analysis...
     /**
      * Save the agent
      */
+    /**
+     * LIVE-BIND: on every agent-form change, write the current field values straight
+     * into the editing node's in-memory Drawflow data. No per-form save — the
+     * workflow-level Save persists to the DB. Mirrors the exact keys saveAgent()
+     * writes (agent_name / agent_provider / model / instructions / settings.* /
+     * tools / merge_strategy / bound_skill / output_schema) so the analyzer & DB
+     * read the same shape. No-op unless a workflow node is being edited. The
+     * `disabled` flag keeps its own dedicated instant-write handler.
+     */
+    _syncAgentFormToNode() {
+        if (!this.editingNodeId) return;
+        const node = this.editor?.drawflow?.drawflow?.Home?.data?.[String(this.editingNodeId)];
+        if (!node || !node.data) return;
+        const g = (id) => document.getElementById(id);
+        const d = node.data;
+        d.type = 'agent';
+        if (g('agent-name-input')) d.agent_name = g('agent-name-input').value.trim();
+        if (g('agent-description-input')) d.description = g('agent-description-input').value.trim();
+        if (g('agent-type-select')) d.agent_type = g('agent-type-select').value;
+        if (g('agent-provider-select')) d.agent_provider = g('agent-provider-select').value;
+        if (g('agent-model-input')) d.model = g('agent-model-input').value.trim();
+        if (g('agent-instructions-input')) d.instructions = g('agent-instructions-input').value;
+        if (g('agent-merge-strategy-select')) d.merge_strategy = g('agent-merge-strategy-select').value;
+        d.settings = {
+            ...(d.settings || {}),
+            temperature: parseFloat(g('agent-temperature-input')?.value) || 0.7,
+            max_tokens: parseInt(g('agent-max-tokens-input')?.value) || 4096,
+        };
+        d.tools = Array.from(document.querySelectorAll('.tool-checkbox:checked')).map(cb => cb.dataset.tool);
+        d.bound_skill = this._boundSkill ? {
+            id: this._boundSkill.id, source: this._boundSkill.source,
+            dir_name: this._boundSkill.dir_name, name: this._boundSkill.name,
+        } : null;
+        d.skill_content = '';
+        if (this.schemaBuilder) {
+            try { d.output_schema = this.getEmbeddedSchemaJson(); d.output_schema_id = null; } catch (_) { /* invalid mid-edit; keep last */ }
+        }
+    }
+
     async saveAgent(persist = true) {
         // persist=false: apply the form to the node in-memory only (no slow
         // autoPersistWorkflow round-trip). The workflow-level Save is the one
