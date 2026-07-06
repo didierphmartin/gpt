@@ -323,13 +323,23 @@ class MAFGenerator
 
 
 def _make_skill_tool(dir_name: str):
-    """run_skill_script bound to ONE skill dir. Plain callable — MAF auto-wraps it."""
-    def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
+    """run_skill_script bound to ONE skill dir. Plain callable -- MAF auto-wraps it and
+    reads the type hints below to build the tool schema, so argv is declared as a LIST of
+    separate tokens (not one string) and the model stops packing the whole command line
+    into a single argv element."""
+    def run_skill_script(script: str, argv: list[str] | None = None,
+                         input_files: dict | None = None,
+                         read_outputs: list[str] | None = None) -> str:
         return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
     run_skill_script.__name__ = "run_skill_script"
     run_skill_script.__doc__ = (
-        "Run a script in the '" + dir_name + "' skill (dir fixed). Stage authored "
-        "content via input_files and pass the output path(s) in read_outputs.")
+        "Run a script in the '" + dir_name + "' skill (the skill dir is fixed). "
+        "argv MUST be a list of SEPARATE command-line tokens -- e.g. "
+        "['-i', '/scratch/report.html', '-o', '/outputs/report.html', '--pretty'] -- "
+        "never a single string like '-i /scratch/report.html -o ...'. To feed a file to "
+        "the script, stage its content with input_files={'/scratch/report.html': '<html>'} "
+        "using the EXACT SAME path you pass to -i, and list produced output path(s) in "
+        "read_outputs so the workflow captures the deliverable.")
     return run_skill_script
 
 
