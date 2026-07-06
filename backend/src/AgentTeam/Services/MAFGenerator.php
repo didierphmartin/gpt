@@ -322,6 +322,15 @@ class MAFGenerator
         $mafSpecific = <<<'PY'
 
 
+# Bounded-retry fail-fast (MAF): a skill SCRIPT that keeps failing is retried at most
+# _SKILL_MAX_ATTEMPTS times; on that last failure the workflow ABORTS with a clear
+# message instead of the agent limping on with error strings (e.g. a bad target URL that
+# would otherwise be rendered into a misleading report). A success resets the counter.
+_SKILL_MAX_ATTEMPTS = 2
+_SKILL_FAIL_COUNTS = {}
+_SKILL_ABORT = []
+
+
 def _make_skill_tool(dir_name: str):
     """run_skill_script bound to ONE skill dir. Plain callable -- MAF auto-wraps it and
     reads the type hints below to build the tool schema, so argv is declared as a LIST of
@@ -330,7 +339,21 @@ def _make_skill_tool(dir_name: str):
     def run_skill_script(script: str, argv: list[str] | None = None,
                          input_files: dict | None = None,
                          read_outputs: list[str] | None = None) -> str:
-        return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
+        result = _run_skill_script(dir_name, script, argv, input_files, read_outputs)
+        key = dir_name + "/" + str(script)
+        failed = result.startswith("ERROR:") or "[run_skill_script exit " in result
+        if failed:
+            _SKILL_FAIL_COUNTS[key] = _SKILL_FAIL_COUNTS.get(key, 0) + 1
+            if _SKILL_FAIL_COUNTS[key] >= _SKILL_MAX_ATTEMPTS:
+                _msg = ("Workflow stopped: skill script '" + key + "' failed "
+                        + str(_SKILL_FAIL_COUNTS[key]) + " times (max "
+                        + str(_SKILL_MAX_ATTEMPTS) + "). Last error:\n" + result[:400]
+                        + "\nCheck the target/inputs (e.g. the URL in the Start node).")
+                _SKILL_ABORT.append(_msg)
+                raise RuntimeError(_msg)
+        else:
+            _SKILL_FAIL_COUNTS.pop(key, None)
+        return result
     run_skill_script.__name__ = "run_skill_script"
     run_skill_script.__doc__ = (
         "Run a script in the '" + dir_name + "' skill (the skill dir is fixed). "
@@ -363,7 +386,16 @@ async def _run_skill_step(skill, prior, provider, model):
         _LAST_SKILL_OUTPUTS.pop(dir_name, None)
     agent = Agent(_make_client(provider, model), instructions=system,
                   name="skill_step", tools=tools)
-    text = (await agent.run("## INPUT (apply the skill to this)\n" + str(prior))).text or ""
+    try:
+        text = (await agent.run("## INPUT (apply the skill to this)\n" + str(prior))).text or ""
+    except Exception:
+        # A retry-cap abort raised inside the tool surfaces here (or the agent errored).
+        if _SKILL_ABORT:
+            raise RuntimeError(_SKILL_ABORT[-1])
+        raise
+    # If MAF swallowed the tool's abort into the agent loop, enforce fail-fast now.
+    if _SKILL_ABORT:
+        raise RuntimeError(_SKILL_ABORT[-1])
     produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
     return produced[-1] if produced else text
 PY;
@@ -497,7 +529,13 @@ PY;
         return <<<'PY'
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
-            _result = asyncio.run(main.run(_prompt))
+            try:
+                _result = asyncio.run(main.run(_prompt))
+            except Exception as _err:
+                # Fail-fast: a skill hit its retry cap (or a node raised) -- stop with a
+                # clear message and a non-zero exit instead of saving a garbage report.
+                print("\n=== WORKFLOW STOPPED ===\n" + str(_err), file=sys.stderr)
+                sys.exit(1)
             # agent-framework's WorkflowRunResult exposes terminal outputs via
             # get_outputs() (a list), NOT a .text attribute.
             _outputs = _result.get_outputs()
