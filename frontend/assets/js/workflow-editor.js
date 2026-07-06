@@ -13136,12 +13136,18 @@ class WorkflowEditor {
                             </button>` : (!isNew ? `<button id="delete-agent-btn" class="text-red-500 hover:text-red-700 text-xs">${tf('deleteAgent')}</button>` : '')}
                         </div>
                         <div class="flex gap-2">
+                            ${this.editingNodeId ? `
+                            <button id="done-agent-btn" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm shadow-sm transition">
+                                ${this.t('common.done') && this.t('common.done') !== 'common.done' ? this.t('common.done') : 'Done'}
+                            </button>
+                            ` : `
                             <button id="cancel-agent-btn" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium transition">
                                 ${this.t('common.cancel')}
                             </button>
                             <button id="save-agent-btn" class="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm shadow-sm transition">
                                 ${this.t('common.save')}
                             </button>
+                            `}
                         </div>
                     </div>
                 </div>
@@ -13167,11 +13173,17 @@ class WorkflowEditor {
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
 
-        // Close button
-        document.getElementById('close-agent-modal')?.addEventListener('click', () => this.closeAgentEditModal());
+        // X (header) close: for a WORKFLOW NODE, apply the edits to the node
+        // in-memory (no DB round-trip) so nothing is lost; the workflow-level Save
+        // persists. For a LIBRARY agent, close just discards (Cancel/Save present).
+        document.getElementById('close-agent-modal')?.addEventListener('click', () => {
+            if (this.editingNodeId) this.saveAgent(false); else this.closeAgentEditModal();
+        });
         document.getElementById('cancel-agent-btn')?.addEventListener('click', () => this.closeAgentEditModal());
 
-        // Save button
+        // Node "Done": apply the form to the node in-memory + close (no per-form save).
+        document.getElementById('done-agent-btn')?.addEventListener('click', () => this.saveAgent(false));
+        // Library "Save": full save to the agents backend.
         document.getElementById('save-agent-btn')?.addEventListener('click', () => this.saveAgent());
 
         // Disable switch: write to the node the INSTANT it's toggled (not only
@@ -14270,7 +14282,10 @@ Based on the analysis...
     /**
      * Save the agent
      */
-    async saveAgent() {
+    async saveAgent(persist = true) {
+        // persist=false: apply the form to the node in-memory only (no slow
+        // autoPersistWorkflow round-trip). The workflow-level Save is the one
+        // that writes to the DB. This kills the per-form save-vs-typing race.
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
 
@@ -14496,9 +14511,9 @@ Based on the analysis...
                 this.editingNodeId = null;
                 this.closeAgentEditModal();
 
-                // Persist the workflow to the backend so the Save button in
-                // the agent modal actually saves (not just to local Drawflow state)
-                this.autoPersistWorkflow();
+                // Persist the workflow to the backend (skipped when persist=false —
+                // the workflow-level Save handles the DB write for node edits).
+                if (persist) this.autoPersistWorkflow();
 
                 // "Keep in library" was a DB-skill creation path; skills now
                 // live only in the filesystem under ~/Documents/synergyAI/skills/<dir>/.
