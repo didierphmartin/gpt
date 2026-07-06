@@ -9068,6 +9068,27 @@ class WorkflowEditor {
      * Save workflow to backend
      */
     async saveWorkflow() {
+        // Serialize saves. Two overlapping saveWorkflow() transactions — the manual Save
+        // button, the debounced structure auto-save, and _persistIfDirty can all fire close
+        // together — issue concurrent DELETE+INSERT on the same workflow's node rows and
+        // deadlock in InnoDB (SQLSTATE[40001] / 1213). Coalesce onto one in-flight save; if
+        // more edits arrive mid-save, run exactly one follow-up afterwards.
+        if (this._saveInFlight) {
+            this._savePending = true;
+            return this._saveInFlight;
+        }
+        this._saveInFlight = (async () => {
+            try {
+                return await this._saveWorkflowImpl();
+            } finally {
+                this._saveInFlight = null;
+                if (this._savePending) { this._savePending = false; this.saveWorkflow().catch(() => {}); }
+            }
+        })();
+        return this._saveInFlight;
+    }
+
+    async _saveWorkflowImpl() {
         console.log('[WorkflowEditor] saveWorkflow called - currentWorkflowId:', this.currentWorkflowId, 'currentWorkflowName:', this.currentWorkflowName);
 
         // For audio workflows: stamp the selected LLM provider onto the

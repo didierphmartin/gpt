@@ -237,6 +237,35 @@ class WorkflowGraphRepository
      */
     public function saveGraph(int $workflowId, array $nodes, array $edges): array
     {
+        // Retry on transient InnoDB lock errors (deadlock / lock-wait). Concurrent saves of
+        // the same workflow (manual Save + the debounced auto-save) can deadlock on the
+        // clearGraph DELETE + node INSERTs. These are transient by nature -- the loser retries.
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $this->saveGraphOnce($workflowId, $nodes, $edges);
+            } catch (\PDOException $e) {
+                if ($attempt < 5 && $this->isTransientLockError($e)) {
+                    usleep(50000 * $attempt);   // 50ms, 100ms, 150ms, 200ms backoff
+                    continue;
+                }
+                throw $e;
+            }
+        }
+    }
+
+    /** SQLSTATE 40001 = serialization failure (deadlock); 1213 = deadlock; 1205 = lock-wait timeout. */
+    private function isTransientLockError(\Throwable $e): bool
+    {
+        $msg = $e->getMessage();
+        return (string)$e->getCode() === '40001'
+            || stripos($msg, 'deadlock') !== false
+            || stripos($msg, 'lock wait timeout') !== false
+            || strpos($msg, '1213') !== false
+            || strpos($msg, '1205') !== false;
+    }
+
+    private function saveGraphOnce(int $workflowId, array $nodes, array $edges): array
+    {
         // Start transaction
         $this->db->beginTransaction();
 
@@ -281,7 +310,9 @@ class WorkflowGraphRepository
             return $nodeIdMap;
 
         } catch (\Exception $e) {
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             throw $e;
         }
     }
