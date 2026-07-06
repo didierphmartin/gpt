@@ -14,6 +14,10 @@ class WorkflowEditor {
         this.workflows = [];
         this.dbNodeToDrawflowMap = {}; // Maps database node IDs to Drawflow node IDs
         this.currentWorkflowId = null;
+        // Set true whenever a node/agent edit changes the in-memory model. The DB save is
+        // deferred: _persistIfDirty() flushes it before Generate/Run or leaving the workflow,
+        // so per-form edits are instant (no autoPersistWorkflow race that lost values).
+        this._workflowDirty = false;
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
         this.audioLlmProvider = 'grok';
@@ -2836,6 +2840,7 @@ class WorkflowEditor {
      * download would never reach the python env, so Run would 400 "Script not found".
      */
     async generateAdkScript() {
+        await this._persistIfDirty();  // flush deferred node edits to the DB first
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3256,6 +3261,7 @@ class WorkflowEditor {
      * in the same line-numbered scrollable modal as _showLangGraphCodeModal.
      */
     async _showAdkCodeModal() {
+        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3338,6 +3344,7 @@ class WorkflowEditor {
      * isn't reachable, same as the LangGraph path.
      */
     async _runAdkScript() {
+        await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3533,6 +3540,7 @@ class WorkflowEditor {
      * Mirrors generateAdkScript; endpoint is generate-maf, filename is *_maf.py.
      */
     async generateMafScript() {
+        await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) to the DB first
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3685,6 +3693,7 @@ class WorkflowEditor {
      * in the same line-numbered scrollable modal as _showAdkCodeModal.
      */
     async _showMafCodeModal() {
+        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3766,6 +3775,7 @@ class WorkflowEditor {
      * Falls back to a "run manually" hint if the runner isn't reachable.
      */
     async _runMafScript() {
+        await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -4109,6 +4119,7 @@ class WorkflowEditor {
      *   POST /api/run-file  body={ filename, args }
      */
     async _runLangGraphScript() {
+        await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -9036,6 +9047,24 @@ class WorkflowEditor {
     }
 
     /**
+     * Flush pending in-memory edits to the DB when the workflow is dirty. Called before
+     * Generate/Run and when leaving a workflow, so deferred node edits are persisted
+     * without a per-form save. Awaitable so callers can persist THEN act. No-op when not
+     * dirty or when no workflow is loaded yet.
+     */
+    async _persistIfDirty() {
+        if (!this._workflowDirty) return;
+        if (!this.currentWorkflowId) { this._workflowDirty = false; return; }
+        try {
+            await this.saveWorkflow();
+            this._workflowDirty = false;
+        } catch (err) {
+            console.error('[WorkflowEditor] _persistIfDirty failed:', err);
+            // keep dirty so a later action retries
+        }
+    }
+
+    /**
      * Save workflow to backend
      */
     async saveWorkflow() {
@@ -9216,6 +9245,8 @@ class WorkflowEditor {
      * Load a workflow from backend
      */
     async loadWorkflow(workflowId) {
+        // Leaving the current workflow: flush its pending in-memory edits to the DB first.
+        await this._persistIfDirty();
         try {
             console.log('[WorkflowEditor] Loading workflow ID:', workflowId);
             // Add cache-busting parameter to prevent stale data
@@ -13135,9 +13166,11 @@ class WorkflowEditor {
                                 <span>🗑️</span> ${tf('deleteNode')}
                             </button>` : (!isNew ? `<button id="delete-agent-btn" class="text-red-500 hover:text-red-700 text-xs">${tf('deleteAgent')}</button>` : '')}
                         </div>
-                        <div class="flex gap-2 items-center">
+                        <div class="flex gap-2">
                             ${this.editingNodeId ? `
-                            <span class="text-xs text-gray-400">${this.t('workflow.agentForm.autoSaved') && this.t('workflow.agentForm.autoSaved') !== 'workflow.agentForm.autoSaved' ? this.t('workflow.agentForm.autoSaved') : 'Changes apply automatically — save the workflow to persist'}</span>
+                            <button id="done-agent-btn" class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm shadow-sm transition">
+                                ${this.t('common.done') && this.t('common.done') !== 'common.done' ? this.t('common.done') : 'Done'}
+                            </button>
                             ` : `
                             <button id="cancel-agent-btn" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium transition">
                                 ${this.t('common.cancel')}
@@ -13171,17 +13204,18 @@ class WorkflowEditor {
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
 
-        // LIVE-BIND (workflow node): every field edit writes straight into the in-memory
-        // node model, immediately -- no per-form save, no button. The workflow-level Save
-        // is the only thing that writes to the DB. For a library agent (no editingNodeId)
-        // _syncAgentFormToNode is a no-op and Cancel/Save handle persistence.
-        if (this.editingNodeId) {
-            ['input', 'change'].forEach(evt =>
-                modal.addEventListener(evt, () => this._syncAgentFormToNode()));
-        }
-        // X (header) / Cancel just close -- for a node the values are already in the model.
-        document.getElementById('close-agent-modal')?.addEventListener('click', () => this.closeAgentEditModal());
+        // Close button
+        // X (header): for a workflow node, apply the edit (saveAgent applies to the
+        // in-memory model, marks dirty, closes -- no DB round-trip); for a library agent
+        // it just closes. So a node edit is never lost by closing without a button.
+        document.getElementById('close-agent-modal')?.addEventListener('click', () => {
+            if (this.editingNodeId) this.saveAgent(); else this.closeAgentEditModal();
+        });
         document.getElementById('cancel-agent-btn')?.addEventListener('click', () => this.closeAgentEditModal());
+
+        // Node "Done": apply the form to the node in-memory + close (no per-form DB save;
+        // the DB write is deferred to Generate/Run/leave via _persistIfDirty).
+        document.getElementById('done-agent-btn')?.addEventListener('click', () => this.saveAgent());
         // Library "Save": full save to the agents backend.
         document.getElementById('save-agent-btn')?.addEventListener('click', () => this.saveAgent());
 
@@ -14281,49 +14315,7 @@ Based on the analysis...
     /**
      * Save the agent
      */
-    /**
-     * LIVE-BIND: on every agent-form change, write the current field values straight
-     * into the editing node's in-memory Drawflow data. No per-form save — the
-     * workflow-level Save persists to the DB. Mirrors the exact keys saveAgent()
-     * writes (agent_name / agent_provider / model / instructions / settings.* /
-     * tools / merge_strategy / bound_skill / output_schema) so the analyzer & DB
-     * read the same shape. No-op unless a workflow node is being edited. The
-     * `disabled` flag keeps its own dedicated instant-write handler.
-     */
-    _syncAgentFormToNode() {
-        if (!this.editingNodeId) return;
-        const node = this.editor?.drawflow?.drawflow?.Home?.data?.[String(this.editingNodeId)];
-        if (!node || !node.data) return;
-        const g = (id) => document.getElementById(id);
-        const d = node.data;
-        d.type = 'agent';
-        if (g('agent-name-input')) d.agent_name = g('agent-name-input').value.trim();
-        if (g('agent-description-input')) d.description = g('agent-description-input').value.trim();
-        if (g('agent-type-select')) d.agent_type = g('agent-type-select').value;
-        if (g('agent-provider-select')) d.agent_provider = g('agent-provider-select').value;
-        if (g('agent-model-input')) d.model = g('agent-model-input').value.trim();
-        if (g('agent-instructions-input')) d.instructions = g('agent-instructions-input').value;
-        if (g('agent-merge-strategy-select')) d.merge_strategy = g('agent-merge-strategy-select').value;
-        d.settings = {
-            ...(d.settings || {}),
-            temperature: parseFloat(g('agent-temperature-input')?.value) || 0.7,
-            max_tokens: parseInt(g('agent-max-tokens-input')?.value) || 4096,
-        };
-        d.tools = Array.from(document.querySelectorAll('.tool-checkbox:checked')).map(cb => cb.dataset.tool);
-        d.bound_skill = this._boundSkill ? {
-            id: this._boundSkill.id, source: this._boundSkill.source,
-            dir_name: this._boundSkill.dir_name, name: this._boundSkill.name,
-        } : null;
-        d.skill_content = '';
-        if (this.schemaBuilder) {
-            try { d.output_schema = this.getEmbeddedSchemaJson(); d.output_schema_id = null; } catch (_) { /* invalid mid-edit; keep last */ }
-        }
-    }
-
-    async saveAgent(persist = true) {
-        // persist=false: apply the form to the node in-memory only (no slow
-        // autoPersistWorkflow round-trip). The workflow-level Save is the one
-        // that writes to the DB. This kills the per-form save-vs-typing race.
+    async saveAgent() {
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
 
@@ -14458,7 +14450,10 @@ Based on the analysis...
                     // Build the new data object with all agent-related fields
                     const newNodeData = {
                         ...nodeData.data,  // Preserve existing data
-                        type: 'agent',  // Ensure it's marked as configured agent
+                        // PRESERVE the node's existing type -- never force 'agent'. Forcing
+                        // it here once flipped the Output node to an Agent node. A node edited
+                        // through this modal is already an agent; new ones default to 'agent'.
+                        type: nodeData.data.type || 'agent',
                         agent_id: agentData.id || null,
                         agent_name: agentData.name,
                         description: agentData.description,
@@ -14549,9 +14544,10 @@ Based on the analysis...
                 this.editingNodeId = null;
                 this.closeAgentEditModal();
 
-                // Persist the workflow to the backend (skipped when persist=false —
-                // the workflow-level Save handles the DB write for node edits).
-                if (persist) this.autoPersistWorkflow();
+                // Node edit is applied to the in-memory model only (instant, no race).
+                // Mark dirty; the DB write is flushed by _persistIfDirty() before the next
+                // Generate/Run or when you leave the workflow.
+                this._workflowDirty = true;
 
                 // "Keep in library" was a DB-skill creation path; skills now
                 // live only in the filesystem under ~/Documents/synergyAI/skills/<dir>/.

@@ -485,6 +485,7 @@
   "common": {
     "cancel": "Cancelar",
     "close": "Cerrar",
+    "done": "Listo",
     "save": "Guardar",
     "delete": "Eliminar",
     "edit": "Editar",
