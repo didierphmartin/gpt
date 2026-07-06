@@ -3540,7 +3540,6 @@ class WorkflowEditor {
      * Mirrors generateAdkScript; endpoint is generate-maf, filename is *_maf.py.
      */
     async generateMafScript() {
-        await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) to the DB first
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -3551,17 +3550,21 @@ class WorkflowEditor {
             return;
         }
 
-        // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
-        const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-        if (!runnerEntry) {
-            this._showRunnerSetupModal();
-            return;
-        }
-
+        // Show the overlay FIRST for instant feedback, THEN do the slow work (flush deferred
+        // node edits to the DB + probe the runner + generate) inside it.
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generatingMaf') || 'Generating Microsoft Agent Framework script…'
         );
         try {
+            await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) first
+
+            // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
+            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
+            if (!runnerEntry) {
+                this._showRunnerSetupModal();
+                return;
+            }
+
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
                 { headers: this.getAuthHeaders() }
@@ -9160,6 +9163,9 @@ class WorkflowEditor {
             }
 
             const data = await response.json();
+            // Saved successfully -> clear dirty. Must happen before the loadWorkflow() below,
+            // whose _persistIfDirty() would otherwise re-trigger a redundant save.
+            this._workflowDirty = false;
             console.log('[WorkflowEditor] Save response:', data);
 
             const savedWorkflowId = data.data?.id || data.id;
