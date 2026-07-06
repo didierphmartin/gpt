@@ -301,6 +301,17 @@ class MAFGenerator
                 return OpenAIChatCompletionClient(model=model, api_key=os.environ.get("DEEPSEEK_API_KEY"),
                     base_url="https://api.deepseek.com")
             raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
+
+
+        def _chat_opts(provider, model, max_tokens, temperature):
+            # Kimi K2 defaults to "thinking" mode; disable it to match the chat KimiProvider
+            # (a non-form setting, same as ADK/LangGraph do). With thinking OFF, kimi-k2.*
+            # requires temperature 0.6 -- that's a model constraint surfaced to the user in
+            # the form, never overridden here.
+            o = ChatOptions(max_tokens=max_tokens, temperature=temperature)
+            if provider == "kimi" and str(model).startswith("kimi-k2"):
+                o["extra_body"] = {"thinking": {"type": "disabled"}}
+            return o
         PY;
     }
 
@@ -403,7 +414,7 @@ async def _run_skill_step(skill, prior, user_prompt, provider, model, max_tokens
         _LAST_SKILL_OUTPUTS.pop(dir_name, None)
     agent = Agent(_make_client(provider, model), instructions=system, name="skill_step",
                   tools=tools,
-                  default_options=ChatOptions(max_tokens=max_tokens, temperature=temperature))
+                  default_options=_chat_opts(provider, model, max_tokens, temperature))
     # Context order (recency-optimised): SKILL.md is the system prompt (above); the user
     # message puts a short task framing first, then the MATERIAL to transform, then the
     # ORIGINAL REQUEST last -- so the workflow's authoritative target/parameters (e.g. the
@@ -470,7 +481,7 @@ PY;
             client = _make_client(ad["provider"], ad["model"])
             # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
             _tools = [t for t in ad["tools"] if t is not None]
-            _opts = ChatOptions(max_tokens=ad["max_tokens"], temperature=ad["temperature"])
+            _opts = _chat_opts(ad["provider"], ad["model"], ad["max_tokens"], ad["temperature"])
             agent = Agent(client, instructions=ad["instructions"], name=f"node_{nid}",
                           tools=_tools, default_options=_opts)
             text = (await agent.run(_agent_input(parents, node_outputs, user_prompt))).text or ""
