@@ -261,7 +261,7 @@ class MAFGenerator
 
         import httpx
         from dotenv import load_dotenv
-        from agent_framework import Agent, workflow
+        from agent_framework import Agent, workflow, FunctionTool
         from agent_framework.anthropic import AnthropicClient
         from agent_framework.openai import OpenAIChatCompletionClient
 
@@ -332,38 +332,46 @@ _SKILL_ABORT = []
 
 
 def _make_skill_tool(dir_name: str):
-    """run_skill_script bound to ONE skill dir. Plain callable -- MAF auto-wraps it and
-    reads the type hints below to build the tool schema, so argv is declared as a LIST of
-    separate tokens (not one string) and the model stops packing the whole command line
-    into a single argv element."""
+    """run_skill_script bound to ONE skill dir, returned as an explicit FunctionTool with
+    max_invocation_exceptions=1 so MAF stops calling it the instant our fail-fast raises --
+    a failing script then stops at exactly _SKILL_MAX_ATTEMPTS (2), not MAF's default 3."""
     def run_skill_script(script: str, argv: list[str] | None = None,
                          input_files: dict | None = None,
                          read_outputs: list[str] | None = None) -> str:
         result = _run_skill_script(dir_name, script, argv, input_files, read_outputs)
         key = dir_name + "/" + str(script)
         failed = result.startswith("ERROR:") or "[run_skill_script exit " in result
-        if failed:
-            _SKILL_FAIL_COUNTS[key] = _SKILL_FAIL_COUNTS.get(key, 0) + 1
-            if _SKILL_FAIL_COUNTS[key] >= _SKILL_MAX_ATTEMPTS:
-                _msg = ("Workflow stopped: skill script '" + key + "' failed "
-                        + str(_SKILL_FAIL_COUNTS[key]) + " times (max "
-                        + str(_SKILL_MAX_ATTEMPTS) + "). Last error:\n" + result[:400]
-                        + "\nCheck the target/inputs (e.g. the URL in the Start node).")
-                _SKILL_ABORT.append(_msg)
-                raise RuntimeError(_msg)
-        else:
+        if not failed:
             _SKILL_FAIL_COUNTS.pop(key, None)
-        return result
-    run_skill_script.__name__ = "run_skill_script"
+            return result
+        _SKILL_FAIL_COUNTS[key] = _SKILL_FAIL_COUNTS.get(key, 0) + 1
+        if _SKILL_FAIL_COUNTS[key] < _SKILL_MAX_ATTEMPTS:
+            return result  # surface the error and let the model correct itself once more
+        # Cap reached. Classify: a DATA-gathering failure (unreachable/blocked target) aborts
+        # the whole run -- a bad URL should stop it. A TOOL-USAGE error (argparse, missing
+        # input file: the model calling the script wrong) only stops THIS script; the run
+        # then finishes with the best output it already has, instead of dying at the end.
+        _low = result.lower()
+        _data_fail = any(k in _low for k in (
+            "fetch failed", "page fetch", "empty body", "could not fetch", "http 4",
+            "http 5", "connection", "timed out", "name resolution", "unreachable", "no route"))
+        _msg = ("skill script '" + key + "' failed " + str(_SKILL_FAIL_COUNTS[key])
+                + " times (max " + str(_SKILL_MAX_ATTEMPTS) + "). Last error:\n" + result[:400])
+        if _data_fail:
+            _SKILL_ABORT.append("Workflow stopped: " + _msg
+                                + "\nCheck the target/inputs (e.g. the URL in the Start node).")
+            raise RuntimeError(_SKILL_ABORT[-1])
+        raise RuntimeError("Stop calling this script (tool-usage error): " + _msg)
     run_skill_script.__doc__ = (
         "Run a script in the '" + dir_name + "' skill (the skill dir is fixed). "
         "argv MUST be a list of SEPARATE command-line tokens -- e.g. "
         "['-i', '/scratch/report.html', '-o', '/outputs/report.html', '--pretty'] -- "
-        "never a single string like '-i /scratch/report.html -o ...'. To feed a file to "
-        "the script, stage its content with input_files={'/scratch/report.html': '<html>'} "
-        "using the EXACT SAME path you pass to -i, and list produced output path(s) in "
-        "read_outputs so the workflow captures the deliverable.")
-    return run_skill_script
+        "never a single string. To feed a file to the script, stage its FULL content with "
+        "input_files={'/scratch/report.html': '<content>'} using the EXACT SAME path you "
+        "pass to -i, IN THE SAME call (nothing persists between calls). List produced output "
+        "path(s) in read_outputs so the workflow captures the deliverable.")
+    return FunctionTool(func=run_skill_script, name="run_skill_script",
+                        description=run_skill_script.__doc__, max_invocation_exceptions=1)
 
 
 async def _run_skill_step(skill, prior, user_prompt, provider, model):
@@ -404,11 +412,12 @@ async def _run_skill_step(skill, prior, user_prompt, provider, model):
     try:
         text = (await agent.run(_user_msg)).text or ""
     except Exception:
-        # A retry-cap abort raised inside the tool surfaces here (or the agent errored).
+        # A DATA-failure abort propagates (below). A bounded tool-usage stop or any other
+        # agent error is non-fatal: fall through and return the best output we captured.
         if _SKILL_ABORT:
             raise RuntimeError(_SKILL_ABORT[-1])
-        raise
-    # If MAF swallowed the tool's abort into the agent loop, enforce fail-fast now.
+        text = ""
+    # Only a genuine data-gathering failure aborts the whole workflow.
     if _SKILL_ABORT:
         raise RuntimeError(_SKILL_ABORT[-1])
     produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
