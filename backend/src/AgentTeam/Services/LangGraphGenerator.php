@@ -980,7 +980,9 @@ class LangGraphGenerator
         $lines[] = self::runBodyBlock();
 
         $code = implode("\n", $lines);
-        $filename = "{$safeName}.py";
+        // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
+        // (LangGraph was the original default and previously had no suffix).
+        $filename = "{$safeName}_langgraph.py";
         return ['filename' => $filename, 'code' => $code];
     }
 
