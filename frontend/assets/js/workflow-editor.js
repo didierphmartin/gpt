@@ -2381,6 +2381,8 @@ class WorkflowEditor {
             }
             const adkBtn = e.target.closest('[data-action="adk-menu"]');
             if (adkBtn) { e.stopPropagation(); this._showAdkMenu(adkBtn); return; }
+            const mafBtn = e.target.closest('[data-action="maf-menu"]');
+            if (mafBtn) { e.stopPropagation(); this._showMafMenu(mafBtn); return; }
             const viewJsonBtn = e.target.closest('[data-action="view-json"]');
             if (viewJsonBtn) {
                 e.stopPropagation();
@@ -3427,6 +3429,433 @@ class WorkflowEditor {
                 <p class="text-xs text-gray-500 mb-4">
                     Alternatively, run the ADK script directly — no runner needed:
                     <code class="text-xs bg-gray-100 px-1 rounded">python &lt;workflow&gt;_adk.py "Your prompt"</code>
+                </p>
+                <div class="flex justify-end">
+                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), startCmd);
+    }
+
+    // -------------------------------------------------------------------------
+    // Microsoft Agent Framework (MAF) — mirrors the ADK block above.
+    // Endpoint: generate-maf  |  filename: <name>_maf.py
+    // -------------------------------------------------------------------------
+
+    /**
+     * Dropdown menu for the "Microsoft Agent Framework" button on the Output node.
+     * Mirrors _showAdkMenu exactly; differs only in endpoints, action names and copy.
+     */
+    _showMafMenu(buttonEl) {
+        // Toggle: clicking the button a second time closes the menu.
+        const existing = document.querySelector('.langgraph-menu.maf-menu');
+        if (existing) { existing.remove(); return; }
+        // Close any open LangGraph/ADK menu so only one is visible at a time.
+        document.querySelector('.langgraph-menu')?.remove();
+
+        const isIngestion = this._outputConnectedToIngestion();
+
+        const menu = document.createElement('div');
+        menu.className = 'langgraph-menu maf-menu';
+        menu.innerHTML = isIngestion
+            ? `
+            <button type="button" class="langgraph-menu-item" data-action="maf-generate">
+                ${this.escapeHtml(this.t('workflow.output.mafGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-display-code">
+                ${this.escapeHtml(this.t('workflow.output.mafDisplayCode') || 'Display Code')}
+            </button>
+        `
+            : `
+            <button type="button" class="langgraph-menu-item" data-action="maf-setup">
+                ${this.escapeHtml(this.t('workflow.output.mafSetup') || 'Setup')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-generate">
+                ${this.escapeHtml(this.t('workflow.output.mafGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-info">
+                ${this.escapeHtml(this.t('workflow.output.mafInfo') || 'Info')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-run">
+                ${this.escapeHtml(this.t('workflow.output.mafRun') || 'Run')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-display-code">
+                ${this.escapeHtml(this.t('workflow.output.mafDisplayCode') || 'Display Code')}
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        const r = buttonEl.getBoundingClientRect();
+        const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${r.bottom + 4}px`;
+
+        menu.querySelector('[data-action="maf-setup"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showMafSetupModal();
+        });
+        menu.querySelector('[data-action="maf-generate"]')?.addEventListener('click', () => {
+            menu.remove();
+            this.generateMafScript();
+        });
+        menu.querySelector('[data-action="maf-info"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showMafInfoModal();
+        });
+        menu.querySelector('[data-action="maf-run"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._runMafScript();
+        });
+        menu.querySelector('[data-action="maf-display-code"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showMafCodeModal();
+        });
+
+        setTimeout(() => {
+            const onDocClick = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', onDocClick, true);
+                }
+            };
+            document.addEventListener('click', onDocClick, true);
+        }, 0);
+    }
+
+    /**
+     * Generate the Microsoft Agent Framework Python script and write it into
+     * python/scripts/ so the runner can find and execute it via /api/run-file.
+     * Mirrors generateAdkScript; endpoint is generate-maf, filename is *_maf.py.
+     */
+    async generateMafScript() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        if (!window.localFs || !window.localFs.isSupported || !window.localFs.isSupported()) {
+            alert(this.t('workflow.output.fsaUnavailable')
+                || 'Local filesystem access is not available in this browser.');
+            return;
+        }
+
+        // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
+        const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
+        if (!runnerEntry) {
+            this._showRunnerSetupModal();
+            return;
+        }
+
+        const overlay = this._showGeneratingOverlay(
+            this.t('workflow.output.generatingMaf') || 'Generating Microsoft Agent Framework script…'
+        );
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err || `HTTP ${resp.status}`);
+            }
+            let filename = 'workflow_maf.py';
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            if (m) filename = m[1];
+            const text = await resp.text();
+
+            // Write into python/scripts/ so the runner can find and execute it.
+            const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+            if (!scriptsDir) {
+                throw new Error('Could not resolve synergyAI/python/scripts.');
+            }
+            const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(text);
+            await writable.close();
+
+            // Refresh python/.env with the current provider keys so the script can auth.
+            await this._syncRunnerEnv();
+
+            const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
+            console.log(`[WorkflowEditor] Saved generated MAF Python to ${rootName}/python/scripts/${filename}`);
+        } catch (e) {
+            console.error('[WorkflowEditor] generate-maf failed:', e);
+            alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
+        } finally {
+            overlay.close();
+        }
+    }
+
+    /**
+     * Setup modal for the Microsoft Agent Framework runtime.
+     * Self-contained script — install three packages, run directly.
+     * Mirrors _showAdkSetupModal visually.
+     */
+    _showMafSetupModal() {
+        const cmd = 'pip install "agent-framework>=1.10,<2" httpx python-dotenv';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">
+                    ${this.escapeHtml(this.t('workflow.mafSetup.title') || 'Microsoft Agent Framework — one-time setup')}
+                </h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    ${this.escapeHtml(this.t('workflow.mafSetup.body')
+                        || 'The generated MAF script is self-contained — no separate runner server required. Install the three runtime packages once:')}
+                </p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.mafSetup.copy') || 'Copy command')}">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-2">
+                    ${this.escapeHtml(this.t('workflow.mafSetup.note')
+                        || 'After installing, click Generate to download the MAF Python file, then run it directly:')}
+                </p>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_maf.py "Your prompt here"</pre>
+                <p class="text-xs text-gray-500 mb-4">
+                    ${this.escapeHtml(this.t('workflow.mafSetup.runnerNote')
+                        || 'Unlike LangGraph, the MAF output needs no FastAPI runner — you run the generated file directly with the provider API keys in your environment.')}
+                </p>
+                <div class="flex justify-end">
+                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
+                        ${this.escapeHtml(this.t('common.close') || 'Close')}
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
+    }
+
+    /**
+     * Info modal for the Microsoft Agent Framework runtime.
+     * Describes the self-contained MAF program: install, run, API keys, providers.
+     * Mirrors _showAdkInfoModal visually.
+     */
+    _showMafInfoModal() {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Microsoft Agent Framework runtime</h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    Generated MAF workflows are self-contained Python programs — no separate runner server or
+                    FastAPI process needed. Download the file, install three packages, and run it directly.
+                </p>
+                <table class="w-full text-xs text-left mb-4">
+                    <tbody class="divide-y divide-gray-200">
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "agent-framework&gt;=1.10,&lt;2" httpx python-dotenv</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_maf.py</code> (written via Generate)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_maf.py "Your prompt here"</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Read from <code class="text-xs">.env</code> via <code class="text-xs">load_dotenv()</code> — e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">MCP &amp; skills</td><td>Run in the script's own environment — no external server required</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Providers</td><td>Claude → <code class="text-xs">AnthropicClient</code>; Gemini / Grok / Kimi / DeepSeek / OpenAI → <code class="text-xs">OpenAIChatCompletionClient</code> + base_url</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">vs LangGraph</td><td>No FastAPI runner needed — the MAF file IS the runtime</td></tr>
+                    </tbody>
+                </table>
+                <p class="text-xs text-gray-500 mb-4">
+                    The Output-node's <b>Run</b> menu item executes the MAF script through the same local runner
+                    (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
+                    used by LangGraph — ensure <code class="text-xs">agent-framework httpx python-dotenv</code> are installed
+                    in its venv, or run the file directly from a terminal instead.
+                </p>
+                <div class="flex justify-end">
+                    <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+    }
+
+    /**
+     * Display Code modal for the Microsoft Agent Framework script.
+     * Fetches from generate-maf (no download param) and shows the code
+     * in the same line-numbered scrollable modal as _showAdkCodeModal.
+     */
+    async _showMafCodeModal() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        let code;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            // Endpoint may return JSON {data:{code,filename}} or raw text.
+            const contentType = resp.headers.get('Content-Type') || '';
+            if (contentType.includes('application/json')) {
+                const j = await resp.json();
+                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
+            } else {
+                code = await resp.text();
+            }
+        } catch (e) {
+            alert(`Could not fetch the MAF code: ${e?.message || e}`);
+            return;
+        }
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-gray-900">Generated Microsoft Agent Framework code</h3>
+                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
+                </div>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
+                <div class="flex justify-end mt-3">
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+
+        const preEl = backdrop.querySelector('pre');
+        const codeLines = code.split('\n');
+        const gutterCh = String(codeLines.length).length + 1;
+        const lnStyle = document.createElement('style');
+        lnStyle.textContent = `
+            .maf-code-modal .code-line { display: block; }
+            .maf-code-modal .code-ln {
+                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
+                text-align: right; color: #64748b; user-select: none;
+                position: sticky; left: 0; background: #111827;
+            }
+            .maf-code-modal .code-lc { white-space: pre; }
+        `;
+        backdrop.appendChild(lnStyle);
+        preEl.classList.add('maf-code-modal', 'code-with-lines');
+        preEl.innerHTML = codeLines.map((ln, i) =>
+            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
+            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
+        ).join('');
+
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
+        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(code);
+                const btn = backdrop.querySelector('.code-copy-btn');
+                const prev = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = prev; }, 1200);
+            } catch (e) { /* user selects + copies manually */ }
+        });
+    }
+
+    /**
+     * Run the MAF script via the local runner.
+     * Mirrors _runAdkScript: liveness-probe /health, derive the MAF
+     * filename from generate-maf Content-Disposition, stream output into a modal.
+     * Falls back to a "run manually" hint if the runner isn't reachable.
+     */
+    async _runMafScript() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        // Liveness probe so the failure mode is "runner not started" not silence.
+        try {
+            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (e) {
+            this._showMafRunnerNotRunningModal();
+            return;
+        }
+
+        // Derive the MAF filename from generate-maf Content-Disposition.
+        let filename;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            filename = m ? m[1] : 'workflow_maf.py';
+            await resp.text(); // consume body
+        } catch (e) {
+            alert(`Could not resolve the MAF filename: ${e?.message || e}\nClick "Generate" first.`);
+            return;
+        }
+
+        const { append, showDiagnostic } = this._openRunOutputModal(filename);
+
+        try {
+            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename,
+                    // No separate prompt entry: the script uses the workflow's Start-node
+                    // prompt, which the compiler bakes in as the default. Run with no argv.
+                    args: [],
+                }),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
+                return;
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let _runOut = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const _chunk = decoder.decode(value, { stream: true });
+                _runOut += _chunk;
+                append(_chunk);
+            }
+            showDiagnostic(this._diagnoseRunError(_runOut));
+        } catch (e) {
+            append(`\n[fetch failed: ${e?.message || e}]\n`);
+        }
+    }
+
+    /**
+     * Modal shown when the runner liveness probe fails while trying to run
+     * a MAF script. Mirrors _showAdkRunnerNotRunningModal with MAF-specific copy.
+     */
+    _showMafRunnerNotRunningModal() {
+        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Runner isn't running (MAF)</h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    The local runner (<code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
+                    isn't responding. Start it from a terminal:
+                </p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-3">
+                    Also ensure <code class="text-xs">agent-framework httpx python-dotenv</code> are installed in the runner venv:
+                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
+                </p>
+                <p class="text-xs text-gray-500 mb-4">
+                    Alternatively, run the MAF script directly — no runner needed:
+                    <code class="text-xs bg-gray-100 px-1 rounded">python &lt;workflow&gt;_maf.py "Your prompt"</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -9329,6 +9758,10 @@ class WorkflowEditor {
                 </button>
                 <button class="node-langgraph node-adk" title="${this.t('workflow.output.adkTitle') || 'Google ADK: set up the runtime or generate the script'}" data-action="adk-menu">
                     <span class="gen-label">Google ADK - Python</span>
+                    <span class="gen-caret" aria-hidden="true">▾</span>
+                </button>
+                <button class="node-langgraph node-maf" title="${this.t('workflow.output.mafTitle') || 'Microsoft Agent Framework: set up the runtime or generate the script'}" data-action="maf-menu">
+                    <span class="gen-label">Microsoft Agent Framework</span>
                     <span class="gen-caret" aria-hidden="true">▾</span>
                 </button>
                 <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
