@@ -65,6 +65,14 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('asyncio.gather(', $code);
         $this->assertStringContainsString('OUTPUT_NODE_ID = "3"', $code);
         $this->assertStringContainsString('asyncio.run(main.run(', $code);
+        // Parity with LangGraph build_context: every agent node sees the original prompt
+        // (framed input), while the output node gets the raw merged deliverable.
+        $this->assertStringContainsString('def _agent_input(', $code);
+        $this->assertStringContainsString('Original user request:', $code);
+        $this->assertStringContainsString('def _merge_parents(', $code);
+        // Result API: agent-framework's WorkflowRunResult has NO .text — use get_outputs().
+        $this->assertStringContainsString('_result.get_outputs()', $code);
+        $this->assertStringNotContainsString('_result.text', $code);
     }
 
     public function testStartPromptAndStorageBaked(): void

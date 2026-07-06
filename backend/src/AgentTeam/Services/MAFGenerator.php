@@ -381,33 +381,53 @@ PY;
         $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
         $runner = <<<'PY'
-        async def _run_node(nid, _input):
-            """Run one node: the output node is a pass-through (returns its merged input);
-            an agent node runs its LLM, then its mandatory skill pipeline (Task 3)."""
+        async def _run_node(nid, parents, node_outputs, user_prompt):
+            """Run one node. The OUTPUT node is a pass-through: it returns its parents'
+            RAW merged text (the deliverable) unchanged -- no framing, so the produced
+            document is not polluted. An AGENT node runs its LLM on a framed input (the
+            original request + its upstream inputs, parity with the LangGraph
+            build_context so every agent sees the prompt), then its mandatory skills."""
             ad = AGENTS.get(nid)
             if ad is None:                      # output / pass-through node
-                return _input
+                merged = _merge_parents(parents, node_outputs)
+                return merged if merged else str(user_prompt)
             client = _make_client(ad["provider"], ad["model"])
+            # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
+            _tools = [t for t in ad["tools"] if t is not None]
             agent = Agent(client, instructions=ad["instructions"],
-                          name=f"node_{nid}", tools=ad["tools"])
-            text = (await agent.run(_input)).text or ""
+                          name=f"node_{nid}", tools=_tools)
+            text = (await agent.run(_agent_input(parents, node_outputs, user_prompt))).text or ""
             for _skill in ad.get("skills", []):
                 text = await _run_skill_step(_skill, text, ad["provider"], ad["model"])
             return text
 
 
-        def _build_input(parents, node_outputs, user_prompt):
-            """Merge parent outputs (fan-in) as this node's input; the start node's
-            children get the user prompt."""
-            parts = []
-            for p in parents:
-                if p in node_outputs:
-                    parts.append(str(node_outputs[p]))
+        def _merge_parents(parents, node_outputs):
+            """Raw concatenation of available parent outputs (fan-in); '' if none. Used
+            verbatim as the OUTPUT node's deliverable, so it adds no framing text."""
+            parts = [str(node_outputs[p]) for p in parents if p in node_outputs]
             if not parts:
-                return user_prompt
+                return ""
             if len(parts) == 1:
                 return parts[0]
             return "\n\n---\n\n".join(parts)
+
+
+        def _agent_input(parents, node_outputs, user_prompt):
+            """An agent node's input: the ORIGINAL user request plus its upstream parents'
+            outputs, so every agent sees the prompt (parity with LangGraph build_context).
+            A node with no available parents (e.g. wired straight from Start) still gets
+            the request."""
+            parts = ['Original user request: "' + str(user_prompt) + '"', "",
+                     "Upstream inputs from this workflow (source material for your task):",
+                     "", "---"]
+            valid = [(p, node_outputs[p]) for p in parents if p in node_outputs]
+            if not valid:
+                parts.append("(no upstream inputs -- respond to the original request directly)")
+            else:
+                for pid, out in valid:
+                    parts += ["", "### Input from node " + str(pid), "", str(out), "", "---"]
+            return "\n".join(parts)
         PY;
         return $agents . "\n\n\n" . $runner;
     }
@@ -447,13 +467,13 @@ PY;
         @workflow
         async def main(user_prompt: str = DEFAULT_PROMPT) -> str:
             node_outputs = {}
-            # Layer 0 is the start node; its prompt seeds the children via _build_input.
+            # Layer 0 is the start node; its prompt reaches every agent via _agent_input.
             for layer in LAYERS[1:]:
                 ids = [n for n in layer if n in AGENTS or n == OUTPUT_NODE_ID]
                 if not ids:
                     continue
-                inputs = [_build_input(PARENTS.get(n, []), node_outputs, user_prompt) for n in ids]
-                results = await asyncio.gather(*[_run_node(n, inp) for n, inp in zip(ids, inputs)])
+                results = await asyncio.gather(*[
+                    _run_node(n, PARENTS.get(n, []), node_outputs, user_prompt) for n in ids])
                 for n, r in zip(ids, results):
                     node_outputs[n] = r
                     print(f"[node] {n}: {len(str(r))} chars", flush=True)
@@ -468,7 +488,10 @@ PY;
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
             _result = asyncio.run(main.run(_prompt))
-            _text = _result.text or ""
+            # agent-framework's WorkflowRunResult exposes terminal outputs via
+            # get_outputs() (a list), NOT a .text attribute.
+            _outputs = _result.get_outputs()
+            _text = str(_outputs[0]) if _outputs else ""
             print("\n=== FINAL OUTPUT ===\n" + _text)
             if OUTPUT_STORAGE_ENABLED:
                 _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
