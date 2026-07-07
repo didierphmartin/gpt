@@ -455,18 +455,30 @@ class SettingsPanel {
             })
             .join('');
 
-        // Single delegated change listener; wired once per render is fine
-        // because we replace the container's innerHTML each time.
-        list.addEventListener('change', (e) => {
-            const cb = e.target.closest('input[type="checkbox"][data-skill-toggle]');
-            if (!cb) return;
-            const dirName = cb.dataset.skillToggle;
-            window.skillsManager.setSkillEnabled(dirName, cb.checked);
-            const label = cb.closest('label');
-            if (label) label.title = cb.checked
-                ? 'Enabled — visible to the chat auto-router'
-                : 'Disabled — hidden from the auto-router';
-        });
+        // Delegated change listener — wire it ONCE on the persistent container. `list.innerHTML = …`
+        // above replaces only the children, NOT `list` itself, so re-adding here every render stacked
+        // duplicate handlers (each toggle then fired setSkillEnabled N times). Guard with a dataset flag.
+        // The body is wrapped so a storage/read error on a single toggle can never bubble up and blank
+        // the panel — it just logs and notifies. (Persistence is localStorage, so the switch is already
+        // instant; no network/optimistic handling needed here, unlike the MCP toggles.)
+        if (!list.dataset.skillsWired) {
+            list.dataset.skillsWired = '1';
+            list.addEventListener('change', (e) => {
+                const cb = e.target.closest('input[type="checkbox"][data-skill-toggle]');
+                if (!cb) return;
+                try {
+                    const dirName = cb.dataset.skillToggle;
+                    window.skillsManager?.setSkillEnabled(dirName, cb.checked);
+                    const label = cb.closest('label');
+                    if (label) label.title = cb.checked
+                        ? 'Enabled — visible to the chat auto-router'
+                        : 'Disabled — hidden from the auto-router';
+                } catch (err) {
+                    console.error('[settings:skills] toggle failed:', err);
+                    this.showNotification?.('Failed to update skill', 'error');
+                }
+            });
+        }
     }
 
     /**
