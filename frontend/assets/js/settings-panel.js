@@ -11,7 +11,7 @@
 class SettingsPanel {
     constructor() {
         // API endpoint
-        this.apiBaseUrl = '/gpt/backend/api/v1';
+        this.apiBaseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
 
         // DOM Elements
         this.panel = document.getElementById('settings-panel');
@@ -104,7 +104,7 @@ class SettingsPanel {
      */
     async loadModelCatalog() {
         try {
-            const res = await fetch('/gpt/backend/api/v1/models/catalog');
+            const res = await fetch(window.apiUrl('/models/catalog'));
             const body = await res.json();
             if (!body.success || !body.providers) {
                 console.warn('[SettingsPanel] Model catalog fetch returned error:', body.error);
@@ -1201,6 +1201,20 @@ class SettingsPanel {
             });
         }
 
+        // Backend connection switcher (admin-only; the section is revealed by
+        // renderBackendConnection). Clicking a flavour persists it + reloads the app.
+        document.querySelectorAll('#backend-connection-section .backend-kind-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const kind = btn.dataset.backendKind === 'node' ? 'node' : 'php';
+                const current = (window.APP_CONFIG && window.APP_CONFIG.BACKEND_KIND) || 'php';
+                if (kind === current) return;
+                const label = kind === 'node' ? 'Node.js' : 'PHP';
+                if (confirm(`Switch the frontend to the ${label} backend? The app will reload.`)) {
+                    if (typeof window.setBackendKind === 'function') window.setBackendKind(kind);
+                }
+            });
+        });
+
         // Send verification code button
         const sendVerificationBtn = document.getElementById('send-verification-btn');
         if (sendVerificationBtn) {
@@ -1275,6 +1289,34 @@ class SettingsPanel {
     }
 
     /**
+     * Backend Connection section (Settings → Account) — ADMIN ONLY. Reveals the PHP/Node
+     * switcher, highlights the active flavour (api-config's BACKEND_KIND) and shows its
+     * resolved URL. Non-admins never see the section.
+     */
+    renderBackendConnection(user) {
+        const section = document.getElementById('backend-connection-section');
+        if (!section) return;
+        const isAdmin = !!(user && user.role === 'admin');
+        section.classList.toggle('hidden', !isAdmin);
+        if (!isAdmin) return;
+        const cfg = window.APP_CONFIG || {};
+        const kind = cfg.BACKEND_KIND === 'node' ? 'node' : 'php';
+        const urls = cfg.BACKEND_URLS || {};
+        section.querySelectorAll('.backend-kind-btn').forEach((btn) => {
+            const active = btn.dataset.backendKind === kind;
+            btn.classList.toggle('bg-blue-600', active);
+            btn.classList.toggle('text-white', active);
+            btn.classList.toggle('border-blue-600', active);
+            btn.classList.toggle('bg-white', !active);
+            btn.classList.toggle('text-gray-700', !active);
+            btn.classList.toggle('border-gray-300', !active);
+            btn.classList.toggle('hover:bg-gray-50', !active);
+        });
+        const cur = document.getElementById('backend-connection-current');
+        if (cur) cur.textContent = 'Active: ' + (kind === 'node' ? 'Node.js' : 'PHP') + ' → ' + (urls[kind] || cfg.API_BASE_URL || '');
+    }
+
+    /**
      * Load account data when Account tab is opened
      */
     loadAccountData() {
@@ -1320,6 +1362,7 @@ class SettingsPanel {
             this.renderEmailVerificationBanner(user);
             this.renderLinkedMethods();
             this.renderAppKeySection(user);
+            this.renderBackendConnection(user);
         }
 
         // Load token usage and quota info
@@ -1454,7 +1497,7 @@ class SettingsPanel {
 
     async _appKeyAuthFetch(action) {
         const token = (typeof localStorage !== 'undefined') ? localStorage.getItem('token') : null;
-        const res = await fetch('/gpt/backend/api/v1/auth', {
+        const res = await fetch(window.apiUrl('/auth'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

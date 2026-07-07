@@ -49,7 +49,7 @@
         }
     </script>
     <!-- Backend base URL single source of truth — must load before any module that calls the API. -->
-    <script src="assets/js/api-config.js"></script>
+    <script src="assets/js/api-config.js?v=20260706-backendswitch"></script>
     <!-- Install prompt overlay. Self-contained — captures beforeinstallprompt
          and surfaces a styled dialog a few seconds in. -->
     <script src="assets/js/pwa-install-prompt.js?v=20260504-outputs" defer></script>
@@ -2981,6 +2981,27 @@
                         <!-- Email verification banner (only for email-provider accounts; populated by JS) -->
                         <div id="account-email-verification" class="hidden mt-3 py-2 px-3 rounded-lg border text-sm flex items-center justify-between gap-3"></div>
 
+                        <!-- Backend Connection (ADMIN ONLY; shown/wired by JS). Switches the frontend
+                             between the PHP and Node.js backends via api-config's BACKEND_KIND. -->
+                        <div id="backend-connection-section" class="hidden mt-4 border border-gray-200 rounded-lg p-4">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-sm font-semibold text-gray-800">Backend Connection</span>
+                                <span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">Admin</span>
+                            </div>
+                            <p class="text-xs text-gray-500 mb-3">Choose which backend the frontend connects to. Changing this reloads the app.</p>
+                            <div class="flex gap-2">
+                                <button type="button" data-backend-kind="php"
+                                        class="backend-kind-btn flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition flex items-center justify-center gap-1.5">
+                                    <span>🐘</span><span>PHP</span>
+                                </button>
+                                <button type="button" data-backend-kind="node"
+                                        class="backend-kind-btn flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition flex items-center justify-center gap-1.5">
+                                    <span>🟢</span><span>Node.js</span>
+                                </button>
+                            </div>
+                            <p id="backend-connection-current" class="text-[11px] text-gray-400 mt-2"></p>
+                        </div>
+
                         <!-- Quota usage bar (only shown for free plan, non-admin users) -->
                         <div id="account-quota-section" class="hidden mt-3 py-3 px-3 bg-amber-50 border border-amber-200 rounded-lg">
                             <div class="flex items-center justify-between mb-2">
@@ -4036,7 +4057,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260618-mcpux2"></script>
+    <script src="assets/js/settings-panel.js?v=20260706-backendswitch"></script>
     <script src="assets/js/agent-teams-panel.js"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
