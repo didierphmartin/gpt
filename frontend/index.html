@@ -2849,6 +2849,15 @@
                             Connect to MCP (Model Context Protocol) servers to extend AI capabilities with custom tools and applications.
                         </p>
 
+                        <!-- Master switch: disable all MCP tools for this account -->
+                        <label class="flex items-center justify-between gap-3 p-3 mb-3 border border-gray-200 rounded-lg">
+                            <span class="text-sm text-gray-800">
+                                <strong data-i18n="settings.mcpMasterTitle">Enable MCP tools</strong>
+                                <span class="block text-xs text-gray-500" data-i18n="settings.mcpMasterHint">When off, no MCP tools are offered to the AI in your chats.</span>
+                            </span>
+                            <input type="checkbox" id="mcp-master-toggle" class="w-5 h-5 accent-indigo-600" checked>
+                        </label>
+
                         <!-- Server List -->
                         <div id="mcp-server-list" class="mcp-server-list">
                             <div class="mcp-empty-state">

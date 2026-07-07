@@ -976,10 +976,42 @@ class SettingsPanel {
         }
 
         await window.mcpClient.loadServers();
+        await this.loadMyMcpState();
         this.renderMCPServers();
 
         await window.mcpClient.loadAllTools();
         this.renderMCPTools();
+    }
+
+    /**
+     * Load this user's MCP master-enable state and per-server effective overrides
+     */
+    async loadMyMcpState() {
+        this.myMcpEnabled = true;
+        this.myMcpEffective = new Map();
+        try {
+            const data = await window.mcpClient?.listMyMcpServers();
+            if (data?.success) {
+                this.myMcpEnabled = data.mcp_enabled !== false;
+                for (const s of (data.servers || [])) {
+                    this.myMcpEffective.set(Number(s.id), { effective_on: !!s.effective_on, is_global: !!s.is_global });
+                }
+            }
+        } catch (e) { console.warn('[settings:mcp] loadMyMcpState failed:', e); }
+
+        const master = document.getElementById('mcp-master-toggle');
+        if (master) {
+            master.checked = this.myMcpEnabled;
+            if (!master.dataset.wired) {
+                master.dataset.wired = '1';
+                master.addEventListener('change', async () => {
+                    const r = await window.mcpClient?.setMcpMasterEnabled(master.checked);
+                    if (!r?.success) { master.checked = !master.checked; this.showNotification('Failed to update MCP setting', 'error'); return; }
+                    this.myMcpEnabled = master.checked;
+                    this.renderMCPServers(); // re-dim list
+                });
+            }
+        }
     }
 
     /**
