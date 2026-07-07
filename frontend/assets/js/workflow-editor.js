@@ -8908,9 +8908,17 @@ class WorkflowEditor {
             // the engine reads has the right node_type + config (not the
             // 'ingestion' group tag, and not the config nested one level deep).
             const isIngestion = node.data?.type === 'ingestion';
+            // Fall back to the Drawflow node NAME (set at creation, never cleared) for the
+            // OUTPUT/START sink/source nodes, so they never silently degrade to 'agent' when
+            // node.data.type is momentarily missing -- that mis-type was corrupting the
+            // Output node into an Agent node on save. Agent nodes keep defaulting to 'agent'
+            // (their name is 'agent_<id>'/'agent-template', not a type).
             const resolvedType = isIngestion
                 ? (node.data?.node_type || 'ingestion')
-                : (node.data?.type || 'agent');
+                : (node.data?.type
+                    || (node.name === 'output' ? 'output'
+                        : node.name === 'start' ? 'start'
+                        : 'agent'));
             const nodeExport = {
                 id: id,
                 node_type: resolvedType,
