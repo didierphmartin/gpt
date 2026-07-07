@@ -1161,6 +1161,13 @@ class WorkflowEditor {
                 transform: translateY(-1px);
                 box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
             }
+            .workflow-save-btn:active {
+                /* Pressed affordance: push the button down + inset shadow so a click feels tactile. */
+                transform: translateY(1px) scale(0.97);
+                background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+                box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.35);
+                transition: transform 0.05s ease, box-shadow 0.05s ease;
+            }
             .workflow-delete-btn {
                 padding: 10px 18px;
                 border: none;
