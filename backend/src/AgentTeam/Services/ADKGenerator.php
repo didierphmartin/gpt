@@ -732,8 +732,13 @@ PY;
             "        print(\"[workflow] ERROR:\", flush=True)\n" .
             "        traceback.print_exc()\n" .
             "        raise\n" .
-            "    _head = final[:500].lower()\n" .
-            "    _ext = \"html\" if (\"<!doctype\" in _head or \"<html\" in _head) else \"md\"\n" .
+            "    import re as _re\n" .
+            "    _mm = _re.search(r\"(?is)<!doctype html.*?</html\\s*>\", final) or _re.search(r\"(?is)<html[\\s>].*?</html\\s*>\", final)\n" .
+            "    if _mm:\n" .
+            "        final = _mm.group(0)  # strip narration/fences around a full HTML doc\n" .
+            "        _ext = \"html\"\n" .
+            "    else:\n" .
+            "        _ext = \"md\"\n" .
             "    _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
             "    _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
             "    # Honour the Output node's storage setting: when ON, persist the final result\n" .

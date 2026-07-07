@@ -455,6 +455,7 @@ PY;
             // Skills baked for Task 3; empty list here is harmless.
             $skillsPy = PythonEmitHelpers::jsonToPython($ag['skills'] ?? []);
             $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $id) . ': {'
+                . '"name": ' . PythonEmitHelpers::pyStr((string) ($ag['name'] ?? ('node ' . $id))) . ', '
                 . '"provider": ' . PythonEmitHelpers::pyStr((string) ($ag['provider'] ?? 'claude')) . ', '
                 . '"model": ' . PythonEmitHelpers::pyStr((string) ($ag['model'] ?? '')) . ', '
                 . '"instructions": ' . PythonEmitHelpers::pyStr($instr) . ', '
@@ -484,10 +485,20 @@ PY;
             _opts = _chat_opts(ad["provider"], ad["model"], ad["max_tokens"], ad["temperature"])
             agent = Agent(client, instructions=ad["instructions"], name=f"node_{nid}",
                           tools=_tools, default_options=_opts)
+            print(f"[node {nid}] {ad['name']!r} → agent {ad['provider']}/{ad['model']} "
+                  f"({len(_tools)} tool(s), temp={ad['temperature']}) — generating…", flush=True)
+            _t0 = time.monotonic()
             text = (await agent.run(_agent_input(parents, node_outputs, user_prompt))).text or ""
+            print(f"[node {nid}] {ad['name']!r} agent done — {len(text)} chars in "
+                  f"{time.monotonic() - _t0:.1f}s", flush=True)
             for _skill in ad.get("skills", []):
+                _sd = _skill.get("dir") or "inline"
+                print(f"[node {nid}] {ad['name']!r} → running skill {_sd!r}…", flush=True)
+                _ts0 = time.monotonic()
                 text = await _run_skill_step(_skill, text, user_prompt, ad["provider"],
                                              ad["model"], ad["max_tokens"], ad["temperature"])
+                print(f"[node {nid}] skill {_sd!r} done — {len(text)} chars in "
+                      f"{time.monotonic() - _ts0:.1f}s", flush=True)
             return text
 
 
@@ -557,15 +568,18 @@ PY;
         async def main(user_prompt: str = DEFAULT_PROMPT) -> str:
             node_outputs = {}
             # Layer 0 is the start node; its prompt reaches every agent via _agent_input.
-            for layer in LAYERS[1:]:
+            for _li, layer in enumerate(LAYERS[1:], start=1):
                 ids = [n for n in layer if n in AGENTS or n == OUTPUT_NODE_ID]
                 if not ids:
                     continue
+                _lnames = ", ".join(str(AGENTS.get(n, {}).get("name", "Output")) for n in ids)
+                print(f"[layer {_li}] running {len(ids)} node(s) in parallel: {_lnames}", flush=True)
                 results = await asyncio.gather(*[
                     _run_node(n, PARENTS.get(n, []), node_outputs, user_prompt) for n in ids])
                 for n, r in zip(ids, results):
                     node_outputs[n] = r
-                    print(f"[node] {n}: {len(str(r))} chars", flush=True)
+                    _nm = AGENTS.get(n, {}).get("name", "Output")
+                    print(f"[node {n}] {_nm!r} ✓ captured {len(str(r))} chars", flush=True)
             return node_outputs.get(OUTPUT_NODE_ID, "")
         PY;
     }
@@ -592,8 +606,17 @@ PY;
                 _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
                 _dir = OUTPUT_FOLDER or os.path.join(_root, "workflow")
                 os.makedirs(_dir, exist_ok=True)
-                _low = _text.lstrip().lower()
-                _ext = "html" if _low.startswith("<!doctype html") or _low.startswith("<html") else "md"
+                # If the deliverable is a full HTML document -- possibly wrapped in narration
+                # or a ```html fence (a no-script layout skill returns HTML as plain text, so
+                # the model often prefaces it with "Let me produce the HTML...") -- extract just
+                # <!doctype html>..</html> and save it as .html; otherwise keep it as .md.
+                import re as _re
+                _mm = _re.search(r"(?is)<!doctype html.*?</html\s*>", _text) or _re.search(r"(?is)<html[\s>].*?</html\s*>", _text)
+                if _mm:
+                    _text = _mm.group(0)
+                    _ext = "html"
+                else:
+                    _ext = "md"
                 _slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
                 _ts = time.strftime("%Y%m%d-%H%M%S")
                 _path = os.path.join(_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")

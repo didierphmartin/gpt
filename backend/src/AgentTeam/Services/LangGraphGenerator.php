@@ -1513,8 +1513,13 @@ if __name__ == "__main__":
     if OUTPUT_STORAGE_ENABLED:
         try:
             import os, time
-            _head = output[:500].lower()
-            _ext = "html" if ("<!doctype" in _head or "<html" in _head) else "md"
+            import re as _re2
+            _mm = _re2.search(r"(?is)<!doctype html.*?</html\s*>", output) or _re2.search(r"(?is)<html[\s>].*?</html\s*>", output)
+            if _mm:
+                output = _mm.group(0)  # strip narration/fences around a full HTML doc
+                _ext = "html"
+            else:
+                _ext = "md"
             _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
             _ts = time.strftime("%Y%m%d-%H%M%S")
             _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
