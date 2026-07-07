@@ -669,11 +669,17 @@ PY;
         $storageEnabled = !empty($analyzed['outputStorageEnabled']) ? 'True' : 'False';
         $folder = $analyzed['outputFolder'] ?? null;
         $folderPy = ($folder !== null && $folder !== '') ? PythonEmitHelpers::pyStr((string) $folder) : 'None';
+        $nodeNames = [];
+        foreach (($analyzed['agents'] ?? []) as $nid => $ag) {
+            $nodeNames[(string) $nid] = (string) ($ag['name'] ?? ('node ' . $nid));
+        }
+        $nodeNamesPy = PythonEmitHelpers::jsonToPython($nodeNames);
         return
             "WORKFLOW_NAME = {$name}\n" .
             "WORKFLOW_ID = {$wfId}\n" .
             "OUTPUT_STORAGE_ENABLED = {$storageEnabled}\n" .
             "OUTPUT_FOLDER = {$folderPy}\n" .
+            "NODE_NAMES = {$nodeNamesPy}  # node id -> human name (for readable logs)\n" .
             "\n" .
             "async def main(user_prompt: str = {$sp}):\n" .
             "    if START_DOCUMENTS:\n" .
@@ -710,7 +716,13 @@ PY;
             "            author = getattr(event, \"author\", \"?\")\n" .
             "            if author and author not in seen:\n" .
             "                seen.add(author)\n" .
-            "                print(f\"[node] > {author}\", flush=True)\n" .
+            "                if isinstance(author, str) and author.startswith(\"node_\"):\n" .
+            "                    _ap = author.split(\"_\")\n" .
+            "                    _nid = _ap[1] if len(_ap) > 1 else author\n" .
+            "                    _kind = \"skill step\" if \"skill\" in author else \"agent\"\n" .
+            "                    print(f\"[node {_nid}] {NODE_NAMES.get(_nid, _nid)!r} \\u2192 {_kind} active\", flush=True)\n" .
+            "                else:\n" .
+            "                    print(f\"[node] > {author}\", flush=True)\n" .
             "            parts = (event.content.parts if event.content else None) or []\n" .
             "            for p in parts:\n" .
             "                fc = getattr(p, \"function_call\", None)\n" .
