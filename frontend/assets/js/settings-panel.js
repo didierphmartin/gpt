@@ -989,10 +989,12 @@ class SettingsPanel {
     async loadMyMcpState() {
         this.myMcpEnabled = true;
         this.myMcpEffective = new Map();
+        this.myMcpServers = [];
         try {
             const data = await window.mcpClient?.listMyMcpServers();
             if (data?.success) {
                 this.myMcpEnabled = data.mcp_enabled !== false;
+                this.myMcpServers = data.servers || [];
                 for (const s of (data.servers || [])) {
                     this.myMcpEffective.set(Number(s.id), { effective_on: !!s.effective_on, is_global: !!s.is_global });
                 }
@@ -1020,7 +1022,14 @@ class SettingsPanel {
     renderMCPServers() {
         if (!this.mcpServerList) return;
 
-        const servers = Array.from(window.mcpClient?.servers?.values() || []);
+        // Render from the per-user /me/mcp-servers list (this.myMcpServers) so GLOBAL servers the
+        // user turned OFF (an allowed=0 override) stay visible and re-enableable — the legacy
+        // /mcp/servers list() drops override-disabled globals. Fall back to the client map only if
+        // the /me fetch failed.
+        const richById = window.mcpClient?.servers;
+        const servers = (this.myMcpServers && this.myMcpServers.length)
+            ? this.myMcpServers
+            : Array.from(richById?.values() || []);
 
         if (servers.length === 0) {
             this.mcpServerList.innerHTML = `
@@ -1036,12 +1045,19 @@ class SettingsPanel {
         }
 
         this.mcpServerList.innerHTML = servers.map(server => {
-            const isGlobal = server.user_id === null || server.user_id === undefined || server.user_id === '';
+            const sid = Number(server.id);
+            const rich = richById && richById.get ? richById.get(sid) : undefined;
+            const isGlobal = (server.is_global !== undefined)
+                ? !!server.is_global
+                : (server.user_id === null || server.user_id === undefined || server.user_id === '');
             const scopeBadge = isGlobal
                 ? `<span class="mcp-scope-badge mcp-scope-global" title="Available to all users">🌐 Global</span>`
                 : `<span class="mcp-scope-badge mcp-scope-user" title="Private to your account">👤 Yours</span>`;
-            const eff = this.myMcpEffective?.get(Number(server.id));
-            const on = eff ? eff.effective_on : !!server.enabled;
+            const eff = this.myMcpEffective?.get(sid);
+            const on = (server.effective_on !== undefined) ? !!server.effective_on
+                     : (eff ? eff.effective_on : !!server.enabled);
+            const toolCount = (server.tool_count != null ? server.tool_count : (rich?.tool_count ?? 0));
+            const uiToolCount = (server.ui_tool_count != null ? server.ui_tool_count : (rich?.ui_tool_count ?? 0));
             return `
             <div class="mcp-server-item ${isGlobal ? 'is-global' : 'is-user'}" data-server-id="${server.id}">
                 <div class="mcp-server-icon">
@@ -1054,8 +1070,8 @@ class SettingsPanel {
                     </div>
                     <div class="mcp-server-url">${this.escapeHtml(server.url)}</div>
                     <div class="mcp-server-stats">
-                        <span>🔧 ${server.tool_count || 0} tools</span>
-                        <span>📱 ${server.ui_tool_count || 0} with UI</span>
+                        <span>🔧 ${toolCount} tools</span>
+                        <span>📱 ${uiToolCount} with UI</span>
                     </div>
                 </div>
                 <div class="mcp-server-toggle ${on ? 'active' : ''}"
