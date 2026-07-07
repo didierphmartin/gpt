@@ -462,6 +462,80 @@ class MCPServerController
         return ['success' => true, 'mcp_enabled' => (bool)$enabled, 'status_code' => 200];
     }
 
+    /** True if the caller may see this server: private-owned always; global gated by allowlist. */
+    private function serverAllowedForUser(array $server, ?array $allowlist): bool
+    {
+        $isGlobal = ($server['user_id'] ?? null) === null;
+        if (!$isGlobal) {
+            return true; // user-private (already scoped to this user by the query)
+        }
+        if ($allowlist === null) {
+            return true; // package unrestricted
+        }
+        return in_array($server['name'], $allowlist, true);
+    }
+
+    /** GET /api/v1/me/mcp-servers — the caller's filtered, effective MCP list + master flag. */
+    public function listMine(array $request): array
+    {
+        $userId = (int)($request['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+
+        $allowlist = (new PackageResolver($this->db))->allowedMcpServers($userId); // null = all
+
+        // Globals + this user's private servers, with tool counts.
+        $sql = "SELECT s.id, s.name, s.url, s.user_id, s.enabled, COUNT(t.id) AS tool_count
+                FROM mcp_servers s
+                LEFT JOIN mcp_server_tools t ON t.server_id = s.id
+                WHERE s.user_id IS NULL OR s.user_id = :uid
+                GROUP BY s.id
+                ORDER BY (s.user_id IS NULL) DESC, s.name ASC";
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':uid', (string)$userId);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Overrides for this user.
+        $ov = $this->db->prepare("SELECT server_id, allowed FROM user_mcp_overrides WHERE user_id = ?");
+        $ov->execute([$userId]);
+        $overrides = [];
+        foreach ($ov->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $overrides[(int)$r['server_id']] = (bool)$r['allowed'];
+        }
+
+        $servers = [];
+        foreach ($rows as $row) {
+            if (!$this->serverAllowedForUser($row, $allowlist)) {
+                continue; // package-denied globals never shown
+            }
+            $isGlobal = $row['user_id'] === null;
+            $id = (int)$row['id'];
+            // Effective on: private => server.enabled; global => override if set, else on (package grants it).
+            if ($isGlobal) {
+                $effective = array_key_exists($id, $overrides) ? $overrides[$id] : true;
+            } else {
+                $effective = (bool)$row['enabled'];
+            }
+            $servers[] = [
+                'id' => $id,
+                'name' => $row['name'],
+                'url' => $row['url'],
+                'is_global' => $isGlobal,
+                'tool_count' => (int)$row['tool_count'],
+                'effective_on' => (bool)$effective,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'mcp_enabled' => $this->isMasterEnabled($userId),
+            'servers' => $servers,
+            'status_code' => 200,
+        ];
+    }
+
     /**
      * Ensure required tables exist
      */
