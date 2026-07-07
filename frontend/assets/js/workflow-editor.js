@@ -1447,7 +1447,27 @@ class WorkflowEditor {
         llmSelect.addEventListener('change', (e) => {
             this.audioLlmProvider = e.target.value;
         });
-        saveBtn.addEventListener('click', () => this.saveWorkflow());
+        saveBtn.addEventListener('click', async () => {
+            // Immediate press feedback: the save is a network round-trip, so without this the
+            // button feels dead until the success toast fires. Show a spinner + "Saving…" and
+            // disable it for the duration; restore on completion (unless a reload replaced it).
+            if (saveBtn.disabled) return;
+            const _orig = saveBtn.innerHTML;
+            saveBtn.disabled = true;
+            saveBtn.classList.add('opacity-75', 'cursor-wait');
+            saveBtn.innerHTML = '<span class="inline-block w-3.5 h-3.5 border-2 border-current '
+                + 'border-t-transparent rounded-full animate-spin align-[-2px] mr-1.5"></span>'
+                + this.tWithFallback('workflow.buttons.saving', 'Saving…');
+            try {
+                await this.saveWorkflow();
+            } finally {
+                if (document.body.contains(saveBtn)) {
+                    saveBtn.disabled = false;
+                    saveBtn.classList.remove('opacity-75', 'cursor-wait');
+                    saveBtn.innerHTML = _orig;
+                }
+            }
+        });
         deleteBtn.addEventListener('click', () => {
             if (this.currentWorkflowId) {
                 this.deleteWorkflow(this.currentWorkflowId);
