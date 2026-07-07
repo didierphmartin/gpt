@@ -7,7 +7,7 @@
 
 class MCPClient {
     constructor() {
-        this.apiBaseUrl = '/gpt/backend/api/v1';
+        this.apiBaseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
         this.servers = new Map(); // server_id -> server info
         this.tools = new Map();   // tool_name -> { server_id, tool_info }
         this.initialized = false;
@@ -231,6 +231,63 @@ class MCPClient {
             console.error('Failed to toggle MCP server:', error);
             return { success: false, error: error.message };
         }
+    }
+
+    /**
+     * List the current user's MCP servers (admin-provisioned + overrides)
+     */
+    async listMyMcpServers() {
+        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers`, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.getAuthToken()}`
+            }
+        });
+        return res.json();
+    }
+
+    /**
+     * Disable a specific MCP server for the current user (per-user override)
+     */
+    async disableMyMcpServer(id) {
+        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.getAuthToken()}`
+            },
+            body: JSON.stringify({ allowed: false })
+        });
+        return res.json();
+    }
+
+    /**
+     * Remove the current user's override for a specific MCP server
+     */
+    async resetMyMcpServer(id) {
+        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.getAuthToken()}`
+            }
+        });
+        return res.json();
+    }
+
+    /**
+     * Enable/disable MCP entirely for the current user (master switch)
+     */
+    async setMcpMasterEnabled(enabled) {
+        const res = await fetch(`${this.apiBaseUrl}/me/mcp-settings`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.getAuthToken()}`
+            },
+            body: JSON.stringify({ mcp_enabled: !!enabled })
+        });
+        return res.json();
     }
 
     /**
