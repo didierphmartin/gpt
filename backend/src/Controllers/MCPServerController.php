@@ -25,6 +25,7 @@ class MCPServerController
         $this->db = $db;
         $this->config = $config;
         $this->ensureTablesExist();
+        $this->ensureMcpSettingsTableExists();
     }
 
     /**
@@ -428,6 +429,39 @@ class MCPServerController
         ];
     }
 
+    /** True unless the user has an explicit mcp_enabled=0 row. Missing table/row => true. */
+    public function isMasterEnabled(int $userId): bool
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT mcp_enabled FROM user_mcp_settings WHERE user_id = ?");
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $row === false ? true : (bool)$row['mcp_enabled'];
+        } catch (\PDOException $e) {
+            return true; // table absent / transient error => default enabled
+        }
+    }
+
+    /** PUT /api/v1/me/mcp-settings  body: { "mcp_enabled": bool } */
+    public function setMasterSetting(array $request): array
+    {
+        $userId = (int)($request['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $body = $request['body'] ?? [];
+        if (!array_key_exists('mcp_enabled', $body)) {
+            return ['success' => false, 'error' => 'Field "mcp_enabled" is required (boolean).', 'status_code' => 400];
+        }
+        $enabled = (bool)$body['mcp_enabled'] ? 1 : 0;
+        $stmt = $this->db->prepare("
+            INSERT INTO user_mcp_settings (user_id, mcp_enabled) VALUES (:uid, :en)
+            ON DUPLICATE KEY UPDATE mcp_enabled = VALUES(mcp_enabled), updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute([':uid' => $userId, ':en' => $enabled]);
+        return ['success' => true, 'mcp_enabled' => (bool)$enabled, 'status_code' => 200];
+    }
+
     /**
      * Ensure required tables exist
      */
@@ -461,5 +495,16 @@ class MCPServerController
                 UNIQUE KEY unique_server_tool (server_id, tool_name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ");
+    }
+
+    /** Idempotently create user_mcp_settings (per-user MCP master switch). */
+    private function ensureMcpSettingsTableExists(): void
+    {
+        $this->db->exec("CREATE TABLE IF NOT EXISTS `user_mcp_settings` (
+            `user_id` BIGINT NOT NULL,
+            `mcp_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     }
 }

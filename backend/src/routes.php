@@ -230,6 +230,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/mcp/servers/update', ['MCPServerController', 'update']);
         $r->post('/api/v1/mcp/servers/toggle', ['MCPServerController', 'toggle']);
         $r->delete('/api/v1/mcp/servers', ['MCPServerController', 'delete']);
+        $r->put('/api/v1/me/mcp-settings', ['MCPServerController', 'setMasterSetting']);
 
         // ============================================
         // MCP PROXY ROUTES
