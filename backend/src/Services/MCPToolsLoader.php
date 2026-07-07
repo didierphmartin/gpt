@@ -33,6 +33,22 @@ class MCPToolsLoader
         $this->tools = [];
         $this->serverUrls = [];
 
+        // Master switch: if the user disabled all MCP, offer zero tools.
+        $uid = ($userId !== null && $userId !== '' && is_numeric($userId)) ? (int)$userId : null;
+        if ($uid !== null) {
+            try {
+                $ms = $this->pdo->prepare("SELECT mcp_enabled FROM user_mcp_settings WHERE user_id = ?");
+                $ms->execute([$uid]);
+                $row = $ms->fetch(PDO::FETCH_ASSOC);
+                if ($row !== false && (int)$row['mcp_enabled'] === 0) {
+                    error_log("[MCP] Master switch OFF for user {$uid} — 0 tools");
+                    return $this->tools; // empty
+                }
+            } catch (\PDOException $e) {
+                // table absent / transient => treat as enabled, continue
+            }
+        }
+
         try {
             // Fetch all enabled tools visible to this caller WITHOUT applying the
             // package allowlist in SQL. We resolve the effective per-server
