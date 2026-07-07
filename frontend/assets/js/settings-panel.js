@@ -1007,10 +1007,18 @@ class SettingsPanel {
             if (!master.dataset.wired) {
                 master.dataset.wired = '1';
                 master.addEventListener('change', async () => {
-                    const r = await window.mcpClient?.setMcpMasterEnabled(master.checked);
-                    if (!r?.success) { master.checked = !master.checked; this.showNotification('Failed to update MCP setting', 'error'); return; }
-                    this.myMcpEnabled = master.checked;
-                    this.renderMCPServers(); // re-dim list
+                    // Optimistic: reflect immediately (the checkbox is already flipped by the browser;
+                    // dim/undim the list now), then persist in the background and revert only on failure.
+                    const desired = master.checked;
+                    this.myMcpEnabled = desired;
+                    this.renderMCPServers(); // re-dim list right away
+                    const r = await window.mcpClient?.setMcpMasterEnabled(desired);
+                    if (!r?.success) {
+                        this.myMcpEnabled = !desired;
+                        master.checked = !desired;
+                        this.renderMCPServers();
+                        this.showNotification('Failed to update MCP setting', 'error');
+                    }
                 });
             }
         }
@@ -1160,23 +1168,46 @@ class SettingsPanel {
         const id = parseInt(serverId, 10);
         const eff = this.myMcpEffective?.get(id);
         const server = window.mcpClient?.servers?.get(id);
-        const isGlobal = eff ? eff.is_global : (server && (server.user_id === null || server.user_id === undefined || server.user_id === ''));
-        const currentlyOn = eff ? eff.effective_on : !!server?.enabled;
+        const listEntry = (this.myMcpServers || []).find(s => Number(s.id) === id);
+        const isGlobal = eff ? eff.is_global
+            : (listEntry ? !!listEntry.is_global
+            : (server && (server.user_id === null || server.user_id === undefined || server.user_id === '')));
+        const currentlyOn = eff ? eff.effective_on
+            : (listEntry ? !!listEntry.effective_on : !!server?.enabled);
+        const newOn = !currentlyOn;
 
-        let result;
-        if (isGlobal) {
-            // Per-user override: off => disable; on => clear override (revert to package default).
-            result = currentlyOn
-                ? await window.mcpClient?.disableMyMcpServer(id)
-                : await window.mcpClient?.resetMyMcpServer(id);
-        } else {
-            // Private server: existing global enabled toggle.
-            result = await window.mcpClient?.toggleServer(id, !currentlyOn);
+        // Optimistic UI: flip the switch + local state IMMEDIATELY so it reacts with zero lag, then
+        // persist in the background and revert only if the save fails. No full reload (that was the
+        // multi-second delay); the chat tool set reads overrides live on the next call anyway.
+        if (eff) this.myMcpEffective.set(id, { ...eff, effective_on: newOn });
+        else this.myMcpEffective.set(id, { effective_on: newOn, is_global: !!isGlobal });
+        if (listEntry) listEntry.effective_on = newOn;         // keep the render source (myMcpServers) in sync
+        if (!isGlobal && server) server.enabled = newOn;
+        const toggleEl = this.mcpServerList?.querySelector(`.mcp-server-toggle[data-server-id="${id}"]`);
+        if (toggleEl) {
+            toggleEl.classList.toggle('active', newOn);
+            toggleEl.title = newOn ? 'Disable for me' : 'Enable for me';
         }
 
-        if (result?.success) {
-            await this.loadMCPData(); // already calls loadMyMcpState() internally (Task 6); refreshes servers + tools + re-renders
+        // Persist. Global: on => clear override (reset); off => disable. Private: existing enabled toggle.
+        let result;
+        if (isGlobal) {
+            result = newOn
+                ? await window.mcpClient?.resetMyMcpServer(id)
+                : await window.mcpClient?.disableMyMcpServer(id);
         } else {
+            result = await window.mcpClient?.toggleServer(id, newOn);
+        }
+
+        if (!result?.success) {
+            // Revert the optimistic change.
+            if (eff) this.myMcpEffective.set(id, eff); else this.myMcpEffective.delete(id);
+            if (listEntry) listEntry.effective_on = currentlyOn;
+            if (!isGlobal && server) server.enabled = currentlyOn;
+            if (toggleEl) {
+                toggleEl.classList.toggle('active', currentlyOn);
+                toggleEl.title = currentlyOn ? 'Disable for me' : 'Enable for me';
+            }
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
         }
     }
