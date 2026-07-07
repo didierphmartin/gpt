@@ -1040,6 +1040,8 @@ class SettingsPanel {
             const scopeBadge = isGlobal
                 ? `<span class="mcp-scope-badge mcp-scope-global" title="Available to all users">🌐 Global</span>`
                 : `<span class="mcp-scope-badge mcp-scope-user" title="Private to your account">👤 Yours</span>`;
+            const eff = this.myMcpEffective?.get(Number(server.id));
+            const on = eff ? eff.effective_on : !!server.enabled;
             return `
             <div class="mcp-server-item ${isGlobal ? 'is-global' : 'is-user'}" data-server-id="${server.id}">
                 <div class="mcp-server-icon">
@@ -1056,9 +1058,10 @@ class SettingsPanel {
                         <span>📱 ${server.ui_tool_count || 0} with UI</span>
                     </div>
                 </div>
-                <div class="mcp-server-toggle ${server.enabled ? 'active' : ''}"
+                <div class="mcp-server-toggle ${on ? 'active' : ''}"
                      data-server-id="${server.id}"
-                     title="${server.enabled ? 'Disable' : 'Enable'}">
+                     data-is-global="${isGlobal ? '1' : '0'}"
+                     title="${on ? 'Disable for me' : 'Enable for me'}">
                 </div>
                 <button class="mcp-server-btn refresh" data-action="rediscover" data-server-id="${server.id}" data-server-url="${this.escapeHtml(server.url)}" title="Rediscover tools">
                     ⟳ Rediscover
@@ -1073,6 +1076,8 @@ class SettingsPanel {
             </div>
         `;
         }).join('');
+
+        if (this.mcpServerList) this.mcpServerList.style.opacity = (this.myMcpEnabled === false) ? '0.45' : '';
 
         // Add event listeners to server items
         this.mcpServerList.querySelectorAll('.mcp-server-toggle').forEach(toggle => {
@@ -1136,14 +1141,25 @@ class SettingsPanel {
      * Toggle MCP server enabled state
      */
     async toggleMCPServer(serverId) {
-        const server = window.mcpClient?.servers?.get(parseInt(serverId));
-        if (!server) return;
+        const id = parseInt(serverId, 10);
+        const eff = this.myMcpEffective?.get(id);
+        const server = window.mcpClient?.servers?.get(id);
+        const isGlobal = eff ? eff.is_global : (server && (server.user_id === null || server.user_id === undefined || server.user_id === ''));
+        const currentlyOn = eff ? eff.effective_on : !!server?.enabled;
 
-        const newState = !server.enabled;
-        const result = await window.mcpClient?.toggleServer(serverId, newState);
+        let result;
+        if (isGlobal) {
+            // Per-user override: off => disable; on => clear override (revert to package default).
+            result = currentlyOn
+                ? await window.mcpClient?.disableMyMcpServer(id)
+                : await window.mcpClient?.resetMyMcpServer(id);
+        } else {
+            // Private server: existing global enabled toggle.
+            result = await window.mcpClient?.toggleServer(id, !currentlyOn);
+        }
 
         if (result?.success) {
-            this.loadMCPData();
+            await this.loadMCPData(); // already calls loadMyMcpState() internally (Task 6); refreshes servers + tools + re-renders
         } else {
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
         }
