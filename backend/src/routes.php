@@ -232,6 +232,8 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/mcp/servers', ['MCPServerController', 'delete']);
         $r->put('/api/v1/me/mcp-settings', ['MCPServerController', 'setMasterSetting']);
         $r->get('/api/v1/me/mcp-servers', ['MCPServerController', 'listMine']);
+        $r->put('/api/v1/me/mcp-servers/{serverId:\d+}/override', ['MCPServerController', 'setMyOverride']);
+        $r->delete('/api/v1/me/mcp-servers/{serverId:\d+}/override', ['MCPServerController', 'clearMyOverride']);
 
         // ============================================
         // MCP PROXY ROUTES

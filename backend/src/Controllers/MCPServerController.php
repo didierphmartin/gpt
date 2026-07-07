@@ -536,6 +536,57 @@ class MCPServerController
         ];
     }
 
+    /** Look up a single visible server for the caller, or null. Enforces the filtered set. */
+    private function findVisibleServer(int $userId, int $serverId): ?array
+    {
+        $stmt = $this->db->prepare("SELECT id, name, user_id FROM mcp_servers WHERE id = ? AND (user_id IS NULL OR user_id = ?)");
+        $stmt->execute([$serverId, $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        $allowlist = (new PackageResolver($this->db))->allowedMcpServers($userId);
+        return $this->serverAllowedForUser($row, $allowlist) ? $row : null;
+    }
+
+    /** PUT /api/v1/me/mcp-servers/{id}/override  body: { "allowed": false }  (deny-only). */
+    public function setMyOverride(array $request, int $serverId): array
+    {
+        $userId = (int)($request['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $body = $request['body'] ?? [];
+        if (!array_key_exists('allowed', $body)) {
+            return ['success' => false, 'error' => 'Field "allowed" is required (boolean).', 'status_code' => 400];
+        }
+        if ((bool)$body['allowed'] !== false) {
+            // Deny-only: re-enabling is done by clearing the override, not force-allow.
+            return ['success' => false, 'error' => 'Only disabling is allowed here; DELETE the override to re-enable.', 'status_code' => 400];
+        }
+        if ($this->findVisibleServer($userId, $serverId) === null) {
+            return ['success' => false, 'error' => 'MCP server not available to you', 'status_code' => 404];
+        }
+        $stmt = $this->db->prepare("
+            INSERT INTO user_mcp_overrides (user_id, server_id, allowed) VALUES (:uid, :sid, 0)
+            ON DUPLICATE KEY UPDATE allowed = 0, updated_at = CURRENT_TIMESTAMP
+        ");
+        $stmt->execute([':uid' => $userId, ':sid' => $serverId]);
+        return ['success' => true, 'server_id' => $serverId, 'allowed' => false, 'status_code' => 200];
+    }
+
+    /** DELETE /api/v1/me/mcp-servers/{id}/override — revert to package default (re-enable). */
+    public function clearMyOverride(array $request, int $serverId): array
+    {
+        $userId = (int)($request['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $stmt = $this->db->prepare("DELETE FROM user_mcp_overrides WHERE user_id = ? AND server_id = ?");
+        $stmt->execute([$userId, $serverId]);
+        return ['success' => true, 'server_id' => $serverId, 'cleared' => $stmt->rowCount() > 0, 'status_code' => 200];
+    }
+
     /**
      * Ensure required tables exist
      */
