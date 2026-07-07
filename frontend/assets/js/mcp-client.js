@@ -237,57 +237,71 @@ class MCPClient {
      * List the current user's MCP servers (admin-provisioned + overrides)
      */
     async listMyMcpServers() {
-        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers`, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getAuthToken()}`
-            }
-        });
-        return res.json();
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers`, {
+                headers: {
+                    'Authorization': `Bearer ${this.getAuthToken()}`
+                }
+            });
+            return await res.json();
+        } catch (e) {
+            return { success: false, error: e?.message || String(e) };
+        }
     }
 
     /**
      * Disable a specific MCP server for the current user (per-user override)
      */
     async disableMyMcpServer(id) {
-        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getAuthToken()}`
-            },
-            body: JSON.stringify({ allowed: false })
-        });
-        return res.json();
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.getAuthToken()}`
+                },
+                body: JSON.stringify({ allowed: false })
+            });
+            return await res.json();
+        } catch (e) {
+            return { success: false, error: e?.message || String(e) };
+        }
     }
 
     /**
      * Remove the current user's override for a specific MCP server
      */
     async resetMyMcpServer(id) {
-        const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getAuthToken()}`
-            }
-        });
-        return res.json();
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/me/mcp-servers/${encodeURIComponent(id)}/override`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${this.getAuthToken()}`
+                }
+            });
+            return await res.json();
+        } catch (e) {
+            return { success: false, error: e?.message || String(e) };
+        }
     }
 
     /**
      * Enable/disable MCP entirely for the current user (master switch)
      */
     async setMcpMasterEnabled(enabled) {
-        const res = await fetch(`${this.apiBaseUrl}/me/mcp-settings`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.getAuthToken()}`
-            },
-            body: JSON.stringify({ mcp_enabled: !!enabled })
-        });
-        return res.json();
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/me/mcp-settings`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.getAuthToken()}`
+                },
+                body: JSON.stringify({ mcp_enabled: !!enabled })
+            });
+            return await res.json();
+        } catch (e) {
+            return { success: false, error: e?.message || String(e) };
+        }
     }
 
     /**
