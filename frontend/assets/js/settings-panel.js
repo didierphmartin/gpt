@@ -43,7 +43,7 @@ class SettingsPanel {
         this.mcpRefreshBtn = document.getElementById('mcp-refresh');
 
         // Provider list
-        this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek'];
+        this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4'];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -3485,7 +3485,8 @@ class SettingsPanel {
             'kimi': 'Kimi (Moonshot)',
             'gemini': 'Gemini (Google)',
             'grok': 'Grok (xAI)',
-            'deepseek': 'DeepSeek'
+            'deepseek': 'DeepSeek',
+            'gamma4': 'Gamma4'
         };
         return names[provider] || provider;
     }

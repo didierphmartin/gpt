@@ -1493,6 +1493,7 @@
         .usage-card.gemini { background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%); border-color: #fde047; }
         .usage-card.grok { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #fecaca; }
         .usage-card.deepseek { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #93c5fd; }
+        .usage-card.gamma4 { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }
         .usage-card-header {
             font-size: 13px;
             font-weight: 600;
@@ -2771,6 +2772,17 @@
                                 </a>
                                 <span class="key-status default" id="key-status-deepseek">Default</span>
                             </div>
+                            <!-- Gamma4 -->
+                            <div class="api-key-row">
+                                <label>Gamma4</label>
+                                <select class="model-select" id="model-select-gamma4"></select>
+                                <span class="model-info" id="model-info-gamma4"></span>
+                                <input type="password" id="api-key-gamma4" placeholder="sk-..." autocomplete="off">
+                                <a class="console-link" href="https://g4eb.yellowbrickroad.info" target="_blank" rel="noopener noreferrer" title="Open Gamma4 endpoint" aria-label="Open Gamma4 endpoint">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                </a>
+                                <span class="key-status default" id="key-status-gamma4">Default</span>
+                            </div>
                         </div>
                         <!-- Advanced: per-provider system prompt overrides.
                              Empty = use admin global / default. The "Save API Keys"
@@ -2806,6 +2818,10 @@
                                 <div class="system-prompt-row">
                                     <label for="system-prompt-deepseek">DeepSeek</label>
                                     <textarea id="system-prompt-deepseek" rows="3" placeholder="Default system prompt" data-i18n-placeholder="settings.systemPromptPlaceholder"></textarea>
+                                </div>
+                                <div class="system-prompt-row">
+                                    <label for="system-prompt-gamma4">Gamma4</label>
+                                    <textarea id="system-prompt-gamma4" rows="3" placeholder="Default system prompt" data-i18n-placeholder="settings.systemPromptPlaceholder"></textarea>
                                 </div>
                             </div>
                         </details>
