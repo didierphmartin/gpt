@@ -3528,11 +3528,18 @@
                              Clears run state (node highlights, timers, captured
                              results) without deleting nodes. z-20 keeps it above
                              the help overlay (z-10). -->
-                        <button id="workflow-reset-top-btn"
-                                class="absolute top-3 left-3 z-20 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 transition flex items-center gap-1"
-                                title="Reset run state — clears node highlights, timers, and last results (keeps your nodes)">
-                            <span class="text-sm leading-none">↺</span><span>Reset</span>
-                        </button>
+                        <div class="absolute top-3 left-3 z-20 flex items-center gap-2">
+                            <button id="workflow-reset-top-btn"
+                                    class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 active:translate-y-px active:scale-95 transition flex items-center gap-1"
+                                    title="Reset run state — clears node highlights, timers, and last results (keeps your nodes)">
+                                <span class="text-sm leading-none">↺</span><span>Reset</span>
+                            </button>
+                            <button id="workflow-save-top-btn"
+                                    class="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 border border-blue-600 rounded-lg shadow-sm hover:bg-blue-700 active:translate-y-px active:scale-95 transition flex items-center gap-1"
+                                    title="Save this workflow">
+                                <span class="text-sm leading-none">💾</span><span>Save</span>
+                            </button>
+                        </div>
 
                         <!-- Help overlay (disappears when nodes are added) -->
                         <div id="workflow-help-overlay" class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
@@ -4061,7 +4068,7 @@
     <script src="assets/js/skillopt-panel.js?v=20260614-selfheal"></script>
     <script src="assets/js/heal-panel.js?v=20260614-3model"></script>
     <script src="assets/js/agent-turn.js?v=20260624-shared1"></script>
-    <script src="assets/js/workflow-editor.js?v=20260706-presseffect"></script>
+    <script src="assets/js/workflow-editor.js?v=20260706-savetopbtn"></script>
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
     <script src="assets/js/chat.js?v=20260626-unwrap"></script>

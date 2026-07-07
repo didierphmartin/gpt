@@ -433,6 +433,26 @@ class WorkflowEditor {
         document.getElementById('workflow-run-btn')?.addEventListener('click', () => this.runWorkflow());
         document.getElementById('workflow-clear-btn')?.addEventListener('click', () => this.clearWorkflow());
         document.getElementById('workflow-reset-top-btn')?.addEventListener('click', () => this.resetWorkflowRun());
+        // Top-left Save button (beside Reset): saves the workflow with spinner/"Saving…" feedback.
+        document.getElementById('workflow-save-top-btn')?.addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            if (btn.disabled) return;
+            const _orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.classList.add('opacity-75', 'cursor-wait');
+            btn.innerHTML = '<span class="inline-block w-3 h-3 border-2 border-current '
+                + 'border-t-transparent rounded-full animate-spin align-[-1px] mr-1"></span>'
+                + this.tWithFallback('workflow.buttons.saving', 'Saving…');
+            try {
+                await this.saveWorkflow();
+            } finally {
+                if (document.body.contains(btn)) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75', 'cursor-wait');
+                    btn.innerHTML = _orig;
+                }
+            }
+        });
 
         // Set up "New Workflow" button in left sidebar — show Batch/Audio choice
         document.getElementById('new-workflow-btn')?.addEventListener('click', (e) => {
