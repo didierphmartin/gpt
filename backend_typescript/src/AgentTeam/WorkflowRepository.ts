@@ -237,6 +237,22 @@ export function validateSteps(steps: any): string[] {
 // Graph repository (read + save methods used by the ported controller slice)
 // =========================================================================
 
+/** Mirrors isTransientLockError(): detect MySQL deadlock and lock-wait errors.
+ * SQLSTATE 40001 = serialization failure (deadlock); 1213 = deadlock; 1205 = lock-wait timeout. */
+function isTransientLockError(err: Error): boolean {
+  const msg = err.message ?? '';
+  const code = (err as any).code ?? '';
+  const errno = (err as any).errno ?? '';
+  return (
+    code === '40001' ||
+    errno === 40001 ||
+    msg.toLowerCase().includes('deadlock') ||
+    msg.toLowerCase().includes('lock wait timeout') ||
+    msg.includes('1213') ||
+    msg.includes('1205')
+  );
+}
+
 export class WorkflowGraphRepository {
   /** Mirrors findRealtimeWorkflowIds(): which of these workflows have a realtime-* node. */
   async findRealtimeWorkflowIds(workflowIds: number[]): Promise<number[]> {
@@ -466,43 +482,58 @@ export class WorkflowGraphRepository {
     `.execute(trx);
   }
 
-  /** Mirrors saveGraph(): replace all nodes/edges in a transaction. */
+  /** Mirrors saveGraph(): replace all nodes/edges in a transaction.
+   * Retries on transient InnoDB lock errors (deadlock / lock-wait) with backoff. */
   async saveGraph(workflowId: number, nodes: any[], edges: any[]): Promise<Record<string, number>> {
-    return db.transaction().execute(async (trx) => {
-      // clearGraph: edges then nodes
-      await sql`DELETE FROM workflow_edges WHERE workflow_id = ${workflowId}`.execute(trx);
-      await sql`DELETE FROM workflow_nodes WHERE workflow_id = ${workflowId}`.execute(trx);
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        return await db.transaction().execute(async (trx) => {
+          // clearGraph: edges then nodes
+          await sql`DELETE FROM workflow_edges WHERE workflow_id = ${workflowId}`.execute(trx);
+          await sql`DELETE FROM workflow_nodes WHERE workflow_id = ${workflowId}`.execute(trx);
 
-      const nodeIdMap: Record<string, number> = {};
+          const nodeIdMap: Record<string, number> = {};
 
-      for (const node of nodes ?? []) {
-        const tempId = node?.id ?? null;
-        const dbId = await this.createNode(trx, workflowId, node);
-        if (tempId !== null) {
-          nodeIdMap[String(tempId)] = dbId;
+          for (const node of nodes ?? []) {
+            const tempId = node?.id ?? null;
+            const dbId = await this.createNode(trx, workflowId, node);
+            if (tempId !== null) {
+              nodeIdMap[String(tempId)] = dbId;
+            }
+          }
+
+          for (const edge of edges ?? []) {
+            const fromTempId = String(edge?.from ?? edge?.from_node_id);
+            const toTempId = String(edge?.to ?? edge?.to_node_id);
+
+            const fromDbId = nodeIdMap[fromTempId] ?? null;
+            const toDbId = nodeIdMap[toTempId] ?? null;
+
+            if (fromDbId && toDbId) {
+              await this.createEdge(trx, workflowId, {
+                from_node_id: fromDbId,
+                to_node_id: toDbId,
+                from_port: edge?.from_port ?? 'output_1',
+                to_port: edge?.to_port ?? 'input_1',
+                condition_expr: edge?.condition_expr ?? edge?.condition ?? null,
+              });
+            }
+          }
+
+          return nodeIdMap;
+        });
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < 5 && isTransientLockError(lastError)) {
+          // Backoff: 50ms, 100ms, 150ms, 200ms (matching PHP usleep(50000 * $attempt))
+          await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+          continue;
         }
+        throw lastError;
       }
-
-      for (const edge of edges ?? []) {
-        const fromTempId = String(edge?.from ?? edge?.from_node_id);
-        const toTempId = String(edge?.to ?? edge?.to_node_id);
-
-        const fromDbId = nodeIdMap[fromTempId] ?? null;
-        const toDbId = nodeIdMap[toTempId] ?? null;
-
-        if (fromDbId && toDbId) {
-          await this.createEdge(trx, workflowId, {
-            from_node_id: fromDbId,
-            to_node_id: toDbId,
-            from_port: edge?.from_port ?? 'output_1',
-            to_port: edge?.to_port ?? 'input_1',
-            condition_expr: edge?.condition_expr ?? edge?.condition ?? null,
-          });
-        }
-      }
-
-      return nodeIdMap;
-    });
+    }
+    throw lastError || new Error('saveGraph: exhausted retry attempts');
   }
 }
 
