@@ -1,0 +1,54 @@
+{
+  "_comment": "Single source of truth for LLM model choices exposed to users and admins. Consumed by gpt (user Settings > LLM API Keys) and gpt_admin (Global Settings > LLM providers, and Packages editor). Prices are USD per 1M tokens. When editing: keep the active-per-provider entry's prices in sync with system_llm_settings DB rows; admins can adjust via Global Settings which writes to the DB.",
+  "_updated": "2026-05-09",
+  "providers": {
+    "claude": [
+      { "id": "claude-sonnet-4-5", "label": "Sonnet 4.5", "desc": "Best balance of speed & quality", "input": 3.00, "output": 15.00 },
+      { "id": "claude-opus-4-6", "label": "Opus 4.6", "desc": "Most capable, deep reasoning", "input": 15.00, "output": 75.00 },
+      { "id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5", "desc": "Fastest, low cost", "input": 0.80, "output": 4.00 }
+    ],
+    "openai": [
+      { "id": "gpt-4o", "label": "GPT-4o", "desc": "Flagship multimodal", "input": 2.50, "output": 10.00 },
+      { "id": "gpt-4o-mini", "label": "GPT-4o Mini", "desc": "Fast & affordable", "input": 0.15, "output": 0.60 },
+      { "id": "o3", "label": "o3", "desc": "Advanced reasoning", "input": 10.00, "output": 40.00 },
+      { "id": "o4-mini", "label": "o4-mini", "desc": "Efficient reasoning", "input": 1.10, "output": 4.40 },
+      { "id": "gpt-5.5", "label": "GPT-5.5", "desc": "Latest flagship (Apr 2026)", "input": 5.00, "output": 30.00 }
+    ],
+    "kimi": [
+      { "id": "kimi-k2.6", "label": "Kimi K2.6", "desc": "Latest flagship (Apr 2026), 1T MoE, 256K context", "input": 0.95, "output": 4.00 }
+    ],
+    "gamma4": [
+      { "id": "Gemma-4-E4B-it", "label": "Gemma 4 E4B", "desc": "Gemma-4 E4B instruction-tuned — OpenAI-compatible, free", "input": 0, "output": 0 }
+    ],
+    "gemini": [
+      { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro (preview)", "desc": "Gemini 3 flagship — highest capability, best for complex reasoning", "input": 1.25, "output": 10.00 },
+      { "id": "gemini-3-flash-preview", "label": "Gemini 3 Flash (preview)", "desc": "Gemini 3 fast tier — strong price/perf, good default", "input": 0.30, "output": 2.50 },
+      { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (preview)", "desc": "Gemini 3.1 flagship — verified live in API, May 2026", "input": 1.25, "output": 10.00 },
+      { "id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite (preview)", "desc": "Cheapest Gemini 3.x tier — verified live", "input": 0.10, "output": 0.40 },
+      { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite", "desc": "Gemini 3.1 lite GA", "input": 0.10, "output": 0.40 },
+      { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "desc": "Previous-gen flagship — mature, broad tool-call support", "input": 1.25, "output": 10.00 },
+      { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "desc": "Previous-gen fast tier — fast & cheap, well-supported", "input": 0.15, "output": 0.60 },
+      { "id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "desc": "Previous-gen cheapest — bulk/simple tasks", "input": 0.10, "output": 0.40 },
+      { "id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash", "desc": "Stable older flagship — fallback if newer models misbehave", "input": 0.10, "output": 0.40 },
+      { "id": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash Lite", "desc": "Stable older lite — lowest cost legacy option", "input": 0.075, "output": 0.30 }
+    ],
+    "grok": [
+      { "id": "grok-4.3", "label": "Grok 4.3", "desc": "Latest xAI flagship — most capable, newest release", "input": 3.00, "output": 15.00 },
+      { "id": "grok-4.20-multi-agent-0309", "label": "Grok 4.20 Multi-Agent (0309)", "desc": "Multi-agent reasoning variant", "input": 3.00, "output": 15.00 },
+      { "id": "grok-4.20-0309-reasoning", "label": "Grok 4.20 (0309, reasoning)", "desc": "Reasoning-tuned mid-tier", "input": 3.00, "output": 15.00 },
+      { "id": "grok-4.20-0309-non-reasoning", "label": "Grok 4.20 (0309, non-reasoning)", "desc": "Non-reasoning mid-tier — recommended for tool/skill workflows", "input": 3.00, "output": 15.00 },
+      { "id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast (reasoning)", "desc": "Fast reasoning model — caveat: reasoning models may bypass tool_choice forcing", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-1-fast-non-reasoning", "label": "Grok 4.1 Fast (non-reasoning)", "desc": "Non-reasoning fast variant — RECOMMENDED for skill/tool-driven workflows", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-fast-reasoning", "label": "Grok 4 Fast (reasoning)", "desc": "Older fast reasoning variant", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-fast-non-reasoning", "label": "Grok 4 Fast (non-reasoning)", "desc": "Older fast non-reasoning — good for tool calls", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-0709", "label": "Grok 4 (0709 snapshot)", "desc": "Pinned snapshot of grok-4", "input": 3.00, "output": 15.00 },
+      { "id": "grok-3", "label": "Grok 3", "desc": "Previous-gen flagship — mature, broad tool-call support", "input": 3.00, "output": 15.00 },
+      { "id": "grok-3-mini", "label": "Grok 3 Mini", "desc": "Compact previous-gen — cheap, supports tools", "input": 0.30, "output": 0.50 },
+      { "id": "grok-code-fast-1", "label": "Grok Code Fast 1", "desc": "Code-specialized variant", "input": 0.20, "output": 1.50 }
+    ],
+    "deepseek": [
+      { "id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "desc": "Fast & low cost, 256K context (Apr 2026)", "input": 0.14, "output": 0.28 },
+      { "id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "desc": "Latest flagship, 1.6T MoE, 1M context (Apr 2026)", "input": 1.74, "output": 3.48 }
+    ]
+  }
+}
