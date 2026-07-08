@@ -1066,15 +1066,16 @@ class SettingsPanel {
                         this.myMcpEnabled = true;
                         await window.mcpClient?.setMcpMasterEnabled(true);
                     }
+                    // Flip all mismatched servers in PARALLEL (not sequentially) so the switches
+                    // react at once instead of cascading over N remote round-trips. Each
+                    // toggleMCPServer flips its own UI synchronously, then persists concurrently.
                     const servers = (this.myMcpServers || []).slice();
-                    for (const s of servers) {
-                        const id = Number(s.id);
-                        const eff = this.myMcpEffective?.get(id);
+                    const toFlip = servers.filter(s => {
+                        const eff = this.myMcpEffective?.get(Number(s.id));
                         const currentlyOn = eff ? eff.effective_on : !!s.effective_on;
-                        if (currentlyOn !== desired) {
-                            await this.toggleMCPServer(id); // flips this one to `desired`
-                        }
-                    }
+                        return currentlyOn !== desired;
+                    });
+                    await Promise.all(toFlip.map(s => this.toggleMCPServer(Number(s.id))));
                     this._refreshMcpMaster(); // reflect the final all/none/mixed state
                 });
             }
