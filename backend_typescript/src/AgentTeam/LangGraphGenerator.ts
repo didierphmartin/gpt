@@ -2,17 +2,16 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { WorkflowRepository, WorkflowGraphRepository, phpIntval } from './WorkflowRepository';
 import { AgentRepository, agentToArray } from './AgentRepository';
+import { WorkflowGraphAnalyzer } from './WorkflowGraphAnalyzer';
 import {
+  jsonToPython as sharedJsonToPython,
+  pyStr,
   mcpClientBlock,
-  toolBuilderBlock,
-  stateBlock,
-  datetimeInjectorBlock,
-  contextBuilderBlock,
+  skillDepsBlock,
+  skillFsSyncBlock,
   documentConverterBlock,
-  parentsChildrenBlock,
-  runHeaderBlock,
-  runBodyBlock,
-} from './pyBlocks';
+} from './pythonEmitHelpers';
+import { stateBlock, datetimeInjectorBlock, contextBuilderBlock, parentsChildrenBlock, runHeaderBlock } from './pyBlocks';
 
 /**
  * LangGraph Generator — faithful TypeScript mirror of
@@ -23,8 +22,15 @@ import {
  * output (the PHP itself mirrors langchain_runner/code_generator.py).
  *
  * Byte-fidelity notes:
- *  - The static Python code blocks live in pyBlocks.ts, extracted verbatim from
- *    the PHP nowdoc <<<'PY' heredocs (each ends in exactly one '\n').
+ *  - Static Python code blocks shared with ADK/MAF (MCP client, document converter, skill-deps
+ *    install, skill filesystem sync) come from pythonEmitHelpers.ts (byte-verified vs PHP's
+ *    PythonEmitHelpers.php in task 9). LangGraph-only blocks (state/datetime/context-builder/
+ *    parents-children/run-header) live in pyBlocks.ts. The LangGraph-specific skill-step pipeline
+ *    (RUN_SKILL_SCRIPT_TOOL/_run_skill_step) and the __main__ body (TOOL_BUILDER_PART_A/
+ *    TOOL_BUILDER_LG_SPECIFIC/RUN_BODY_BLOCK below) are extracted verbatim from the PHP nowdoc
+ *    <<<'PY' heredocs (each ends in exactly one '\n') directly into this file.
+ *  - Graph topology (byId/order/edges/startNodeId) comes from the shared, byte-verified
+ *    WorkflowGraphAnalyzer.analyzeGraph() rather than a local topoOrder() re-implementation.
  *  - Prompt wrapping is done in the BYTE domain (PHP strlen/wordwrap operate on
  *    bytes), so the result `code` is a Buffer.
  *  - json_encode is emulated to match PHP's JSON_UNESCAPED_SLASHES |
@@ -36,110 +42,33 @@ import {
 const NL = Buffer.from('\n');
 
 /**
- * PHP-faithful float serialization. The LIVE server runs with serialize_precision = 100, so
- * json_encode of a (float) emits the FULL EXACT DECIMAL EXPANSION of the IEEE-754 double
- * (e.g. 0.7 -> "0.6999999999999999555910790149937383830547332763671875"), while integer-valued
- * floats print with no decimal (1.0 -> "1", 0.0 -> "0"). Reproduces that exactly via BigInt.
+ * PHP always escapes U+2028 / U+2029 even with JSON_UNESCAPED_UNICODE; JS does not.
+ *
+ * Float precision note: PythonEmitHelpers::jsonToPython() (and every real PHP generator caller)
+ * forces ini_set('serialize_precision', '-1') at the top of generate() -- shortest-round-trip
+ * float formatting, exactly what JS's native JSON.stringify already produces. So no BigInt /
+ * exact-decimal-expansion machinery is needed here; see pythonEmitHelpers.ts's header and the
+ * task-9 report for the verified evidence (an earlier draft of this file implemented that
+ * unnecessarily -- removed now that this generator imports the shared, verified module).
  */
-function phpFloatExact(x: number): string {
-  if (!Number.isFinite(x)) return String(x);
-  if (Number.isInteger(x)) return Object.is(x, -0) ? '-0' : String(x); // PHP: 1.0 -> "1", 0.0 -> "0"
-  const buf = Buffer.alloc(8);
-  buf.writeDoubleLE(x);
-  const bits = buf.readBigUInt64LE();
-  const sign = (bits >> 63n) & 1n;
-  let exp = Number((bits >> 52n) & 0x7ffn);
-  let mant = bits & 0xfffffffffffffn;
-  if (exp === 0) {
-    exp = 1;
-  } else {
-    mant |= 0x10000000000000n;
-  }
-  exp -= 1075;
-  let num = mant;
-  let den = 1n;
-  if (exp >= 0) num = mant << BigInt(exp);
-  else den = 1n << BigInt(-exp);
-  const intPart = num / den;
-  let rem = num % den;
-  let s = intPart.toString();
-  if (rem > 0n) {
-    s += '.';
-    let frac = '';
-    while (rem > 0n) {
-      rem *= 10n;
-      frac += (rem / den).toString();
-      rem %= den;
-    }
-    s += frac;
-  }
-  return (sign ? '-' : '') + s;
-}
-
-// Sentinel used to splice exact float decimals into a JSON.stringify result. Present only
-// transiently inside phpJsonStringify (always fully replaced before return).
-const FLOAT_SENTINEL = ' __PHP_FLOAT_SENTINEL_8b41f2__ ';
-
-/**
- * PHP json_encode emulation that, like the LIVE server (serialize_precision = 100), prints the
- * exact decimal expansion for every genuine float while leaving integers as integers. Strings,
- * structure and (pretty) 4-space indentation come from JSON.stringify (which matches PHP's
- * JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE byte-for-byte); then U+2028/U+2029 are escaped
- * and float sentinels are swapped for phpFloatExact() expansions. A non-integer JS number is a
- * PHP float; an integer-valued JS number serializes identically whether PHP saw it as int or as
- * an integer-valued float (both print with no decimal), so only non-integers need the sentinel.
- */
-function phpJsonStringify(value: any, pretty: boolean): string {
-  const floats: string[] = [];
-  const replacer = (_key: string, val: any): any => {
-    if (typeof val === 'number' && Number.isFinite(val) && !Number.isInteger(val)) {
-      const idx = floats.length;
-      floats.push(phpFloatExact(val));
-      return FLOAT_SENTINEL + idx + FLOAT_SENTINEL;
-    }
-    return val;
-  };
-  let s = pretty ? JSON.stringify(value, replacer, 4) : JSON.stringify(value, replacer);
-  s = fixSep(s);
-  if (floats.length > 0) {
-    const enc = JSON.stringify(FLOAT_SENTINEL).slice(1, -1); // escaped form, no surrounding quotes
-    for (let i = 0; i < floats.length; i++) {
-      s = s.split('"' + enc + i + enc + '"').join(floats[i]);
-    }
-  }
-  return s;
-}
-
-/** PHP json_encode(..., JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), compact. */
-function jsonEncode(v: any): string {
-  return phpJsonStringify(v, false);
-}
-
-/** PHP always escapes U+2028 / U+2029 even with JSON_UNESCAPED_UNICODE; JS does not. */
 function fixSep(s: string): string {
   return s.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
-/** PHP str_replace on ': true'/': false'/': null' (global, including inside strings — a quirk). */
-function boolToPy(s: string): string {
-  return s.split(': true').join(': True').split(': false').join(': False').split(': null').join(': None');
-}
-
 /**
- * jsonToPython: json_encode(value, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)
- * then ': true'->': True', ': false'->': False', ': null'->': None'. PHP's JSON_PRETTY_PRINT uses
- * 4-space indent and ': ' / ',\n' separators — JSON.stringify(_, null, 4) matches byte-for-byte.
- * forceObject casts an empty top-level array to {} (handled by the caller building objects/Maps).
+ * PHP json_encode(..., JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), compact -- no pretty
+ * print, no true/false/null -> True/False/None conversion. Matches the PHP call sites that use
+ * plain json_encode() rather than PythonEmitHelpers::jsonToPython() (tool_names/display/provider/
+ * model/temperature/skills in the AGENTS dict) -- none of those values contain JSON booleans, so
+ * no Python-literal conversion is needed for them.
  */
-function jsonToPython(value: any): string {
-  return boolToPy(phpJsonStringify(value, true));
+function jsonEncode(v: any): string {
+  return fixSep(JSON.stringify(v));
 }
 
-/** Flat string->string dict, pretty-printed in INSERTION order (JSON.stringify reorders int keys). */
-function pyDictFlat(entries: Array<[string, string]>): string {
-  if (entries.length === 0) return '{}';
-  const inner = entries.map(([k, v]) => `    ${jsonEncode(String(k))}: ${jsonEncode(v)}`).join(',\n');
-  return boolToPy(`{\n${inner}\n}`);
+/** PythonEmitHelpers::jsonToPython($value, $forceObject) -- pretty-printed, True/False/None. */
+function jsonToPython(value: any, forceObject = false): string {
+  return sharedJsonToPython(value, forceObject);
 }
 
 /** Mirror json_decode($s,true) then json_encode: empty objects collapse to []. */
@@ -272,33 +201,6 @@ function edgeTo(e: any): string {
   return String(e.to_node_id ?? e.to ?? (e.target ?? ''));
 }
 
-function children(nid: string, edges: any[]): string[] {
-  const out: string[] = [];
-  const s = String(nid);
-  for (const e of edges) {
-    if (edgeFrom(e) === s) out.push(edgeTo(e));
-  }
-  return out;
-}
-
-function providerMaxTokensDefault(provider: string): number {
-  switch (provider) {
-    case 'claude':
-    case 'anthropic':
-      return 32000;
-    case 'openai':
-    case 'grok':
-      return 16000;
-    case 'gemini':
-    case 'google':
-    case 'kimi':
-    case 'moonshot':
-    case 'deepseek':
-    default:
-      return 8000;
-  }
-}
-
 function displayName(node: any): string {
   const cfg = asObj(node.config);
   const name = cfg.agent_name ?? cfg.name ?? (node.name ?? null);
@@ -317,11 +219,28 @@ function isPhpAlnumByte(b: number): boolean {
   return (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
 }
 
+/**
+ * PHP (current): `strtolower(trim(preg_replace('/[^A-Za-z0-9]+/', '_', $name) ?? '', '_'))`.
+ * The `+` quantifier COLLAPSES each run of consecutive non-alnum BYTES (which, for any
+ * multi-byte UTF-8 character such as an em-dash, are all its bytes at once) into a SINGLE '_' --
+ * this replaced an older byte-by-byte ctype_alnum() loop that mapped every non-alnum byte to its
+ * own '_' (producing e.g. three underscores for one em-dash), which "kept a stray lead byte of a
+ * multibyte char... producing invalid UTF-8 that broke py_compile of the emitted script" (PHP
+ * source comment). Ported here as byte-domain run-collapsing to match exactly, including for
+ * multi-byte UTF-8 sequences.
+ */
 function safeVar(name: string): string {
   const bytes = Buffer.from(name, 'utf8');
   const out: number[] = [];
+  let inRun = false;
   for (const b of bytes) {
-    out.push(isPhpAlnumByte(b) ? b : 0x5f); // 0x5f = '_'
+    if (isPhpAlnumByte(b)) {
+      out.push(b);
+      inRun = false;
+    } else if (!inRun) {
+      out.push(0x5f); // 0x5f = '_'
+      inRun = true;
+    }
   }
   // trim leading/trailing '_' (byte 0x5f)
   let start = 0;
@@ -334,44 +253,6 @@ function safeVar(name: string): string {
     if (trimmed[i] >= 65 && trimmed[i] <= 90) trimmed[i] += 32;
   }
   return trimmed.toString('latin1');
-}
-
-/** Kahn's algorithm restricted to nodes reachable from start. Maps preserve PHP insertion order. */
-function topoOrder(startId: string, edges: any[]): string[] {
-  const reachable = new Map<string, boolean>();
-  const stack: string[] = [startId];
-  while (stack.length > 0) {
-    const nid = String(stack.pop());
-    if (reachable.has(nid)) continue;
-    reachable.set(nid, true);
-    for (const child of children(nid, edges)) stack.push(String(child));
-  }
-
-  const inDeg = new Map<string, number>();
-  for (const nid of reachable.keys()) inDeg.set(String(nid), 0);
-  for (const e of edges) {
-    const f = edgeFrom(e);
-    const t = edgeTo(e);
-    if (reachable.has(f) && reachable.has(t)) inDeg.set(t, (inDeg.get(t) ?? 0) + 1);
-  }
-
-  const order: string[] = [];
-  const queue: string[] = [];
-  for (const [nid, d] of inDeg) {
-    if (d === 0) queue.push(String(nid));
-  }
-  while (queue.length > 0) {
-    const nid = String(queue.shift());
-    order.push(nid);
-    for (const child0 of children(nid, edges)) {
-      const child = String(child0);
-      if (!inDeg.has(child)) continue;
-      const nd = (inDeg.get(child) as number) - 1;
-      inDeg.set(child, nd);
-      if (nd === 0) queue.push(child);
-    }
-  }
-  return order;
 }
 
 function pythonListRepr(items: string[]): string {
@@ -401,12 +282,40 @@ interface AgentDatum {
   model: string;
   temperature: number;
   max_tokens: number;
+  skills: Array<Record<string, string>>;
 }
 
 export interface GenerateResult {
   filename: string;
   code: Buffer;
 }
+
+
+// ---------- LangGraph-specific skill pipeline blocks (verbatim from PHP LangGraphGenerator.php) ----------
+
+/**
+ * PHP: LangGraphGenerator::toolBuilderBlock()'s $partA -- _summarize_tool_result +
+ * build_tools_from_catalog(). Concatenated with pythonEmitHelpers' skillDepsBlock() +
+ * skillFsSyncBlock() + TOOL_BUILDER_LG_SPECIFIC below to reproduce toolBuilderBlock() exactly
+ * (PHP: `$partA . PythonEmitHelpers::skillDepsBlock() . PythonEmitHelpers::skillFsSyncBlock() . $lgSpecific`).
+ */
+const TOOL_BUILDER_PART_A: string = "def _summarize_tool_result(result: str) -> str:\n    \"\"\"Short, informative summary of a tool result for logs.\n\n    Parses JSON when possible and surfaces the most useful fields\n    (article count + first PMIDs, error message, query text, etc.)\n    so the log shows *what* came back, not just the raw first 120 chars.\n    \"\"\"\n    try:\n        parsed = json.loads(result)\n    except Exception:\n        s = result.strip().replace(\"\\n\", \" \")\n        return s[:160] + (\" ...\" if len(s) > 160 else \"\")\n    if isinstance(parsed, dict):\n        if \"error\" in parsed:\n            return f\"error: {str(parsed['error'])[:200]}\"\n        if isinstance(parsed.get(\"articles\"), list):\n            arts = parsed[\"articles\"]\n            pmids = [str(a.get(\"pmid\", \"?\")) for a in arts[:5] if isinstance(a, dict)]\n            more = \"\" if len(arts) <= 5 else f\", +{len(arts) - 5} more\"\n            return f\"{len(arts)} articles (PMIDs: {', '.join(pmids)}{more})\"\n        if isinstance(parsed.get(\"suggestions\"), list):\n            return f\"{len(parsed['suggestions'])} suggestions\"\n        if isinstance(parsed.get(\"query\"), str):\n            q = parsed[\"query\"]\n            return f\"query: {q[:200]}\" + (\" ...\" if len(q) > 200 else \"\")\n        if isinstance(parsed.get(\"items\"), list):\n            return f\"{len(parsed['items'])} items\"\n        keys = \", \".join(list(parsed.keys())[:6])\n        return f\"keys: {keys}\"\n    if isinstance(parsed, list):\n        return f\"list of {len(parsed)} items\"\n    s = str(parsed)\n    return s[:160] + (\" ...\" if len(s) > 160 else \"\")\n\n\ndef build_tools_from_catalog() -> dict[str, StructuredTool]:\n    \"\"\"Build LangChain StructuredTool wrappers from TOOL_CATALOG.\n\n    For each tool:\n    1. Parse the JSON Schema into a Pydantic model (for LLM argument validation)\n    2. Create a callable that sends the MCP JSON-RPC request\n    3. Wrap both into a LangChain StructuredTool\n\n    Returns: dict mapping tool_name -> StructuredTool\n    \"\"\"\n    type_map = {\"string\": str, \"integer\": int, \"number\": float,\n                \"boolean\": bool, \"array\": list, \"object\": dict}\n    catalog = {}\n    for name, info in TOOL_CATALOG.items():\n        schema = info.get(\"input_schema\") or {}\n        props = schema.get(\"properties\", {}) if isinstance(schema, dict) else {}\n        required = set(schema.get(\"required\", []) if isinstance(schema, dict) else [])\n        fields = {}\n        for pname, pspec in props.items():\n            spec = pspec if isinstance(pspec, dict) else {}\n            ptype = type_map.get(spec.get(\"type\", \"string\"), str)\n            default = ... if pname in required else None\n            fields[pname] = (ptype, Field(default, description=spec.get(\"description\", \"\")))\n        args_model = create_model(f\"{name}Args\", **fields) if fields else create_model(f\"{name}Args\")\n\n        server_url = info[\"server_url\"]\n        def make_fn(n=name, s=server_url):\n            def invoke(**kwargs):\n                argv = json.dumps(kwargs, default=str)\n                argv_preview = argv if len(argv) <= 250 else argv[:250] + f\" ... +{len(argv) - 250} chars\"\n                print(f\"  [tool] -> {n}({argv_preview})\")\n                t0 = time.monotonic()\n                result = _call_mcp_tool(s, n, kwargs)\n                dt = time.monotonic() - t0\n                summary = _summarize_tool_result(result)\n                print(f\"  [tool] ← {n}: {summary} ({len(result)} chars, {dt:.1f}s)\")\n                return result\n            return invoke\n\n        catalog[name] = StructuredTool.from_function(\n            func=make_fn(),\n            name=name,\n            description=info.get(\"description\") or f\"MCP tool {name}\",\n            args_schema=args_model,\n        )\n    return catalog\n\n\n";
+
+/**
+ * PHP: LangGraphGenerator::toolBuilderBlock()'s $lgSpecific -- RUN_SKILL_SCRIPT_TOOL,
+ * _make_skill_tool, and _run_skill_step (the mandatory post-agent skill-step runner).
+ * LangGraph-specific (uses StructuredTool/create_model), so it is NOT in the shared
+ * pythonEmitHelpers module.
+ */
+const TOOL_BUILDER_LG_SPECIFIC: string = "\n\nRUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(\n    func=_run_skill_script,\n    name=\"run_skill_script\",\n    description=(\"Execute a folder-backed skill's Python script and return its \"\n                 \"stdout. Pass the dir_name/script/argv the skill instructions \"\n                 \"specify, e.g. dir_name='GEO/geo-llmstxt', \"\n                 \"script='scripts/llmstxt_signals.py', argv=['https://example.com'].\"),\n    args_schema=create_model(\n        \"RunSkillScriptArgs\",\n        dir_name=(str, ...),\n        script=(str, ...),\n        # list[str] (not bare list) so the generated JSON schema carries\n        # `items`. Gemini rejects array params without `items` (400\n        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave\n        # input_files as a bare dict — Gemini accepted that, and dict[str,str]\n        # would add additionalProperties which Gemini may reject.\n        argv=(list[str], []),\n        input_files=(dict, {}),\n        read_outputs=(list[str], []),\n    ),\n)\n\n\ndef _make_skill_tool(dir_name: str):\n    \"\"\"run_skill_script scoped to ONE skill dir: the model picks only the script + argv\n    (and input_files/read_outputs); the dir is fixed to this skill.\"\"\"\n    def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:\n        return _run_skill_script(dir_name, script, argv, input_files, read_outputs)\n    return StructuredTool.from_function(\n        func=run_skill_script, name=\"run_skill_script\",\n        description=(f\"Run a script in the '{dir_name}' skill (dir fixed). Stage authored \"\n                     \"content via input_files and pass the output path in read_outputs.\"),\n        args_schema=create_model(\n            \"ScopedSkillArgs\",\n            script=(str, ...), argv=(list[str], []),\n            input_files=(dict, {}), read_outputs=(list[str], []),\n        ),\n    )\n\n\nasync def _run_skill_step(skill, prior, llm):\n    \"\"\"Run ONE skill as a mandatory step on `prior` (the previous stage's output). A\n    dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to\n    the dir; the step output becomes the skill's produced deliverable file (via\n    read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform.\"\"\"\n    dir_name = skill.get(\"dir\", \"\")\n    body = skill.get(\"inline\") or (_read_skill_md(dir_name) if dir_name else \"\")\n    system = (\n        \"You are running the '\" + (dir_name or \"inline\") + \"' skill as a MANDATORY step in \"\n        \"a compiled workflow. Follow the skill instructions below and APPLY THE SKILL to the \"\n        \"INPUT. If the skill produces a document/file (e.g. an HTML report via a create/\"\n        \"render script), you MUST call run_skill_script -- stage your authored content via \"\n        \"input_files and pass the output path in read_outputs; the workflow captures that \"\n        \"produced file as this node's output. If the skill has no script, return the \"\n        \"transformed result as your response.\\n\\n=== SKILL INSTRUCTIONS ===\\n\" + body\n    )\n    tools = [_make_skill_tool(dir_name)] if dir_name else []\n    if dir_name:\n        _LAST_SKILL_OUTPUTS.pop(dir_name, None)\n    agent = create_react_agent(llm, tools)\n    msgs = [SystemMessage(content=system),\n            HumanMessage(content=\"## INPUT (apply the skill to this)\\n\" + str(prior))]\n    result = await agent.ainvoke({\"messages\": msgs})\n    final = result[\"messages\"][-1]\n    text = final.content if isinstance(final, AIMessage) else str(final)\n    if isinstance(text, list):\n        text = \"\".join(b.get(\"text\", \"\") for b in text if isinstance(b, dict))\n    produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None\n    return produced[-1] if produced else text\n";
+
+/**
+ * PHP: LangGraphGenerator::runBodyBlock(). Verbatim port including the mandatory
+ * per-skill run loop (`for _skill in ad.get("skills", [])`) and the __main__ inline
+ * <!doctype html>...</html> extraction + OUTPUT_STORAGE_ENABLED/OUTPUT_FOLDER handling
+ * (replaces the old `from script_io import write_output` external-helper approach).
+ */
+const RUN_BODY_BLOCK: string = "    # One LLM instance per agent — provider/model come from the AGENTS\n    # dict, which the generator baked from each agent's workflow config.\n    # Built eagerly (not per-call) so we fail fast on missing API keys.\n    LLMS = {\n        nid: _make_llm(\n            ad.get(\"provider\", \"claude\"),\n            ad.get(\"model\", \"\"),\n            float(ad.get(\"temperature\", 0.7)),\n            int(ad.get(\"max_tokens\", 4096)),\n        )\n        for nid, ad in AGENTS.items()\n    }\n    sg = StateGraph(WFState)\n\n    for nid in ORDER:\n        ntype = NODE_TYPES.get(nid, \"\")\n\n        if ntype == \"start\":\n            def make_start(n=nid):\n                def _run(state):\n                    text = state.get(\"user_prompt\", \"\")\n                    if START_DOCUMENTS:\n                        doc_parts = []\n                        for doc in START_DOCUMENTS:\n                            name = doc.get(\"name\", \"Document\")\n                            path = doc.get(\"path\", \"\")\n                            if not path:\n                                doc_parts.append(f\"### {name}\\n\\n_(no path on attachment record)_\")\n                                continue\n                            try:\n                                md = _convert_doc_to_markdown(path)\n                                doc_parts.append(f\"### {name}\\n\\n{md}\")\n                            except Exception as e:\n                                doc_parts.append(f\"### {name}\\n\\n_(conversion failed: {e})_\")\n                        if doc_parts:\n                            text = (\n                                \"## Attached Documents\\n\\n\"\n                                + \"\\n\\n---\\n\\n\".join(doc_parts)\n                                + \"\\n\\n---\\n\\n\"\n                                + text\n                            )\n                    print(f\"[node] [{n}] start -- {len(text)} chars\")\n                    return {\"node_outputs\": {n: {\"source\": \"start\", \"text\": text}}}\n                return _run\n            sg.add_node(nid, make_start())\n\n        elif ntype in (\"agent\", \"agent-template\"):\n            def make_agent(n=nid):\n                async def _run(state):\n                    from pathlib import Path\n                    from datetime import datetime as _dt\n                    ad = AGENTS[n]\n                    tool_names = ad[\"tool_names\"]\n                    tools = [catalog[t] for t in tool_names if t in catalog]\n                    print(f\"[node] [{n}] {ad['display']!r} -- {len(tools)} tools \"\n                          f\"(provider={ad.get('provider', '?')}, model={ad.get('model', '?')})\")\n\n                    ctx = build_context(state.get(\"user_prompt\", \"\"), parents(n), state.get(\"node_outputs\", {}))\n                    sys_chars = len(ad[\"system_prompt\"]) if ad.get(\"system_prompt\") else 0\n                    print(f\"[node] [{n}] inputs: system={sys_chars} chars, context={len(ctx)} chars\", flush=True)\n\n                    msgs = []\n                    if ad[\"system_prompt\"]:\n                        msgs.append(SystemMessage(content=inject_datetime(ad[\"system_prompt\"])))\n                    msgs.append(HumanMessage(content=ctx))\n\n                    # Per-agent LLM. Each agent uses the provider/model\n                    # it was configured with in the workflow editor.\n                    agent = create_react_agent(LLMS[n], tools)\n                    t0 = time.monotonic()\n                    result = await agent.ainvoke({\"messages\": msgs})\n                    dt = time.monotonic() - t0\n\n                    final = result[\"messages\"][-1]\n                    text = final.content if isinstance(final, AIMessage) else str(final)\n                    if isinstance(text, list):\n                        text = \"\".join(b.get(\"text\", \"\") for b in text if isinstance(b, dict))\n\n                    msgs_out = result.get(\"messages\", [])\n                    llm_rounds = sum(1 for m in msgs_out if isinstance(m, AIMessage))\n                    tool_results = sum(\n                        1 for m in msgs_out\n                        if getattr(m, \"type\", None) == \"tool\"\n                        or m.__class__.__name__ == \"ToolMessage\"\n                    )\n                    print(f\"[node] [{n}] done -- {len(text)} chars \"\n                          f\"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)\")\n                    # Preview of what the agent produced, so the log shows the\n                    # actual answer without opening the _debug dump.\n                    print(f\"[node] [{n}] output head: {text[:240]!r}\", flush=True)\n                    # High-signal red flag: a tool-bound agent that ran ZERO\n                    # tools almost certainly fabricated its answer (the exact\n                    # failure that produced \"Missing /llms.txt\"). Surface it.\n                    if tools and tool_results == 0:\n                        print(f\"[node] [{n}] ⚠ answered with 0 tool calls despite \"\n                              f\"{len(tools)} tool(s) available — likely fabricated; \"\n                              f\"check the skill ran\", flush=True)\n\n                    try:\n                        script_root = Path(__file__).resolve().parent.parent\n                        debug_dir = script_root / \"outputs\" / \"_debug\"\n                        debug_dir.mkdir(parents=True, exist_ok=True)\n                        ts = _dt.now().strftime(\"%Y%m%d-%H%M%S\")\n                        stem = Path(__file__).stem\n                        dump_path = debug_dir / f\"{stem}_{n}_{ts}.json\"\n                        entries = []\n                        for m in msgs_out:\n                            content = m.content\n                            if isinstance(content, list):\n                                content = [\n                                    (b if isinstance(b, dict) else {\"type\": \"text\", \"text\": str(b)})\n                                    for b in content\n                                ]\n                            entries.append({\n                                \"role\": m.__class__.__name__,\n                                \"content\": content,\n                                \"tool_calls\": getattr(m, \"tool_calls\", None),\n                                \"tool_call_id\": getattr(m, \"tool_call_id\", None),\n                                \"name\": getattr(m, \"name\", None),\n                            })\n                        dump_path.write_text(\n                            json.dumps(entries, default=str, indent=2, ensure_ascii=False),\n                            encoding=\"utf-8\",\n                        )\n                        print(f\"[debug] [{n}] message history → outputs/_debug/{dump_path.name}\")\n                    except Exception as e:\n                        print(f\"[debug] [{n}] failed to dump message history: {e}\")\n\n                    # Mandatory skill pipeline: each attached skill runs on the agent's\n                    # result in order; the last skill's produced deliverable (e.g. the html\n                    # skill's rendered HTML file) becomes this node's output.\n                    for _skill in ad.get(\"skills\", []):\n                        text = await _run_skill_step(_skill, text, LLMS[n])\n                        print(f\"[node] [{n}] after skill {_skill.get('dir') or 'inline'!r}: \"\n                              f\"{len(text)} chars\", flush=True)\n\n                    return {\"node_outputs\": {n: {\"source\": ad[\"display\"], \"text\": text}}}\n                return _run\n            sg.add_node(nid, make_agent())\n\n        elif ntype == \"output\":\n            def make_output(n=nid):\n                def _run(state):\n                    pids = parents(n)\n                    outs = state.get(\"node_outputs\", {})\n                    if len(pids) == 1 and pids[0] in outs:\n                        final = outs[pids[0]][\"text\"]\n                    else:\n                        blocks = [f\"## {outs[p]['source']}\\n\\n{outs[p]['text']}\" for p in pids if p in outs]\n                        final = \"\\n\\n---\\n\\n\".join(blocks)\n                    print(f\"[node] [{n}] output -- {len(final)} chars\")\n                    return {\"final_output\": final}\n                return _run\n            sg.add_node(nid, make_output())\n\n        else:\n            sg.add_node(nid, lambda s: {})\n\n    # Wire edges\n    pos = {n: i for i, n in enumerate(ORDER)}\n    sg.add_edge(START, ORDER[0])\n    for nid in ORDER:\n        for child in children(nid):\n            if child in pos and pos[child] > pos[nid]:\n                sg.add_edge(nid, child)\n    for nid in ORDER:\n        if not children(nid):\n            sg.add_edge(nid, END)\n\n    graph = sg.compile()\n    print(\"[info] Running...\")\n    result = await graph.ainvoke({\"user_prompt\": user_prompt, \"node_outputs\": {}})\n    return result.get(\"final_output\", \"\")\n\n\nif __name__ == \"__main__\":\n    prompt = \" \".join(sys.argv[1:]) or DEFAULT_PROMPT or \"Hello\"\n    print(f\"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\")\n    output = asyncio.run(run(prompt))\n    print(\"\\n\" + \"=\" * 60)\n    print(\"FINAL OUTPUT\")\n    print(\"=\" * 60)\n    print(output)\n\n    # Honour the Output node's storage setting: when ON, save the final result where the\n    # app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via\n    # SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, don't save.\n    if OUTPUT_STORAGE_ENABLED:\n        try:\n            import os, time\n            import re as _re2\n            _mm = _re2.search(r\"(?is)<!doctype html.*?</html\\s*>\", output) or _re2.search(r\"(?is)<html[\\s>].*?</html\\s*>\", output)\n            if _mm:\n                output = _mm.group(0)  # strip narration/fences around a full HTML doc\n                _ext = \"html\"\n            else:\n                _ext = \"md\"\n            _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n            _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n            _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n            if OUTPUT_FOLDER:\n                _cf = os.path.expanduser(OUTPUT_FOLDER)\n                _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)\n            else:\n                _save_dir = os.path.join(_root, \"workflow\")\n            os.makedirs(_save_dir, exist_ok=True)\n            _out = os.path.join(_save_dir, f\"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}\")\n            with open(_out, \"w\", encoding=\"utf-8\") as _f:\n                _f.write(output)\n            print(f\"\\nResult saved to: {os.path.abspath(_out)}\")\n        except Exception as e:\n            print(f\"\\n[warn] failed to save result: {e}\")\n    else:\n        print(\"\\n[info] output storage is OFF -- result printed above, not saved\")\n";
 
 export class LangGraphGenerator {
   protected workflowRepo: WorkflowRepository;
@@ -479,24 +388,22 @@ export class LangGraphGenerator {
     }
 
     const graph = await this.graphRepo.getGraph(workflowId);
-    const nodes: any[] = graph.nodes ?? [];
-    const edges: any[] = graph.edges ?? [];
-
-    const byId = new Map<string, any>();
-    for (const n of nodes) byId.set(nodeId(n), n);
-
-    const startNodes = nodes.filter((n) => nodeType(n) === 'start');
-    if (startNodes.length === 0) {
+    // Route pure graph analysis through the shared WorkflowGraphAnalyzer (byte-verified against
+    // PHP in task 9): byId, order (Kahn topo), edges (normalised), startNodeId.
+    const gdata = WorkflowGraphAnalyzer.analyzeGraph(graph);
+    const byId: Record<string, any> = gdata.byId;
+    const order: string[] = gdata.order;
+    const startId = gdata.startNodeId;
+    if (startId === '') {
       throw new Error('No start node found.');
     }
-    const startNode = startNodes[0];
-    const startId = nodeId(startNode);
+    // Normalised edges ({from, to}) are compatible with edgeFrom()/edgeTo().
+    const edges: any[] = gdata.edges;
+    const startNode = byId[startId];
     const startCfg = asObj(startNode.config ?? startNode.data ?? {});
     const startPrompt = startCfg.prompt === undefined || startCfg.prompt === null ? '' : String(startCfg.prompt);
     let startDocuments: any = startCfg.documents ?? [];
     if (startDocuments === null || typeof startDocuments !== 'object') startDocuments = [];
-
-    const order = topoOrder(startId, edges);
 
     const providerDefaults = await this.loadProviderDefaults();
     const mcpTools = await this.loadMcpToolsWithServers();
@@ -523,7 +430,7 @@ export class LangGraphGenerator {
     const agentData = new Map<string, AgentDatum>();
     const allNeededTools = new Map<string, boolean>();
     for (const nid of order) {
-      const node = byId.get(nid);
+      const node = byId[nid];
       const ntype = nodeType(node);
       if (ntype !== 'agent' && ntype !== 'agent-template') continue;
       const cfg = asObj(node.config);
@@ -567,10 +474,11 @@ export class LangGraphGenerator {
       if (agentProvider === '') agentProvider = 'claude';
       if (agentModel === '') agentModel = providerDefaults.get(agentProvider.toLowerCase()) ?? '';
 
-      const skillContent = phpTrim(String(cfg.skill_content ?? ''));
-      if (skillContent !== '') {
-        systemPrompt = phpRtrim(systemPrompt) + '\n\n## Skill\n' + skillContent;
-      }
+      // Skills are mandatory POST-agent steps (not prompt text, not an optional tool): the main
+      // agent runs, then each skill runs on its result and the last skill's produced deliverable
+      // becomes the node output. Surface the ordered skill bindings; skill_content is NO LONGER
+      // appended to the prompt. Mirrors ADK/PHP (bde5afb).
+      const skills = WorkflowGraphAnalyzer.skillsFromConfig(cfg);
 
       const pl = systemPrompt.toLowerCase();
       const wantsHtml =
@@ -578,7 +486,10 @@ export class LangGraphGenerator {
         pl.indexOf('production-quality html') !== -1 ||
         pl.indexOf('<!doctype') !== -1 ||
         (pl.indexOf('self-contained') !== -1 && pl.indexOf('<style') !== -1);
-      if (wantsHtml) {
+      // Only nudge the MAIN agent to emit HTML when the node has NO skill to render it. When a
+      // skill (e.g. html) is attached, that skill step produces the HTML deliverable, so the main
+      // agent should just write the report content.
+      if (wantsHtml && skills.length === 0) {
         systemPrompt =
           phpRtrim(systemPrompt) +
           '\n\n## Output format (CRITICAL — read carefully)\n' +
@@ -591,15 +502,15 @@ export class LangGraphGenerator {
           'file, so anything that is not HTML breaks the deliverable.';
       }
 
+      // Per-agent sampling/limits saved by the editor under `settings`. max_tokens comes from the
+      // agent form VERBATIM -- no substitution. If a node's output truncates, raise it in that
+      // node's form; the compiler never overrides a form-stated value.
       const cfgSettings = asObj(cfg.settings);
       const agentTemperature = phpFloatval(cfgSettings.temperature ?? 0.7);
-      const explicitMaxTokens = phpIntval(cfgSettings.max_tokens ?? 0);
-      const agentMaxTokens =
-        explicitMaxTokens > 4096 ? explicitMaxTokens : providerMaxTokensDefault(agentProvider.toLowerCase());
+      const agentMaxTokens = phpIntval(cfgSettings.max_tokens ?? 4096);
 
-      if (systemPrompt.indexOf('run_skill_script') !== -1 && !toolNames.includes('run_skill_script')) {
-        toolNames.push('run_skill_script');
-      }
+      // NOTE: the main agent NEVER gets run_skill_script -- skills run as separate mandatory
+      // steps after it (see the skill loop in RUN_BODY_BLOCK's agent node function).
 
       for (const tn of toolNames) allNeededTools.set(tn, true);
       agentData.set(nid, {
@@ -610,6 +521,7 @@ export class LangGraphGenerator {
         model: agentModel,
         temperature: agentTemperature,
         max_tokens: agentMaxTokens,
+        skills,
       });
     }
 
@@ -641,7 +553,7 @@ export class LangGraphGenerator {
 
     const nodeDescs: string[] = [];
     for (const nid of order) {
-      const node = byId.get(nid);
+      const node = byId[nid];
       const ntype = nodeType(node);
       const name = displayName(node);
       const ad = agentData.get(nid);
@@ -810,22 +722,18 @@ export class LangGraphGenerator {
     push('        )');
     push('    if p == "kimi":');
     push('        from langchain_openai import ChatOpenAI');
-    push('        # K2 models enforce non-thinking sampling values; mirror the');
-    push('        # PHP KimiProvider so the API accepts the request. The');
-    push("        # editor's temperature is overridden here (API requirement);");
-    push('        # max_tokens is still honoured.');
+    push('        # Kimi is OpenAI-compatible. temperature/max_tokens come straight from');
+    push('        # the agent form -- never overridden. K2 defaults to thinking mode; disable');
+    push('        # it (not a form parameter) to match the PHP KimiProvider.');
     push('        kwargs = dict(');
     push('            model=model,');
     push('            base_url="https://api.moonshot.ai/v1",');
     push('            api_key=os.environ.get("KIMI_API_KEY"),');
+    push('            temperature=temperature,');
     push('            max_tokens=max_tokens,');
     push('        )');
     push('        if model.startswith("kimi-k2"):');
-    push('            kwargs["temperature"] = 0.6');
-    push('            kwargs["top_p"] = 0.95');
     push('            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}');
-    push('        else:');
-    push('            kwargs["temperature"] = temperature');
     push('        return ChatOpenAI(**kwargs)');
     push('    raise RuntimeError(');
     push('        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi."');
@@ -839,7 +747,7 @@ export class LangGraphGenerator {
     push('# Maps server URL -> metadata. If a server moves, update the URL here.');
     push(sep);
     push('');
-    push('MCP_SERVERS = ' + jsonToPython(usedServers));
+    push('MCP_SERVERS = ' + jsonToPython(usedServers, true));
     push('');
 
     // ---- tool catalog ----
@@ -852,7 +760,7 @@ export class LangGraphGenerator {
     push("# agent's tool_names list in the AGENTS dict below.");
     push(sep);
     push('');
-    push('TOOL_CATALOG = ' + jsonToPython(usedCatalog));
+    push('TOOL_CATALOG = ' + jsonToPython(usedCatalog, true));
     push('');
 
     // ---- MCP client ----
@@ -870,7 +778,7 @@ export class LangGraphGenerator {
     push('# plain JSON. The parser handles both formats transparently.');
     push(sep);
     push('');
-    push(mcpClientBlock);
+    push(mcpClientBlock());
 
     // ---- tool builder ----
     push('');
@@ -883,7 +791,11 @@ export class LangGraphGenerator {
     push("# other LangChain tool -- it doesn't know about MCP internals.");
     push(sep);
     push('');
-    push(toolBuilderBlock);
+    // PHP: self::toolBuilderBlock() = $partA . PythonEmitHelpers::skillDepsBlock() .
+    // PythonEmitHelpers::skillFsSyncBlock() . $lgSpecific. skillDepsBlock/skillFsSyncBlock are the
+    // shared (ADK/MAF-reusable) blocks ported in task 9; TOOL_BUILDER_PART_A/LG_SPECIFIC are
+    // LangGraph-only (StructuredTool/create_react_agent), so they stay local to this file.
+    push(TOOL_BUILDER_PART_A + skillDepsBlock() + skillFsSyncBlock() + TOOL_BUILDER_LG_SPECIFIC);
 
     // ---- state ----
     push('');
@@ -947,7 +859,7 @@ export class LangGraphGenerator {
     push('# this script (absolute paths recommended).');
     push(sep);
     push('');
-    push(documentConverterBlock);
+    push(documentConverterBlock());
 
     // ---- start node config ----
     push('');
@@ -966,6 +878,15 @@ export class LangGraphGenerator {
     push('DEFAULT_PROMPT = """');
     for (const seg of wrapPromptToBuffers(promptEscaped)) push(seg);
     push('""".strip()');
+    push('');
+    // Output-node storage setting baked in so the compiled script persists the final result where
+    // the app does (~/Documents/synergyAI/outputs/workflow/, or a custom folder) only when storage
+    // is enabled. Mirrors the ADK generator.
+    const ofolder = workflow.outputFolder;
+    push('WORKFLOW_ID = ' + String(phpIntval(workflowId)));
+    push('WORKFLOW_NAME = ' + pyStr(wfName));
+    push('OUTPUT_STORAGE_ENABLED = ' + (workflow.outputStorageEnabled ? 'True' : 'False'));
+    push('OUTPUT_FOLDER = ' + (ofolder !== null && ofolder !== undefined && ofolder !== '' ? pyStr(String(ofolder)) : 'None'));
     push('');
     if (!isEmpty(startDocuments)) {
       push('START_DOCUMENTS = ' + jsonToPython(phpAssocReencode(startDocuments)));
@@ -1008,7 +929,11 @@ export class LangGraphGenerator {
       push('        "system_prompt": """');
       for (const seg of wrappedSegs) push(seg);
       push('""",');
+      const skillsJson = jsonEncode(ad.skills ?? []);
       push('        "tool_names": ' + toolsList + ',');
+      // Ordered skill bindings ([{"dir": "..."}] / [{"inline": "..."}]) -- the node runs each as
+      // a mandatory post-agent step; the last produces the node output.
+      push('        "skills": ' + skillsJson + ',');
       push('    },');
     }
     push('}');
@@ -1029,9 +954,9 @@ export class LangGraphGenerator {
     push('');
     push(parentsChildrenBlock);
 
-    const typeEntries: Array<[string, string]> = [];
-    for (const nid of order) typeEntries.push([nid, nodeType(byId.get(nid))]);
-    push('NODE_TYPES = ' + pyDictFlat(typeEntries));
+    const typeMap: Record<string, string> = {};
+    for (const nid of order) typeMap[nid] = nodeType(byId[nid]);
+    push('NODE_TYPES = ' + jsonToPython(typeMap, true));
     push('');
 
     // ---- main ----
@@ -1054,7 +979,7 @@ export class LangGraphGenerator {
       push('');
     }
 
-    push(runBodyBlock);
+    push(RUN_BODY_BLOCK);
 
     // join (implode("\n", lines)) in the byte domain
     const bufs: Buffer[] = [];
@@ -1064,7 +989,9 @@ export class LangGraphGenerator {
       bufs.push(typeof p === 'string' ? Buffer.from(p, 'utf8') : p);
     }
     const code = Buffer.concat(bufs);
-    const filename = `${safeName}.py`;
+    // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py (LangGraph was
+    // the original default and previously had no suffix).
+    const filename = `${safeName}_langgraph.py`;
     return { filename, code };
   }
 }
