@@ -138,6 +138,15 @@ router.post('/api/v1/mcp/servers/update', handle((ctx) => mcpServers.update(ctx)
 router.post('/api/v1/mcp/servers/toggle', handle((ctx) => mcpServers.toggle(ctx)));
 router.delete('/api/v1/mcp/servers', handle((ctx) => mcpServers.delete(ctx)));
 
+// User-controlled MCP settings (protected; user id ALWAYS from the JWT — see
+// MCPServerController.requireUserId). listMine keeps override-disabled servers in the list
+// with effective_on:false (unlike /api/v1/mcp/servers, which drops them); setMyOverride is
+// deny-only (allowed:false); clearMyOverride reverts to the package default.
+router.put('/api/v1/me/mcp-settings', handle((ctx) => mcpServers.setMasterSetting(ctx)));
+router.get('/api/v1/me/mcp-servers', handle((ctx) => mcpServers.listMine(ctx)));
+router.put('/api/v1/me/mcp-servers/:serverId(\\d+)/override', handle((ctx) => mcpServers.setMyOverride(ctx)));
+router.delete('/api/v1/me/mcp-servers/:serverId(\\d+)/override', handle((ctx) => mcpServers.clearMyOverride(ctx)));
+
 // Settings (protected) — user API keys, usage, phone, storage, auto-heal.
 router.get('/api/v1/settings/usage', handle((ctx) => settings.getUsage(ctx)));
 router.get('/api/v1/settings/keys', handle((ctx) => settings.getKeys(ctx)));

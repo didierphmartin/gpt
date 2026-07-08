@@ -1,3 +1,4 @@
+import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { ToolDefinition } from '../Contracts/FunctionExecutor';
 
@@ -62,6 +63,22 @@ export class MCPToolsLoader {
     this.tools.clear();
     try {
       const hasUser = userId !== undefined && userId !== null && String(userId) !== '';
+
+      // Master switch: if the user disabled all MCP, offer zero tools. Mirrors
+      // MCPToolsLoader.php's mcp_enabled=0 short-circuit (missing row/table => enabled).
+      if (hasUser && /^\d+$/.test(String(userId))) {
+        try {
+          const row = (
+            await sql<any>`SELECT mcp_enabled FROM user_mcp_settings WHERE user_id = ${Number(userId)}`.execute(db)
+          ).rows[0];
+          if (row !== undefined && Number(row.mcp_enabled) === 0) {
+            console.log(`[MCP] Master switch OFF for user ${userId} — 0 tools`);
+            return; // empty
+          }
+        } catch {
+          // table absent / transient => treat as enabled, continue
+        }
+      }
 
       let q = db
         .selectFrom('mcp_server_tools as t')

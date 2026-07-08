@@ -3,6 +3,15 @@ import { db } from '../db/pools';
 import { PackageResolver } from '../Services/PackageResolver';
 import { Ctx, ControllerResult } from '../Support/Http';
 
+// PHP (bool) cast semantics (false for null/0/""/"0"/false; true otherwise).
+function phpBoolVal(v: any): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') return v !== '' && v !== '0';
+  if (v === null || v === undefined) return false;
+  return true;
+}
+
 /**
  * Mirrors src/Controllers/MCPServerController.php — user-facing MCP server management.
  * Effectiveness cascade (mirrors isServerEffective): per-user override (user_mcp_overrides) wins;
@@ -187,5 +196,146 @@ export class MCPServerController {
     const res = await db.deleteFrom('mcp_servers').where('id', '=', Number(serverId)).where('user_id', '=', String(userId)).executeTakeFirst();
     if (Number(res.numDeletedRows) === 0) return { status_code: 404, success: false, error: 'Server not found' };
     return { success: true, message: 'Server deleted successfully' };
+  }
+
+  // ============================================
+  // /api/v1/me/mcp-* — user-controlled MCP settings (mirrors PHP additions:
+  // listMine, setMyOverride, clearMyOverride, setMasterSetting, isMasterEnabled).
+  // Security invariant: the user id is ALWAYS taken from the JWT (ctx.user_id),
+  // never from body/path — see requireUserId().
+  // ============================================
+
+  /** JWT-derived user id ONLY (never body/path) — required by every /me/mcp-* endpoint. */
+  private requireUserId(ctx: Ctx): number {
+    const uid = ctx.user_id;
+    return uid != null && Number(uid) > 0 ? Number(uid) : 0;
+  }
+
+  /** True if the caller may see this server: private-owned always; global gated by allowlist. */
+  private serverAllowedForUser(server: { user_id: any; name: string }, allowlist: string[] | null): boolean {
+    const isGlobal = server.user_id === null || server.user_id === undefined;
+    if (!isGlobal) return true; // user-private (already scoped to this user by the query)
+    if (allowlist === null) return true; // package unrestricted
+    return allowlist.includes(server.name);
+  }
+
+  /** True unless the user has an explicit mcp_enabled=0 row. Missing table/row => true. */
+  async isMasterEnabled(userId: number): Promise<boolean> {
+    try {
+      const row = (await sql<any>`SELECT mcp_enabled FROM user_mcp_settings WHERE user_id = ${userId}`.execute(db)).rows[0];
+      return row === undefined ? true : Boolean(Number(row.mcp_enabled));
+    } catch {
+      return true; // table absent / transient error => default enabled
+    }
+  }
+
+  /** PUT /api/v1/me/mcp-settings  body: { "mcp_enabled": bool } */
+  async setMasterSetting(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.requireUserId(ctx);
+    if (userId <= 0) return { success: false, error: 'Authentication required', status_code: 401 };
+    const body = ctx.body ?? {};
+    if (!Object.prototype.hasOwnProperty.call(body, 'mcp_enabled')) {
+      return { success: false, error: 'Field "mcp_enabled" is required (boolean).', status_code: 400 };
+    }
+    const enabled = phpBoolVal(body.mcp_enabled) ? 1 : 0;
+    await sql`
+      INSERT INTO user_mcp_settings (user_id, mcp_enabled) VALUES (${userId}, ${enabled})
+      ON DUPLICATE KEY UPDATE mcp_enabled = VALUES(mcp_enabled), updated_at = CURRENT_TIMESTAMP
+    `.execute(db);
+    return { success: true, mcp_enabled: Boolean(enabled), status_code: 200 };
+  }
+
+  /** GET /api/v1/me/mcp-servers — the caller's filtered, effective MCP list + master flag. */
+  async listMine(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.requireUserId(ctx);
+    if (userId <= 0) return { success: false, error: 'Authentication required', status_code: 401 };
+    const uid = String(userId);
+
+    const allowlist = await this.allowList(uid); // null = all
+
+    // Globals + this user's private servers, with tool counts.
+    const rows = (
+      await sql<any>`
+        SELECT s.id, s.name, s.url, s.user_id, s.enabled, COUNT(t.id) AS tool_count
+        FROM mcp_servers s
+        LEFT JOIN mcp_server_tools t ON t.server_id = s.id
+        WHERE s.user_id IS NULL OR s.user_id = ${uid}
+        GROUP BY s.id
+        ORDER BY (s.user_id IS NULL) DESC, s.name ASC
+      `.execute(db)
+    ).rows as any[];
+
+    // Overrides for this user.
+    const overrides = await this.loadOverrides(uid);
+
+    const servers: any[] = [];
+    for (const row of rows) {
+      if (!this.serverAllowedForUser(row, allowlist)) continue; // package-denied globals never shown
+      const isGlobal = row.user_id === null || row.user_id === undefined;
+      const id = Number(row.id);
+      // Effective on: private => server.enabled; global => override if set, else on (package grants it).
+      const effective = isGlobal ? (overrides.has(id) ? overrides.get(id)! : true) : Boolean(Number(row.enabled));
+      servers.push({
+        id,
+        name: row.name,
+        url: row.url,
+        is_global: isGlobal,
+        tool_count: Number(row.tool_count),
+        effective_on: effective,
+      });
+    }
+
+    return {
+      success: true,
+      mcp_enabled: await this.isMasterEnabled(userId),
+      servers,
+      status_code: 200,
+    };
+  }
+
+  /** Look up a single visible server for the caller, or null. Enforces the filtered set. */
+  private async findVisibleServer(userId: number, serverId: number): Promise<{ id: number; name: string; user_id: any } | null> {
+    const row = (
+      await sql<any>`SELECT id, name, user_id FROM mcp_servers WHERE id = ${serverId} AND (user_id IS NULL OR user_id = ${String(userId)})`.execute(db)
+    ).rows[0] as { id: number; name: string; user_id: any } | undefined;
+    if (!row) return null;
+    const allowlist = await this.allowList(String(userId));
+    return this.serverAllowedForUser(row, allowlist) ? row : null;
+  }
+
+  /** PUT /api/v1/me/mcp-servers/{id}/override  body: { "allowed": false }  (deny-only). */
+  async setMyOverride(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.requireUserId(ctx);
+    if (userId <= 0) return { success: false, error: 'Authentication required', status_code: 401 };
+    const serverId = Number(ctx.params?.serverId ?? 0);
+    const body = ctx.body ?? {};
+    if (!Object.prototype.hasOwnProperty.call(body, 'allowed')) {
+      return { success: false, error: 'Field "allowed" is required (boolean).', status_code: 400 };
+    }
+    if (phpBoolVal(body.allowed) !== false) {
+      // Deny-only: re-enabling is done by clearing the override, not force-allow.
+      return {
+        success: false,
+        error: 'Only disabling is allowed here; DELETE the override to re-enable.',
+        status_code: 400,
+      };
+    }
+    if ((await this.findVisibleServer(userId, serverId)) === null) {
+      return { success: false, error: 'MCP server not available to you', status_code: 404 };
+    }
+    await sql`
+      INSERT INTO user_mcp_overrides (user_id, server_id, allowed) VALUES (${userId}, ${serverId}, 0)
+      ON DUPLICATE KEY UPDATE allowed = 0, updated_at = CURRENT_TIMESTAMP
+    `.execute(db);
+    return { success: true, server_id: serverId, allowed: false, status_code: 200 };
+  }
+
+  /** DELETE /api/v1/me/mcp-servers/{id}/override — revert to package default (re-enable). */
+  async clearMyOverride(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.requireUserId(ctx);
+    if (userId <= 0) return { success: false, error: 'Authentication required', status_code: 401 };
+    const serverId = Number(ctx.params?.serverId ?? 0);
+    const res = await sql`DELETE FROM user_mcp_overrides WHERE user_id = ${userId} AND server_id = ${serverId}`.execute(db);
+    return { success: true, server_id: serverId, cleared: Number(res.numAffectedRows ?? 0) > 0, status_code: 200 };
   }
 }
