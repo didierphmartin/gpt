@@ -10,6 +10,7 @@ import { PromptTemplateProcessor } from './PromptTemplateProcessor';
 import { WorkflowSchemaRepository } from './WorkflowSchemaRepository';
 import { SkillToolBridge } from './SkillToolBridge';
 import { WorkflowRunLog } from './WorkflowRunLog';
+import { WorkflowOutputStorage } from './WorkflowOutputStorage';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -25,7 +26,11 @@ import { WorkflowRunLog } from './WorkflowRunLog';
  * DEFERRED / STUBBED (see inline comments + report):
  *  - SkillToolBridge / folder-backed skill agents / client-tool round-trip: deferred. node_trace
  *    still emits with PHP's default skill_* values (all null for non-skill agents).
- *  - WorkflowOutputStorage (disk writes): stubbed — workflow_complete.output/node_outputs still computed.
+ *  - WorkflowOutputStorage: IMPLEMENTED (see WorkflowOutputStorage.ts) — saveOutput() is called after
+ *    every run exactly like PHP (best-effort, errors swallowed). The universalFS provider path is a
+ *    documented no-op stub (PHP's universalFS is an in-process PHP library, not network-reachable
+ *    from Node — see that file's class doc); the LOCAL-FILESYSTEM fallback, which is what every known
+ *    deployment actually exercises today, is fully ported.
  *  - ExecutionTraceStore DB persistence: stubbed — the node_trace SSE WIRE event still emits.
  *  - archiveRunToConversationContexts: stubbed.
  *  - WorkflowRunLog JSONL persistence: IMPLEMENTED (see WorkflowRunLog.ts) — every node/workflow event
@@ -87,6 +92,18 @@ function round2(ms: number): number {
   return Math.round(ms * 100) / 100;
 }
 
+/** Mirrors PHP date('c') (ISO 8601 with local UTC offset) — used for the saveOutput() payload. */
+function phpDateC(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offMin);
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}` +
+    `${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -129,10 +146,12 @@ export class GraphWorkflowRunner {
   private workflowContext: Record<string, any> = {};
   private config: Record<string, any>;
   private runLog: WorkflowRunLog;
+  private outputStorage: WorkflowOutputStorage;
 
   constructor(config: Record<string, any> = {}) {
     this.config = config;
     this.runLog = new WorkflowRunLog(WorkflowRunLog.defaultDir(config));
+    this.outputStorage = new WorkflowOutputStorage(config);
   }
 
   setStreamContext(context: StreamContext | null): this {
@@ -455,9 +474,30 @@ export class GraphWorkflowRunner {
         total_tokens: this.totalInputTokens + this.totalOutputTokens,
       });
 
-      // STUBBED: WorkflowOutputStorage.saveOutput (no disk write) and
-      // archiveRunToConversationContexts (no conversation archive). Both are best-effort in PHP.
-      const storageSaveResult = null;
+      // Save output to storage if enabled. WorkflowOutputStorage.saveOutput() itself re-checks
+      // workflow.output_storage_enabled (via a fresh DB read), so — mirroring PHP exactly — this is
+      // called unconditionally here and is best-effort (errors are swallowed, never fail the run).
+      // archiveRunToConversationContexts (no conversation archive) remains STUBBED.
+      let storageSaveResult: Record<string, any> | null = null;
+      try {
+        storageSaveResult = await this.outputStorage.saveOutput(workflow.id as number, userId, {
+          execution_id: this.executionId,
+          workflow_id: workflow.id,
+          workflow_name: workflow.name,
+          timestamp: phpDateC(new Date()),
+          response_time_ms: round2(responseTime),
+          nodes_executed: executedNodes.length,
+          output: finalOutput,
+          node_outputs: this.nodeOutputs,
+          input_variables: inputVariables,
+        });
+
+        if (storageSaveResult?.success) {
+          console.error('[GraphWorkflowRunner] Output saved to storage: ' + (storageSaveResult.path ?? 'unknown'));
+        }
+      } catch (e: any) {
+        console.error('[GraphWorkflowRunner] Failed to save output to storage: ' + (e?.message ?? String(e)));
+      }
 
       return {
         success: true,

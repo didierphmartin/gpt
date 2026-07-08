@@ -19,15 +19,17 @@ import { WorkflowRunner } from '../AgentTeam/WorkflowRunner';
 import { StreamContext } from '../AgentTeam/StreamContext';
 import { SkillToolBridge } from '../AgentTeam/SkillToolBridge';
 import { WorkflowRunLog } from '../AgentTeam/WorkflowRunLog';
+import { WorkflowOutputStorage } from '../AgentTeam/WorkflowOutputStorage';
 
 /**
  * Mirrors src/AgentTeam/Controllers/WorkflowController.php — the management CRUD slice plus the
  *   start/agent/output execution endpoints:
- *   index, create, show, update, destroy, toggle, duplicate, executions, generatePython, run, runStream.
- *
- * DEFERRED (NOT ported / NOT routed): runByName,
- *   listOutputs, getOutput, uploadNodeDocument, saveDocumentMetadata, listNodeDocuments,
+ *   index, create, show, update, destroy, toggle, duplicate, executions, generatePython, run, runStream,
+ *   listOutputs, getOutput (WorkflowOutputStorage — see that file's class doc for the
+ *   universalFS-vs-local-fallback porting decision), saveDocumentMetadata, listNodeDocuments,
  *   deleteNodeDocument.
+ *
+ * DEFERRED (NOT ported / NOT routed): runByName, uploadNodeDocument (multipart file upload handling).
  *
  * `executions` only needs a plain SELECT from agent_workflow_executions (mirrored in
  * WorkflowRepository.getExecutionHistory) — the WorkflowRunner is NOT pulled in.
@@ -426,6 +428,61 @@ export class WorkflowController {
         count: executions.length,
         status_code: 200,
       };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 500 };
+    }
+  }
+
+  /** GET /api/v1/workflows/{id}/outputs — list all stored outputs for a workflow. */
+  async listOutputs(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const workflowId = this.getWorkflowId(ctx);
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+
+    if (!workflowId) {
+      return { success: false, error: 'Workflow ID is required', status_code: 400 };
+    }
+
+    try {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+        return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+      }
+
+      const outputStorage = new WorkflowOutputStorage();
+      const result = await outputStorage.listOutputs(workflowId, userId);
+
+      return { ...result, status_code: 200 };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 500 };
+    }
+  }
+
+  /** GET /api/v1/workflows/{id}/outputs/{filename} — get a specific workflow output file. */
+  async getOutput(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const workflowId = this.getWorkflowId(ctx);
+    const filename = ctx.params.filename ?? '';
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+
+    if (!workflowId || phpEmpty(filename)) {
+      return { success: false, error: 'Workflow ID and filename are required', status_code: 400 };
+    }
+
+    try {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+        return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+      }
+
+      const outputStorage = new WorkflowOutputStorage();
+      const result = await outputStorage.getOutput(workflowId, userId, filename);
+
+      return { ...result, status_code: result.success ? 200 : 404 };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }

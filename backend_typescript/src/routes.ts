@@ -340,6 +340,11 @@ router.get('/api/v1/workflows/:id(\\d+)/executions', handle((ctx) => workflows.e
 // hex-constrained so it can't collide with the numeric :id(\d+) routes above.
 router.get('/api/v1/workflows/runs/:runId([a-f0-9]{32})/events', handle((ctx) => workflows.runEvents(ctx)));
 
+// Stored workflow outputs (WorkflowOutputStorage). List is registered before the :filename param
+// route so it isn't shadowed.
+router.get('/api/v1/workflows/:id(\\d+)/outputs', handle((ctx) => workflows.listOutputs(ctx)));
+router.get('/api/v1/workflows/:id(\\d+)/outputs/:filename', handle((ctx) => workflows.getOutput(ctx)));
+
 // Workflow node documents (metadata stored in the node config). The /metadata literal is registered
 // before the :docId param route so it isn't shadowed.
 router.post('/api/v1/workflows/:id(\\d+)/nodes/:nodeId(\\d+)/documents/metadata', handle((ctx) => workflows.saveDocumentMetadata(ctx)));
