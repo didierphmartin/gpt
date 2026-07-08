@@ -9,6 +9,7 @@ import { StreamContext } from './StreamContext';
 import { PromptTemplateProcessor } from './PromptTemplateProcessor';
 import { WorkflowSchemaRepository } from './WorkflowSchemaRepository';
 import { SkillToolBridge } from './SkillToolBridge';
+import { SkillToolChoice } from './SkillToolChoice';
 import { WorkflowRunLog } from './WorkflowRunLog';
 import { WorkflowOutputStorage } from './WorkflowOutputStorage';
 
@@ -45,8 +46,14 @@ import { WorkflowOutputStorage } from './WorkflowOutputStorage';
  *    constrained; the post-hoc JSON parse of the output is still reproduced.
  *  - True curl_multi parallelism: parallel agent nodes are dispatched concurrently via Promise.all then
  *    their completion events are emitted in node-list order (deterministic), reproducing PHP's per-node
- *    emission pattern (node_start upfront, then node_log/node_complete/node_trace). Per-round tool_call
- *    node_logs of the parallel path are not reproduced (AgentRunner handles tools internally).
+ *    emission pattern (node_start upfront, then node_log/node_complete/node_trace).
+ *  - Parallel client-side skill (run_skill_script) round-trip: IMPLEMENTED. executeAgentsInParallel now
+ *    runs a bounded (10-round, ~120s) tool loop that forces run_skill_script on each skill-bound agent's
+ *    FIRST round (SkillToolChoice.forProvider) and uses the emit-ALL-then-await-ALL pattern
+ *    (SkillToolBridge) so every parallel agent's browser skill is dispatched before any awaitResult —
+ *    the browser worker pool runs them concurrently. Mirrors PHP executeAgentsInParallel /
+ *    makeParallelLLMCalls / emitClientToolCallInParallel / awaitClientToolResultInParallel. Non-skill
+ *    parallel agents settle in round 0 exactly as before.
  */
 
 /** Pure formatters mirroring NodeLogFormat.php (the node_log `message`). */
@@ -56,6 +63,9 @@ const NodeLogFormat = {
   },
   modelRespondedText(): string {
     return 'model responded with text';
+  },
+  modelRequestedTool(tool: string): string {
+    return `model requested ${tool}`;
   },
   completed(tokens: number, costUsd: number | null): string {
     return costUsd !== null
@@ -116,6 +126,15 @@ interface ParallelState {
   output?: any;
   success?: boolean;
   usage?: any;
+  // Client-skill tool-round bookkeeping (parallel path only).
+  history?: any[];
+  currentInput?: string;
+  completed?: boolean;
+  toolsFilter?: string[] | null;
+  skillMetadata?: any;
+  extraTools?: any[];
+  forceSkill?: boolean;
+  skillRan?: boolean;
 }
 
 export class GraphWorkflowRunner {
@@ -1109,8 +1128,7 @@ export class GraphWorkflowRunner {
       states.push({ node, agent, input: task, agentId });
     }
 
-    // Dispatch all agent calls concurrently (curl_multi analog), then process completions in
-    // node-list order so the per-node node_complete/node_trace ordering is deterministic.
+    // Per-agent tools filter (config.tools overrides the agent's own tools list).
     const toolsFilterFor = (state: ParallelState): string[] | null => {
       const config = state.node.config ?? {};
       if (!phpEmpty(config.tools) && Array.isArray(config.tools)) return config.tools;
@@ -1118,44 +1136,247 @@ export class GraphWorkflowRunner {
       return Array.isArray(at) && at.length > 0 ? at : null;
     };
 
-    // Dispatch all branches concurrently. Attach the rejection handler IMMEDIATELY (via .then's
-    // onRejected) rather than only at the later sequential `await` — otherwise a branch that rejects
-    // before the loop reaches its index is an unhandled rejection at rejection time, which crashes the
-    // Node process (unlike PHP's per-request isolation). Each branch thus settles to a tagged result.
-    const promises = states.map((state) =>
-      this.agentRunner
-        .run(state.agent, state.input, [], userId, {
-          workflow_execution_id: this.executionId,
-          node_id: state.node.id,
-          tools_filter: toolsFilterFor(state),
+    // Initialize per-agent round-loop bookkeeping (mirrors PHP $agentStates init: messages/tools/
+    // force_skill). A node bound to a folder-backed skill gets run_skill_script declared + forced on
+    // its first round (see makeParallelLLMCalls ~2074). Non-skill agents leave forceSkill=false and
+    // therefore finish in round 0 exactly as before.
+    for (const state of states) {
+      const config = state.node.config ?? {};
+      state.history = [];
+      state.currentInput = state.input;
+      state.completed = false;
+      state.skillRan = false;
+      state.toolsFilter = toolsFilterFor(state);
+
+      const skillScripts = this.getBoundSkillScripts(config);
+      const skillDirName = config.bound_skill?.dir_name ?? null;
+      if (skillScripts.length && typeof skillDirName === 'string' && skillDirName !== '') {
+        state.skillMetadata = { dir_name: skillDirName, scripts: skillScripts };
+        state.extraTools = [this.buildRunSkillScriptTool(state.skillMetadata)];
+        state.forceSkill = true;
+      } else {
+        state.skillMetadata = null;
+        state.extraTools = [];
+        state.forceSkill = false;
+      }
+    }
+
+    // Round loop with the client-skill tool round-trip. Semantic port of PHP
+    // executeAgentsInParallel: dispatch every still-active agent concurrently, then EMIT every
+    // agent's client_tool_call FIRST and AWAIT them all afterwards so the browser worker pool runs
+    // the parallel skills concurrently (~max(skill) not sum). Bounded to MAX_ROUNDS and an overall
+    // ~120s wall-clock cap; each per-skill bridge wait is capped at parallel_skill_timeout_ms (~60s),
+    // itself clamped by whatever remains of the overall deadline.
+    const MAX_ROUNDS = 10;
+    const OVERALL_CAP_MS = 120_000;
+    const perSkillTimeoutMs = Number(this.config?.parallel_skill_timeout_ms ?? 60000);
+    const overallDeadline = Date.now() + OVERALL_CAP_MS;
+
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const active = states.filter((s) => !s.completed && !this.parallelEmitted[phpIntval(s.node.id)]);
+      if (active.length === 0) break;
+      if (Date.now() >= overallDeadline) break; // overall cap hit — leftovers swept below.
+
+      // (1) Dispatch each active agent's next round concurrently (curl_multi analog). Attach the
+      // rejection handler IMMEDIATELY so a branch that rejects before we read it can't become an
+      // unhandled rejection (which would crash the single Node process, unlike PHP's per-request
+      // isolation). Each branch settles to a tagged result.
+      const settledList = await Promise.all(
+        active.map((state) => {
+          const runContext: Record<string, any> = {
+            workflow_execution_id: this.executionId,
+            node_id: state.node.id,
+            tools_filter: state.toolsFilter ?? null,
+            extra_tools: state.extraTools ?? [],
+            skill_metadata: state.skillMetadata ?? null,
+          };
+          // Force run_skill_script until it has run once (PHP forces via SkillToolChoice::forProvider;
+          // null for Gemini/unknown, which fall back to the prompt instruction).
+          if (state.forceSkill && !state.skillRan) {
+            const tc = SkillToolChoice.forProvider(state.agent.provider);
+            if (tc) runContext.tool_choice = tc;
+          }
+          return this.agentRunner
+            .run(state.agent, state.currentInput ?? '', state.history ?? [], userId, runContext)
+            .then(
+              (value: Record<string, any>) => ({ ok: true as const, value }),
+              (error: any) => ({ ok: false as const, error })
+            );
         })
-        .then(
-          (value: Record<string, any>) => ({ ok: true as const, value }),
-          (error: any) => ({ ok: false as const, error })
-        )
-    );
+      );
 
-    for (let i = 0; i < states.length; i++) {
-      const state = states[i];
-      const nodeId = phpIntval(state.node.id);
-      const settled = await promises[i];
-      const result: Record<string, any> = settled.ok
-        ? settled.value
-        : { success: false, error: settled.error?.message ?? 'Unknown error' };
+      // (2) Process responses. EMIT every pending skill's client_tool_call here (do NOT await yet),
+      // and collect them so the whole batch can be awaited concurrently afterwards.
+      const pendingAwaits: Array<{
+        state: ParallelState;
+        toolCallId: string;
+        callForFrontend: { id: string; name: string; input: any };
+      }> = [];
 
-      if (result.success === false) {
-        state.success = false;
-        state.output = 'Error: ' + (result.error ?? 'Unknown error');
-        state.usage = null;
-        this.nodeLog(state.node, 'error', 'error', result.error ?? 'Unknown error');
+      for (let j = 0; j < active.length; j++) {
+        const state = active[j];
+        const nodeId = phpIntval(state.node.id);
+        const settled = settledList[j];
+        const result: Record<string, any> = settled.ok
+          ? settled.value
+          : { success: false, error: settled.error?.message ?? 'Unknown error' };
+
+        if (result.success === false) {
+          state.completed = true;
+          state.success = false;
+          state.output = 'Error: ' + (result.error ?? 'Unknown error');
+          state.usage = null;
+          this.nodeLog(state.node, 'error', 'error', result.error ?? 'Unknown error');
+          await this.finalizeParallelNode(nodeId, state, results);
+          continue;
+        }
+
+        if (result.pending_client_tool_call) {
+          const pending = result.pending_tool_calls ?? [];
+          if (!pending.length || typeof pending[0] !== 'object') {
+            // pending flagged but no usable tool_calls payload — treat the assistant text as final.
+            state.completed = true;
+            state.success = true;
+            state.output = result.text ?? '';
+            state.usage = result.usage ?? null;
+            this.nodeLog(state.node, 'info', 'llm', NodeLogFormat.modelRespondedText());
+            await this.finalizeParallelNode(nodeId, state, results);
+            continue;
+          }
+
+          const call: any = pending[0];
+          const fnName = call.name ?? 'run_skill_script';
+          const assistantText = result.pending_assistant_text ?? '';
+          this.nodeLog(state.node, 'info', 'llm', NodeLogFormat.modelRequestedTool(fnName));
+
+          const toolCallId = SkillToolBridge.generateToolCallId();
+          const assistantToolCall: any = {
+            id: toolCallId,
+            type: 'function',
+            function: { name: fnName, arguments: JSON.stringify(call.input ?? {}) },
+          };
+          // Gemini 2.5+/3 require the original functionCall's thoughtSignature echoed back on the
+          // continuation turn (no-op for other providers).
+          if (call.thought_signature) assistantToolCall.thought_signature = call.thought_signature;
+
+          if (state.skillRan) {
+            // Run-once (PHP $state['skill_ran']): the model already executed this node's skill. Feed
+            // a nudge tool result instead of re-emitting run_skill_script, so it summarizes next round.
+            state.history!.push({ role: 'user', content: state.currentInput ?? '' });
+            state.history!.push({ role: 'assistant', content: assistantText, tool_calls: [assistantToolCall] });
+            state.history!.push({
+              role: 'tool',
+              tool_call_id: toolCallId,
+              name: fnName,
+              content: JSON.stringify({
+                note: 'You have already run this skill — its output is in the previous tool result. Do NOT call run_skill_script again. Write your final analysis now using that output.',
+              }),
+            });
+            state.currentInput = '';
+            continue;
+          }
+
+          // First skill run: EMIT the client_tool_call now; the tool result is filled in during the
+          // concurrent await pass below (emit-all then await-all).
+          const callForFrontend = { id: toolCallId, name: fnName, input: call.input ?? {} };
+          this.nodeLog(state.node, 'info', 'skill', NodeLogFormat.runningSkill(state.skillMetadata?.dir_name ?? 'skill'));
+          this.emitNodeEvent('client_tool_call', state.node, {
+            tool_call_id: toolCallId,
+            tool_calls: [callForFrontend],
+            assistant_text: assistantText,
+            dir_name: state.skillMetadata?.dir_name ?? null,
+          });
+          state.skillRan = true;
+          state.history!.push({ role: 'user', content: state.currentInput ?? '' });
+          state.history!.push({ role: 'assistant', content: assistantText, tool_calls: [assistantToolCall] });
+          pendingAwaits.push({ state, toolCallId, callForFrontend });
+          continue;
+        }
+
+        // No tool call — the agent produced its final answer.
+        state.completed = true;
+        state.success = true;
+        state.output = result.text ?? '';
+        state.usage = result.usage ?? null;
+        this.nodeLog(state.node, 'info', 'llm', NodeLogFormat.modelRespondedText());
         await this.finalizeParallelNode(nodeId, state, results);
-        continue;
       }
 
-      state.output = result.text ?? '';
-      state.success = true;
-      state.usage = result.usage ?? null;
-      this.nodeLog(state.node, 'info', 'llm', NodeLogFormat.modelRespondedText());
+      // (3) AWAIT-ALL: every skill in this round was already emitted, so the browser pool ran them
+      // concurrently; awaiting them together costs ~max(skill) not sum. Per-skill cap is clamped by
+      // the remaining overall deadline.
+      if (pendingAwaits.length) {
+        const remaining = Math.max(0, overallDeadline - Date.now());
+        const skillTimeout = remaining > 0 ? Math.min(perSkillTimeoutMs, remaining) : perSkillTimeoutMs;
+        const bridgeResults = await Promise.all(
+          pendingAwaits.map((p) => SkillToolBridge.awaitResult(p.toolCallId, skillTimeout))
+        );
+        for (let k = 0; k < pendingAwaits.length; k++) {
+          const p = pendingAwaits[k];
+          const state = p.state;
+          const bridgeResult = bridgeResults[k];
+          let toolContent: string;
+          if (bridgeResult === null) {
+            const secs = Math.round(skillTimeout / 1000);
+            this.nodeLog(state.node, 'error', 'skill', NodeLogFormat.skillTimedOut(secs));
+            // Unlike the sequential bridge (which throws), the parallel path feeds an error tool
+            // result back and continues, so one stuck skill can't fail its siblings. Mirrors PHP
+            // awaitClientToolResultInParallel.
+            toolContent = JSON.stringify({
+              error: `Skill did not return within ${secs}s — check the editor console for a worker/Pyodide error.`,
+            });
+          } else {
+            const stdoutBytes =
+              typeof bridgeResult?.output?.stdout === 'string'
+                ? Buffer.byteLength(bridgeResult.output.stdout, 'utf8')
+                : 0;
+            this.nodeLog(
+              state.node,
+              'info',
+              'skill',
+              NodeLogFormat.skillFinished(bridgeResult?.output?.exit_code ?? null, stdoutBytes)
+            );
+            // Phase 0: stash the skill stdout/script/argv for the execution trace.
+            this.skillResultByNode[phpIntval(state.node.id ?? 0)] = {
+              output: bridgeResult?.output && typeof bridgeResult.output === 'object' ? bridgeResult.output : {},
+              script: p.callForFrontend.input?.script ?? null,
+              argv: p.callForFrontend.input?.argv ?? [],
+            };
+            toolContent = JSON.stringify(bridgeResult);
+          }
+          state.history!.push({
+            role: 'tool',
+            tool_call_id: p.toolCallId,
+            name: p.callForFrontend.name,
+            content: toolContent,
+          });
+          state.currentInput = '';
+        }
+      }
+    }
+
+    // Final sweep: any node not finalized inside the loop (still pending at the round/overall cap)
+    // still reports an outcome. Surface the last assistant text (or an explicit message), mark failed.
+    for (const state of states) {
+      const nodeId = phpIntval(state.node.id);
+      if (this.parallelEmitted[nodeId]) continue;
+      if (!state.completed) {
+        let lastText = '';
+        const hist = state.history ?? [];
+        for (let m = hist.length - 1; m >= 0; m--) {
+          const msg = hist[m];
+          if (msg?.role === 'assistant' && typeof msg.content === 'string' && msg.content !== '') {
+            lastText = msg.content;
+            break;
+          }
+        }
+        state.output =
+          lastText !== ''
+            ? lastText
+            : 'Agent did not finish within the tool-round limit (likely stuck calling its skill).';
+        state.success = false;
+        this.nodeLog(state.node, 'error', 'error', 'did not finish within the tool-round limit');
+      }
       await this.finalizeParallelNode(nodeId, state, results);
     }
 
