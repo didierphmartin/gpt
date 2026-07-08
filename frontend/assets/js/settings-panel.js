@@ -446,8 +446,9 @@ class SettingsPanel {
                             </div>
                             <div class="text-xs text-gray-600 mt-1 leading-relaxed">${escape(truncated || '(no description)')}</div>
                         </div>
-                        <label class="inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5" title="${enabled ? 'Enabled — visible to the chat auto-router' : 'Disabled — hidden from the auto-router'}">
-                            <input type="checkbox" data-skill-toggle="${escape(s.dir_name)}" class="sr-only peer" ${enabled ? 'checked' : ''}>
+                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5" title="${enabled ? 'Enabled — visible to the chat auto-router' : 'Disabled — hidden from the auto-router'}">
+                            <!-- Positioned over the visible toggle (not sr-only) so focusing it on click doesn't scroll the hidden input "into view" and jump the panel to a blank offset. -->
+                            <input type="checkbox" data-skill-toggle="${escape(s.dir_name)}" class="peer absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0" ${enabled ? 'checked' : ''}>
                             <span class="relative w-10 h-5 bg-gray-300 peer-checked:bg-blue-600 rounded-full transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:after:translate-x-5"></span>
                         </label>
                     </div>
@@ -463,12 +464,19 @@ class SettingsPanel {
         // instant; no network/optimistic handling needed here, unlike the MCP toggles.)
         if (!list.dataset.skillsWired) {
             list.dataset.skillsWired = '1';
+            // Backstop for the sr-only focus-scroll jump: capture the settings-panel scroll on
+            // pointerdown (before the browser's focus-scroll fires) and restore it right after the
+            // toggle, so even if a browser still scrolls, the panel never ends up on a blank offset.
+            const panelEl = () => document.getElementById('settings-panel');
+            let scrollBefore = 0;
+            list.addEventListener('pointerdown', (e) => {
+                if (e.target.closest('label')) { const p = panelEl(); if (p) scrollBefore = p.scrollTop; }
+            }, true);
             list.addEventListener('change', (e) => {
                 const cb = e.target.closest('input[type="checkbox"][data-skill-toggle]');
                 if (!cb) return;
                 try {
-                    const dirName = cb.dataset.skillToggle;
-                    window.skillsManager?.setSkillEnabled(dirName, cb.checked);
+                    window.skillsManager?.setSkillEnabled(cb.dataset.skillToggle, cb.checked);
                     const label = cb.closest('label');
                     if (label) label.title = cb.checked
                         ? 'Enabled — visible to the chat auto-router'
@@ -477,6 +485,9 @@ class SettingsPanel {
                     console.error('[settings:skills] toggle failed:', err);
                     this.showNotification?.('Failed to update skill', 'error');
                 }
+                // Undo any focus-scroll jump so the panel stays exactly where it was.
+                const p = panelEl();
+                if (p) { p.scrollTop = scrollBefore; requestAnimationFrame(() => { p.scrollTop = scrollBefore; }); }
             });
         }
     }
