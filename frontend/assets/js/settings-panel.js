@@ -1061,21 +1061,23 @@ class SettingsPanel {
                     // Reuses the per-server toggler so global overrides and private enabled-toggles are
                     // handled correctly, with the same optimistic UI + revert-on-failure per server.
                     const desired = master.checked;
-                    // Keep the master flag ON so per-server overrides are the sole control (never block).
-                    if (this.myMcpEnabled !== true) {
-                        this.myMcpEnabled = true;
-                        await window.mcpClient?.setMcpMasterEnabled(true);
-                    }
-                    // Flip all mismatched servers in PARALLEL (not sequentially) so the switches
-                    // react at once instead of cascading over N remote round-trips. Each
-                    // toggleMCPServer flips its own UI synchronously, then persists concurrently.
+                    // Flip EVERY switch at once, THEN persist them all together in the background —
+                    // same feel as the Skills "Enable all". toggleMCPServer flips its switch UI
+                    // synchronously, so this .map flips them all in a single tick (before any request
+                    // resolves); the per-server saves and the master-flag write all run in one
+                    // parallel batch rather than any of them blocking the flips.
                     const servers = (this.myMcpServers || []).slice();
                     const toFlip = servers.filter(s => {
                         const eff = this.myMcpEffective?.get(Number(s.id));
                         const currentlyOn = eff ? eff.effective_on : !!s.effective_on;
                         return currentlyOn !== desired;
                     });
-                    await Promise.all(toFlip.map(s => this.toggleMCPServer(Number(s.id))));
+                    const persists = toFlip.map(s => this.toggleMCPServer(Number(s.id)));
+                    if (this.myMcpEnabled !== true) {
+                        this.myMcpEnabled = true; // keep the master flag ON so overrides are the sole control
+                        persists.push(window.mcpClient?.setMcpMasterEnabled(true));
+                    }
+                    await Promise.all(persists);
                     this._refreshMcpMaster(); // reflect the final all/none/mixed state
                 });
             }
