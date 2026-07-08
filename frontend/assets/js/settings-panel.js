@@ -1053,25 +1053,45 @@ class SettingsPanel {
 
         const master = document.getElementById('mcp-master-toggle');
         if (master) {
-            master.checked = this.myMcpEnabled;
+            this._refreshMcpMaster(); // tri-state from per-server on/off (all / none / mixed)
             if (!master.dataset.wired) {
                 master.dataset.wired = '1';
                 master.addEventListener('change', async () => {
-                    // Optimistic: reflect immediately (the checkbox is already flipped by the browser;
-                    // dim/undim the list now), then persist in the background and revert only on failure.
+                    // Select-all: flip EVERY server switch to match (like the Skills "Enable all").
+                    // Reuses the per-server toggler so global overrides and private enabled-toggles are
+                    // handled correctly, with the same optimistic UI + revert-on-failure per server.
                     const desired = master.checked;
-                    this.myMcpEnabled = desired;
-                    this.renderMCPServers(); // re-dim list right away
-                    const r = await window.mcpClient?.setMcpMasterEnabled(desired);
-                    if (!r?.success) {
-                        this.myMcpEnabled = !desired;
-                        master.checked = !desired;
-                        this.renderMCPServers();
-                        this.showNotification('Failed to update MCP setting', 'error');
+                    // Keep the master flag ON so per-server overrides are the sole control (never block).
+                    if (this.myMcpEnabled !== true) {
+                        this.myMcpEnabled = true;
+                        await window.mcpClient?.setMcpMasterEnabled(true);
                     }
+                    const servers = (this.myMcpServers || []).slice();
+                    for (const s of servers) {
+                        const id = Number(s.id);
+                        const eff = this.myMcpEffective?.get(id);
+                        const currentlyOn = eff ? eff.effective_on : !!s.effective_on;
+                        if (currentlyOn !== desired) {
+                            await this.toggleMCPServer(id); // flips this one to `desired`
+                        }
+                    }
+                    this._refreshMcpMaster(); // reflect the final all/none/mixed state
                 });
             }
         }
+    }
+
+    /** Set the MCP master checkbox to tri-state (all on / all off / mixed) from per-server state. */
+    _refreshMcpMaster() {
+        const master = document.getElementById('mcp-master-toggle');
+        if (!master) return;
+        const servers = this.myMcpServers || [];
+        const onCount = servers.filter(s => {
+            const eff = this.myMcpEffective?.get(Number(s.id));
+            return eff ? eff.effective_on : !!s.effective_on;
+        }).length;
+        master.checked = servers.length > 0 && onCount === servers.length;
+        master.indeterminate = onCount > 0 && onCount < servers.length;
     }
 
     /**
@@ -1260,6 +1280,7 @@ class SettingsPanel {
             }
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
         }
+        this._refreshMcpMaster(); // keep the select-all master checkbox tri-state in sync
     }
 
     /**
