@@ -15,6 +15,7 @@ import {
 import { AgentRepository } from '../AgentTeam/AgentRepository';
 import { LangGraphGenerator } from '../AgentTeam/LangGraphGenerator';
 import { ADKGenerator } from '../AgentTeam/ADKGenerator';
+import { MAFGenerator } from '../AgentTeam/MAFGenerator';
 import { GraphWorkflowRunner } from '../AgentTeam/GraphWorkflowRunner';
 import { WorkflowRunner } from '../AgentTeam/WorkflowRunner';
 import { StreamContext } from '../AgentTeam/StreamContext';
@@ -222,6 +223,57 @@ export class WorkflowController {
 
       const agentRepo = new AgentRepository();
       const gen = new ADKGenerator(this.workflowRepository, this.graphRepository, agentRepo);
+      const result = await gen.generate(workflowId, String(userId));
+
+      if (download) {
+        return {
+          success: true,
+          raw_body: result.code, // string — streamed raw by the route
+          headers: {
+            'Content-Type': 'text/x-python; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="' + result.filename + '"',
+          },
+          status_code: 200,
+        };
+      }
+
+      return {
+        success: true,
+        data: { filename: result.filename, code: result.code },
+        status_code: 200,
+      };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 500 };
+    }
+  }
+
+  /**
+   * GET /api/v1/workflows/{id}/generate-maf
+   * Generate a standalone Microsoft Agent Framework Python script from the workflow.
+   *
+   * The route decides raw-vs-JSON: on download success this returns a `raw_body` +
+   * `headers`; otherwise the JSON `{success, data:{filename, code}}` shape. Auth/validation/error
+   * order and messages mirror the PHP method (WorkflowController::generateMaf) exactly.
+   */
+  async generateMaf(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const workflowId = this.getWorkflowId(ctx);
+    const download = ((ctx.query as any)?.download ?? '0') === '1';
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    if (!workflowId) {
+      return { success: false, error: 'Workflow ID is required', status_code: 400 };
+    }
+
+    try {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+        return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+      }
+
+      const agentRepo = new AgentRepository();
+      const gen = new MAFGenerator(this.workflowRepository, this.graphRepository, agentRepo);
       const result = await gen.generate(workflowId, String(userId));
 
       if (download) {
