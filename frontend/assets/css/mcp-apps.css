@@ -284,6 +284,10 @@
 .mcp-server-btn {
     width: 32px;
     height: 32px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: none;
     border-radius: 6px;
     background: transparent;
