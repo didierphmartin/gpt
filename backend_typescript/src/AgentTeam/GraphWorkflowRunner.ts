@@ -1,4 +1,9 @@
 import { randomBytes } from 'crypto';
+import { execFileSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import zlib from 'zlib';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Workflow } from './WorkflowRepository';
@@ -13,6 +18,7 @@ import { SkillToolChoice } from './SkillToolChoice';
 import { WorkflowRunLog } from './WorkflowRunLog';
 import { WorkflowOutputStorage } from './WorkflowOutputStorage';
 import { ExecutionTraceStore } from './ExecutionTraceStore';
+import { SessionSearchService } from './SessionSearchService';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -37,15 +43,29 @@ import { ExecutionTraceStore } from './ExecutionTraceStore';
  *  - ExecutionTraceStore DB persistence: IMPLEMENTED — recordExecutionTrace() awaits
  *    ExecutionTraceStore.insert() (fail-soft: insert() never throws, and the call is additionally
  *    wrapped so a future throw can't break the run) before emitting the node_trace SSE wire event.
- *  - archiveRunToConversationContexts: stubbed.
+ *  - archiveRunToConversationContexts: IMPLEMENTED (see SessionSearchService.ts) — inserts the
+ *    finished run into `conversation_contexts` (same DB `db` already points at — see that
+ *    file's recon note) via SessionSearchService.archiveRun(), reproducing buildArchiveOutput/
+ *    pickMarkdownAgentOutput/isHtmlShaped exactly. One documented gap: PHP's HTML→markdown
+ *    conversion (league/html-to-markdown) has no ported npm equivalent wired in, so the
+ *    HTML-shaped branch takes PHP's own "class not installed" fallback (log + walk back to
+ *    the most recent non-HTML agent output) — never silently drops the archive. Fail-soft:
+ *    wrapped in try/catch at the call site exactly like PHP, never fails the run.
  *  - WorkflowRunLog JSONL persistence: IMPLEMENTED (see WorkflowRunLog.ts) — every node/workflow event
  *    is appended to storage/workflow-runs/{runId}.jsonl BEFORE the SSE emit, exactly like PHP's
  *    GraphWorkflowRunner::emitNodeEvent/emitWorkflowEvent (lines ~194/236). Read back via
  *    WorkflowController.runEvents / GET /api/v1/workflows/runs/{runId}/events.
  *  - Node types other than start/agent/output: handled exactly as PHP (default branch → {type,output:null});
  *    agent-template throws the same message.
- *  - Attached documents (buildDocumentsContext): no-document path is exact ('' returned). The
- *    document-reading path is stubbed (returns '' + logs), since inline_documents are ignored for 2a.
+ *  - Attached documents (buildDocumentsContext): IMPLEMENTED. Reads locally-stored docs from
+ *    the scratch-file reference / inline_documents map (both already threaded through run()'s
+ *    parameters), and remote/cloud docs from the LOCAL-FILESYSTEM fallback path (matching
+ *    WorkflowOutputStorage's precedent). PHP's universalFS adapter (getDocumentStorageAdapter)
+ *    is a same-process PHP library, NOT reachable from Node (see that method's TODO) — when a
+ *    remote-stored doc's bytes only exist behind universalFS, this logs a warning and returns
+ *    null/'' rather than silently dropping it. PDF text extraction shells out to `pdftotext`
+ *    (falls back to the same regex-based basicPdfTextExtract PHP uses when the binary is
+ *    unavailable).
  *  - Output-schema CONSTRAINED decoding: AgentRunner has no schema carrier, so the LLM is not actually
  *    constrained; the post-hoc JSON parse of the output is still reproduced.
  *  - True curl_multi parallelism: parallel agent nodes are dispatched concurrently via Promise.all then
@@ -511,7 +531,6 @@ export class GraphWorkflowRunner {
       // Save output to storage if enabled. WorkflowOutputStorage.saveOutput() itself re-checks
       // workflow.output_storage_enabled (via a fresh DB read), so — mirroring PHP exactly — this is
       // called unconditionally here and is best-effort (errors are swallowed, never fail the run).
-      // archiveRunToConversationContexts (no conversation archive) remains STUBBED.
       let storageSaveResult: Record<string, any> | null = null;
       try {
         storageSaveResult = await this.outputStorage.saveOutput(workflow.id as number, userId, {
@@ -531,6 +550,21 @@ export class GraphWorkflowRunner {
         }
       } catch (e: any) {
         console.error('[GraphWorkflowRunner] Failed to save output to storage: ' + (e?.message ?? String(e)));
+      }
+
+      // Archive the run into conversation_contexts so it shows up in the chat sidebar and is
+      // searchable via session_search. This is best-effort — a failure here never fails the workflow.
+      try {
+        await this.archiveRunToConversationContexts(
+          userId,
+          workflow.id as number,
+          String(workflow.name ?? ''),
+          userPrompt,
+          finalOutput ?? '',
+          executedNodes
+        );
+      } catch (e: any) {
+        console.error('[GraphWorkflowRunner] Archive to conversation_contexts failed: ' + (e?.message ?? String(e)));
       }
 
       return {
@@ -1033,16 +1067,327 @@ export class GraphWorkflowRunner {
   }
 
   /**
-   * STUBBED document reading. The no-document path is exact ('' returned). When documents are
-   * present, reading them (cloud/local storage) is deferred for 2a — returns '' and logs.
+   * Build document context string from attached documents.
+   * Port of GraphWorkflowRunner.php::buildDocumentsContext (line ~2943).
    */
   private buildDocumentsContext(node: any): string {
     const documents = node.config?.documents ?? [];
     if (phpEmpty(documents)) return '';
+
+    const textParts: string[] = ['## Attached Documents\n'];
+    let imageCount = 0;
+
+    for (const doc of documents) {
+      if (this.isImageFile(doc?.mimeType ?? '')) {
+        imageCount++;
+        continue; // Images are handled separately for multimodal (PHP's getDocumentImages is
+        // dead code — never called anywhere in GraphWorkflowRunner.php — so it is not ported).
+      }
+
+      try {
+        const content = this.readDocumentContent(doc);
+        if (!phpEmpty(content)) {
+          textParts.push(`### ${doc?.name}\n\`\`\`\n${content}\n\`\`\`\n`);
+        }
+      } catch (e: any) {
+        console.error(`[GraphWorkflowRunner] Error reading document ${doc?.name}: ${e?.message ?? String(e)}`);
+        textParts.push(`### ${doc?.name}\n[Error: Could not read document]\n`);
+      }
+    }
+
+    if (imageCount > 0) {
+      textParts.push(`\n_Note: ${imageCount} image(s) attached (processed separately if model supports vision)_\n`);
+    }
+
+    return textParts.length > 1 ? textParts.join('\n') : '';
+  }
+
+  /** Port of GraphWorkflowRunner.php::isImageFile. */
+  private isImageFile(mimeType: string): boolean {
+    return mimeType.startsWith('image/');
+  }
+
+  /**
+   * Read document content as text. Port of GraphWorkflowRunner.php::readDocumentContent
+   * (line ~3021).
+   */
+  private readDocumentContent(doc: any): string {
+    const storage = doc?.storage ?? 'remote';
+    if (storage === 'local') {
+      const docId = String(doc?.id ?? '');
+
+      // Bound-skill workflow: the browser pre-stashed the file body for Pyodide /scratch/<name>.
+      // Tell the agent where to find it via run_skill_script instead of inlining the body.
+      if (docId !== '' && this.scratchFilesByDocId[docId]) {
+        const sf = this.scratchFilesByDocId[docId];
+        const p = String(sf?.path ?? '');
+        const mime = String(sf?.mime_type ?? 'application/octet-stream');
+        const size = Number(sf?.size ?? 0);
+        console.error(`[GraphWorkflowRunner] Using scratch reference for ${doc?.name} → ${p} (${size} bytes)`);
+        return (
+          `[Pre-loaded into the script runtime at \`${p}\` (${mime}, ${size} bytes). ` +
+          `When you call run_skill_script, reference this path in argv (e.g. \`argv: ["-i", "${p}", "-o", "/outputs/<name>"]\`). ` +
+          `Do not paste or restate the file content — the script will read it directly.]`
+        );
+      }
+
+      // Non-skill workflow: ship the body inline so generic agents can see it. Without inline
+      // content, fall back to the legacy "stored locally" message.
+      console.error(
+        `[GraphWorkflowRunner] readDocumentContent local doc id=${docId} name=${doc?.name} inlineKeys=${JSON.stringify(
+          Object.keys(this.inlineDocuments)
+        )}`
+      );
+      if (docId !== '' && typeof this.inlineDocuments[docId] === 'string') {
+        console.error(
+          `[GraphWorkflowRunner] Using inline content for ${doc?.name} (${this.inlineDocuments[docId].length} chars)`
+        );
+        return this.inlineDocuments[docId];
+      }
+      console.error(`[GraphWorkflowRunner] Skipping local document: ${doc?.name} (stored on user's machine, no inline content shipped)`);
+      return `[Document '${doc?.name}' is stored locally on user's machine and cannot be accessed during server-side execution. Please use cloud storage for scheduled workflows.]`;
+    }
+
+    const mimeType = doc?.mimeType ?? 'application/octet-stream';
+
+    // PDF: extract text
+    if (mimeType === 'application/pdf') {
+      return this.extractPdfText(doc);
+    }
+
+    // Text files: read directly
+    const content = this.readFileRaw(doc);
+    if (content === null) return '';
+
+    // PHP validates UTF-8 and mb_convert_encoding('UTF-8','auto') as a fallback; Node's
+    // Buffer#toString('utf8') already replaces invalid byte sequences with U+FFFD rather than
+    // throwing, which is an adequate faithful approximation of that fallback.
+    return content.toString('utf8');
+  }
+
+  /**
+   * TODO (unreachable from Node): PHP's getDocumentStorageAdapter() connects to universalFS, a
+   * same-process PHP library at /Applications/XAMPP/xamppfiles/htdocs/universalfs — not an HTTP
+   * service, so there is nothing for this Node process to call. See WorkflowOutputStorage.ts's
+   * class doc for the identical situation and porting decision (local-fallback fully ported,
+   * universalFS documented as an always-null stub). readFileRaw() below goes straight to the
+   * local-storage fallback and logs when a remote-stored document isn't found there, so
+   * documents that only exist behind universalFS are never silently dropped.
+   */
+  private getDocumentStorageAdapter(): null {
+    return null;
+  }
+
+  /** Port of GraphWorkflowRunner.php::getDocumentLocalPath. */
+  private getDocumentLocalPath(relativePath: string): string {
+    const basePath = this.config.storage_path ?? path.resolve(__dirname, '../../storage');
+    return `${basePath}/${relativePath.replace(/^\/+/, '')}`;
+  }
+
+  /**
+   * Read raw file content from storage. Port of GraphWorkflowRunner.php::readFileRaw
+   * (line ~3081). universalFS is unreachable (see getDocumentStorageAdapter TODO), so this
+   * goes straight to the local-storage fallback PHP itself falls through to whenever the
+   * adapter throws or is unavailable.
+   */
+  private readFileRaw(doc: any): Buffer | null {
+    const storagePath = doc?.path ?? '';
+    const fullPath = doc?.fullPath ?? '';
+
+    if (phpEmpty(storagePath) && phpEmpty(fullPath)) return null;
+
+    // Try universalFS first (always null here — see getDocumentStorageAdapter TODO above).
+    const adapter = this.getDocumentStorageAdapter();
+    if (!adapter) {
+      // Fall through to local storage, exactly like PHP does whenever the adapter is
+      // unavailable or throws.
+    }
+
+    const localPath = this.getDocumentLocalPath(fullPath || storagePath);
+    if (fs.existsSync(localPath)) {
+      return fs.readFileSync(localPath);
+    }
+
     console.warn(
-      `[GraphWorkflowRunner] Node ${node.id} has attached documents — document reading is DEFERRED (2a), returning empty context.`
+      `[GraphWorkflowRunner] readFileRaw: document not found via local fallback (universalFS unreachable from Node): ${localPath}`
     );
+    return null;
+  }
+
+  /** Port of GraphWorkflowRunner.php::extractPdfText (line ~3116). */
+  private extractPdfText(doc: any): string {
+    const pdfContent = this.readFileRaw(doc);
+    if (!pdfContent) return '[PDF content could not be read]';
+
+    const tmpFile = path.join(os.tmpdir(), `pdf_${randomBytes(8).toString('hex')}`);
+    fs.writeFileSync(tmpFile, pdfContent);
+
+    try {
+      try {
+        const output = execFileSync('pdftotext', ['-layout', tmpFile, '-'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        if (output && output.trim() !== '') return output.trim();
+      } catch {
+        // pdftotext missing/failed — fall through, matching PHP's shell_exec() returning
+        // null/empty on failure.
+      }
+      return this.basicPdfTextExtract(pdfContent);
+    } finally {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    }
+  }
+
+  /** Port of GraphWorkflowRunner.php::basicPdfTextExtract (line ~3149). */
+  private basicPdfTextExtract(pdfContent: Buffer): string {
+    let text = '';
+    const raw = pdfContent.toString('latin1'); // byte-preserving, mirrors PHP's binary string ops
+
+    const streamRe = /stream\s*([\s\S]*?)\s*endstream/g;
+    let m: RegExpExecArray | null;
+    while ((m = streamRe.exec(raw)) !== null) {
+      let streamData = m[1];
+      try {
+        streamData = zlib.inflateSync(Buffer.from(streamData, 'latin1')).toString('latin1');
+      } catch {
+        // Not compressed / inflate failed — use the stream as-is, matching PHP's
+        // @gzuncompress() silently keeping the original stream on failure.
+      }
+
+      const parts: string[] = [];
+      const textRe = /\(([^)]*)\)/g;
+      let tm: RegExpExecArray | null;
+      while ((tm = textRe.exec(streamData)) !== null) parts.push(tm[1]);
+      if (parts.length > 0) text += parts.join(' ') + '\n';
+    }
+
+    const trimmed = text.trim();
+    return trimmed !== '' ? trimmed : '[PDF text extraction limited - install pdftotext for better results]';
+  }
+
+  // ========================================================================
+  // conversation_contexts archival (chat sidebar / session search)
+  // ========================================================================
+
+  /**
+   * Archive a completed workflow run into conversation_contexts so it appears in the chat
+   * sidebar and is searchable via session_search. Port of
+   * GraphWorkflowRunner.php::archiveRunToConversationContexts (line ~3292).
+   *
+   * `executedNodeOrder` reproduces PHP's array-insertion order for $this->nodeOutputs (needed
+   * because this.nodeOutputs is keyed by numeric node id, and JS objects always iterate
+   * non-negative-integer keys in ascending numeric order rather than insertion order) — it is
+   * the exact list `run()` appends node ids to at the same moments it sets this.nodeOutputs[id].
+   */
+  private async archiveRunToConversationContexts(
+    userId: number,
+    workflowId: number,
+    workflowName: string,
+    userPrompt: string,
+    finalOutput: string,
+    executedNodeOrder: number[]
+  ): Promise<void> {
+    if (userId <= 0) return;
+
+    const archiveOutput = this.buildArchiveOutput(finalOutput, executedNodeOrder);
+    if (archiveOutput === '' && userPrompt.trim() === '') return; // nothing worth archiving
+
+    const messages = [
+      { role: 'user', content: userPrompt },
+      { role: 'assistant', content: archiveOutput },
+    ];
+    const contextData = JSON.stringify({ messages });
+
+    let title = userPrompt.trim();
+    if (title === '') title = `(no prompt) — ${workflowName}`;
+    const titleCodePoints = Array.from(title);
+    if (titleCodePoints.length > 60) title = titleCodePoints.slice(0, 60).join('') + '…';
+
+    const provider = `workflow:${workflowId}`;
+    const messageCount = messages.length;
+
+    const insertId = await SessionSearchService.archiveRun({
+      userId,
+      title,
+      contextData,
+      provider,
+      messageCount,
+    });
+
+    console.error(
+      `[GraphWorkflowRunner] Archived workflow ${workflowId} (${workflowName}) to conversation_contexts id=${insertId}`
+    );
+  }
+
+  /**
+   * Build the content written to the archive row. Port of
+   * GraphWorkflowRunner.php::buildArchiveOutput (line ~3365).
+   *
+   * One documented gap: PHP converts HTML-shaped output to markdown via
+   * league/html-to-markdown. No npm equivalent (e.g. `turndown`) is wired into this backend
+   * yet, so this reproduces PHP's OWN fallback for when that class isn't installed — log and
+   * fall back to the walk-back heuristic below — rather than silently dropping the archive.
+   */
+  private buildArchiveOutput(finalOutput: string, executedNodeOrder: number[]): string {
+    finalOutput = finalOutput.trim();
+    if (finalOutput === '') return this.pickMarkdownAgentOutput(executedNodeOrder);
+
+    if (!this.isHtmlShaped(finalOutput)) return finalOutput;
+
+    console.error(
+      '[GraphWorkflowRunner] HTML output detected but no HTML→markdown converter is wired in ' +
+        '(TODO: port league/html-to-markdown, e.g. via the `turndown` npm package); falling back to walk-back heuristic'
+    );
+    return this.pickMarkdownAgentOutput(executedNodeOrder);
+  }
+
+  /**
+   * Walk executedNodeOrder in reverse and return the most recent agent output that is plain
+   * markdown (not HTML-shaped). Port of GraphWorkflowRunner.php::pickMarkdownAgentOutput
+   * (line ~3410).
+   */
+  private pickMarkdownAgentOutput(executedNodeOrder: number[]): string {
+    const reversed = [...executedNodeOrder].reverse();
+
+    for (const nodeId of reversed) {
+      const nodeOutput = this.nodeOutputs[nodeId];
+      const text = String(nodeOutput?.output ?? '').trim();
+      if (text === '' || this.isHtmlShaped(text)) continue;
+      return text;
+    }
+
+    // Fallback: every output looked HTML-ish. Return the most recent non-empty one so we still
+    // archive something meaningful.
+    for (const nodeId of reversed) {
+      const nodeOutput = this.nodeOutputs[nodeId];
+      const text = String(nodeOutput?.output ?? '').trim();
+      if (text !== '') return text;
+    }
+
     return '';
+  }
+
+  /**
+   * Heuristic: does this content contain HTML that should be converted? Port of
+   * GraphWorkflowRunner.php::isHtmlShaped (line ~3443).
+   */
+  private isHtmlShaped(content: string): boolean {
+    if (content.trim() === '') return false;
+
+    if (/<!DOCTYPE/i.test(content)) return true;
+    if (/<html/i.test(content)) return true;
+    if (/<body/i.test(content)) return true;
+    if (/<head>/i.test(content)) return true;
+
+    const matches = content.match(/<[a-z][^>]*>/gi);
+    if (matches) {
+      const tagChars = matches.reduce((sum, tag) => sum + tag.length, 0);
+      const total = content.length;
+      return total > 0 && tagChars / total > 0.15;
+    }
+
+    return false;
   }
 
   // ========================================================================
