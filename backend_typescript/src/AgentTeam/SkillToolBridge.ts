@@ -26,6 +26,15 @@ const DEFAULT_TIMEOUT_MS = 300_000; // 5 min — matches PHP DEFAULT_TIMEOUT_MS
 /** Pending resolvers keyed by tool_call_id. Latest-write-wins on the value. */
 const pending = new Map<string, (result: any) => void>();
 
+/**
+ * Results the browser POSTed BEFORE their awaitResult registered a resolver. The parallel executor
+ * emits every client_tool_call first (phase 2) and only awaits them afterwards (phase 3); if a
+ * yielding await runs in between (e.g. a sibling node's cost lookup does DB I/O), the browser's
+ * result can arrive before the resolver exists. Buffer it here — mirroring PHP's write-then-read
+ * /tmp tolerance — so it is never dropped. Entries self-expire so a never-awaited id can't leak.
+ */
+const buffered = new Map<string, { result: any; timer: ReturnType<typeof setTimeout> }>();
+
 export class SkillToolBridge {
   static generateToolCallId(): string {
     return randomBytes(16).toString('hex');
@@ -37,6 +46,14 @@ export class SkillToolBridge {
    * The map entry and timer are cleaned up on either path.
    */
   static awaitResult(toolCallId: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<any | null> {
+    // The result may have already arrived (the browser POSTed before this deferred await registered
+    // a resolver) — take the buffered value now rather than waiting for a write that already fired.
+    const early = buffered.get(toolCallId);
+    if (early) {
+      clearTimeout(early.timer);
+      buffered.delete(toolCallId);
+      return Promise.resolve(early.result);
+    }
     return new Promise((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -62,14 +79,21 @@ export class SkillToolBridge {
   }
 
   /**
-   * Write the browser's result for `toolCallId`. Latest-write-wins: if a
-   * resolver is registered, invoke it with `result`. If none is registered
-   * (a late or duplicate POST for an already-settled call), this is a no-op.
+   * Write the browser's result for `toolCallId`. If a resolver is registered, invoke it. If NOT —
+   * because a deferred awaitResult (parallel emit-all/await-all) hasn't registered yet — buffer the
+   * result so awaitResult can pick it up, instead of dropping it (the lost-result race). Orphan
+   * buffers self-expire after DEFAULT_TIMEOUT_MS so a never-awaited id can't leak.
    */
   static writeResult(toolCallId: string, result: any): void {
     const resolver = pending.get(toolCallId);
     if (resolver) {
       resolver(result);
+      return;
     }
+    const existing = buffered.get(toolCallId);
+    if (existing) clearTimeout(existing.timer);
+    const timer = setTimeout(() => buffered.delete(toolCallId), DEFAULT_TIMEOUT_MS);
+    (timer as any).unref?.();
+    buffered.set(toolCallId, { result, timer });
   }
 }

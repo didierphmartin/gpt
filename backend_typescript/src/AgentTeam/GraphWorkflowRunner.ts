@@ -1165,11 +1165,12 @@ export class GraphWorkflowRunner {
     // executeAgentsInParallel: dispatch every still-active agent concurrently, then EMIT every
     // agent's client_tool_call FIRST and AWAIT them all afterwards so the browser worker pool runs
     // the parallel skills concurrently (~max(skill) not sum). Bounded to MAX_ROUNDS and an overall
-    // ~120s wall-clock cap; each per-skill bridge wait is capped at parallel_skill_timeout_ms (~60s),
-    // itself clamped by whatever remains of the overall deadline.
+    // ~120s wall-clock cap; each per-skill bridge wait is capped at parallel_skill_timeout_ms
+    // (default 120s, matching PHP awaitClientToolResultInParallel ~line 2296), itself clamped by
+    // whatever remains of the overall deadline.
     const MAX_ROUNDS = 10;
     const OVERALL_CAP_MS = 120_000;
-    const perSkillTimeoutMs = Number(this.config?.parallel_skill_timeout_ms ?? 60000);
+    const perSkillTimeoutMs = Number(this.config?.parallel_skill_timeout_ms ?? 120000);
     const overallDeadline = Date.now() + OVERALL_CAP_MS;
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1307,7 +1308,9 @@ export class GraphWorkflowRunner {
       // the remaining overall deadline.
       if (pendingAwaits.length) {
         const remaining = Math.max(0, overallDeadline - Date.now());
-        const skillTimeout = remaining > 0 ? Math.min(perSkillTimeoutMs, remaining) : perSkillTimeoutMs;
+        // Clamp to remaining budget (never the full per-skill timeout when the budget is spent —
+        // that would overshoot the overall cap by up to one per-skill wait).
+        const skillTimeout = Math.max(0, Math.min(perSkillTimeoutMs, remaining));
         const bridgeResults = await Promise.all(
           pendingAwaits.map((p) => SkillToolBridge.awaitResult(p.toolCallId, skillTimeout))
         );
