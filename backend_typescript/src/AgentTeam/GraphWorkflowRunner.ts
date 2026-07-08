@@ -12,6 +12,7 @@ import { SkillToolBridge } from './SkillToolBridge';
 import { SkillToolChoice } from './SkillToolChoice';
 import { WorkflowRunLog } from './WorkflowRunLog';
 import { WorkflowOutputStorage } from './WorkflowOutputStorage';
+import { ExecutionTraceStore } from './ExecutionTraceStore';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -25,14 +26,17 @@ import { WorkflowOutputStorage } from './WorkflowOutputStorage';
  * text becomes the node output and node_trace.final_text.
  *
  * DEFERRED / STUBBED (see inline comments + report):
- *  - SkillToolBridge / folder-backed skill agents / client-tool round-trip: deferred. node_trace
- *    still emits with PHP's default skill_* values (all null for non-skill agents).
+ *  - SkillToolBridge / folder-backed skill agents / client-tool round-trip: IMPLEMENTED. node_trace's
+ *    skill_* fields are populated from skillResultByNode (stashed at the bridge await sites) for
+ *    skill-bound agent nodes; non-skill agents still get PHP's default null skill_* values.
  *  - WorkflowOutputStorage: IMPLEMENTED (see WorkflowOutputStorage.ts) — saveOutput() is called after
  *    every run exactly like PHP (best-effort, errors swallowed). The universalFS provider path is a
  *    documented no-op stub (PHP's universalFS is an in-process PHP library, not network-reachable
  *    from Node — see that file's class doc); the LOCAL-FILESYSTEM fallback, which is what every known
  *    deployment actually exercises today, is fully ported.
- *  - ExecutionTraceStore DB persistence: stubbed — the node_trace SSE WIRE event still emits.
+ *  - ExecutionTraceStore DB persistence: IMPLEMENTED — recordExecutionTrace() awaits
+ *    ExecutionTraceStore.insert() (fail-soft: insert() never throws, and the call is additionally
+ *    wrapped so a future throw can't break the run) before emitting the node_trace SSE wire event.
  *  - archiveRunToConversationContexts: stubbed.
  *  - WorkflowRunLog JSONL persistence: IMPLEMENTED (see WorkflowRunLog.ts) — every node/workflow event
  *    is appended to storage/workflow-runs/{runId}.jsonl BEFORE the SSE emit, exactly like PHP's
@@ -102,6 +106,15 @@ function round2(ms: number): number {
   return Math.round(ms * 100) / 100;
 }
 
+/** Mirrors PHP date('Y-m-d H:i:s') using local server time (used by recordExecutionTrace's `ts`). */
+function formatSqlDateTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  );
+}
+
 /** Mirrors PHP date('c') (ISO 8601 with local UTC offset) — used for the saveOutput() payload. */
 function phpDateC(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -166,11 +179,13 @@ export class GraphWorkflowRunner {
   private config: Record<string, any>;
   private runLog: WorkflowRunLog;
   private outputStorage: WorkflowOutputStorage;
+  private traceStore: ExecutionTraceStore;
 
   constructor(config: Record<string, any> = {}) {
     this.config = config;
     this.runLog = new WorkflowRunLog(WorkflowRunLog.defaultDir(config));
     this.outputStorage = new WorkflowOutputStorage(config);
+    this.traceStore = new ExecutionTraceStore();
   }
 
   setStreamContext(context: StreamContext | null): this {
@@ -1425,8 +1440,8 @@ export class GraphWorkflowRunner {
       cost_usd: cost,
     });
 
-    // node_trace (recordExecutionTrace) — DB persistence stubbed; wire event emitted.
-    this.emitNodeTraceEvent(state.node, agent.provider, success, output);
+    // Phase 0: record an execution trace for this parallel agent node (mirrors PHP finalizeParallelNode).
+    await this.recordExecutionTrace(state.node, agent.provider, agent.model, success, output, inputTokens, outputTokens);
   }
 
   // ========================================================================
@@ -1559,33 +1574,88 @@ export class GraphWorkflowRunner {
   }
 
   /**
-   * Emit the node_trace wire event (recordExecutionTrace). DB persistence (ExecutionTraceStore) is
-   * STUBBED. For non-skill agents the skill_* fields take PHP's default values: all null.
+   * Emit the node_trace wire event (mirrors the second half of PHP's recordExecutionTrace, which
+   * mirrors the DB trace's skill stdout/logs into the per-run event log so the node form can show
+   * them after the fact — the DB trace itself isn't read back by the frontend). For non-skill agents
+   * `skill` is omitted/null and the skill_* fields take PHP's default values: all null.
    */
-  private emitNodeTraceEvent(node: any, _provider: string | null, success: boolean, outputText: any): void {
+  private emitNodeTraceEvent(
+    node: any,
+    _provider: string | null,
+    success: boolean,
+    outputText: any,
+    skill: { exit_code: any; stdout: any; log_messages: any } | null = null
+  ): void {
     const config = node.config ?? {};
     this.emitNodeEvent('node_trace', node, {
       skill_dir: config.bound_skill?.dir_name ?? null,
-      skill_exit_code: null,
-      skill_stdout: null,
-      skill_log_messages: null,
+      skill_exit_code: skill?.exit_code ?? null,
+      skill_stdout: skill?.stdout ?? null,
+      skill_log_messages: skill?.log_messages ?? null,
       final_text: outputText,
       success,
       error_text: success ? null : outputText,
     });
   }
 
+  /**
+   * Phase 0: assemble + persist one execution trace for a workflow agent node. Pulls the skill
+   * stdout/script/argv stashed during the client-tool round-trip (skillResultByNode). Never lets a
+   * tracing failure break the run — ExecutionTraceStore.insert() already swallows its own errors, and
+   * the surrounding try/catch here is defense in depth against any future throw, mirroring the PHP
+   * doc comment "Never throws (insert() swallows errors) — tracing must not break a workflow run."
+   * Spec: docs/specs/2026-06-13-phase0-trace-store.md
+   */
   private async recordExecutionTrace(
     node: any,
     provider: string | null,
-    _model: string | null,
+    model: string | null,
     success: boolean,
     outputText: any,
-    _inTok: number,
-    _outTok: number
+    inTok: number,
+    outTok: number
   ): Promise<void> {
-    // ExecutionTraceStore.insert is STUBBED. Still emit the node_trace SSE event.
-    this.emitNodeTraceEvent(node, provider, success, outputText);
+    const nodeId = phpIntval(node.id ?? 0);
+    const config = node.config ?? {};
+    const sr = this.skillResultByNode[nodeId] ?? {};
+    const out = sr.output && typeof sr.output === 'object' ? sr.output : {};
+    const outputFiles = out.outputs && typeof out.outputs === 'object' ? Object.keys(out.outputs) : [];
+
+    try {
+      await this.traceStore.insert({
+        run_id: this.runId,
+        ts: formatSqlDateTime(new Date()),
+        env: 'workflow',
+        invocation_mode: 'workflow_node',
+        workflow_id: this.currentWorkflowId,
+        node_id: nodeId,
+        provider,
+        model,
+        skill_dir: config.bound_skill?.dir_name ?? null,
+        script: sr.script ?? null,
+        argv: sr.argv ?? [],
+        skill_exit_code: out.exit_code ?? null,
+        skill_stdout: out.stdout ?? null,
+        skill_log_messages: out.log_messages ?? null,
+        output_files: outputFiles,
+        final_text: outputText,
+        success,
+        error_text: success ? null : outputText,
+        tokens_in: inTok,
+        tokens_out: outTok,
+        cost_usd: await this.computeNodeCost(provider, inTok, outTok),
+      });
+    } catch (e: any) {
+      console.error('[GraphWorkflowRunner] recordExecutionTrace insert failed: ' + (e?.message ?? e));
+    }
+
+    // Mirror the skill stdout/logs into the per-run event log so the node form can show them after
+    // the fact (the DB trace isn't read back by the frontend). emitNodeEvent persists + streams.
+    this.emitNodeTraceEvent(node, provider, success, outputText, {
+      exit_code: out.exit_code ?? null,
+      stdout: out.stdout ?? null,
+      log_messages: out.log_messages ?? null,
+    });
   }
 
   // ========================================================================
