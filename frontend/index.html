@@ -2944,6 +2944,14 @@
                         <p class="text-sm text-gray-600 mb-4">
                             Skills installed in your local <code class="text-xs bg-gray-100 px-1 rounded">skills/</code> folder. Toggle a skill OFF to hide it from the chat &amp; workflow auto-router. Default is ON for every skill — newly installed skills appear here automatically and start enabled.
                         </p>
+                        <!-- Master: enable/disable ALL skills at once (client-side localStorage; works on both backends). -->
+                        <label class="flex items-center justify-between gap-3 p-3 mb-3 border border-gray-200 rounded-lg">
+                            <span class="text-sm text-gray-800">
+                                <strong>Enable all skills</strong>
+                                <span class="block text-xs text-gray-500">Check to turn every skill on, uncheck to turn every skill off.</span>
+                            </span>
+                            <input type="checkbox" id="skills-master-toggle" class="w-5 h-5 accent-blue-600">
+                        </label>
                         <div id="skills-list" class="space-y-2">
                             <div class="text-sm text-gray-500 p-4">Loading…</div>
                         </div>

@@ -490,6 +490,33 @@ class SettingsPanel {
                 if (p) { p.scrollTop = scrollBefore; requestAnimationFrame(() => { p.scrollTop = scrollBefore; }); }
             });
         }
+
+        // Master "Enable all skills" checkbox: reflects all / none / mixed (indeterminate) and
+        // toggles every skill at once. Skill state is localStorage, so this works on both backends.
+        const master = document.getElementById('skills-master-toggle');
+        if (master) {
+            this._shownSkills = skills; // refreshed every render so the wired-once handler isn't stale
+            const enabledCount = skills.filter(s => window.skillsManager.isSkillEnabled(s.dir_name)).length;
+            master.checked = skills.length > 0 && enabledCount === skills.length;
+            master.indeterminate = enabledCount > 0 && enabledCount < skills.length;
+            if (!master.dataset.wired) {
+                master.dataset.wired = '1';
+                master.addEventListener('change', () => {
+                    // Bulk toggle every shown skill via the existing per-skill setter (localStorage;
+                    // both backends). Kept here rather than a SkillsManager method to avoid touching
+                    // skills-manager.js, which carries unrelated uncommitted work. Reads the live
+                    // this._shownSkills (not a closed-over array) so new skills aren't missed.
+                    try {
+                        const on = master.checked;
+                        (this._shownSkills || []).forEach((s) => window.skillsManager?.setSkillEnabled(s.dir_name, on));
+                    } catch (err) {
+                        console.error('[settings:skills] set-all failed:', err);
+                        this.showNotification?.('Failed to update skills', 'error');
+                    }
+                    this.loadSkills(); // re-render rows + refresh the master state
+                });
+            }
+        }
     }
 
     /**
