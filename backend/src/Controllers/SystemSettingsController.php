@@ -37,7 +37,7 @@ class SystemSettingsController
         'deepseek' => [0.28, 0.42],   // deepseek-chat / deepseek-reasoner (V3.2)
         'kimi'     => [0.55, 2.20],   // kimi-k2
         'gamma4'   => [0.00, 0.00],   // Gemma-4-E4B-it — free
-        'glm'      => [0.60, 2.20],   // glm-5.2 (z.ai / Zhipu) — placeholder pricing
+        'glm'      => [1.40, 4.40],   // glm-5.2 (z.ai / Zhipu): $1.40 in / $4.40 out per 1M
     ];
 
     private bool $priceColumnsEnsured = false;

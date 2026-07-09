@@ -307,12 +307,12 @@ class MAFGenerator
 
 
         def _chat_opts(provider, model, max_tokens, temperature):
-            # Kimi K2 defaults to "thinking" mode; disable it to match the chat KimiProvider
-            # (a non-form setting, same as ADK/LangGraph do). With thinking OFF, kimi-k2.*
-            # requires temperature 0.6 -- that's a model constraint surfaced to the user in
-            # the form, never overridden here.
+            # Kimi K2 and GLM 5.2 default to "thinking" mode; disable it (a non-form setting,
+            # same as ADK/LangGraph do) so they answer directly instead of burning the token
+            # budget on reasoning. With thinking OFF, kimi-k2.* requires temperature 0.6 -- a
+            # model constraint surfaced to the user in the form, never overridden here.
             o = ChatOptions(max_tokens=max_tokens, temperature=temperature)
-            if provider == "kimi" and str(model).startswith("kimi-k2"):
+            if (provider == "kimi" and str(model).startswith("kimi-k2")) or provider == "glm":
                 o["extra_body"] = {"thinking": {"type": "disabled"}}
             return o
         PY;

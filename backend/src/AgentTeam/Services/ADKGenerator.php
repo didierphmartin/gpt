@@ -231,11 +231,13 @@ def _make_model(provider: str, model: str):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         return LiteLlm(**kwargs)
     if p == "glm":
-        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
+        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Defaults to heavy reasoning; disable
+        # thinking so it answers directly instead of burning the token budget on reasoning.
         return LiteLlm(
             model="openai/" + model,
             api_base="https://api.z.ai/api/paas/v4",
             api_key=os.environ.get("GLM_API_KEY"),
+            extra_body={"thinking": {"type": "disabled"}},
         )
     # Fallback: best-effort litellm prefixed spec.
     return LiteLlm(model=model if "/" in model else p + "/" + model)

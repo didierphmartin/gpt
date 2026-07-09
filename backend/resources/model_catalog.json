@@ -21,7 +21,7 @@
       { "id": "Gemma-4-E4B-it", "label": "Gemma 4 E4B", "desc": "Gemma-4 E4B instruction-tuned — OpenAI-compatible, free", "input": 0, "output": 0 }
     ],
     "glm": [
-      { "id": "glm-5.2", "label": "GLM 5.2", "desc": "GLM 5.2 (z.ai / Zhipu) — OpenAI-compatible", "input": 0.60, "output": 2.20 }
+      { "id": "glm-5.2", "label": "GLM 5.2", "desc": "GLM 5.2 (z.ai / Zhipu) — OpenAI-compatible", "input": 1.40, "output": 4.40 }
     ],
     "gemini": [
       { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro (preview)", "desc": "Gemini 3 flagship — highest capability, best for complex reasoning", "input": 1.25, "output": 10.00 },

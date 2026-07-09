@@ -722,6 +722,8 @@ class LangGraphGenerator
         $lines[] = '            api_key=os.environ.get("GLM_API_KEY"),';
         $lines[] = '            temperature=temperature,';
         $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '            # GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.';
+        $lines[] = '            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},';
         $lines[] = '        )';
         $lines[] = '    raise RuntimeError(';
         $lines[] = '        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi, glm."';

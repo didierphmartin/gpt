@@ -273,6 +273,12 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
             $payload['temperature'] = $this->temperature;
         }
 
+        // GLM 5.2 (z.ai) defaults to heavy reasoning; disable thinking so it answers directly
+        // instead of spending the token budget on reasoning (temperature is kept, above).
+        if ($this->name === 'glm') {
+            $payload['thinking'] = ['type' => 'disabled'];
+        }
+
         if (!empty($tools) && $this->supportsTools) {
             $payload['tools'] = $this->convertToOpenAITools($tools);
             $payload['tool_choice'] = 'auto';
