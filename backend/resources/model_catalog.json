@@ -17,6 +17,12 @@
     "kimi": [
       { "id": "kimi-k2.6", "label": "Kimi K2.6", "desc": "Latest flagship (Apr 2026), 1T MoE, 256K context", "input": 0.95, "output": 4.00 }
     ],
+    "gamma4": [
+      { "id": "Gemma-4-E4B-it", "label": "Gemma 4 E4B", "desc": "Gemma-4 E4B instruction-tuned — OpenAI-compatible, free", "input": 0, "output": 0 }
+    ],
+    "glm": [
+      { "id": "glm-5.2", "label": "GLM 5.2", "desc": "GLM 5.2 (z.ai / Zhipu) — OpenAI-compatible", "input": 0.60, "output": 2.20 }
+    ],
     "gemini": [
       { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro (preview)", "desc": "Gemini 3 flagship — highest capability, best for complex reasoning", "input": 1.25, "output": 10.00 },
       { "id": "gemini-3-flash-preview", "label": "Gemini 3 Flash (preview)", "desc": "Gemini 3 fast tier — strong price/perf, good default", "input": 0.30, "output": 2.50 },

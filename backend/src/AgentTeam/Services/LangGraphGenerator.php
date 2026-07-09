@@ -658,6 +658,7 @@ class LangGraphGenerator
         $lines[] = '      grok       → ChatOpenAI on https://api.x.ai/v1';
         $lines[] = '      deepseek   → ChatOpenAI on https://api.deepseek.com';
         $lines[] = '      kimi       → ChatOpenAI on https://api.moonshot.ai/v1';
+        $lines[] = '      glm        → ChatOpenAI on https://api.z.ai/api/paas/v4';
         $lines[] = '';
         $lines[] = '    Reads API keys from the environment (loaded from .env at startup).';
         $lines[] = '    """';
@@ -712,8 +713,18 @@ class LangGraphGenerator
         $lines[] = '        if model.startswith("kimi-k2"):';
         $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
         $lines[] = '        return ChatOpenAI(**kwargs)';
+        $lines[] = '    if p == "glm":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.';
+        $lines[] = '        return ChatOpenAI(';
+        $lines[] = '            model=model,';
+        $lines[] = '            base_url="https://api.z.ai/api/paas/v4",';
+        $lines[] = '            api_key=os.environ.get("GLM_API_KEY"),';
+        $lines[] = '            temperature=temperature,';
+        $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '        )';
         $lines[] = '    raise RuntimeError(';
-        $lines[] = '        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi."';
+        $lines[] = '        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi, glm."';
         $lines[] = '    )';
         $lines[] = '';
 

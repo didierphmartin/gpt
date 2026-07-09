@@ -300,6 +300,9 @@ class MAFGenerator
             if p == "deepseek":
                 return OpenAIChatCompletionClient(model=model, api_key=os.environ.get("DEEPSEEK_API_KEY"),
                     base_url="https://api.deepseek.com")
+            if p == "glm":
+                return OpenAIChatCompletionClient(model=model, api_key=os.environ.get("GLM_API_KEY"),
+                    base_url="https://api.z.ai/api/paas/v4")
             raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
 
 

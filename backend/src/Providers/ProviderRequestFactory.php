@@ -28,6 +28,14 @@ class ProviderRequestFactory
         'deepseek' => DeepSeekProvider::class,
         'grok' => GrokProvider::class,
         'kimi' => KimiProvider::class,
+        // Gamma4: OpenAI-compatible, no dedicated class — handled generically by
+        // CustomProvider (same as DeepSeek's instance path). Config comes from the
+        // system_llm_settings 'gamma4' row via LLMProviderResolver.
+        'gamma4' => CustomProvider::class,
+        // GLM 5.2 (z.ai / Zhipu): OpenAI-compatible, no dedicated class — handled
+        // generically by CustomProvider. Config comes from the system_llm_settings
+        // 'glm' row via LLMProviderResolver.
+        'glm' => CustomProvider::class,
     ];
 
     /**

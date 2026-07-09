@@ -43,7 +43,7 @@
         document.head.appendChild(st);
     })();
 
-    const API = '/gpt/backend/api/v1';
+    const API = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
     const SKILL_CREATOR_DIR = 'skill-creator';
     const t = (k, d) => (window.i18n && window.i18n.t && window.i18n.t(k)) || d;
     const tok = () => (localStorage.getItem('token') || (window.authManager && window.authManager.token) || '');
@@ -52,6 +52,8 @@
     const MODEL = {
         claude: 'claude-sonnet-4-5-20250929', openai: 'gpt-4o', gemini: 'gemini-2.5-flash',
         grok: 'grok-4-fast', deepseek: 'deepseek-chat', kimi: 'kimi-k2',
+        gamma4: 'Gemma-4-E4B-it',
+        glm: 'glm-5.2',
     };
     // Post-run auto-trigger guards.
     const AUTO_MIN_BAD = 2;                     // need >=2 bad runs before auto-healing

@@ -24,7 +24,7 @@ class SystemSettingsController
     private const ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom'];
 
     // Top-level provider keys that have dedicated config sections
-    private const TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+    private const TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
 
     // Default per-million-token pricing (USD) for known provider/model pairs.
     // Used as fallback when no explicit value is stored. Sourced April 2026.
@@ -36,6 +36,8 @@ class SystemSettingsController
         'grok'     => [0.20, 0.50],   // grok-4-1-fast-reasoning
         'deepseek' => [0.28, 0.42],   // deepseek-chat / deepseek-reasoner (V3.2)
         'kimi'     => [0.55, 2.20],   // kimi-k2
+        'gamma4'   => [0.00, 0.00],   // Gemma-4-E4B-it — free
+        'glm'      => [0.60, 2.20],   // glm-5.2 (z.ai / Zhipu) — placeholder pricing
     ];
 
     private bool $priceColumnsEnsured = false;
@@ -209,6 +211,22 @@ class SystemSettingsController
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
+            ],
+            'gamma4' => [
+                'display_name' => 'Gamma4',
+                'base_url' => 'https://g4eb.yellowbrickroad.info',
+                'model' => 'Gemma-4-E4B-it',
+                'max_tokens' => 4096,
+                'api_format' => 'openai',
+                'chat_endpoint' => '/v1/chat/completions',
+            ],
+            'glm' => [
+                'display_name' => 'GLM 5.2',
+                'base_url' => 'https://api.z.ai/api/paas/v4',
+                'model' => 'glm-5.2',
+                'max_tokens' => 4096,
+                'api_format' => 'openai',
+                'chat_endpoint' => '/chat/completions',
             ],
         ];
 

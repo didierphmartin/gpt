@@ -537,7 +537,7 @@ class ChatApp {
      */
     async applyUserPackage() {
         try {
-            const res = await fetch('/gpt/backend/api/v1/me/package', {
+            const res = await fetch(window.apiUrl('/me/package'), {
                 headers: this.getAuthHeaders(),
             });
             if (!res.ok) return;
@@ -873,7 +873,7 @@ class ChatApp {
         }
 
         try {
-            const response = await fetch('/gpt/backend/api/v1/mcp/proxy', {
+            const response = await fetch(window.apiUrl('/mcp/proxy'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -1351,7 +1351,7 @@ class ChatApp {
             }
             if (viewUUID) params.set('viewUUID', viewUUID);
 
-            const appUrl = `/gpt/backend/api/v1/mcp/app?${params.toString()}`;
+            const appUrl = window.apiUrl(`/mcp/app?${params.toString()}`);
             console.log('📍 Loading app from proxy:', appUrl);
             console.log('📍 URL params:', Object.fromEntries(params.entries()));
 
@@ -1424,7 +1424,7 @@ class ChatApp {
 
     async loadProviders() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/providers', {
+            const response = await fetch(window.apiUrl('/providers'), {
                 headers: this.getAuthHeaders()
             });
             const data = await response.json();
@@ -1550,7 +1550,7 @@ class ChatApp {
 
             this.showProgress(`${window.i18n.t('progress.switchingTo')} ${providerName}...`);
 
-            const response = await fetch('/gpt/backend/api/v1/providers', {
+            const response = await fetch(window.apiUrl('/providers'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({ provider: providerName })
@@ -2235,14 +2235,14 @@ class ChatApp {
                 return b;
             })() : null;
 
-            const primaryFetchP = fetch('/gpt/backend/api/v1/chat', {
+            const primaryFetchP = fetch(window.apiUrl('/chat'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(requestBody),
                 signal: this.abortController.signal
             });
             const compareFetchP = compareRequestBody
-                ? fetch('/gpt/backend/api/v1/compare', {
+                ? fetch(window.apiUrl('/compare'), {
                     method: 'POST',
                     headers: this.getAuthHeaders(),
                     body: JSON.stringify(compareRequestBody),
@@ -3083,7 +3083,7 @@ class ChatApp {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20260612-writtenoutputs');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20260626-unwrap');
                 console.log(`[pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -3289,7 +3289,7 @@ class ChatApp {
      */
     _postExecutionTrace(data) {
         try {
-            fetch('/gpt/backend/api/v1/traces', {
+            fetch(window.apiUrl('/traces'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(data),
@@ -3343,7 +3343,7 @@ class ChatApp {
             // primary → deepseek grader at ~10× lower cost). Falls back to
             // the current primary's provider when omitted, preserving the
             // pre-existing behaviour.
-            const PROVIDER_ALLOWLIST = ['claude', 'openai', 'grok', 'gemini', 'deepseek', 'kimi'];
+            const PROVIDER_ALLOWLIST = ['claude', 'openai', 'grok', 'gemini', 'deepseek', 'kimi', 'gamma4', 'glm'];
             const providerOverrideRaw = (typeof call.input?.provider === 'string'
                 ? call.input.provider.trim().toLowerCase() : '');
             const providerOverride = PROVIDER_ALLOWLIST.includes(providerOverrideRaw)
@@ -3382,7 +3382,7 @@ class ChatApp {
                         provider: providerOverride || this.currentProvider || 'claude',
                     };
                     if (modelOverride) body.model = modelOverride;
-                    const resp = await fetch('/gpt/backend/api/v1/agent', {
+                    const resp = await fetch(window.apiUrl('/agent'), {
                         method: 'POST', headers, body: JSON.stringify(body),
                     });
                     const data = await resp.json();
@@ -3869,6 +3869,84 @@ class ChatApp {
         }
     }
 
+    // Coerce a model-supplied input_files value into the schema's
+    // object<path → string> shape. Claude (especially on large HTML payloads)
+    // emits input_files inconsistently: sometimes a proper object, sometimes a
+    // JSON-encoded STRING (often over-escaped), sometimes a raw content string.
+    // This is the single source of truth for that recovery — chat's skill
+    // dispatch AND the workflow runner (workflow-editor.js _runNodeAsChatUnit)
+    // both call it so the two paths can't drift. Returns a sanitized object
+    // (possibly empty); never throws.
+    _coerceInputFiles(rawInputFiles, argv) {
+        argv = Array.isArray(argv) ? argv : [];
+        let llmInputFiles;
+        if (rawInputFiles && typeof rawInputFiles === 'object') {
+            llmInputFiles = rawInputFiles;
+        } else if (typeof rawInputFiles === 'string' && rawInputFiles.trim()) {
+            let parsed = null;
+            let lastError = null;
+            const trimmed = rawInputFiles.trim();
+            const looksLikeJsonObject = trimmed.startsWith('{') && trimmed.endsWith('}');
+            // Strategy 1: direct JSON.parse
+            try { parsed = JSON.parse(rawInputFiles); }
+            catch (e) { lastError = e; }
+            // Strategy 2: undo one level of over-escape (`\"`→`"`, `\\`→`\`).
+            // This is the one that recovers Claude's over-escaped large JSON.
+            if (!parsed && looksLikeJsonObject) {
+                try {
+                    const unescaped = rawInputFiles
+                        .replace(/\\"/g, '"')
+                        .replace(/\\\\/g, '\\');
+                    parsed = JSON.parse(unescaped);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        console.log('[coerceInputFiles] parsed after one over-escape pass');
+                    }
+                } catch (e) { lastError = e; }
+            }
+            // Strategy 3: double-decode (a JSON-string-of-a-JSON-string).
+            if (!parsed) {
+                try {
+                    const oneLayer = JSON.parse('"' + rawInputFiles.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
+                    if (typeof oneLayer === 'string') {
+                        parsed = JSON.parse(oneLayer);
+                        if (parsed && typeof parsed === 'object') {
+                            console.log('[coerceInputFiles] parsed after double-decode');
+                        }
+                    }
+                } catch (e) { lastError = e; }
+            }
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                llmInputFiles = parsed;
+                console.log(`[coerceInputFiles] input_files was a JSON-stringified object; ${Object.keys(parsed).length} key(s):`, Object.keys(parsed));
+            } else {
+                if (looksLikeJsonObject && lastError) {
+                    console.warn(`[coerceInputFiles] input_files LOOKS like a JSON object (${rawInputFiles.length} chars) but every parse strategy failed — last error:`, lastError?.message || lastError);
+                    console.warn('[coerceInputFiles] first 300 chars:', JSON.stringify(rawInputFiles.slice(0, 300)));
+                }
+                // Treat the string as raw file content; wrap it under the -i/--input path.
+                let inputPathFromArgv = null;
+                for (let i = 0; i < argv.length - 1; i++) {
+                    if ((argv[i] === '-i' || argv[i] === '--input' || argv[i] === '--in')
+                        && typeof argv[i + 1] === 'string'
+                        && !argv[i + 1].startsWith('-')) {
+                        inputPathFromArgv = argv[i + 1];
+                        break;
+                    }
+                }
+                if (inputPathFromArgv) {
+                    llmInputFiles = { [inputPathFromArgv]: rawInputFiles };
+                    console.log(`[coerceInputFiles] raw content string (${rawInputFiles.length} chars) wrapped under "${inputPathFromArgv}"`);
+                } else {
+                    llmInputFiles = {};
+                    console.warn(`[coerceInputFiles] raw content string but argv has no -i/--input; dropping. argv:`, argv);
+                }
+            }
+        } else {
+            llmInputFiles = {};
+        }
+        return this._sanitizeInputFilesKeys(llmInputFiles);
+    }
+
     // Builds the exact request object passed to pyodideRunner.runSkillScript for
     // a run_skill_script tool call. Extracted so the parallel worker-pool path
     // can reuse the identical normalization. Side-effect-free except for the
@@ -4082,92 +4160,10 @@ class ChatApp {
         //      input path the model named in argv (the value after -i /
         //      --input). Without that path, fall back to the only /scratch/
         //      key the model didn't pre-write.
-        let llmInputFiles;
-        const rawInputFiles = input.input_files;
-        if (rawInputFiles && typeof rawInputFiles === 'object') {
-            llmInputFiles = rawInputFiles;
-        } else if (typeof rawInputFiles === 'string' && rawInputFiles.trim()) {
-            // Multi-strategy JSON-stringified-object recovery. Claude
-            // (especially Phase 2 of auto-routing under load) often emits
-            // input_files as a string that's actually a JSON-encoded
-            // object — sometimes well-formed, sometimes over-escaped.
-            // Try progressive unescape strategies to recover it; falling
-            // back to "raw content" causes the entire JSON to be written
-            // as a single file's content, which then renders as broken
-            // HTML in the artifact pane (the failure mode users keep
-            // seeing).
-            let parsed = null;
-            let lastError = null;
-            const trimmed = rawInputFiles.trim();
-            const looksLikeJsonObject = trimmed.startsWith('{') && trimmed.endsWith('}');
-            // Strategy 1: direct JSON.parse
-            try { parsed = JSON.parse(rawInputFiles); }
-            catch (e) { lastError = e; }
-            // Strategy 2: if direct fails AND it looks like a JSON object,
-            // try undoing one level of over-escape (`\"` → `"`, `\\` → `\`)
-            // and parse again. Anthropic's streaming JSON sometimes
-            // double-encodes string values; this unwinds it.
-            if (!parsed && looksLikeJsonObject) {
-                try {
-                    const unescaped = rawInputFiles
-                        .replace(/\\"/g, '"')
-                        .replace(/\\\\/g, '\\');
-                    parsed = JSON.parse(unescaped);
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        console.log('[B3 dispatch] input_files JSON-parse succeeded after one unescape pass');
-                    }
-                } catch (e) { lastError = e; }
-            }
-            // Strategy 3: maybe it's a JSON-string-of-a-JSON-string (double
-            // wrap). Try parsing once to peel one layer, then parse again.
-            if (!parsed) {
-                try {
-                    const oneLayer = JSON.parse('"' + rawInputFiles.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
-                    if (typeof oneLayer === 'string') {
-                        parsed = JSON.parse(oneLayer);
-                        if (parsed && typeof parsed === 'object') {
-                            console.log('[B3 dispatch] input_files JSON-parse succeeded after double-decode');
-                        }
-                    }
-                } catch (e) { lastError = e; }
-            }
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                llmInputFiles = parsed;
-                console.log(`[B3 dispatch] input_files was a JSON-stringified object; parsed into ${Object.keys(parsed).length} key(s):`, Object.keys(parsed));
-            } else {
-                if (looksLikeJsonObject && lastError) {
-                    console.warn(`[B3 dispatch] input_files LOOKS like a JSON object (starts with '{', ends with '}', ${rawInputFiles.length} chars) but every parse strategy failed — last error:`, lastError?.message || lastError);
-                    console.warn('[B3 dispatch] first 300 chars of unparseable input_files:', JSON.stringify(rawInputFiles.slice(0, 300)));
-                }
-                // Treat the string as raw file content. Find the -i / --input
-                // target in argv (we already coerced argv to an array above).
-                // Use `argv` (not `finalArgv`) here: this block runs BEFORE
-                // the URL-interception step that introduces `finalArgv`, so
-                // the `let finalArgv` declaration further down would trip
-                // the temporal dead zone if referenced here. argv and
-                // finalArgv are identical at this point (URL interception
-                // hasn't run yet), so `argv` is the correct local.
-                let inputPathFromArgv = null;
-                for (let i = 0; i < argv.length - 1; i++) {
-                    if ((argv[i] === '-i' || argv[i] === '--input' || argv[i] === '--in')
-                        && typeof argv[i + 1] === 'string'
-                        && !argv[i + 1].startsWith('-')) {
-                        inputPathFromArgv = argv[i + 1];
-                        break;
-                    }
-                }
-                if (inputPathFromArgv) {
-                    llmInputFiles = { [inputPathFromArgv]: rawInputFiles };
-                    console.log(`[B3 dispatch] input_files was a raw content string (${rawInputFiles.length} chars); wrapped under argv input path "${inputPathFromArgv}"`);
-                } else {
-                    llmInputFiles = {};
-                    console.warn(`[B3 dispatch] input_files was a raw content string (${rawInputFiles.length} chars) but argv has no -i/--input flag; cannot infer destination path, dropping content. argv:`, argv);
-                }
-            }
-        } else {
-            llmInputFiles = {};
-        }
-        llmInputFiles = this._sanitizeInputFilesKeys(llmInputFiles);
+        // input_files recovery (object / over-escaped JSON string / raw
+        // content) lives in the shared _coerceInputFiles so chat and the
+        // workflow runner can't drift. See that method for the strategies.
+        let llmInputFiles = this._coerceInputFiles(input.input_files, argv);
 
         // DIAGNOSTIC: when both the LLM and pre-write target the same
         // /scratch/<path>, show what each has so we can see why the
@@ -4543,7 +4539,7 @@ class ChatApp {
 
         this._updateB3OverlayPhase(`Compare pane: ${this.getProviderDisplayName(this.selectedComparer)} responding…`);
 
-        const resp = await fetch('/gpt/backend/api/v1/compare', {
+        const resp = await fetch(window.apiUrl('/compare'), {
             method: 'POST',
             headers: this.getAuthHeaders(),
             body: JSON.stringify(followUpBody),
@@ -4719,7 +4715,7 @@ class ChatApp {
             console.log(`[B3 continue] continuing with ${results.length} tool_result(s) paired to ${assistantToolCalls.length} tool_use(s)`);
         }
 
-        const resp = await fetch('/gpt/backend/api/v1/chat', {
+        const resp = await fetch(window.apiUrl('/chat'), {
             method: 'POST',
             headers: this.getAuthHeaders(),
             body: JSON.stringify(followUpBody),
@@ -4945,7 +4941,7 @@ class ChatApp {
             if (!url) { newArgv.push(tok); continue; }
 
             try {
-                const resp = await fetch('/gpt/backend/api/v1/fetch-url', {
+                const resp = await fetch(window.apiUrl('/fetch-url'), {
                     method: 'POST',
                     headers: this.getAuthHeaders(),
                     body: JSON.stringify({ url }),
@@ -5397,7 +5393,7 @@ class ChatApp {
     // backend's validation errors surfaced.
     async _createWorkflowFromDsl(dsl) {
         const token = window.authManager?.token || window.authManager?.getToken?.();
-        const base = '/gpt/backend/api/v1';
+        const base = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
         const resp = await fetch(`${base}/workflows`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -7437,7 +7433,7 @@ class ChatApp {
             if (window.authManager && window.authManager.token) {
                 headers['Authorization'] = `Bearer ${window.authManager.token}`;
             }
-            const res = await fetch('/gpt/backend/api/v1/chat/upload', {
+            const res = await fetch(window.apiUrl('/chat/upload'), {
                 method: 'POST',
                 headers,
                 body: form,
@@ -7816,7 +7812,7 @@ class ChatApp {
         }
 
         try {
-            const res = await fetch('/gpt/backend/api/v1/prompts', {
+            const res = await fetch(window.apiUrl('/prompts'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -7866,7 +7862,7 @@ class ChatApp {
             return;
         }
         try {
-            const res = await fetch('/gpt/backend/api/v1/prompts', {
+            const res = await fetch(window.apiUrl('/prompts'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -8044,7 +8040,7 @@ class ChatApp {
             // instead of treating it as prior context.
             const historyForReplay = this.conversationHistory.slice(0, -1).slice(-10);
 
-            const response = await fetch('/gpt/backend/api/v1/compare', {
+            const response = await fetch(window.apiUrl('/compare'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -8155,7 +8151,7 @@ class ChatApp {
 
         try {
             const storedUser = window.accountStore.getActiveUser();
-            const response = await fetch('/gpt/backend/api/v1/verify', {
+            const response = await fetch(window.apiUrl('/verify'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -8775,7 +8771,7 @@ class ChatApp {
             const params = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
 
             // Call backend to execute the function
-            const response = await fetch('/gpt/backend/api/v1/hume/tools/execute', {
+            const response = await fetch(window.apiUrl('/hume/tools/execute'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -8839,7 +8835,7 @@ class ChatApp {
         try {
             console.log('🔄 Syncing tools to Hume API...');
 
-            const response = await fetch('/gpt/backend/api/v1/hume/tools/sync', {
+            const response = await fetch(window.apiUrl('/hume/tools/sync'), {
                 method: 'POST',
                 headers: this.getAuthHeaders()
             });
@@ -9115,7 +9111,7 @@ class ChatApp {
                 try {
                     this.showProgress(`Switching to ${claudeProvider.display_name}...`);
 
-                    const response = await fetch('/gpt/backend/api/v1/providers', {
+                    const response = await fetch(window.apiUrl('/providers'), {
                         method: 'POST',
                         headers: this.getAuthHeaders(),
                         body: JSON.stringify({ provider: claudeProvider.name })
@@ -9351,7 +9347,7 @@ class ChatApp {
      */
     async loadContextsList() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/contexts', {
+            const response = await fetch(window.apiUrl('/contexts'), {
                 headers: this.getAuthHeaders()
             });
 
@@ -9610,7 +9606,7 @@ class ChatApp {
         }
 
         try {
-            const response = await fetch(`/gpt/backend/api/v1/contexts/${contextId}`, {
+            const response = await fetch(window.apiUrl(`/contexts/${contextId}`), {
                 headers: this.getAuthHeaders()
             });
 
@@ -9678,7 +9674,7 @@ class ChatApp {
         if (!confirmed) return;
 
         try {
-            const response = await fetch(`/gpt/backend/api/v1/contexts/${contextId}`, {
+            const response = await fetch(window.apiUrl(`/contexts/${contextId}`), {
                 method: 'DELETE',
                 headers: this.getAuthHeaders()
             });
@@ -9825,7 +9821,7 @@ class ChatApp {
      */
     async updateContextTitle(contextId, newTitle) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/contexts/${contextId}`, {
+            const response = await fetch(window.apiUrl(`/contexts/${contextId}`), {
                 method: 'PUT',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({ title: newTitle })
@@ -9878,7 +9874,7 @@ class ChatApp {
                 }
             };
 
-            const response = await fetch('/gpt/backend/api/v1/contexts', {
+            const response = await fetch(window.apiUrl('/contexts'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(requestBody)
@@ -10158,7 +10154,7 @@ class ChatApp {
             // Lazy-init the agents library on first visit, then reload its tree.
             if (!window.agentsLibrary && window.AgentsLibrary) {
                 window.agentsLibrary = new window.AgentsLibrary(
-                    '/gpt/backend/api/v1',
+                    window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
                     () => this.getAuthHeaders(),
                     (k) => (window.i18n?.t ? window.i18n.t(k) : k),
                 );
@@ -10190,13 +10186,15 @@ class ChatApp {
 
         // Hide agent teams content panel when switching to other views.
         //
-        // Exception: when the user switches the sidebar to 'agents' while
-        // the workflow canvas is already up, KEEP the canvas visible.
-        // Agents are drag-dropped FROM the agents sidebar ONTO the workflow
-        // canvas, so the canvas must stay onscreen across that switch.
-        // Any view that isn't agent-teams/agents (e.g. conversations,
-        // skills, settings) still hides the canvas as before.
-        const KEEPS_WORKFLOW_CANVAS_VISIBLE = new Set(['agent-teams', 'agents']);
+        // Exception: when the user switches the sidebar to 'agents' or
+        // 'skills' while the workflow canvas is already up, KEEP the canvas
+        // visible. Agents AND skills are drag-dropped FROM their sidebar lists
+        // ONTO the workflow canvas (skills bind to a node), so the canvas must
+        // stay onscreen across that switch. The guard below is gated on
+        // agentTeamsPanel.isActive, so from plain chat (no workflow up)
+        // selecting Skills behaves as before. Any other view (conversations,
+        // settings, file-storage) still hides the canvas.
+        const KEEPS_WORKFLOW_CANVAS_VISIBLE = new Set(['agent-teams', 'agents', 'skills']);
         if (!KEEPS_WORKFLOW_CANVAS_VISIBLE.has(view) && window.agentTeamsPanel && window.agentTeamsPanel.isActive) {
             window.agentTeamsPanel.hide();
         }
@@ -10212,7 +10210,7 @@ class ChatApp {
      */
     async loadPromptLibrary() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/prompts', {
+            const response = await fetch(window.apiUrl('/prompts'), {
                 headers: this.getAuthHeaders()
             });
             const data = await response.json();
@@ -10224,7 +10222,7 @@ class ChatApp {
                 if (this.promptLibrary.length === 0) {
                     await this.createDefaultRootFolder();
                     // Reload the library to get the newly created folder
-                    const reloadResponse = await fetch('/gpt/backend/api/v1/prompts', {
+                    const reloadResponse = await fetch(window.apiUrl('/prompts'), {
                         headers: this.getAuthHeaders()
                     });
                     const reloadData = await reloadResponse.json();
@@ -10247,7 +10245,7 @@ class ChatApp {
      */
     async createDefaultRootFolder() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/prompts', {
+            const response = await fetch(window.apiUrl('/prompts'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -10599,7 +10597,7 @@ class ChatApp {
      */
     async renameNode(nodeId, newName) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/prompts/${nodeId}`, {
+            const response = await fetch(window.apiUrl(`/prompts/${nodeId}`), {
                 method: 'PUT',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -10660,7 +10658,7 @@ class ChatApp {
         if (!confirm(confirmMsg)) return;
 
         try {
-            const response = await fetch(`/gpt/backend/api/v1/prompts/${node.id}`, {
+            const response = await fetch(window.apiUrl(`/prompts/${node.id}`), {
                 method: 'DELETE',
                 headers: this.getAuthHeaders()
             });
@@ -10780,7 +10778,7 @@ class ChatApp {
      */
     async saveEditableNode(parentId, type, name, content = null) {
         try {
-            const response = await fetch('/gpt/backend/api/v1/prompts', {
+            const response = await fetch(window.apiUrl('/prompts'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
@@ -10810,7 +10808,7 @@ class ChatApp {
      */
     async updatePrompt(promptId, content) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/prompts/${promptId}`, {
+            const response = await fetch(window.apiUrl(`/prompts/${promptId}`), {
                 method: 'PUT',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({

@@ -1494,6 +1494,7 @@
         .usage-card.grok { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #fecaca; }
         .usage-card.deepseek { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #93c5fd; }
         .usage-card.gamma4 { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }
+        .usage-card.glm { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-color: #7dd3fc; }
         .usage-card-header {
             font-size: 13px;
             font-weight: 600;
@@ -2783,6 +2784,17 @@
                                 </a>
                                 <span class="key-status default" id="key-status-gamma4">Default</span>
                             </div>
+                            <!-- GLM 5.2 -->
+                            <div class="api-key-row">
+                                <label>GLM 5.2</label>
+                                <select class="model-select" id="model-select-glm"></select>
+                                <span class="model-info" id="model-info-glm"></span>
+                                <input type="password" id="api-key-glm" placeholder="sk-..." autocomplete="off">
+                                <a class="console-link" href="https://z.ai" target="_blank" rel="noopener noreferrer" title="Open z.ai platform (get API key)" aria-label="Open z.ai platform">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                </a>
+                                <span class="key-status default" id="key-status-glm">Default</span>
+                            </div>
                         </div>
                         <!-- Advanced: per-provider system prompt overrides.
                              Empty = use admin global / default. The "Save API Keys"
@@ -2822,6 +2834,10 @@
                                 <div class="system-prompt-row">
                                     <label for="system-prompt-gamma4">Gamma4</label>
                                     <textarea id="system-prompt-gamma4" rows="3" placeholder="Default system prompt" data-i18n-placeholder="settings.systemPromptPlaceholder"></textarea>
+                                </div>
+                                <div class="system-prompt-row">
+                                    <label for="system-prompt-glm">GLM 5.2</label>
+                                    <textarea id="system-prompt-glm" rows="3" placeholder="Default system prompt" data-i18n-placeholder="settings.systemPromptPlaceholder"></textarea>
                                 </div>
                             </div>
                         </details>
@@ -2951,6 +2967,21 @@
                                 <span class="block text-xs text-gray-500">Check to turn every skill on, uncheck to turn every skill off.</span>
                             </span>
                             <input type="checkbox" id="skills-master-toggle" class="w-5 h-5 accent-blue-600">
+                        </label>
+                        <!-- Default provider the workflow-compile skill assigns to agents when the user doesn't name one. -->
+                        <label class="flex items-center justify-between gap-3 p-3 mb-3 border border-gray-200 rounded-lg">
+                            <span class="text-sm text-gray-800">
+                                <strong>Default workflow provider</strong>
+                                <span class="block text-xs text-gray-500">Which LLM the workflow-compile skill gives an agent when you don't specify one.</span>
+                            </span>
+                            <select id="workflow-default-provider" class="text-sm border border-gray-300 rounded-md px-2 py-1 bg-white">
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="openai">OpenAI (GPT)</option>
+                                <option value="anthropic">Anthropic (Claude)</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="grok">Grok</option>
+                                <option value="kimi">Kimi</option>
+                            </select>
                         </label>
                         <div id="skills-list" class="space-y-2">
                             <div class="text-sm text-gray-500 p-4">Loading…</div>
@@ -4090,7 +4121,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260706-backendswitch"></script>
+    <script src="assets/js/settings-panel.js?v=20260709-glm"></script>
     <script src="assets/js/agent-teams-panel.js"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4120,12 +4151,12 @@
     <script src="assets/js/skills-import.js?v=20260506-github-install"></script>
     <script src="assets/js/skills-manager.js?v=20260625-inputfiles"></script>
     <script src="assets/js/skillopt-panel.js?v=20260614-selfheal"></script>
-    <script src="assets/js/heal-panel.js?v=20260614-3model"></script>
+    <script src="assets/js/heal-panel.js?v=20260709-glm"></script>
     <script src="assets/js/agent-turn.js?v=20260624-shared1"></script>
     <script src="assets/js/workflow-editor.js?v=20260706-savetopbtn"></script>
     <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20260626-unwrap"></script>
+    <script src="assets/js/chat.js?v=20260709-glm"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

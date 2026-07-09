@@ -230,6 +230,13 @@ def _make_model(provider: str, model: str):
             # K2 enforces non-thinking sampling; mirror the PHP KimiProvider.
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         return LiteLlm(**kwargs)
+    if p == "glm":
+        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
+        return LiteLlm(
+            model="openai/" + model,
+            api_base="https://api.z.ai/api/paas/v4",
+            api_key=os.environ.get("GLM_API_KEY"),
+        )
     # Fallback: best-effort litellm prefixed spec.
     return LiteLlm(model=model if "/" in model else p + "/" + model)
 PY;

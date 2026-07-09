@@ -43,7 +43,7 @@ class SettingsPanel {
         this.mcpRefreshBtn = document.getElementById('mcp-refresh');
 
         // Provider list
-        this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4'];
+        this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4', 'glm'];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -386,6 +386,20 @@ class SettingsPanel {
      * to make the list always reflect what's actually on disk.
      */
     async loadSkills() {
+        // Default workflow provider dropdown (localStorage; read by skills-manager.js when it injects
+        // the setting into the workflow-compile skill). Wired once, before the skills-list guards so it
+        // works even with no skills installed.
+        const wfProv = document.getElementById('workflow-default-provider');
+        if (wfProv) {
+            wfProv.value = localStorage.getItem('workflowDefaultProvider') || 'deepseek';
+            if (!wfProv.dataset.wired) {
+                wfProv.dataset.wired = '1';
+                wfProv.addEventListener('change', () => {
+                    localStorage.setItem('workflowDefaultProvider', wfProv.value);
+                });
+            }
+        }
+
         const list = document.getElementById('skills-list');
         if (!list) return;
 
@@ -3655,7 +3669,8 @@ class SettingsPanel {
             'gemini': 'Gemini (Google)',
             'grok': 'Grok (xAI)',
             'deepseek': 'DeepSeek',
-            'gamma4': 'Gamma4'
+            'gamma4': 'Gamma4',
+            'glm': 'GLM 5.2 (z.ai)'
         };
         return names[provider] || provider;
     }

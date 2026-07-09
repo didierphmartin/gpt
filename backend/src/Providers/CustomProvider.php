@@ -46,6 +46,17 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
     private string $chatEndpoint;
     private bool $supportsTools;
     private bool $streamingEnabled;
+    private int $requestTimeout;
+    private int $connectTimeout;
+
+    /** Fallback total-request timeout (seconds) — generous, for long legit streams (e.g. DeepSeek). */
+    private const DEFAULT_TIMEOUT = 600;
+    /**
+     * Per-provider total-timeout overrides (seconds) for small/flaky self-hosted endpoints that can
+     * accept a connection then never respond (e.g. gamma4's vLLM host). Caps the 0-byte stall so it
+     * fails fast with a clear error instead of hanging the 10-minute default. Config `timeout` wins.
+     */
+    private const PROVIDER_TIMEOUTS = ['gamma4' => 90];
 
     public function __construct(Configuration $config, string $providerName)
     {
@@ -67,9 +78,19 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->supportsTools = $providerConfig['supports_tools'] ?? true;
         $this->streamingEnabled = $providerConfig['streaming'] ?? false;
 
+        // Fail-fast guard: a small/flaky endpoint (gamma4) can accept the socket and never send a
+        // byte; the old 600s blanket timeout turned that into a 10-minute silent hang. Cap such
+        // providers via PROVIDER_TIMEOUTS (config `timeout` overrides), keep others at 600, and add a
+        // short connect timeout. On expiry Guzzle throws → surfaces as a clear error, not a hang.
+        $this->requestTimeout = (int)($providerConfig['timeout']
+            ?? self::PROVIDER_TIMEOUTS[$providerName]
+            ?? self::DEFAULT_TIMEOUT);
+        $this->connectTimeout = (int)($providerConfig['connect_timeout'] ?? 15);
+
         $this->httpClient = new Client([
             'base_uri' => $this->baseUrl,
-            'timeout' => 600, // 10 minutes for large responses
+            'timeout' => $this->requestTimeout,
+            'connect_timeout' => $this->connectTimeout,
         ]);
 
         if ($config->isDebugEnabled()) {
