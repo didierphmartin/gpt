@@ -83,7 +83,7 @@ router.post('/api/v1/providers/switch', handle((ctx) => providers.switch(ctx)));
 router.post('/api/v1/chat/upload', uploadMw.single('file'), (req: Request, res: Response) => {
   chatAttachments.upload(req, res).catch((err) => {
     console.error('[chat/upload] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 
@@ -91,7 +91,7 @@ router.post('/api/v1/chat/upload', uploadMw.single('file'), (req: Request, res: 
 router.post('/api/v1/chat', (req: Request, res: Response) => {
   chat.chat(req, res).catch((err) => {
     console.error('[chat] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 
@@ -99,13 +99,13 @@ router.post('/api/v1/chat', (req: Request, res: Response) => {
 router.post('/api/v1/verify', (req: Request, res: Response) => {
   chat.verify(req, res).catch((err) => {
     console.error('[verify] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 router.post('/api/v1/compare', (req: Request, res: Response) => {
   chat.compare(req, res).catch((err) => {
     console.error('[compare] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 
@@ -318,7 +318,7 @@ router.post('/api/v1/agents/:id(\\d+)/run', handle((ctx) => agents.run(ctx)));
 router.post('/api/v1/agents/:id(\\d+)/chat', (req: Request, res: Response) => {
   agents.chat(req, res).catch((err) => {
     console.error('[agents.chat] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 
@@ -366,7 +366,7 @@ router.post('/api/v1/workflows/:id(\\d+)/run', handle((ctx) => workflows.run(ctx
 router.post('/api/v1/workflows/:id(\\d+)/run-stream', (req: Request, res: Response) => {
   workflows.runStream(req, res).catch((err) => {
     console.error('[workflows.run-stream] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+    if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
 
