@@ -19,6 +19,7 @@ class UsageLogger
     private ?PDO $pdo;
     private bool $enabled;
     private ?array $connectionConfig = null;
+    private ?\Quantis\AIPortfolioAssistant\Services\PricingResolver $pricingResolver = null;
 
     /**
      * Voice pricing per second (input/output) in USD
@@ -32,56 +33,6 @@ class UsageLogger
         'grok' => [
             'input' => 0.0004,   // $0.0004/sec = $1.44/hour
             'output' => 0.0008,  // $0.0008/sec = $2.88/hour
-        ],
-    ];
-
-    /**
-     * Pricing per million tokens (input/output)
-     * Rates as of March 2026
-     */
-    private const PRICING = [
-        'claude' => [
-            'claude-sonnet-4-5-20250929' => ['input' => 3.0, 'output' => 15.0],
-            'claude-sonnet-4-5' => ['input' => 3.0, 'output' => 15.0],
-            'claude-3-5-sonnet-20241022' => ['input' => 3.0, 'output' => 15.0],
-            'claude-3-opus-20240229' => ['input' => 15.0, 'output' => 75.0],
-            'claude-3-haiku-20240307' => ['input' => 1.0, 'output' => 5.0],
-        ],
-        'openai' => [
-            'gpt-4-turbo-preview' => ['input' => 10.0, 'output' => 30.0],
-            'gpt-4' => ['input' => 30.0, 'output' => 60.0],
-            'gpt-4o' => ['input' => 2.5, 'output' => 10.0],
-            'gpt-4o-mini' => ['input' => 0.15, 'output' => 0.6],
-            'gpt-3.5-turbo' => ['input' => 0.5, 'output' => 1.5],
-            'o1' => ['input' => 15.0, 'output' => 60.0],
-            'o1-mini' => ['input' => 3.0, 'output' => 12.0],
-        ],
-        'grok' => [
-            'grok-2-1212' => ['input' => 2.0, 'output' => 10.0],
-            'grok-4-1-fast-reasoning' => ['input' => 3.0, 'output' => 15.0],
-            'grok-beta' => ['input' => 5.0, 'output' => 15.0],
-            'grok-3' => ['input' => 3.0, 'output' => 15.0],
-        ],
-        'deepseek' => [
-            'deepseek-chat' => ['input' => 0.28, 'output' => 0.42],
-            'deepseek-reasoner' => ['input' => 0.55, 'output' => 2.19],
-            'deepseek-coder' => ['input' => 0.28, 'output' => 0.42],
-        ],
-        'gemini' => [
-            'gemini-3-flash-preview' => ['input' => 0.5, 'output' => 3.0],
-            'gemini-3-pro-preview' => ['input' => 2.0, 'output' => 12.0],
-            'gemini-2.5-flash' => ['input' => 0.30, 'output' => 2.5],
-            'gemini-2.5-pro' => ['input' => 1.25, 'output' => 10.0],
-            'gemini-2.0-flash' => ['input' => 0.1, 'output' => 0.4],
-            'gemini-1.5-pro' => ['input' => 1.25, 'output' => 5.0],
-            'gemini-1.5-flash' => ['input' => 0.075, 'output' => 0.3],
-        ],
-        'kimi' => [
-            'kimi-k2.5' => ['input' => 0.6, 'output' => 3.0],
-            'kimi-k2-turbo-preview' => ['input' => 0.6, 'output' => 3.0],
-            'moonshot-v1-8k' => ['input' => 0.8, 'output' => 0.8],
-            'moonshot-v1-32k' => ['input' => 1.6, 'output' => 1.6],
-            'moonshot-v1-128k' => ['input' => 4.0, 'output' => 4.0],
         ],
     ];
 
@@ -177,10 +128,17 @@ class UsageLogger
             }
 
             // Calculate cost (voice or token-based)
+            $costError = null;
             if ($isVoiceRequest) {
                 $costUsd = $this->calculateVoiceCost($provider, $audioInputSeconds ?? 0, $audioOutputSeconds ?? 0);
             } else {
-                $costUsd = $this->calculateCost($provider, $model, $promptTokens, $completionTokens);
+                try {
+                    $costUsd = $this->calculateCost($provider, $model, $promptTokens, $completionTokens);
+                } catch (\Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException $e) {
+                    $costUsd = null; // do NOT record a misleading $0
+                    $costError = $e->getMessage();
+                    error_log('❌ [UsageLogger] PRICING_ERROR: ' . $costError);
+                }
             }
 
             // Prepare JSON fields
@@ -233,7 +191,9 @@ class UsageLogger
                 ':cost_usd' => $costUsd,
                 ':response_time_ms' => $data['response_time_ms'] ?? null,
                 ':status' => $data['status'] ?? 'success',
-                ':error_message' => $data['error_message'] ?? null,
+                ':error_message' => $costError !== null
+                    ? trim((($data['error_message'] ?? '') . ' | PRICING_ERROR: ' . $costError))
+                    : ($data['error_message'] ?? null),
                 ':function_calls_count' => $data['function_calls_count'] ?? 0,
                 ':functions_called' => $functionsCalled,
                 ':mcp_calls_count' => $mcpCallsCount,
@@ -250,7 +210,7 @@ class UsageLogger
             // Update balance ledger
             $this->updateBalance($userId, $provider, [
                 'tokens' => $totalTokens,
-                'cost' => $costUsd,
+                'cost' => $costUsd ?? 0,
                 'success' => ($data['status'] ?? 'success') === 'success',
                 'is_voice' => $isVoiceRequest,
                 'audio_seconds' => $audioDurationSeconds ?? 0,
@@ -429,15 +389,12 @@ class UsageLogger
      */
     public function calculateCost(string $provider, string $model, int $promptTokens, int $completionTokens): float
     {
-        // Get pricing for provider/model, fallback to Claude Sonnet default
-        $pricing = self::PRICING[$provider][$model]
-            ?? self::PRICING['claude']['claude-sonnet-4-5']
-            ?? ['input' => 3.0, 'output' => 15.0];
-
-        $inputCost = ($promptTokens / 1_000_000) * $pricing['input'];
-        $outputCost = ($completionTokens / 1_000_000) * $pricing['output'];
-
-        return round($inputCost + $outputCost, 6);
+        if ($this->pricingResolver === null) {
+            $this->pricingResolver = new \Quantis\AIPortfolioAssistant\Services\PricingResolver($this->pdo);
+        }
+        [$inPer1M, $outPer1M] = $this->pricingResolver->resolve($provider);
+        $cost = ($promptTokens / 1_000_000) * $inPer1M + ($completionTokens / 1_000_000) * $outPer1M;
+        return round($cost, 6);
     }
 
     /**
