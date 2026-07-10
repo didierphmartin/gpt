@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\PricingResolver;
+use Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException;
 
 /**
  * ExecutionTraceStore — Phase 0 of the self-healing design.
@@ -415,8 +417,9 @@ SQL;
         return (0.8 * $tokens * $pin + 0.2 * $tokens * $pout) / 1_000_000;
     }
 
-    /** Per-1M [in,out] USD from system_llm_settings, with defaults. Mirrors
-     *  GraphWorkflowRunner::getProviderPricing. */
+    /** Per-1M [in,out] USD via PricingResolver (single source of truth).
+     *  [null, null] when pricing is unavailable — never a hardcoded number,
+     *  never a throw. Mirrors GraphWorkflowRunner::getProviderPricing. */
     private function pricing(string $provider): array
     {
         $provider = strtolower($provider);
@@ -424,27 +427,11 @@ SQL;
         if (isset($this->pricingCache[$key])) {
             return $this->pricingCache[$key];
         }
-        $defaults = [
-            'claude' => [3.00, 15.00], 'openai' => [2.50, 10.00], 'gemini' => [0.30, 2.50],
-            'grok' => [0.20, 0.50], 'deepseek' => [0.28, 0.42], 'kimi' => [0.55, 2.20],
-        ];
-        [$in, $out] = $defaults[$key] ?? [null, null];
         try {
-            $stmt = $this->db->prepare(
-                'SELECT price_input_per_1m, price_output_per_1m FROM system_llm_settings WHERE provider_key = :k LIMIT 1'
-            );
-            $stmt->execute([':k' => $key]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row) {
-                if ($row['price_input_per_1m'] !== null) {
-                    $in = (float) $row['price_input_per_1m'];
-                }
-                if ($row['price_output_per_1m'] !== null) {
-                    $out = (float) $row['price_output_per_1m'];
-                }
-            }
-        } catch (\Throwable $e) {
-            // defaults apply
+            $resolver = new PricingResolver($this->db);
+            [$in, $out] = $resolver->resolve($key);
+        } catch (PricingUnavailableException $e) {
+            [$in, $out] = [null, null];
         }
         return $this->pricingCache[$key] = [$in, $out];
     }
