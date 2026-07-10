@@ -2899,19 +2899,10 @@ class AdminController
         $stmt->execute();
         $llmCostsRaw = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fallback pricing when a provider has no row (or null prices) in
-        // system_llm_settings. Keep in sync with SystemSettingsController::PRICE_DEFAULTS.
-        $priceFallbacks = [
-            'claude'   => [3.00, 15.00],
-            'openai'   => [2.50, 10.00],
-            'gemini'   => [0.30, 2.50],
-            'grok'     => [0.20, 0.50],
-            'deepseek' => [0.28, 0.42],
-            'kimi'     => [0.55, 2.20],
-        ];
+        // No hardcoded fallback: a provider with no/NULL price in system_llm_settings shows "—" (single source of truth).
         $llmCosts = [];
         foreach ($llmCostsRaw as $row) {
-            $fb = $priceFallbacks[$row['provider']] ?? [null, null];
+            $fb = [null, null];
             $priceIn = $row['price_in'] !== null ? (float)$row['price_in'] : $fb[0];
             $priceOut = $row['price_out'] !== null ? (float)$row['price_out'] : $fb[1];
             $row['resolved_price_in'] = $priceIn;
