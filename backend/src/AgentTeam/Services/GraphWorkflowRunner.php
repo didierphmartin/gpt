@@ -955,33 +955,15 @@ class GraphWorkflowRunner
             return $this->pricingCache[$key];
         }
 
-        // Keep in sync with SystemSettingsController::PRICE_DEFAULTS.
-        $defaults = [
-            'claude'   => [3.00, 15.00],
-            'openai'   => [2.50, 10.00],
-            'gemini'   => [0.30, 2.50],
-            'grok'     => [0.20, 0.50],
-            'deepseek' => [0.28, 0.42],
-            'kimi'     => [0.55, 2.20],
-        ];
-        [$priceIn, $priceOut] = $defaults[$key] ?? [null, null];
-
         try {
-            $stmt = $this->db->prepare(
-                "SELECT price_input_per_1m, price_output_per_1m
-                 FROM system_llm_settings WHERE provider_key = :k LIMIT 1"
-            );
-            $stmt->execute([':k' => $key]);
-            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-            if ($row) {
-                if ($row['price_input_per_1m'] !== null)  $priceIn  = (float)$row['price_input_per_1m'];
-                if ($row['price_output_per_1m'] !== null) $priceOut = (float)$row['price_output_per_1m'];
-            }
-        } catch (\Throwable $e) {
-            // Column/table may not exist yet — defaults already applied.
+            $resolver = new \Quantis\AIPortfolioAssistant\Services\PricingResolver($this->db);
+            [$in, $out] = $resolver->resolve($key);
+        } catch (\Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException $e) {
+            // Forecast/trace surface: unknown pricing renders "—", not a guessed number.
+            [$in, $out] = [null, null];
         }
 
-        return $this->pricingCache[$key] = [$priceIn, $priceOut];
+        return $this->pricingCache[$key] = [$in, $out];
     }
 
     /**
