@@ -6,6 +6,7 @@ import path from 'path';
 import zlib from 'zlib';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
+import { resolvePricing, PricingUnavailableError } from '../Services/PricingResolver';
 import { Workflow } from './WorkflowRepository';
 import { WorkflowGraphRepository } from './WorkflowRepository';
 import { Agent, AgentRepository } from './AgentRepository';
@@ -1800,33 +1801,15 @@ export class GraphWorkflowRunner {
 
     if (this.pricingCache[key]) return this.pricingCache[key];
 
-    const defaults: Record<string, [number, number]> = {
-      claude: [3.0, 15.0],
-      openai: [2.5, 10.0],
-      gemini: [0.3, 2.5],
-      grok: [0.2, 0.5],
-      deepseek: [0.28, 0.42],
-      kimi: [0.55, 2.2],
-    };
-    let priceIn: number | null = defaults[key] ? defaults[key][0] : null;
-    let priceOut: number | null = defaults[key] ? defaults[key][1] : null;
-
+    let pair: [number | null, number | null] = [null, null];
     try {
-      const row = (
-        await sql<any>`
-          SELECT price_input_per_1m, price_output_per_1m
-          FROM system_llm_settings WHERE provider_key = ${key} LIMIT 1`.execute(db)
-      ).rows[0];
-      if (row) {
-        if (row.price_input_per_1m !== null && row.price_input_per_1m !== undefined) priceIn = parseFloat(String(row.price_input_per_1m));
-        if (row.price_output_per_1m !== null && row.price_output_per_1m !== undefined) priceOut = parseFloat(String(row.price_output_per_1m));
-      }
-    } catch {
-      /* table/column may not exist — defaults already applied */
+      pair = await resolvePricing(key);
+    } catch (e) {
+      if (!(e instanceof PricingUnavailableError)) throw e;
+      pair = [null, null];
     }
-
-    this.pricingCache[key] = [priceIn, priceOut];
-    return this.pricingCache[key];
+    this.pricingCache[key] = pair;
+    return pair;
   }
 
   private async computeNodeCost(provider: string | null, inputTokens: number, outputTokens: number): Promise<number | null> {

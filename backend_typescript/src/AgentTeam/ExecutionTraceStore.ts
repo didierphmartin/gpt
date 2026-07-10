@@ -1,5 +1,6 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
+import { resolvePricing, PricingUnavailableError } from '../Services/PricingResolver';
 
 /**
  * ExecutionTraceStore — faithful TS mirror of
@@ -384,29 +385,15 @@ export class ExecutionTraceStore {
     if (Object.prototype.hasOwnProperty.call(this.pricingCache, key)) {
       return this.pricingCache[key];
     }
-    const defaults: Record<string, [number, number]> = {
-      claude: [3.0, 15.0], openai: [2.5, 10.0], gemini: [0.3, 2.5],
-      grok: [0.2, 0.5], deepseek: [0.28, 0.42], kimi: [0.55, 2.2],
-    };
-    let inP: number | null = defaults[key] ? defaults[key][0] : null;
-    let outP: number | null = defaults[key] ? defaults[key][1] : null;
+    let pair: [number | null, number | null] = [null, null];
     try {
-      const row = (
-        await sql<{ price_input_per_1m: any; price_output_per_1m: any }>`SELECT price_input_per_1m, price_output_per_1m FROM system_llm_settings WHERE provider_key = ${key} LIMIT 1`.execute(db)
-      ).rows[0];
-      if (row) {
-        if (row.price_input_per_1m !== null && row.price_input_per_1m !== undefined) {
-          inP = Number(row.price_input_per_1m);
-        }
-        if (row.price_output_per_1m !== null && row.price_output_per_1m !== undefined) {
-          outP = Number(row.price_output_per_1m);
-        }
-      }
-    } catch {
-      // defaults apply
+      pair = await resolvePricing(key);
+    } catch (e) {
+      if (!(e instanceof PricingUnavailableError)) throw e;
+      pair = [null, null]; // forecast/trace: unknown → "—"
     }
-    this.pricingCache[key] = [inP, outP];
-    return this.pricingCache[key];
+    this.pricingCache[key] = pair;
+    return pair;
   }
 
   /** Foundation reader: recurring class-d bugs, ranked by frequency. */
