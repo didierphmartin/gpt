@@ -55,17 +55,6 @@ export class SystemSettingsController {
   // Top-level provider keys that have dedicated config sections (::TOP_LEVEL_PROVIDERS).
   private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4'];
 
-  // Default per-million-token pricing (USD) fallbacks (::PRICE_DEFAULTS). [input_per_1m, output_per_1m].
-  private static readonly PRICE_DEFAULTS: Record<string, [number | null, number | null]> = {
-    claude: [3.0, 15.0],
-    openai: [2.5, 10.0],
-    gemini: [0.3, 2.5],
-    grok: [0.2, 0.5],
-    deepseek: [0.28, 0.42],
-    kimi: [0.55, 2.2],
-    gamma4: [0.0, 0.0],
-  };
-
   // Mirrors PHP's $this->config (the ai_config.php array) for provider-seeding purposes. The array
   // no longer carries provider blocks nor a 'providers' entry (now DB-loaded), so this is empty —
   // getProvidersFromConfig/seedFromConfig therefore return empty sets, matching live PHP.
@@ -136,7 +125,7 @@ export class SystemSettingsController {
         provider.max_tokens = phpIntVal(provider.max_tokens);
         provider.temperature = phpFloatVal(provider.temperature);
         provider.sort_order = phpIntVal(provider.sort_order);
-        const defaults = SystemSettingsController.PRICE_DEFAULTS[provider.provider_key] ?? [null, null];
+        const defaults: [number | null, number | null] = [null, null];
         provider.price_input_per_1m =
           provider.price_input_per_1m !== undefined && provider.price_input_per_1m !== null
             ? phpFloatVal(provider.price_input_per_1m)
@@ -222,7 +211,7 @@ export class SystemSettingsController {
       if (this.phpConfig[key] !== undefined) {
         const cfg = this.phpConfig[key];
         const defaults = providerDefaults[key] ?? {};
-        const prices = SystemSettingsController.PRICE_DEFAULTS[key] ?? [null, null];
+        const prices: [number | null, number | null] = [null, null];
         providers.push({
           id: null,
           provider_key: key,
@@ -255,7 +244,7 @@ export class SystemSettingsController {
         if (SystemSettingsController.TOP_LEVEL_PROVIDERS.includes(key) && this.phpConfig[key] !== undefined) {
           continue;
         }
-        const prices = SystemSettingsController.PRICE_DEFAULTS[key] ?? [null, null];
+        const prices: [number | null, number | null] = [null, null];
         providers.push({
           id: null,
           provider_key: key,
@@ -309,7 +298,7 @@ export class SystemSettingsController {
       provider.streaming = phpBoolVal(provider.streaming);
       provider.supports_tools = phpBoolVal(provider.supports_tools);
       provider.enabled = phpBoolVal(provider.enabled);
-      const defaults = SystemSettingsController.PRICE_DEFAULTS[provider.provider_key] ?? [null, null];
+      const defaults: [number | null, number | null] = [null, null];
       provider.price_input_per_1m =
         provider.price_input_per_1m !== undefined && provider.price_input_per_1m !== null
           ? phpFloatVal(provider.price_input_per_1m)
@@ -518,7 +507,7 @@ export class SystemSettingsController {
       supportedModels = JSON.stringify(supportedModels);
     }
 
-    const priceDefaults = SystemSettingsController.PRICE_DEFAULTS[key] ?? [null, null];
+    const priceDefaults: [number | null, number | null] = [null, null];
     const priceInput = cfg.price_input_per_1m !== undefined ? phpFloatVal(cfg.price_input_per_1m) : priceDefaults[0];
     const priceOutput = cfg.price_output_per_1m !== undefined ? phpFloatVal(cfg.price_output_per_1m) : priceDefaults[1];
 

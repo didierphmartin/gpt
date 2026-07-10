@@ -1788,19 +1788,9 @@ export class AdminController {
         ORDER BY stored_cost_total DESC`.execute(db)
     ).rows;
 
-    // Fallback pricing when a provider has no row (or null prices) in system_llm_settings.
-    const priceFallbacks: Record<string, [number, number]> = {
-      claude: [3.0, 15.0],
-      openai: [2.5, 10.0],
-      gemini: [0.3, 2.5],
-      grok: [0.2, 0.5],
-      deepseek: [0.28, 0.42],
-      kimi: [0.55, 2.2],
-      gamma4: [0.0, 0.0],
-    };
-
+    // No provider has a hardcoded fallback price; a missing/null system_llm_settings row stays null.
     const llmCosts: any[] = llmCostsRaw.map((row: any) => {
-      const fb = priceFallbacks[row.provider] ?? [null, null];
+      const fb: [number | null, number | null] = [null, null];
       const priceIn = row.price_in !== null && row.price_in !== undefined ? Number(row.price_in) : fb[0];
       const priceOut = row.price_out !== null && row.price_out !== undefined ? Number(row.price_out) : fb[1];
       const tokensIn = phpIntVal(row.tokens_in);
