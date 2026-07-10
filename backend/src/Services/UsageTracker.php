@@ -14,43 +14,7 @@ class UsageTracker implements UsageTrackerInterface
 {
     private ?PDO $pdo;
     private bool $enabled;
-
-    /**
-     * Pricing per million tokens (input/output)
-     * Note: This is a backup - primary pricing is in UsageLogger
-     */
-    private const PRICING = [
-        'claude' => [
-            'claude-sonnet-4-5-20250929' => ['input' => 3.0, 'output' => 15.0],
-            'claude-sonnet-4-5' => ['input' => 3.0, 'output' => 15.0],
-            'claude-3-5-sonnet-20241022' => ['input' => 3.0, 'output' => 15.0],
-            'claude-3-opus-20240229' => ['input' => 15.0, 'output' => 75.0],
-            'claude-3-haiku-20240307' => ['input' => 0.25, 'output' => 1.25],
-        ],
-        'openai' => [
-            'gpt-4-turbo-preview' => ['input' => 10.0, 'output' => 30.0],
-            'gpt-4' => ['input' => 30.0, 'output' => 60.0],
-            'gpt-4o' => ['input' => 2.5, 'output' => 10.0],
-            'gpt-4o-mini' => ['input' => 0.15, 'output' => 0.6],
-            'gpt-3.5-turbo' => ['input' => 0.5, 'output' => 1.5],
-        ],
-        'grok' => [
-            'grok-2-1212' => ['input' => 2.0, 'output' => 10.0],
-            'grok-4-1-fast-reasoning' => ['input' => 3.0, 'output' => 15.0],
-        ],
-        'deepseek' => [
-            'deepseek-chat' => ['input' => 0.14, 'output' => 0.28],
-            'deepseek-reasoner' => ['input' => 0.55, 'output' => 2.19],
-        ],
-        'gemini' => [
-            'gemini-2.5-flash' => ['input' => 0.075, 'output' => 0.3],
-            'gemini-2.5-pro' => ['input' => 1.25, 'output' => 10.0],
-        ],
-        'kimi' => [
-            'kimi-k2.5' => ['input' => 0.6, 'output' => 2.4],
-            'kimi-k2-turbo-preview' => ['input' => 0.6, 'output' => 2.4],
-        ],
-    ];
+    private ?PricingResolver $pricingResolver = null;
 
     public function __construct(?PDO $pdo = null, bool $enabled = true)
     {
@@ -92,6 +56,15 @@ class UsageTracker implements UsageTrackerInterface
             $provider = $data['provider'] ?? 'claude';
             $model = $data['model'] ?? 'claude-sonnet-4-5-20250929';
 
+            $costError = null;
+            try {
+                $costUsd = $this->calculateCost($provider, $model, $inputTokens, $outputTokens);
+            } catch (\Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException $e) {
+                $costUsd = null;
+                $costError = $e->getMessage();
+                error_log('❌ [UsageTracker] PRICING_ERROR: ' . $costError);
+            }
+
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute([
                 ':user_id' => $data['user_id'] ?? null,
@@ -101,11 +74,13 @@ class UsageTracker implements UsageTrackerInterface
                 ':prompt_tokens' => $inputTokens,
                 ':completion_tokens' => $outputTokens,
                 ':total_tokens' => $inputTokens + $outputTokens,
-                ':cost_usd' => $this->calculateCost($provider, $model, $inputTokens, $outputTokens),
+                ':cost_usd' => $costUsd,
                 ':response_time_ms' => $data['response_time_ms'] ?? 0,
                 ':function_calls_count' => $data['function_calls_count'] ?? 0,
                 ':status' => $data['status'] ?? 'success',
-                ':error_message' => $data['error_message'] ?? null,
+                ':error_message' => $costError !== null
+                    ? trim((($data['error_message'] ?? '') . ' | PRICING_ERROR: ' . $costError))
+                    : ($data['error_message'] ?? null),
                 ':request_metadata' => json_encode(['request_type' => $data['request_type'] ?? 'chat']),
             ]);
         } catch (\PDOException $e) {
@@ -236,11 +211,12 @@ class UsageTracker implements UsageTrackerInterface
      */
     public function calculateCost(string $provider, string $model, int $inputTokens, int $outputTokens): float
     {
-        $pricing = self::PRICING[$provider][$model] ?? ['input' => 3.0, 'output' => 15.0];
-
-        $inputCost = ($inputTokens / 1_000_000) * $pricing['input'];
-        $outputCost = ($outputTokens / 1_000_000) * $pricing['output'];
-
+        if ($this->pricingResolver === null) {
+            $this->pricingResolver = new PricingResolver($this->pdo);
+        }
+        [$inPer1M, $outPer1M] = $this->pricingResolver->resolve($provider);
+        $inputCost = ($inputTokens / 1_000_000) * $inPer1M;
+        $outputCost = ($outputTokens / 1_000_000) * $outPer1M;
         return round($inputCost + $outputCost, 6);
     }
 
