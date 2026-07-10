@@ -225,7 +225,9 @@ class UsageLogger
             } else {
                 $logMsg .= ", Tokens=$totalTokens";
             }
-            $logMsg .= ", Cost=$" . number_format($costUsd, 6);
+            $logMsg .= $costUsd === null
+                ? ", Cost=UNKNOWN (PRICING_ERROR)"
+                : ", Cost=$" . number_format($costUsd, 6);
             error_log($logMsg);
 
             return $transactionId;
