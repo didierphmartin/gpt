@@ -26,20 +26,6 @@ class SystemSettingsController
     // Top-level provider keys that have dedicated config sections
     private const TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
 
-    // Default per-million-token pricing (USD) for known provider/model pairs.
-    // Used as fallback when no explicit value is stored. Sourced April 2026.
-    // [input_per_1m, output_per_1m]
-    private const PRICE_DEFAULTS = [
-        'claude'   => [3.00, 15.00],  // claude-sonnet-4-5
-        'openai'   => [2.50, 10.00],  // gpt-4o
-        'gemini'   => [0.30, 2.50],   // gemini-2.5-flash (Flash tier)
-        'grok'     => [0.20, 0.50],   // grok-4-1-fast-reasoning
-        'deepseek' => [0.28, 0.42],   // deepseek-chat / deepseek-reasoner (V3.2)
-        'kimi'     => [0.55, 2.20],   // kimi-k2
-        'gamma4'   => [0.00, 0.00],   // Gemma-4-E4B-it — free
-        'glm'      => [1.40, 4.40],   // glm-5.2 (z.ai / Zhipu): $1.40 in / $4.40 out per 1M
-    ];
-
     private bool $priceColumnsEnsured = false;
 
     public function __construct(PDO $db, array $config)
@@ -132,7 +118,7 @@ class SystemSettingsController
                 $provider['max_tokens'] = (int)$provider['max_tokens'];
                 $provider['temperature'] = (float)$provider['temperature'];
                 $provider['sort_order'] = (int)$provider['sort_order'];
-                $defaults = self::PRICE_DEFAULTS[$provider['provider_key']] ?? [null, null];
+                $defaults = [null, null];
                 $provider['price_input_per_1m'] = isset($provider['price_input_per_1m']) && $provider['price_input_per_1m'] !== null
                     ? (float)$provider['price_input_per_1m'] : $defaults[0];
                 $provider['price_output_per_1m'] = isset($provider['price_output_per_1m']) && $provider['price_output_per_1m'] !== null
@@ -236,7 +222,7 @@ class SystemSettingsController
                 $config = $this->config[$key];
                 $defaults = $providerDefaults[$key] ?? [];
 
-                $prices = self::PRICE_DEFAULTS[$key] ?? [null, null];
+                $prices = [null, null];
                 $providers[] = [
                     'id' => null,
                     'provider_key' => $key,
@@ -269,7 +255,7 @@ class SystemSettingsController
                     continue;
                 }
 
-                $prices = self::PRICE_DEFAULTS[$key] ?? [null, null];
+                $prices = [null, null];
                 $providers[] = [
                     'id' => null,
                     'provider_key' => $key,
@@ -342,7 +328,7 @@ class SystemSettingsController
             $provider['streaming'] = (bool)$provider['streaming'];
             $provider['supports_tools'] = (bool)$provider['supports_tools'];
             $provider['enabled'] = (bool)$provider['enabled'];
-            $defaults = self::PRICE_DEFAULTS[$provider['provider_key']] ?? [null, null];
+            $defaults = [null, null];
             $provider['price_input_per_1m'] = isset($provider['price_input_per_1m']) && $provider['price_input_per_1m'] !== null
                 ? (float)$provider['price_input_per_1m'] : $defaults[0];
             $provider['price_output_per_1m'] = isset($provider['price_output_per_1m']) && $provider['price_output_per_1m'] !== null
@@ -617,7 +603,7 @@ class SystemSettingsController
             $supportedModels = json_encode($supportedModels);
         }
 
-        $priceDefaults = self::PRICE_DEFAULTS[$key] ?? [null, null];
+        $priceDefaults = [null, null];
         $priceInput = isset($config['price_input_per_1m']) ? (float)$config['price_input_per_1m'] : $priceDefaults[0];
         $priceOutput = isset($config['price_output_per_1m']) ? (float)$config['price_output_per_1m'] : $priceDefaults[1];
 
