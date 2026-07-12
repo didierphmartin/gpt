@@ -1,6 +1,8 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
-import { Agent, buildSystemPrompt } from './AgentRepository';
+import { Agent, buildSystemPrompt, AgentRepository } from './AgentRepository';
+import { AgentDelegationFunctions } from './AgentDelegationFunctions';
+import { AgentToolsExecutor } from './AgentToolsExecutor';
 import { StreamContext } from './StreamContext';
 import { SSEStream } from '../Services/SseStream';
 import { ToolsManager } from '../Services/ToolsManager';
@@ -332,12 +334,21 @@ export class AgentRunner {
 
     const baseExecutor = new CombinedToolsExecutor(this.toolsManager, mcpLoader);
 
-    // DEFERRED (Slice 1b): manager agents are wrapped with AgentToolsExecutor + AgentDelegationFunctions
-    // in PHP. We do NOT add delegation tools here — managers run with the base executor (no delegation).
+    // Managers get a delegation-aware executor: delegation tool names route to the
+    // delegation handlers (with this runner's executionContext); all else → base.
+    const executor: FunctionExecutor =
+      agent.agentType === 'manager'
+        ? new AgentToolsExecutor(baseExecutor, this.getDelegationFunctions(), this)
+        : baseExecutor;
 
     const tools = this.buildToolsForAgent(agent, mcpLoader, toolsFilter);
-    provider.setFunctionExecutor(new AgentToolDefsExecutor(baseExecutor, tools));
+    provider.setFunctionExecutor(new AgentToolDefsExecutor(executor, tools));
     return tools;
+  }
+
+  /** Fresh delegation-functions instance bound to this runner. Mirrors AgentRunner::getDelegationFunctions. */
+  private getDelegationFunctions(): AgentDelegationFunctions {
+    return new AgentDelegationFunctions(new AgentRepository(), this);
   }
 
   /**
@@ -348,8 +359,8 @@ export class AgentRunner {
    */
   private buildToolsForAgent(agent: Agent, mcpLoader: MCPToolsLoader, toolsFilter: string[] | null): ToolDefinition[] {
     if (agent.agentType === 'manager') {
-      // DEFERRED: delegation tools (list_available_agents / delegate_to_agent / complete_task).
-      return [];
+      // Managers get ONLY the delegation tools (no built-in / MCP tools) — they must delegate.
+      return this.getDelegationFunctions().toolDefinitions();
     }
 
     const byName = new Map<string, ToolDefinition>();
