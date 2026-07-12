@@ -170,6 +170,14 @@ export function isManager(a: Agent): boolean {
   return a.agentType === 'manager';
 }
 
+/** Mirrors Agent::canDelegateToAgent. Manager-only; empty canDelegateTo = any agent. */
+export function canDelegateToAgent(manager: Agent, agentId: number): boolean {
+  if (manager.agentType !== 'manager') return false;
+  const list = Array.isArray(manager.canDelegateTo) ? manager.canDelegateTo : [];
+  if (list.length === 0) return true;
+  return list.map((x: any) => Number(x)).includes(Number(agentId));
+}
+
 /**
  * Mirrors Agent::buildSystemPrompt(). The manager block is emitted verbatim (it references the
  * delegation tools); delegation tool *registration* is deferred (Slice 1b) but the prompt text is
@@ -212,6 +220,30 @@ export class AgentRepository {
   async findById(id: number): Promise<Agent | null> {
     const row = (await sql<any>`SELECT * FROM agents WHERE id = ${id}`.execute(db)).rows[0];
     return row ? hydrateAgent(row) : null;
+  }
+
+  /** Mirrors AgentRepository::findWorkerAgents. Empty canDelegateTo → all enabled worker/standard. */
+  async findWorkerAgents(managerId: number): Promise<Agent[]> {
+    const manager = await this.findById(managerId);
+    if (!manager || manager.agentType !== 'manager') return [];
+    const list = Array.isArray(manager.canDelegateTo) ? manager.canDelegateTo : [];
+
+    let rows: any[];
+    if (list.length === 0) {
+      rows = (
+        await sql<any>`SELECT * FROM agents
+          WHERE agent_type IN ('worker','standard') AND enabled = 1
+          ORDER BY display_order ASC, name ASC`.execute(db)
+      ).rows;
+    } else {
+      const ids = list.map((x: any) => Number(x));
+      rows = (
+        await sql<any>`SELECT * FROM agents
+          WHERE id IN (${sql.join(ids)}) AND enabled = 1
+          ORDER BY display_order ASC, name ASC`.execute(db)
+      ).rows;
+    }
+    return rows.map((r) => hydrateAgent(r));
   }
 
   /** Mirrors findByName(): first enabled agent named `name` the user can access. */
