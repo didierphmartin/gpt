@@ -135,7 +135,7 @@ export class AgentRunner {
       // Get the LLM provider (applies the agent's model/temperature/max_tokens overrides)
       const provider = await this.resolveProvider(agent);
 
-      // Set up unified function executor (built-in + MCP; delegation deferred for managers)
+      // Set up unified function executor (built-in + MCP; managers also get delegation tools)
       const toolsFilter: string[] | null = context.tools_filter ?? null;
       const tools = await this.setupFunctionExecutor(provider, agent, userId, toolsFilter);
 
@@ -353,7 +353,7 @@ export class AgentRunner {
 
   /**
    * Build tool definitions for an agent. Mirrors AgentRunner::buildToolsForAgent.
-   *  - Manager: ONLY delegation tools — DEFERRED, returns [] (PHP would return delegation tool defs).
+   *  - Manager: ONLY delegation tools (delegate_to_agent / list_available_agents / complete_task).
    *  - Worker/Standard: built-in [empty] + ALL MCP tools, then the optional request-level tools_filter.
    *    NOTE the PHP quirk: the agent's own configured `tools` field is NOT used to filter here.
    */
