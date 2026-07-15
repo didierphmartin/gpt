@@ -138,6 +138,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/heal/record', ['HealController', 'record']);
         $r->get('/api/v1/heal/status', ['HealController', 'status']);
 
+        // Skill genesis (spec: docs/specs/2026-07-14-skill-genesis-design.md §7)
+        $r->get('/api/v1/genesis/promotions', ['GenesisController', 'listPromotions']);
+        $r->post('/api/v1/genesis/authorize', ['GenesisController', 'authorize']);
+        $r->post('/api/v1/genesis/record', ['GenesisController', 'record']);
+        $r->post('/api/v1/genesis/promotions/{id:\d+}/dismiss', ['GenesisController', 'dismiss']);
+
         // ============================================
         // FILE STORAGE ROUTES (universalFS)
         // ============================================

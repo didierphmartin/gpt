@@ -112,4 +112,194 @@ final class GenesisController
         }
         $this->tablesEnsured = true;
     }
+
+    // ─── Endpoints ───────────────────────────────────────────────────────────
+
+    /** GET /api/v1/genesis/promotions?status=proposed */
+    public function listPromotions(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $this->ensureTables();
+        $status = (string) ($request['query']['status'] ?? '');
+        $sql = 'SELECT * FROM skill_promotions WHERE user_id = :u';
+        $params = [':u' => $userId];
+        if ($status !== '') {
+            $sql .= ' AND status = :s';
+            $params[':s'] = $status;
+        }
+        $sql .= ' ORDER BY created_at DESC LIMIT 100';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$r) {
+            $r['eval_queries'] = json_decode((string) $r['eval_queries'], true) ?: [];
+            $r['parameter_schema'] = $r['parameter_schema'] !== null
+                ? (json_decode((string) $r['parameter_schema'], true) ?: null) : null;
+        }
+        return ['success' => true, 'promotions' => $rows];
+    }
+
+    /** POST /api/v1/genesis/authorize {promotion_id, estimate_usd, approved?} */
+    public function authorize(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $this->ensureTables();
+        $b = $request['body'] ?? [];
+        $promotionId = (int) ($b['promotion_id'] ?? 0);
+        $estimate = max(0.0, (float) ($b['estimate_usd'] ?? 0));
+        $approved = !empty($b['approved']);
+
+        if (!$this->promotionBelongsToUser($promotionId, $userId)) {
+            return ['success' => false, 'error' => 'Promotion not found', 'status_code' => 404];
+        }
+
+        $cfg = $this->genesisConfig($userId);
+        $spent = $this->spentToday($userId);
+        $remaining = max(0.0, $cfg['budget'] - $spent);
+        $born = $this->bornThisWeek($userId);
+
+        $decision = $this->decide($cfg['mode'], $estimate, $remaining, $cfg['ceiling'], $born, $cfg['weekly_max'], $approved);
+
+        if ($decision['allowed']) {
+            $stmt = $this->db->prepare("UPDATE skill_promotions SET status = 'approved' WHERE id = ? AND user_id = ?");
+            $stmt->execute([$promotionId, $userId]);
+        }
+
+        return [
+            'success' => true,
+            'mode' => $cfg['mode'],
+            'estimate_usd' => round($estimate, 4),
+            'spent_today_usd' => round($spent, 4),
+            'budget_usd' => $cfg['budget'],
+            'remaining_usd' => round($remaining, 4),
+            'ceiling_usd' => $cfg['ceiling'],
+            'born_this_week' => $born,
+            'weekly_max' => $cfg['weekly_max'],
+        ] + $decision;
+    }
+
+    /** POST /api/v1/genesis/record {promotion_id, actual_usd, outcome, skill_dir?} */
+    public function record(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $this->ensureTables();
+        $b = $request['body'] ?? [];
+        $promotionId = (int) ($b['promotion_id'] ?? 0);
+        $actual = max(0.0, (float) ($b['actual_usd'] ?? 0));
+        $outcome = in_array($b['outcome'] ?? '', ['born', 'failed', 'merged'], true) ? $b['outcome'] : 'failed';
+        $skillDir = isset($b['skill_dir']) ? (string) $b['skill_dir'] : null;
+
+        if (!$this->promotionBelongsToUser($promotionId, $userId)) {
+            return ['success' => false, 'error' => 'Promotion not found', 'status_code' => 404];
+        }
+
+        try {
+            $stmt = $this->db->prepare(
+                "UPDATE skill_promotions
+                 SET status = :st, born_skill_dir = :dir, decided_at = NOW()
+                 WHERE id = :id AND user_id = :u"
+            );
+            $stmt->execute([':st' => $outcome, ':dir' => $outcome === 'born' ? $skillDir : null,
+                            ':id' => $promotionId, ':u' => $userId]);
+            $stmt = $this->db->prepare(
+                "INSERT INTO heal_spend (user_id, day, kind, spent_usd) VALUES (:u, CURDATE(), 'genesis', :s)
+                 ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2"
+            );
+            $stmt->execute([':u' => $userId, ':s' => $actual, ':s2' => $actual]);
+        } catch (\Throwable $e) {
+            error_log('[GenesisController] record failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => 'record failed', 'status_code' => 500];
+        }
+        return ['success' => true, 'spent_today_usd' => round($this->spentToday($userId), 4)];
+    }
+
+    /** POST /api/v1/genesis/promotions/{id}/dismiss */
+    public function dismiss(array $request, int $id): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $this->ensureTables();
+        $stmt = $this->db->prepare(
+            "UPDATE skill_promotions SET status = 'dismissed', decided_at = NOW()
+             WHERE id = ? AND user_id = ?"
+        );
+        $stmt->execute([$id, $userId]);
+        if ($stmt->rowCount() === 0) {
+            return ['success' => false, 'error' => 'Promotion not found', 'status_code' => 404];
+        }
+        return ['success' => true];
+    }
+
+    // ─── internals ───────────────────────────────────────────────────────────
+
+    private function promotionBelongsToUser(int $promotionId, int $userId): bool
+    {
+        if ($promotionId <= 0) return false;
+        $stmt = $this->db->prepare('SELECT 1 FROM skill_promotions WHERE id = ? AND user_id = ?');
+        $stmt->execute([$promotionId, $userId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /** @return array{mode:string,budget:float,ceiling:float,weekly_max:int,provider:string} */
+    private function genesisConfig(int $userId): array
+    {
+        $d = ['mode' => 'off', 'budget' => 3.00, 'ceiling' => 1.50, 'weekly_max' => 2, 'provider' => 'kimi'];
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT genesis_mode, genesis_daily_budget_usd, genesis_per_skill_ceiling_usd,
+                        genesis_max_skills_per_week, genesis_reflection_provider
+                 FROM users WHERE id = ?"
+            );
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            return [
+                'mode' => (string) ($row['genesis_mode'] ?? $d['mode']) ?: $d['mode'],
+                'budget' => isset($row['genesis_daily_budget_usd']) ? (float) $row['genesis_daily_budget_usd'] : $d['budget'],
+                'ceiling' => isset($row['genesis_per_skill_ceiling_usd']) ? (float) $row['genesis_per_skill_ceiling_usd'] : $d['ceiling'],
+                'weekly_max' => isset($row['genesis_max_skills_per_week']) ? (int) $row['genesis_max_skills_per_week'] : $d['weekly_max'],
+                'provider' => (string) ($row['genesis_reflection_provider'] ?? $d['provider']) ?: $d['provider'],
+            ];
+        } catch (\Throwable $e) {
+            return $d; // columns not created yet → defaults (mode off = safe)
+        }
+    }
+
+    private function spentToday(int $userId): float
+    {
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT COALESCE(SUM(spent_usd),0) FROM heal_spend
+                 WHERE user_id = :u AND day = CURDATE() AND kind = 'genesis'"
+            );
+            $stmt->execute([':u' => $userId]);
+            return (float) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0.0;
+        }
+    }
+
+    private function bornThisWeek(int $userId): int
+    {
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT COUNT(*) FROM skill_promotions
+                 WHERE user_id = :u AND status = 'born' AND decided_at >= (NOW() - INTERVAL 7 DAY)"
+            );
+            $stmt->execute([':u' => $userId]);
+            return (int) $stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
 }
