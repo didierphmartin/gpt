@@ -28,7 +28,7 @@ Respond with ONE JSON object only — no markdown fences, no commentary:
   "rationale": "<one sentence: why this is a repeatable procedure worth a skill>"
 }
 If an existing catalog skill already covers this procedure, you MUST set merge_target instead of inventing a near-duplicate name.
-If the material contains no repeatable multi-step procedure, return {"skill_name": null}.
+The user EXPLICITLY requested this promotion — demand is already established, so do NOT judge whether the procedure is "worth" a skill. Generalize the best skill you can from the material (uniform run histories are fine: parameterize by inspecting the structure). Return {"skill_name": null} ONLY when the material is truly unusable — empty, or containing no identifiable action at all.
 TXT;
 
     /** @param array<array{role:string,content:mixed}> $messages */
@@ -70,7 +70,7 @@ TXT;
             . "Diff the runs: whatever VARIED across inputs becomes a parameter (observed values are the "
             . "examples); whatever stayed CONSTANT stays baked in. If the runs are uniform, propose "
             . "parameters by inspecting what in the workflow's purpose is most likely to vary, and mark "
-            . "them as inspection-based in the rationale.\n\n"
+            . "them as inspection-based in the rationale. A fixed target value in the structure (e.g. a hardcoded URL or topic) is the STRONGEST parameter candidate — lift it.\n\n"
             . "WORKFLOW: #{$workflow['id']} \"{$workflow['name']}\""
             . (isset($workflow['description']) && $workflow['description'] !== null && $workflow['description'] !== ''
                 ? " — {$workflow['description']}" : '') . "\n\n"

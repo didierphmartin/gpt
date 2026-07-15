@@ -129,4 +129,13 @@ class GenesisProposerTest extends TestCase
         );
         $this->assertStringContainsString('STRUCTURE: (not available)', $prompt);
     }
+
+    public function testOutputContractForbidsDemandJudgment(): void
+    {
+        $prompt = GenesisProposer::buildConversationPrompt(
+            [['role' => 'user', 'content' => 'make me a skill']],
+            []
+        );
+        $this->assertStringContainsString('demand is already established', $prompt);
+    }
 }
