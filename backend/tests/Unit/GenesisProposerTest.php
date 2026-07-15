@@ -88,6 +88,26 @@ class GenesisProposerTest extends TestCase
                 'id' => 7,
                 'name' => 'Newsletter Pipeline',
                 'description' => 'crypto+pubmed → publisher',
+                'nodes' => [
+                    ['type' => 'agent', 'name' => 'Researcher', 'instructions' => 'Research crypto news daily'],
+                ],
+            ],
+            [['input_variables' => ['topic' => 'crypto']]],
+            []
+        );
+        $this->assertStringContainsString('STRUCTURE', $prompt);
+        $this->assertStringContainsString('Researcher', $prompt);
+        $this->assertStringContainsString('Research crypto news daily', $prompt);
+    }
+
+    /** Legacy workflows (pre-editor, or rows never migrated to workflow_nodes) still render via steps. */
+    public function testWorkflowPromptFallsBackToLegacySteps(): void
+    {
+        $prompt = GenesisProposer::buildWorkflowPrompt(
+            [
+                'id' => 7,
+                'name' => 'Newsletter Pipeline',
+                'description' => 'crypto+pubmed → publisher',
                 'steps' => json_encode([
                     ['name' => 'Researcher', 'type' => 'agent', 'instructions' => 'Research crypto news daily'],
                 ]),
@@ -98,5 +118,15 @@ class GenesisProposerTest extends TestCase
         $this->assertStringContainsString('STRUCTURE', $prompt);
         $this->assertStringContainsString('Researcher', $prompt);
         $this->assertStringContainsString('Research crypto news daily', $prompt);
+    }
+
+    public function testWorkflowPromptStructureUnavailableWhenNeitherPresent(): void
+    {
+        $prompt = GenesisProposer::buildWorkflowPrompt(
+            ['id' => 7, 'name' => 'Empty Pipeline', 'description' => null],
+            [],
+            []
+        );
+        $this->assertStringContainsString('STRUCTURE: (not available)', $prompt);
     }
 }

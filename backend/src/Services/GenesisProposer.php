@@ -52,7 +52,7 @@ TXT;
     }
 
     /**
-     * @param array{id:int|string,name:string,description?:?string,steps?:mixed} $workflow
+     * @param array{id:int|string,name:string,description?:?string,steps?:mixed,nodes?:mixed} $workflow
      * @param array<array{input_variables:mixed}> $runs
      */
     public static function buildWorkflowPrompt(array $workflow, array $runs, array $catalog): string
@@ -74,29 +74,47 @@ TXT;
             . "WORKFLOW: #{$workflow['id']} \"{$workflow['name']}\""
             . (isset($workflow['description']) && $workflow['description'] !== null && $workflow['description'] !== ''
                 ? " — {$workflow['description']}" : '') . "\n\n"
-            . self::structureBlock($workflow['steps'] ?? null) . "\n\n"
+            . self::structureBlock($workflow['nodes'] ?? null, $workflow['steps'] ?? null) . "\n\n"
             . "RUN HISTORY:\n" . self::truncate(implode("\n", $runLines), self::MAX_TRANSCRIPT_CHARS) . "\n\n"
             . "EXISTING SKILL CATALOG (name — description):\n" . self::catalogBlock($catalog) . "\n\n"
             . self::OUTPUT_CONTRACT;
     }
 
-    /** Renders the workflow's graph (steps column) as a compact one-line-per-step summary. */
-    private static function structureBlock(mixed $stepsRaw): string
+    /**
+     * Renders the workflow's graph as a compact one-line-per-step summary.
+     *
+     * Editor-built workflows keep their real graph in the workflow_nodes table
+     * (agent_workflows.steps is always [] for those — see
+     * AgentTeam/Services/WorkflowGraphRepository.php), so GenesisController
+     * pre-fetches those rows into $nodesRaw. Legacy/pre-editor workflows (or
+     * anything not yet migrated) still carry their graph in the steps column,
+     * so that stays as a fallback.
+     */
+    private static function structureBlock(mixed $nodesRaw, mixed $stepsRaw): string
     {
-        if (is_string($stepsRaw)) {
-            $steps = json_decode($stepsRaw, true);
-        } elseif (is_array($stepsRaw)) {
-            $steps = $stepsRaw;
+        $items = null;
+
+        if (is_array($nodesRaw) && !empty($nodesRaw)) {
+            $items = $nodesRaw;
         } else {
-            $steps = null;
+            if (is_string($stepsRaw)) {
+                $steps = json_decode($stepsRaw, true);
+            } elseif (is_array($stepsRaw)) {
+                $steps = $stepsRaw;
+            } else {
+                $steps = null;
+            }
+            if (is_array($steps) && !empty($steps)) {
+                $items = $steps;
+            }
         }
 
-        if (!is_array($steps) || empty($steps)) {
+        if ($items === null) {
             return 'STRUCTURE: (not available)';
         }
 
         $lines = [];
-        foreach (array_values($steps) as $i => $step) {
+        foreach (array_values($items) as $i => $step) {
             $lines[] = self::formatStep($i, $step);
         }
 

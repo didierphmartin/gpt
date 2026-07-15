@@ -295,6 +295,28 @@ final class GenesisController
             if (!$wf) {
                 return ['success' => false, 'error' => 'Workflow not found', 'status_code' => 404];
             }
+            // Editor-built workflows always persist steps = [] — the real graph lives in
+            // workflow_nodes (AgentTeam/Services/WorkflowGraphRepository.php). Ownership was
+            // already checked on the agent_workflows row above; workflow_nodes has no user_id
+            // column of its own, so we scope by the already-verified workflow_id only.
+            $stmt = $this->db->prepare('SELECT * FROM workflow_nodes WHERE workflow_id = ? ORDER BY id');
+            $stmt->execute([$workflowId]);
+            $nodeRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $wf['nodes'] = array_map(static function (array $row): array {
+                $config = [];
+                if (!empty($row['config'])) {
+                    $decoded = json_decode((string) $row['config'], true);
+                    if (is_array($decoded)) $config = $decoded;
+                }
+                $node = ['type' => $row['node_type'] ?? 'agent'];
+                $name = $config['agent_name'] ?? $config['name'] ?? $config['title'] ?? null;
+                if (is_string($name) && $name !== '') $node['name'] = $name;
+                $instructions = $config['instructions'] ?? $config['systemPrompt'] ?? $config['prompt'] ?? null;
+                if (is_string($instructions) && $instructions !== '') {
+                    $node['instructions'] = mb_substr($instructions, 0, 160);
+                }
+                return $node;
+            }, $nodeRows);
             $stmt = $this->db->prepare(
                 'SELECT input_variables FROM agent_workflow_executions
                  WHERE workflow_id = ? AND user_id = ? ORDER BY started_at DESC LIMIT 20'
