@@ -44,7 +44,10 @@
     "built": "Habilidad creada",
     "buildFailed": "Error al crear la habilidad",
     "approveMerge": "Añadir casos de evaluación a la habilidad existente",
-    "merged": "Casos de evaluación añadidos"
+    "merged": "Casos de evaluación añadidos",
+    "analyzing": "Analizando ejecuciones…",
+    "analyzingConversation": "Analizando la conversación…",
+    "proposalFailed": "Propuesta fallida"
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {

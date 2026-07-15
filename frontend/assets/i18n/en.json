@@ -44,7 +44,10 @@
     "built": "Skill created",
     "buildFailed": "Skill creation failed",
     "approveMerge": "Add eval cases to existing skill",
-    "merged": "Eval cases added"
+    "merged": "Eval cases added",
+    "analyzing": "Analyzing runs…",
+    "analyzingConversation": "Analyzing conversation…",
+    "proposalFailed": "Proposal failed"
   },
   "title": "AI Assistant - Multi-Provider",
   "header": {

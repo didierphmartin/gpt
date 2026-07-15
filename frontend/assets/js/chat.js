@@ -9788,7 +9788,7 @@ class ChatApp {
                     description: (s.description || '').slice(0, 200),
                   })).filter(s => s.name)
                 : [];
-            this.showNotification('Analyzing conversation…', 'info');
+            this.showNotification(window.i18n?.t('genesis.analyzingConversation') || 'Analyzing conversation…', 'info');
             const resp = await fetch(window.apiUrl('/genesis/proposals'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
@@ -9801,13 +9801,13 @@ class ChatApp {
 
             const data = await resp.json();
             if (!data.success) {
-                this.showNotification(`Proposal failed: ${data.error || 'unknown'}`, 'error');
+                this.showNotification(`${window.i18n?.t('genesis.proposalFailed') || 'Proposal failed'}: ${data.error || 'unknown'}`, 'error');
                 return;
             }
             window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
         } catch (e) {
             console.error('[genesis] createSkillFromConversation failed:', e);
-            this.showNotification('Proposal failed', 'error');
+            this.showNotification(window.i18n?.t('genesis.proposalFailed') || 'Proposal failed', 'error');
         } finally {
             this._skillifyInFlight = false;
         }

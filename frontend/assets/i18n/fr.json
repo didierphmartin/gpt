@@ -44,7 +44,10 @@
     "built": "Compétence créée",
     "buildFailed": "Échec de la création",
     "approveMerge": "Ajouter les cas d'évaluation à la compétence existante",
-    "merged": "Cas d'évaluation ajoutés"
+    "merged": "Cas d'évaluation ajoutés",
+    "analyzing": "Analyse des exécutions…",
+    "analyzingConversation": "Analyse de la conversation…",
+    "proposalFailed": "Échec de la proposition"
   },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {

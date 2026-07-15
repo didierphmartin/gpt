@@ -454,6 +454,12 @@ class WorkflowEditor {
                     return;
                 }
                 this._promoteInFlight = true;
+                const _origPromoteBtnHtml = promoteBtn.innerHTML;
+                promoteBtn.disabled = true;
+                promoteBtn.classList.add('opacity-75', 'cursor-wait');
+                promoteBtn.innerHTML = '<span class="inline-block w-3 h-3 border-2 border-current '
+                    + 'border-t-transparent rounded-full animate-spin align-[-1px] mr-1"></span>'
+                    + this.tWithFallback('genesis.analyzing', 'Analyzing runs…');
                 try {
                     const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
                         ? window.skillsManager.skills.map(s => ({
@@ -481,6 +487,11 @@ class WorkflowEditor {
                     this.showToast('Proposal failed', 'error');
                 } finally {
                     this._promoteInFlight = false;
+                    if (document.body.contains(promoteBtn)) {
+                        promoteBtn.disabled = false;
+                        promoteBtn.classList.remove('opacity-75', 'cursor-wait');
+                        promoteBtn.innerHTML = _origPromoteBtnHtml;
+                    }
                 }
             });
         }
