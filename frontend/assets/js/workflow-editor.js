@@ -293,7 +293,7 @@ class WorkflowEditor {
                     <div class="workflow-section-header" data-section="essentials">
                         <span class="section-toggle">${collapsedSections.essentials ? '▶' : '▼'}</span>
                         <span class="section-title">${this.t('workflow.essentials')}</span>
-                        <span class="section-count">2</span>
+                        <span class="section-count">3</span>
                     </div>
                     <div class="workflow-section-content ${collapsedSections.essentials ? 'collapsed' : ''}" data-section="essentials">
                         <!-- Start Node -->
@@ -304,6 +304,17 @@ class WorkflowEditor {
                             <div class="agent-info">
                                 <div class="agent-name">${this.t('workflow.nodes.start')}</div>
                                 <div class="agent-type">${this.t('workflow.nodes.startDesc')}</div>
+                            </div>
+                        </div>
+                        <!-- Agent Template Node -->
+                        <div class="workflow-agent-card template"
+                             draggable="true"
+                             data-template-id="new-agent-1"
+                             data-node-type="agent-template">
+                            <div class="agent-icon">🤖</div>
+                            <div class="agent-info">
+                                <div class="agent-name">${this.escapeHtml(this.t('agentTeams.newTemplate'))}</div>
+                                <div class="agent-type">${this.escapeHtml(this.t('agentTeams.templateDesc'))}</div>
                             </div>
                         </div>
                         <!-- Output Node -->
@@ -334,19 +345,6 @@ class WorkflowEditor {
                         <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="vectorstore">
                             <span class="ingestion-order" title="Step 3 — after the splitter">3</span><div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
                     </div>
-                </div>
-
-                <!-- Agents Section — templates only. Specific saved agents come
-                     from the left sidebar's Agents list (drag-to-canvas); this
-                     section keeps the draggable Agent Template + the "+" to add one. -->
-                <div class="workflow-section">
-                    <div class="workflow-section-header" data-section="agents">
-                        <span class="section-toggle">${collapsedSections.agents ? '▶' : '▼'}</span>
-                        <span class="section-title">${this.t('workflow.agents')}</span>
-                        <span class="section-count">0</span>
-                        <button class="section-add-btn" data-action="add-agent" title="${this.t('agentTeams.addTemplate')}">+</button>
-                    </div>
-                    <div class="workflow-section-content ${collapsedSections.agents ? 'collapsed' : ''}" data-section="agents"></div>
                 </div>
             </div>
 
@@ -392,23 +390,8 @@ class WorkflowEditor {
             };
         }
 
-        // Set up section add button handlers
-        this.agentsPanel.querySelectorAll('.section-add-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const action = btn.dataset.action;
-                if (action === 'add-agent') {
-                    this.addAgentTemplate();
-                }
-            });
-        });
-
-        // Initialize agent templates with one default if not exists
-        if (!this.agentTemplates) {
-            this.agentTemplates = [{ id: 'new-agent-1', templateNum: 1 }];
-        }
-        // Always render agent templates (includes real agents + templates)
-        this.renderAgentTemplates();
+        // The Agent Template now lives in the Essentials section (between Start
+        // and Output); the separate Agents section has been removed.
 
         // Set up drag events for all draggable cards
         this.agentsPanel.querySelectorAll('.workflow-agent-card').forEach(card => {
@@ -8859,7 +8842,7 @@ class WorkflowEditor {
     addAgentTemplate() {
         // Create a temporary agent object in the local list
         if (!this.agentTemplates) {
-            this.agentTemplates = [{ id: 'new-agent-1', templateNum: 1 }];
+            this.agentTemplates = [];
         }
 
         // Get next template number
@@ -10747,6 +10730,19 @@ class WorkflowEditor {
         return picked;
     }
 
+    // Conservative check: does an agent's final answer indicate it produced no
+    // real content? Anchored/specific patterns only, so a normal report that
+    // merely mentions "error" mid-text is NOT flagged.
+    _wfOutputLooksFailed(text) {
+        const t = (text || '').trim();
+        if (!t) return true;                                       // empty output
+        if (/^error\b[:\s]/i.test(t)) return true;                 // "Error: …"
+        if (/\b(?:don'?t|do not|does ?n'?t|cannot|can'?t)\b[^.]{0,60}\brun_skill_script\b/i.test(t)) return true;
+        if (/\brun_skill_script\b[^.]{0,60}\b(?:not available|unavailable|isn'?t available|is not available)\b/i.test(t)) return true;
+        if (/\bagent did not finish\b/i.test(t)) return true;      // tool-round limit
+        return false;
+    }
+
     async _runNodeAsChatUnit(node, inputText) {
         const dfId = String(node.id);
         const data = node.data || {};
@@ -10754,6 +10750,13 @@ class WorkflowEditor {
         const model = data.model || null;
         const instructions = data.instructions || '';
         const dirName = data.bound_skill?.dir_name || null;
+        // Per-node context from the agent form. These OVERRIDE the backend
+        // provider-config defaults (the user's form is the source of truth).
+        // Sent only when set, so a node that specifies nothing falls back to
+        // the backend default. tools = the node's MCP/tool selection.
+        const nodeTools = Array.isArray(data.tools) ? data.tools : null;
+        const nodeMaxTokens = data.settings?.max_tokens;
+        const nodeTemperature = data.settings?.temperature;
 
         if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
         this.nodeExecutionData[dfId].input = inputText;
@@ -10769,13 +10772,38 @@ class WorkflowEditor {
         this._wfNodeLog(dfId, 'llm', `calling ${provider}${model ? ' (' + model + ')' : ''}`);
 
         // Load the bound skill's body + scripts so the model can call it.
-        let skillContent = null, skillMetadata = null;
-        if (dirName && window.skillsFs) {
-            try {
-                skillContent = await window.skillsFs.getSkillContent(dirName);
-                const scripts = await window.skillsFs.listSkillScripts(dirName);
-                skillMetadata = { dir_name: dirName, scripts };
-            } catch (e) { console.warn('[wf-unit] skill load failed for', dirName, e); }
+        // If a node is BOUND to a skill but we can't load it, the backend will
+        // never offer the run_skill_script tool — the agent then runs "blind"
+        // and typically hallucinates or apologizes while still reporting
+        // success (green). Capture that as a hard failure with an actionable
+        // reason instead of silently dropping the tool.
+        let skillContent = null, skillMetadata = null, skillLoadError = null;
+        if (dirName) {
+            if (!window.skillsFs) {
+                skillLoadError = `skill "${dirName}" requires the local skills folder, which isn't connected — the run_skill_script tool is unavailable, so this audit can't run. Connect the skills folder and re-run.`;
+            } else {
+                try {
+                    skillContent = await window.skillsFs.getSkillContent(dirName);
+                    const scripts = await window.skillsFs.listSkillScripts(dirName);
+                    skillMetadata = { dir_name: dirName, scripts };
+                } catch (e) {
+                    skillLoadError = `skill "${dirName}" failed to load (${e?.message || e}) — the run_skill_script tool can't be offered, so this audit can't run.`;
+                    console.warn('[wf-unit] skill load failed for', dirName, e);
+                }
+            }
+        }
+
+        // Fail fast: don't call the LLM without the tool it depends on.
+        if (skillLoadError) {
+            const nd = this.nodeExecutionData[dfId];
+            nd.output = 'Error: ' + skillLoadError;
+            nd.success = false;
+            nd.executionTime = Date.now() - _startedAt;
+            try { this.stopNodeTimer(dfId); } catch (_) {}
+            this._wfNodeLog(dfId, 'error', skillLoadError, 'error');
+            this.highlightNode(dfId, 'error', dfId, 'agent');
+            this.updateModalInputOutput(dfId);
+            return { success: false, output: 'Error: ' + skillLoadError };
         }
 
         const conversationHistory = [];
@@ -10792,13 +10820,37 @@ class WorkflowEditor {
                     skill_content: skillContent,
                     skill_metadata: skillMetadata,
                 };
+                // Per-node overrides from the agent form (source of truth over
+                // backend provider-config defaults). Omitted when unset so the
+                // backend falls back to its default.
+                if (nodeTools) body.tools = nodeTools;
+                if (nodeMaxTokens != null) body.max_tokens = nodeMaxTokens;
+                if (nodeTemperature != null) body.temperature = nodeTemperature;
                 const resp = await fetch(`${this.apiBase}/chat`, {
                     method: 'POST',
                     headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
                     credentials: 'include',
                     body: JSON.stringify(body),
                 });
-                if (!resp.ok) throw new Error(`chat HTTP ${resp.status}`);
+                if (!resp.ok) {
+                    // Surface the backend's ACTUAL error, not just the status code. /chat returns a
+                    // JSON error body ({error:{message}} / {error} / {message} / {detail}) or plain
+                    // text; a bare "chat HTTP 500" hides the real cause (provider message, timeout,
+                    // context-length, etc.). Read it, extract the message, cap the length.
+                    let detail = '';
+                    try {
+                        const errText = await resp.text();
+                        try {
+                            const j = JSON.parse(errText);
+                            detail = (j && (j.error?.message || j.message || (typeof j.error === 'string' ? j.error : '') || j.detail)) || errText;
+                        } catch { detail = errText; }
+                    } catch { /* body unreadable */ }
+                    detail = String(detail || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+                    // Lead with the human-readable cause (the backend now humanizes provider
+                    // errors — rate limit / auth / billing / context / overload); keep the HTTP
+                    // code as a trailing hint for debugging instead of a scary "HTTP 500" prefix.
+                    throw new Error(detail ? `${detail} (HTTP ${resp.status})` : `Request failed (HTTP ${resp.status})`);
+                }
                 const r = await resp.json();
                 const _u = r.usage || {};
                 _inTok += (_u.input_tokens ?? _u.prompt_tokens ?? 0);
@@ -10954,15 +11006,38 @@ class WorkflowEditor {
                 } else {
                     const finalText = r.text || r.assistant_text || '';
                     const nd = this.nodeExecutionData[dfId];
+                    // An agent that returns empty text, or a final answer that is
+                    // itself an error/refusal ("Error: …", "I don't have access to
+                    // run_skill_script"), did NOT provide real content — mark it
+                    // failed (red) so the node state matches reality instead of a
+                    // misleading green.
+                    const failed = this._wfOutputLooksFailed(finalText);
+                    // Truncation: finish_reason 'length' means the model hit its
+                    // max_tokens cap mid-generation, so trailing content is lost.
+                    // This is how an assembling agent silently drops later inputs
+                    // (e.g. a newspaper that renders topic 1 but gets cut off
+                    // before topic 2). It's not a hard failure — there IS content
+                    // — but it must be VISIBLE, not a clean green, so the user
+                    // knows to raise the agent's Max Tokens.
+                    const truncated = (r.finish_reason || r.stop_reason) === 'length';
                     nd.output = finalText;
-                    nd.success = true;
+                    nd.success = !failed;
+                    nd.truncated = truncated;
                     nd.inputTokens = _inTok; nd.outputTokens = _outTok; nd.totalTokens = _inTok + _outTok;
                     nd.executionTime = Date.now() - _startedAt;
                     try { this.stopNodeTimer(dfId); } catch (_) {}
-                    this._wfNodeLog(dfId, 'done', `completed (${_inTok + _outTok} tok)`);
-                    this.highlightNode(dfId, 'completed', dfId, 'agent');
+                    if (failed) {
+                        this._wfNodeLog(dfId, 'error', 'agent returned no usable content', 'error');
+                        this.highlightNode(dfId, 'error', dfId, 'agent');
+                    } else if (truncated) {
+                        this._wfNodeLog(dfId, 'warn', `⚠ output truncated at max_tokens (${_outTok} tok) — later content was cut off. Raise this agent's Max Tokens.`, 'warn');
+                        this.highlightNode(dfId, 'warning', dfId, 'agent');
+                    } else {
+                        this._wfNodeLog(dfId, 'done', `completed (${_inTok + _outTok} tok)`);
+                        this.highlightNode(dfId, 'completed', dfId, 'agent');
+                    }
                     this.updateModalInputOutput(dfId);
-                    return { success: true, output: finalText };
+                    return { success: !failed, output: finalText };
                 }
             }
             throw new Error(`did not finish within ${MAX_ROUNDS} rounds`);
@@ -11024,6 +11099,8 @@ class WorkflowEditor {
         // browser-driven path must do it here).
         this.lastProducedArtifact = null;
         this.updateStartNodeIndicator(true);
+        const _wfStartedAt = Date.now();
+        let _wfHadError = false;
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
@@ -11056,10 +11133,14 @@ class WorkflowEditor {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const res = await this._runNodeAsChatUnit(node, ctx);
                         this._wfOutputs[id] = res.output;
+                        // _runNodeAsChatUnit already highlighted the node red on a
+                        // soft failure (error/refusal text); reflect it in the run.
+                        if (res && res.success === false) _wfHadError = true;
                     }
                 } catch (e) {
                     this._wfOutputs[id] = 'Error: ' + (e?.message || e);
                     this.highlightNode(id, 'error', id, 'agent');
+                    _wfHadError = true;
                 }
                 done.add(id);
                 remaining.delete(id);
@@ -11075,7 +11156,19 @@ class WorkflowEditor {
         const finalOutput = outId ? this._wfOutputs[outId] : '';
         console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
         if (typeof this.showWorkflowResults === 'function' && finalOutput) {
-            try { this.showWorkflowResults({ output: finalOutput, node_outputs: this._wfOutputs }); } catch (_) {}
+            // Pass real run metadata — without success/nodes_executed/response_time_ms
+            // the results modal defaulted to "❌ Workflow Failed / 0 nodes / 0.0s"
+            // even though the run finished and produced this output.
+            const success = !!finalOutput && !_wfHadError && remaining.size === 0;
+            try {
+                this.showWorkflowResults({
+                    output: finalOutput,
+                    node_outputs: this._wfOutputs,
+                    success,
+                    nodes_executed: done.size,
+                    response_time_ms: Date.now() - _wfStartedAt,
+                });
+            } catch (_) {}
         }
         return this._wfOutputs;
     }
@@ -11501,7 +11594,7 @@ class WorkflowEditor {
         }
 
         // Remove previous states
-        nodeEl.classList.remove('node-active', 'node-completed', 'node-error');
+        nodeEl.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning');
 
         // Add new state
         switch (state) {
@@ -11511,6 +11604,10 @@ class WorkflowEditor {
                 break;
             case 'completed':
                 nodeEl.classList.add('node-completed');
+                break;
+            case 'warning':
+                // Completed WITH a caveat (e.g. output truncated at max_tokens).
+                nodeEl.classList.add('node-warning');
                 break;
             case 'error':
                 nodeEl.classList.add('node-error');
@@ -11523,6 +11620,15 @@ class WorkflowEditor {
      */
     startNodeTimer(nodeId, drawflowId = null) {
         console.log('[WorkflowEditor] startNodeTimer called:', { nodeId, drawflowId, map: this.dbNodeToDrawflowMap });
+
+        // Ensure the per-node timer registry exists. The browser-driven run path
+        // (executeWorkflowInBrowser) never initializes this.executionState — only
+        // the SSE path does. Without this guard, the .set() below throws AFTER the
+        // interval is created, leaking an untracked interval that stopNodeTimer can
+        // never clear, so the node timer keeps incrementing forever after the agent
+        // finishes. Lazily create it so tracking always succeeds on every run path.
+        if (!this.executionState) this.executionState = {};
+        if (!this.executionState.nodeTimers) this.executionState.nodeTimers = new Map();
 
         // Find the node element using the same strategy as highlightNode
         let nodeEl = null;
@@ -11560,17 +11666,18 @@ class WorkflowEditor {
 
         // Update timer every 100ms (always show minutes:seconds format)
         const interval = setInterval(() => {
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            const minutes = Math.floor(elapsed / 60);
-            const seconds = elapsed % 60;
-            const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
             if (timerEl) {
-                timerEl.textContent = timeStr;
+                timerEl.textContent = this._formatTimer(Date.now() - startTime);
             }
         }, 100);
 
-        // Store timer info per-node to support parallel execution
-        this.executionState.nodeTimers.set(nodeId, { interval, timerEl });
+        // Store timer info per-node to support parallel execution. Keep the
+        // drawflowId + startTime so stopNodeTimer can compute the authoritative
+        // final duration and write it to the node's LIVE timer element (rather
+        // than relying on whatever the interval happened to write last, which
+        // could be a stale/re-rendered element left showing 0:00 — see the
+        // parallel-branch bug where a sibling node froze at 0:00).
+        this.executionState.nodeTimers.set(nodeId, { interval, timerEl, startTime, drawflowId: drawflowId || nodeId });
         console.log('[WorkflowEditor] Timer started for node:', nodeId);
     }
 
@@ -11585,14 +11692,34 @@ class WorkflowEditor {
             // Clear the interval for this node
             clearInterval(timerInfo.interval);
 
-            // Keep the final time displayed, just remove the active styling
-            if (timerInfo.timerEl) {
-                timerInfo.timerEl.classList.remove('node-timer-active');
+            // Write the authoritative final duration. We recompute from the
+            // stored startTime instead of trusting the interval's last write,
+            // and we re-query the node's CURRENT .node-timer element so a stale
+            // reference (e.g. a re-rendered parallel-branch node) can't leave
+            // the display frozen at the template's 0:00.
+            const liveTimerEl =
+                (timerInfo.drawflowId != null
+                    ? document.querySelector(`#node-${timerInfo.drawflowId} .node-timer`)
+                    : null) || timerInfo.timerEl;
+
+            if (liveTimerEl) {
+                if (timerInfo.startTime != null) {
+                    liveTimerEl.textContent = this._formatTimer(Date.now() - timerInfo.startTime);
+                }
+                liveTimerEl.classList.remove('node-timer-active');
             }
 
             // Remove from map
             this.executionState.nodeTimers.delete(nodeId);
         }
+    }
+
+    /** Format an elapsed millisecond span as the node timer's m:ss string. */
+    _formatTimer(ms) {
+        const elapsed = Math.floor(Math.max(0, ms) / 1000);
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
 
     /**
@@ -12255,6 +12382,12 @@ class WorkflowEditor {
                     padding: 20px;
                     overflow-y: auto;
                     flex: 1;
+                    /* min-height:0 lets this flex child actually shrink and scroll inside the
+                       container instead of growing to content height (the with-artifact variant
+                       already had this). overscroll-behavior stops the scroll from chaining into
+                       the page/canvas behind the modal, which feels like the scroll "sticking". */
+                    min-height: 0;
+                    overscroll-behavior: contain;
                 }
                 .workflow-result-final {
                     padding: 0;
@@ -12271,6 +12404,14 @@ class WorkflowEditor {
                     font-size: 14px;
                     line-height: 1.6;
                     color: #1f2937;
+                }
+                /* A long report renders as one big DOM; without this the browser paints/lays out
+                   the whole thing on every scroll frame (the "slow / not responsive" feel). Skip
+                   off-screen top-level blocks; contain-intrinsic-size gives an estimated height so
+                   the scrollbar stays stable. */
+                .workflow-result-content > * {
+                    content-visibility: auto;
+                    contain-intrinsic-size: auto 48px;
                 }
                 .workflow-result-nodes h3 {
                     margin: 0 0 16px 0;
@@ -12394,6 +12535,18 @@ class WorkflowEditor {
         // Insert modal into DOM
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
+        // Freeze the editor canvas while the results modal is open. The overlay
+        // is semi-transparent, so without this the drawflow canvas behind it
+        // stays live — and every edge runs an infinite stroke-dashoffset
+        // animation (connectionFlowAnim) that Chrome repaints on the MAIN
+        // THREAD every frame (stroke props aren't GPU-composited). A translucent
+        // full-viewport overlay forces the compositor to re-blend that animating
+        // canvas over the whole screen every frame, which pegs the CPU and makes
+        // the whole UI janky the entire time the output is displayed.
+        // content-visibility:hidden skips all rendering/animation of the canvas
+        // subtree (it's covered anyway); it's restored in closeModal().
+        if (this.container) this.container.style.contentVisibility = 'hidden';
+
         // Fix SVG viewBoxes after rendering (same as chat does)
         const modal = document.getElementById('workflow-results-modal');
         if (modal && window.chatApp?.fixAllSVGsInContainer) {
@@ -12407,6 +12560,8 @@ class WorkflowEditor {
         const closeModal = () => {
             const m = document.getElementById('workflow-results-modal');
             if (m) m.remove();
+            // Un-freeze the editor canvas (see the content-visibility note above).
+            if (this.container) this.container.style.contentVisibility = '';
             document.removeEventListener('keydown', escHandler);
         };
         const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };

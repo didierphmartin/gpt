@@ -1289,7 +1289,10 @@ class ChatApp {
         // Create iframe
         const iframe = document.createElement('iframe');
         iframe.className = 'mcp-ui-frame';
-        iframe.sandbox = 'allow-scripts allow-forms allow-same-origin';
+        // allow-downloads: MCP apps offer file downloads (e.g. generated images) via
+        // anchor download, which is the only path when the app is cross-origin (Node
+        // backend on :3001). allow-modals: surface the apps' alert() error messages.
+        iframe.sandbox = 'allow-scripts allow-forms allow-same-origin allow-downloads allow-modals';
 
         const serverUrl = ui_info.server_url || '';
         const viewUUID = ui_info.view_uuid || '';
