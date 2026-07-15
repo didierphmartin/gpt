@@ -9747,12 +9747,58 @@ class ChatApp {
                 this.startRenameContext(contextId);
                 break;
 
+            case 'skillify':
+                this.createSkillFromConversation(contextId);
+                break;
+
             case 'delete':
                 this.deleteContext(contextId);
                 break;
         }
 
         this.hideConversationMenu();
+    }
+
+    /**
+     * L0 genesis on-ramp: one reflection call over this conversation's stored
+     * context → proposal overlay (genesis-panel.js). The skills catalog is
+     * client-side, so we pass name+description pairs for the merge-router.
+     *
+     * `contextId` here is `this.currentConversationMenuId`, which is the
+     * same server context id `deleteContext`/`updateContextTitle` use
+     * directly against `/contexts/{id}` — no local-store indirection.
+     *
+     * Catalog fields: window.skillsManager.skills entries carry `dir_name`
+     * (folder/identifier, snake_case) and `name` (human title from
+     * SKILL.md frontmatter, which the spec requires to match dir_name) —
+     * not `dirName`. We prefer `dir_name` to match the identifier the rest
+     * of chat.js sends the backend as the skill catalog key (see
+     * `availableSkills` in sendMessage).
+     */
+    async createSkillFromConversation(contextId) {
+        try {
+            const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
+                ? window.skillsManager.skills.map(s => ({
+                    name: s.dir_name || s.name || '',
+                    description: (s.description || '').slice(0, 200),
+                  })).filter(s => s.name)
+                : [];
+            this.showNotification('Analyzing conversation…', 'info');
+            const resp = await fetch(window.apiUrl('/genesis/proposals'), {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({ source: 'conversation', context_id: Number(contextId), catalog }),
+            });
+            const data = await resp.json();
+            if (!data.success) {
+                this.showNotification(`Proposal failed: ${data.error || 'unknown'}`, 'error');
+                return;
+            }
+            window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
+        } catch (e) {
+            console.error('[genesis] createSkillFromConversation failed:', e);
+            this.showNotification('Proposal failed', 'error');
+        }
     }
 
     /**
