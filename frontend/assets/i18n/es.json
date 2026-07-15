@@ -25,6 +25,25 @@
     "autoHealed": "Auto-reparado",
     "skillsWord": "habilidad(es)"
   },
+  "genesis": {
+    "title": "Promoción a habilidades",
+    "subtitle": "Convierte conversaciones y workflows repetidos en habilidades. Sugerir solo lista candidatos; Preguntar requiere tu aprobación antes de crear; Auto crea dentro del presupuesto.",
+    "mode": { "off": "Off", "suggest": "Sugerir", "ask": "Preguntar", "auto": "Auto" },
+    "dailyBudget": "Presupuesto diario (USD)",
+    "ceiling": "Límite por habilidad (USD)",
+    "weeklyMax": "Máx. habilidades nuevas / semana",
+    "provider": "Modelo de reflexión",
+    "save": "Guardar",
+    "createFromConversation": "Crear una habilidad desde esta conversación",
+    "promoteWorkflow": "Promover a habilidad…",
+    "proposalTitle": "Propuesta de habilidad",
+    "noProcedure": "No se encontró un procedimiento repetible en esta conversación.",
+    "approveBuild": "Crear habilidad",
+    "dismiss": "Descartar",
+    "mergeHint": "Se superpone con una habilidad existente:",
+    "built": "Habilidad creada",
+    "buildFailed": "Error al crear la habilidad"
+  },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {
     "title": "Asistente IA",

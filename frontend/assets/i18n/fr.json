@@ -25,6 +25,25 @@
     "autoHealed": "Auto-réparé",
     "skillsWord": "compétence(s)"
   },
+  "genesis": {
+    "title": "Promotion en compétences",
+    "subtitle": "Transformez les conversations et workflows répétés en compétences. Suggérer se contente de lister des candidats ; Demander exige votre approbation avant la création ; Auto crée dans la limite du budget.",
+    "mode": { "off": "Off", "suggest": "Suggérer", "ask": "Demander", "auto": "Auto" },
+    "dailyBudget": "Budget quotidien (USD)",
+    "ceiling": "Plafond par compétence (USD)",
+    "weeklyMax": "Nouvelles compétences max / semaine",
+    "provider": "Modèle de réflexion",
+    "save": "Enregistrer",
+    "createFromConversation": "Créer une compétence depuis cette conversation",
+    "promoteWorkflow": "Promouvoir en compétence…",
+    "proposalTitle": "Proposition de compétence",
+    "noProcedure": "Aucune procédure répétable trouvée dans cette conversation.",
+    "approveBuild": "Créer la compétence",
+    "dismiss": "Ignorer",
+    "mergeHint": "Chevauche une compétence existante :",
+    "built": "Compétence créée",
+    "buildFailed": "Échec de la création"
+  },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {
     "title": "Assistant IA",

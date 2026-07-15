@@ -310,6 +310,8 @@ class SettingsPanel {
             this.loadSkills();
         } else if (tabName === 'auto') {
             this.loadHealSettings();
+            this.ensureGenesisSection();
+            this.loadGenesisSettings();
         }
     }
 
@@ -369,6 +371,132 @@ class SettingsPanel {
             }
         } catch (e) {
             console.warn('[settings] saveHealSettings failed:', e);
+            if (status) { status.textContent = 'Save failed'; status.className = 'text-sm text-red-600'; }
+        }
+    }
+
+    /**
+     * Inject the "Skill promotion" (genesis) block as a sibling settings-section
+     * inside the Auto tab, right after the self-heal section. Static HTML for the
+     * Auto tab otherwise lives in index.html, but this block is injected here
+     * (rather than hand-added to index.html) so the feature ships from this file
+     * alone. Idempotent: safe to call every time the Auto tab is opened.
+     */
+    ensureGenesisSection() {
+        if (document.getElementById('genesis-section')) return;
+        const healSection = document.querySelector('#settings-tab-auto .settings-section');
+        const container = healSection ? healSection.parentElement : document.getElementById('settings-tab-auto');
+        if (!container) return;
+
+        const modes = ['off', 'suggest', 'ask', 'auto'];
+        const modeRows = modes.map(m => `
+                        <label class="flex items-center gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                            <input type="radio" name="genesis-mode" value="${m}" class="mt-1">
+                            <span class="font-medium" data-i18n="genesis.mode.${m}">${m}</span>
+                        </label>`).join('');
+
+        const providerOptions = this.providers.map(p =>
+            `<option value="${p}">${this.getProviderDisplayName(p)}</option>`).join('');
+
+        const section = document.createElement('div');
+        section.className = 'settings-section';
+        section.id = 'genesis-section';
+        section.innerHTML = `
+                    <h3 data-i18n="genesis.title">Skill promotion</h3>
+                    <p class="text-sm text-gray-500 mb-4" data-i18n="genesis.subtitle">Turn repeated conversations and workflows into skills. Suggest lists candidates only; Ask requires your approval before building; Auto builds within budget.</p>
+
+                    <label class="block text-sm font-medium text-gray-700 mb-2" data-i18n="settings.auto.mode">Mode</label>
+                    <div class="space-y-2 mb-5" id="genesis-mode-group">${modeRows}
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="genesis.dailyBudget">Daily budget (USD)</label>
+                            <input id="genesis-budget" type="number" min="0" step="0.5" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="genesis.ceiling">Per-skill ceiling (USD)</label>
+                            <input id="genesis-ceiling" type="number" min="0" step="0.25" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="genesis.weeklyMax">Max new skills / week</label>
+                            <input id="genesis-weekly" type="number" min="0" step="1" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1" data-i18n="genesis.provider">Reflection model</label>
+                            <select id="genesis-provider" class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">${providerOptions}</select>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 mt-5">
+                        <button id="genesis-save" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium" data-i18n="genesis.save">Save promotion settings</button>
+                        <span id="genesis-save-status" class="text-sm text-gray-500"></span>
+                    </div>`;
+
+        container.insertBefore(section, healSection ? healSection.nextSibling : null);
+
+        // Apply the current language to the freshly-injected data-i18n nodes immediately
+        // (updateAllTranslations() otherwise only runs on language switch/init).
+        if (window.i18n && typeof window.i18n.updateAllTranslations === 'function') {
+            window.i18n.updateAllTranslations();
+        }
+
+        const genesisSave = document.getElementById('genesis-save');
+        if (genesisSave) {
+            genesisSave.addEventListener('click', () => this.saveGenesisSettings());
+        }
+    }
+
+    /** Load the skill-promotion (genesis) settings into the Auto tab controls. */
+    async loadGenesisSettings() {
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/settings/genesis?t=${Date.now()}`, {
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}` },
+                cache: 'no-store'
+            });
+            if (!res.ok) return;
+            const json = await res.json();
+            const s = json.settings || {};
+            const mode = s.genesis_mode || 'off';
+            document.querySelectorAll('#genesis-mode-group input[name="genesis-mode"]').forEach(r => { r.checked = (r.value === mode); });
+            const set = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+            set('genesis-budget', s.genesis_daily_budget_usd);
+            set('genesis-ceiling', s.genesis_per_skill_ceiling_usd);
+            set('genesis-weekly', s.genesis_max_skills_per_week);
+            set('genesis-provider', s.genesis_reflection_provider);
+        } catch (e) {
+            console.warn('[settings] loadGenesisSettings failed:', e);
+        }
+    }
+
+    /** Save the skill-promotion (genesis) settings from the Auto tab controls. */
+    async saveGenesisSettings() {
+        const status = document.getElementById('genesis-save-status');
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        const mode = document.querySelector('#genesis-mode-group input[name="genesis-mode"]:checked')?.value || 'off';
+        const body = {
+            genesis_mode: mode,
+            genesis_daily_budget_usd: num('genesis-budget', 3),
+            genesis_per_skill_ceiling_usd: num('genesis-ceiling', 1.5),
+            genesis_max_skills_per_week: num('genesis-weekly', 2),
+            genesis_reflection_provider: document.getElementById('genesis-provider')?.value || 'claude',
+        };
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/settings/genesis`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const json = await res.json();
+            if (status) {
+                status.textContent = json.success
+                    ? (window.i18n?.t('settings.auto.saved') || 'Saved')
+                    : (window.i18n?.t('settings.auto.saveFailed') || 'Save failed');
+                status.className = json.success ? 'text-sm text-green-600' : 'text-sm text-red-600';
+                setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+            }
+        } catch (e) {
+            console.warn('[settings] saveGenesisSettings failed:', e);
             if (status) { status.textContent = 'Save failed'; status.className = 'text-sm text-red-600'; }
         }
     }

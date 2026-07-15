@@ -25,6 +25,25 @@
     "autoHealed": "Auto-healed",
     "skillsWord": "skill(s)"
   },
+  "genesis": {
+    "title": "Skill promotion",
+    "subtitle": "Turn repeated conversations and workflows into skills. Suggest lists candidates only; Ask requires your approval before building; Auto builds within budget.",
+    "mode": { "off": "Off", "suggest": "Suggest", "ask": "Ask", "auto": "Auto" },
+    "dailyBudget": "Daily budget (USD)",
+    "ceiling": "Per-skill ceiling (USD)",
+    "weeklyMax": "Max new skills / week",
+    "provider": "Reflection model",
+    "save": "Save promotion settings",
+    "createFromConversation": "Create skill from this conversation",
+    "promoteWorkflow": "Promote to skill…",
+    "proposalTitle": "Skill proposal",
+    "noProcedure": "No repeatable procedure found in this conversation.",
+    "approveBuild": "Create skill",
+    "dismiss": "Dismiss",
+    "mergeHint": "Overlaps existing skill:",
+    "built": "Skill created",
+    "buildFailed": "Skill creation failed"
+  },
   "title": "AI Assistant - Multi-Provider",
   "header": {
     "title": "AI Assistant",
