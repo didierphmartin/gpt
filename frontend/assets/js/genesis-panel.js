@@ -177,6 +177,7 @@
 
     function showProposal(p) {
         if (!p) { toast(t('genesis.noProcedure', 'No repeatable procedure found in this conversation.'), 'info'); return; }
+        document.querySelectorAll('.gen-ov-backdrop').forEach(el => el.remove());
         const paramRows = p.parameter_schema
             ? Object.entries(p.parameter_schema).map(([k, v]) =>
                 `<tr><td>${esc(k)}</td><td>${esc((v && v.type) || 'string')}</td><td>${v && v.examples ? esc(v.examples.join(', ')) : ''}</td></tr>`).join('')

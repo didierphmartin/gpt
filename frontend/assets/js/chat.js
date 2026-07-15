@@ -9776,6 +9776,11 @@ class ChatApp {
      * `availableSkills` in sendMessage).
      */
     async createSkillFromConversation(contextId) {
+        if (this._skillifyInFlight) {
+            this.showNotification('Skill proposal already in progress…', 'info');
+            return;
+        }
+        this._skillifyInFlight = true;
         try {
             const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
                 ? window.skillsManager.skills.map(s => ({
@@ -9789,6 +9794,11 @@ class ChatApp {
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({ source: 'conversation', context_id: Number(contextId), catalog }),
             });
+            if (resp.status === 401) {
+                window.location.href = 'login.html';
+                return;
+            }
+
             const data = await resp.json();
             if (!data.success) {
                 this.showNotification(`Proposal failed: ${data.error || 'unknown'}`, 'error');
@@ -9798,6 +9808,8 @@ class ChatApp {
         } catch (e) {
             console.error('[genesis] createSkillFromConversation failed:', e);
             this.showNotification('Proposal failed', 'error');
+        } finally {
+            this._skillifyInFlight = false;
         }
     }
 
