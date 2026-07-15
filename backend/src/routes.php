@@ -143,6 +143,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/genesis/authorize', ['GenesisController', 'authorize']);
         $r->post('/api/v1/genesis/record', ['GenesisController', 'record']);
         $r->post('/api/v1/genesis/promotions/{id:\d+}/dismiss', ['GenesisController', 'dismiss']);
+        $r->post('/api/v1/genesis/proposals', ['GenesisController', 'createProposal']);
 
         // ============================================
         // FILE STORAGE ROUTES (universalFS)

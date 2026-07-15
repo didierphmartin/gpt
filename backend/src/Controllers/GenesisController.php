@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\GenesisProposer;
 
 /**
  * GenesisController — server-side enforcement gate + promotion store for
@@ -249,6 +250,113 @@ final class GenesisController
             return ['success' => false, 'error' => 'Promotion not found', 'status_code' => 404];
         }
         return ['success' => true];
+    }
+
+    /**
+     * POST /api/v1/genesis/proposals
+     * {source:'conversation'|'workflow', context_id?|workflow_id?, catalog?:[{name,description}]}
+     * Runs ONE reflection LLM call (via ChatController::agent so provider
+     * settings/keys/quota apply) and stores the proposal as a promotion row.
+     */
+    public function createProposal(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $this->ensureTables();
+        $b = $request['body'] ?? [];
+        $source = (string) ($b['source'] ?? '');
+        $catalog = is_array($b['catalog'] ?? null) ? $b['catalog'] : [];
+
+        if ($source === 'conversation') {
+            $contextId = (int) ($b['context_id'] ?? 0);
+            $stmt = $this->db->prepare(
+                'SELECT context_data FROM conversation_contexts WHERE id = ? AND user_id = ?'
+            );
+            $stmt->execute([$contextId, $userId]);
+            $ctx = $stmt->fetchColumn();
+            if ($ctx === false) {
+                return ['success' => false, 'error' => 'Context not found', 'status_code' => 404];
+            }
+            $data = json_decode((string) $ctx, true) ?: [];
+            $messages = is_array($data['messages'] ?? null) ? $data['messages'] : (is_array($data) ? $data : []);
+            if (empty($messages)) {
+                return ['success' => false, 'error' => 'Context has no messages', 'status_code' => 400];
+            }
+            $prompt = GenesisProposer::buildConversationPrompt($messages, $catalog);
+            $class = 1;
+            $sourceRef = 'context:' . $contextId;
+        } elseif ($source === 'workflow') {
+            $workflowId = (int) ($b['workflow_id'] ?? 0);
+            $stmt = $this->db->prepare('SELECT id, name, description FROM agent_workflows WHERE id = ? AND user_id = ?');
+            $stmt->execute([$workflowId, $userId]);
+            $wf = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$wf) {
+                return ['success' => false, 'error' => 'Workflow not found', 'status_code' => 404];
+            }
+            $stmt = $this->db->prepare(
+                'SELECT input_variables FROM agent_workflow_executions
+                 WHERE workflow_id = ? AND user_id = ? ORDER BY started_at DESC LIMIT 20'
+            );
+            $stmt->execute([$workflowId, $userId]);
+            $runs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $prompt = GenesisProposer::buildWorkflowPrompt($wf, $runs, $catalog);
+            $class = 2;
+            $sourceRef = 'workflow:' . $workflowId;
+        } else {
+            return ['success' => false, 'error' => "source must be 'conversation' or 'workflow'", 'status_code' => 400];
+        }
+
+        // One-shot LLM call through the agent endpoint's machinery.
+        $cfg = $this->genesisConfig($userId);
+        $chat = new ChatController($this->db, $this->config);
+        $resp = $chat->agent([
+            'user_id' => $userId,
+            'body' => ['prompt' => $prompt, 'provider' => $cfg['provider'], 'user_id' => $userId],
+        ]);
+        if (empty($resp['success'])) {
+            return ['success' => false,
+                'error' => 'Reflection call failed: ' . (string) ($resp['error'] ?? 'unknown'),
+                'status_code' => 502];
+        }
+        $text = (string) ($resp['response'] ?? $resp['text'] ?? '');
+        $proposal = GenesisProposer::parseProposal($text);
+        if ($proposal === null) {
+            return ['success' => true, 'promotion' => null,
+                'message' => 'No repeatable procedure found in this material.'];
+        }
+
+        try {
+            $stmt = $this->db->prepare(
+                "INSERT INTO skill_promotions
+                    (user_id, class, status, source_ref, skill_name, description, eval_queries,
+                     parameter_schema, merge_target, created_at)
+                 VALUES (:u, :c, 'proposed', :ref, :name, :descr, :evals, :params, :merge, NOW())
+                 ON DUPLICATE KEY UPDATE description = VALUES(description),
+                     eval_queries = VALUES(eval_queries), parameter_schema = VALUES(parameter_schema),
+                     merge_target = VALUES(merge_target), status = 'proposed', decided_at = NULL"
+            );
+            $stmt->execute([
+                ':u' => $userId, ':c' => $class, ':ref' => $sourceRef,
+                ':name' => $proposal['skill_name'], ':descr' => $proposal['description'],
+                ':evals' => json_encode($proposal['eval_queries']),
+                ':params' => $proposal['parameter_schema'] !== null ? json_encode($proposal['parameter_schema']) : null,
+                ':merge' => $proposal['merge_target'],
+            ]);
+            $id = (int) $this->db->lastInsertId();
+        } catch (\Throwable $e) {
+            error_log('[GenesisController] proposal insert failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => 'Could not store proposal', 'status_code' => 500];
+        }
+
+        return ['success' => true, 'promotion' => [
+            'id' => $id, 'class' => $class, 'status' => 'proposed', 'source_ref' => $sourceRef,
+            'skill_name' => $proposal['skill_name'], 'description' => $proposal['description'],
+            'eval_queries' => $proposal['eval_queries'],
+            'parameter_schema' => $proposal['parameter_schema'],
+            'merge_target' => $proposal['merge_target'], 'rationale' => $proposal['rationale'],
+        ]];
     }
 
     // ─── internals ───────────────────────────────────────────────────────────
