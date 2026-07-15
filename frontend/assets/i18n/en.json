@@ -47,7 +47,10 @@
     "merged": "Eval cases added",
     "analyzing": "Analyzing runs…",
     "analyzingConversation": "Analyzing conversation…",
-    "proposalFailed": "Proposal failed"
+    "proposalFailed": "Proposal failed",
+    "promoteFromPrompt": "Promote to skill…",
+    "promptOnly": "Select a prompt, not a folder",
+    "analyzingPrompt": "Analyzing prompt…"
   },
   "title": "AI Assistant - Multi-Provider",
   "header": {

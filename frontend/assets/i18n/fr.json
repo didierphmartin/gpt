@@ -47,7 +47,10 @@
     "merged": "Cas d'évaluation ajoutés",
     "analyzing": "Analyse des exécutions…",
     "analyzingConversation": "Analyse de la conversation…",
-    "proposalFailed": "Échec de la proposition"
+    "proposalFailed": "Échec de la proposition",
+    "promoteFromPrompt": "Promouvoir en compétence…",
+    "promptOnly": "Sélectionnez un prompt, pas un dossier",
+    "analyzingPrompt": "Analyse du prompt…"
   },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {

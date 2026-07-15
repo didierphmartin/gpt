@@ -9814,6 +9814,51 @@ class ChatApp {
     }
 
     /**
+     * L0 genesis on-ramp: prompt-library variant of createSkillFromConversation.
+     * Same in-flight guard (shared flag — only one proposal reflection at a
+     * time regardless of source), same catalog mapper, same 401/error
+     * handling. `promptId` is the saved-prompt row id (node.id from the
+     * prompt tree), not a context id.
+     */
+    async createSkillFromPrompt(promptId) {
+        if (this._skillifyInFlight) {
+            this.showNotification('Skill proposal already in progress…', 'info');
+            return;
+        }
+        this._skillifyInFlight = true;
+        try {
+            const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
+                ? window.skillsManager.skills.map(s => ({
+                    name: s.dir_name || s.name || '',
+                    description: (s.description || '').slice(0, 200),
+                  })).filter(s => s.name)
+                : [];
+            this.showNotification(window.i18n?.t('genesis.analyzingPrompt') || 'Analyzing prompt…', 'info');
+            const resp = await fetch(window.apiUrl('/genesis/proposals'), {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({ source: 'prompt', prompt_id: Number(promptId), catalog }),
+            });
+            if (resp.status === 401) {
+                window.location.href = 'login.html';
+                return;
+            }
+
+            const data = await resp.json();
+            if (!data.success) {
+                this.showNotification(`${window.i18n?.t('genesis.proposalFailed') || 'Proposal failed'}: ${data.error || 'unknown'}`, 'error');
+                return;
+            }
+            window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
+        } catch (e) {
+            console.error('[genesis] createSkillFromPrompt failed:', e);
+            this.showNotification(window.i18n?.t('genesis.proposalFailed') || 'Proposal failed', 'error');
+        } finally {
+            this._skillifyInFlight = false;
+        }
+    }
+
+    /**
      * Start renaming a conversation (inline editing)
      */
     startRenameContext(contextId) {
@@ -10570,6 +10615,14 @@ class ChatApp {
 
             case 'save':
                 this.handleSavePrompt(node);
+                break;
+
+            case 'skillify':
+                if (node.type === 'prompt') {
+                    this.createSkillFromPrompt(node.id);
+                } else {
+                    this.showNotification(window.i18n?.t('genesis.promptOnly') || 'Select a prompt, not a folder', 'info');
+                }
                 break;
 
             case 'rename':

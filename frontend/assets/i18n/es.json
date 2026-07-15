@@ -47,7 +47,10 @@
     "merged": "Casos de evaluación añadidos",
     "analyzing": "Analizando ejecuciones…",
     "analyzingConversation": "Analizando la conversación…",
-    "proposalFailed": "Propuesta fallida"
+    "proposalFailed": "Propuesta fallida",
+    "promoteFromPrompt": "Promover a habilidad…",
+    "promptOnly": "Seleccione un prompt, no una carpeta",
+    "analyzingPrompt": "Analizando el prompt…"
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {
