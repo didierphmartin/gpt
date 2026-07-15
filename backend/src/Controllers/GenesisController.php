@@ -98,6 +98,22 @@ final class GenesisController
         } catch (\Throwable $e) {
             error_log('[GenesisController] ensureTables(skill_promotions) failed: ' . $e->getMessage());
         }
+        // heal_spend may not exist at all yet on a fresh install (HealController's
+        // own ensureTables() may not have run). Bootstrap it here too so genesis
+        // works standalone; log-and-continue mirrors the skill_promotions block.
+        try {
+            $this->db->exec(
+                "CREATE TABLE IF NOT EXISTS heal_spend (
+                    user_id BIGINT UNSIGNED NOT NULL,
+                    day DATE NOT NULL,
+                    kind ENUM('heal','genesis') NOT NULL DEFAULT 'heal',
+                    spent_usd DECIMAL(10,4) NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, day, kind)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+            );
+        } catch (\Throwable $e) {
+            error_log('[GenesisController] ensureTables(heal_spend) failed: ' . $e->getMessage());
+        }
         // heal_spend.kind — probe then alter (PK must include kind so heal and
         // genesis rows upsert independently per (user, day)).
         try {
@@ -355,7 +371,8 @@ final class GenesisController
                     (user_id, class, status, source_ref, skill_name, description, eval_queries,
                      parameter_schema, merge_target, created_at)
                  VALUES (:u, :c, 'proposed', :ref, :name, :descr, :evals, :params, :merge, NOW())
-                 ON DUPLICATE KEY UPDATE description = VALUES(description),
+                 ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), class = VALUES(class),
+                     description = VALUES(description),
                      eval_queries = VALUES(eval_queries), parameter_schema = VALUES(parameter_schema),
                      merge_target = VALUES(merge_target), status = 'proposed', decided_at = NULL"
             );

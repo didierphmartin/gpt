@@ -42,7 +42,9 @@
     "dismiss": "Ignorer",
     "mergeHint": "Chevauche une compétence existante :",
     "built": "Compétence créée",
-    "buildFailed": "Échec de la création"
+    "buildFailed": "Échec de la création",
+    "approveMerge": "Ajouter les cas d'évaluation à la compétence existante",
+    "merged": "Cas d'évaluation ajoutés"
   },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {

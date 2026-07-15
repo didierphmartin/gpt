@@ -42,7 +42,9 @@
     "dismiss": "Descartar",
     "mergeHint": "Se superpone con una habilidad existente:",
     "built": "Habilidad creada",
-    "buildFailed": "Error al crear la habilidad"
+    "buildFailed": "Error al crear la habilidad",
+    "approveMerge": "Añadir casos de evaluación a la habilidad existente",
+    "merged": "Casos de evaluación añadidos"
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {

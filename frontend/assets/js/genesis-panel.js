@@ -19,7 +19,13 @@
 (function () {
     'use strict';
 
-    const t = (k, d) => (window.i18n && window.i18n.t && window.i18n.t(k)) || d;
+    // i18n.t() key-echo-aware fallback: window.i18n.t() returns the key itself
+    // (not empty/null) when a key is missing from the translation file, so a
+    // bare `|| d` never fires. Mirror workflow-editor.js's tWithFallback().
+    const t = (k, d) => {
+        const v = window.i18n && window.i18n.t && window.i18n.t(k);
+        return (!v || v === k) ? d : v;
+    };
     const tok = () => (localStorage.getItem('token') || (window.authManager && window.authManager.token) || '');
     const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
     // Flat estimate for an L0 build (write + optional short harden pass).
@@ -180,7 +186,7 @@
         document.querySelectorAll('.gen-ov-backdrop').forEach(el => el.remove());
         const paramRows = p.parameter_schema
             ? Object.entries(p.parameter_schema).map(([k, v]) =>
-                `<tr><td>${esc(k)}</td><td>${esc((v && v.type) || 'string')}</td><td>${v && v.examples ? esc(v.examples.join(', ')) : ''}</td></tr>`).join('')
+                `<tr><td>${esc(k)}</td><td>${esc((v && v.type) || 'string')}</td><td>${esc(Array.isArray(v && v.examples) ? v.examples.join(', ') : (v && v.examples ? String(v.examples) : ''))}</td></tr>`).join('')
             : '';
         const approveLabel = p.is_merge
             ? t('genesis.approveMerge', 'Add eval cases to existing skill')

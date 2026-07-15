@@ -42,7 +42,9 @@
     "dismiss": "Dismiss",
     "mergeHint": "Overlaps existing skill:",
     "built": "Skill created",
-    "buildFailed": "Skill creation failed"
+    "buildFailed": "Skill creation failed",
+    "approveMerge": "Add eval cases to existing skill",
+    "merged": "Eval cases added"
   },
   "title": "AI Assistant - Multi-Provider",
   "header": {
