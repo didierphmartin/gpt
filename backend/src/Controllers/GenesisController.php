@@ -356,6 +356,7 @@ final class GenesisController
             'eval_queries' => $proposal['eval_queries'],
             'parameter_schema' => $proposal['parameter_schema'],
             'merge_target' => $proposal['merge_target'], 'rationale' => $proposal['rationale'],
+            'is_merge' => $proposal['is_merge'],
         ]];
     }
 

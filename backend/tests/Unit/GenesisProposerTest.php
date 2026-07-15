@@ -38,6 +38,25 @@ class GenesisProposerTest extends TestCase
         $this->assertCount(2, $p['eval_queries']);
     }
 
+    public function testParseProposalAcceptsMergeShape(): void
+    {
+        $text = '{"skill_name":null,"merge_target":"medium-format",' .
+            '"description":"WHEN asked to convert to Medium DO transform",' .
+            '"eval_queries":[{"query":"convert to medium","should_trigger":true}]}';
+        $p = GenesisProposer::parseProposal($text);
+        $this->assertNotNull($p);
+        $this->assertTrue($p['is_merge']);
+        $this->assertSame('medium-format', $p['skill_name']);
+        $this->assertSame('medium-format', $p['merge_target']);
+    }
+
+    public function testParseProposalStillRejectsWhenBothNamesEmpty(): void
+    {
+        $this->assertNull(GenesisProposer::parseProposal(
+            '{"skill_name":null,"merge_target":null,"description":"d"}'
+        ));
+    }
+
     public function testConversationPromptContainsTranscriptAndCatalog(): void
     {
         $prompt = GenesisProposer::buildConversationPrompt(

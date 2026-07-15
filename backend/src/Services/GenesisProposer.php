@@ -138,14 +138,23 @@ TXT;
         }
         $data = json_decode($m[0], true);
         if (!is_array($data)) return null;
-        if (!isset($data['skill_name']) || !is_string($data['skill_name']) || $data['skill_name'] === '') {
+
+        $mergeTarget = (isset($data['merge_target']) && is_string($data['merge_target']) && $data['merge_target'] !== '')
+            ? $data['merge_target'] : null;
+
+        $hasSkillName = isset($data['skill_name']) && is_string($data['skill_name']) && $data['skill_name'] !== '';
+        $isMerge = !$hasSkillName && $mergeTarget !== null;
+
+        if (!$hasSkillName && !$isMerge) {
             return null; // includes the explicit {"skill_name": null} no-procedure answer
         }
         if (!isset($data['description']) || !is_string($data['description']) || trim($data['description']) === '') {
             return null;
         }
 
-        $name = strtolower(trim($data['skill_name']));
+        // Merge proposals carry the name in merge_target; non-merge proposals carry it in skill_name.
+        $rawName = $isMerge ? $mergeTarget : $data['skill_name'];
+        $name = strtolower(trim($rawName));
         $name = preg_replace('/[^a-z0-9]+/', '-', $name);
         $name = trim(preg_replace('/-+/', '-', $name), '-');
         $name = substr($name, 0, 60);
@@ -163,9 +172,9 @@ TXT;
             'description' => trim($data['description']),
             'eval_queries' => $evals,
             'parameter_schema' => is_array($data['parameter_schema'] ?? null) ? $data['parameter_schema'] : null,
-            'merge_target' => (isset($data['merge_target']) && is_string($data['merge_target']) && $data['merge_target'] !== '')
-                ? $data['merge_target'] : null,
+            'merge_target' => $mergeTarget,
             'rationale' => is_string($data['rationale'] ?? null) ? $data['rationale'] : '',
+            'is_merge' => $isMerge,
         ];
     }
 
