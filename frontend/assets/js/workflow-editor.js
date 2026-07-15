@@ -437,6 +437,50 @@ class WorkflowEditor {
             }
         });
 
+        // Top-left "Promote to skill…" button (beside Reset/Save): L0 genesis
+        // on-ramp for workflows — mirrors chat.js's createSkillFromConversation
+        // (same catalog shape, in-flight guard, and 401 handling), but scoped
+        // to the currently loaded workflow via this.currentWorkflowId.
+        document.getElementById('wf-promote-skill')?.addEventListener('click', async () => {
+            if (!this.currentWorkflowId) {
+                this.showToast(this.t('workflow.messages.saveFirst'), 'warning');
+                return;
+            }
+            if (this._promoteInFlight) {
+                this.showToast(this.tWithFallback('genesis.proposalInProgress', 'Skill proposal already in progress…'), 'info');
+                return;
+            }
+            this._promoteInFlight = true;
+            try {
+                const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
+                    ? window.skillsManager.skills.map(s => ({
+                        name: s.dir_name || s.name || '',
+                        description: (s.description || '').slice(0, 200),
+                      })).filter(s => s.name)
+                    : [];
+                const resp = await fetch(`${this.apiBase}/genesis/proposals`, {
+                    method: 'POST',
+                    headers: this.getAuthHeaders(),
+                    body: JSON.stringify({ source: 'workflow', workflow_id: this.currentWorkflowId, catalog }),
+                });
+                if (resp.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+                const data = await resp.json();
+                if (!data.success) {
+                    this.showToast(`Proposal failed: ${data.error || 'unknown'}`, 'error');
+                    return;
+                }
+                window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
+            } catch (e) {
+                console.error('[genesis] promote workflow failed:', e);
+                this.showToast('Proposal failed', 'error');
+            } finally {
+                this._promoteInFlight = false;
+            }
+        });
+
         // Set up "New Workflow" button in left sidebar — show Batch/Audio choice
         document.getElementById('new-workflow-btn')?.addEventListener('click', (e) => {
             this.showNewWorkflowTypeSelector(e.target.closest('button'));
