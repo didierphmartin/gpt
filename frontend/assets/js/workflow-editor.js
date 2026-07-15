@@ -453,7 +453,6 @@ class WorkflowEditor {
                     this.showToast(this.tWithFallback('genesis.proposalInProgress', 'Skill proposal already in progress…'), 'info');
                     return;
                 }
-                this._promoteInFlight = true;
                 const _origPromoteBtnHtml = promoteBtn.innerHTML;
                 promoteBtn.disabled = true;
                 promoteBtn.classList.add('opacity-75', 'cursor-wait');
@@ -461,32 +460,8 @@ class WorkflowEditor {
                     + 'border-t-transparent rounded-full animate-spin align-[-1px] mr-1"></span>'
                     + this.tWithFallback('genesis.analyzing', 'Analyzing runs…');
                 try {
-                    const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
-                        ? window.skillsManager.skills.map(s => ({
-                            name: s.dir_name || s.name || '',
-                            description: (s.description || '').slice(0, 200),
-                          })).filter(s => s.name)
-                        : [];
-                    const resp = await fetch(`${this.apiBase}/genesis/proposals`, {
-                        method: 'POST',
-                        headers: this.getAuthHeaders(),
-                        body: JSON.stringify({ source: 'workflow', workflow_id: this.currentWorkflowId, catalog }),
-                    });
-                    if (resp.status === 401) {
-                        window.location.href = 'login.html';
-                        return;
-                    }
-                    const data = await resp.json();
-                    if (!data.success) {
-                        this.showToast(`Proposal failed: ${data.error || 'unknown'}`, 'error');
-                        return;
-                    }
-                    window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
-                } catch (e) {
-                    console.error('[genesis] promote workflow failed:', e);
-                    this.showToast('Proposal failed', 'error');
+                    await this.promoteWorkflowToSkill(this.currentWorkflowId);
                 } finally {
-                    this._promoteInFlight = false;
                     if (document.body.contains(promoteBtn)) {
                         promoteBtn.disabled = false;
                         promoteBtn.classList.remove('opacity-75', 'cursor-wait');
@@ -495,6 +470,47 @@ class WorkflowEditor {
                 }
             });
         }
+
+        // Shared genesis on-ramp used by both the toolbar button above and the
+        // sidebar workflow ⋮ menu: one reflection call → approval overlay.
+        // Callers own any button busy-state; this method owns the in-flight
+        // guard, the analyzing toast, and all request/error handling.
+        this.promoteWorkflowToSkill = this.promoteWorkflowToSkill || (async (workflowId) => {
+            if (this._promoteInFlight) {
+                this.showToast(this.tWithFallback('genesis.proposalInProgress', 'Skill proposal already in progress…'), 'info');
+                return;
+            }
+            this._promoteInFlight = true;
+            this.showToast(this.tWithFallback('genesis.analyzing', 'Analyzing runs…'), 'info');
+            try {
+                const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
+                    ? window.skillsManager.skills.map(s => ({
+                        name: s.dir_name || s.name || '',
+                        description: (s.description || '').slice(0, 200),
+                      })).filter(s => s.name)
+                    : [];
+                const resp = await fetch(`${this.apiBase}/genesis/proposals`, {
+                    method: 'POST',
+                    headers: this.getAuthHeaders(),
+                    body: JSON.stringify({ source: 'workflow', workflow_id: workflowId, catalog }),
+                });
+                if (resp.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+                const data = await resp.json();
+                if (!data.success) {
+                    this.showToast(`${this.tWithFallback('genesis.proposalFailed', 'Proposal failed')}: ${data.error || 'unknown'}`, 'error');
+                    return;
+                }
+                window.genesisSystem.showProposal(data.promotion); // null → "no procedure" toast
+            } catch (e) {
+                console.error('[genesis] promote workflow failed:', e);
+                this.showToast(this.tWithFallback('genesis.proposalFailed', 'Proposal failed'), 'error');
+            } finally {
+                this._promoteInFlight = false;
+            }
+        });
 
         // Set up "New Workflow" button in left sidebar — show Batch/Audio choice
         document.getElementById('new-workflow-btn')?.addEventListener('click', (e) => {
@@ -669,6 +685,10 @@ class WorkflowEditor {
                         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
                     <span>✏️</span><span data-i18n="contextMenu.rename">${this.t('contextMenu.rename')}</span>
                 </button>
+                <button type="button" data-action="skillify"
+                        class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
+                    <span>🧬</span><span data-i18n="genesis.promoteWorkflow">${this.tWithFallback('genesis.promoteWorkflow', 'Promote to skill…')}</span>
+                </button>
                 <button type="button" data-action="delete"
                         class="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2">
                     <span>🗑️</span><span data-i18n="contextMenu.delete">${this.t('contextMenu.delete')}</span>
@@ -702,6 +722,8 @@ class WorkflowEditor {
                     if (!target) return;
                     if (action === 'rename') {
                         await this.renameWorkflow(target.id, target.name);
+                    } else if (action === 'skillify') {
+                        await this.promoteWorkflowToSkill(target.id);
                     } else if (action === 'delete') {
                         await this.deleteWorkflow(target.id);
                     }
