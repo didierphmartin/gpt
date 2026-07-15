@@ -80,6 +80,19 @@ TXT;
             . self::OUTPUT_CONTRACT;
     }
 
+    /** A saved, reused prompt is a proto-skill: its text is the trigger material. */
+    public static function buildPromptLibraryPrompt(string $name, string $content, array $catalog): string
+    {
+        return "You analyse ONE saved prompt from the user's prompt library — a prompt they saved to reuse — "
+            . "and propose a skill that encapsulates the procedure it invokes.\n"
+            . "The prompt text is the best possible evidence of the trigger: derive the WHEN from how the "
+            . "prompt is phrased, and the DO from what it instructs. Lift concrete values (topics, formats, "
+            . "currencies, counts) into parameters with the observed values as defaults/examples.\n\n"
+            . "SAVED PROMPT \"" . $name . "\":\n---\n" . self::truncate($content, self::MAX_TRANSCRIPT_CHARS) . "\n---\n\n"
+            . "EXISTING SKILL CATALOG (name — description):\n" . self::catalogBlock($catalog) . "\n\n"
+            . self::OUTPUT_CONTRACT;
+    }
+
     /**
      * Renders the workflow's graph as a compact one-line-per-step summary.
      *

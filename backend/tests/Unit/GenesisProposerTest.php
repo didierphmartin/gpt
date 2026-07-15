@@ -138,4 +138,18 @@ class GenesisProposerTest extends TestCase
         );
         $this->assertStringContainsString('demand is already established', $prompt);
     }
+
+    public function testPromptLibraryPromptContainsPromptAndContract(): void
+    {
+        $prompt = GenesisProposer::buildPromptLibraryPrompt(
+            'Weekly crypto digest',
+            "Summarize this week's top crypto news as a 5-bullet digest with prices in EUR",
+            [['name' => 'composed-newsletter', 'description' => 'WHEN asked for a newsletter…']]
+        );
+        $this->assertStringContainsString('Weekly crypto digest', $prompt);
+        $this->assertStringContainsString('5-bullet digest', $prompt);
+        $this->assertStringContainsString('composed-newsletter', $prompt);
+        $this->assertStringContainsString('demand is already established', $prompt);
+        $this->assertStringContainsString('merge_target', $prompt);
+    }
 }

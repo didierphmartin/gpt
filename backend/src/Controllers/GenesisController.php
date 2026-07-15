@@ -342,8 +342,24 @@ final class GenesisController
             $prompt = GenesisProposer::buildWorkflowPrompt($wf, $runs, $catalog);
             $class = 2;
             $sourceRef = 'workflow:' . $workflowId;
+        } elseif ($source === 'prompt') {
+            $promptId = (int) ($b['prompt_id'] ?? 0);
+            $stmt = $this->db->prepare(
+                "SELECT id, name, content FROM prompt_library WHERE id = ? AND user_id = ? AND type = 'prompt'"
+            );
+            $stmt->execute([$promptId, $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return ['success' => false, 'error' => 'Prompt not found', 'status_code' => 404];
+            }
+            if (trim((string) $row['content']) === '') {
+                return ['success' => false, 'error' => 'Prompt has no content', 'status_code' => 400];
+            }
+            $prompt = GenesisProposer::buildPromptLibraryPrompt((string) $row['name'], (string) $row['content'], $catalog);
+            $class = 1;
+            $sourceRef = 'prompt:' . $promptId;
         } else {
-            return ['success' => false, 'error' => "source must be 'conversation' or 'workflow'", 'status_code' => 400];
+            return ['success' => false, 'error' => "source must be 'conversation', 'workflow' or 'prompt'", 'status_code' => 400];
         }
 
         // One-shot LLM call through the agent endpoint's machinery.
