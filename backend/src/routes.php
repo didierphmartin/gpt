@@ -129,6 +129,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/settings/heal', ['SettingsController', 'getHealSettings']);
         $r->post('/api/v1/settings/heal', ['SettingsController', 'saveHealSettings']);
 
+        // Skill-genesis settings (promotion mode + cost guards)
+        $r->get('/api/v1/settings/genesis', ['SettingsController', 'getGenesisSettings']);
+        $r->post('/api/v1/settings/genesis', ['SettingsController', 'saveGenesisSettings']);
+
         // Self-healing enforcement gate (mode/budget/ceiling)
         $r->post('/api/v1/heal/authorize', ['HealController', 'authorize']);
         $r->post('/api/v1/heal/record', ['HealController', 'record']);

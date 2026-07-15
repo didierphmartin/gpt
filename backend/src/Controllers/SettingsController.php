@@ -1000,6 +1000,102 @@ class SettingsController
         }
     }
 
+    // ─── Skill-genesis settings (promotion mode + cost guards) ──────────────
+    // Spec: docs/specs/2026-07-14-skill-genesis-design.md §8 (L0 subset).
+    // Default mode 'off' = the system only lists proposals a user creates
+    // manually; it never spends.
+
+    private function genesisDefaults(): array
+    {
+        return [
+            'genesis_mode'                 => 'off',  // off | suggest | ask | auto
+            'genesis_daily_budget_usd'     => 3.00,
+            'genesis_per_skill_ceiling_usd'=> 1.50,
+            'genesis_max_skills_per_week'  => 2,
+            'genesis_reflection_provider'  => 'kimi',
+        ];
+    }
+
+    private function ensureGenesisColumnsExist(): void
+    {
+        try {
+            $this->db->query("SELECT genesis_mode FROM users LIMIT 1");
+        } catch (\PDOException $e) {
+            $alters = [
+                "ALTER TABLE users ADD COLUMN genesis_mode VARCHAR(8) DEFAULT 'off'",
+                "ALTER TABLE users ADD COLUMN genesis_daily_budget_usd DECIMAL(8,2) DEFAULT 3.00",
+                "ALTER TABLE users ADD COLUMN genesis_per_skill_ceiling_usd DECIMAL(8,2) DEFAULT 1.50",
+                "ALTER TABLE users ADD COLUMN genesis_max_skills_per_week INT DEFAULT 2",
+                "ALTER TABLE users ADD COLUMN genesis_reflection_provider VARCHAR(40) DEFAULT 'kimi'",
+            ];
+            foreach ($alters as $sql) {
+                try { $this->db->exec($sql); } catch (\PDOException $e2) { /* already exists */ }
+            }
+        }
+    }
+
+    public function getGenesisSettings(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $defaults = $this->genesisDefaults();
+        try {
+            $this->ensureGenesisColumnsExist();
+            $stmt = $this->db->prepare(
+                "SELECT genesis_mode, genesis_daily_budget_usd, genesis_per_skill_ceiling_usd,
+                        genesis_max_skills_per_week, genesis_reflection_provider
+                 FROM users WHERE id = ?"
+            );
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $s = $defaults;
+            foreach ($defaults as $k => $def) {
+                if (isset($row[$k]) && $row[$k] !== null) {
+                    $s[$k] = is_int($def) ? (int) $row[$k] : (is_float($def) ? (float) $row[$k] : (string) $row[$k]);
+                }
+            }
+            return ['success' => true, 'settings' => $s];
+        } catch (\Throwable $e) {
+            error_log('[SettingsController] getGenesisSettings failed: ' . $e->getMessage());
+            return ['success' => true, 'settings' => $defaults];
+        }
+    }
+
+    public function saveGenesisSettings(array $request): array
+    {
+        $userId = $request['user_id'] ?? 0;
+        $b = $request['body'] ?? [];
+        if (!$userId) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'glm', 'gamma4'];
+        $mode = in_array($b['genesis_mode'] ?? '', ['off', 'suggest', 'ask', 'auto'], true) ? $b['genesis_mode'] : 'off';
+        $prov = in_array($b['genesis_reflection_provider'] ?? '', $validProviders, true) ? $b['genesis_reflection_provider'] : 'kimi';
+        $budget  = max(0.0, min(1000.0, (float) ($b['genesis_daily_budget_usd'] ?? 3.0)));
+        $ceiling = max(0.0, min(1000.0, (float) ($b['genesis_per_skill_ceiling_usd'] ?? 1.5)));
+        $weekly  = max(0, min(50, (int) ($b['genesis_max_skills_per_week'] ?? 2)));
+        try {
+            $this->ensureGenesisColumnsExist();
+            $stmt = $this->db->prepare(
+                "UPDATE users SET genesis_mode = ?, genesis_daily_budget_usd = ?,
+                        genesis_per_skill_ceiling_usd = ?, genesis_max_skills_per_week = ?,
+                        genesis_reflection_provider = ? WHERE id = ?"
+            );
+            $stmt->execute([$mode, $budget, $ceiling, $weekly, $prov, $userId]);
+            return ['success' => true, 'settings' => [
+                'genesis_mode' => $mode, 'genesis_daily_budget_usd' => $budget,
+                'genesis_per_skill_ceiling_usd' => $ceiling,
+                'genesis_max_skills_per_week' => $weekly,
+                'genesis_reflection_provider' => $prov,
+            ]];
+        } catch (\Throwable $e) {
+            error_log('[SettingsController] saveGenesisSettings failed: ' . $e->getMessage());
+            return ['success' => false, 'error' => 'Save failed', 'status_code' => 500];
+        }
+    }
+
     /**
      * Get user's storage settings
      */
