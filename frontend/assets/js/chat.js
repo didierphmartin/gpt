@@ -481,7 +481,10 @@ class ChatApp {
         });
         this.promptContextMenu.addEventListener('click', (e) => {
             e.stopPropagation();
-            const action = e.target.dataset.action;
+            // closest(): buttons may wrap their label in a <span> (e.g. i18n),
+            // so e.target can be the span rather than the button itself —
+            // same idiom as the conversation menu listener below.
+            const action = e.target.closest('.context-menu-item')?.dataset.action;
             if (action) {
                 this.handleContextMenuAction(action);
             }
