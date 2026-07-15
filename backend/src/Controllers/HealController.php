@@ -92,11 +92,21 @@ final class HealController
         $actual = max(0.0, (float) (($request['body'] ?? [])['actual_usd'] ?? 0));
         $this->ensureSpendTable();
         try {
-            $stmt = $this->db->prepare(
-                "INSERT INTO heal_spend (user_id, day, spent_usd) VALUES (:u, CURDATE(), :s)
-                 ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2"
-            );
-            $stmt->execute([':u' => $userId, ':s' => $actual, ':s2' => $actual]);
+            // kind-scoped when the column exists (added by GenesisController);
+            // fall back to the legacy shape on installs that pre-date it.
+            try {
+                $stmt = $this->db->prepare(
+                    "INSERT INTO heal_spend (user_id, day, kind, spent_usd) VALUES (:u, CURDATE(), 'heal', :s)
+                     ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2"
+                );
+                $stmt->execute([':u' => $userId, ':s' => $actual, ':s2' => $actual]);
+            } catch (\PDOException $eKind) {
+                $stmt = $this->db->prepare(
+                    "INSERT INTO heal_spend (user_id, day, spent_usd) VALUES (:u, CURDATE(), :s)
+                     ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2"
+                );
+                $stmt->execute([':u' => $userId, ':s' => $actual, ':s2' => $actual]);
+            }
         } catch (\Throwable $e) {
             error_log('[HealController] record failed: ' . $e->getMessage());
             return ['success' => false, 'error' => 'record failed', 'status_code' => 500];
@@ -152,10 +162,19 @@ final class HealController
     {
         $this->ensureSpendTable();
         try {
-            $stmt = $this->db->prepare(
-                "SELECT spent_usd FROM heal_spend WHERE user_id = ? AND day = CURDATE()"
-            );
-            $stmt->execute([$userId]);
+            // kind-scoped when the column exists (added by GenesisController);
+            // fall back to the legacy shape on installs that pre-date it.
+            try {
+                $stmt = $this->db->prepare(
+                    "SELECT spent_usd FROM heal_spend WHERE user_id = ? AND day = CURDATE() AND kind = 'heal'"
+                );
+                $stmt->execute([$userId]);
+            } catch (\PDOException $eKind) {
+                $stmt = $this->db->prepare(
+                    "SELECT spent_usd FROM heal_spend WHERE user_id = ? AND day = CURDATE()"
+                );
+                $stmt->execute([$userId]);
+            }
             $v = $stmt->fetchColumn();
             return $v !== false ? (float) $v : 0.0;
         } catch (\Throwable $e) {
