@@ -61,4 +61,23 @@ class GenesisProposerTest extends TestCase
         $this->assertStringContainsString('"topic": "crypto"', $prompt);
         $this->assertStringContainsString('parameter_schema', $prompt);
     }
+
+    public function testWorkflowPromptContainsStructure(): void
+    {
+        $prompt = GenesisProposer::buildWorkflowPrompt(
+            [
+                'id' => 7,
+                'name' => 'Newsletter Pipeline',
+                'description' => 'crypto+pubmed → publisher',
+                'steps' => json_encode([
+                    ['name' => 'Researcher', 'type' => 'agent', 'instructions' => 'Research crypto news daily'],
+                ]),
+            ],
+            [['input_variables' => ['topic' => 'crypto']]],
+            []
+        );
+        $this->assertStringContainsString('STRUCTURE', $prompt);
+        $this->assertStringContainsString('Researcher', $prompt);
+        $this->assertStringContainsString('Research crypto news daily', $prompt);
+    }
 }

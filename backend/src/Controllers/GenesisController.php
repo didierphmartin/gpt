@@ -289,7 +289,7 @@ final class GenesisController
             $sourceRef = 'context:' . $contextId;
         } elseif ($source === 'workflow') {
             $workflowId = (int) ($b['workflow_id'] ?? 0);
-            $stmt = $this->db->prepare('SELECT id, name, description FROM agent_workflows WHERE id = ? AND user_id = ?');
+            $stmt = $this->db->prepare('SELECT id, name, description, steps FROM agent_workflows WHERE id = ? AND user_id = ?');
             $stmt->execute([$workflowId, $userId]);
             $wf = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$wf) {
