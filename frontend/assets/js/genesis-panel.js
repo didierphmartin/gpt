@@ -25,6 +25,12 @@
     // Flat estimate for an L0 build (write + optional short harden pass).
     const BUILD_ESTIMATE_USD = 0.25;
 
+    /**
+     * HTML escape helper — prevents stored XSS by converting LLM-derived
+     * strings to safe HTML entities before interpolation into innerHTML.
+     */
+    function esc(s) { const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
     (function injectStyles() {
         if (document.getElementById('genesis-panel-styles')) return;
         const st = document.createElement('style');
@@ -173,7 +179,7 @@
         if (!p) { toast(t('genesis.noProcedure', 'No repeatable procedure found in this conversation.'), 'info'); return; }
         const paramRows = p.parameter_schema
             ? Object.entries(p.parameter_schema).map(([k, v]) =>
-                `<tr><td>${k}</td><td>${(v && v.type) || 'string'}</td><td>${v && v.examples ? v.examples.join(', ') : ''}</td></tr>`).join('')
+                `<tr><td>${esc(k)}</td><td>${esc((v && v.type) || 'string')}</td><td>${v && v.examples ? esc(v.examples.join(', ')) : ''}</td></tr>`).join('')
             : '';
         const approveLabel = p.is_merge
             ? t('genesis.approveMerge', 'Add eval cases to existing skill')
@@ -183,13 +189,13 @@
         back.innerHTML = `
         <div class="gen-ov">
             <h3>${t('genesis.proposalTitle', 'Skill proposal')}</h3>
-            <p class="gen-ov-name">${p.skill_name}</p>
-            <p class="gen-ov-desc">${p.description}</p>
+            <p class="gen-ov-name">${esc(p.skill_name)}</p>
+            <p class="gen-ov-desc">${esc(p.description)}</p>
             <div class="gen-ov-meta">
                 <span>${(p.eval_queries || []).length} eval queries</span>
-                ${p.rationale ? `<span>${p.rationale}</span>` : ''}
+                ${p.rationale ? `<span>${esc(p.rationale)}</span>` : ''}
             </div>
-            ${p.merge_target ? `<div class="gen-ov-merge">${t('genesis.mergeHint', 'Overlaps existing skill:')} <b>${p.merge_target}</b></div>` : ''}
+            ${p.merge_target ? `<div class="gen-ov-merge">${t('genesis.mergeHint', 'Overlaps existing skill:')} <b>${esc(p.merge_target)}</b></div>` : ''}
             ${paramRows ? `<table><thead><tr><th>Parameter</th><th>Type</th><th>Examples</th></tr></thead><tbody>${paramRows}</tbody></table>` : ''}
             <div class="gen-ov-actions">
                 <button class="gen-btn-dismiss">${t('genesis.dismiss', 'Dismiss')}</button>
@@ -204,7 +210,15 @@
             const ok = await buildOne(p);
             if (ok) back.remove(); else e.target.disabled = false;
         });
-        back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
+        back.addEventListener('click', (e) => {
+            if (e.target === back) {
+                if (p.id > 0) {
+                    dismiss(p.id).then(() => back.remove());
+                } else {
+                    back.remove();
+                }
+            }
+        });
         document.body.appendChild(back);
     }
 
