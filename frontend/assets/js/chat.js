@@ -10579,13 +10579,16 @@ class ChatApp {
         // Enable/disable menu items based on node type
         const getPromptBtn = menu.querySelector('[data-action="get"]');
         const savePromptBtn = menu.querySelector('[data-action="save"]');
+        const skillifyBtn = menu.querySelector('[data-action="skillify"]');
 
         if (node.type === 'folder') {
             getPromptBtn.classList.add('disabled');
             savePromptBtn.textContent = '💾 Save Prompt (New)';
+            if (skillifyBtn) skillifyBtn.classList.add('disabled');
         } else {
             getPromptBtn.classList.remove('disabled');
             savePromptBtn.textContent = '💾 Save Prompt (Update)';
+            if (skillifyBtn) skillifyBtn.classList.remove('disabled');
         }
 
         // Position menu at cursor
