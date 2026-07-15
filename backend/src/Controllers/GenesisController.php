@@ -159,6 +159,13 @@ final class GenesisController
             return ['success' => false, 'error' => 'Promotion not found', 'status_code' => 404];
         }
 
+        $stmt = $this->db->prepare('SELECT status FROM skill_promotions WHERE id = ? AND user_id = ?');
+        $stmt->execute([$promotionId, $userId]);
+        $currentStatus = (string) $stmt->fetchColumn();
+        if (!in_array($currentStatus, ['proposed', 'approved'], true)) {
+            return ['success' => false, 'error' => 'Promotion already decided', 'status_code' => 409];
+        }
+
         $cfg = $this->genesisConfig($userId);
         $spent = $this->spentToday($userId);
         $remaining = max(0.0, $cfg['budget'] - $spent);
@@ -203,6 +210,7 @@ final class GenesisController
         }
 
         try {
+            $this->db->beginTransaction();
             $stmt = $this->db->prepare(
                 "UPDATE skill_promotions
                  SET status = :st, born_skill_dir = :dir, decided_at = NOW()
@@ -215,7 +223,9 @@ final class GenesisController
                  ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2"
             );
             $stmt->execute([':u' => $userId, ':s' => $actual, ':s2' => $actual]);
+            $this->db->commit();
         } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) { $this->db->rollBack(); }
             error_log('[GenesisController] record failed: ' . $e->getMessage());
             return ['success' => false, 'error' => 'record failed', 'status_code' => 500];
         }
