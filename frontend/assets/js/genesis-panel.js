@@ -59,9 +59,51 @@
         #genesis-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);z-index:320;background:#1e293b;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:all .2s;pointer-events:none;max-width:80vw}
         #genesis-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
         #genesis-toast.genesis-toast-error{background:#b91c1c}
-        #genesis-toast.genesis-toast-ok{background:#15803d}`;
+        #genesis-toast.genesis-toast-ok{background:#15803d}
+        .gen-busy, .gen-busy *{cursor:progress !important}
+        #gen-cursor-spin{position:fixed;z-index:400;width:16px;height:16px;border:2.5px solid #4f46e5;border-top-color:transparent;border-radius:50%;animation:gen-spin .7s linear infinite;pointer-events:none;left:-100px;top:-100px}
+        @keyframes gen-spin{to{transform:rotate(360deg)}}`;
         document.head.appendChild(st);
     })();
+
+    // Mouse-attached busy indicator — the reflection call takes 10-60s with no
+    // intermediate progress events, so a spinner riding beside the cursor (plus
+    // cursor:progress) keeps "something is happening" visible the whole time.
+    // Used by every on-ramp (chat, workflow toolbar/menu, prompt library).
+    let busyEl = null, busyMove = null;
+    function busy(on) {
+        if (on) {
+            if (busyEl) return;
+            document.documentElement.classList.add('gen-busy');
+            busyEl = document.createElement('div');
+            busyEl.id = 'gen-cursor-spin';
+            document.body.appendChild(busyEl);
+            busyMove = (e) => {
+                busyEl.style.left = (e.clientX + 14) + 'px';
+                busyEl.style.top = (e.clientY + 14) + 'px';
+            };
+            document.addEventListener('mousemove', busyMove);
+        } else {
+            document.documentElement.classList.remove('gen-busy');
+            if (busyMove) document.removeEventListener('mousemove', busyMove);
+            if (busyEl) busyEl.remove();
+            busyEl = null;
+            busyMove = null;
+        }
+    }
+
+    /** Human-readable, actionable message for a gate refusal reason. */
+    function reasonMessage(d) {
+        const r = (d && (d.reason || d.error)) || 'not allowed';
+        const defaults = {
+            mode_off: 'Skill promotion is turned off — enable it in Settings → Auto → Skill promotion',
+            suggest_only: "Promotion mode is 'Suggest' (list only) — switch to Ask or Auto in Settings → Auto to build",
+            over_budget: 'Daily skill-promotion budget reached — raise it in Settings → Auto or try tomorrow',
+            weekly_throttle: 'Weekly new-skill limit reached — raise it in Settings → Auto',
+            over_ceiling: 'Estimated cost exceeds the per-skill ceiling in Settings → Auto',
+        };
+        return defaults[r] ? t(`genesis.reason.${r}`, defaults[r]) : r;
+    }
 
     // Self-contained toast — heal-panel.js does NOT expose .toast on
     // window.healSystem (only { scan, healOne, autoAfterRun }), so this
@@ -142,7 +184,7 @@
         });
         let d = await r.json();
         if (!d.success || !d.allowed) {
-            toast(`${t('genesis.buildFailed', 'Skill creation failed')}: ${d.reason || d.error || 'not allowed'}`, 'error');
+            toast(`${t('genesis.buildFailed', 'Skill creation failed')}: ${reasonMessage(d)}`, 'error');
             return false;
         }
         // 2. build locally — merge promotions add a sidecar to an existing
@@ -229,5 +271,5 @@
         document.body.appendChild(back);
     }
 
-    window.genesisSystem = { showProposal, buildOne, dismiss };
+    window.genesisSystem = { showProposal, buildOne, dismiss, busy };
 })();

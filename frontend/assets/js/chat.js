@@ -9784,6 +9784,7 @@ class ChatApp {
             return;
         }
         this._skillifyInFlight = true;
+        if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(true);
         try {
             const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
                 ? window.skillsManager.skills.map(s => ({
@@ -9813,6 +9814,7 @@ class ChatApp {
             this.showNotification(window.i18n?.t('genesis.proposalFailed') || 'Proposal failed', 'error');
         } finally {
             this._skillifyInFlight = false;
+            if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(false);
         }
     }
 
@@ -9829,6 +9831,7 @@ class ChatApp {
             return;
         }
         this._skillifyInFlight = true;
+        if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(true);
         try {
             const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
                 ? window.skillsManager.skills.map(s => ({
@@ -9858,6 +9861,7 @@ class ChatApp {
             this.showNotification(window.i18n?.t('genesis.proposalFailed') || 'Proposal failed', 'error');
         } finally {
             this._skillifyInFlight = false;
+            if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(false);
         }
     }
 

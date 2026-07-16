@@ -481,6 +481,7 @@ class WorkflowEditor {
                 return;
             }
             this._promoteInFlight = true;
+            if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(true);
             this.showToast(this.tWithFallback('genesis.analyzing', 'Analyzing runs…'), 'info');
             try {
                 const catalog = (window.skillsManager && Array.isArray(window.skillsManager.skills))
@@ -509,6 +510,7 @@ class WorkflowEditor {
                 this.showToast(this.tWithFallback('genesis.proposalFailed', 'Proposal failed'), 'error');
             } finally {
                 this._promoteInFlight = false;
+                if (window.genesisSystem && window.genesisSystem.busy) window.genesisSystem.busy(false);
             }
         });
 

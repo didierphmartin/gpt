@@ -28,7 +28,12 @@
   "genesis": {
     "title": "Promoción a habilidades",
     "subtitle": "Convierte conversaciones y workflows repetidos en habilidades. Sugerir solo lista candidatos; Preguntar requiere tu aprobación antes de crear; Auto crea dentro del presupuesto.",
-    "mode": { "off": "Off", "suggest": "Sugerir", "ask": "Preguntar", "auto": "Auto" },
+    "mode": {
+      "off": "Off",
+      "suggest": "Sugerir",
+      "ask": "Preguntar",
+      "auto": "Auto"
+    },
     "dailyBudget": "Presupuesto diario (USD)",
     "ceiling": "Límite por habilidad (USD)",
     "weeklyMax": "Máx. habilidades nuevas / semana",
@@ -50,7 +55,14 @@
     "proposalFailed": "Propuesta fallida",
     "promoteFromPrompt": "Promover a habilidad…",
     "promptOnly": "Seleccione un prompt, no una carpeta",
-    "analyzingPrompt": "Analizando el prompt…"
+    "analyzingPrompt": "Analizando el prompt…",
+    "reason": {
+      "mode_off": "La promoción a habilidades está desactivada — actívela en Ajustes → Auto → Promoción a habilidades",
+      "suggest_only": "El modo es 'Sugerir' (solo lista) — cambie a Preguntar o Auto en Ajustes → Auto para construir",
+      "over_budget": "Presupuesto diario de promoción alcanzado — auméntelo en Ajustes → Auto o inténtelo mañana",
+      "weekly_throttle": "Límite semanal de habilidades nuevas alcanzado — auméntelo en Ajustes → Auto",
+      "over_ceiling": "El costo estimado supera el límite por habilidad en Ajustes → Auto"
+    }
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {

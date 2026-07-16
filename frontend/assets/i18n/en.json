@@ -28,7 +28,12 @@
   "genesis": {
     "title": "Skill promotion",
     "subtitle": "Turn repeated conversations and workflows into skills. Suggest lists candidates only; Ask requires your approval before building; Auto builds within budget.",
-    "mode": { "off": "Off", "suggest": "Suggest", "ask": "Ask", "auto": "Auto" },
+    "mode": {
+      "off": "Off",
+      "suggest": "Suggest",
+      "ask": "Ask",
+      "auto": "Auto"
+    },
     "dailyBudget": "Daily budget (USD)",
     "ceiling": "Per-skill ceiling (USD)",
     "weeklyMax": "Max new skills / week",
@@ -50,7 +55,14 @@
     "proposalFailed": "Proposal failed",
     "promoteFromPrompt": "Promote to skill…",
     "promptOnly": "Select a prompt, not a folder",
-    "analyzingPrompt": "Analyzing prompt…"
+    "analyzingPrompt": "Analyzing prompt…",
+    "reason": {
+      "mode_off": "Skill promotion is turned off — enable it in Settings → Auto → Skill promotion",
+      "suggest_only": "Promotion mode is 'Suggest' (list only) — switch to Ask or Auto in Settings → Auto to build",
+      "over_budget": "Daily skill-promotion budget reached — raise it in Settings → Auto or try tomorrow",
+      "weekly_throttle": "Weekly new-skill limit reached — raise it in Settings → Auto",
+      "over_ceiling": "Estimated cost exceeds the per-skill ceiling in Settings → Auto"
+    }
   },
   "title": "AI Assistant - Multi-Provider",
   "header": {

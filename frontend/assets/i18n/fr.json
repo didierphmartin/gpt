@@ -28,7 +28,12 @@
   "genesis": {
     "title": "Promotion en compétences",
     "subtitle": "Transformez les conversations et workflows répétés en compétences. Suggérer se contente de lister des candidats ; Demander exige votre approbation avant la création ; Auto crée dans la limite du budget.",
-    "mode": { "off": "Off", "suggest": "Suggérer", "ask": "Demander", "auto": "Auto" },
+    "mode": {
+      "off": "Off",
+      "suggest": "Suggérer",
+      "ask": "Demander",
+      "auto": "Auto"
+    },
     "dailyBudget": "Budget quotidien (USD)",
     "ceiling": "Plafond par compétence (USD)",
     "weeklyMax": "Nouvelles compétences max / semaine",
@@ -50,7 +55,14 @@
     "proposalFailed": "Échec de la proposition",
     "promoteFromPrompt": "Promouvoir en compétence…",
     "promptOnly": "Sélectionnez un prompt, pas un dossier",
-    "analyzingPrompt": "Analyse du prompt…"
+    "analyzingPrompt": "Analyse du prompt…",
+    "reason": {
+      "mode_off": "La promotion en compétences est désactivée — activez-la dans Réglages → Auto → Promotion en compétences",
+      "suggest_only": "Le mode est « Suggérer » (liste seule) — passez à Demander ou Auto dans Réglages → Auto pour construire",
+      "over_budget": "Budget quotidien de promotion atteint — augmentez-le dans Réglages → Auto ou réessayez demain",
+      "weekly_throttle": "Limite hebdomadaire de nouvelles compétences atteinte — augmentez-la dans Réglages → Auto",
+      "over_ceiling": "Le coût estimé dépasse le plafond par compétence dans Réglages → Auto"
+    }
   },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {
