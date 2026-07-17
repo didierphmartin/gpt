@@ -333,13 +333,41 @@ final class GenesisController
                 }
                 return $node;
             }, $nodeRows);
-            $stmt = $this->db->prepare(
-                'SELECT input_variables FROM agent_workflow_executions
-                 WHERE workflow_id = ? AND user_id = ? ORDER BY started_at DESC LIMIT 20'
-            );
-            $stmt->execute([$workflowId, $userId]);
-            $runs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            $prompt = GenesisProposer::buildWorkflowPrompt($wf, $runs, $catalog);
+            // Manual on-ramp = an explicit user decision, and the workflow's
+            // structure is already fully declared (name, description, nodes).
+            // Nothing here needs LLM judgment — build the proposal
+            // DETERMINISTICALLY: instant, free, and immune to reflection
+            // failures. The LLM reflection below stays only for sources that
+            // require extraction from unstructured text (conversation, prompt).
+            $agentNames = [];
+            foreach ($wf['nodes'] as $n) {
+                if (($n['type'] ?? '') === 'agent' && !empty($n['name'])) {
+                    $agentNames[] = $n['name'];
+                }
+            }
+            $wfName = trim((string) ($wf['name'] ?? '')) !== '' ? trim((string) $wf['name']) : ('workflow ' . $workflowId);
+            $name = strtolower($wfName);
+            $name = preg_replace('/[^a-z0-9]+/', '-', $name);
+            $name = trim(preg_replace('/-+/', '-', $name), '-');
+            $name = substr($name !== '' ? $name : 'workflow-' . $workflowId, 0, 60);
+            $wfDescr = trim((string) ($wf['description'] ?? ''));
+            $descr = $wfDescr !== ''
+                ? $wfDescr
+                : sprintf(
+                    "Runs the '%s' agent workflow (%d agents%s) on a user-supplied prompt.",
+                    $wfName,
+                    count($agentNames),
+                    $agentNames ? ': ' . implode(', ', array_slice($agentNames, 0, 8)) : ''
+                );
+            $proposal = [
+                'skill_name' => $name,
+                'description' => mb_substr($descr, 0, 500),
+                'eval_queries' => [],
+                'parameter_schema' => null,
+                'merge_target' => null,
+                'rationale' => 'Manual workflow promotion — structure is explicit, no reflection needed.',
+                'is_merge' => false,
+            ];
             $class = 2;
             $sourceRef = 'workflow:' . $workflowId;
         } elseif ($source === 'prompt') {
@@ -362,23 +390,27 @@ final class GenesisController
             return ['success' => false, 'error' => "source must be 'conversation', 'workflow' or 'prompt'", 'status_code' => 400];
         }
 
-        // One-shot LLM call through the agent endpoint's machinery.
-        $cfg = $this->genesisConfig($userId);
-        $chat = new ChatController($this->db, $this->config);
-        $resp = $chat->agent([
-            'user_id' => $userId,
-            'body' => ['prompt' => $prompt, 'provider' => $cfg['provider'], 'user_id' => $userId],
-        ]);
-        if (empty($resp['success'])) {
-            return ['success' => false,
-                'error' => 'Reflection call failed: ' . (string) ($resp['error'] ?? 'unknown'),
-                'status_code' => 502];
-        }
-        $text = (string) ($resp['response'] ?? $resp['text'] ?? '');
-        $proposal = GenesisProposer::parseProposal($text);
-        if ($proposal === null) {
-            return ['success' => true, 'promotion' => null,
-                'message' => 'No repeatable procedure found in this material.'];
+        // One-shot LLM reflection — only for sources whose procedure must be
+        // EXTRACTED from unstructured text (conversation, prompt-library).
+        // Workflow promotions arrive here with $proposal already built.
+        if (!isset($proposal)) {
+            $cfg = $this->genesisConfig($userId);
+            $chat = new ChatController($this->db, $this->config);
+            $resp = $chat->agent([
+                'user_id' => $userId,
+                'body' => ['prompt' => $prompt, 'provider' => $cfg['provider'], 'user_id' => $userId],
+            ]);
+            if (empty($resp['success'])) {
+                return ['success' => false,
+                    'error' => 'Reflection call failed: ' . (string) ($resp['error'] ?? 'unknown'),
+                    'status_code' => 502];
+            }
+            $text = (string) ($resp['response'] ?? $resp['text'] ?? '');
+            $proposal = GenesisProposer::parseProposal($text);
+            if ($proposal === null) {
+                return ['success' => true, 'promotion' => null,
+                    'message' => 'No repeatable procedure found in this material.'];
+            }
         }
 
         try {
