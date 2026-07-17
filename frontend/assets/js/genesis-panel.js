@@ -140,29 +140,53 @@
         return null;
     }
 
-    async function genesisWorkflowRun(workflowId, prompt) {
-        const ed = await ensureWorkflowEditor();
-        if (!ed) {
-            return JSON.stringify({ success: false, error: 'Workflow engine unavailable (open the Workflows panel once and retry)' });
-        }
-        try {
-            const run = await ed.runHeadless(Number(workflowId), String(prompt)) || {};
-            const result = run.result || {};
-            const output = (typeof result.output === 'string' && result.output.trim())
-                ? result.output
-                : (run.outputs ? JSON.stringify(run.outputs) : '');
-            return JSON.stringify({
-                success: result.success !== false,
-                execution_id: result.execution_id ?? null,
-                nodes_executed: result.nodes_executed ?? null,
-                response_time_ms: result.response_time_ms ?? null,
-                output,
-            });
-        } catch (e) {
-            return JSON.stringify({ success: false, error: String((e && e.message) || e) });
-        }
+    /**
+     * Fire-and-notify: START the run and return immediately. run.py holds the
+     * SERIALIZED main Pyodide queue while it executes — if it awaited the whole
+     * workflow, any agent-node skill that falls back from the worker pool to
+     * the main runner would deadlock behind it (and even the happy path would
+     * hog the runtime for minutes). So the dispatcher exits right after start;
+     * when the workflow completes, the output is posted into the conversation.
+     */
+    let _genRunSeq = 0;
+    function genesisWorkflowStart(workflowId, prompt) {
+        const runNo = ++_genRunSeq;
+        (async () => {
+            const label = `workflow #${workflowId} (skill run ${runNo})`;
+            try {
+                const ed = await ensureWorkflowEditor();
+                if (!ed) {
+                    toast(`Genesis run failed: workflow engine unavailable`, 'error');
+                    return;
+                }
+                toast(`▶ Running ${label}…`, 'info');
+                const run = await ed.runHeadless(Number(workflowId), String(prompt)) || {};
+                const result = run.result || {};
+                const output = (typeof result.output === 'string' && result.output.trim())
+                    ? result.output
+                    : (run.outputs ? JSON.stringify(run.outputs, null, 2) : '(no final output)');
+                const summary = `🧬 **Workflow #${workflowId} completed**`
+                    + (result.execution_id ? ` (execution ${result.execution_id}` : '(')
+                    + (result.nodes_executed ? `, ${result.nodes_executed} nodes` : '')
+                    + (result.response_time_ms ? `, ${Math.round(result.response_time_ms / 1000)}s` : '')
+                    + ')\n\n' + output;
+                if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
+                    window.chatApp.addMessage('assistant', summary);
+                } else {
+                    toast(`${label} completed`, 'ok');
+                }
+            } catch (e) {
+                const msg = String((e && e.message) || e);
+                if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
+                    window.chatApp.addMessage('assistant', `⚠️ Genesis ${label} failed: ${msg}`);
+                } else {
+                    toast(`Genesis run failed: ${msg}`, 'error');
+                }
+            }
+        })();
+        return JSON.stringify({ started: true, run: runNo });
     }
-    window.genesisWorkflowRun = genesisWorkflowRun;
+    window.genesisWorkflowStart = genesisWorkflowStart;
 
     /** Workflow-backed promotion? (class 2 rows carry source_ref 'workflow:<id>') */
     function workflowIdOf(p) {
@@ -184,7 +208,7 @@
         // its output. Everything flows through the prompt — the workflow's
         // start node consumes it as its input.
         const howToRun = wfId !== null
-            ? `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. Relay the workflow output to the user; do not paraphrase away concrete results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`
+            ? `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the run and returns immediately; the full results are posted into the conversation automatically when the run completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`
             : '';
         return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? 'L1 workflow dispatcher' : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
     }
@@ -210,58 +234,29 @@ import asyncio
 import json
 import sys
 
-import pyodide.http
 from js import window
 
 WORKFLOW_ID = ${wfId}
 
 
-def _api_base():
-    cfg = getattr(window, "APP_CONFIG", None)
-    base = getattr(cfg, "API_BASE_URL", None) if cfg is not None else None
-    return str(base) if base else "/gpt/backend/api/v1"
-
-
 async def _run(prompt: str) -> int:
-    # Preferred path: the browser-side bridged runner (genesis-panel.js).
-    # It executes the workflow with the client-skill bridge attached, so
-    # agent nodes that call Pyodide skills actually produce output. The
-    # bare server POST below is only a fallback (fine for MCP/LLM-only
-    # workflows, empty outputs for skill-using ones).
-    runner = getattr(window, "genesisWorkflowRun", None)
-    if runner is not None:
-        data = json.loads(str(await runner(WORKFLOW_ID, prompt)))
-    else:
-        headers = {"Content-Type": "application/json"}
-        tok = getattr(getattr(window, "authManager", None), "token", None)
-        if tok:
-            headers["Authorization"] = f"Bearer {tok}"
-        resp = await pyodide.http.pyfetch(
-            f"{_api_base()}/workflows/{WORKFLOW_ID}/run",
-            method="POST",
-            headers=headers,
-            body=json.dumps({"variables": {"prompt": prompt}}),
-        )
-        try:
-            data = await resp.json()
-        except Exception:
-            print(f"WORKFLOW RUN FAILED: HTTP {resp.status} (non-JSON response — "
-                  "the run may have exceeded the server time limit)", file=sys.stderr)
-            return 1
-
-    if not data.get("success"):
-        print(f"WORKFLOW RUN FAILED: {data.get('error') or json.dumps(data)[:500]}", file=sys.stderr)
+    # Fire-and-notify: start the run in the browser (full client-skill
+    # bridge via the editor's runHeadless) and EXIT so the shared Pyodide
+    # runtime is freed — the workflow's own agent skills may need it.
+    # The final output is posted into the conversation when the run ends.
+    starter = getattr(window, "genesisWorkflowStart", None)
+    if starter is None:
+        print("WORKFLOW RUN FAILED: genesis runtime not loaded (refresh the app)", file=sys.stderr)
         return 1
-
-    print(f"=== Workflow #{WORKFLOW_ID} run completed "
-          f"(execution {data.get('execution_id')}, "
-          f"{data.get('nodes_executed')} nodes, "
-          f"{data.get('response_time_ms')} ms) ===")
-    out = data.get("output")
-    if isinstance(out, str) and out.strip():
-        print(out)
-    else:
-        print("(no final output)")
+    info = json.loads(str(starter(WORKFLOW_ID, prompt)))
+    if not info.get("started"):
+        print(f"WORKFLOW RUN FAILED: {json.dumps(info)[:300]}", file=sys.stderr)
+        return 1
+    print(f"Workflow #{WORKFLOW_ID} STARTED in the background (run {info.get('run')}).")
+    print("The full results will be posted into this conversation automatically when the "
+          "run completes (a multi-agent run can take several minutes).")
+    print("Tell the user the workflow is running and that results will follow — "
+          "do NOT invent or predict the results.")
     return 0
 
 
