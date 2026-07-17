@@ -650,6 +650,11 @@ class WorkflowController
      */
     public function run(array $request): array
     {
+        // Multi-agent runs routinely exceed PHP's default 120s — raise to the
+        // same ceiling ChatController uses (600s). Without this, a long run is
+        // killed mid-flight and the caller gets a connection error, not JSON.
+        @set_time_limit(600);
+
         $userId = $request['user_id'] ?? 0;
         $workflowId = (int) ($request['params']['id'] ?? 0);
         $body = $request['body'] ?? [];

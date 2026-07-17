@@ -122,14 +122,160 @@
         toastEl._t = setTimeout(() => { toastEl.className = toastEl.className.replace(' show', ''); }, 4000);
     }
 
-    /** Compose SKILL.md content from a promotion row. */
+    /**
+     * Bridged workflow runner for dispatcher scripts (run.py delegates here
+     * via the Pyodide js proxy). Uses the editor's runHeadless — the ONLY
+     * runner with the client-skill bridge (Pyodide skills inside agent nodes
+     * execute in the browser; a bare server POST /run would return empty
+     * outputs for skill-using agents). Returns a JSON STRING so the Python
+     * side never touches JsProxy field access.
+     */
+    async function ensureWorkflowEditor() {
+        if (window.workflowEditor && window.workflowEditor.loadWorkflow) return window.workflowEditor;
+        if (window.agentTeamsPanel && window.agentTeamsPanel.show) window.agentTeamsPanel.show();
+        for (let i = 0; i < 20; i++) {
+            if (window.workflowEditor && window.workflowEditor.loadWorkflow) return window.workflowEditor;
+            await new Promise(r => setTimeout(r, 100));
+        }
+        return null;
+    }
+
+    async function genesisWorkflowRun(workflowId, prompt) {
+        const ed = await ensureWorkflowEditor();
+        if (!ed) {
+            return JSON.stringify({ success: false, error: 'Workflow engine unavailable (open the Workflows panel once and retry)' });
+        }
+        try {
+            const run = await ed.runHeadless(Number(workflowId), String(prompt)) || {};
+            const result = run.result || {};
+            const output = (typeof result.output === 'string' && result.output.trim())
+                ? result.output
+                : (run.outputs ? JSON.stringify(run.outputs) : '');
+            return JSON.stringify({
+                success: result.success !== false,
+                execution_id: result.execution_id ?? null,
+                nodes_executed: result.nodes_executed ?? null,
+                response_time_ms: result.response_time_ms ?? null,
+                output,
+            });
+        } catch (e) {
+            return JSON.stringify({ success: false, error: String((e && e.message) || e) });
+        }
+    }
+    window.genesisWorkflowRun = genesisWorkflowRun;
+
+    /** Workflow-backed promotion? (class 2 rows carry source_ref 'workflow:<id>') */
+    function workflowIdOf(p) {
+        const m = /^workflow:(\d+)$/.exec(p.source_ref || '');
+        return m ? Number(m[1]) : null;
+    }
+
     function skillMd(p) {
         const params = p.parameter_schema
             ? '\n## Parameters\n' + Object.entries(p.parameter_schema).map(([k, v]) =>
                 `- **${k}** (${(v && v.type) || 'string'})${v && v.default !== undefined ? ` — default: ${JSON.stringify(v.default)}` : ''}${v && v.examples ? ` — examples: ${JSON.stringify(v.examples)}` : ''}`
               ).join('\n') + '\n'
             : '';
-        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\n---\n\n# ${p.skill_name}\n\n${p.description}\n${params}\n## Provenance\n\nCreated by skill genesis (L0) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
+        const wfId = workflowIdOf(p);
+        // L1 dispatcher contract: workflow-backed skills execute by reference.
+        // The model composes ONE plain-language instruction (filling the
+        // documented parameters from the user's request) and hands it to
+        // scripts/run.py, which submits the referenced workflow and relays
+        // its output. Everything flows through the prompt — the workflow's
+        // start node consumes it as its input.
+        const howToRun = wfId !== null
+            ? `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. Relay the workflow output to the user; do not paraphrase away concrete results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`
+            : '';
+        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? 'L1 workflow dispatcher' : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
+    }
+
+    /**
+     * scripts/run.py for workflow-backed skills: submit the referenced
+     * workflow with the composed prompt as its input variables and print the
+     * outputs. Runs inside Pyodide — pyfetch + window proxies, same idioms as
+     * skill-creator's improve_description.py (incl. asyncio.run and the
+     * APP_CONFIG.API_BASE_URL base so PHP/Node backend selection is honored).
+     */
+    function runPyTemplate(p, wfId) {
+        return `#!/usr/bin/env python3
+"""Dispatcher for the '${p.skill_name}' skill.
+
+Submits workflow #${wfId} with a caller-composed prompt and relays the
+outputs. Generated by skill genesis (L1). The workflow reference is
+canonical: edits made in the workflow editor apply automatically.
+"""
+
+import argparse
+import asyncio
+import json
+import sys
+
+import pyodide.http
+from js import window
+
+WORKFLOW_ID = ${wfId}
+
+
+def _api_base():
+    cfg = getattr(window, "APP_CONFIG", None)
+    base = getattr(cfg, "API_BASE_URL", None) if cfg is not None else None
+    return str(base) if base else "/gpt/backend/api/v1"
+
+
+async def _run(prompt: str) -> int:
+    # Preferred path: the browser-side bridged runner (genesis-panel.js).
+    # It executes the workflow with the client-skill bridge attached, so
+    # agent nodes that call Pyodide skills actually produce output. The
+    # bare server POST below is only a fallback (fine for MCP/LLM-only
+    # workflows, empty outputs for skill-using ones).
+    runner = getattr(window, "genesisWorkflowRun", None)
+    if runner is not None:
+        data = json.loads(str(await runner(WORKFLOW_ID, prompt)))
+    else:
+        headers = {"Content-Type": "application/json"}
+        tok = getattr(getattr(window, "authManager", None), "token", None)
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        resp = await pyodide.http.pyfetch(
+            f"{_api_base()}/workflows/{WORKFLOW_ID}/run",
+            method="POST",
+            headers=headers,
+            body=json.dumps({"variables": {"prompt": prompt}}),
+        )
+        try:
+            data = await resp.json()
+        except Exception:
+            print(f"WORKFLOW RUN FAILED: HTTP {resp.status} (non-JSON response — "
+                  "the run may have exceeded the server time limit)", file=sys.stderr)
+            return 1
+
+    if not data.get("success"):
+        print(f"WORKFLOW RUN FAILED: {data.get('error') or json.dumps(data)[:500]}", file=sys.stderr)
+        return 1
+
+    print(f"=== Workflow #{WORKFLOW_ID} run completed "
+          f"(execution {data.get('execution_id')}, "
+          f"{data.get('nodes_executed')} nodes, "
+          f"{data.get('response_time_ms')} ms) ===")
+    out = data.get("output")
+    if isinstance(out, str) and out.strip():
+        print(out)
+    else:
+        print("(no final output)")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Run the referenced workflow with a composed prompt.")
+    ap.add_argument("--prompt", required=True,
+                    help="Full plain-language instruction for the workflow run")
+    args = ap.parse_args()
+    sys.exit(asyncio.run(_run(args.prompt)))
+
+
+if __name__ == "__main__":
+    main()
+`;
     }
 
     /** Local-FS connection check — getStatus() returns { state, handle, name },
@@ -144,7 +290,7 @@
         }
     }
 
-    /** Write skills/<name>/SKILL.md through the local-FS handle. */
+    /** Write skills/<name>/SKILL.md (+ scripts/run.py for workflow-backed skills). */
     async function writeSkillFolder(p) {
         await requireLocalFs();
         const dir = await window.localFs.resolvePath(`skills/${p.skill_name}`, { create: true });
@@ -153,6 +299,14 @@
         const w = await fh.createWritable();
         await w.write(skillMd(p));
         await w.close();
+        const wfId = workflowIdOf(p);
+        if (wfId !== null) {
+            const scriptsDir = await dir.getDirectoryHandle('scripts', { create: true });
+            const sfh = await scriptsDir.getFileHandle('run.py', { create: true });
+            const sw = await sfh.createWritable();
+            await sw.write(runPyTemplate(p, wfId));
+            await sw.close();
+        }
         return p.skill_name;
     }
 
