@@ -13281,6 +13281,15 @@ class WorkflowEditor {
                                         <input type="number" id="agent-max-tokens-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                                                value="${agent.settings?.max_tokens || 4096}" min="256" max="128000">
                                     </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">${tf('thinking')}</label>
+                                        <select id="agent-thinking-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm bg-white">
+                                            <option value="" ${!agent.settings?.thinking ? 'selected' : ''}>${tf('thinkingDefault')}</option>
+                                            <option value="on" ${agent.settings?.thinking === 'on' ? 'selected' : ''}>${tf('thinkingOn')}</option>
+                                            <option value="off" ${agent.settings?.thinking === 'off' ? 'selected' : ''}>${tf('thinkingOff')}</option>
+                                        </select>
+                                        <p class="text-xs text-gray-500 mt-1">${tf('thinkingHint')}</p>
+                                    </div>
                                 </div>
 
                                 <!-- Save as Template (shown when editing workflow node) -->
@@ -14701,7 +14710,12 @@ Based on the analysis...
             tools: Array.from(modal.querySelectorAll('.tool-checkbox:checked')).map(cb => cb.dataset.tool),
             settings: {
                 temperature: parseFloat(document.getElementById('agent-temperature-input')?.value) || 0.7,
-                max_tokens: parseInt(document.getElementById('agent-max-tokens-input')?.value) || 4096
+                max_tokens: parseInt(document.getElementById('agent-max-tokens-input')?.value) || 4096,
+                // Thinking switch: '' = provider default, 'on' | 'off' override.
+                // Only persisted when set so legacy agents stay untouched.
+                ...(document.getElementById('agent-thinking-select')?.value
+                    ? { thinking: document.getElementById('agent-thinking-select').value }
+                    : {})
             },
             is_template: saveAsTemplate,
             // Merge strategy (node-specific, not saved to template)

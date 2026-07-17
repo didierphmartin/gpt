@@ -607,6 +607,14 @@ class AgentRunner
             $options['max_tokens'] = (int) $settings['max_tokens'];
         }
 
+        // Per-agent thinking switch ('on' | 'off'). Providers with a native
+        // thinking mode (DeepSeek V4, GLM, Kimi K2) honor it; others ignore
+        // the option. Absent/'default' keeps each provider's own default.
+        $thinking = $settings['thinking'] ?? null;
+        if ($thinking === 'on' || $thinking === 'off') {
+            $options['thinking'] = $thinking;
+        }
+
         // System prompt is passed to provider via system_prompt key
         $options['system_prompt'] = $agent->buildSystemPrompt();
 

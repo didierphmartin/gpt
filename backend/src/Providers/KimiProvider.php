@@ -49,6 +49,9 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
     private string $displayName;
     private int $maxTokens;
     private float $temperature;
+    // Per-call thinking override from agent settings ('on' | 'off' | null =
+    // provider default). Set in chat(), read by makeRequest().
+    private ?string $thinkingOverride = null;
     private string $apiKey;
     private int $maxRecursionDepth;
     private array $supportedModels;
@@ -151,6 +154,8 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $userId = $options['user_id'] ?? null;
         $streaming = $options['streaming'] ?? false;
         $toolChoice = $options['tool_choice'] ?? 'auto';
+        $t = $options['thinking'] ?? null;
+        $this->thinkingOverride = ($t === 'on' || $t === 'off') ? $t : null;
 
         // Client-side tools support: register names and append tool definitions
         if (!empty($options['client_tool_names']) && is_array($options['client_tool_names'])) {
@@ -276,10 +281,16 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
         if ($isK2) {
             // Non-thinking mode: temp must be exactly 0.6, top_p exactly 0.95.
             // Disabling thinking keeps tool_choice and reasoning_content
-            // round-trip behaviour predictable.
-            $payload['thinking'] = ['type' => 'disabled'];
-            $payload['temperature'] = 0.6;
-            $payload['top_p'] = 0.95;
+            // round-trip behaviour predictable. Agent-level switch 'on'
+            // enables K2 thinking mode (API requires temperature 1.0 there).
+            if ($this->thinkingOverride === 'on') {
+                $payload['thinking'] = ['type' => 'enabled'];
+                $payload['temperature'] = 1.0;
+            } else {
+                $payload['thinking'] = ['type' => 'disabled'];
+                $payload['temperature'] = 0.6;
+                $payload['top_p'] = 0.95;
+            }
         } else {
             $payload['temperature'] = $this->temperature;
         }

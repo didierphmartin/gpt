@@ -39,6 +39,9 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
     private int $maxTokens;
     private float $temperature;
     private string $baseUrl;
+    // Per-call thinking override from agent settings ('on' | 'off' | null =
+    // provider default). Set in chat(), read by makeRequest().
+    private ?string $thinkingOverride = null;
     private string $apiKey;
     private int $maxRecursionDepth;
     private array $supportedModels;
@@ -162,6 +165,9 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
 
         $this->sendProgress("Preparing {$this->displayName} request...");
 
+        $t = $options['thinking'] ?? null;
+        $this->thinkingOverride = ($t === 'on' || $t === 'off') ? $t : null;
+
         $systemPrompt = $this->buildSystemPrompt($options);
         $tools = ($this->supportsTools && $this->functionExecutor) ? ($options['tools'] ?? $this->getTools()) : [];
         $userId = $options['user_id'] ?? null;
@@ -268,15 +274,18 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
         ];
 
         if ($isDeepSeekV4) {
-            $payload['thinking'] = ['type' => 'enabled'];
+            // Agent-level thinking switch: 'off' disables V4 thinking (cuts
+            // reasoning latency); default/'on' keeps the V4 default (enabled).
+            $payload['thinking'] = ['type' => $this->thinkingOverride === 'off' ? 'disabled' : 'enabled'];
         } else {
             $payload['temperature'] = $this->temperature;
         }
 
         // GLM 5.2 (z.ai) defaults to heavy reasoning; disable thinking so it answers directly
         // instead of spending the token budget on reasoning (temperature is kept, above).
+        // The agent-level switch can re-enable it ('on') for reasoning-heavy nodes.
         if ($this->name === 'glm') {
-            $payload['thinking'] = ['type' => 'disabled'];
+            $payload['thinking'] = ['type' => $this->thinkingOverride === 'on' ? 'enabled' : 'disabled'];
         }
 
         if (!empty($tools) && $this->supportsTools) {
@@ -309,7 +318,11 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $requestHeaders = array_merge($requestHeaders, $this->headers);
 
         try {
-            $response = $this->httpClient->post($this->chatEndpoint, [
+            // Post to the fully-qualified URL rather than a root-relative path. Guzzle resolves a
+            // request path beginning with "/" against the base_uri's ROOT (RFC 3986), which silently
+            // drops any path segment in base_url — e.g. z.ai's "/api/paas/v4". Concatenating the
+            // rtrim'd base_url with the endpoint preserves it for every provider.
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => $requestHeaders,
                 'json' => $payload,
                 'stream' => $streaming,  // Enable Guzzle streaming mode

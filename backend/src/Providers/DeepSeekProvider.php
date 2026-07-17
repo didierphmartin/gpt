@@ -167,7 +167,14 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
         $forcedToolChoice = $toolChoiceOpt !== null
             && $toolChoiceOpt !== 'auto'
             && $toolChoiceOpt !== 'none';
-        $this->disableThinkingForThisCall = !empty($options['skill_metadata']) || $forcedToolChoice;
+        // Per-agent thinking switch (settings.thinking → options['thinking']).
+        // 'off' always disables; 'on' keeps thinking EXCEPT under forced
+        // tool_choice, which the API rejects in thinking mode regardless.
+        $thinkingSwitch = $options['thinking'] ?? null;
+        $this->disableThinkingForThisCall =
+            $thinkingSwitch === 'off'
+            || $forcedToolChoice
+            || ($thinkingSwitch !== 'on' && !empty($options['skill_metadata']));
 
         try {
         $systemPrompt = $this->buildSystemPrompt($options);
