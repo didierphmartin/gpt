@@ -14,6 +14,7 @@ use Quantis\AIPortfolioAssistant\Contracts\StreamingClientInterface;
 use Quantis\AIPortfolioAssistant\Contracts\UsageTrackerInterface;
 use Quantis\AIPortfolioAssistant\Exceptions\ProviderException;
 use Quantis\AIPortfolioAssistant\Providers\Traits\ProviderRequestBuilderTrait;
+use Quantis\AIPortfolioAssistant\Providers\Traits\ClientSideToolsTrait;
 use Quantis\AIPortfolioAssistant\Services\DebugLogger;
 
 /**
@@ -25,6 +26,7 @@ use Quantis\AIPortfolioAssistant\Services\DebugLogger;
 class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
 {
     use ProviderRequestBuilderTrait;
+    use ClientSideToolsTrait;
 
     private Configuration $config;
     private Client $httpClient;
@@ -169,8 +171,31 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->thinkingOverride = ($t === 'on' || $t === 'off') ? $t : null;
 
         $systemPrompt = $this->buildSystemPrompt($options);
-        $tools = ($this->supportsTools && $this->functionExecutor) ? ($options['tools'] ?? $this->getTools()) : [];
+        // Honor caller-supplied tools (e.g. run_skill_script from chat B3 or
+        // the browser-driven workflow engine) REGARDLESS of functionExecutor —
+        // client tools run in the browser, not via a server executor. The
+        // gate only governs this provider's OWN server tools (getTools()).
+        $tools = $options['tools'] ?? (($this->supportsTools && $this->functionExecutor) ? $this->getTools() : []);
         $userId = $options['user_id'] ?? null;
+
+        // Client-side tools support: register names and append tool definitions
+        if (!empty($options['client_tool_names']) && is_array($options['client_tool_names'])) {
+            $this->setPerRequestClientSideToolNames($options['client_tool_names']);
+        }
+
+        if (!empty($options['client_tools']) && is_array($options['client_tools'])) {
+            foreach ($options['client_tools'] as $ct) {
+                $tools[] = [
+                    'name' => $ct['name'],
+                    'description' => $ct['description'] ?? '',
+                    'input_schema' => $ct['input_schema'] ?? [
+                        'type' => 'object',
+                        'properties' => new \stdClass(),
+                        'required' => []
+                    ],
+                ];
+            }
+        }
 
         // Build messages array
         $messages = $this->buildMessages($conversationHistory, $message, $systemPrompt);
@@ -205,6 +230,28 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
                 0,
                 $streaming
             );
+        }
+
+        // B3 short-circuit: surface client-side tool call to frontend.
+        if (!empty($response['_pending_client_tool_call'])) {
+            $responseTimeMs = (int) ((microtime(true) - $startTime) * 1000);
+            $this->trackUsage($userId, $inputTokens, $outputTokens, $functionCallCount, $responseTimeMs);
+            return [
+                'text' => $response['_pending_assistant_text'] ?? '',
+                'usage' => [
+                    'input_tokens' => $inputTokens,
+                    'output_tokens' => $outputTokens,
+                    'total_tokens' => $inputTokens + $outputTokens,
+                    'function_calls' => $functionCallCount,
+                ],
+                'model' => $this->model,
+                'provider' => $this->name,
+                'functions_called' => $functionsCalled,
+                'mcp_tools_called' => $mcpToolsCalled,
+                'mcp_calls_count' => count($mcpToolsCalled),
+                'pending_client_tool_call' => true,
+                'pending_tool_calls' => $response['_pending_tool_calls'] ?? [],
+            ];
         }
 
         // Extract final text response
@@ -523,6 +570,44 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
             return $response;
         }
 
+        // B3: surface solo client-side tool turns to the frontend instead of
+        // executing them server-side (run_skill_script lives in the browser).
+        // Without this split, CustomProvider-backed models (deepseek, glm,
+        // gamma4) silently fed 'No function executor'-style errors to the
+        // model, which then fabricated results — the Citability N/A bug.
+        $clientCalls = [];
+        $serverCalls = [];
+        foreach ($toolCalls as $tc) {
+            if ($this->isClientSideTool($tc['function']['name'] ?? '')) {
+                $clientCalls[] = $tc;
+            } else {
+                $serverCalls[] = $tc;
+            }
+        }
+        if (!empty($clientCalls) && empty($serverCalls)) {
+            $assistantText = $assistantMessage['content'] ?? '';
+            if (!\is_string($assistantText)) $assistantText = '';
+            $normalized = array_map(static function ($tc) {
+                $args = $tc['function']['arguments'] ?? '{}';
+                $input = is_string($args) ? (json_decode($args, true) ?? []) : ($args ?? []);
+                return [
+                    'id'    => $tc['id'],
+                    'name'  => $tc['function']['name'] ?? '',
+                    'input' => $input,
+                ];
+            }, $clientCalls);
+            error_log("🔧 [CustomProvider:{$this->name}] Client-side tool call detected; surfacing to frontend: " . json_encode(array_column($normalized, 'name')));
+            $marker = $this->emitClientToolCallEvent($normalized, $assistantText);
+            foreach ($clientCalls as $tc) {
+                $functionCallCount++;
+                $functionsCalled[] = $tc['function']['name'] ?? '';
+            }
+            return array_merge($response, $marker);
+        }
+        if (!empty($clientCalls)) {
+            error_log("⚠️ [CustomProvider:{$this->name}] Mixed client/server tool calls in one turn — failing client-side calls.");
+        }
+
         // Add assistant message with tool calls
         $messages[] = $assistantMessage;
 
@@ -531,6 +616,19 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
             $functionCallCount++;
             $functionName = $toolCall['function']['name'];
             $arguments = json_decode($toolCall['function']['arguments'], true) ?? [];
+
+            // Mixed-turn fallback for client-side tools.
+            if ($this->isClientSideTool($functionName)) {
+                $messages[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $toolCall['id'],
+                    'content' => json_encode([
+                        'error' => 'Client-side tools cannot be mixed with server-side tools in a single turn yet. Issue this tool call in its own turn.',
+                    ]),
+                ];
+                $functionsCalled[] = $functionName;
+                continue;
+            }
 
             // Track tool name and check if it's an MCP tool
             $functionsCalled[] = $functionName;
@@ -649,14 +747,67 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
 
         // Add conversation history
         foreach ($conversationHistory as $msg) {
-            // Always extract text content - don't preserve tool call blocks from history
+            $role = $msg['role'] ?? 'user';
+
+            // B3: round-trip tool_result and assistant-with-tool_calls so
+            // client-side tool continuations (run_skill_script results from
+            // the browser) reach the API intact. Stripping these turns broke
+            // every continuation round for CustomProvider-backed models.
+            if ($role === 'tool' && !empty($msg['tool_call_id'])) {
+                $entry = [
+                    'role' => 'tool',
+                    'tool_call_id' => $msg['tool_call_id'],
+                    'content' => is_string($msg['content'] ?? null)
+                        ? $msg['content']
+                        : json_encode($msg['content'] ?? null),
+                ];
+                if (!empty($msg['name']) && is_string($msg['name'])) {
+                    $entry['name'] = $msg['name'];
+                }
+                $messages[] = $entry;
+                continue;
+            }
+            if ($role === 'assistant' && !empty($msg['tool_calls'])) {
+                $textContent = $this->extractTextFromContent($msg['content'] ?? '');
+                $normalizedToolCalls = array_map(function ($tc) {
+                    // Already in OpenAI wire shape — pass through.
+                    if (isset($tc['function'])) return $tc;
+                    // Frontend/webMCP shape: {id, name, input}.
+                    if (isset($tc['name'])) {
+                        return [
+                            'id'       => $tc['id'] ?? '',
+                            'type'     => 'function',
+                            'function' => [
+                                'name'      => $tc['name'],
+                                'arguments' => json_encode($tc['input'] ?? new \stdClass()),
+                            ],
+                        ];
+                    }
+                    return $tc; // unknown shape — pass through
+                }, $msg['tool_calls']);
+                $messages[] = [
+                    'role'       => 'assistant',
+                    'content'    => $textContent !== '' ? $textContent : null,
+                    'tool_calls' => $normalizedToolCalls,
+                ];
+                continue;
+            }
+
             $textContent = $this->extractTextFromContent($msg['content']);
             if (!empty($textContent)) {
                 $messages[] = [
-                    'role' => $msg['role'],
+                    'role' => $role,
                     'content' => $textContent,
                 ];
             }
+        }
+
+        // B3 continuation: skip empty user turn after tool_result tail.
+        $isToolResultContinuation = empty(trim($newMessage))
+            && !empty($messages)
+            && ($messages[count($messages) - 1]['role'] ?? '') === 'tool';
+        if ($isToolResultContinuation) {
+            return $messages;
         }
 
         // Add new user message
