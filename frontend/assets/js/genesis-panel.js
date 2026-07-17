@@ -161,15 +161,30 @@
                 }
                 toast(`▶ Running ${label}…`, 'info');
                 const run = await ed.runHeadless(Number(workflowId), String(prompt)) || {};
-                const result = run.result || {};
+                const result = run.result;
+                // runHeadless resolves with result:null when the stream ended on a
+                // workflow_error (e.g. a bridge skill timeout) instead of
+                // workflow_complete — that is a FAILURE, not an empty success.
+                if (!result || result.success === false) {
+                    const note = `⚠️ **Workflow #${workflowId} did not complete cleanly.** `
+                        + 'It may have hit a skill timeout or node error — check the Workflows panel '
+                        + 'for per-node states. Any report files already written to your outputs '
+                        + 'folder are still valid.';
+                    if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
+                        window.chatApp.addMessage('assistant', note);
+                    } else {
+                        toast(`${label} did not complete cleanly`, 'error');
+                    }
+                    return;
+                }
                 const output = (typeof result.output === 'string' && result.output.trim())
                     ? result.output
-                    : (run.outputs ? JSON.stringify(run.outputs, null, 2) : '(no final output)');
-                const summary = `🧬 **Workflow #${workflowId} completed**`
-                    + (result.execution_id ? ` (execution ${result.execution_id}` : '(')
-                    + (result.nodes_executed ? `, ${result.nodes_executed} nodes` : '')
-                    + (result.response_time_ms ? `, ${Math.round(result.response_time_ms / 1000)}s` : '')
-                    + ')\n\n' + output;
+                    : (run.outputs ? JSON.stringify(run.outputs, null, 2) : '(no final output text — check your outputs folder for written reports)');
+                const meta = [
+                    result.nodes_executed ? `${result.nodes_executed} nodes` : null,
+                    result.response_time_ms ? `${Math.round(result.response_time_ms / 1000)}s` : null,
+                ].filter(Boolean).join(', ');
+                const summary = `🧬 **Workflow #${workflowId} completed**${meta ? ` (${meta})` : ''}\n\n` + output;
                 if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
                     window.chatApp.addMessage('assistant', summary);
                 } else {

@@ -14,6 +14,11 @@ return [
     // are now loaded from the system_llm_settings DB table at runtime.
     // See ChatController::applyDatabaseProviderSettings.
 
+    // How long the workflow engine waits for a browser-side (Pyodide) skill
+    // to return through the SkillToolBridge. The old defaults (60s sequential
+    // / 120s parallel) killed network-heavy skills on slow target sites —
+    // a GEO audit run died 60s after its report was already written.
+    'parallel_skill_timeout_ms' => 300000,
 
     // Search APIs
     'search' => [
