@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant;
 
 use PDO;
 use Quantis\AIPortfolioAssistant\Config\Configuration;
+use Quantis\AIPortfolioAssistant\Contracts\AIProviderInterface;
 use Quantis\AIPortfolioAssistant\Contracts\StreamingClientInterface;
 use Quantis\AIPortfolioAssistant\Functions\AnalysisFunctions;
 use Quantis\AIPortfolioAssistant\Functions\PortfolioFunctions;
@@ -404,16 +405,45 @@ class AIPortfolioAssistant
     }
 
     /**
+     * Providers with a dedicated handler class. Any other provider that
+     * appears in config['providers'] with a base_url is OpenAI-compatible
+     * and served by the generic CustomProvider (glm, gamma4, future
+     * providers added through system_llm_settings). Keep this map in sync
+     * with ProviderRequestFactory::$providerClasses.
+     */
+    private const DEDICATED_PROVIDERS = [
+        'claude'   => ClaudeProvider::class,
+        'deepseek' => DeepSeekProvider::class,
+        'gemini'   => GeminiProvider::class,
+        'grok'     => GrokProvider::class,
+        'kimi'     => KimiProvider::class,
+        'openai'   => OpenAIProvider::class,
+    ];
+
+    /**
+     * Instantiate a provider (dedicated class when one exists, generic
+     * CustomProvider otherwise) and wire the shared collaborators.
+     */
+    private function makeProvider(string $name): AIProviderInterface
+    {
+        $class = self::DEDICATED_PROVIDERS[$name] ?? null;
+        $provider = $class !== null
+            ? new $class($this->config)
+            : new CustomProvider($this->config, $name);
+        $provider->setFunctionExecutor($this->toolsManager);
+        if ($this->logger) {
+            $provider->setLogger($this->logger);
+        }
+        return $provider;
+    }
+
+    /**
      * Initialize all configured providers
      */
     private function initializeDefaultProvider(): void
     {
-        // Initialize Claude provider
-        $claude = new ClaudeProvider($this->config);
-        $claude->setFunctionExecutor($this->toolsManager);
-        if ($this->logger) {
-            $claude->setLogger($this->logger);
-        }
+        // Claude is the baseline provider — always registered.
+        $claude = $this->makeProvider('claude');
         $this->llmManager->registerProvider('claude', $claude);
         // Alias: the workflow compiler (and saved workflow DSL) name this
         // provider 'anthropic', while chat names it 'claude'. Register the
@@ -422,45 +452,20 @@ class AIPortfolioAssistant
         // fail with "Provider 'anthropic' not found" and emit empty output.
         $this->llmManager->registerProvider('anthropic', $claude);
 
-        // Initialize OpenAI provider if configured
+        // OpenAI when configured (its config lives outside config['providers']).
         if ($this->config->isProviderConfigured('openai')) {
-            $openai = new OpenAIProvider($this->config);
-            $openai->setFunctionExecutor($this->toolsManager);
-            if ($this->logger) {
-                $openai->setLogger($this->logger);
-            }
-            $this->llmManager->registerProvider('openai', $openai);
+            $this->llmManager->registerProvider('openai', $this->makeProvider('openai'));
         }
 
-        // Initialize custom providers from config
+        // Everything declared in config['providers'] (DB-driven via
+        // system_llm_settings): deepseek/gemini/grok/kimi resolve to their
+        // dedicated classes through the map; the rest get CustomProvider.
         $customProviders = $this->config->get('providers', []);
         foreach ($customProviders as $name => $providerConfig) {
-            if (!empty($providerConfig['base_url'])) {
-                // Use dedicated providers for specific APIs
-                if ($name === 'gemini') {
-                    $provider = new GeminiProvider($this->config);
-                } elseif ($name === 'grok') {
-                    $provider = new GrokProvider($this->config);
-                } elseif ($name === 'kimi') {
-                    $provider = new KimiProvider($this->config);
-                } elseif ($name === 'deepseek') {
-                    // Dedicated provider: V4 thinking handling, forced-tool_choice
-                    // guards, client-side tool split. Routing deepseek through the
-                    // generic CustomProvider caused the Citability server-side
-                    // tool-execution bug (2026-07-17).
-                    $provider = new DeepSeekProvider($this->config);
-                } else {
-                    // OpenAI-compatible providers WITHOUT a dedicated class
-                    // (glm, gamma4, future DB-added providers) use the generic
-                    // CustomProvider.
-                    $provider = new CustomProvider($this->config, $name);
-                }
-                $provider->setFunctionExecutor($this->toolsManager);
-                if ($this->logger) {
-                    $provider->setLogger($this->logger);
-                }
-                $this->llmManager->registerProvider($name, $provider);
+            if (empty($providerConfig['base_url'])) {
+                continue;
             }
+            $this->llmManager->registerProvider($name, $this->makeProvider($name));
         }
 
         // Update fallback order to include custom providers
