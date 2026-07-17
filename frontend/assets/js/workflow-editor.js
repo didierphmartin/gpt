@@ -10101,168 +10101,17 @@ class WorkflowEditor {
             return this._runIngestion();
         }
 
-        // Agent workflows now run BROWSER-DRIVEN (each node = a chat unit,
-        // concurrent, non-blocking) instead of the old server run-stream that
-        // blocked on the skill bridge. The server path stays below as a
-        // fallback (set window.WF_SERVER_RUN = true to force it).
-        if (!window.WF_SERVER_RUN) {
-            return this.executeWorkflowInBrowser(userPrompt);
-        }
-
-        this.updateStartNodeIndicator(true);
-
-        console.log('[WorkflowEditor] executeWorkflow - currentWorkflowId:', this.currentWorkflowId);
-
-        // Re-promote local FS permission if Chrome silently downgraded it
-        // since the last grant. Folder-backed skills + locally-stored
-        // attachments both need readwrite access; without it, the bundle
-        // sent to the backend would be empty (no skill_content, no
-        // scripts) and the agent would get no run_skill_script tool.
-        // Must run BEFORE any heavy awaits so the Run-button click's
-        // transient activation is still valid for requestPermission().
+        // Agent workflows run BROWSER-DRIVEN (each node = a chat unit,
+        // concurrent, non-blocking). The legacy server run-stream +
+        // SkillToolBridge engine was removed — it serialized browser
+        // skills behind 300s bridge waits (timeout-retry storms under
+        // fan-out). Server-side runs (cron/API) use the backend runner
+        // directly and never involve the browser.
+        // Re-promote local FS permission while the Run click's user
+        // gesture is still valid — pool workers need readwrite access
+        // to skills/ and outputs/.
         await this._ensureLocalFsPermission();
-
-        // Reset all node states
-        this.resetNodeStates();
-
-        // Track execution state
-        this.executionState = {
-            startTime: Date.now(),
-            activeNodeId: null,
-            nodeTimers: new Map(),  // Track timers per-node for parallel execution
-            completedNodes: new Set(),
-            abortController: new AbortController()
-        };
-
-        // Hide reset button if visible and show abort button
-        this.hideResetButton();
-        this.showAbortButton();
-
-        try {
-            const token = window.authManager?.token || window.authManager?.getToken?.();
-            const url = `${this.apiBase}/workflows/${this.currentWorkflowId}/run-stream`;
-
-            // Folder-backed skills live in the user's local FS (not on
-            // the server). Read SKILL.md content + script list for any
-            // node bound to a folder-backed skill and send the bundle
-            // inline so the runner can resolve them. Server-side skills
-            // (source !== 'local') are unaffected — the runner reads
-            // them from the DB as before.
-            const clientSkills = await this._collectClientSkillsForRun();
-            // Locally-stored attachments live on the user's disk and the
-            // server can't read them. The collector splits docs into two
-            // shipping modes: bound-skill workflows ship metadata only
-            // (scratch_files) and the body lands in Pyodide's /scratch/
-            // at tool-call time; non-skill workflows ship the body
-            // inline (inline_documents) the same way cloud docs do.
-            const { inlineDocuments, scratchFiles } = await this._collectInlineDocumentsForRun();
-            console.log('[WorkflowEditor] run-stream payload: client_skills keys=',
-                Object.keys(clientSkills || {}),
-                'inline_documents keys=', Object.keys(inlineDocuments || {}),
-                'scratch_files=', (scratchFiles || []).map(f => f.path));
-
-            const body = {
-                variables: { prompt: userPrompt },
-            };
-            if (clientSkills && Object.keys(clientSkills).length > 0) {
-                body.client_skills = clientSkills;
-            }
-            if (inlineDocuments && Object.keys(inlineDocuments).length > 0) {
-                body.inline_documents = inlineDocuments;
-            }
-            if (scratchFiles && scratchFiles.length > 0) {
-                body.scratch_files = scratchFiles;
-            }
-
-            // Use fetch with streaming for SSE (EventSource doesn't support POST body)
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(body),
-                signal: this.executionState.abortController.signal
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let finalResult = null;
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line in buffer
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6).trim();
-                        if (data === '[DONE]') {
-                            console.log('[WorkflowEditor] SSE stream complete');
-                            continue;
-                        }
-                        try {
-                            const event = JSON.parse(data);
-                            finalResult = this.handleWorkflowEvent(event) || finalResult;
-                        } catch (e) {
-                            console.warn('[WorkflowEditor] Failed to parse SSE event:', data);
-                        }
-                    }
-                }
-            }
-
-            // Clear all node timers and hide abort button
-            if (this.executionState.nodeTimers) {
-                for (const [nodeId, timerInfo] of this.executionState.nodeTimers) {
-                    clearInterval(timerInfo.interval);
-                }
-                this.executionState.nodeTimers.clear();
-            }
-            this.hideAbortButton();
-
-            // Show results
-            if (finalResult) {
-                this.showWorkflowResults(finalResult);
-            }
-
-            // Cleanup /scratch/ files we pre-wrote at run start. MEMFS is
-            // in-browser only and gets wiped on tab close, but explicit
-            // unlink keeps memory hygiene tight across long sessions.
-            this._cleanupScratchFiles();
-
-        } catch (error) {
-            this._cleanupScratchFiles();
-            // Hide abort button
-            this.hideAbortButton();
-
-            // Clear all node timers
-            if (this.executionState?.nodeTimers) {
-                for (const [nodeId, timerInfo] of this.executionState.nodeTimers) {
-                    clearInterval(timerInfo.interval);
-                }
-                this.executionState.nodeTimers.clear();
-            }
-
-            // Check if it was an abort
-            if (error.name === 'AbortError') {
-                console.log('[WorkflowEditor] Workflow aborted by user');
-                this.resetNodeStates();
-                return;
-            }
-
-            console.error('[WorkflowEditor] Error running workflow:', error);
-            this.resetNodeStates();
-            alert(this.t('workflow.errors.runWorkflowFailed', { error: error.message }));
-        }
+        return this.executeWorkflowInBrowser(userPrompt);
     }
 
     /**
@@ -10315,10 +10164,9 @@ class WorkflowEditor {
      * Runs BROWSER-DRIVEN (executeWorkflowInBrowser: each node is a chat
      * unit, skills run concurrently on the worker pool, no server-side
      * blocking) — the same engine as the canvas Run button. The legacy
-     * server run-stream + SkillToolBridge path is kept as
-     * _runHeadlessServer (window.WF_SERVER_RUN = true forces it); it
-     * serializes browser skills behind 300s bridge waits, which made
-     * skill-triggered runs time out and retry for 30+ minutes.
+     * server run-stream + SkillToolBridge path was REMOVED: it serialized
+     * browser skills behind 300s bridge waits, which made skill-triggered
+     * runs time out and retry for 30+ minutes.
      *
      * @param {string|number} workflowId
      * @param {string} userPrompt
@@ -10326,9 +10174,6 @@ class WorkflowEditor {
      * @returns {Promise<{ result: object|null, outputs: object|null }>}
      */
     async runHeadless(workflowId, userPrompt, { onProgress } = {}) {
-        if (window.WF_SERVER_RUN) {
-            return this._runHeadlessServer(workflowId, userPrompt, { onProgress });
-        }
         // Populate the drawflow graph — the browser-driven orchestrator
         // walks this.editor's nodes.
         await this.loadWorkflow(workflowId);
@@ -10341,343 +10186,6 @@ class WorkflowEditor {
         return { result: runResult, outputs: runResult?.node_outputs ?? null };
     }
 
-    /**
-     * LEGACY headless run over the server run-stream + SkillToolBridge.
-     * Mirrors executeWorkflow's old network/stream contract exactly (same
-     * body shape, headers, SSE loop, and handleWorkflowEvent call). Kept
-     * only as a debugging fallback — see runHeadless.
-     */
-    async _runHeadlessServer(workflowId, userPrompt, { onProgress } = {}) {
-        // Populate the drawflow so client-skill / inline-document
-        // collection can walk the node graph below.
-        await this.loadWorkflow(workflowId);
-
-        // Re-promote local FS permission if Chrome silently downgraded it
-        // (same rationale as executeWorkflow).
-        await this._ensureLocalFsPermission();
-
-        const clientSkills = await this._collectClientSkillsForRun();
-        const { inlineDocuments, scratchFiles } = await this._collectInlineDocumentsForRun();
-
-        const body = {
-            variables: { prompt: userPrompt },
-        };
-        if (clientSkills && Object.keys(clientSkills).length > 0) {
-            body.client_skills = clientSkills;
-        }
-        if (inlineDocuments && Object.keys(inlineDocuments).length > 0) {
-            body.inline_documents = inlineDocuments;
-        }
-        if (scratchFiles && scratchFiles.length > 0) {
-            body.scratch_files = scratchFiles;
-        }
-
-        const token = window.authManager?.token || window.authManager?.getToken?.();
-        const url = `${this.apiBase}/workflows/${workflowId}/run-stream`;
-        const abortController = new AbortController();
-
-        // handleWorkflowEvent (invoked per SSE event below) drives the editor's
-        // per-node timers via this.executionState. executeWorkflow initializes
-        // it; runHeadless MUST too, or every event throws inside the handler and
-        // gets swallowed by the catch — losing finalResult and the artifact.
-        this.resetNodeStates();
-        this.executionState = {
-            startTime: Date.now(),
-            activeNodeId: null,
-            nodeTimers: new Map(),
-            completedNodes: new Set(),
-            abortController,
-        };
-
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(body),
-                signal: abortController.signal
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let finalResult = null;
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line in buffer
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6).trim();
-                        if (data === '[DONE]') {
-                            console.log('[WorkflowEditor] runHeadless SSE stream complete');
-                            continue;
-                        }
-                        try {
-                            const ev = JSON.parse(data);
-                            const r = this.handleWorkflowEvent(ev);
-                            if (r) finalResult = r;
-                            if (typeof onProgress === 'function' &&
-                                (ev.type === 'node_start' || ev.type === 'node_complete' ||
-                                 ev.type === 'workflow_start' || ev.type === 'workflow_complete')) {
-                                onProgress(ev);
-                            }
-                        } catch (e) {
-                            console.warn('[WorkflowEditor] runHeadless error handling SSE event:', e, data);
-                        }
-                    }
-                }
-            }
-
-            if (this.executionState?.nodeTimers) {
-                for (const [, timerInfo] of this.executionState.nodeTimers) {
-                    clearInterval(timerInfo.interval);
-                }
-                this.executionState.nodeTimers.clear();
-            }
-            // The editor panel is visible during a chat-driven run, so surface
-            // the result in its own results panel + artifact view — exactly like
-            // executeWorkflow does (otherwise the panel shows "No Results Yet").
-            if (finalResult) {
-                this.showWorkflowResults(finalResult);
-            }
-            this._cleanupScratchFiles();
-            return { result: finalResult, outputs: finalResult?.outputs ?? null };
-
-        } catch (error) {
-            this._cleanupScratchFiles();
-            if (error.name === 'AbortError') {
-                console.log('[WorkflowEditor] runHeadless aborted');
-                return { result: null, outputs: null };
-            }
-            throw error;
-        }
-    }
-
-    /**
-     * Walk drawflow nodes, find any bound to a folder-backed skill
-     * (source === 'local'), and read their SKILL.md + script list off
-     * the user's local FS so we can ship them inline with the run
-     * request. The runner cannot reach the user's disk; without this
-     * bundle, folder-backed skills resolve to empty content.
-     *
-     * Returns an object keyed by dir_name:
-     *   { "<dir>": { skill_content, scripts: ["scripts/x.py", ...] } }
-     * or {} if there's nothing folder-backed in the graph.
-     */
-    async _collectClientSkillsForRun() {
-        if (!window.skillsFs) return {};
-        const drawflowNodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
-        const dirNames = new Set();
-        for (const nodeId of Object.keys(drawflowNodes)) {
-            const data = drawflowNodes[nodeId]?.data || {};
-            const bs = data.bound_skill;
-            if (bs && bs.source === 'local' && typeof bs.dir_name === 'string' && bs.dir_name) {
-                dirNames.add(bs.dir_name);
-            }
-        }
-        if (dirNames.size === 0) return {};
-
-        const out = {};
-        await Promise.all(Array.from(dirNames).map(async (dirName) => {
-            try {
-                const skill_content = await window.skillsFs.getSkillContent(dirName);
-                let scripts = [];
-                try {
-                    scripts = await window.skillsFs.listSkillScripts(dirName);
-                } catch (_) { /* tolerate empty/missing scripts dir */ }
-                out[dirName] = { skill_content: skill_content || '', scripts };
-            } catch (e) {
-                console.warn(`[WorkflowEditor] could not read folder-backed skill "${dirName}":`, e);
-            }
-        }));
-        return out;
-    }
-
-    /**
-     * Read every locally-stored attachment off the user's disk. Routes
-     * them in one of two ways depending on whether the workflow has any
-     * folder-backed skill agent:
-     *
-     *   - **Bound-skill workflow**: docs go to Pyodide /scratch/<name>
-     *     and the backend gets `scratch_files` metadata only (no body).
-     *     The agent's prompt sees a one-line "file at /scratch/<name>"
-     *     reference instead of the full document, saving ~14K input
-     *     tokens per LLM call. Mirrors the chat B3 pre-write pattern.
-     *     Content is stashed on `this._scratchFileContents` so
-     *     `handleClientToolCall` can merge into runSkillScript's
-     *     inputFiles when the agent invokes the script.
-     *
-     *   - **Non-skill workflow**: docs ship inline as before
-     *     (`inline_documents`), so generic agents still see the body.
-     *
-     * Returns `{ inlineDocuments, scratchFiles }`. Callers cleanup
-     * `_scratchFileContents` paths via pyodideRunner.cleanupPath after
-     * the run.
-     */
-    async _collectInlineDocumentsForRun() {
-        const drawflowNodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
-        const localDocs = [];
-        const allDocsSeen = [];
-        let anyBoundSkillLocal = false;
-        for (const nodeId of Object.keys(drawflowNodes)) {
-            const data = drawflowNodes[nodeId]?.data || {};
-            if (data.bound_skill?.source === 'local' && data.bound_skill?.dir_name) {
-                anyBoundSkillLocal = true;
-            }
-            const docs = data.documents || [];
-            for (const doc of docs) {
-                allDocsSeen.push({ nodeId, name: doc?.name, storage: doc?.storage, hasPath: !!doc?.path, hasId: !!doc?.id });
-                if (doc?.storage === 'local' && doc.path && doc.id) {
-                    localDocs.push(doc);
-                }
-            }
-        }
-        console.log('[WorkflowEditor] _collectInlineDocumentsForRun: scanned', allDocsSeen.length, 'docs, qualifying', localDocs.length, 'as local. anyBoundSkillLocal=', anyBoundSkillLocal);
-
-        this._scratchFileContents = {};
-        if (localDocs.length === 0) {
-            return { inlineDocuments: {}, scratchFiles: [] };
-        }
-
-        // Need an FSA adapter to read. connectLocalStorage now silently
-        // reuses the app-wide synergyAI root if the user already
-        // granted it for skills, so this usually succeeds without a
-        // prompt. If the adapter still isn't available, fall through
-        // and let the agent see the legacy "stored locally" message.
-        if (!this.localFsAdapter) {
-            try {
-                await this.connectLocalStorage();
-            } catch (e) {
-                console.warn('[WorkflowEditor] Could not bring up local FS adapter for inline doc shipping:', e);
-            }
-        }
-        if (!this.localFsAdapter) {
-            console.warn('[WorkflowEditor] No local FS adapter — local-storage docs will not be visible to the agent.');
-            return { inlineDocuments: {}, scratchFiles: [] };
-        }
-
-        const inlineDocuments = {};
-        const scratchFiles = [];
-        // Binary file types we should NOT decode as UTF-8. .docx, .xlsx,
-        // .pptx are ZIPs; PDFs and images are obviously binary.
-        //
-        // Mime detection uses exact matches + safe suffixes, NOT
-        // substring includes — Office formats like
-        // application/vnd.openxmlformats-officedocument.wordprocessingml.document
-        // contain "xml" in "wordprocessingml" but are binary ZIPs
-        // underneath. The `+xml && !vnd.` rule keeps atom+xml etc.
-        // as text while excluding all vendor (vnd.*) binary formats.
-        const isTextLike = (doc) => {
-            const mime = (doc.mimeType || '').toLowerCase();
-            const name = (doc.name || '').toLowerCase();
-            if (mime.startsWith('text/')) return true;
-            if (mime === 'application/json' || mime === 'application/xml' ||
-                mime === 'application/xhtml+xml' || mime === 'application/javascript' ||
-                mime === 'application/x-yaml' || mime === 'application/yaml' ||
-                mime === 'application/x-toml') return true;
-            if (mime.endsWith('+json')) return true;
-            if (mime.endsWith('+xml') && !mime.startsWith('application/vnd.')) return true;
-            return /\.(html?|md|markdown|txt|json|csv|xml|css|js|py|sh|yml|yaml|toml|ini|log)$/.test(name);
-        };
-
-        for (const doc of localDocs) {
-            try {
-                // Two outputs per doc, computed independently:
-                //   inlineMarkdown — text the agent reads (always populated
-                //                    when we can produce it).
-                //   scratchPayload — raw bytes/string for skill scripts
-                //                    that need to read the original file
-                //                    (e.g. docx/edit.py find-and-replace).
-                let inlineMarkdown = null;
-                let scratchPayload = null;
-                let sizeForLog;
-
-                if (isTextLike(doc)) {
-                    const text = await this.localFsAdapter.read('/' + doc.path);
-                    if (typeof text !== 'string') continue;
-                    inlineMarkdown = text;
-                    scratchPayload = text;
-                    sizeForLog = `${text.length} chars`;
-                } else {
-                    const buf = await this.localFsAdapter.readArrayBuffer('/' + doc.path);
-                    if (!buf) continue;
-                    const bytes = new Uint8Array(buf);
-                    scratchPayload = bytes;
-                    sizeForLog = `${bytes.byteLength} bytes (binary)`;
-
-                    // Run the binary through the platform converter
-                    // (attachment-converter.js) so the agent sees DOCX/
-                    // PPTX/XLSX/PDF as markdown, the same way chat does.
-                    // Failure is logged but non-fatal — the doc still
-                    // ships via scratchFiles for skill workflows that
-                    // can read it directly; non-skill workflows just lose
-                    // visibility into that one doc.
-                    if (window.attachmentConverter && typeof window.attachmentConverter.toMarkdown === 'function') {
-                        try {
-                            const file = new File([bytes], doc.name || 'attachment', {
-                                type: doc.mimeType || 'application/octet-stream',
-                            });
-                            const result = await window.attachmentConverter.toMarkdown(file);
-                            inlineMarkdown = result.markdown;
-                        } catch (convErr) {
-                            console.warn(`[WorkflowEditor] Conversion failed for "${doc.name}": ${convErr?.message || convErr}`);
-                        }
-                    } else {
-                        console.warn('[WorkflowEditor] attachmentConverter not available; binary doc will not be visible to non-skill agents.');
-                    }
-                }
-                console.log(`[WorkflowEditor] read local doc "${doc.name}" path=/${doc.path} → ${sizeForLog}${inlineMarkdown ? ' · markdown ready' : ''}`);
-
-                if (inlineMarkdown) {
-                    inlineDocuments[doc.id] = inlineMarkdown;
-                }
-
-                // Skill-bound workflows also get the raw file written to
-                // /scratch/ so edit.py-style scripts can operate on the
-                // original bytes. Non-skill workflows skip this — agent
-                // already has the markdown via inlineDocuments.
-                if (anyBoundSkillLocal && scratchPayload != null) {
-                    const safeName = (doc.name || 'attachment').replace(/[^a-zA-Z0-9._-]/g, '_');
-                    const scratchPath = `/scratch/${safeName}`;
-                    this._scratchFileContents[scratchPath] = scratchPayload;
-                    const reportedSize = typeof scratchPayload === 'string'
-                        ? scratchPayload.length
-                        : scratchPayload.byteLength;
-                    scratchFiles.push({
-                        doc_id: doc.id,
-                        name: doc.name,
-                        path: scratchPath,
-                        mime_type: doc.mimeType || 'application/octet-stream',
-                        size: reportedSize,
-                    });
-                }
-            } catch (e) {
-                console.warn(`[WorkflowEditor] Could not read local doc "${doc.name}" (${doc.path}):`, e);
-            }
-        }
-        return { inlineDocuments, scratchFiles };
-    }
-
-    /**
-     * Bridge a workflow agent's run_skill_script call to Pyodide.
-     * Backend has emitted a `client_tool_call` SSE event and is now
-     * blocked on SkillToolBridge::awaitResult; we run the script and
-     * POST the result to /workflows/tool-result so the runner can
-     * resume.
-     */
     /**
      * Run a skill off the main thread via the Pyodide worker pool when possible.
      * This is what makes workflow skills reliable under fan-out: the single
@@ -10993,8 +10501,8 @@ class WorkflowEditor {
                         // to its real group path "GEO/geo-report", so either
                         // form the model passes resolves correctly.
                         this._wfNodeLog(dfId, 'skill', `running skill ${input.dir_name || dirName}`);
-                        // Stage the model's input_files into the run — exactly
-                        // like handleClientToolCall does. This is essential for
+                        // Stage the model's input_files into the run. This is
+                        // essential for
                         // skills that read a model-authored file, e.g.
                         // html/create.py reading `-i /scratch/in.html`. Without
                         // it those files never reach Pyodide and the script
@@ -11066,8 +10574,7 @@ class WorkflowEditor {
                             exit: _exit, stdoutHead: (result?.stdout || '').slice(0, 200),
                             stderrHead: _stderr.slice(0, 500), outputKeys: Object.keys(result?.outputs || {}),
                         });
-                        // Capture a renderable artifact (HTML/Markdown) the SAME
-                        // way the server path (handleClientToolCall) does, so the
+                        // Capture a renderable artifact (HTML/Markdown) so the
                         // Output node shows the actual generated file — e.g. the
                         // html skill's /outputs/*.html — instead of only the
                         // model's prose summary. The browser-driven path never
@@ -11266,6 +10773,15 @@ class WorkflowEditor {
         const finalOutput = outId ? this._wfOutputs[outId] : '';
         console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
         const success = !!finalOutput && !_wfHadError && remaining.size === 0;
+        // Post-run self-heal hook (Auto mode only; debounced + threshold'd).
+        try { window.healSystem?.autoAfterRun?.(); } catch (_) {}
+        // Persist the final output to synergyAI/outputs/workflows/
+        // (timestamped, fire-and-forget) — parity with the old engine.
+        if (success && finalOutput && typeof this._saveWorkflowOutput === 'function') {
+            this._saveWorkflowOutput(finalOutput).catch(err => {
+                console.warn('[WorkflowEditor] Could not save workflow output:', err);
+            });
+        }
         const runResult = {
             output: finalOutput,
             node_outputs: this._wfOutputs,
@@ -11292,140 +10808,6 @@ class WorkflowEditor {
         const out = await this._runNodeAsChatUnit(node, inputText);
         console.log('[wf-unit] result:', out);
         return out;
-    }
-
-    async handleClientToolCall(event) {
-        const toolCallId = event.tool_call_id;
-        const calls = Array.isArray(event.tool_calls) ? event.tool_calls : [];
-        const dirName = event.dir_name || calls[0]?.input?.dir_name;
-        if (!toolCallId || !calls.length) {
-            console.warn('[WorkflowEditor] client_tool_call missing tool_call_id or tool_calls', event);
-            return;
-        }
-        if (!window.pyodideRunner) {
-            await this._postToolResult(toolCallId, {
-                tool_call_id: toolCallId,
-                success: false,
-                error: 'pyodideRunner not loaded — cannot run skill script in this browser.',
-            });
-            return;
-        }
-        if (!dirName) {
-            await this._postToolResult(toolCallId, {
-                tool_call_id: toolCallId,
-                success: false,
-                error: 'No skill dir_name in client_tool_call event.',
-            });
-            return;
-        }
-
-        const call = calls[0];
-        const input = call.input || {};
-        // Merge any /scratch/ files we pre-stashed at workflow start
-        // with whatever the LLM passed via input_files. Pre-stashed
-        // entries WIN — for binary files (.docx/.xlsx/.pdf) the LLM
-        // physically can't send raw bytes through JSON, so any value
-        // it provides for a stashed path is a corrupted guess. The
-        // LLM's input_files still apply for paths we didn't stash.
-        const llmInputFiles = (input.input_files && typeof input.input_files === 'object') ? input.input_files : {};
-        const stashed = this._scratchFileContents || {};
-        const mergedInputFiles = { ...llmInputFiles, ...stashed };
-        const finalInputFiles = Object.keys(mergedInputFiles).length > 0 ? mergedInputFiles : null;
-        try {
-            const result = await this._runSkillPooledOrMain({
-                dirName,
-                script: input.script,
-                argv: Array.isArray(input.argv) ? input.argv : [],
-                inputFiles: finalInputFiles,
-                readOutputs: Array.isArray(input.read_outputs) && input.read_outputs.length > 0 ? input.read_outputs : null,
-            });
-
-            // Capture this skill run's logs so the node modal's Logs tab can
-            // show what the script actually did (stdout + log_messages), which
-            // dir/script/argv ran, the exit code and duration. This is the
-            // richest signal when a node misbehaves — far more than a red glow.
-            try {
-                const logNodeId = this.dbNodeToDrawflowMap?.[event.node_id] || event.node_id;
-                if (logNodeId != null) {
-                    if (!this.nodeExecutionData[logNodeId]) this.nodeExecutionData[logNodeId] = {};
-                    if (!Array.isArray(this.nodeExecutionData[logNodeId].logs)) this.nodeExecutionData[logNodeId].logs = [];
-                    this.nodeExecutionData[logNodeId].logs.push({
-                        dirName,
-                        script: input.script || '',
-                        argv: Array.isArray(input.argv) ? input.argv : [],
-                        exitCode: result?.exitCode ?? 0,
-                        stdout: result?.stdout || '',
-                        logMessages: result?.stderr || '',
-                        durationMs: Math.round(result?.durationMs ?? 0),
-                    });
-                    this.updateModalInputOutput(logNodeId);
-                }
-            } catch (e) {
-                console.warn('[WorkflowEditor] failed to capture skill logs:', e);
-            }
-
-            // Capture the latest renderable artifact (HTML/MD) for the
-            // end-node display. Reuses chat's existing selector so the
-            // detection logic stays in one place. The pane itself is
-            // opened later, in showWorkflowResults().
-            try {
-                const artifact = window.chatApp?._selectArtifactFromOutputs?.(result?.outputs);
-                if (artifact) {
-                    this.lastProducedArtifact = { dirName, ...artifact };
-                }
-            } catch (e) {
-                console.warn('[WorkflowEditor] artifact selection failed:', e);
-            }
-
-            // Trim outputs the same way chat.js does:
-            //   - binary (Uint8Array) → placeholder with disk path so the
-            //     agent can tell the user where the file lives
-            //   - large strings truncated to keep tokens down
-            //   - small strings passed through
-            // Also resolves /outputs/<name> to a human-friendly disk path
-            // (e.g. "synergyAI/outputs/foo.docx") that the agent can echo
-            // back. Without this, raw Uint8Arrays get JSON-serialized as
-            // {"0":1,"1":255,...} — 4x the bytes and unusable to the LLM.
-            const MAX_OUTPUT_CHARS = 2_000;
-            const rootName = window.chatApp?._fsaRootName || 'storage';
-            const diskPathFor = (path) => (typeof path === 'string' && path.startsWith('/'))
-                ? `${rootName}${path}`
-                : null;
-            const trimmedOutputs = {};
-            for (const [path, val] of Object.entries(result?.outputs || {})) {
-                const disk = diskPathFor(path);
-                const diskHint = disk ? ` File saved on disk at: ${disk}` : '';
-                if (val == null) {
-                    trimmedOutputs[path] = null;
-                } else if (typeof val === 'string' && val.length > MAX_OUTPUT_CHARS) {
-                    trimmedOutputs[path] = val.slice(0, MAX_OUTPUT_CHARS) + `\n\n[truncated — original was ${val.length} chars.${diskHint}]`;
-                } else if (typeof val === 'string') {
-                    trimmedOutputs[path] = val;
-                } else {
-                    trimmedOutputs[path] = `[binary file, ${val.byteLength} bytes.${diskHint} Tell the user where the file lives on their disk.]`;
-                }
-            }
-
-            await this._postToolResult(toolCallId, {
-                tool_call_id: toolCallId,
-                success: (result?.exitCode ?? 0) === 0,
-                output: {
-                    exit_code: result?.exitCode ?? 0,
-                    stdout: result?.stdout || '',
-                    log_messages: result?.stderr || '',
-                    outputs: trimmedOutputs,
-                    duration_ms: Math.round(result?.durationMs ?? 0),
-                },
-                note: 'Treat success=true as the script ran cleanly. Summarize what changed; do not re-quote large outputs.',
-            });
-        } catch (e) {
-            console.error('[WorkflowEditor] runSkillScript failed:', e);
-            await this._postToolResult(toolCallId, {
-                tool_call_id: toolCallId,
-                success: false,
-                error: e?.message || String(e),
-            });
-        }
     }
 
     /**
@@ -11459,192 +10841,6 @@ class WorkflowEditor {
         }
     }
 
-    /**
-     * Unlink any /scratch/<file> paths we pre-stashed at workflow start
-     * and clear the in-memory map. Safe to call multiple times.
-     */
-    _cleanupScratchFiles() {
-        const stashed = this._scratchFileContents || {};
-        for (const path of Object.keys(stashed)) {
-            window.pyodideRunner?.cleanupPath?.(path);
-        }
-        this._scratchFileContents = {};
-    }
-
-    async _postToolResult(toolCallId, payload) {
-        try {
-            const url = `${this.apiBase}/workflows/tool-result`;
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: this.getAuthHeaders(),
-                body: JSON.stringify(payload),
-            });
-            if (!res.ok) {
-                console.warn('[WorkflowEditor] tool-result POST failed:', res.status);
-            }
-        } catch (e) {
-            console.error('[WorkflowEditor] tool-result POST threw:', e);
-        }
-    }
-
-    /**
-     * Handle SSE workflow events
-     */
-    handleWorkflowEvent(event) {
-        console.log('[WorkflowEditor] SSE event:', event.type, event);
-
-        switch (event.type) {
-            case 'workflow_start':
-                console.log('[WorkflowEditor] Workflow started:', event.workflow_name);
-                // Clear previous execution data for fresh run
-                this.nodeExecutionData = {};
-                if (event.run_id) {
-                    this.currentRunId = event.run_id;
-                    try {
-                        const wfKey = this.currentWorkflowId || 'unsaved';
-                        localStorage.setItem('lastRunId:' + wfKey, event.run_id);
-                    } catch (e) { /* localStorage may be unavailable; non-fatal */ }
-                }
-                this.lastProducedArtifact = null;
-                break;
-
-            case 'node_start':
-                this.highlightNode(event.node_id, 'active', event.drawflow_id, event.node_type);
-                this.startNodeTimer(event.node_id, event.drawflow_id);
-                // Store input content and start time as soon as it arrives
-                {
-                    const drawflowId = this.dbNodeToDrawflowMap?.[event.node_id] || event.drawflow_id || event.node_id;
-                    if (!this.nodeExecutionData[drawflowId]) {
-                        this.nodeExecutionData[drawflowId] = {};
-                    }
-                    this.nodeExecutionData[drawflowId].startTime = Date.now();
-                    if (event.input) {
-                        this.nodeExecutionData[drawflowId].input = event.input;
-                        // Update modal if it's open for this node
-                        this.updateModalInputOutput(drawflowId);
-                    }
-                }
-                break;
-
-            case 'node_complete':
-                // Use 'error' state if success is explicitly false, otherwise 'completed'
-                const nodeState = event.success === false ? 'error' : 'completed';
-                this.highlightNode(event.node_id, nodeState, event.drawflow_id, event.node_type);
-                this.stopNodeTimer(event.node_id);
-                if (event.node_id) {
-                    this.executionState.completedNodes.add(event.node_id);
-                }
-                // Store output content, tokens, and execution time
-                {
-                    const drawflowId = this.dbNodeToDrawflowMap?.[event.node_id] || event.drawflow_id || event.node_id;
-                    if (!this.nodeExecutionData[drawflowId]) {
-                        this.nodeExecutionData[drawflowId] = {};
-                    }
-                    const nodeData = this.nodeExecutionData[drawflowId];
-                    if (event.output !== undefined) {
-                        nodeData.output = event.output;
-                    }
-                    // Store token usage
-                    nodeData.inputTokens = event.input_tokens || 0;
-                    nodeData.outputTokens = event.output_tokens || 0;
-                    nodeData.totalTokens = nodeData.inputTokens + nodeData.outputTokens;
-                    // Backend-computed USD cost (from centralized system_llm_settings
-                    // pricing). null when pricing is unknown for the provider.
-                    nodeData.costUsd = (event.cost_usd !== undefined && event.cost_usd !== null)
-                        ? Number(event.cost_usd) : null;
-                    // Calculate execution time
-                    if (nodeData.startTime) {
-                        nodeData.executionTime = Date.now() - nodeData.startTime;
-                    }
-                    nodeData.agentName = event.agent_name || null;
-                    nodeData.success = event.success !== false;
-                    // Update modal if it's open for this node
-                    this.updateModalInputOutput(drawflowId);
-                }
-                break;
-
-        case 'node_log': {
-            const dfId = this.dbNodeToDrawflowMap?.[event.node_id] || event.drawflow_id || event.node_id;
-            if (dfId != null) {
-                if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
-                if (!Array.isArray(this.nodeExecutionData[dfId].activity)) this.nodeExecutionData[dfId].activity = [];
-                this.nodeExecutionData[dfId].activity.push({
-                    ts: event.timestamp || 0,
-                    level: event.level || 'info',
-                    phase: event.phase || '',
-                    message: event.message || '',
-                });
-                this.updateModalInputOutput(dfId);
-            }
-            break;
-        }
-
-            case 'node_error':
-                this.highlightNode(event.node_id, 'error', event.drawflow_id, event.node_type);
-                this.stopNodeTimer(event.node_id);
-                console.error('[WorkflowEditor] Node error:', event.error);
-                break;
-
-            case 'client_tool_call':
-                // Backend ran an agent that emitted run_skill_script;
-                // it's now blocked on the bridge waiting for us. Run
-                // the script via Pyodide and POST the result back.
-                this.handleClientToolCall(event).catch(err => {
-                    console.error('[WorkflowEditor] client_tool_call handler failed:', err);
-                });
-                break;
-
-            case 'workflow_complete':
-                console.log('[WorkflowEditor] Workflow completed:', event);
-                // Post-run self-heal hook (Auto mode only; debounced + threshold'd).
-                try { window.healSystem && window.healSystem.autoAfterRun && window.healSystem.autoAfterRun(); } catch (_) {}
-                // Hide abort button and show reset button with token stats
-                this.hideAbortButton();
-                const tokenInfo = {
-                    input: event.total_input_tokens || 0,
-                    output: event.total_output_tokens || 0,
-                    total: event.total_tokens || (event.total_input_tokens || 0) + (event.total_output_tokens || 0)
-                };
-                this.showResetButton(tokenInfo);
-                // Refresh the chat sidebar so the just-archived workflow row
-                // appears immediately without requiring a page reload.
-                if (window.chatApp && typeof window.chatApp.loadContextsList === 'function') {
-                    window.chatApp.loadContextsList().catch(e => {
-                        console.warn('[WorkflowEditor] Could not refresh chat sidebar:', e);
-                    });
-                }
-                // Persist the final output to synergyAI/outputs/workflows/.
-                // Filename is timestamped so multiple runs of the same
-                // workflow never overwrite each other. Fires-and-forgets:
-                // we don't block the UI completion path on the FSA write.
-                if (event.success && event.output) {
-                    this._saveWorkflowOutput(event.output).catch(err => {
-                        console.warn('[WorkflowEditor] Could not save workflow output:', err);
-                    });
-                }
-                // Return the result data for display
-                return {
-                    success: event.success,
-                    output: event.output,
-                    node_outputs: event.node_outputs,
-                    nodes_executed: event.nodes_executed,
-                    response_time_ms: event.response_time_ms,
-                    total_input_tokens: event.total_input_tokens,
-                    total_output_tokens: event.total_output_tokens,
-                    total_tokens: event.total_tokens
-                };
-
-            case 'workflow_error':
-            case 'error':
-                console.error('[WorkflowEditor] Workflow error:', event.error);
-                // Hide abort button and show reset button (keep node states visible to show errors)
-                this.hideAbortButton();
-                this.showResetButton();
-                alert(this.t('workflow.errors.workflowError', { error: event.error }));
-                break;
-        }
-        return null;
-    }
 
     /**
      * Highlight a node in the canvas
@@ -13671,9 +12867,8 @@ class WorkflowEditor {
         // from the library and the node binds to it by reference (not
         // by copying its content). The bound skill is stored on
         // this._boundSkill until saveAgent reads it. Folder-backed
-        // skills are now selectable: the browser ships SKILL.md inline
-        // at run start (see _collectClientSkillsForRun) and the runner
-        // resolves it via SkillRepository::resolveBoundSkillContent.
+        // skills are selectable: the browser-driven engine reads them
+        // off the local FS (worker pool) at run time.
         // Caveat: folder-backed skills require the editor to be open
         // when the workflow runs, so they can't be used by scheduled
         // (cron-triggered) executions.
