@@ -317,11 +317,19 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
             'messages' => $messages,
         ];
 
-        if ($isV4 && !$this->disableThinkingForThisCall) {
-            $payload['thinking'] = ['type' => 'enabled'];
+        if ($isV4) {
+            // V4 thinking is ON by default SERVER-side — merely omitting the
+            // key does NOT disable it (the API still 400s forced tool_choice
+            // with "Thinking mode does not support this tool_choice"). The
+            // disable must be explicit.
+            $payload['thinking'] = [
+                'type' => $this->disableThinkingForThisCall ? 'disabled' : 'enabled',
+            ];
+            if ($this->disableThinkingForThisCall) {
+                // Non-thinking V4 accepts temperature.
+                $payload['temperature'] = $this->temperature;
+            }
         } else {
-            // Either a non-V4 model, or V4 with thinking disabled for this
-            // call (B3 skill turn). Both cases accept temperature.
             $payload['temperature'] = $this->temperature;
         }
 

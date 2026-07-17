@@ -443,8 +443,16 @@ class AIPortfolioAssistant
                     $provider = new GrokProvider($this->config);
                 } elseif ($name === 'kimi') {
                     $provider = new KimiProvider($this->config);
+                } elseif ($name === 'deepseek') {
+                    // Dedicated provider: V4 thinking handling, forced-tool_choice
+                    // guards, client-side tool split. Routing deepseek through the
+                    // generic CustomProvider caused the Citability server-side
+                    // tool-execution bug (2026-07-17).
+                    $provider = new DeepSeekProvider($this->config);
                 } else {
-                    // DeepSeek and others use CustomProvider
+                    // OpenAI-compatible providers WITHOUT a dedicated class
+                    // (glm, gamma4, future DB-added providers) use the generic
+                    // CustomProvider.
                     $provider = new CustomProvider($this->config, $name);
                 }
                 $provider->setFunctionExecutor($this->toolsManager);
