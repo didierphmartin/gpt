@@ -10308,15 +10308,17 @@ class WorkflowEditor {
     }
 
     /**
-     * Headless run: execute a workflow and return its result without
-     * driving the editor canvas (no node highlighting, abort button,
-     * reset button, or results modal). This is the reusable entry point
-     * the chat uses to run a workflow inline.
+     * Headless run: execute a workflow and return its result. This is the
+     * reusable entry point chat + workflow-born skills use to run a
+     * workflow inline.
      *
-     * Behavior mirrors executeWorkflow's network/stream contract exactly
-     * (same body shape, headers, SSE loop, and handleWorkflowEvent call —
-     * so client_tool_call round-trips and final-result extraction keep
-     * working), but deliberately skips all canvas-UI side effects.
+     * Runs BROWSER-DRIVEN (executeWorkflowInBrowser: each node is a chat
+     * unit, skills run concurrently on the worker pool, no server-side
+     * blocking) — the same engine as the canvas Run button. The legacy
+     * server run-stream + SkillToolBridge path is kept as
+     * _runHeadlessServer (window.WF_SERVER_RUN = true forces it); it
+     * serializes browser skills behind 300s bridge waits, which made
+     * skill-triggered runs time out and retry for 30+ minutes.
      *
      * @param {string|number} workflowId
      * @param {string} userPrompt
@@ -10324,6 +10326,28 @@ class WorkflowEditor {
      * @returns {Promise<{ result: object|null, outputs: object|null }>}
      */
     async runHeadless(workflowId, userPrompt, { onProgress } = {}) {
+        if (window.WF_SERVER_RUN) {
+            return this._runHeadlessServer(workflowId, userPrompt, { onProgress });
+        }
+        // Populate the drawflow graph — the browser-driven orchestrator
+        // walks this.editor's nodes.
+        await this.loadWorkflow(workflowId);
+        // Re-promote local FS permission if Chrome silently downgraded it:
+        // pool workers need readwrite on skills/ and outputs/.
+        await this._ensureLocalFsPermission();
+        try { onProgress?.({ type: 'workflow_start', workflow_id: workflowId }); } catch (_) {}
+        const runResult = await this.executeWorkflowInBrowser(userPrompt, { onProgress });
+        try { onProgress?.({ type: 'workflow_complete', ...runResult }); } catch (_) {}
+        return { result: runResult, outputs: runResult?.node_outputs ?? null };
+    }
+
+    /**
+     * LEGACY headless run over the server run-stream + SkillToolBridge.
+     * Mirrors executeWorkflow's old network/stream contract exactly (same
+     * body shape, headers, SSE loop, and handleWorkflowEvent call). Kept
+     * only as a debugging fallback — see runHeadless.
+     */
+    async _runHeadlessServer(workflowId, userPrompt, { onProgress } = {}) {
         // Populate the drawflow so client-skill / inline-document
         // collection can walk the node graph below.
         await this.loadWorkflow(workflowId);
@@ -11175,7 +11199,7 @@ class WorkflowEditor {
         return parts.join('\n\n');
     }
 
-    async executeWorkflowInBrowser(userPrompt) {
+    async executeWorkflowInBrowser(userPrompt, { onProgress } = {}) {
         this.lastUserPrompt = userPrompt;
         // Clear any artifact from a prior run so the Output node never shows a
         // stale file (the SSE path resets this on 'workflow_start'; the
@@ -11214,8 +11238,11 @@ class WorkflowEditor {
                         this._wfOutputs[id] = this._wfBuildContext(id, nodes);
                     } else {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
+                        const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
+                        try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
                         const res = await this._runNodeAsChatUnit(node, ctx);
                         this._wfOutputs[id] = res.output;
+                        try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: res?.success !== false }); } catch (_) {}
                         // _runNodeAsChatUnit already highlighted the node red on a
                         // soft failure (error/refusal text); reflect it in the run.
                         if (res && res.success === false) _wfHadError = true;
@@ -11238,22 +11265,23 @@ class WorkflowEditor {
         const outId = ids.find(id => this._wfNodeKind(id, nodes) === 'output');
         const finalOutput = outId ? this._wfOutputs[outId] : '';
         console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
+        const success = !!finalOutput && !_wfHadError && remaining.size === 0;
+        const runResult = {
+            output: finalOutput,
+            node_outputs: this._wfOutputs,
+            success,
+            nodes_executed: done.size,
+            response_time_ms: Date.now() - _wfStartedAt,
+        };
         if (typeof this.showWorkflowResults === 'function' && finalOutput) {
             // Pass real run metadata — without success/nodes_executed/response_time_ms
             // the results modal defaulted to "❌ Workflow Failed / 0 nodes / 0.0s"
             // even though the run finished and produced this output.
-            const success = !!finalOutput && !_wfHadError && remaining.size === 0;
             try {
-                this.showWorkflowResults({
-                    output: finalOutput,
-                    node_outputs: this._wfOutputs,
-                    success,
-                    nodes_executed: done.size,
-                    response_time_ms: Date.now() - _wfStartedAt,
-                });
+                this.showWorkflowResults(runResult);
             } catch (_) {}
         }
-        return this._wfOutputs;
+        return runResult;
     }
 
     // Console test entry: wfEditor.runNodeChatUnitTest('<drawflowId>', 'input text')

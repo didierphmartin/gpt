@@ -123,12 +123,12 @@
     }
 
     /**
-     * Bridged workflow runner for dispatcher scripts (run.py delegates here
-     * via the Pyodide js proxy). Uses the editor's runHeadless — the ONLY
-     * runner with the client-skill bridge (Pyodide skills inside agent nodes
-     * execute in the browser; a bare server POST /run would return empty
-     * outputs for skill-using agents). Returns a JSON STRING so the Python
-     * side never touches JsProxy field access.
+     * Workflow runner for dispatcher scripts (run.py delegates here via the
+     * Pyodide js proxy). Uses the editor's runHeadless, which now runs the
+     * graph BROWSER-DRIVEN (each node a chat unit, skills on the worker
+     * pool) — the same engine as the canvas Run button. A bare server POST
+     * /run would return empty outputs for skill-using agents, and the old
+     * server run-stream + bridge path serialized skills behind 300s waits.
      */
     async function ensureWorkflowEditor() {
         if (window.workflowEditor && window.workflowEditor.loadWorkflow) return window.workflowEditor;
