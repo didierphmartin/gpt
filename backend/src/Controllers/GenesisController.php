@@ -327,10 +327,6 @@ final class GenesisController
                 $node = ['type' => $row['node_type'] ?? 'agent'];
                 $name = $config['agent_name'] ?? $config['name'] ?? $config['title'] ?? null;
                 if (is_string($name) && $name !== '') $node['name'] = $name;
-                $instructions = $config['instructions'] ?? $config['systemPrompt'] ?? $config['prompt'] ?? null;
-                if (is_string($instructions) && $instructions !== '') {
-                    $node['instructions'] = mb_substr($instructions, 0, 160);
-                }
                 return $node;
             }, $nodeRows);
             // Manual on-ramp = an explicit user decision, and the workflow's

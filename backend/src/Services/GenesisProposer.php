@@ -51,35 +51,6 @@ TXT;
             . self::OUTPUT_CONTRACT;
     }
 
-    /**
-     * @param array{id:int|string,name:string,description?:?string,steps?:mixed,nodes?:mixed} $workflow
-     * @param array<array{input_variables:mixed}> $runs
-     */
-    public static function buildWorkflowPrompt(array $workflow, array $runs, array $catalog): string
-    {
-        $runLines = [];
-        foreach (array_slice($runs, 0, self::MAX_RUNS) as $i => $r) {
-            $iv = $r['input_variables'] ?? [];
-            if (is_string($iv)) $iv = json_decode($iv, true) ?: [];
-            $runLines[] = 'run ' . ($i + 1) . ' inputs: '
-                . json_encode($iv, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        }
-
-        return "You analyse the run history of ONE user-built workflow and propose a skill that wraps it, "
-            . "PARAMETERIZED so a chat prompt can trigger it with different inputs.\n"
-            . "Diff the runs: whatever VARIED across inputs becomes a parameter (observed values are the "
-            . "examples); whatever stayed CONSTANT stays baked in. If the runs are uniform, propose "
-            . "parameters by inspecting what in the workflow's purpose is most likely to vary, and mark "
-            . "them as inspection-based in the rationale. A fixed target value in the structure (e.g. a hardcoded URL or topic) is the STRONGEST parameter candidate — lift it.\n\n"
-            . "WORKFLOW: #{$workflow['id']} \"{$workflow['name']}\""
-            . (isset($workflow['description']) && $workflow['description'] !== null && $workflow['description'] !== ''
-                ? " — {$workflow['description']}" : '') . "\n\n"
-            . self::structureBlock($workflow['nodes'] ?? null, $workflow['steps'] ?? null) . "\n\n"
-            . "RUN HISTORY:\n" . self::truncate(implode("\n", $runLines), self::MAX_TRANSCRIPT_CHARS) . "\n\n"
-            . "EXISTING SKILL CATALOG (name — description):\n" . self::catalogBlock($catalog) . "\n\n"
-            . self::OUTPUT_CONTRACT;
-    }
-
     /** A saved, reused prompt is a proto-skill: its text is the trigger material. */
     public static function buildPromptLibraryPrompt(string $name, string $content, array $catalog): string
     {
@@ -91,74 +62,6 @@ TXT;
             . "SAVED PROMPT \"" . $name . "\":\n---\n" . self::truncate($content, self::MAX_TRANSCRIPT_CHARS) . "\n---\n\n"
             . "EXISTING SKILL CATALOG (name — description):\n" . self::catalogBlock($catalog) . "\n\n"
             . self::OUTPUT_CONTRACT;
-    }
-
-    /**
-     * Renders the workflow's graph as a compact one-line-per-step summary.
-     *
-     * Editor-built workflows keep their real graph in the workflow_nodes table
-     * (agent_workflows.steps is always [] for those — see
-     * AgentTeam/Services/WorkflowGraphRepository.php), so GenesisController
-     * pre-fetches those rows into $nodesRaw. Legacy/pre-editor workflows (or
-     * anything not yet migrated) still carry their graph in the steps column,
-     * so that stays as a fallback.
-     */
-    private static function structureBlock(mixed $nodesRaw, mixed $stepsRaw): string
-    {
-        $items = null;
-
-        if (is_array($nodesRaw) && !empty($nodesRaw)) {
-            $items = $nodesRaw;
-        } else {
-            if (is_string($stepsRaw)) {
-                $steps = json_decode($stepsRaw, true);
-            } elseif (is_array($stepsRaw)) {
-                $steps = $stepsRaw;
-            } else {
-                $steps = null;
-            }
-            if (is_array($steps) && !empty($steps)) {
-                $items = $steps;
-            }
-        }
-
-        if ($items === null) {
-            return 'STRUCTURE: (not available)';
-        }
-
-        $lines = [];
-        foreach (array_values($items) as $i => $step) {
-            $lines[] = self::formatStep($i, $step);
-        }
-
-        return "STRUCTURE:\n" . self::truncate(implode("\n", $lines), self::MAX_TRANSCRIPT_CHARS);
-    }
-
-    /** One-line summary of a single workflow step; defensive about unknown/missing shape. */
-    private static function formatStep(int $index, mixed $step): string
-    {
-        $n = $index + 1;
-        if (!is_array($step)) {
-            return "step $n: " . self::truncate((string) json_encode($step, JSON_UNESCAPED_SLASHES), 160);
-        }
-
-        $type = $step['type'] ?? $step['agent'] ?? null;
-        $name = $step['name'] ?? null;
-        $label = trim(implode(' ', array_filter([
-            is_string($name) && $name !== '' ? $name : null,
-            is_string($type) && $type !== '' ? "($type)" : null,
-        ])));
-        if ($label === '') $label = "(step $n)";
-
-        $excerptSource = $step['instructions'] ?? $step['config'] ?? null;
-        if ($excerptSource === null) {
-            $excerptSource = json_encode($step, JSON_UNESCAPED_SLASHES);
-        } elseif (!is_string($excerptSource)) {
-            $excerptSource = json_encode($excerptSource, JSON_UNESCAPED_SLASHES);
-        }
-        $excerpt = self::truncate((string) $excerptSource, 160);
-
-        return "step $n: $label — $excerpt";
     }
 
     /** Parse + validate the LLM's proposal. Null = no usable proposal. */
