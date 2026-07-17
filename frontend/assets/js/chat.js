@@ -4718,7 +4718,10 @@ class ChatApp {
             console.log('[B3 continue] follow-up body extras:', Object.keys(followUpExtras));
         }
         if (results.length > 1) {
-            console.log(`[B3 continue] continuing with ${results.length} tool_result(s) paired to ${assistantToolCalls.length} tool_use(s)`);
+            // payload.tool_calls is the assistant's tool_use list these results pair to
+            // (a stale `assistantToolCalls` reference here threw only on multi-result
+            // rounds — i.e. exactly the parallel skill path — as a ReferenceError).
+            console.log(`[B3 continue] continuing with ${results.length} tool_result(s) paired to ${(payload.tool_calls || results).length} tool_use(s)`);
         }
 
         const resp = await fetch(window.apiUrl('/chat'), {
