@@ -152,12 +152,22 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
 
         $this->sendProgress("Preparing request...");
 
-        // B3 turns (folder-backed skill with executable scripts) — disable
-        // V4 thinking mode for this call. The model is just picking which
-        // tool to call with which args; thinking adds latency and, with
-        // V4-pro, induces tool-call spiraling. We restore the default in
-        // the finally block so a subsequent non-B3 call keeps thinking on.
-        $this->disableThinkingForThisCall = !empty($options['skill_metadata']);
+        // Disable V4 thinking mode whenever the call forces a tool: the API
+        // rejects forced tool_choice in thinking mode outright ("Thinking mode
+        // does not support this tool_choice"), and even for merely-required
+        // choices the model is just picking which tool to call with which
+        // args — thinking adds latency and, with V4-pro, induces tool-call
+        // spiraling. Covers BOTH the chat path (skill_metadata, B3 chip turns)
+        // and the workflow path (AgentRunner sets tool_choice 'required' /
+        // GraphWorkflowRunner forces a specific function, but neither sets
+        // skill_metadata — which made workflow Citability nodes 400 and every
+        // other workflow deepseek call pay thinking latency). Restored in the
+        // finally block so a subsequent unforced call keeps thinking on.
+        $toolChoiceOpt = $options['tool_choice'] ?? null;
+        $forcedToolChoice = $toolChoiceOpt !== null
+            && $toolChoiceOpt !== 'auto'
+            && $toolChoiceOpt !== 'none';
+        $this->disableThinkingForThisCall = !empty($options['skill_metadata']) || $forcedToolChoice;
 
         try {
         $systemPrompt = $this->buildSystemPrompt($options);
