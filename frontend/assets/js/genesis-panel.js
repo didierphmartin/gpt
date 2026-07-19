@@ -60,8 +60,6 @@
         .gen-ov-exec-title{font-weight:600;font-size:13px;margin-bottom:6px;color:#374151}
         .gen-exec-opt{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#374151;margin:4px 0;cursor:pointer}
         .gen-exec-opt input{margin-top:2px}
-        .gen-exec-target{margin:6px 0 0 24px;font-size:12.5px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff}
-        .gen-exec-target[disabled]{opacity:.5}
         .gen-exec-hint{margin:6px 0 0;font-size:11px;color:#6b7280}
         #genesis-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);z-index:320;background:#1e293b;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:all .2s;pointer-events:none;max-width:80vw}
         #genesis-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -210,79 +208,6 @@
     }
     window.genesisWorkflowStart = genesisWorkflowStart;
 
-    /**
-     * Fire-and-notify runner for COMPILED workflow skills: POST the frozen
-     * snapshot (already in synergyAI/python/scripts/) to the local Python
-     * runner's /api/run-file with the prompt as argv, stream its output, and
-     * post the result into the conversation. Mirrors genesisWorkflowStart's
-     * contract: returns a JSON string {started, run} synchronously.
-     */
-    async function genesisCompiledStart(filename, prompt, workflowId) {
-        const runNo = ++_genRunSeq;
-        // Probe the runner BEFORE claiming the run started. run.py awaits this
-        // function, so a dead runner becomes the tool result itself and the
-        // model reports the failure — no optimistic "it's running" message
-        // followed by a contradicting "could not start" post.
-        try {
-            const ping = await fetch('http://127.0.0.1:8765/health');
-            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-        } catch (_) {
-            return JSON.stringify({
-                started: false,
-                error: 'The local Python runner is not running. Start it with '
-                    + '`cd synergyAI/python && python main.py` (port 8765), then run the skill again. '
-                    + 'Or re-promote the workflow choosing Interpreted execution.',
-            });
-        }
-        (async () => {
-            const label = `compiled workflow #${workflowId} (${filename}, skill run ${runNo})`;
-            const say = (text) => {
-                if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
-                    window.chatApp.addMessage('assistant', text);
-                } else {
-                    toast(text.slice(0, 140), 'info');
-                }
-            };
-            try {
-                toast(`▶ Running ${label}…`, 'info');
-                const resp = await fetch('http://127.0.0.1:8765/api/run-file', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename, args: [String(prompt)] }),
-                });
-                if (!resp.ok) {
-                    say(`⚠️ **Compiled workflow #${workflowId} failed to start** — runner returned HTTP ${resp.status}: `
-                        + (await resp.text()).slice(0, 300));
-                    return;
-                }
-                // Stream the SSE body to completion, keeping the raw text.
-                const reader = resp.body.getReader();
-                const decoder = new TextDecoder();
-                let out = '';
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    out += decoder.decode(value, { stream: true });
-                }
-                // Strip SSE framing ("event: …" / "data: …" prefixes) to plain text.
-                const text = out.split('\n')
-                    .filter(l => !/^event: /.test(l))
-                    .map(l => l.replace(/^data: /, ''))
-                    .join('\n').trim();
-                const MAX = 6000;
-                const shown = text.length > MAX ? text.slice(-MAX) : text;
-                const failed = /Traceback \(most recent call last\)|\[runner returned HTTP/.test(text);
-                say((failed
-                        ? `⚠️ **Compiled workflow #${workflowId} finished with errors** (${filename})`
-                        : `🧬 **Compiled workflow #${workflowId} completed** (${filename})`)
-                    + '\n\n```\n' + shown + '\n```');
-            } catch (e) {
-                say(`⚠️ Compiled ${label} failed: ${String((e && e.message) || e)}`);
-            }
-        })();
-        return JSON.stringify({ started: true, run: runNo });
-    }
-    window.genesisCompiledStart = genesisCompiledStart;
 
     /** Workflow-backed promotion? (class 2 rows carry source_ref 'workflow:<id>') */
     function workflowIdOf(p) {
@@ -291,32 +216,45 @@
     }
 
     /**
-     * Compiled-execution targets. Each maps to the backend generator endpoint
-     * whose Content-Disposition names the .py the local Python runner
-     * (langchain_runner, port 8765) executes from synergyAI/python/scripts/.
+     * Freeze a workflow's graph for the Pyodide-compiled snapshot. Distills
+     * GET /workflows/{id} `graph` into the minimal node/edge shape the
+     * embedded Python engine executes: agent nodes carry name, provider,
+     * model, instructions and bound-skill dir; edges are [from, to] pairs.
      */
-    const COMPILE_TARGETS = {
-        langgraph: { endpoint: 'generate-python', label: 'LangGraph — Python' },
-        adk:       { endpoint: 'generate-adk',    label: 'Google ADK — Python' },
-        maf:       { endpoint: 'generate-maf',    label: 'Microsoft Agent Framework — Python' },
-    };
-    const RUNNER_BASE = 'http://127.0.0.1:8765'; // langchain_runner/main.py
+    async function fetchWorkflowGraphSnapshot(wfId) {
+        const r = await fetch(window.apiUrl(`/workflows/${wfId}`), { headers: hdrs() });
+        if (!r.ok) throw new Error(`Could not load workflow ${wfId} (HTTP ${r.status}).`);
+        const wf = (await r.json()).data || {};
+        let g = wf.graph || {};
+        if (typeof g === 'string') { try { g = JSON.parse(g); } catch (_) { g = {}; } }
+        const nodes = (g.nodes || []).map((n) => {
+            const cfg = n.config || {};
+            return {
+                id: String(n.id),
+                type: n.node_type || n.type || 'agent',
+                name: cfg.agent_name || cfg.name || '',
+                provider: cfg.agent_provider || cfg.provider || '',
+                model: cfg.model || '',
+                instructions: cfg.instructions || cfg.systemPrompt || '',
+                skill: (cfg.bound_skill && cfg.bound_skill.dir_name) || '',
+            };
+        });
+        const edges = (g.edges || g.connections || []).map((e) => [String(e.from), String(e.to)]);
+        if (!nodes.length) throw new Error(`Workflow ${wfId} has no nodes to compile.`);
+        return { workflow_id: wfId, name: wf.name || '', nodes, edges };
+    }
 
-    /**
-     * Fetch the compiled Python for a workflow from the backend generator and
-     * return { filename, code }. The filename comes from Content-Disposition —
-     * the same name the editor's Generate action uses, so the runner's
-     * /api/run-file resolves it.
-     */
-    async function fetchCompiledCode(wfId, target) {
-        const tgt = COMPILE_TARGETS[target];
-        if (!tgt) throw new Error(`Unknown compile target "${target}"`);
-        const r = await fetch(window.apiUrl(`/workflows/${wfId}/${tgt.endpoint}?download=1`), { headers: hdrs() });
-        if (!r.ok) throw new Error(`Code generation failed (HTTP ${r.status}): ${(await r.text()).slice(0, 200)}`);
-        const dispo = r.headers.get('Content-Disposition') || '';
-        const m = /filename="([^"]+)"/.exec(dispo);
-        const filename = m ? m[1] : `workflow_${wfId}_${target}.py`;
-        return { filename, code: await r.text() };
+    /** scripts list per bound skill (read off the local FS) — the snapshot
+     * sends these as skill_metadata so /chat exposes run_skill_script. */
+    async function collectSkillScripts(graph) {
+        const out = {};
+        if (!window.skillsFs) return out;
+        for (const n of graph.nodes) {
+            if (!n.skill || out[n.skill]) continue;
+            try { out[n.skill] = await window.skillsFs.listSkillScripts(n.skill) || []; }
+            catch (_) { out[n.skill] = []; }
+        }
+        return out;
     }
 
     function skillMd(p) {
@@ -335,12 +273,12 @@
         // hands it to scripts/run.py via --prompt.
         let howToRun = '';
         if (wfId !== null && compiled) {
-            howToRun = `\n## How to run\n\nThis skill runs a COMPILED snapshot of workflow #${wfId} (${COMPILE_TARGETS[compiled.target]?.label || compiled.target}) in the local Python runner. The code was generated at promotion time — later edits to the workflow do NOT affect this skill (re-promote to refresh).\n\nRequirements: the local Python runner must be running (synergyAI/python → \`python main.py\`, port 8765).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the compiled run and returns immediately; the results are posted into the conversation automatically when it completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself.\n`;
+            howToRun = `\n## How to run\n\nThis skill runs a COMPILED Pyodide snapshot of workflow #${wfId} — the graph was frozen into \`scripts/run.py\` at promotion time and executes fully in the browser (agent turns via the backend, skills via the worker pool). Later edits to the workflow do NOT affect this skill; re-promote to refresh. No external runner is required.\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script runs the whole workflow and prints the FINAL OUTPUT to stdout when done (a multi-agent run can take several minutes; that is normal). Summarize that output for the user — do NOT invent or predict results before it returns.\n\nDo NOT attempt to perform the workflow's steps yourself.\n`;
         } else if (wfId !== null) {
             howToRun = `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the run and returns immediately; the full results are posted into the conversation automatically when the run completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`;
         }
-        const execLine = compiled ? `execution: compiled-${compiled.target}\n` : (wfId !== null ? 'execution: interpreted\n' : '');
-        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n${execLine}---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? (compiled ? `L1 compiled dispatcher (${compiled.target})` : 'L1 workflow dispatcher') : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
+        const execLine = compiled ? 'execution: compiled-pyodide\n' : (wfId !== null ? 'execution: interpreted\n' : '');
+        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n${execLine}---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? (compiled ? 'L1 compiled Pyodide snapshot' : 'L1 workflow dispatcher') : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
     }
 
     /**
@@ -404,19 +342,24 @@ if __name__ == "__main__":
     }
 
     /**
-     * scripts/run.py for COMPILED workflow skills: fire-and-notify into the
-     * local Python runner via window.genesisCompiledStart. The compiled .py
-     * (snapshot from promotion time) lives in synergyAI/python/scripts/ where
-     * langchain_runner's /api/run-file resolves it; the prompt travels as
-     * argv (all three generators accept " ".join(sys.argv[1:])).
+     * scripts/run.py for COMPILED workflow skills: a self-contained Pyodide
+     * snapshot. The workflow's graph is frozen as JSON and executed by an
+     * embedded asyncio engine that runs entirely IN THE BROWSER: agent nodes
+     * call the backend /chat (same-origin — no CORS, keys stay server-side),
+     * parallel layers via asyncio.gather, bound-skill tool calls through the
+     * worker pool (window.chatApp._runViaPool). No external runner required.
+     * The final output is returned directly as this script's stdout.
      */
-    function compiledRunPyTemplate(p, wfId, filename, target) {
+    function pyodideSnapshotRunPy(p, wfId, graph, skillScripts) {
+        const graphLit = JSON.stringify(JSON.stringify(graph));
+        const scriptsLit = JSON.stringify(JSON.stringify(skillScripts || {}));
         return `#!/usr/bin/env python3
-"""Compiled dispatcher for the '${p.skill_name}' skill.
+"""Compiled Pyodide snapshot of workflow #${wfId} ('${graph.name || p.skill_name}').
 
-Runs the ${target} snapshot of workflow #${wfId} (${filename}) in the local
-Python runner. Generated by skill genesis (L1 compiled). The snapshot is
-frozen at promotion time — re-promote the workflow to refresh it.
+Generated by skill genesis (L1 compiled/pyodide). The graph below is FROZEN
+at promotion time — later edits to the workflow do not apply; re-promote to
+refresh. Runs fully in the browser: /chat for agent turns, the Pyodide
+worker pool for skill tool calls.
 """
 
 import argparse
@@ -424,41 +367,168 @@ import asyncio
 import json
 import sys
 
+import js
 from js import window
+from pyodide.ffi import to_js
+from pyodide.http import pyfetch
 
-WORKFLOW_ID = ${wfId}
-SCRIPT_FILENAME = ${JSON.stringify(filename)}
+GRAPH = json.loads(${graphLit})
+SKILL_SCRIPTS = json.loads(${scriptsLit})
+MAX_ROUNDS = 8
+TRIM = 4000
 
 
-async def _run(prompt: str) -> int:
-    starter = getattr(window, "genesisCompiledStart", None)
-    if starter is None:
-        print("COMPILED RUN FAILED: genesis runtime not loaded (refresh the app)", file=sys.stderr)
-        return 1
-    # genesisCompiledStart probes the runner BEFORE claiming the run started,
-    # so it returns a Promise — await it. A dead runner comes back as
-    # started:false with fix instructions: relay those, never claim "running".
-    res = starter(SCRIPT_FILENAME, prompt, WORKFLOW_ID)
-    if hasattr(res, "then"):
-        res = await res
-    info = json.loads(str(res))
-    if not info.get("started"):
-        print(f"COMPILED RUN FAILED: {info.get('error') or json.dumps(info)[:300]}", file=sys.stderr)
-        print("Relay this failure and the fix instructions to the user. "
-              "Do NOT claim the workflow is running.")
-        return 1
-    print(f"Compiled workflow #{WORKFLOW_ID} ({SCRIPT_FILENAME}) is now RUNNING in the local "
-          f"Python runner; the results will be posted into this conversation automatically when "
-          f"it completes. Tell the user this ONCE, briefly — do NOT invent or predict results.")
-    return 0
+def _api(path):
+    base = "/gpt/backend/api/v1"
+    try:
+        cfg = getattr(window, "APP_CONFIG", None)
+        if cfg is not None and getattr(cfg, "API_BASE_URL", None):
+            base = str(cfg.API_BASE_URL)
+    except Exception:
+        pass
+    return base.rstrip("/") + path
+
+
+async def _post_chat(body):
+    resp = await pyfetch(
+        _api("/chat"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + str(window.authManager.token),
+        },
+        body=json.dumps(body),
+    )
+    return json.loads(await resp.string())
+
+
+async def _run_skill(inp, node):
+    """Nested run_skill_script → the worker pool (parallel-safe, off the
+    main runtime this snapshot occupies)."""
+    chat_app = getattr(window, "chatApp", None)
+    if chat_app is None or not hasattr(chat_app, "_runViaPool"):
+        return {"success": False,
+                "error": "skill bridge unavailable (snapshot must run on the main thread)"}
+    dir_name = (inp.get("dir_name") or node.get("skill") or "").strip()
+    req = {
+        "dirName": dir_name,
+        "script": inp.get("script"),
+        "argv": inp.get("argv") or [],
+        "inputFiles": inp.get("input_files") or None,
+        "readOutputs": inp.get("read_outputs") or None,
+    }
+    try:
+        res = await chat_app._runViaPool(to_js(req, dict_converter=js.Object.fromEntries))
+        py = res.to_py() if hasattr(res, "to_py") else res
+        outs = {}
+        for k, v in (py.get("outputs") or {}).items():
+            outs[k] = v[:TRIM] if isinstance(v, str) else "[binary output]"
+        return {
+            "success": (py.get("exitCode") or 0) == 0,
+            "output": {
+                "exit_code": py.get("exitCode") or 0,
+                "stdout": (py.get("stdout") or "")[:TRIM],
+                "log_messages": (py.get("stderr") or "")[:TRIM],
+                "outputs": outs,
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)[:500]}
+
+
+async def _run_agent(node, context):
+    """One agent node = one /chat conversation, looping tool rounds until
+    the model returns final text (mirrors the browser engine's chat-unit)."""
+    body_base = {
+        "provider": node.get("provider") or "openai",
+        "streaming": False,
+        "verification_enabled": False,
+        "compare_enabled": False,
+    }
+    if node.get("model"):
+        body_base["model"] = node["model"]
+    if node.get("skill"):
+        body_base["skill_metadata"] = {
+            "dir_name": node["skill"],
+            "scripts": SKILL_SCRIPTS.get(node["skill"]) or ["scripts/run.py"],
+        }
+    instructions = (node.get("instructions") or "").strip()
+    message = (instructions + "\\n\\n--- INPUT ---\\n" + context) if instructions else context
+    history = []
+    for _ in range(MAX_ROUNDS):
+        body = dict(body_base)
+        body["message"] = message
+        body["conversation_history"] = history
+        r = await _post_chat(body)
+        if r.get("success") is False:
+            return "Error: " + str(r.get("error") or "chat call failed")[:400]
+        if r.get("pending_client_tool_call"):
+            calls = r.get("pending_tool_calls") or []
+            if message:
+                history.append({"role": "user", "content": message})
+            history.append({
+                "role": "assistant",
+                "content": r.get("text") or "",
+                "tool_calls": [
+                    {"id": c.get("id"), "name": c.get("name"), "input": c.get("input") or {}}
+                    for c in calls
+                ],
+            })
+            for c in calls:
+                result = await _run_skill(c.get("input") or {}, node)
+                history.append({
+                    "role": "tool",
+                    "tool_call_id": c.get("id"),
+                    "name": c.get("name") or "run_skill_script",
+                    "content": json.dumps(result),
+                })
+            message = ""
+            continue
+        return r.get("text") or ""
+    return "(node exceeded the tool-round limit)"
+
+
+async def _run_graph(prompt):
+    nodes = {n["id"]: n for n in GRAPH["nodes"]}
+    incoming = {nid: [e[0] for e in GRAPH["edges"] if e[1] == nid] for nid in nodes}
+    outputs = {}
+    done = set()
+    for n in GRAPH["nodes"]:
+        if n["type"] == "start":
+            outputs[n["id"]] = prompt
+            done.add(n["id"])
+    remaining = set(nodes) - done
+    while remaining:
+        ready = [nid for nid in remaining if all(u in done for u in incoming[nid])]
+        if not ready:
+            break  # cycle or orphan
+        async def _run_one(nid):
+            n = nodes[nid]
+            parts = []
+            for u in incoming[nid]:
+                o = outputs.get(u, "")
+                if not o:
+                    continue
+                parts.append(o if nodes[u]["type"] == "start"
+                             else "## " + (nodes[u].get("name") or u) + "\\n" + o)
+            ctx = "\\n\\n".join(parts) or prompt
+            outputs[nid] = ctx if n["type"] == "output" else await _run_agent(n, ctx)
+        await asyncio.gather(*[_run_one(nid) for nid in ready])
+        for nid in ready:
+            done.add(nid)
+            remaining.discard(nid)
+    out_id = next((n["id"] for n in GRAPH["nodes"] if n["type"] == "output"), None)
+    return outputs.get(out_id) or json.dumps(
+        {nodes[k].get("name") or k: v for k, v in outputs.items()}, ensure_ascii=False)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Run the compiled workflow snapshot with a composed prompt.")
+    ap = argparse.ArgumentParser(description="Run the compiled workflow snapshot.")
     ap.add_argument("--prompt", required=True,
                     help="Full plain-language instruction for the workflow run")
     args = ap.parse_args()
-    sys.exit(asyncio.run(_run(args.prompt)))
+    final = asyncio.run(_run_graph(args.prompt))
+    print(final[:6000] if isinstance(final, str) else str(final)[:6000])
 
 
 if __name__ == "__main__":
@@ -484,25 +554,15 @@ if __name__ == "__main__":
         const wfId = workflowIdOf(p);
         const compiled = p.execution && p.execution.mode === 'compiled' && wfId !== null ? p.execution : null;
 
-        // Compiled: generate the snapshot FIRST — if generation fails, no
-        // half-built skill folder is left behind.
-        let artifact = null;
+        // Compiled: freeze the graph FIRST — if snapshot generation fails,
+        // no half-built skill folder is left behind. The snapshot IS run.py:
+        // a self-contained Pyodide program (graph JSON + asyncio engine)
+        // that runs in the browser — no external runner involved.
+        let snapshotPy = null;
         if (compiled) {
-            // Runner-installed sentinel (same probe as the editor's Generate).
-            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-            if (!runnerEntry) {
-                throw new Error('Local Python runner not installed (synergyAI/python). Install it or choose Interpreted.');
-            }
-            artifact = await fetchCompiledCode(wfId, compiled.target);
-            // Write where the runner's /api/run-file resolves scripts.
-            const pyScripts = await window.localFs.resolvePath('python/scripts', { create: true });
-            if (!pyScripts) throw new Error('Could not resolve synergyAI/python/scripts.');
-            const pfh = await pyScripts.getFileHandle(artifact.filename, { create: true });
-            const pw = await pfh.createWritable();
-            await pw.write(artifact.code);
-            await pw.close();
-            // Provider keys → python/.env so the compiled script can auth.
-            try { await window.workflowEditor?._syncRunnerEnv?.(); } catch (_) {}
+            const graph = await fetchWorkflowGraphSnapshot(wfId);
+            const skillScripts = await collectSkillScripts(graph);
+            snapshotPy = pyodideSnapshotRunPy(p, wfId, graph, skillScripts);
         }
 
         const dir = await window.localFs.resolvePath(`skills/${p.skill_name}`, { create: true });
@@ -515,18 +575,8 @@ if __name__ == "__main__":
             const scriptsDir = await dir.getDirectoryHandle('scripts', { create: true });
             const sfh = await scriptsDir.getFileHandle('run.py', { create: true });
             const sw = await sfh.createWritable();
-            await sw.write(compiled
-                ? compiledRunPyTemplate(p, wfId, artifact.filename, compiled.target)
-                : runPyTemplate(p, wfId));
+            await sw.write(compiled ? snapshotPy : runPyTemplate(p, wfId));
             await sw.close();
-            if (compiled) {
-                // Provenance copy of the frozen snapshot inside the skill —
-                // lets the user re-install into python/scripts/ if wiped.
-                const cfh = await scriptsDir.getFileHandle(artifact.filename, { create: true });
-                const cw = await cfh.createWritable();
-                await cw.write(artifact.code);
-                await cw.close();
-            }
         }
         return p.skill_name;
     }
@@ -630,12 +680,9 @@ if __name__ == "__main__":
                 </label>
                 <label class="gen-exec-opt">
                     <input type="radio" name="gen-exec-mode" value="compiled">
-                    <span><b>${t('genesis.execCompiled', 'Compiled')}</b> — ${t('genesis.execCompiledDesc', 'generates Python code now and runs it in the local Python runner; frozen snapshot, later edits do not apply')}</span>
+                    <span><b>${t('genesis.execCompiled', 'Compiled')}</b> — ${t('genesis.execCompiledDesc', 'freezes the workflow into a Pyodide Python snapshot that runs in the browser; later edits to the workflow do not apply')}</span>
                 </label>
-                <select class="gen-exec-target" disabled>
-                    ${Object.entries(COMPILE_TARGETS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}
-                </select>
-                <p class="gen-exec-hint">${t('genesis.execCompiledHint', 'Compiled runs need the local Python runner (synergyAI/python, port 8765). Agent nodes bound to browser skills cannot execute those skills in the runner.')}</p>
+                <p class="gen-exec-hint">${t('genesis.execCompiledHint', 'The snapshot runs fully in the browser (agents via the backend, skills via the worker pool) — no external runner needed. Re-promote the workflow to refresh the snapshot.')}</p>
             </div>` : ''}
             <div class="gen-ov-actions">
                 <button class="gen-btn-dismiss">${t('genesis.dismiss', 'Dismiss')}</button>
@@ -645,19 +692,10 @@ if __name__ == "__main__":
         back.querySelector('.gen-btn-dismiss').addEventListener('click', async () => {
             await dismiss(p.id); back.remove();
         });
-        // Compiled-target select follows the radio choice.
-        const targetSel = back.querySelector('.gen-exec-target');
-        back.querySelectorAll('input[name="gen-exec-mode"]').forEach(rb => {
-            rb.addEventListener('change', () => {
-                if (targetSel) targetSel.disabled = back.querySelector('input[name="gen-exec-mode"]:checked')?.value !== 'compiled';
-            });
-        });
         back.querySelector('.gen-btn-approve').addEventListener('click', async (e) => {
             e.target.disabled = true;
             const mode = back.querySelector('input[name="gen-exec-mode"]:checked')?.value || 'interpreted';
-            p.execution = mode === 'compiled'
-                ? { mode: 'compiled', target: targetSel?.value || 'langgraph' }
-                : { mode: 'interpreted' };
+            p.execution = { mode: mode === 'compiled' ? 'compiled' : 'interpreted' };
             const ok = await buildOne(p);
             if (ok) back.remove(); else e.target.disabled = false;
         });

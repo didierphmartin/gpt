@@ -67,8 +67,8 @@
     "execInterpreted": "Interpretado",
     "execInterpretedDesc": "ejecuta el workflow en vivo mediante el motor de workflows; las ediciones posteriores se aplican automáticamente",
     "execCompiled": "Compilado",
-    "execCompiledDesc": "genera el código Python ahora y lo ejecuta en el runner Python local; instantánea congelada, las ediciones posteriores no se aplican",
-    "execCompiledHint": "Las ejecuciones compiladas requieren el runner Python local (synergyAI/python, puerto 8765). Los nodos agente vinculados a habilidades del navegador no pueden ejecutar esas habilidades en el runner."
+    "execCompiledDesc": "congela el workflow en una instantánea Python Pyodide que se ejecuta en el navegador; las ediciones posteriores del workflow no se aplican",
+    "execCompiledHint": "La instantánea se ejecuta completamente en el navegador (agentes vía backend, habilidades vía el pool de workers) — no se requiere runner externo. Re-promocione el workflow para refrescar la instantánea."
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {
