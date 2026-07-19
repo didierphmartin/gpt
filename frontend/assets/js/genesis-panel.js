@@ -217,8 +217,23 @@
      * post the result into the conversation. Mirrors genesisWorkflowStart's
      * contract: returns a JSON string {started, run} synchronously.
      */
-    function genesisCompiledStart(filename, prompt, workflowId) {
+    async function genesisCompiledStart(filename, prompt, workflowId) {
         const runNo = ++_genRunSeq;
+        // Probe the runner BEFORE claiming the run started. run.py awaits this
+        // function, so a dead runner becomes the tool result itself and the
+        // model reports the failure — no optimistic "it's running" message
+        // followed by a contradicting "could not start" post.
+        try {
+            const ping = await fetch('http://127.0.0.1:8765/health');
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (_) {
+            return JSON.stringify({
+                started: false,
+                error: 'The local Python runner is not running. Start it with '
+                    + '`cd synergyAI/python && python main.py` (port 8765), then run the skill again. '
+                    + 'Or re-promote the workflow choosing Interpreted execution.',
+            });
+        }
         (async () => {
             const label = `compiled workflow #${workflowId} (${filename}, skill run ${runNo})`;
             const say = (text) => {
@@ -229,16 +244,6 @@
                 }
             };
             try {
-                // Liveness probe: fail with a setup hint, not a silent hang.
-                try {
-                    const ping = await fetch('http://127.0.0.1:8765/health');
-                    if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-                } catch (_) {
-                    say(`⚠️ **Compiled workflow #${workflowId} could not start** — the local Python runner is not running. `
-                        + 'Start it with `cd synergyAI/python && python main.py` (port 8765), then run the skill again. '
-                        + 'Or re-promote the workflow choosing Interpreted execution.');
-                    return;
-                }
                 toast(`▶ Running ${label}…`, 'info');
                 const resp = await fetch('http://127.0.0.1:8765/api/run-file', {
                     method: 'POST',
@@ -430,14 +435,21 @@ async def _run(prompt: str) -> int:
     if starter is None:
         print("COMPILED RUN FAILED: genesis runtime not loaded (refresh the app)", file=sys.stderr)
         return 1
-    info = json.loads(str(starter(SCRIPT_FILENAME, prompt, WORKFLOW_ID)))
+    # genesisCompiledStart probes the runner BEFORE claiming the run started,
+    # so it returns a Promise — await it. A dead runner comes back as
+    # started:false with fix instructions: relay those, never claim "running".
+    res = starter(SCRIPT_FILENAME, prompt, WORKFLOW_ID)
+    if hasattr(res, "then"):
+        res = await res
+    info = json.loads(str(res))
     if not info.get("started"):
-        print(f"COMPILED RUN FAILED: {json.dumps(info)[:300]}", file=sys.stderr)
+        print(f"COMPILED RUN FAILED: {info.get('error') or json.dumps(info)[:300]}", file=sys.stderr)
+        print("Relay this failure and the fix instructions to the user. "
+              "Do NOT claim the workflow is running.")
         return 1
-    print(f"Compiled workflow #{WORKFLOW_ID} ({SCRIPT_FILENAME}) STARTED in the local Python runner.")
-    print("The results will be posted into this conversation automatically when the run completes.")
-    print("Tell the user the workflow is running and that results will follow — "
-          "do NOT invent or predict the results.")
+    print(f"Compiled workflow #{WORKFLOW_ID} ({SCRIPT_FILENAME}) is now RUNNING in the local "
+          f"Python runner; the results will be posted into this conversation automatically when "
+          f"it completes. Tell the user this ONCE, briefly — do NOT invent or predict results.")
     return 0
 
 
