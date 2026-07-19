@@ -2335,18 +2335,22 @@ class ChatApp {
                         this.appendChunk(assistantMsgId,
                             `\n\n_Tool execution failed: ${e.message || e}_`);
                     }
-                    // Defensive finalize: re-render the bubble with the
-                    // accumulated content and `isStreaming=false` so the
-                    // typing-indicator dots are removed. The continuation
-                    // SSE may or may not emit a 'response' event with
-                    // non-empty text (depends on whether the model wrote
-                    // a summary or chose to dispatch another tool), so we
-                    // can't rely on handleSSEEvent's 'response' case to
-                    // clear the indicator. Calling updateMessage with a
-                    // string content path replaces innerHTML wholesale,
-                    // wiping any leftover typing indicator span.
-                    if (this.fullContent) {
-                        this.updateMessage(assistantMsgId, this.fullContent, false);
+                    // Defensive finalize: re-render the bubble and clear the
+                    // typing indicator. Prefer the continuation's `response`
+                    // event text — the AUTHORITATIVE single copy — over the
+                    // chunk accumulator, which has been observed carrying the
+                    // answer twice on tool-continuation turns. Fall back to
+                    // fullContent when the stream ended without a response
+                    // event (e.g. the model dispatched another tool).
+                    {
+                        const _r = this._nonStreamFinalResponse;
+                        const _authText = (_r && typeof _r.text === 'string' && _r.text.trim())
+                            ? _r.text
+                            : this.fullContent;
+                        if (_authText) {
+                            this.fullContent = _authText;
+                            this.updateMessage(assistantMsgId, _authText, false);
+                        }
                     }
                 } else {
                     // Plain text answer — render it into the assistant
@@ -2864,21 +2868,33 @@ class ChatApp {
                 }
             }
 
+            // Final content: the backend's `response` event text is the
+            // AUTHORITATIVE single copy of the turn's answer. Prefer it over
+            // the chunk accumulator — on tool-continuation turns the
+            // accumulator has been observed carrying the answer twice
+            // (rendered as the message duplicated back-to-back with no
+            // separator). fullContent stays as the fallback for streams that
+            // ended without a response event.
+            const _finalText = (finalResponse && typeof finalResponse.text === 'string'
+                && finalResponse.text.trim())
+                ? finalResponse.text
+                : this.fullContent;
+
             // Re-render the final message with full markdown support (for tables, etc.)
-            if (this.fullContent) {
-                this.updateMessage(assistantMsgId, this.fullContent, false);
+            if (_finalText) {
+                this.updateMessage(assistantMsgId, _finalText, false);
             }
 
-            // Add to conversation history using streamed content
-            if (this.fullContent) {
+            // Add to conversation history using the authoritative final text
+            if (_finalText) {
                 this.conversationHistory.push(userMessage);
                 this.conversationHistory.push({
                     role: 'assistant',
-                    content: this.fullContent,
+                    content: _finalText,
                     provider: this.currentProvider
                 });
             } else {
-                console.warn('⚠️ fullContent is empty, not adding to history');
+                console.warn('⚠️ final text is empty, not adding to history');
             }
 
             // Apply final response metadata from backend
