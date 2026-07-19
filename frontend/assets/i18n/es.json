@@ -62,7 +62,13 @@
       "over_budget": "Presupuesto diario de promoción alcanzado — auméntelo en Ajustes → Auto o inténtelo mañana",
       "weekly_throttle": "Límite semanal de habilidades nuevas alcanzado — auméntelo en Ajustes → Auto",
       "over_ceiling": "El costo estimado supera el límite por habilidad en Ajustes → Auto"
-    }
+    },
+    "execTitle": "Ejecución",
+    "execInterpreted": "Interpretado",
+    "execInterpretedDesc": "ejecuta el workflow en vivo mediante el motor de workflows; las ediciones posteriores se aplican automáticamente",
+    "execCompiled": "Compilado",
+    "execCompiledDesc": "genera el código Python ahora y lo ejecuta en el runner Python local; instantánea congelada, las ediciones posteriores no se aplican",
+    "execCompiledHint": "Las ejecuciones compiladas requieren el runner Python local (synergyAI/python, puerto 8765). Los nodos agente vinculados a habilidades del navegador no pueden ejecutar esas habilidades en el runner."
   },
   "title": "Asistente IA - Multi-Proveedor",
   "header": {

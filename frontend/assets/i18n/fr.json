@@ -62,7 +62,13 @@
       "over_budget": "Budget quotidien de promotion atteint — augmentez-le dans Réglages → Auto ou réessayez demain",
       "weekly_throttle": "Limite hebdomadaire de nouvelles compétences atteinte — augmentez-la dans Réglages → Auto",
       "over_ceiling": "Le coût estimé dépasse le plafond par compétence dans Réglages → Auto"
-    }
+    },
+    "execTitle": "Exécution",
+    "execInterpreted": "Interprété",
+    "execInterpretedDesc": "exécute le workflow en direct via le moteur de workflows ; les modifications ultérieures s'appliquent automatiquement",
+    "execCompiled": "Compilé",
+    "execCompiledDesc": "génère le code Python maintenant et l'exécute dans le runner Python local ; instantané figé, les modifications ultérieures ne s'appliquent pas",
+    "execCompiledHint": "Les exécutions compilées nécessitent le runner Python local (synergyAI/python, port 8765). Les nœuds agents liés à des compétences navigateur ne peuvent pas exécuter ces compétences dans le runner."
   },
   "title": "Assistant IA - Multi-Fournisseurs",
   "header": {

@@ -56,6 +56,13 @@
         .gen-btn-dismiss{background:#fff;border:1px solid #cbd5e1!important;color:#475569}
         .gen-btn-approve{background:#4f46e5;color:#fff}
         .gen-btn-approve[disabled]{opacity:.6;cursor:default}
+        .gen-ov-exec{margin:12px 0;padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb}
+        .gen-ov-exec-title{font-weight:600;font-size:13px;margin-bottom:6px;color:#374151}
+        .gen-exec-opt{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#374151;margin:4px 0;cursor:pointer}
+        .gen-exec-opt input{margin-top:2px}
+        .gen-exec-target{margin:6px 0 0 24px;font-size:12.5px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff}
+        .gen-exec-target[disabled]{opacity:.5}
+        .gen-exec-hint{margin:6px 0 0;font-size:11px;color:#6b7280}
         #genesis-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);z-index:320;background:#1e293b;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:all .2s;pointer-events:none;max-width:80vw}
         #genesis-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
         #genesis-toast.genesis-toast-error{background:#b91c1c}
@@ -203,10 +210,108 @@
     }
     window.genesisWorkflowStart = genesisWorkflowStart;
 
+    /**
+     * Fire-and-notify runner for COMPILED workflow skills: POST the frozen
+     * snapshot (already in synergyAI/python/scripts/) to the local Python
+     * runner's /api/run-file with the prompt as argv, stream its output, and
+     * post the result into the conversation. Mirrors genesisWorkflowStart's
+     * contract: returns a JSON string {started, run} synchronously.
+     */
+    function genesisCompiledStart(filename, prompt, workflowId) {
+        const runNo = ++_genRunSeq;
+        (async () => {
+            const label = `compiled workflow #${workflowId} (${filename}, skill run ${runNo})`;
+            const say = (text) => {
+                if (window.chatApp && typeof window.chatApp.addMessage === 'function') {
+                    window.chatApp.addMessage('assistant', text);
+                } else {
+                    toast(text.slice(0, 140), 'info');
+                }
+            };
+            try {
+                // Liveness probe: fail with a setup hint, not a silent hang.
+                try {
+                    const ping = await fetch('http://127.0.0.1:8765/health');
+                    if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+                } catch (_) {
+                    say(`⚠️ **Compiled workflow #${workflowId} could not start** — the local Python runner is not running. `
+                        + 'Start it with `cd synergyAI/python && python main.py` (port 8765), then run the skill again. '
+                        + 'Or re-promote the workflow choosing Interpreted execution.');
+                    return;
+                }
+                toast(`▶ Running ${label}…`, 'info');
+                const resp = await fetch('http://127.0.0.1:8765/api/run-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, args: [String(prompt)] }),
+                });
+                if (!resp.ok) {
+                    say(`⚠️ **Compiled workflow #${workflowId} failed to start** — runner returned HTTP ${resp.status}: `
+                        + (await resp.text()).slice(0, 300));
+                    return;
+                }
+                // Stream the SSE body to completion, keeping the raw text.
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let out = '';
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    out += decoder.decode(value, { stream: true });
+                }
+                // Strip SSE framing ("event: …" / "data: …" prefixes) to plain text.
+                const text = out.split('\n')
+                    .filter(l => !/^event: /.test(l))
+                    .map(l => l.replace(/^data: /, ''))
+                    .join('\n').trim();
+                const MAX = 6000;
+                const shown = text.length > MAX ? text.slice(-MAX) : text;
+                const failed = /Traceback \(most recent call last\)|\[runner returned HTTP/.test(text);
+                say((failed
+                        ? `⚠️ **Compiled workflow #${workflowId} finished with errors** (${filename})`
+                        : `🧬 **Compiled workflow #${workflowId} completed** (${filename})`)
+                    + '\n\n```\n' + shown + '\n```');
+            } catch (e) {
+                say(`⚠️ Compiled ${label} failed: ${String((e && e.message) || e)}`);
+            }
+        })();
+        return JSON.stringify({ started: true, run: runNo });
+    }
+    window.genesisCompiledStart = genesisCompiledStart;
+
     /** Workflow-backed promotion? (class 2 rows carry source_ref 'workflow:<id>') */
     function workflowIdOf(p) {
         const m = /^workflow:(\d+)$/.exec(p.source_ref || '');
         return m ? Number(m[1]) : null;
+    }
+
+    /**
+     * Compiled-execution targets. Each maps to the backend generator endpoint
+     * whose Content-Disposition names the .py the local Python runner
+     * (langchain_runner, port 8765) executes from synergyAI/python/scripts/.
+     */
+    const COMPILE_TARGETS = {
+        langgraph: { endpoint: 'generate-python', label: 'LangGraph — Python' },
+        adk:       { endpoint: 'generate-adk',    label: 'Google ADK — Python' },
+        maf:       { endpoint: 'generate-maf',    label: 'Microsoft Agent Framework — Python' },
+    };
+    const RUNNER_BASE = 'http://127.0.0.1:8765'; // langchain_runner/main.py
+
+    /**
+     * Fetch the compiled Python for a workflow from the backend generator and
+     * return { filename, code }. The filename comes from Content-Disposition —
+     * the same name the editor's Generate action uses, so the runner's
+     * /api/run-file resolves it.
+     */
+    async function fetchCompiledCode(wfId, target) {
+        const tgt = COMPILE_TARGETS[target];
+        if (!tgt) throw new Error(`Unknown compile target "${target}"`);
+        const r = await fetch(window.apiUrl(`/workflows/${wfId}/${tgt.endpoint}?download=1`), { headers: hdrs() });
+        if (!r.ok) throw new Error(`Code generation failed (HTTP ${r.status}): ${(await r.text()).slice(0, 200)}`);
+        const dispo = r.headers.get('Content-Disposition') || '';
+        const m = /filename="([^"]+)"/.exec(dispo);
+        const filename = m ? m[1] : `workflow_${wfId}_${target}.py`;
+        return { filename, code: await r.text() };
     }
 
     function skillMd(p) {
@@ -216,16 +321,21 @@
               ).join('\n') + '\n'
             : '';
         const wfId = workflowIdOf(p);
-        // L1 dispatcher contract: workflow-backed skills execute by reference.
-        // The model composes ONE plain-language instruction (filling the
-        // documented parameters from the user's request) and hands it to
-        // scripts/run.py, which submits the referenced workflow and relays
-        // its output. Everything flows through the prompt — the workflow's
-        // start node consumes it as its input.
-        const howToRun = wfId !== null
-            ? `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the run and returns immediately; the full results are posted into the conversation automatically when the run completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`
-            : '';
-        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? 'L1 workflow dispatcher' : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
+        const compiled = p.execution && p.execution.mode === 'compiled' ? p.execution : null;
+        // L1 dispatcher contract. Interpreted: the skill executes the workflow
+        // by reference through the browser engine (edits flow through).
+        // Compiled: the skill runs a Python snapshot generated at promotion
+        // time in the local Python runner (frozen; edits do NOT flow through).
+        // Either way the model composes ONE plain-language instruction and
+        // hands it to scripts/run.py via --prompt.
+        let howToRun = '';
+        if (wfId !== null && compiled) {
+            howToRun = `\n## How to run\n\nThis skill runs a COMPILED snapshot of workflow #${wfId} (${COMPILE_TARGETS[compiled.target]?.label || compiled.target}) in the local Python runner. The code was generated at promotion time — later edits to the workflow do NOT affect this skill (re-promote to refresh).\n\nRequirements: the local Python runner must be running (synergyAI/python → \`python main.py\`, port 8765).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the compiled run and returns immediately; the results are posted into the conversation automatically when it completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself.\n`;
+        } else if (wfId !== null) {
+            howToRun = `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the run and returns immediately; the full results are posted into the conversation automatically when the run completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`;
+        }
+        const execLine = compiled ? `execution: compiled-${compiled.target}\n` : (wfId !== null ? 'execution: interpreted\n' : '');
+        return `---\nname: ${p.skill_name}\ndescription: ${String(p.description).replace(/\n/g, ' ')}\nfetches_urls: false\n${execLine}---\n\n# ${p.skill_name}\n\n${p.description}\n${params}${howToRun}\n## Provenance\n\nCreated by skill genesis (${wfId !== null ? (compiled ? `L1 compiled dispatcher (${compiled.target})` : 'L1 workflow dispatcher') : 'L0'}) from ${p.source_ref || 'user material'} on ${new Date().toISOString().slice(0, 10)}.\n\n## Eval queries\n\n\`\`\`json\n${JSON.stringify(p.eval_queries || [], null, 2)}\n\`\`\`\n`;
     }
 
     /**
@@ -288,6 +398,62 @@ if __name__ == "__main__":
 `;
     }
 
+    /**
+     * scripts/run.py for COMPILED workflow skills: fire-and-notify into the
+     * local Python runner via window.genesisCompiledStart. The compiled .py
+     * (snapshot from promotion time) lives in synergyAI/python/scripts/ where
+     * langchain_runner's /api/run-file resolves it; the prompt travels as
+     * argv (all three generators accept " ".join(sys.argv[1:])).
+     */
+    function compiledRunPyTemplate(p, wfId, filename, target) {
+        return `#!/usr/bin/env python3
+"""Compiled dispatcher for the '${p.skill_name}' skill.
+
+Runs the ${target} snapshot of workflow #${wfId} (${filename}) in the local
+Python runner. Generated by skill genesis (L1 compiled). The snapshot is
+frozen at promotion time — re-promote the workflow to refresh it.
+"""
+
+import argparse
+import asyncio
+import json
+import sys
+
+from js import window
+
+WORKFLOW_ID = ${wfId}
+SCRIPT_FILENAME = ${JSON.stringify(filename)}
+
+
+async def _run(prompt: str) -> int:
+    starter = getattr(window, "genesisCompiledStart", None)
+    if starter is None:
+        print("COMPILED RUN FAILED: genesis runtime not loaded (refresh the app)", file=sys.stderr)
+        return 1
+    info = json.loads(str(starter(SCRIPT_FILENAME, prompt, WORKFLOW_ID)))
+    if not info.get("started"):
+        print(f"COMPILED RUN FAILED: {json.dumps(info)[:300]}", file=sys.stderr)
+        return 1
+    print(f"Compiled workflow #{WORKFLOW_ID} ({SCRIPT_FILENAME}) STARTED in the local Python runner.")
+    print("The results will be posted into this conversation automatically when the run completes.")
+    print("Tell the user the workflow is running and that results will follow — "
+          "do NOT invent or predict the results.")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Run the compiled workflow snapshot with a composed prompt.")
+    ap.add_argument("--prompt", required=True,
+                    help="Full plain-language instruction for the workflow run")
+    args = ap.parse_args()
+    sys.exit(asyncio.run(_run(args.prompt)))
+
+
+if __name__ == "__main__":
+    main()
+`;
+    }
+
     /** Local-FS connection check — getStatus() returns { state, handle, name },
      * NOT a `.connected` flag; 'granted' is the only usable state. */
     async function requireLocalFs() {
@@ -303,19 +469,52 @@ if __name__ == "__main__":
     /** Write skills/<name>/SKILL.md (+ scripts/run.py for workflow-backed skills). */
     async function writeSkillFolder(p) {
         await requireLocalFs();
+        const wfId = workflowIdOf(p);
+        const compiled = p.execution && p.execution.mode === 'compiled' && wfId !== null ? p.execution : null;
+
+        // Compiled: generate the snapshot FIRST — if generation fails, no
+        // half-built skill folder is left behind.
+        let artifact = null;
+        if (compiled) {
+            // Runner-installed sentinel (same probe as the editor's Generate).
+            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
+            if (!runnerEntry) {
+                throw new Error('Local Python runner not installed (synergyAI/python). Install it or choose Interpreted.');
+            }
+            artifact = await fetchCompiledCode(wfId, compiled.target);
+            // Write where the runner's /api/run-file resolves scripts.
+            const pyScripts = await window.localFs.resolvePath('python/scripts', { create: true });
+            if (!pyScripts) throw new Error('Could not resolve synergyAI/python/scripts.');
+            const pfh = await pyScripts.getFileHandle(artifact.filename, { create: true });
+            const pw = await pfh.createWritable();
+            await pw.write(artifact.code);
+            await pw.close();
+            // Provider keys → python/.env so the compiled script can auth.
+            try { await window.workflowEditor?._syncRunnerEnv?.(); } catch (_) {}
+        }
+
         const dir = await window.localFs.resolvePath(`skills/${p.skill_name}`, { create: true });
         if (!dir) throw new Error(`Could not create skills/${p.skill_name}.`);
         const fh = await dir.getFileHandle('SKILL.md', { create: true });
         const w = await fh.createWritable();
         await w.write(skillMd(p));
         await w.close();
-        const wfId = workflowIdOf(p);
         if (wfId !== null) {
             const scriptsDir = await dir.getDirectoryHandle('scripts', { create: true });
             const sfh = await scriptsDir.getFileHandle('run.py', { create: true });
             const sw = await sfh.createWritable();
-            await sw.write(runPyTemplate(p, wfId));
+            await sw.write(compiled
+                ? compiledRunPyTemplate(p, wfId, artifact.filename, compiled.target)
+                : runPyTemplate(p, wfId));
             await sw.close();
+            if (compiled) {
+                // Provenance copy of the frozen snapshot inside the skill —
+                // lets the user re-install into python/scripts/ if wiped.
+                const cfh = await scriptsDir.getFileHandle(artifact.filename, { create: true });
+                const cw = await cfh.createWritable();
+                await cw.write(artifact.code);
+                await cw.close();
+            }
         }
         return p.skill_name;
     }
@@ -410,6 +609,22 @@ if __name__ == "__main__":
             </div>
             ${p.merge_target ? `<div class="gen-ov-merge">${t('genesis.mergeHint', 'Overlaps existing skill:')} <b>${esc(p.merge_target)}</b></div>` : ''}
             ${paramRows ? `<table><thead><tr><th>Parameter</th><th>Type</th><th>Examples</th></tr></thead><tbody>${paramRows}</tbody></table>` : ''}
+            ${(workflowIdOf(p) !== null && !p.is_merge) ? `
+            <div class="gen-ov-exec">
+                <div class="gen-ov-exec-title">${t('genesis.execTitle', 'Execution')}</div>
+                <label class="gen-exec-opt">
+                    <input type="radio" name="gen-exec-mode" value="interpreted" checked>
+                    <span><b>${t('genesis.execInterpreted', 'Interpreted')}</b> — ${t('genesis.execInterpretedDesc', 'runs the live workflow through the workflow engine; later edits to the workflow apply automatically')}</span>
+                </label>
+                <label class="gen-exec-opt">
+                    <input type="radio" name="gen-exec-mode" value="compiled">
+                    <span><b>${t('genesis.execCompiled', 'Compiled')}</b> — ${t('genesis.execCompiledDesc', 'generates Python code now and runs it in the local Python runner; frozen snapshot, later edits do not apply')}</span>
+                </label>
+                <select class="gen-exec-target" disabled>
+                    ${Object.entries(COMPILE_TARGETS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}
+                </select>
+                <p class="gen-exec-hint">${t('genesis.execCompiledHint', 'Compiled runs need the local Python runner (synergyAI/python, port 8765). Agent nodes bound to browser skills cannot execute those skills in the runner.')}</p>
+            </div>` : ''}
             <div class="gen-ov-actions">
                 <button class="gen-btn-dismiss">${t('genesis.dismiss', 'Dismiss')}</button>
                 <button class="gen-btn-approve">${approveLabel}</button>
@@ -418,8 +633,19 @@ if __name__ == "__main__":
         back.querySelector('.gen-btn-dismiss').addEventListener('click', async () => {
             await dismiss(p.id); back.remove();
         });
+        // Compiled-target select follows the radio choice.
+        const targetSel = back.querySelector('.gen-exec-target');
+        back.querySelectorAll('input[name="gen-exec-mode"]').forEach(rb => {
+            rb.addEventListener('change', () => {
+                if (targetSel) targetSel.disabled = back.querySelector('input[name="gen-exec-mode"]:checked')?.value !== 'compiled';
+            });
+        });
         back.querySelector('.gen-btn-approve').addEventListener('click', async (e) => {
             e.target.disabled = true;
+            const mode = back.querySelector('input[name="gen-exec-mode"]:checked')?.value || 'interpreted';
+            p.execution = mode === 'compiled'
+                ? { mode: 'compiled', target: targetSel?.value || 'langgraph' }
+                : { mode: 'interpreted' };
             const ok = await buildOne(p);
             if (ok) back.remove(); else e.target.disabled = false;
         });

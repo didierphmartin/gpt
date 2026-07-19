@@ -62,7 +62,13 @@
       "over_budget": "Daily skill-promotion budget reached — raise it in Settings → Auto or try tomorrow",
       "weekly_throttle": "Weekly new-skill limit reached — raise it in Settings → Auto",
       "over_ceiling": "Estimated cost exceeds the per-skill ceiling in Settings → Auto"
-    }
+    },
+    "execTitle": "Execution",
+    "execInterpreted": "Interpreted",
+    "execInterpretedDesc": "runs the live workflow through the workflow engine; later edits to the workflow apply automatically",
+    "execCompiled": "Compiled",
+    "execCompiledDesc": "generates Python code now and runs it in the local Python runner; frozen snapshot, later edits do not apply",
+    "execCompiledHint": "Compiled runs need the local Python runner (synergyAI/python, port 8765). Agent nodes bound to browser skills cannot execute those skills in the runner."
   },
   "title": "AI Assistant - Multi-Provider",
   "header": {
