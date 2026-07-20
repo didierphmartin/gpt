@@ -67,7 +67,7 @@
     "execInterpreted": "Interprété",
     "execInterpretedDesc": "exécute le workflow en direct via le moteur de workflows ; les modifications ultérieures s'appliquent automatiquement",
     "execCompiled": "Compilé",
-    "execCompiledDesc": "fige le workflow en un instantané Python Pyodide exécuté dans le navigateur ; les modifications ultérieures du workflow ne s'appliquent pas",
+    "execCompiledDesc": "Fige le workflow en un instantané Python ; les modifications ultérieures du workflow ne s'appliquent pas. Ce script sera utilisé par SKILL.md",
     "execCompiledHint": "L'instantané s'exécute entièrement dans le navigateur (agents via le backend, compétences via le pool de workers) — aucun runner externe requis. Re-promouvez le workflow pour rafraîchir l'instantané."
   },
   "title": "Assistant IA - Multi-Fournisseurs",

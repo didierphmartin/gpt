@@ -713,7 +713,7 @@ if __name__ == "__main__":
                 </label>
                 <label class="gen-exec-opt">
                     <input type="radio" name="gen-exec-mode" value="compiled">
-                    <span><b>${t('genesis.execCompiled', 'Compiled')}</b> — ${t('genesis.execCompiledDesc', 'freezes the workflow into a Pyodide Python snapshot that runs in the browser; later edits to the workflow do not apply')}</span>
+                    <span><b>${t('genesis.execCompiled', 'Compiled')}</b> — ${t('genesis.execCompiledDesc', 'Freezes the workflow into a Python snapshot; later edits to the workflow do not apply. This script will be used by SKILL.md')}</span>
                 </label>
                 <p class="gen-exec-hint">${t('genesis.execCompiledHint', 'The snapshot runs fully in the browser (agents via the backend, skills via the worker pool) — no external runner needed. Re-promote the workflow to refresh the snapshot.')}</p>
             </div>` : ''}

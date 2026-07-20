@@ -67,7 +67,7 @@
     "execInterpreted": "Interpreted",
     "execInterpretedDesc": "runs the live workflow through the workflow engine; later edits to the workflow apply automatically",
     "execCompiled": "Compiled",
-    "execCompiledDesc": "freezes the workflow into a Pyodide Python snapshot that runs in the browser; later edits to the workflow do not apply",
+    "execCompiledDesc": "Freezes the workflow into a Python snapshot; later edits to the workflow do not apply. This script will be used by SKILL.md",
     "execCompiledHint": "The snapshot runs fully in the browser (agents via the backend, skills via the worker pool) — no external runner needed. Re-promote the workflow to refresh the snapshot."
   },
   "title": "AI Assistant - Multi-Provider",
