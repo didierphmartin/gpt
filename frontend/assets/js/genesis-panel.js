@@ -237,6 +237,13 @@
                 model: cfg.model || '',
                 instructions: cfg.instructions || cfg.systemPrompt || '',
                 skill: (cfg.bound_skill && cfg.bound_skill.dir_name) || '',
+                // Full node fidelity — the browser engine sends these per
+                // node; omitting them made snapshot agents run with default
+                // token caps (shorter outputs) and without their MCP tools.
+                max_tokens: (cfg.settings && cfg.settings.max_tokens) || null,
+                temperature: (cfg.settings && typeof cfg.settings.temperature === 'number')
+                    ? cfg.settings.temperature : null,
+                tools: Array.isArray(cfg.tools) && cfg.tools.length ? cfg.tools : null,
             };
         });
         const edges = (g.edges || g.connections || []).map((e) => [String(e.from), String(e.to)]);
@@ -448,13 +455,23 @@ async def _run_agent(node, context):
     }
     if node.get("model"):
         body_base["model"] = node["model"]
+    # Node instructions go in as the SYSTEM PROMPT (full authority) — same
+    # as the browser engine — not concatenated into the user message.
+    instructions = (node.get("instructions") or "").strip()
+    if instructions:
+        body_base["system_prompt"] = instructions
+    if node.get("max_tokens"):
+        body_base["max_tokens"] = node["max_tokens"]
+    if node.get("temperature") is not None:
+        body_base["temperature"] = node["temperature"]
+    if node.get("tools"):
+        body_base["tools"] = node["tools"]
     if node.get("skill"):
         body_base["skill_metadata"] = {
             "dir_name": node["skill"],
             "scripts": SKILL_SCRIPTS.get(node["skill"]) or ["scripts/run.py"],
         }
-    instructions = (node.get("instructions") or "").strip()
-    message = (instructions + "\\n\\n--- INPUT ---\\n" + context) if instructions else context
+    message = context
     history = []
     for _ in range(MAX_ROUNDS):
         body = dict(body_base)
