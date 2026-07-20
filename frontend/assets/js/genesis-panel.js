@@ -273,7 +273,7 @@
         // hands it to scripts/run.py via --prompt.
         let howToRun = '';
         if (wfId !== null && compiled) {
-            howToRun = `\n## How to run\n\nThis skill runs a COMPILED Pyodide snapshot of workflow #${wfId} — the graph was frozen into \`scripts/run.py\` at promotion time and executes fully in the browser (agent turns via the backend, skills via the worker pool). Later edits to the workflow do NOT affect this skill; re-promote to refresh. No external runner is required.\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script runs the whole workflow and prints the FINAL OUTPUT to stdout when done (a multi-agent run can take several minutes; that is normal). Summarize that output for the user — do NOT invent or predict results before it returns.\n\nDo NOT attempt to perform the workflow's steps yourself.\n`;
+            howToRun = `\n## How to run\n\nThis skill runs a COMPILED Pyodide snapshot of workflow #${wfId} — the graph was frozen into \`scripts/run.py\` at promotion time and executes fully in the browser (agent turns via the backend, skills via the worker pool). Later edits to the workflow do NOT affect this skill; re-promote to refresh. No external runner is required.\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script runs the whole workflow (a multi-agent run can take several minutes; that is normal), writes the final document to /outputs/ and announces it with a "wrote <path>" line — the platform renders that document (HTML or Markdown) for the user automatically.\n4. After it returns: give the user a SHORT 2-3 sentence summary and point to the rendered document. Do NOT re-paste the document body and do NOT invent results before the script returns.\n\nDo NOT attempt to perform the workflow's steps yourself.\n`;
         } else if (wfId !== null) {
             howToRun = `\n## How to run\n\nThis skill executes workflow #${wfId} by reference (edits in the workflow editor flow through automatically).\n\nOn every invocation you MUST:\n1. Compose a single plain-language instruction for the workflow from the user's request, explicitly filling in the parameters documented above (use defaults when the user did not specify one).\n2. Call \`run_skill_script\` with script \`scripts/run.py\` and argv \`["--prompt", "<your composed instruction>"]\`.\n3. The script starts the run and returns immediately; the full results are posted into the conversation automatically when the run completes. Tell the user the workflow is running — do NOT invent or predict results.\n\nDo NOT attempt to perform the workflow's steps yourself — the workflow engine runs them (a run may take several minutes; that is normal).\n`;
         }
@@ -374,6 +374,7 @@ from pyodide.http import pyfetch
 
 GRAPH = json.loads(${graphLit})
 SKILL_SCRIPTS = json.loads(${scriptsLit})
+SKILL_NAME = ${JSON.stringify(p.skill_name)}
 MAX_ROUNDS = 8
 TRIM = 4000
 
@@ -505,14 +506,21 @@ async def _run_graph(prompt):
         async def _run_one(nid):
             n = nodes[nid]
             parts = []
+            raws = []
             for u in incoming[nid]:
                 o = outputs.get(u, "")
                 if not o:
                     continue
+                raws.append(o)
                 parts.append(o if nodes[u]["type"] == "start"
                              else "## " + (nodes[u].get("name") or u) + "\\n" + o)
             ctx = "\\n\\n".join(parts) or prompt
-            outputs[nid] = ctx if n["type"] == "output" else await _run_agent(n, ctx)
+            if n["type"] == "output":
+                # Single feeder → pass the document through RAW (no fan-in
+                # label header polluting the final HTML/Markdown).
+                outputs[nid] = raws[0] if len(raws) == 1 else ctx
+            else:
+                outputs[nid] = await _run_agent(n, ctx)
         await asyncio.gather(*[_run_one(nid) for nid in ready])
         for nid in ready:
             done.add(nid)
@@ -522,13 +530,38 @@ async def _run_graph(prompt):
         {nodes[k].get("name") or k: v for k, v in outputs.items()}, ensure_ascii=False)
 
 
+def _looks_html(text):
+    s = text.lstrip().lower()
+    return s.startswith("<!doctype") or s.startswith("<html")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run the compiled workflow snapshot.")
     ap.add_argument("--prompt", required=True,
                     help="Full plain-language instruction for the workflow run")
     args = ap.parse_args()
     final = asyncio.run(_run_graph(args.prompt))
-    print(final[:6000] if isinstance(final, str) else str(final)[:6000])
+    text = final if isinstance(final, str) else str(final)
+
+    # Persist the workflow's OUTPUT DOCUMENT to /outputs/ and announce it
+    # with a "wrote <path>" line: the platform reads announced files back
+    # into the tool result and renders HTML/Markdown in the document pane —
+    # the user sees the real document, not just the model's summary of it.
+    import time as _time
+    ext = "html" if _looks_html(text) else "md"
+    out_path = "/outputs/%s_%s.%s" % (SKILL_NAME, _time.strftime("%Y-%m-%d_%H%M%S"), ext)
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print("wrote %s" % out_path)
+    except Exception as e:
+        print("could not write output document: %s" % e, file=sys.stderr)
+
+    head = text[:1500]
+    print(head)
+    if len(text) > 1500:
+        print("...[document continues — the full version is rendered for the user "
+              "from %s; do NOT re-paste it]" % out_path)
 
 
 if __name__ == "__main__":
