@@ -749,12 +749,18 @@ if __name__ == "__main__":
             const ok = await buildOne(p);
             if (ok) back.remove(); else e.target.disabled = false;
         });
+        // Clicking the backdrop must NOT silently cancel the promotion —
+        // that pattern ate three promotion attempts in one afternoon (form
+        // opened → outside click → dismissed with no feedback → user's
+        // tests kept running the stale skill). The overlay closes only via
+        // its explicit buttons; a backdrop click just pulses the card.
         back.addEventListener('click', (e) => {
             if (e.target === back) {
-                if (p.id > 0) {
-                    dismiss(p.id).then(() => back.remove());
-                } else {
-                    back.remove();
+                const card = back.querySelector('.gen-ov');
+                if (card) {
+                    card.style.transition = 'transform .1s';
+                    card.style.transform = 'scale(1.02)';
+                    setTimeout(() => { card.style.transform = ''; }, 120);
                 }
             }
         });
