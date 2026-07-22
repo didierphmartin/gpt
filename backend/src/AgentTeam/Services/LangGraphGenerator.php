@@ -691,18 +691,28 @@ class LangGraphGenerator
         $lines[] = '        )';
         $lines[] = '    if p == "deepseek":';
         $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        return ChatOpenAI(';
+        $lines[] = '        kwargs = dict(';
         $lines[] = '            model=model,';
         $lines[] = '            base_url="https://api.deepseek.com",';
         $lines[] = '            api_key=os.environ.get("DEEPSEEK_API_KEY"),';
         $lines[] = '            temperature=temperature,';
         $lines[] = '            max_tokens=max_tokens,';
         $lines[] = '        )';
+        $lines[] = '        if model.startswith("deepseek-v4"):';
+        $lines[] = '            # V4 runs thinking-ON by default SERVER-side and rejects sampling';
+        $lines[] = '            # params in that mode; disable explicitly (platform DeepSeekProvider';
+        $lines[] = '            # fix) so the form temperature is accepted.';
+        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
+        $lines[] = '        return ChatOpenAI(**kwargs)';
         $lines[] = '    if p == "kimi":';
         $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        # Kimi is OpenAI-compatible. temperature/max_tokens come straight from';
-        $lines[] = '        # the agent form -- never overridden. K2 defaults to thinking mode; disable';
-        $lines[] = '        # it (not a form parameter) to match the PHP KimiProvider.';
+        $lines[] = '        # Kimi is OpenAI-compatible. K2 defaults to thinking mode; disable it';
+        $lines[] = '        # (not a form parameter) to match the PHP KimiProvider. With thinking';
+        $lines[] = '        # OFF the API accepts ONLY temperature 0.6 — clamp (provider CONSTRAINT,';
+        $lines[] = '        # not a preference override; any other value 400s the whole node).';
+        $lines[] = '        if model.startswith("kimi-k2") and temperature != 0.6:';
+        $lines[] = '            print(f"[info] kimi {model}: temperature {temperature} -> 0.6 (model constraint)", flush=True)';
+        $lines[] = '            temperature = 0.6';
         $lines[] = '        kwargs = dict(';
         $lines[] = '            model=model,';
         $lines[] = '            base_url="https://api.moonshot.ai/v1",';
@@ -1421,6 +1431,7 @@ PY;
                         if getattr(m, "type", None) == "tool"
                         or m.__class__.__name__ == "ToolMessage"
                     )
+                    NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
                     print(f"[node] [{n}] done -- {len(text)} chars "
                           f"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)")
                     # Preview of what the agent produced, so the log shows the
@@ -1507,8 +1518,14 @@ PY;
 
     graph = sg.compile()
     print("[info] Running...")
+    global _RUN_T0
+    _RUN_T0 = time.monotonic()
     result = await graph.ainvoke({"user_prompt": user_prompt, "node_outputs": {}})
     return result.get("final_output", "")
+
+
+NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
+_RUN_T0 = None
 
 
 if __name__ == "__main__":
@@ -1545,11 +1562,32 @@ if __name__ == "__main__":
             _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
             with open(_out, "w", encoding="utf-8") as _f:
                 _f.write(output)
-            print(f"\nResult saved to: {os.path.abspath(_out)}")
+            _saved_path = os.path.abspath(_out)
         except Exception as e:
+            _saved_path = None
             print(f"\n[warn] failed to save result: {e}")
     else:
-        print("\n[info] output storage is OFF -- result printed above, not saved")
+        _saved_path = None
+
+    # Closing RUN SUMMARY (printed LAST): time per node, total, document location.
+    import time as _t2
+    print("\n" + "=" * 74)
+    print("RUN SUMMARY")
+    print("-" * 74)
+    if NODE_DURATIONS:
+        _w = max(len(k) for k in NODE_DURATIONS)
+        print("  Time per node:")
+        for _n, _s in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
+            print(f"    {_n:<{_w}}   {_s:7.1f}s")
+    if _RUN_T0 is not None:
+        print(f"  Total wall-clock: {_t2.monotonic() - _RUN_T0:.1f}s")
+    print(f"  Final output: {len(output)} chars")
+    if _saved_path:
+        print(f"  Document saved to: {_saved_path}")
+    else:
+        print("  Document not saved (output storage is OFF in the workflow settings) -- "
+              "the output is printed above.")
+    print("=" * 74)
 
 PY;
     }
