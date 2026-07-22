@@ -507,6 +507,16 @@ PY;
                   temperature is accepted.
                 """
                 extra = None
+                if (provider or "").lower() in ("claude", "anthropic") and (max_tokens or 0) > 16384:
+                    # Anthropic SDK refuses NON-STREAMING requests whose
+                    # max_tokens implies a >10-minute response ("Streaming is
+                    # required for operations that may take longer than 10
+                    # minutes"). MAF agent.run() is non-streaming, so clamp to
+                    # the largest safe budget. This is a provider constraint,
+                    # not an override of the form value.
+                    print(f"[info  ] anthropic: max_tokens {max_tokens} -> 16384 "
+                          f"(non-streaming SDK limit)", flush=True)
+                    max_tokens = 16384
                 if provider == "kimi" and str(model).startswith("kimi-k2"):
                     if temperature != 0.6:
                         print(f"[info  ] kimi {model}: temperature {temperature} -> 0.6 "
