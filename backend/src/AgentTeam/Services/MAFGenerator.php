@@ -341,12 +341,28 @@ PY;
 
         Nodes exchange a typed NodeMessage (source node + text). A node with
         several parents holds a FAN-IN BARRIER: its handler buffers one message
-        per parent edge and only fires when all have arrived. Each agent node =
-        one MAF `Agent` (provider, model, system instructions, MCP tools and
-        sampling settings verbatim from the node's editor form); any skills bound
-        to the node run as mandatory post-steps on its output. The Output node is
-        not an LLM: it merges its parents' text untouched and yields it as the
-        workflow result, so the deliverable is never reworded by another model.
+        per parent edge and only fires when all have arrived.
+
+        NODE-INTERNAL PIPELINE (fixed order, isolated contexts):
+            merged fan-in
+              ==> AGENT: one MAF Agent with the NODE's system prompt, MCP
+                  tools, provider/model/sampling (all verbatim from the editor
+                  form) applied to the merged content; the original request is
+                  included only as parameter context.
+              ==> SKILL(s), each in a FRESH context: system prompt = SKILL.md
+                  (not the node instructions), empty history (sees only the
+                  agent's result + the original request), tools = stage_file +
+                  the dir-scoped run_skill_script (not the node's MCP tools).
+                  Two shapes, chosen by the skill itself in phase A:
+                    author-first  -- author deliverable as text -> runtime
+                                     stages it -> script renders it;
+                    script-first  -- full SKILL.md process with tools (gather
+                                     script first, then compose).
+                  A failed skill step degrades to "skill skipped" — it can
+                  never replace the node's output with a stub.
+        The Output node is not an LLM: it merges its parents' text untouched
+        and yields it as the workflow result, so the deliverable is never
+        reworded by another model.
 
         FILE MAP (in emission order)
         ============================
