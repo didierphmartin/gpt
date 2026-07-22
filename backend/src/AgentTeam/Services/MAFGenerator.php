@@ -603,7 +603,7 @@ class SkillRuntime:
             real = cls._scratch_real(p)
             os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
             with open(real, "w", encoding="utf-8") as fh:
-                fh.write(str(content))
+                fh.write(_fix_overescaped(content))
             print(f"  [stage_file] wrote {len(str(content))} chars to {p}", flush=True)
             return (f"Staged {len(str(content))} chars at {p}. Now call run_skill_script "
                     f"referencing this exact path in argv.")
@@ -767,7 +767,7 @@ class SkillRuntime:
         except Exception as e:
             print(f"  [skill] phase A (author) failed: {str(e)[:160]}", flush=True)
             doc = ""
-        doc = doc.strip()
+        doc = _fix_overescaped(doc.strip())
 
         if doc.upper().startswith("NEED-SCRIPTS"):
             # SCRIPT-FIRST skill: the full SKILL.md process runs with tools —

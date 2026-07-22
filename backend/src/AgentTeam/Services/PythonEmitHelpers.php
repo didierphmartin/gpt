@@ -307,6 +307,24 @@ def _remap_virtual_path(p, out_dir: str) -> str:
     return p
 
 
+def _fix_overescaped(text):
+    """Repair JSON-style over-escaping in model-carried document content.
+
+    Models (Claude especially) sometimes emit large documents inside tool
+    arguments as an escaped single-line string: literal \\n / \\" sequences
+    and ZERO real newlines. Written verbatim, the HTML/CSS is broken and the
+    page renders unstyled (a live report shipped with 1131 literal \\n).
+    Mirrors the platform chat's _coerceInputFiles over-escape recovery.
+    Detection is conservative: many escape sequences AND no real newlines."""
+    s = str(text)
+    if s.count("\\n") > 5 and s.count("\n") == 0:
+        print("  [stage] repairing over-escaped content ("
+              + str(s.count("\\n")) + " literal escape sequences)", flush=True)
+        s = (s.replace("\\\\", "\x00").replace("\\n", "\n").replace("\\t", "\t")
+              .replace("\\r", "").replace('\\"', '"').replace("\\'", "'").replace("\x00", "\\"))
+    return s
+
+
 def _run_skill_script(dir_name: str, script: str, argv=None,
                       input_files=None, read_outputs=None) -> str:
     if isinstance(argv, str):
@@ -332,7 +350,7 @@ def _run_skill_script(dir_name: str, script: str, argv=None,
                 target = _remap_virtual_path(raw_path, out_dir)
                 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
                 with open(target, "w", encoding="utf-8") as fh:
-                    fh.write(content if isinstance(content, str) else str(content))
+                    fh.write(_fix_overescaped(content))
             except Exception as e:
                 print(f"  [run_skill_script] could not stage {raw_path}: {e}")
     env = dict(
