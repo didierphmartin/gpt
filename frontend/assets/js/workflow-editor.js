@@ -3905,7 +3905,11 @@ class WorkflowEditor {
             return;
         }
 
-        // Derive the MAF filename from generate-maf Content-Disposition.
+        // Run is SELF-CONTAINED: generate fresh code and write it to
+        // python/scripts/ before executing. Previously this fetch was used
+        // only to derive the filename and the body was discarded — Run then
+        // executed whatever stale file an earlier Generate left on disk,
+        // silently running outdated code after workflow edits.
         let filename;
         try {
             const resp = await fetch(
@@ -3916,9 +3920,21 @@ class WorkflowEditor {
             const dispo = resp.headers.get('Content-Disposition') || '';
             const m = dispo.match(/filename="([^"]+)"/);
             filename = m ? m[1] : 'workflow_maf.py';
-            await resp.text(); // consume body
+            const code = await resp.text();
+            if (window.localFs?.isSupported?.()) {
+                const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+                if (scriptsDir) {
+                    const fh = await scriptsDir.getFileHandle(filename, { create: true });
+                    const w = await fh.createWritable();
+                    await w.write(code);
+                    await w.close();
+                    // Keep provider keys fresh so the just-written script can auth.
+                    await this._syncRunnerEnv();
+                    console.log(`[WorkflowEditor] Run: regenerated python/scripts/${filename}`);
+                }
+            }
         } catch (e) {
-            alert(`Could not resolve the MAF filename: ${e?.message || e}\nClick "Generate" first.`);
+            alert(`Could not generate the MAF script: ${e?.message || e}`);
             return;
         }
 
