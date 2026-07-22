@@ -629,7 +629,15 @@ PY;
         $defaultModels = (array) ($analyzed['providerDefaultModels'] ?? []);
         foreach ($analyzed['agents'] as $id => $ag) {
             $instr = (string) ($ag['systemPrompt'] ?? '');
-            $tools = array_map(fn($t) => 'catalog.get(' . PythonEmitHelpers::pyStr($t) . ')', $ag['tools'] ?? []);
+            // Node forms store tool names with the runtime 'mcp_' prefix, but the
+            // catalog (usedCatalog, mirrored into TOOL_CATALOG) is keyed on the
+            // UNPREFIXED DB tool_name — normalize here or every lookup returns
+            // None and agents silently run tool-less (the hallucinated-report bug).
+            $tools = array_map(function ($t) {
+                $t = (string) $t;
+                if (strpos($t, 'mcp_') === 0) $t = substr($t, 4);
+                return 'catalog.get(' . PythonEmitHelpers::pyStr($t) . ')';
+            }, $ag['tools'] ?? []);
             $toolsPy = '[' . implode(', ', array_filter($tools)) . ']';
             // Skills baked for Task 3; empty list here is harmless.
             $skillsPy = PythonEmitHelpers::jsonToPython($ag['skills'] ?? []);
@@ -841,7 +849,13 @@ PY;
                 _tools = [t for t in ad["tools"] if t is not None]
                 _opts = ProviderClients.chat_options(ad["provider"], ad["model"],
                                                      ad["max_tokens"], ad["temperature"])
-                agent = Agent(client, instructions=ad["instructions"], name=self.id,
+                # Ground the model in TODAY — without this, research agents anchor
+                # on their training-data era and confidently report stale facts
+                # (the platform's chat injects the same preamble).
+                _instr = (f"Current date: {time.strftime('%Y-%m-%d')}. Treat this as 'now'; "
+                          f"prefer your tools for current data over memory.\n\n"
+                          + ad["instructions"])
+                agent = Agent(client, instructions=_instr, name=self.id,
                               tools=_tools, default_options=_opts)
                 ProgressReporter.node_start(
                     name, f"agent {ad['provider']}/{ad['model'] or 'default'} "

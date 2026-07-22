@@ -484,6 +484,11 @@ PY;
             // run_skill_script auto-add entirely — skills are separate steps now.)
             $toolExprs = [];
             foreach ($ag['tools'] as $t) {
+                // Node forms store the runtime 'mcp_' prefix; the catalog is keyed
+                // on the UNPREFIXED DB tool_name (the analyzer's normalization).
+                // Without stripping, catalog["mcp_…"] raises KeyError at import.
+                $t = (string) $t;
+                if (strpos($t, 'mcp_') === 0) $t = substr($t, 4);
                 $toolExprs[] = 'catalog["' . $t . '"]';
             }
             $toolsPy = '[' . implode(', ', $toolExprs) . ']';
