@@ -677,6 +677,7 @@ PY;
             _done = 0
             _total = 0
             _in_flight = {}   # node display name -> start time (monotonic)
+            _durations = {}   # node display name -> seconds spent (for the summary)
             _stop = None      # threading.Event that terminates the heartbeat
 
             @classmethod
@@ -712,7 +713,10 @@ PY;
             def node_done(cls, name, chars):
                 started = cls._in_flight.pop(name, None)
                 cls._done += 1
-                dur = f" in {time.monotonic() - started:.1f}s" if started else ""
+                dur = ""
+                if started is not None:
+                    cls._durations[name] = time.monotonic() - started
+                    dur = f" in {cls._durations[name]:.1f}s"
                 print(f"[node ✓] {name} — {chars} chars{dur}"
                       f"  ({cls._done}/{cls._total} agent nodes done)", flush=True)
 
@@ -726,12 +730,39 @@ PY;
 
             @classmethod
             def end(cls, chars):
-                """Stop the heartbeat and print the run summary."""
+                """Stop the heartbeat (the full summary prints at the very end
+                of __main__, once the output document's save path is known)."""
                 if cls._stop:
                     cls._stop.set()
+                cls._final_chars = chars
+
+            @classmethod
+            def summary(cls, saved_path=None):
+                """The closing RUN SUMMARY: time per AI agent, total wall-clock,
+                and where the produced document lives. Printed LAST so it is the
+                first thing a user sees when they come back to the terminal."""
                 elapsed = time.monotonic() - cls._t0 if cls._t0 else 0.0
+                print("", flush=True)
                 print("=" * 74, flush=True)
-                print(f"DONE in {elapsed:.1f}s — final output: {chars} chars", flush=True)
+                print("RUN SUMMARY", flush=True)
+                print("-" * 74, flush=True)
+                if cls._durations:
+                    width = max(len(n) for n in cls._durations)
+                    print("  Time per AI agent:", flush=True)
+                    for name, secs in sorted(cls._durations.items(), key=lambda kv: -kv[1]):
+                        print(f"    {name:<{width}}   {secs:7.1f}s", flush=True)
+                    total_agent = sum(cls._durations.values())
+                    print(f"    {'(sum of agent time)':<{width}}   {total_agent:7.1f}s", flush=True)
+                print(f"  Total wall-clock: {elapsed:.1f}s"
+                      + ("  (less than the sum — parallel nodes overlap)"
+                         if cls._durations and elapsed < sum(cls._durations.values()) else ""),
+                      flush=True)
+                print(f"  Final output: {getattr(cls, '_final_chars', 0)} chars", flush=True)
+                if saved_path:
+                    print(f"  Document saved to: {saved_path}", flush=True)
+                else:
+                    print("  Document not saved to disk (output storage is OFF in the workflow "
+                          "settings) — the output is printed above.", flush=True)
                 print("=" * 74, flush=True)
 
 
@@ -1022,6 +1053,7 @@ PY;
             _outputs = _result.get_outputs()
             _text = str(_outputs[0]) if _outputs else ""
             print("\n=== FINAL OUTPUT ===\n" + _text)
+            _saved_path = None
             if OUTPUT_STORAGE_ENABLED:
                 _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
                 _dir = OUTPUT_FOLDER or os.path.join(_root, "workflow")
@@ -1039,10 +1071,12 @@ PY;
                     _ext = "md"
                 _slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
                 _ts = time.strftime("%Y%m%d-%H%M%S")
-                _path = os.path.join(_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
-                with open(_path, "w", encoding="utf-8") as _fh:
+                _saved_path = os.path.join(_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
+                with open(_saved_path, "w", encoding="utf-8") as _fh:
                     _fh.write(_text)
-                print(f"[output] saved to {_path}")
+            # Closing summary LAST: per-agent time, total wall-clock, and where
+            # the produced document lives.
+            ProgressReporter.summary(_saved_path)
         PY;
     }
 }
