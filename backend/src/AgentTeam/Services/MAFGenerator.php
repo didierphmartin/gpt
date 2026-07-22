@@ -551,6 +551,43 @@ class SkillRuntime:
     _stage_hints = {}     # "skill_dir/script" -> staging-coach count
     _abort = []           # non-empty => a DATA failure demands a workflow abort
 
+    @staticmethod
+    def _scratch_real(path):
+        """Map a virtual /scratch/<name> path to its real location on disk."""
+        p = str(path)
+        if p == "/scratch" or p.startswith("/scratch/"):
+            return os.path.join(SKILL_SCRATCH_DIR, p[len("/scratch/"):]) if len(p) > 9 else SKILL_SCRATCH_DIR
+        return p
+
+    @classmethod
+    def make_stage_tool(cls):
+        """A dedicated write-a-file tool (the pattern models comply with).
+
+        Live runs showed models flatly REFUSE to inline a 25k-char document
+        into run_skill_script's input_files argument, no matter how the
+        docstring or error coaching insists — but they happily use a
+        Write-style tool. stage_file persists content under /scratch/ so a
+        following run_skill_script call can reference it by path.
+        """
+        def stage_file(path: str, content: str) -> str:
+            p = str(path)
+            if not p.startswith("/scratch/"):
+                return "ERROR: stage_file only writes under /scratch/ — use a path like /scratch/report.html"
+            real = cls._scratch_real(p)
+            os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+            with open(real, "w", encoding="utf-8") as fh:
+                fh.write(str(content))
+            print(f"  [stage_file] wrote {len(str(content))} chars to {p}", flush=True)
+            return (f"Staged {len(str(content))} chars at {p}. Now call run_skill_script "
+                    f"referencing this exact path in argv.")
+        stage_file.__doc__ = (
+            "Write a file to the shared /scratch/ area so a skill script can read it. "
+            "Use this FIRST to stage any document you authored (pass the COMPLETE "
+            "content), THEN call run_skill_script with the same /scratch/<name> path "
+            "in its argv. Files persist for the rest of this workflow run.")
+        return FunctionTool(func=stage_file, name="stage_file",
+                            description=stage_file.__doc__)
+
     @classmethod
     def make_tool(cls, dir_name: str):
         """Wrap run_skill_script for ONE skill dir as an explicit MAF FunctionTool.
@@ -571,8 +608,12 @@ class SkillRuntime:
             # mistake. (This exact miss cost a live run 2 attempts + 6 minutes.)
             _staged = set((input_files or {}).keys())
             _needed = [a for a in (argv or []) if isinstance(a, str) and "/scratch/" in a]
+            # A /scratch/ input is satisfied by input_files OR by a file already
+            # staged on disk (stage_file, or a previous call's input_files).
             _missing = [p for p in _needed
-                        if not any(p == s or p.endswith("/" + s.rsplit("/", 1)[-1]) for s in _staged)]
+                        if not any(p == s or p.endswith("/" + s.rsplit("/", 1)[-1]) for s in _staged)
+                        and not os.path.isfile(cls._scratch_real(
+                            "/scratch/" + p.rsplit("/", 1)[-1]))]
             if _missing:
                 cls._stage_hints[key] = cls._stage_hints.get(key, 0) + 1
                 if cls._stage_hints[key] > cls.MAX_STAGE_HINTS:
@@ -582,15 +623,13 @@ class SkillRuntime:
                         + ", ".join(_missing[:3]) + ").")
                 _p = _missing[0]
                 _virt = "/scratch/" + _p.rsplit("/", 1)[-1]
-                print(f"  [run_skill_script] staging coach: {_p} passed in argv but NOT in "
-                      f"input_files — script not run; asking the model to retry correctly.",
+                print(f"  [run_skill_script] staging coach: {_p} passed in argv but the file "
+                      f"is not staged — script not run; asking the model to stage_file first.",
                       flush=True)
-                return ("STAGING REQUIRED — the script was NOT run. You passed " + _p
-                        + " in argv but did not stage that file. Files do NOT persist between "
-                        "calls and the host filesystem is not readable. Call run_skill_script "
-                        "again with BOTH, in the SAME call: argv using the path '" + _virt
-                        + "', and input_files={'" + _virt + "': <the COMPLETE document content, "
-                        "not a summary or placeholder>}.")
+                return ("STAGING REQUIRED — the script was NOT run because " + _p
+                        + " does not exist yet. Do this in two steps: 1) call stage_file("
+                        "path='" + _virt + "', content=<the COMPLETE document>) ; 2) call "
+                        "run_skill_script again with '" + _virt + "' in argv.")
             result = _run_skill_script(dir_name, script, argv, input_files, read_outputs)
             failed = result.startswith("ERROR:") or "[run_skill_script exit " in result
             if not failed:
@@ -646,11 +685,13 @@ class SkillRuntime:
             "'gather_audits.py' from some other skill), and do NOT refuse or ask for "
             "clarification -- always produce THIS skill's deliverable from the given content. "
             "If the skill produces a document/file (e.g. HTML via a create/render script), "
-            "you MUST call run_skill_script -- stage authored content via input_files and pass "
-            "the output path in read_outputs; the workflow captures that produced file as this "
-            "node's output. If the skill has no script, return the transformed result.\n\n"
+            "author the COMPLETE document, then: 1) call stage_file('/scratch/<name>', "
+            "<the full document>) to write it; 2) call run_skill_script with that same "
+            "/scratch/<name> path in argv and the output path in read_outputs; the workflow "
+            "captures that produced file as this node's output. If the skill has no script, "
+            "return the transformed result.\n\n"
             "=== SKILL INSTRUCTIONS ===\n" + body)
-        tools = [cls.make_tool(dir_name)] if dir_name else []
+        tools = [cls.make_stage_tool(), cls.make_tool(dir_name)] if dir_name else []
         if dir_name:
             _LAST_SKILL_OUTPUTS.pop(dir_name, None)
         agent = Agent(ProviderClients.make(provider, model), instructions=system, name="skill_step",
