@@ -313,6 +313,10 @@ class MAFGenerator
                                 the mandatory skill step after the agent's answer.
           AGENTS             -- dict; the frozen per-node metadata (name, provider,
                                 model, instructions, tools, skills, sampling).
+          ProgressReporter   -- class; console liveness: run banner, per-node
+                                start/done lines with a counter, fan-in status,
+                                a 15s heartbeat naming the in-flight nodes, and
+                                the final summary.
           NodeMessage        -- dataclass; the typed payload on every edge.
           StartExecutor      -- class; the Start node: broadcasts the run prompt.
           AgentNodeExecutor  -- class; one agent node: fan-in barrier -> MAF Agent
@@ -604,6 +608,84 @@ PY;
         $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
         $runner = <<<'PY'
+        class ProgressReporter:
+            """Console progress feedback for the whole run.
+
+            INTENT: a long multi-agent run spends most of its wall-clock inside
+            LLM calls, which print nothing. This class keeps the console ALIVE:
+              * begin()  -- banner (workflow, node count, prompt) + starts a
+                            HEARTBEAT thread that, every 15s, prints elapsed
+                            time, how many nodes are done, and which nodes are
+                            currently running (with their own elapsed time).
+              * node_start/node_done -- per-node ▶/✓ lines with a done-counter.
+              * waiting  -- fan-in status (how many inputs a node still needs).
+              * note     -- free-form step info (skill runs etc.).
+              * end()    -- stops the heartbeat and prints the run summary.
+            The heartbeat runs on a daemon thread so it can never block exit.
+            """
+
+            _t0 = None
+            _done = 0
+            _total = 0
+            _in_flight = {}   # node display name -> start time (monotonic)
+            _stop = None      # threading.Event that terminates the heartbeat
+
+            @classmethod
+            def begin(cls, total_agents, prompt):
+                """Print the run banner and start the liveness heartbeat."""
+                cls._t0 = time.monotonic()
+                cls._total = total_agents
+                print("=" * 74, flush=True)
+                print(f"WORKFLOW  {WORKFLOW_NAME}  (id {WORKFLOW_ID})", flush=True)
+                print(f"  {total_agents} agent node(s) + output sink", flush=True)
+                print(f"  prompt: {str(prompt)[:120]!r}", flush=True)
+                print("=" * 74, flush=True)
+                cls._stop = threading.Event()
+                threading.Thread(target=cls._heartbeat, daemon=True).start()
+
+            @classmethod
+            def _heartbeat(cls):
+                """Every 15s of silence: prove the run is alive, say what it's doing."""
+                while not cls._stop.wait(15):
+                    busy = ", ".join(f"{n} ({time.monotonic() - t:.0f}s)"
+                                     for n, t in list(cls._in_flight.items()))
+                    elapsed = time.monotonic() - cls._t0
+                    print(f"[alive {elapsed:5.0f}s] {cls._done}/{cls._total} agent node(s) done"
+                          + (f" — running: {busy}" if busy else " — idle (waiting on graph)"),
+                          flush=True)
+
+            @classmethod
+            def node_start(cls, name, detail):
+                cls._in_flight[name] = time.monotonic()
+                print(f"[node ▶] {name} — {detail}", flush=True)
+
+            @classmethod
+            def node_done(cls, name, chars):
+                started = cls._in_flight.pop(name, None)
+                cls._done += 1
+                dur = f" in {time.monotonic() - started:.1f}s" if started else ""
+                print(f"[node ✓] {name} — {chars} chars{dur}"
+                      f"  ({cls._done}/{cls._total} agent nodes done)", flush=True)
+
+            @classmethod
+            def waiting(cls, name, have, need):
+                print(f"[fan-in] {name}: {have}/{need} inputs received — waiting for the rest", flush=True)
+
+            @classmethod
+            def note(cls, msg):
+                print(f"[info  ] {msg}", flush=True)
+
+            @classmethod
+            def end(cls, chars):
+                """Stop the heartbeat and print the run summary."""
+                if cls._stop:
+                    cls._stop.set()
+                elapsed = time.monotonic() - cls._t0 if cls._t0 else 0.0
+                print("=" * 74, flush=True)
+                print(f"DONE in {elapsed:.1f}s — final output: {chars} chars", flush=True)
+                print("=" * 74, flush=True)
+
+
         @dataclass
         class NodeMessage:
             """The typed payload that flows along every edge of the graph.
@@ -667,10 +749,13 @@ PY;
             @handler
             async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[NodeMessage]) -> None:
                 """Collect one parent's output; run the node when all have arrived."""
+                ad = AGENTS[self.node_id]
+                name = str(ad["name"])
                 self._inbox[msg.source_id] = msg
                 if len(self._inbox) < max(1, len(self.parents)):
-                    return                                  # fan-in barrier still waiting
-                ad = AGENTS[self.node_id]
+                    # Fan-in barrier still waiting — tell the user what's missing.
+                    ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
+                    return
                 client = ProviderClients.make(ad["provider"], ad["model"])
                 # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
                 _tools = [t for t in ad["tools"] if t is not None]
@@ -678,23 +763,22 @@ PY;
                                                      ad["max_tokens"], ad["temperature"])
                 agent = Agent(client, instructions=ad["instructions"], name=self.id,
                               tools=_tools, default_options=_opts)
-                print(f"[node {self.node_id}] {ad['name']!r} → agent {ad['provider']}/{ad['model']} "
-                      f"({len(_tools)} tool(s), temp={ad['temperature']}) — generating…", flush=True)
-                _t0 = time.monotonic()
+                ProgressReporter.node_start(
+                    name, f"agent {ad['provider']}/{ad['model'] or 'default'} "
+                          f"({len(_tools)} tool(s), temp={ad['temperature']}) — generating…")
                 text = (await agent.run(self._framed_input())).text or ""
-                print(f"[node {self.node_id}] {ad['name']!r} agent done — {len(text)} chars in "
-                      f"{time.monotonic() - _t0:.1f}s", flush=True)
                 # Mandatory post-steps: every skill bound to this node in the editor.
                 for _skill in ad.get("skills", []):
                     _sd = _skill.get("dir") or "inline"
-                    print(f"[node {self.node_id}] {ad['name']!r} → running skill {_sd!r}…", flush=True)
+                    ProgressReporter.note(f"{name}: running skill {_sd!r}…")
                     _ts0 = time.monotonic()
                     text = await SkillRuntime.run_step(_skill, text, RUN_STATE["user_prompt"],
                                                        ad["provider"], ad["model"],
                                                        ad["max_tokens"], ad["temperature"])
-                    print(f"[node {self.node_id}] skill {_sd!r} done — {len(text)} chars in "
-                          f"{time.monotonic() - _ts0:.1f}s", flush=True)
-                await ctx.send_message(NodeMessage(self.node_id, str(ad["name"]), text))
+                    ProgressReporter.note(f"{name}: skill {_sd!r} done — {len(text)} chars "
+                                          f"in {time.monotonic() - _ts0:.1f}s")
+                ProgressReporter.node_done(name, len(text))
+                await ctx.send_message(NodeMessage(self.node_id, name, text))
 
             def _framed_input(self) -> str:
                 """Frame this node's LLM input.
@@ -741,6 +825,7 @@ PY;
                 parts = [self._inbox[p].text for p in self.parents
                          if p in self._inbox and self._inbox[p].text]
                 merged = parts[0] if len(parts) == 1 else "\n\n---\n\n".join(parts)
+                ProgressReporter.end(len(merged))
                 await ctx.yield_output(merged if merged else RUN_STATE["user_prompt"])
         PY;
         // The AGENTS dict feeds AgentNodeExecutor: document it inline at emission.
@@ -869,6 +954,9 @@ PY;
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
             try:
+                # Banner + liveness heartbeat first, so the console shows signs of
+                # life even while the first LLM calls are still connecting.
+                ProgressReporter.begin(len(AGENTS), _prompt)
                 # Build the graph, then hand the prompt to MAF: it enters at the
                 # Start executor and flows along the edges declared in
                 # create_workflow() until the Output executor yields.
