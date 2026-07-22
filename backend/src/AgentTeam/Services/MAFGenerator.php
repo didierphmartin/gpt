@@ -546,7 +546,9 @@ class SkillRuntime:
     """
 
     MAX_ATTEMPTS = 2      # per-script cap before the fail-fast triggers
+    MAX_STAGE_HINTS = 3   # staging-coach messages before giving up on the model
     _fail_counts = {}     # "skill_dir/script" -> consecutive failure count
+    _stage_hints = {}     # "skill_dir/script" -> staging-coach count
     _abort = []           # non-empty => a DATA failure demands a workflow abort
 
     @classmethod
@@ -560,8 +562,36 @@ class SkillRuntime:
         def run_skill_script(script: str, argv: list[str] | None = None,
                              input_files: dict | None = None,
                              read_outputs: list[str] | None = None) -> str:
-            result = _run_skill_script(dir_name, script, argv, input_files, read_outputs)
             key = dir_name + "/" + str(script)
+            # PRE-FLIGHT staging check: an argv that references a /scratch/ input
+            # the call did not stage via input_files can NEVER work (each call
+            # stages only what it carries; the host FS is not readable). Catch it
+            # BEFORE running the script and coach the model with the exact fix —
+            # without burning the script-failure fail-fast budget on a call
+            # mistake. (This exact miss cost a live run 2 attempts + 6 minutes.)
+            _staged = set((input_files or {}).keys())
+            _needed = [a for a in (argv or []) if isinstance(a, str) and "/scratch/" in a]
+            _missing = [p for p in _needed
+                        if not any(p == s or p.endswith("/" + s.rsplit("/", 1)[-1]) for s in _staged)]
+            if _missing:
+                cls._stage_hints[key] = cls._stage_hints.get(key, 0) + 1
+                if cls._stage_hints[key] > cls.MAX_STAGE_HINTS:
+                    raise RuntimeError(
+                        "Stop calling this script: " + str(cls._stage_hints[key])
+                        + " calls in a row referenced unstaged /scratch/ inputs ("
+                        + ", ".join(_missing[:3]) + ").")
+                _p = _missing[0]
+                _virt = "/scratch/" + _p.rsplit("/", 1)[-1]
+                print(f"  [run_skill_script] staging coach: {_p} passed in argv but NOT in "
+                      f"input_files — script not run; asking the model to retry correctly.",
+                      flush=True)
+                return ("STAGING REQUIRED — the script was NOT run. You passed " + _p
+                        + " in argv but did not stage that file. Files do NOT persist between "
+                        "calls and the host filesystem is not readable. Call run_skill_script "
+                        "again with BOTH, in the SAME call: argv using the path '" + _virt
+                        + "', and input_files={'" + _virt + "': <the COMPLETE document content, "
+                        "not a summary or placeholder>}.")
+            result = _run_skill_script(dir_name, script, argv, input_files, read_outputs)
             failed = result.startswith("ERROR:") or "[run_skill_script exit " in result
             if not failed:
                 cls._fail_counts.pop(key, None)
