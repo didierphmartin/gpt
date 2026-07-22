@@ -689,7 +689,10 @@ class SkillRuntime:
             "<the full document>) to write it; 2) call run_skill_script with that same "
             "/scratch/<name> path in argv and the output path in read_outputs; the workflow "
             "captures that produced file as this node's output. If the skill has no script, "
-            "return the transformed result.\n\n"
+            "return the transformed result.\n"
+            "SAFETY VALVE: if tool calls fail twice, STOP calling tools entirely and output "
+            "the COMPLETE finished document directly as your final answer (never a preamble, "
+            "never a summary) -- the workflow saves your text as the deliverable.\n\n"
             "=== SKILL INSTRUCTIONS ===\n" + body)
         tools = [cls.make_stage_tool(), cls.make_tool(dir_name)] if dir_name else []
         if dir_name:
@@ -719,8 +722,29 @@ class SkillRuntime:
         # Only a genuine data-gathering failure aborts the whole workflow.
         if cls._abort:
             raise RuntimeError(cls._abort[-1])
+        # ---- Deliverable selection: a skill step must NEVER lose the document.
+        # Priority: (1) a file the script actually produced; (2) a full document
+        # the model emitted as text (models often prefer this over tool args);
+        # (3) meaningful transformed text; (4) FALLBACK to the pre-skill
+        # document `prior` — a failed step degrades to "skill skipped", never to
+        # a stub replacing the node's real output (a live run once saved a
+        # 193-byte preamble over a 25k-char report).
         produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
-        return produced[-1] if produced else text
+        if produced:
+            print(f"  [skill] deliverable: file produced by {dir_name or 'inline'} script", flush=True)
+            return produced[-1]
+        _txt = (text or "").strip()
+        _low = _txt.lower()
+        if _low.startswith("<!doctype") or "<html" in _low[:2000]:
+            print("  [skill] deliverable: full HTML document from the model's text", flush=True)
+            return text
+        _prior = str(prior)
+        if not _txt or (len(_txt) < 400 and len(_prior) > 4 * max(len(_txt), 1)):
+            print(f"  [skill] WARNING: '{dir_name or 'inline'}' step produced no usable output "
+                  f"({len(_txt)} chars) — keeping the pre-skill document ({len(_prior)} chars).",
+                  flush=True)
+            return prior
+        return text
 PY;
 
         return PythonEmitHelpers::skillFsSyncBlock() . $mafSpecific;
