@@ -3896,20 +3896,14 @@ class WorkflowEditor {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        // Liveness probe so the failure mode is "runner not started" not silence.
-        try {
-            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
-            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-        } catch (e) {
-            this._showMafRunnerNotRunningModal();
-            return;
-        }
 
         // Run is SELF-CONTAINED: generate fresh code and write it to
-        // python/scripts/ before executing. Previously this fetch was used
-        // only to derive the filename and the body was discarded — Run then
-        // executed whatever stale file an earlier Generate left on disk,
-        // silently running outdated code after workflow edits.
+        // python/scripts/ FIRST — before the runner probe — so whether the
+        // run happens here (runner up) or in the user's terminal (runner
+        // down → command modal), it always executes the CURRENT workflow.
+        // Previously the generate fetch was used only to derive the filename
+        // and the body was discarded — Run then executed whatever stale file
+        // an earlier Generate left on disk.
         let filename;
         try {
             const resp = await fetch(
@@ -3935,6 +3929,16 @@ class WorkflowEditor {
             }
         } catch (e) {
             alert(`Could not generate the MAF script: ${e?.message || e}`);
+            return;
+        }
+
+        // Runner up → execute here and stream the output. Runner down → the
+        // script is already fresh on disk; show the one-command modal.
+        try {
+            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (e) {
+            this._showMafRunnerNotRunningModal();
             return;
         }
 
@@ -3986,31 +3990,20 @@ class WorkflowEditor {
         // Same sanitize rule as MAFGenerator::generate (PHP): [^a-z0-9_]+ → _
         const mafFile = ((this.currentWorkflowName || 'workflow')
             .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_maf.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${mafFile} "Your prompt here"`;
-        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${mafFile}`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">Runner isn't running (MAF)</h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    The local runner (<code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
-                    isn't responding. Two ways to run the compiled workflow:
-                </p>
-                <p class="text-sm font-medium text-gray-800 mb-1">Option A — run it directly in a terminal (no runner needed; live progress prints there):</p>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal</h3>
+                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
                     <button class="cmd-copy-direct absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
                 </div>
-                <p class="text-sm font-medium text-gray-800 mb-1">Option B — start the runner service, then click Run here again (output streams into this window):</p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
-                    <button class="cmd-copy-start absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
-                </div>
                 <p class="text-xs text-gray-500 mb-4">
-                    Note: the command in Option B only starts the runner <b>service</b> — it does not run the workflow by itself.
-                    First-time setup for either option:
-                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
+                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
+                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4022,7 +4015,6 @@ class WorkflowEditor {
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
         this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-direct'), directCmd);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-start'), startCmd);
     }
 
     /**
