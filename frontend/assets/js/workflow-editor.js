@@ -3958,9 +3958,19 @@ class WorkflowEditor {
 
     /**
      * Modal shown when the runner liveness probe fails while trying to run
-     * a MAF script. Mirrors _showAdkRunnerNotRunningModal with MAF-specific copy.
+     * a MAF script. Presents the two options explicitly — the old layout
+     * made the runner-start command the ONLY prominent copyable line, and
+     * users pasted it expecting to see the WORKFLOW run (it only starts the
+     * service; uvicorn logs look like "nothing happened"). Option A (direct
+     * terminal run, with the REAL filename and live progress) now comes
+     * first; Option B (start the service so the editor's Run streams here)
+     * second. Both get copy buttons.
      */
     _showMafRunnerNotRunningModal() {
+        // Same sanitize rule as MAFGenerator::generate (PHP): [^a-z0-9_]+ → _
+        const mafFile = ((this.currentWorkflowName || 'workflow')
+            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_maf.py';
+        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${mafFile} "Your prompt here"`;
         const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
@@ -3969,19 +3979,22 @@ class WorkflowEditor {
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">Runner isn't running (MAF)</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     The local runner (<code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
-                    isn't responding. Start it from a terminal:
+                    isn't responding. Two ways to run the compiled workflow:
                 </p>
+                <p class="text-sm font-medium text-gray-800 mb-1">Option A — run it directly in a terminal (no runner needed; live progress prints there):</p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
+                    <button class="cmd-copy-direct absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                </div>
+                <p class="text-sm font-medium text-gray-800 mb-1">Option B — start the runner service, then click Run here again (output streams into this window):</p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                    <button class="cmd-copy-start absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
                 </div>
-                <p class="text-xs text-gray-500 mb-3">
-                    Also ensure <code class="text-xs">agent-framework httpx python-dotenv</code> are installed in the runner venv:
-                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
-                </p>
                 <p class="text-xs text-gray-500 mb-4">
-                    Alternatively, run the MAF script directly — no runner needed:
-                    <code class="text-xs bg-gray-100 px-1 rounded">python &lt;workflow&gt;_maf.py "Your prompt"</code>
+                    Note: the command in Option B only starts the runner <b>service</b> — it does not run the workflow by itself.
+                    First-time setup for either option:
+                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -3992,7 +4005,8 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), startCmd);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-direct'), directCmd);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-start'), startCmd);
     }
 
     /**
