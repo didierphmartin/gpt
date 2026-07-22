@@ -567,31 +567,6 @@ class SkillRuntime:
     _stage_hints = {}     # "skill_dir/script" -> staging-coach count
     _abort = []           # non-empty => a DATA failure demands a workflow abort
 
-    # Known-safe output-token ceilings per provider for DOCUMENT transport.
-    # The skill step moves whole documents through model OUTPUT (authored
-    # text, or tool-call arguments — those count against max_tokens too). A
-    # node form cap like 8192 DECAPITATES a ~10k-token document-carrying tool
-    # call mid-JSON: the API emits an invalid/truncated call, MAF counts a
-    # "function call error", and after 3 the model stops calling tools —
-    # which looks exactly like refusal. Diagnosed from a live run; the skill
-    # step therefore boosts max_tokens to at least these values.
-    DOC_TOKEN_CAPS = {
-        "claude": 32000, "anthropic": 32000,
-        "openai": 16384,
-        "gemini": 32768, "google": 32768,
-        "grok": 16384,
-        "kimi": 8192, "deepseek": 8192, "glm": 8192,
-    }
-
-    @classmethod
-    def doc_max_tokens(cls, provider, max_tokens):
-        """Output-token budget for document-carrying skill phases."""
-        cap = cls.DOC_TOKEN_CAPS.get((provider or "").lower(), 8192)
-        boosted = max(int(max_tokens or 0), cap)
-        if boosted > int(max_tokens or 0):
-            print(f"  [skill] max_tokens {max_tokens} -> {boosted} for document transport "
-                  f"(node cap would truncate document-sized outputs/tool calls)", flush=True)
-        return boosted
 
     @staticmethod
     def _scratch_real(path):
@@ -733,11 +708,15 @@ class SkillRuntime:
         dir_name = skill.get("dir", "")
         body = skill.get("inline") or (_read_skill_md(dir_name) if dir_name else "")
         client = ProviderClients.make(provider, model)
-        # Documents flow through model output in EVERY phase of this step
-        # (authored text, or content inside tool-call arguments) — boost the
-        # budget above the node's chat-sized cap or they get truncated.
-        opts = ProviderClients.chat_options(provider, model,
-                                            cls.doc_max_tokens(provider, max_tokens), temperature)
+        # The node form's max_tokens governs EVERY phase of this step, verbatim
+        # (platform principle: form values are never silently overridden).
+        # NOTE for operators: documents flow through model OUTPUT here — both
+        # authored text AND tool-call arguments count against this budget. A
+        # document-carrying call that exceeds it is truncated mid-JSON, which
+        # surfaces as consecutive 'function call errors'. If a document skill
+        # fails that way, raise Max Tokens on the NODE's form and regenerate.
+        print(f"  [skill] token budget for this step: {max_tokens} (from the node form)", flush=True)
+        opts = ProviderClients.chat_options(provider, model, max_tokens, temperature)
         material_msg = (
             "## Material to process\n" + str(prior) +
             "\n\n## Original request (authoritative for target and parameters)\n" + str(user_prompt))
