@@ -36,6 +36,23 @@ class ADKGenerator
     {
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
+
+        // Platform default model per provider (system_llm_settings) — an empty
+        // node/agent model means "use the platform default" and must be resolved
+        // at generation time (mirrors MAFGenerator; _make_model raises otherwise).
+        $defaults = [];
+        try {
+            $rows = $this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1");
+            foreach ($rows as $row) {
+                if (!empty($row['model'])) {
+                    $defaults[strtolower((string) $row['provider_key'])] = (string) $row['model'];
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[ADKGenerator] could not load provider default models: ' . $e->getMessage());
+        }
+        $analyzed['providerDefaultModels'] = $defaults;
+
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
             'filename' => strtolower($name) . '_adk.py',
@@ -152,7 +169,24 @@ HOW THIS FILE IS ORGANISED (top to bottom):
                                       ParallelAgent; the layers themselves run in order.
   7. main()                        -- seeds the prompt (plus any attached documents), runs
                                       the graph via Runner, streams a [node]/[tool] trace to
-                                      stdout, and saves the final result under outputs/.
+                                      stdout, saves the final result under outputs/, and
+                                      closes with a RUN SUMMARY (time per node, total
+                                      wall-clock, document location).
+
+NODE-INTERNAL PIPELINE (fixed order):
+    merged fan-in (parents' outputs via {node_<id>} state placeholders)
+      ==> AGENT: the node's LlmAgent — its system prompt, MCP tools and
+          sampling settings come verbatim from the editor form (provider
+          CONSTRAINT clamps only, each documented as an emitted comment:
+          kimi-k2 temperature 0.6; anthropic 16384 non-streaming ceiling).
+          Instructions are grounded in today's date at import time.
+      ==> SKILL step(s), each a SequentialAgent pair: an LLM turn whose
+          system prompt is the skill's SKILL.md (fresh context; the node's
+          budget so document-carrying tool calls don't truncate), then a
+          capture agent that makes the node output the file the skill's
+          script PRODUCED (else the LLM text). Staged input_files are
+          repaired if a model delivers them JSON-over-escaped.
+    The Output node is a non-LLM pass-through: parents' text verbatim.
 
 TO RUN:
     pip install "google-adk>=2.3,<3" litellm httpx   # 2.3.x: SequentialAgent/ParallelAgent still supported
@@ -171,6 +205,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.events import Event, EventActions
 from google.genai import types
+
+# Runtime "today" for date-grounding every agent instruction (evaluated at import).
+_TODAY = time.strftime("%Y-%m-%d")
 PY;
     }
 
@@ -215,11 +252,17 @@ def _make_model(provider: str, model: str):
             api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
         )
     if p == "deepseek":
-        return LiteLlm(
+        kwargs = dict(
             model="openai/" + model,
             api_base="https://api.deepseek.com",
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
         )
+        if model.startswith("deepseek-v4"):
+            # V4 runs thinking-ON by default SERVER-side and rejects sampling
+            # params in that mode; disable explicitly (mirrors the platform's
+            # DeepSeekProvider fix) so the form's temperature is accepted.
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        return LiteLlm(**kwargs)
     if p == "kimi":
         kwargs = dict(
             model="openai/" + model,
@@ -299,6 +342,19 @@ def _remap_virtual_path(p, out_dir: str) -> str:
     return p
 
 
+def _fix_overescaped(text):
+    """Repair JSON-style over-escaping in model-carried document content
+    (literal \\n / \\" sequences, zero real newlines — a known model behavior
+    that ships broken HTML/CSS; mirrors the platform chat's recovery).
+    Conservative: only fires on many escapes AND no real newlines."""
+    s = str(text)
+    if s.count("\\n") > 5 and s.count("\n") == 0:
+        print("  [skill] repairing over-escaped staged content", flush=True)
+        s = (s.replace("\\\\", "\x00").replace("\\n", "\n").replace("\\t", "\t")
+              .replace("\\r", "").replace('\\"', '"').replace("\\'", "'").replace("\x00", "\\"))
+    return s
+
+
 async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None = None,
                             input_files: dict | None = None,
                             read_outputs: list[str] | None = None) -> str:
@@ -319,7 +375,7 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
                 target = _remap_virtual_path(raw_path, out_dir)
                 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
                 with open(target, "w", encoding="utf-8") as fh:
-                    fh.write(content if isinstance(content, str) else str(content))
+                    fh.write(_fix_overescaped(content))
             except Exception as e:
                 print(f"[skill] could not stage {raw_path}: {e}", flush=True)
     group = dir_name.split("/")[0] if "/" in dir_name else ""
@@ -386,6 +442,7 @@ def _skill_instruction(dir_name: str, input_key: str, inline_md: str = ""):
         body = inline_md if inline_md else _read_skill_md(dir_name)
         prior = ctx.state.get(input_key, "")
         return (
+            "Current date: " + _TODAY + ".\n"
             "You are running the '" + dir_name + "' skill as a MANDATORY step in a compiled "
             "workflow. Follow the skill instructions below and APPLY THE SKILL to the INPUT. "
             "If the skill produces a document/file (e.g. an HTML report via a create/render "
@@ -480,6 +537,34 @@ PY;
             $skills = $ag['skills'] ?? [];
             $hasSkills = count($skills) > 0;
 
+            // Empty model = "platform default": resolve at generation time
+            // (aliases share their canonical provider's default). Mirrors MAF.
+            $defaults = (array) ($analyzed['providerDefaultModels'] ?? []);
+            $provKey  = strtolower((string) ($ag['provider'] ?? 'claude'));
+            $canon    = ['anthropic' => 'claude', 'google' => 'gemini'][$provKey] ?? $provKey;
+            $modelStr = (string) ($ag['model'] ?? '');
+            if ($modelStr === '') {
+                $modelStr = (string) ($defaults[$canon] ?? $defaults[$provKey] ?? '');
+            }
+            $ag['model'] = $modelStr;
+
+            // Provider CONSTRAINT clamps (not preference overrides — these values
+            // are hard API rules; the emitted comment documents each adjustment):
+            //  * kimi-k2.* accepts ONLY temperature 0.6 with thinking off.
+            //  * anthropic non-streaming SDK refuses budgets implying >10min
+            //    responses; 16384 is the safe ceiling (see MAFGenerator).
+            $clampNotes = [];
+            if ($provKey === 'kimi' && str_starts_with($modelStr, 'kimi-k2')
+                && $ag['temperature'] !== null && (float) $ag['temperature'] !== 0.6) {
+                $clampNotes[] = "temperature {$ag['temperature']} -> 0.6 (kimi-k2 API constraint)";
+                $ag['temperature'] = 0.6;
+            }
+            if (in_array($provKey, ['claude', 'anthropic'], true)
+                && $ag['max_tokens'] !== null && (int) $ag['max_tokens'] > 16384) {
+                $clampNotes[] = "max_tokens {$ag['max_tokens']} -> 16384 (anthropic non-streaming SDK limit)";
+                $ag['max_tokens'] = 16384;
+            }
+
             // The main agent NEVER carries the skill tool. (Drop the old
             // run_skill_script auto-add entirely — skills are separate steps now.)
             $toolExprs = [];
@@ -499,10 +584,17 @@ PY;
 
             $agentComment = str_replace(["\r", "\n"], ' ', (string) $ag['name']);
             $entry  = "# Agent \"{$agentComment}\" ({$ag['provider']}/{$ag['model']}) -- workflow node {$id}\n";
+            foreach ($clampNotes as $cn) {
+                $entry .= "# constraint clamp: {$cn}\n";
+            }
             $entry .= "{$agentVar} = LlmAgent(\n";
             $entry .= "    name=\"{$agentVar}\",\n";
             $entry .= "    model={$model},\n";
-            $entry .= "    instruction=" . PythonEmitHelpers::pyStr($instr) . ",\n";
+            // Ground the model in TODAY (runtime date, evaluated at import) — without
+            // it research agents anchor on their training era (see MAF fix).
+            $entry .= "    instruction=(\"Current date: \" + _TODAY + \". Treat this as 'now'; \"\n"
+                    . "                 \"prefer your tools for current data over memory.\\n\\n\"\n"
+                    . "                 + " . PythonEmitHelpers::pyStr($instr) . "),\n";
             $entry .= "    tools={$toolsPy},\n";
             // Emit the agent-form values verbatim — never override a form-stated
             // parameter. If a value is invalid for a model (e.g. Kimi K2 requires
@@ -547,6 +639,15 @@ PY;
                     $entry .= "    model={$model},\n";
                     $entry .= "    instruction={$instrExpr},\n";
                     $entry .= "    tools={$toolPy},\n";
+                    // Documents flow through this step's OUTPUT (authored text and
+                    // tool-call arguments both count) — inherit the node's budget so
+                    // provider-default caps don't truncate document-carrying calls.
+                    if ($ag['temperature'] !== null || $ag['max_tokens'] !== null) {
+                        $skwargs = [];
+                        if ($ag['temperature'] !== null) $skwargs[] = "temperature=" . json_encode($ag['temperature']);
+                        if ($ag['max_tokens'] !== null)  $skwargs[] = "max_output_tokens=" . json_encode($ag['max_tokens']);
+                        $entry .= "    generate_content_config=types.GenerateContentConfig(" . implode(", ", $skwargs) . "),\n";
+                    }
                     $entry .= "    output_key=\"{$llmVar}\",\n";
                     $entry .= ")";
                     // (b) capture: node output = the produced file (via run_skill_script read_outputs), else the LLM text.
@@ -724,10 +825,15 @@ PY;
             "    final = \"\"\n" .
             "    t0 = time.monotonic()\n" .
             "    seen = set()\n" .
+            "    _t_first, _t_last = {}, {}  # per-node timing for the RUN SUMMARY\n" .
             "    content = types.Content(role=\"user\", parts=[types.Part(text=user_prompt)])\n" .
             "    try:\n" .
             "        async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
             "            author = getattr(event, \"author\", \"?\")\n" .
+            "            if isinstance(author, str) and author.startswith(\"node_\"):\n" .
+            "                _nk = author.split(\"_\")[1] if \"_\" in author else author\n" .
+            "                _t_first.setdefault(_nk, time.monotonic())\n" .
+            "                _t_last[_nk] = time.monotonic()\n" .
             "            if author and author not in seen:\n" .
             "                seen.add(author)\n" .
             "                if isinstance(author, str) and author.startswith(\"node_\"):\n" .
@@ -770,6 +876,7 @@ PY;
             "    # Honour the Output node's storage setting: when ON, persist the final result\n" .
             "    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,\n" .
             "    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.\n" .
+            "    _saved_path = None\n" .
             "    if OUTPUT_STORAGE_ENABLED:\n" .
             "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n" .
             "        if OUTPUT_FOLDER:\n" .
@@ -781,10 +888,26 @@ PY;
             "        _out = os.path.join(_save_dir, f\"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}\")\n" .
             "        with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
             "            _f.write(final)\n" .
-            "        print(f\"[workflow] result saved to {os.path.abspath(_out)}\", flush=True)\n" .
-            "    else:\n" .
-            "        print(\"[workflow] output storage is OFF -- result printed below, not saved\", flush=True)\n" .
+            "        _saved_path = os.path.abspath(_out)\n" .
             "    print(final)\n" .
+            "    # Closing RUN SUMMARY (printed LAST): time per node, total, document location.\n" .
+            "    print(\"\\n\" + \"=\" * 74, flush=True)\n" .
+            "    print(\"RUN SUMMARY\", flush=True)\n" .
+            "    print(\"-\" * 74, flush=True)\n" .
+            "    _durs = {NODE_NAMES.get(k, k): _t_last[k] - _t_first[k] for k in _t_first if k in _t_last}\n" .
+            "    if _durs:\n" .
+            "        _w = max(len(n) for n in _durs)\n" .
+            "        print(\"  Time per node:\", flush=True)\n" .
+            "        for _n, _s in sorted(_durs.items(), key=lambda kv: -kv[1]):\n" .
+            "            print(f\"    {_n:<{_w}}   {_s:7.1f}s\", flush=True)\n" .
+            "    print(f\"  Total wall-clock: {time.monotonic() - t0:.1f}s\", flush=True)\n" .
+            "    print(f\"  Final output: {len(final)} chars\", flush=True)\n" .
+            "    if _saved_path:\n" .
+            "        print(f\"  Document saved to: {_saved_path}\", flush=True)\n" .
+            "    else:\n" .
+            "        print(\"  Document not saved (output storage is OFF in the workflow settings) -- \"\n" .
+            "              \"the output is printed above.\", flush=True)\n" .
+            "    print(\"=\" * 74, flush=True)\n" .
             "    return final\n" .
             "\n" .
             "if __name__ == \"__main__\":\n" .
