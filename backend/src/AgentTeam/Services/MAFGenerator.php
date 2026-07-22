@@ -23,6 +23,24 @@ class MAFGenerator
     {
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
+
+        // Platform default model per provider (system_llm_settings) — a node
+        // whose form leaves the model empty means "use the platform default",
+        // and the compiled code must bake that SAME default (MAF clients
+        // reject an empty model string outright).
+        $defaults = [];
+        try {
+            $rows = $this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1");
+            foreach ($rows as $row) {
+                if (!empty($row['model'])) {
+                    $defaults[strtolower((string) $row['provider_key'])] = (string) $row['model'];
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[MAFGenerator] could not load provider default models: ' . $e->getMessage());
+        }
+        $analyzed['providerDefaultModels'] = $defaults;
+
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
             'filename' => strtolower($name) . '_maf.py',
@@ -407,6 +425,12 @@ class MAFGenerator
                 misconfigured node fails loudly at its first run, not mid-workflow.
                 """
                 p = (provider or "claude").lower()
+                if not model:
+                    # Models are resolved at generation time (form value, else the
+                    # platform default) — an empty one here means neither existed.
+                    raise RuntimeError(
+                        f"No model for provider {provider!r}: set the model in the "
+                        f"node's form (or configure a platform default) and re-generate.")
                 # 'anthropic' is the workflow DSL's alias for 'claude' (the editor
                 # saves either, depending on where the node was authored).
                 if p in ("claude", "anthropic"):
@@ -602,16 +626,26 @@ PY;
     private static function agentsBlock(array $analyzed): string
     {
         $entries = [];
+        $defaultModels = (array) ($analyzed['providerDefaultModels'] ?? []);
         foreach ($analyzed['agents'] as $id => $ag) {
             $instr = (string) ($ag['systemPrompt'] ?? '');
             $tools = array_map(fn($t) => 'catalog.get(' . PythonEmitHelpers::pyStr($t) . ')', $ag['tools'] ?? []);
             $toolsPy = '[' . implode(', ', array_filter($tools)) . ']';
             // Skills baked for Task 3; empty list here is harmless.
             $skillsPy = PythonEmitHelpers::jsonToPython($ag['skills'] ?? []);
+            // Empty form model = "platform default": resolve it NOW so the
+            // compiled file is self-contained (MAF clients reject model="").
+            // Provider aliases share their canonical provider's default.
+            $prov  = strtolower((string) ($ag['provider'] ?? 'claude'));
+            $canon = ['anthropic' => 'claude', 'google' => 'gemini'][$prov] ?? $prov;
+            $model = (string) ($ag['model'] ?? '');
+            if ($model === '') {
+                $model = (string) ($defaultModels[$canon] ?? $defaultModels[$prov] ?? '');
+            }
             $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $id) . ': {'
                 . '"name": ' . PythonEmitHelpers::pyStr((string) ($ag['name'] ?? ('node ' . $id))) . ', '
                 . '"provider": ' . PythonEmitHelpers::pyStr((string) ($ag['provider'] ?? 'claude')) . ', '
-                . '"model": ' . PythonEmitHelpers::pyStr((string) ($ag['model'] ?? '')) . ', '
+                . '"model": ' . PythonEmitHelpers::pyStr($model) . ', '
                 . '"instructions": ' . PythonEmitHelpers::pyStr($instr) . ', '
                 . '"tools": ' . $toolsPy . ', '
                 . '"skills": ' . $skillsPy . ', '
