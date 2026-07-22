@@ -421,17 +421,32 @@ class MAFGenerator
 
             @staticmethod
             def chat_options(provider, model, max_tokens, temperature):
-                """Per-call ChatOptions carrying the node form's sampling settings.
+                """Per-call ChatOptions carrying the node form's sampling settings,
+                corrected for hard model constraints (same policy as the platform):
 
-                Kimi K2 and GLM 5.2 default to "thinking" mode; disable it (a
-                non-form setting, same as the ADK/LangGraph targets do) so they
-                answer directly instead of burning the token budget on reasoning.
-                With thinking OFF, kimi-k2.* requires temperature 0.6 -- a model
-                constraint surfaced to the user in the form, never overridden here.
+                * kimi-k2.*  -- thinking disabled; the API then accepts ONLY
+                  temperature 0.6, so any other form value is clamped (with a
+                  console note) instead of 400-failing the whole run.
+                * glm        -- thinking disabled (answers directly instead of
+                  burning the token budget on reasoning); temperature kept.
+                * deepseek-v4.* -- thinking is ON by default server-side and
+                  rejects sampling params; disable it explicitly so the form's
+                  temperature is accepted.
                 """
+                extra = None
+                if provider == "kimi" and str(model).startswith("kimi-k2"):
+                    if temperature != 0.6:
+                        print(f"[info  ] kimi {model}: temperature {temperature} -> 0.6 "
+                              f"(the only value this model accepts with thinking off)", flush=True)
+                    temperature = 0.6
+                    extra = {"thinking": {"type": "disabled"}}
+                elif provider == "glm":
+                    extra = {"thinking": {"type": "disabled"}}
+                elif provider == "deepseek" and str(model).startswith("deepseek-v4"):
+                    extra = {"thinking": {"type": "disabled"}}
                 o = ChatOptions(max_tokens=max_tokens, temperature=temperature)
-                if (provider == "kimi" and str(model).startswith("kimi-k2")) or provider == "glm":
-                    o["extra_body"] = {"thinking": {"type": "disabled"}}
+                if extra:
+                    o["extra_body"] = extra
                 return o
         PY;
     }
@@ -923,8 +938,9 @@ PY;
         }
 
         $body = implode("\n", $inst)
-            . "\n\n    # -- graph assembly: Start is the entry executor -------------------------"
-            . "\n    builder = WorkflowBuilder(start_executor=start_node)\n"
+            . "\n\n    # -- graph assembly: Start is the entry executor; the Output executor is"
+            . "\n    # -- explicitly declared as the workflow's output source (output_from)."
+            . "\n    builder = WorkflowBuilder(start_executor=start_node, output_from=[output_node])\n"
             . implode("\n", $edges);
         return <<<PY
         def create_workflow():
