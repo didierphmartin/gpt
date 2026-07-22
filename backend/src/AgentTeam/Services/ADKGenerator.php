@@ -224,7 +224,7 @@ PY;
     private static function modelFactoryBlock(): string
     {
         return <<<'PY'
-def _make_model(provider: str, model: str):
+def _make_model(provider: str, model: str, thinking: str | None = None):
     """Resolve a (provider, model) pair to an ADK model.
 
     Gemini -> native model string; everything else -> LiteLlm. Grok/DeepSeek/Kimi
@@ -258,10 +258,12 @@ def _make_model(provider: str, model: str):
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
         )
         if model.startswith("deepseek-v4"):
-            # V4 runs thinking-ON by default SERVER-side and rejects sampling
-            # params in that mode; disable explicitly (mirrors the platform's
-            # DeepSeekProvider fix) so the form's temperature is accepted.
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            # The node form's Thinking attribute governs (platform parity):
+            # 'off' -> disabled (form temperature accepted); 'on'/default ->
+            # V4's server default stays ON (sampling params are dropped at the
+            # config level by the generator in that case).
+            _mode = "disabled" if thinking == "off" else "enabled"
+            kwargs["extra_body"] = {"thinking": {"type": _mode}}
         return LiteLlm(**kwargs)
     if p == "kimi":
         kwargs = dict(
@@ -270,17 +272,19 @@ def _make_model(provider: str, model: str):
             api_key=os.environ.get("KIMI_API_KEY"),
         )
         if model.startswith("kimi-k2"):
-            # K2 enforces non-thinking sampling; mirror the PHP KimiProvider.
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            # Thinking attribute governs; K2's sampling constraints per mode
+            # are enforced at the config level by the generator.
+            _mode = "enabled" if thinking == "on" else "disabled"
+            kwargs["extra_body"] = {"thinking": {"type": _mode}}
         return LiteLlm(**kwargs)
     if p == "glm":
-        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Defaults to heavy reasoning; disable
-        # thinking so it answers directly instead of burning the token budget on reasoning.
+        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Default: thinking off so it
+        # answers directly; the node form's Thinking attribute can enable it.
         return LiteLlm(
             model="openai/" + model,
             api_base="https://api.z.ai/api/paas/v4",
             api_key=os.environ.get("GLM_API_KEY"),
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
         )
     # Fallback: best-effort litellm prefixed spec.
     return LiteLlm(model=model if "/" in model else p + "/" + model)
@@ -549,15 +553,28 @@ PY;
             $ag['model'] = $modelStr;
 
             // Provider CONSTRAINT clamps (not preference overrides — these values
-            // are hard API rules; the emitted comment documents each adjustment):
-            //  * kimi-k2.* accepts ONLY temperature 0.6 with thinking off.
-            //  * anthropic non-streaming SDK refuses budgets implying >10min
-            //    responses; 16384 is the safe ceiling (see MAFGenerator).
+            // are hard API rules; the emitted comment documents each adjustment).
+            // The node form's Thinking attribute ('on'|'off'|default) governs
+            // reasoning mode; sampling constraints follow the chosen mode:
+            //  * kimi-k2: thinking off -> temperature MUST be 0.6; on -> 1.0.
+            //  * deepseek-v4: thinking on/default -> sampling params rejected
+            //    by the API, temperature dropped; off -> temperature kept.
+            //  * anthropic non-streaming SDK: 16384 budget ceiling.
+            $thinking = $ag['thinking'] ?? null;
             $clampNotes = [];
-            if ($provKey === 'kimi' && str_starts_with($modelStr, 'kimi-k2')
-                && $ag['temperature'] !== null && (float) $ag['temperature'] !== 0.6) {
-                $clampNotes[] = "temperature {$ag['temperature']} -> 0.6 (kimi-k2 API constraint)";
-                $ag['temperature'] = 0.6;
+            if ($provKey === 'kimi' && str_starts_with($modelStr, 'kimi-k2')) {
+                $want = ($thinking === 'on') ? 1.0 : 0.6;
+                if ($ag['temperature'] !== null && (float) $ag['temperature'] !== $want) {
+                    $clampNotes[] = "temperature {$ag['temperature']} -> {$want} (kimi-k2 "
+                        . ($thinking === 'on' ? 'thinking' : 'non-thinking') . " constraint)";
+                    $ag['temperature'] = $want;
+                }
+            }
+            if ($provKey === 'deepseek' && str_starts_with($modelStr, 'deepseek-v4')
+                && $thinking !== 'off' && $ag['temperature'] !== null) {
+                $clampNotes[] = "temperature {$ag['temperature']} dropped (deepseek-v4 thinking mode "
+                    . "rejects sampling params; set the node's Thinking attribute to Off to keep it)";
+                $ag['temperature'] = null;
             }
             if (in_array($provKey, ['claude', 'anthropic'], true)
                 && $ag['max_tokens'] !== null && (int) $ag['max_tokens'] > 16384) {
@@ -578,7 +595,8 @@ PY;
             }
             $toolsPy = '[' . implode(', ', $toolExprs) . ']';
 
-            $model = '_make_model("' . $ag['provider'] . '", "' . $ag['model'] . '")';
+            $thinkPy = in_array($thinking, ['on', 'off'], true) ? '"' . $thinking . '"' : 'None';
+            $model = '_make_model("' . $ag['provider'] . '", "' . $ag['model'] . '", thinking=' . $thinkPy . ')';
             $agentVar    = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
             $agentOutKey = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
 

@@ -483,6 +483,9 @@ class LangGraphGenerator
                 'model' => $agentModel,
                 'temperature' => $agentTemperature,
                 'max_tokens' => $agentMaxTokens,
+                // Per-agent Thinking switch ('on'|'off'|null) — node form attribute.
+                'thinking' => (in_array($cfgSettings['thinking'] ?? null, ['on', 'off'], true)
+                                ? $cfgSettings['thinking'] : null),
                 'skills' => $skills,
             ];
         }
@@ -641,7 +644,7 @@ class LangGraphGenerator
         $lines[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $lines[] = '';
         $lines[] = '';
-        $lines[] = 'def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096):';
+        $lines[] = 'def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096, thinking=None):';
         $lines[] = '    """Build a LangChain chat model for the given provider/model.';
         $lines[] = '';
         $lines[] = '    The (provider, model) pair was resolved by the generator: the';
@@ -699,20 +702,30 @@ class LangGraphGenerator
         $lines[] = '            max_tokens=max_tokens,';
         $lines[] = '        )';
         $lines[] = '        if model.startswith("deepseek-v4"):';
-        $lines[] = '            # V4 runs thinking-ON by default SERVER-side and rejects sampling';
-        $lines[] = '            # params in that mode; disable explicitly (platform DeepSeekProvider';
-        $lines[] = '            # fix) so the form temperature is accepted.';
-        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
+        $lines[] = '            # The node form Thinking attribute governs (platform parity):';
+        $lines[] = '            # off -> disabled, form temperature kept; on/default -> V4 thinking';
+        $lines[] = '            # stays enabled and the API rejects sampling params, so temperature';
+        $lines[] = '            # is dropped (set Thinking=Off on the node to use a temperature).';
+        $lines[] = '            if thinking == "off":';
+        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
+        $lines[] = '            else:';
+        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "enabled"}}}';
+        $lines[] = '                if "temperature" in kwargs:';
+        $lines[] = '                    print(f"[info] deepseek {model}: temperature dropped (thinking mode)", flush=True)';
+        $lines[] = '                    kwargs.pop("temperature", None)';
         $lines[] = '        return ChatOpenAI(**kwargs)';
         $lines[] = '    if p == "kimi":';
         $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        # Kimi is OpenAI-compatible. K2 defaults to thinking mode; disable it';
-        $lines[] = '        # (not a form parameter) to match the PHP KimiProvider. With thinking';
-        $lines[] = '        # OFF the API accepts ONLY temperature 0.6 — clamp (provider CONSTRAINT,';
-        $lines[] = '        # not a preference override; any other value 400s the whole node).';
-        $lines[] = '        if model.startswith("kimi-k2") and temperature != 0.6:';
-        $lines[] = '            print(f"[info] kimi {model}: temperature {temperature} -> 0.6 (model constraint)", flush=True)';
-        $lines[] = '            temperature = 0.6';
+        $lines[] = '        # Kimi is OpenAI-compatible. The node form Thinking attribute governs';
+        $lines[] = '        # K2 reasoning mode (default off, matching the PHP KimiProvider); the';
+        $lines[] = '        # API then constrains sampling: thinking OFF -> temperature MUST be 0.6,';
+        $lines[] = '        # thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).';
+        $lines[] = '        _k2 = model.startswith("kimi-k2")';
+        $lines[] = '        if _k2:';
+        $lines[] = '            _want = 1.0 if thinking == "on" else 0.6';
+        $lines[] = '            if temperature != _want:';
+        $lines[] = '                print(f"[info] kimi {model}: temperature {temperature} -> {_want} (model constraint)", flush=True)';
+        $lines[] = '                temperature = _want';
         $lines[] = '        kwargs = dict(';
         $lines[] = '            model=model,';
         $lines[] = '            base_url="https://api.moonshot.ai/v1",';
@@ -720,8 +733,9 @@ class LangGraphGenerator
         $lines[] = '            temperature=temperature,';
         $lines[] = '            max_tokens=max_tokens,';
         $lines[] = '        )';
-        $lines[] = '        if model.startswith("kimi-k2"):';
-        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
+        $lines[] = '        if _k2:';
+        $lines[] = '            _mode = "enabled" if thinking == "on" else "disabled"';
+        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": _mode}}}';
         $lines[] = '        return ChatOpenAI(**kwargs)';
         $lines[] = '    if p == "glm":';
         $lines[] = '        from langchain_openai import ChatOpenAI';
@@ -940,6 +954,9 @@ class LangGraphGenerator
             $lines[] = '        "model": ' . $modelJson . ',';
             $lines[] = '        "temperature": ' . $temperatureLit . ',';
             $lines[] = '        "max_tokens": ' . $maxTokensLit . ',';
+            $thinkLit = in_array($ad['thinking'] ?? null, ['on', 'off'], true)
+                ? '"' . $ad['thinking'] . '"' : 'None';
+            $lines[] = '        "thinking": ' . $thinkLit . ',  # node form Thinking attribute';
             $lines[] = '        "system_prompt": """';
             foreach ($wrappedLines as $wl) {
                 $lines[] = $wl;
@@ -1355,6 +1372,7 @@ PY;
             ad.get("model", ""),
             float(ad.get("temperature", 0.7)),
             int(ad.get("max_tokens", 4096)),
+            thinking=ad.get("thinking"),
         )
         for nid, ad in AGENTS.items()
     }

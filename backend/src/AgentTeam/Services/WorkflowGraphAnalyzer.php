@@ -257,6 +257,11 @@ class WorkflowGraphAnalyzer
                 'model'            => (string) ($c['model'] ?? ''),
                 'temperature'      => $c['settings']['temperature'] ?? null,
                 'max_tokens'       => $c['settings']['max_tokens'] ?? null,
+                // Per-agent Thinking switch ('on'|'off'|null=provider default) —
+                // the node form attribute added 2026-07-17; compile targets
+                // honor it the same way AgentRunner/providers do in-platform.
+                'thinking'         => (in_array($c['settings']['thinking'] ?? null, ['on', 'off'], true)
+                                        ? $c['settings']['thinking'] : null),
                 'tools'            => array_values(array_map('strval', is_array($tools) ? $tools : [])),
                 'skill_content'    => (string) ($c['skill_content'] ?? ''),
                 'skills'           => self::skillsFromConfig($c),

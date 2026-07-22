@@ -493,41 +493,60 @@ PY;
                 raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
 
             @staticmethod
-            def chat_options(provider, model, max_tokens, temperature):
-                """Per-call ChatOptions carrying the node form's sampling settings,
-                corrected for hard model constraints (same policy as the platform):
+            def chat_options(provider, model, max_tokens, temperature, thinking=None):
+                """Per-call ChatOptions carrying the node form's sampling settings.
 
-                * kimi-k2.*  -- thinking disabled; the API then accepts ONLY
-                  temperature 0.6, so any other form value is clamped (with a
-                  console note) instead of 400-failing the whole run.
-                * glm        -- thinking disabled (answers directly instead of
-                  burning the token budget on reasoning); temperature kept.
-                * deepseek-v4.* -- thinking is ON by default server-side and
-                  rejects sampling params; disable it explicitly so the form's
-                  temperature is accepted.
+                `thinking` is the node form's Thinking attribute ('on' | 'off' |
+                None = provider default) — honored EXACTLY like the platform's
+                AgentRunner/providers, corrected only for hard API constraints:
+
+                * kimi-k2.*  -- thinking OFF (default): API accepts ONLY
+                  temperature 0.6 (clamped with a note). Thinking ON: the API
+                  requires temperature 1.0.
+                * glm        -- default OFF (answers directly); ON honored.
+                * deepseek-v4.* -- provider default is thinking ON (server
+                  side), which REJECTS sampling params — temperature is dropped
+                  in that mode. Thinking OFF keeps the form's temperature.
+                * anthropic  -- non-streaming SDK refuses budgets implying a
+                  >10-minute response; clamp to the 16384 ceiling.
                 """
+                p = (provider or "").lower()
                 extra = None
-                if (provider or "").lower() in ("claude", "anthropic") and (max_tokens or 0) > 16384:
-                    # Anthropic SDK refuses NON-STREAMING requests whose
-                    # max_tokens implies a >10-minute response ("Streaming is
-                    # required for operations that may take longer than 10
-                    # minutes"). MAF agent.run() is non-streaming, so clamp to
-                    # the largest safe budget. This is a provider constraint,
-                    # not an override of the form value.
+                if p in ("claude", "anthropic") and (max_tokens or 0) > 16384:
                     print(f"[info  ] anthropic: max_tokens {max_tokens} -> 16384 "
                           f"(non-streaming SDK limit)", flush=True)
                     max_tokens = 16384
-                if provider == "kimi" and str(model).startswith("kimi-k2"):
-                    if temperature != 0.6:
-                        print(f"[info  ] kimi {model}: temperature {temperature} -> 0.6 "
-                              f"(the only value this model accepts with thinking off)", flush=True)
-                    temperature = 0.6
-                    extra = {"thinking": {"type": "disabled"}}
-                elif provider == "glm":
-                    extra = {"thinking": {"type": "disabled"}}
-                elif provider == "deepseek" and str(model).startswith("deepseek-v4"):
-                    extra = {"thinking": {"type": "disabled"}}
-                o = ChatOptions(max_tokens=max_tokens, temperature=temperature)
+                if p == "kimi" and str(model).startswith("kimi-k2"):
+                    if thinking == "on":
+                        extra = {"thinking": {"type": "enabled"}}
+                        if temperature != 1.0:
+                            print(f"[info  ] kimi {model}: temperature {temperature} -> 1.0 "
+                                  f"(required in thinking mode)", flush=True)
+                        temperature = 1.0
+                    else:
+                        if temperature != 0.6:
+                            print(f"[info  ] kimi {model}: temperature {temperature} -> 0.6 "
+                                  f"(the only value this model accepts with thinking off)", flush=True)
+                        temperature = 0.6
+                        extra = {"thinking": {"type": "disabled"}}
+                elif p == "glm":
+                    extra = {"thinking": {"type": "enabled" if thinking == "on" else "disabled"}}
+                elif p == "deepseek" and str(model).startswith("deepseek-v4"):
+                    if thinking == "off":
+                        extra = {"thinking": {"type": "disabled"}}
+                    else:
+                        # Provider default (and 'on'): V4 thinking stays enabled;
+                        # the API rejects sampling params in this mode.
+                        extra = {"thinking": {"type": "enabled"}}
+                        if temperature is not None:
+                            print(f"[info  ] deepseek {model}: temperature dropped "
+                                  f"(not accepted while thinking is enabled; set the node's "
+                                  f"Thinking attribute to Off to use a temperature)", flush=True)
+                        temperature = None
+                kwargs = {"max_tokens": max_tokens}
+                if temperature is not None:
+                    kwargs["temperature"] = temperature
+                o = ChatOptions(**kwargs)
                 if extra:
                     o["extra_body"] = extra
                 return o
@@ -693,7 +712,7 @@ class SkillRuntime:
                             description=run_skill_script.__doc__, max_invocation_exceptions=1)
 
     @classmethod
-    async def run_step(cls, skill, prior, user_prompt, provider, model, max_tokens, temperature):
+    async def run_step(cls, skill, prior, user_prompt, provider, model, max_tokens, temperature, thinking=None):
         """Run ONE mandatory skill step on `prior` (the previous stage's output).
 
         TWO-PHASE, chat-parity design. In the platform's conversation mode a
@@ -726,7 +745,7 @@ class SkillRuntime:
         # surfaces as consecutive 'function call errors'. If a document skill
         # fails that way, raise Max Tokens on the NODE's form and regenerate.
         print(f"  [skill] token budget for this step: {max_tokens} (from the node form)", flush=True)
-        opts = ProviderClients.chat_options(provider, model, max_tokens, temperature)
+        opts = ProviderClients.chat_options(provider, model, max_tokens, temperature, thinking)
         material_msg = (
             "## Material to process\n" + str(prior) +
             "\n\n## Original request (authoritative for target and parameters)\n" + str(user_prompt))
@@ -909,7 +928,9 @@ PY;
                 // Form values VERBATIM (no substitution) -- if output truncates, raise
                 // max_tokens in that node's form.
                 . '"max_tokens": ' . (int) ($ag['max_tokens'] ?? 4096) . ', '
-                . '"temperature": ' . json_encode((float) ($ag['temperature'] ?? 0.7)) . '},';
+                . '"temperature": ' . json_encode((float) ($ag['temperature'] ?? 0.7)) . ', '
+                . '"thinking": ' . (in_array($ag['thinking'] ?? null, ['on', 'off'], true)
+                                    ? PythonEmitHelpers::pyStr($ag['thinking']) : 'None') . '},';
         }
         $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
@@ -1097,7 +1118,8 @@ PY;
                 # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
                 _tools = [t for t in ad["tools"] if t is not None]
                 _opts = ProviderClients.chat_options(ad["provider"], ad["model"],
-                                                     ad["max_tokens"], ad["temperature"])
+                                                     ad["max_tokens"], ad["temperature"],
+                                                     ad.get("thinking"))
                 # Ground the model in TODAY — without this, research agents anchor
                 # on their training-data era and confidently report stale facts
                 # (the platform's chat injects the same preamble).
@@ -1121,7 +1143,8 @@ PY;
                     _ts0 = time.monotonic()
                     text = await SkillRuntime.run_step(_skill, text, RUN_STATE["user_prompt"],
                                                        ad["provider"], ad["model"],
-                                                       ad["max_tokens"], ad["temperature"])
+                                                       ad["max_tokens"], ad["temperature"],
+                                                       ad.get("thinking"))
                     ProgressReporter.note(f"{name}: skill {_sd!r} done — {len(text)} chars "
                                           f"in {time.monotonic() - _ts0:.1f}s")
                 ProgressReporter.node_done(name, len(text))
