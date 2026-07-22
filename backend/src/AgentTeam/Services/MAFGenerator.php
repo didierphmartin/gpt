@@ -212,6 +212,9 @@ class MAFGenerator
             $pyUrl  = PythonEmitHelpers::pyStr($serverUrl);
             $pyName = PythonEmitHelpers::pyStr($toolName);
 
+            // Every tool call reports progress (which agent, which tool, how
+            // long, how much data) — parity with the conversation UI's
+            // "Executing function: …" feedback.
             if ($allValidProps || $hasExtra) {
                 $argPairs = [];
                 foreach ($allValidProps as $pname => $pspec) {
@@ -224,10 +227,10 @@ class MAFGenerator
                     $argDict = '{' . implode(', ', $argPairs) . '}';
                 }
                 $body  = "    _args = {k: v for k, v in {$argDict}.items() if v is not None}\n";
-                $body .= "    return _call_mcp_tool({$pyUrl}, {$pyName}, _args)";
+                $body .= "    return _reported_mcp_call({$pyUrl}, {$pyName}, _args)";
             } else {
                 // No properties — empty-schema tool; pass empty dict.
-                $body = "    return _call_mcp_tool({$pyUrl}, {$pyName}, {})";
+                $body = "    return _reported_mcp_call({$pyUrl}, {$pyName}, {})";
             }
 
             $functions[]      = "def {$fnName}({$paramStr}) -> str:\n{$doc}\n{$body}";
@@ -237,7 +240,37 @@ class MAFGenerator
         }
 
         // Emit concrete _tool_* functions at module scope before build_tools_from_catalog.
-        $out = '';
+        // _reported_mcp_call wraps the shared _call_mcp_tool with console progress:
+        // WHICH agent (contextvar set by AgentNodeExecutor — it survives across
+        // await points and threads, so parallel nodes attribute correctly) called
+        // WHICH tool, how long it took, and how much data came back.
+        $out = <<<'PY'
+import contextvars
+
+_CURRENT_NODE = contextvars.ContextVar("current_node", default="?")
+
+
+def _reported_mcp_call(server_url, tool_name, args):
+    """Progress-reporting wrapper around _call_mcp_tool (see FILE MAP).
+
+    Prints the same kind of feedback the platform's conversation UI shows
+    while a tool executes, attributed to the agent node that asked for it."""
+    node = _CURRENT_NODE.get()
+    print(f"[tool ⚙] {node} → {tool_name}({', '.join(f'{k}={v!r}' for k, v in args.items()) if args else ''})",
+          flush=True)
+    _t0 = time.monotonic()
+    try:
+        result = _call_mcp_tool(server_url, tool_name, args)
+    except Exception as e:
+        print(f"[tool ✗] {node} → {tool_name} FAILED after {time.monotonic() - _t0:.1f}s: "
+              f"{str(e)[:160]}", flush=True)
+        raise
+    print(f"[tool ✓] {node} → {tool_name} — {len(str(result))} chars in "
+          f"{time.monotonic() - _t0:.1f}s", flush=True)
+    return result
+
+
+PY;
         if ($functions) {
             $out .= implode("\n\n", $functions) . "\n\n";
         }
@@ -860,6 +893,10 @@ PY;
                 ProgressReporter.node_start(
                     name, f"agent {ad['provider']}/{ad['model'] or 'default'} "
                           f"({len(_tools)} tool(s), temp={ad['temperature']}) — generating…")
+                # Attribute this node's MCP tool calls in the progress output
+                # (contextvars propagate through awaits and to_thread).
+                if "_CURRENT_NODE" in globals():
+                    _CURRENT_NODE.set(name)
                 text = (await agent.run(self._framed_input())).text or ""
                 # Mandatory post-steps: every skill bound to this node in the editor.
                 for _skill in ad.get("skills", []):
