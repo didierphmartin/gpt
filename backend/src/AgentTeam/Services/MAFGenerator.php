@@ -279,43 +279,51 @@ class MAFGenerator
 
         WORKFLOW IMPLEMENTATION
         =======================
-        The visual graph is compiled into topological LAYERS. Execution walks the
-        layers in order; every node inside a layer runs CONCURRENTLY
-        (asyncio.gather), and each node receives the original user prompt plus the
-        outputs of its parent nodes. The frozen plan for this workflow:
+        The visual graph is compiled onto Microsoft Agent Framework's GRAPH-BASED
+        workflow API (WorkflowBuilder / Executor / add_edge): every editor node
+        becomes an Executor instance, every drawn connection becomes one
+        `add_edge(...)` line in create_workflow(), and MAF's own engine schedules
+        execution from that topology -- nodes whose parents are all done run
+        concurrently, exactly as the canvas implies. The frozen graph:
 
         {$outline}
 
-        Each agent node = one Microsoft Agent Framework `Agent` (its provider,
-        model, system instructions, MCP tools and sampling settings come verbatim
-        from the node's form in the editor). After the agent answers, any skills
-        bound to the node run as mandatory post-steps on its output. The `output`
-        node is not an LLM: it concatenates its parents' text untouched, so the
-        final deliverable is never reworded by another model pass.
+        Nodes exchange a typed NodeMessage (source node + text). A node with
+        several parents holds a FAN-IN BARRIER: its handler buffers one message
+        per parent edge and only fires when all have arrived. Each agent node =
+        one MAF `Agent` (provider, model, system instructions, MCP tools and
+        sampling settings verbatim from the node's editor form); any skills bound
+        to the node run as mandatory post-steps on its output. The Output node is
+        not an LLM: it merges its parents' text untouched and yields it as the
+        workflow result, so the deliverable is never reworded by another model.
 
         FILE MAP (in emission order)
         ============================
-          ProviderClients   -- class; builds the MAF chat client for each provider
-                               and the per-call ChatOptions (token cap, temperature,
-                               provider quirks like disabling k2/GLM thinking mode).
-          MCP tool layer    -- module functions; one `_tool_*` wrapper per MCP tool
-                               used by any node + `build_tools_from_catalog()`.
-                               (Function-based: this block is shared verbatim with
-                               the LangGraph/ADK compile targets.)
-          Skill FS layer    -- module functions shared with the other targets:
-                               stage input files, run skill scripts, read outputs.
-          SkillRuntime      -- class; wraps a node's bound skills as MAF
-                               FunctionTools with bounded-retry fail-fast, and runs
-                               the mandatory skill step after the agent's answer.
-          AGENTS            -- dict; the frozen per-node metadata (name, provider,
-                               model, instructions, tools, skills, sampling).
-          GraphExecutor     -- class; runs one node (agent -> skills), builds an
-                               agent's input from its parents, merges fan-in text.
-          main()            -- the @workflow entry (MAF Functional API): drives the
-                               LAYERS plan with asyncio.gather per layer.
-          __main__          -- CLI entry: prompt from argv (or the baked default),
-                               prints the final output, optionally saves it as
-                               .html/.md under the configured output folder.
+          ProviderClients    -- class; builds the MAF chat client for each provider
+                                and the per-call ChatOptions (token cap, temperature,
+                                provider quirks like disabling k2/GLM thinking mode).
+          MCP tool layer     -- module functions; one `_tool_*` wrapper per MCP tool
+                                used by any node + `build_tools_from_catalog()`.
+                                (Function-based: this block is shared verbatim with
+                                the LangGraph/ADK compile targets.)
+          Skill FS layer     -- module functions shared with the other targets:
+                                stage input files, run skill scripts, read outputs.
+          SkillRuntime       -- class; wraps a node's bound skills as MAF
+                                FunctionTools with bounded-retry fail-fast, and runs
+                                the mandatory skill step after the agent's answer.
+          AGENTS             -- dict; the frozen per-node metadata (name, provider,
+                                model, instructions, tools, skills, sampling).
+          NodeMessage        -- dataclass; the typed payload on every edge.
+          StartExecutor      -- class; the Start node: broadcasts the run prompt.
+          AgentNodeExecutor  -- class; one agent node: fan-in barrier -> MAF Agent
+                                -> mandatory skills -> send downstream.
+          OutputNodeExecutor -- class; the Output node: fan-in sink, merges parent
+                                text verbatim and yields the workflow output.
+          create_workflow()  -- the canvas, reconstructed 1:1: one executor per
+                                node, one add_edge per drawn connection.
+          __main__           -- CLI entry: prompt from argv (or the baked default),
+                                runs the workflow, prints the final output,
+                                optionally saves it as .html/.md.
 
         TO RUN
         ======
@@ -333,10 +341,23 @@ class MAFGenerator
         import time
         import traceback
         import urllib.request
+        from dataclasses import dataclass
+        try:
+            from typing import Never  # Python 3.11+
+        except ImportError:          # pragma: no cover
+            from typing_extensions import Never
 
         import httpx
         from dotenv import load_dotenv
-        from agent_framework import Agent, workflow, FunctionTool, ChatOptions
+        from agent_framework import (
+            Agent,
+            ChatOptions,
+            Executor,
+            FunctionTool,
+            WorkflowBuilder,
+            WorkflowContext,
+            handler,
+        )
         from agent_framework.anthropic import AnthropicClient
         from agent_framework.openai import OpenAIChatCompletionClient
 
@@ -382,7 +403,9 @@ class MAFGenerator
                 misconfigured node fails loudly at its first run, not mid-workflow.
                 """
                 p = (provider or "claude").lower()
-                if p == "claude":
+                # 'anthropic' is the workflow DSL's alias for 'claude' (the editor
+                # saves either, depending on where the node was authored).
+                if p in ("claude", "anthropic"):
                     return AnthropicClient(model=model, api_key=os.environ.get("ANTHROPIC_API_KEY"))
                 if p in cls.OPENAI_COMPATIBLE:
                     env_key, base_url = cls.OPENAI_COMPATIBLE[p]
@@ -581,91 +604,150 @@ PY;
         $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
         $runner = <<<'PY'
-        class GraphExecutor:
-            """Executes the frozen graph node-by-node.
+        @dataclass
+        class NodeMessage:
+            """The typed payload that flows along every edge of the graph.
 
-            INTENT: this class is the bridge between the STATIC plan (the AGENTS
-            dict + LAYERS/PARENTS emitted below) and the DYNAMIC run: given a node
-            id, the outputs produced so far and the user's prompt, it produces
-            that node's output. main() drives it layer by layer.
+            INTENT: make the data contract between nodes explicit. Carrying the
+            SOURCE alongside the text lets a fan-in node label each contribution
+            and lets the fan-in barrier count distinct parents.
+            """
+            source_id: str      # editor node id of the producer
+            source_name: str    # human-readable node name (for input framing/logs)
+            text: str           # the producer's output
 
-            Node semantics:
-              * AGENT node  -- build the node's MAF Agent (provider/model/
-                instructions/tools from the editor form), run it on a framed
-                input (original request + upstream outputs), then run the node's
-                mandatory skills on the result via SkillRuntime.
-              * OUTPUT node -- NOT an LLM. Returns its parents' merged text
-                verbatim, so the final deliverable is never reworded.
+
+        # Run-scoped state shared by all executors. The Start executor records the
+        # original user prompt here so every agent node can include it in its input
+        # framing (the graph edges only carry parent outputs, not the prompt).
+        RUN_STATE = {"user_prompt": ""}
+
+
+        class StartExecutor(Executor):
+            """The editor's Start node.
+
+            INTENT: entry point of the graph. Workflow.run(prompt) delivers the
+            prompt (a plain str) here; this executor records it in RUN_STATE and
+            broadcasts it as a NodeMessage -- MAF forwards the message along every
+            outgoing edge, which IS the canvas fan-out.
             """
 
-            @classmethod
-            async def run_node(cls, nid, parents, node_outputs, user_prompt):
-                """Run ONE node and return its output text (the layer loop gathers these)."""
-                ad = AGENTS.get(nid)
-                if ad is None:                      # output / pass-through node
-                    merged = cls.merge_parents(parents, node_outputs)
-                    return merged if merged else str(user_prompt)
+            def __init__(self, node_id: str, id: str = "start"):
+                super().__init__(id=id)
+                self.node_id = node_id
+
+            @handler
+            async def start(self, prompt: str, ctx: WorkflowContext[NodeMessage]) -> None:
+                """Receive the run's prompt and forward it to all first-layer nodes."""
+                RUN_STATE["user_prompt"] = str(prompt)
+                await ctx.send_message(NodeMessage(self.node_id, "Start", str(prompt)))
+
+
+        class AgentNodeExecutor(Executor):
+            """ONE agent node from the editor canvas, as a MAF executor.
+
+            INTENT: reproduce the node's editor behavior exactly --
+              1. FAN-IN BARRIER: buffer one NodeMessage per parent edge; only fire
+                 when every declared parent has reported (a single-parent node
+                 fires immediately on its one input).
+              2. Run the node's MAF Agent: provider, model, system instructions,
+                 MCP tools and sampling settings come verbatim from AGENTS (the
+                 frozen editor form values).
+              3. MANDATORY SKILLS: each skill bound to the node transforms the
+                 agent's output in order (agent -> skill 1 -> skill 2 -> ...).
+              4. Send the final text downstream as a NodeMessage.
+            """
+
+            def __init__(self, node_id: str, parents: list, id: str):
+                super().__init__(id=id)
+                self.node_id = node_id
+                self.parents = [str(p) for p in parents]   # declared parent EDITOR ids, in canvas order
+                self._inbox = {}                            # parent node_id -> NodeMessage
+
+            @handler
+            async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[NodeMessage]) -> None:
+                """Collect one parent's output; run the node when all have arrived."""
+                self._inbox[msg.source_id] = msg
+                if len(self._inbox) < max(1, len(self.parents)):
+                    return                                  # fan-in barrier still waiting
+                ad = AGENTS[self.node_id]
                 client = ProviderClients.make(ad["provider"], ad["model"])
                 # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
                 _tools = [t for t in ad["tools"] if t is not None]
                 _opts = ProviderClients.chat_options(ad["provider"], ad["model"],
                                                      ad["max_tokens"], ad["temperature"])
-                agent = Agent(client, instructions=ad["instructions"], name=f"node_{nid}",
+                agent = Agent(client, instructions=ad["instructions"], name=self.id,
                               tools=_tools, default_options=_opts)
-                print(f"[node {nid}] {ad['name']!r} → agent {ad['provider']}/{ad['model']} "
+                print(f"[node {self.node_id}] {ad['name']!r} → agent {ad['provider']}/{ad['model']} "
                       f"({len(_tools)} tool(s), temp={ad['temperature']}) — generating…", flush=True)
                 _t0 = time.monotonic()
-                text = (await agent.run(cls.agent_input(parents, node_outputs, user_prompt))).text or ""
-                print(f"[node {nid}] {ad['name']!r} agent done — {len(text)} chars in "
+                text = (await agent.run(self._framed_input())).text or ""
+                print(f"[node {self.node_id}] {ad['name']!r} agent done — {len(text)} chars in "
                       f"{time.monotonic() - _t0:.1f}s", flush=True)
-                # Mandatory post-steps: every skill bound to this node in the editor
-                # transforms the running text in order (agent → skill 1 → skill 2 → …).
+                # Mandatory post-steps: every skill bound to this node in the editor.
                 for _skill in ad.get("skills", []):
                     _sd = _skill.get("dir") or "inline"
-                    print(f"[node {nid}] {ad['name']!r} → running skill {_sd!r}…", flush=True)
+                    print(f"[node {self.node_id}] {ad['name']!r} → running skill {_sd!r}…", flush=True)
                     _ts0 = time.monotonic()
-                    text = await SkillRuntime.run_step(_skill, text, user_prompt, ad["provider"],
-                                                       ad["model"], ad["max_tokens"], ad["temperature"])
-                    print(f"[node {nid}] skill {_sd!r} done — {len(text)} chars in "
+                    text = await SkillRuntime.run_step(_skill, text, RUN_STATE["user_prompt"],
+                                                       ad["provider"], ad["model"],
+                                                       ad["max_tokens"], ad["temperature"])
+                    print(f"[node {self.node_id}] skill {_sd!r} done — {len(text)} chars in "
                           f"{time.monotonic() - _ts0:.1f}s", flush=True)
-                return text
+                await ctx.send_message(NodeMessage(self.node_id, str(ad["name"]), text))
 
-            @staticmethod
-            def merge_parents(parents, node_outputs):
-                """Fan-in for the OUTPUT node: raw concatenation of available parent
-                outputs ('' if none). Used verbatim as the deliverable, so it adds no
-                framing text -- a single-parent output IS that parent's document."""
-                parts = [str(node_outputs[p]) for p in parents if p in node_outputs]
-                if not parts:
-                    return ""
-                if len(parts) == 1:
-                    return parts[0]
-                return "\n\n---\n\n".join(parts)
+            def _framed_input(self) -> str:
+                """Frame this node's LLM input.
 
-            @staticmethod
-            def agent_input(parents, node_outputs, user_prompt):
-                """Frame an AGENT node's input message.
-
-                Contains the ORIGINAL user request plus the node's upstream parents'
-                outputs, so every agent sees the prompt (parity with the LangGraph
-                target's build_context). A node with no available parents (e.g. wired
-                straight from Start) still gets the request."""
-                parts = ['Original user request: "' + str(user_prompt) + '"', "",
+                Contains the ORIGINAL user request plus each parent's output
+                (labelled with the parent node's name, in canvas order), so every
+                agent sees the prompt no matter how deep it sits in the graph.
+                A node wired straight from Start still gets the request."""
+                parts = ['Original user request: "' + RUN_STATE["user_prompt"] + '"', "",
                          "Upstream inputs from this workflow (source material for your task):",
                          "", "---"]
-                valid = [(p, node_outputs[p]) for p in parents if p in node_outputs]
+                valid = [self._inbox[p] for p in self.parents if p in self._inbox
+                         and self._inbox[p].source_name != "Start"]
                 if not valid:
                     parts.append("(no upstream inputs -- respond to the original request directly)")
                 else:
-                    for pid, out in valid:
-                        parts += ["", "### Input from node " + str(pid), "", str(out), "", "---"]
+                    for m in valid:
+                        parts += ["", "### Input from " + m.source_name, "", m.text, "", "---"]
                 return "\n".join(parts)
+
+
+        class OutputNodeExecutor(Executor):
+            """The editor's Output node: the fan-in sink of the graph.
+
+            INTENT: deliver the workflow's result WITHOUT another model pass.
+            Buffers its parents' messages (same barrier as AgentNodeExecutor),
+            then merges their text verbatim -- a single parent's document passes
+            through byte-identical; multiple parents are joined with a plain
+            separator -- and yields it as the workflow output, which the caller
+            reads via WorkflowRunResult.get_outputs().
+            """
+
+            def __init__(self, parents: list, id: str = "output"):
+                super().__init__(id=id)
+                self.parents = [str(p) for p in parents]
+                self._inbox = {}
+
+            @handler
+            async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[Never, str]) -> None:
+                """Collect parent outputs; yield the merged deliverable when complete."""
+                self._inbox[msg.source_id] = msg
+                if len(self._inbox) < max(1, len(self.parents)):
+                    return                                  # fan-in barrier still waiting
+                parts = [self._inbox[p].text for p in self.parents
+                         if p in self._inbox and self._inbox[p].text]
+                merged = parts[0] if len(parts) == 1 else "\n\n---\n\n".join(parts)
+                await ctx.yield_output(merged if merged else RUN_STATE["user_prompt"])
         PY;
-        // The AGENTS dict feeds GraphExecutor: document it inline at emission.
+        // The AGENTS dict feeds AgentNodeExecutor: document it inline at emission.
         $agentsDoc = "# Frozen per-node metadata from the visual editor (one entry per agent\n"
             . "# node): display name, provider/model, system instructions, MCP tool\n"
             . "# selection, bound skills, and the node form's sampling settings.\n"
-            . "# GraphExecutor.run_node() reads this; the OUTPUT node has no entry.";
+            . "# AgentNodeExecutor reads this by node_id; Start/Output have no entry.";
         return $agentsDoc . "\n" . $agents . "\n\n\n" . $runner;
     }
 
@@ -686,55 +768,92 @@ PY;
              . "OUTPUT_FOLDER = {$folder}";
     }
 
-    /** Topological LAYERS + PARENTS + OUTPUT_NODE_ID + the @workflow main function. */
+    /**
+     * Emit create_workflow(): the editor canvas reconstructed 1:1 on MAF's
+     * graph API — one Executor instantiation per node (python variable named
+     * after the node), one add_edge() per drawn connection, each line
+     * commented with the canvas names it mirrors.
+     */
     private static function orchestrationBlock(array $analyzed): string
     {
-        $layers  = PythonEmitHelpers::jsonToPython(array_values($analyzed['layers']));
-        $parents = PythonEmitHelpers::jsonToPython($analyzed['parents'], true);
+        $startId = (string) ($analyzed['startNodeId'] ?? '');
         // First node whose type == 'output' is the fan-in sink.
         $outId = '';
         foreach ($analyzed['byId'] as $id => $node) {
             $t = $node['type'] ?? ($node['config']['type'] ?? '');
             if ($t === 'output') { $outId = (string) $id; break; }
         }
-        return "# The compiled execution plan, frozen from the editor graph:\n"
-             . "#   LAYERS  -- topological layers; layer 0 is the Start node, later layers\n"
-             . "#              only depend on earlier ones, so a whole layer can run in\n"
-             . "#              parallel. This is the entire scheduling policy of the file.\n"
-             . "#   PARENTS -- node id -> its direct upstream node ids (the graph edges,\n"
-             . "#              inverted); feeds each node's input assembly and fan-in.\n"
-             . "#   OUTPUT_NODE_ID -- the fan-in sink whose text is the final deliverable.\n"
-             . "LAYERS = {$layers}\n"
-             . "PARENTS = {$parents}\n"
-             . 'OUTPUT_NODE_ID = ' . PythonEmitHelpers::pyStr($outId) . "\n\n\n"
-             . <<<'PY'
-        @workflow
-        async def main(user_prompt: str = DEFAULT_PROMPT) -> str:
-            """Workflow entry (Microsoft Agent Framework, Functional API).
 
-            INTENT: reproduce the visual editor's run semantics exactly --
-            walk the topological LAYERS in order and run every node of a layer
-            CONCURRENTLY (asyncio.gather); a node's input is the original
-            prompt plus its PARENTS' outputs. Returns the OUTPUT node's text,
-            which MAF exposes to the caller via WorkflowRunResult.get_outputs().
+        // Python variable per node: snake_cased editor name, deduped, reserved
+        // names avoided. Start/Output get fixed, self-describing names.
+        $vars = [$startId => 'start_node', $outId => 'output_node'];
+        $used = ['start_node' => true, 'output_node' => true];
+        $displayName = [$startId => 'Start', $outId => 'Output'];
+        foreach ($analyzed['agents'] as $id => $ag) {
+            $label = (string) ($ag['name'] ?? ('node ' . $id));
+            $displayName[(string) $id] = $label;
+            $v = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', $label), '_'));
+            if ($v === '' || preg_match('/^[0-9]/', $v)) $v = 'node_' . $id;
+            if (isset($used[$v])) $v .= '_' . $id;
+            $used[$v] = true;
+            $vars[(string) $id] = $v;
+        }
+
+        // Node instantiations in topological (layer) order, so the function
+        // reads top-to-bottom like the canvas. Parent lists come from the
+        // analyzer's inverted edge map and preserve canvas order.
+        $parents = $analyzed['parents'];
+        $inst  = [];
+        $edges = [];
+        $inst[] = '    # -- nodes (one executor per canvas node) --------------------------------';
+        $inst[] = '    start_node = StartExecutor(node_id=' . PythonEmitHelpers::pyStr($startId) . ')';
+        foreach (array_values($analyzed['layers']) as $layer) {
+            foreach ((array) $layer as $nid) {
+                $key = (string) $nid;
+                if ($key === $startId || !isset($vars[$key])) continue;
+                $pList = array_map(fn($p) => PythonEmitHelpers::pyStr((string) $p), (array) ($parents[$key] ?? $parents[$nid] ?? []));
+                $pPy = '[' . implode(', ', $pList) . ']';
+                if ($key === $outId) {
+                    $inst[] = '    output_node = OutputNodeExecutor(parents=' . $pPy . ')';
+                } else {
+                    $inst[] = '    ' . $vars[$key] . ' = AgentNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
+                        . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
+                        . '  # "' . str_replace('"', "'", $displayName[$key]) . '"';
+                }
+            }
+        }
+        $edges[] = '    # -- edges (one add_edge per drawn connection) ---------------------------';
+        foreach (array_values($analyzed['layers']) as $layer) {
+            foreach ((array) $layer as $nid) {
+                $key = (string) $nid;
+                if ($key === $startId || !isset($vars[$key])) continue;
+                foreach ((array) ($parents[$key] ?? $parents[$nid] ?? []) as $p) {
+                    $pKey = (string) $p;
+                    if (!isset($vars[$pKey])) continue;
+                    $edges[] = '    builder.add_edge(' . $vars[$pKey] . ', ' . $vars[$key] . ')'
+                        . '  # ' . str_replace('"', "'", ($displayName[$pKey] ?? $pKey))
+                        . ' -> ' . str_replace('"', "'", ($displayName[$key] ?? $key));
+                }
+            }
+        }
+
+        $body = implode("\n", $inst)
+            . "\n\n    # -- graph assembly: Start is the entry executor -------------------------"
+            . "\n    builder = WorkflowBuilder(start_executor=start_node)\n"
+            . implode("\n", $edges);
+        return <<<PY
+        def create_workflow():
+            """Reconstruct the visual editor canvas on MAF's graph API, 1:1.
+
+            Reading this function IS reading the canvas: every executor below is
+            one node (variable named after it), every add_edge is one drawn
+            connection. MAF's engine schedules execution from this topology --
+            nodes whose parents are all done run concurrently -- and the Output
+            executor's yield becomes the workflow result.
             """
-            node_outputs = {}
-            # Layer 0 is the start node; its prompt reaches every agent via
-            # GraphExecutor.agent_input, so the loop starts at layer 1.
-            for _li, layer in enumerate(LAYERS[1:], start=1):
-                ids = [n for n in layer if n in AGENTS or n == OUTPUT_NODE_ID]
-                if not ids:
-                    continue
-                _lnames = ", ".join(str(AGENTS.get(n, {}).get("name", "Output")) for n in ids)
-                print(f"[layer {_li}] running {len(ids)} node(s) in parallel: {_lnames}", flush=True)
-                results = await asyncio.gather(*[
-                    GraphExecutor.run_node(n, PARENTS.get(n, []), node_outputs, user_prompt)
-                    for n in ids])
-                for n, r in zip(ids, results):
-                    node_outputs[n] = r
-                    _nm = AGENTS.get(n, {}).get("name", "Output")
-                    print(f"[node {n}] {_nm!r} ✓ captured {len(str(r))} chars", flush=True)
-            return node_outputs.get(OUTPUT_NODE_ID, "")
+        {$body}
+
+            return builder.build()
         PY;
     }
 
@@ -750,7 +869,11 @@ PY;
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
             try:
-                _result = asyncio.run(main.run(_prompt))
+                # Build the graph, then hand the prompt to MAF: it enters at the
+                # Start executor and flows along the edges declared in
+                # create_workflow() until the Output executor yields.
+                _workflow = create_workflow()
+                _result = asyncio.run(_workflow.run(_prompt))
             except Exception as _err:
                 # Fail-fast: a skill hit its retry cap (or a node raised) -- stop with a
                 # clear message and a non-zero exit instead of saving a garbage report.
