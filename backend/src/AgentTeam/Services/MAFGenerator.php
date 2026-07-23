@@ -57,16 +57,38 @@ class MAFGenerator
         ini_set('serialize_precision', '-1');
         $parts = [];
         $parts[] = self::headerBlock($analyzed);
+        $parts[] = self::banner('PROVIDER CLIENT FACTORY',
+            'Builds the MAF chat client + per-call ChatOptions for each agent',
+            'node. Every provider-specific detail lives here: endpoints,',
+            'credential env vars, and the hard API constraints (kimi/anthropic/',
+            'deepseek sampling rules). The node form Thinking attribute is',
+            'honored here. To support a new provider: add it to',
+            'ProviderClients.OPENAI_COMPATIBLE (or a dedicated branch in make).');
         $parts[] = self::clientFactoryBlock();
         if (!empty($analyzed['usedCatalog'])) {
+            $parts[] = self::banner('MCP SERVER REGISTRY',
+                'Baked at generation time from the workflow editor config.',
+                'Maps server URL -> metadata. If a server moves, update the URL here.');
             $parts[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
+            $parts[] = self::banner('TOOL CATALOG',
+                'Each entry maps a tool name to its MCP server URL and JSON Schema.',
+                'Only tools actually used by agents in this workflow are included.',
+                'To add a tool: add an entry here AND reference it in the node',
+                'metadata (AGENTS dict) below.');
             $parts[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
+            $parts[] = self::banner('MCP CLIENT + TOOL WRAPPERS',
+                'HTTP JSON-RPC client for the MCP servers, one typed _tool_*',
+                'function per catalog entry, and _reported_mcp_call — the',
+                'progress wrapper that prints [tool] lines attributed to the',
+                'calling agent node (contextvar).');
             $parts[] = PythonEmitHelpers::mcpClientBlock();
             $parts[] = self::mcpToolBuilderBlock($analyzed);
             $parts[] = 'catalog = build_tools_from_catalog()';
         } else {
             $parts[] = 'catalog = {}';
         }
+        $parts[] = self::banner('DOCUMENT CONVERTER',
+            'Turns a start-node attachment into markdown for the prompt.');
         $parts[] = PythonEmitHelpers::documentConverterBlock();
         // Skill runtime: emit BEFORE agentsBlock so SkillRuntime is defined
         // when GraphExecutor calls it. Gate on any agent having a non-empty skills list.
@@ -75,15 +97,37 @@ class MAFGenerator
             if (!empty($ag['skills'])) { $needsSkills = true; break; }
         }
         if ($needsSkills) {
+            $parts[] = self::banner('SKILL RUNTIME',
+                'Runs folder-backed skills (SKILL.md + scripts) as mandatory',
+                'post-agent steps. SkillRuntime implements the two-phase design:',
+                'phase A authors the deliverable as plain text, the runtime',
+                'stages it deterministically, phase B runs the skill script',
+                'with path-only arguments (or a full SKILL.md-driven process',
+                'for script-first skills). A failed step degrades to "skill',
+                'skipped" — it can never destroy the node output.');
             $parts[] = PythonEmitHelpers::skillDepsBlock();   // SKILLS_DIR + _ensure_skill_deps
             $parts[] = self::skillRunnerBlock();
         }
+        $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
+            'AGENTS: per-node settings verbatim from the editor forms.',
+            'ProgressReporter: console liveness (banner, node lines, heartbeat,',
+            'RUN SUMMARY). StartExecutor / AgentNodeExecutor / OutputNodeExecutor:',
+            'the graph node implementations (fan-in barrier -> agent -> skills).',
+            'To change a node\'s provider/model/tools: edit the workflow in the',
+            'editor and re-generate — do not hand-edit AGENTS.');
         $parts[] = self::agentsBlock($analyzed);
         // globalsBlock MUST precede orchestrationBlock: DEFAULT_PROMPT is used as
         // the default parameter value in `main()`'s signature, which Python resolves
         // at def-execution time (when the `async def main` line runs), so it must
         // exist before that line executes.
+        $parts[] = self::banner('WORKFLOW GLOBALS',
+            'Identity + the Start node prompt baked as DEFAULT_PROMPT',
+            '(CLI args override it) + output storage settings.');
         $parts[] = self::globalsBlock($analyzed);
+        $parts[] = self::banner('GRAPH ASSEMBLY',
+            'create_workflow() reconstructs the editor canvas 1:1 on the MAF',
+            'graph API: one executor per node, one add_edge per drawn',
+            'connection. MAF schedules execution from this topology.');
         $parts[] = self::orchestrationBlock($analyzed);
         $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
@@ -91,6 +135,22 @@ class MAFGenerator
 
     /** Expose skillRunnerBlock for test/inspection (test seam). */
     public static function skillRunnerBlockForTest(): string { return self::skillRunnerBlock(); }
+
+    /**
+     * Emit a LangGraph-style section banner: a boxed comment block naming the
+     * section and explaining what it is for / how to modify it. Requested
+     * documentation standard for all compile targets.
+     */
+    private static function banner(string $title, string ...$lines): string
+    {
+        $bar = '# ' . str_repeat('=', 62);
+        $out = [$bar, '# ' . $title];
+        foreach ($lines as $l) {
+            $out[] = '# ' . $l;
+        }
+        $out[] = $bar;
+        return implode("\n", $out);
+    }
 
     /**
      * Emit concrete _tool_* functions + build_tools_from_catalog() for MAF.

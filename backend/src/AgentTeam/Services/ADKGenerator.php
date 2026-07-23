@@ -76,16 +76,34 @@ class ADKGenerator
         $lines = [];
         $lines[] = self::headerBlock($analyzed);
 
-        $lines[] = '# --- Model factory: map a node provider+model to an ADK model ---';
+        $lines[] = self::banner('MODEL FACTORY',
+            'Maps a node provider+model to an ADK model. Gemini is native;',
+            'every other provider routes through LiteLLM (OpenAI-compatible',
+            'endpoints for Grok/Kimi/DeepSeek/GLM). The node form Thinking',
+            'attribute governs reasoning mode; hard API constraints only',
+            '(kimi sampling, deepseek-v4 thinking rules) are applied here.',
+            'To support a new provider: add a branch in _make_model.');
         $lines[] = self::modelFactoryBlock();
 
-        $lines[] = '# --- MCP: baked server list + tool catalog, an HTTP JSON-RPC client, and';
-        $lines[] = '#     one FunctionTool per tool so the agents can call them ---';
+        $lines[] = self::banner('MCP SERVER REGISTRY',
+            'Baked at generation time from the workflow editor config.',
+            'Maps server URL -> metadata. If a server moves, update the URL here.');
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
+        $lines[] = self::banner('TOOL CATALOG',
+            'Each entry maps a tool name to its MCP server URL and JSON Schema.',
+            'Only tools actually used by agents in this workflow are included.',
+            'To add a tool: add an entry here AND reference it in the agent',
+            'definitions below (catalog["<tool>"]).');
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
+        $lines[] = self::banner('MCP CLIENT',
+            'HTTP JSON-RPC client used by every generated _tool_* function.');
         $lines[] = PythonEmitHelpers::mcpClientBlock();
-        $lines[] = '# --- Document converter: turn an attached file into markdown for the prompt ---';
+        $lines[] = self::banner('DOCUMENT CONVERTER',
+            'Turns a start-node attachment into markdown for the prompt.');
         $lines[] = PythonEmitHelpers::documentConverterBlock();
+        $lines[] = self::banner('TOOL WRAPPERS',
+            'One typed FunctionTool per catalog entry; ADK introspects each',
+            'function signature to build the tool schema the model sees.');
         $lines[] = self::adkToolBuilderBlock($analyzed);
 
         // Emit skill runner only when the workflow actually uses skills.
@@ -97,30 +115,49 @@ class ADKGenerator
             if (!empty($agent['skills'])) { $needsSkills = true; break; }
         }
         if ($needsSkills) {
-            $lines[] = '# --- Skills: run a skill folder Python script as a subprocess in this env ---';
+            $lines[] = self::banner('SKILL RUNTIME',
+                'Runs folder-backed skills (SKILL.md + scripts) as mandatory',
+                'post-agent SequentialAgent steps: an LLM turn instructed by',
+                'SKILL.md, then a capture agent that makes the node output the',
+                'file the script PRODUCED (else the LLM text). Staged',
+                'input_files are repaired if a model delivers them',
+                'JSON-over-escaped. Scripts run as async subprocesses here.');
             $lines[] = PythonEmitHelpers::skillDepsBlock();
             $lines[] = self::skillRunnerBlock();
         }
 
         // catalog must be defined after build_tools_from_catalog() (from adkToolBuilderBlock).
-        $lines[] = '# --- The tool objects agents reference by name as catalog["<tool>"] ---';
+        $lines[] = '# The tool objects agents reference by name as catalog["<tool>"].';
         $lines[] = 'catalog = build_tools_from_catalog()';
         // START_DOCUMENTS baked from the analyzed workflow; always present (empty list when none).
         $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments']);
-        $lines[] = '# --- Agents: one LlmAgent per workflow node. Each writes its result to';
-        $lines[] = '#     session.state["node_<id>"]; a child reads a parent via {node_<id>} ---';
+        $lines[] = self::banner('AGENTS — ONE LlmAgent PER WORKFLOW NODE',
+            'Each agent writes its result to session.state["node_<id>"]; a',
+            'child reads a parent through the literal {node_<id>} placeholder',
+            'in its instruction (ADK state templating). Provider/model/tools/',
+            'sampling come verbatim from the editor forms (constraint clamps',
+            'are documented as comments on the affected node). To change a',
+            'node: edit the workflow in the editor and re-generate.');
         $lines[] = self::agentsBlock($analyzed);
 
         $consolidators = self::outputConsolidatorsBlock($analyzed);
         if ($consolidators !== '') {
-            $lines[] = '# --- Output (fan-in) nodes: forward parent result(s) verbatim, no LLM (preserves HTML) ---';
+            $lines[] = self::banner('OUTPUT (FAN-IN) NODES',
+                'Non-LLM pass-throughs: forward parent result(s) VERBATIM so',
+                'formatting such as HTML is never reworded by another model.');
             $lines[] = self::passThroughAgentBlock();
             $lines[] = $consolidators;
         }
-        $lines[] = '# --- Orchestration: each topological layer runs as a ParallelAgent (independent';
-        $lines[] = '#     nodes concurrent), and the layers run in order inside a SequentialAgent ---';
+        $lines[] = self::banner('ORCHESTRATION',
+            'The workflow graph as TOPOLOGICAL LAYERS: independent nodes at',
+            'the same depth run together in a ParallelAgent; the layers run',
+            'in order inside a SequentialAgent. This mirrors the canvas.');
         $lines[] = self::rootBlock($analyzed);
-        $lines[] = '# --- Entry point: seed prompt (+documents), run, stream trace, save to outputs/ ---';
+        $lines[] = self::banner('CLI ENTRY',
+            'Seeds the prompt (+ attached documents), runs the graph via',
+            'Runner, streams a [node]/[tool] trace, saves the result per the',
+            'Output node storage setting, and closes with a RUN SUMMARY',
+            '(time per node, total wall-clock, document location).');
         $lines[] = self::mainBlock($analyzed);
 
         return implode("\n", $lines) . "\n";
@@ -293,6 +330,22 @@ PY;
 
     /** Test seam: exposes skillRunnerBlock() output for unit testing. */
     public static function skillRunnerBlockForTest(): string { return self::skillRunnerBlock(); }
+
+    /**
+     * Emit a LangGraph-style section banner: a boxed comment block naming the
+     * section and explaining what it is for / how to modify it. Requested
+     * documentation standard for all compile targets.
+     */
+    private static function banner(string $title, string ...$lines): string
+    {
+        $bar = '# ' . str_repeat('=', 62);
+        $out = [$bar, '# ' . $title];
+        foreach ($lines as $l) {
+            $out[] = '# ' . $l;
+        }
+        $out[] = $bar;
+        return implode("\n", $out);
+    }
 
     /**
      * Emit the ADK-specific async skill runner.
