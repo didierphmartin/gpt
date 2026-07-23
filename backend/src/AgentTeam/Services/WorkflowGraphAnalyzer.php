@@ -333,7 +333,13 @@ class WorkflowGraphAnalyzer
             $schemaRaw = $row['input_schema'] ?? null;
             $schema    = null;
             if (is_string($schemaRaw) && $schemaRaw !== '') {
-                $schema = json_decode($schemaRaw);
+                // ASSOCIATIVE decode is load-bearing: the generators walk the
+                // schema with is_array() checks — an object decode made every
+                // check fail, silently stripping ALL tool parameters from the
+                // ADK/MAF exports (models called search tools with keywords
+                // that never reached the MCP server: "keyword parameter is
+                // required" despite a correct call).
+                $schema = json_decode($schemaRaw, true);
                 if ($schema === null && json_last_error() !== JSON_ERROR_NONE) {
                     $schema = null;
                 }

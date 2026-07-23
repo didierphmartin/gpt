@@ -688,6 +688,13 @@ PY;
                 }
                 $entry .= "    generate_content_config=types.GenerateContentConfig(" . implode(", ", $kwargs) . "),\n";
             }
+            // CONTEXT ISOLATION: without this, agents in the shared
+            // SequentialAgent session inherit every PRIOR agent's full
+            // conversation — including raw MCP tool payloads. A 1MB news-feed
+            // fetch upstream blew a downstream compiler past Anthropic's 200k
+            // window ("prompt is too long: 284915 tokens"). Data flows between
+            // nodes ONLY through the {node_<id>} state placeholders.
+            $entry .= "    include_contents='none',\n";
             $entry .= "    output_key=\"{$agentOutKey}\",\n";
             $entry .= ")";
 
@@ -727,6 +734,7 @@ PY;
                         if ($ag['max_tokens'] !== null)  $skwargs[] = "max_output_tokens=" . json_encode($ag['max_tokens']);
                         $entry .= "    generate_content_config=types.GenerateContentConfig(" . implode(", ", $skwargs) . "),\n";
                     }
+                    $entry .= "    include_contents='none',\n";
                     $entry .= "    output_key=\"{$llmVar}\",\n";
                     $entry .= ")";
                     // (b) capture: node output = the produced file (via run_skill_script read_outputs), else the LLM text.
