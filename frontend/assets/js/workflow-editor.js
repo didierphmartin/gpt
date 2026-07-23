@@ -3918,40 +3918,10 @@ class WorkflowEditor {
             return;
         }
 
-        // Run is SELF-CONTAINED: generate fresh code and write it to
-        // python/scripts/ FIRST — before the runner probe — so whether the
-        // run happens here (runner up) or in the user's terminal (runner
-        // down → command modal), it always executes the CURRENT workflow.
-        // Previously the generate fetch was used only to derive the filename
-        // and the body was discarded — Run then executed whatever stale file
-        // an earlier Generate left on disk.
-        let filename;
-        try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            filename = m ? m[1] : 'workflow_maf.py';
-            const code = await resp.text();
-            if (window.localFs?.isSupported?.()) {
-                const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
-                if (scriptsDir) {
-                    const fh = await scriptsDir.getFileHandle(filename, { create: true });
-                    const w = await fh.createWritable();
-                    await w.write(code);
-                    await w.close();
-                    // Keep provider keys fresh so the just-written script can auth.
-                    await this._syncRunnerEnv();
-                    console.log(`[WorkflowEditor] Run: regenerated python/scripts/${filename}`);
-                }
-            }
-        } catch (e) {
-            alert(`Could not generate the MAF script: ${e?.message || e}`);
-            return;
-        }
+        // Run is SELF-CONTAINED: regenerate + write FIRST (shared helper —
+        // same behavior as the ADK/LangGraph Run actions), THEN probe.
+        const filename = await this._generateAndWriteScript('generate-maf', 'workflow_maf.py');
+        if (!filename) return;
 
         // Runner up → execute here and stream the output. Runner down → the
         // script is already fresh on disk; show the one-command modal.
