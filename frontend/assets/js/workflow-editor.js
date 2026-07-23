@@ -3456,35 +3456,57 @@ class WorkflowEditor {
      * output into a modal. Falls back to a "run manually" hint if the runner
      * isn't reachable, same as the LangGraph path.
      */
+
+    /**
+     * Generate a target's script fresh and write it into python/scripts/ so
+     * Run always executes the CURRENT workflow (and the runner-down modal's
+     * command points at fresh code). Returns the filename, or null on failure
+     * (already alerted). Mirrors the MAF self-contained-Run fix for all targets.
+     */
+    async _generateAndWriteScript(endpoint, fallbackName) {
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/${endpoint}?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            const filename = m ? m[1] : fallbackName;
+            const code = await resp.text();
+            if (window.localFs?.isSupported?.()) {
+                const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+                if (scriptsDir) {
+                    const fh = await scriptsDir.getFileHandle(filename, { create: true });
+                    const w = await fh.createWritable();
+                    await w.write(code);
+                    await w.close();
+                    await this._syncRunnerEnv();
+                    console.log(`[WorkflowEditor] Run: regenerated python/scripts/${filename}`);
+                }
+            }
+            return filename;
+        } catch (e) {
+            alert(`Could not generate the script: ${e?.message || e}`);
+            return null;
+        }
+    }
+
     async _runAdkScript() {
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        // Liveness probe so the failure mode is "runner not started" not silence.
+        // Regenerate FIRST (self-contained Run: no stale-file trap; the
+        // runner-down modal's command then points at current code), THEN probe.
+        const filename = await this._generateAndWriteScript('generate-adk', 'workflow_adk.py');
+        if (!filename) return;
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
             if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
         } catch (e) {
             this._showAdkRunnerNotRunningModal();
-            return;
-        }
-
-        // Derive the ADK filename from generate-adk Content-Disposition.
-        let filename;
-        try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            filename = m ? m[1] : 'workflow_adk.py';
-            await resp.text(); // consume body
-        } catch (e) {
-            alert(`Could not resolve the ADK filename: ${e?.message || e}\nClick "Generate" first.`);
             return;
         }
 
@@ -3528,27 +3550,26 @@ class WorkflowEditor {
      * (install google-adk litellm httpx in the runner venv, or run directly).
      */
     _showAdkRunnerNotRunningModal() {
-        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        // One ready-to-run command with the REAL filename (same sanitize rule
+        // as the backend generator) — mirrors the MAF modal fix: the old
+        // layout's prominent command only started the runner SERVICE and
+        // users pasted it expecting the workflow to run.
+        const adkFile = ((this.currentWorkflowName || 'workflow')
+            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_adk.py';
+        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${adkFile}`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">Runner isn't running (ADK)</h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    The local runner (<code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
-                    isn't responding. Start it from a terminal:
-                </p>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal (ADK)</h3>
+                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
                 <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
                     <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
                 </div>
-                <p class="text-xs text-gray-500 mb-3">
-                    Also ensure <code class="text-xs">google-adk litellm httpx</code> are installed in the runner venv:
-                    <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install google-adk litellm httpx</code>
-                </p>
                 <p class="text-xs text-gray-500 mb-4">
-                    Alternatively, run the ADK script directly — no runner needed:
-                    <code class="text-xs bg-gray-100 px-1 rounded">python &lt;workflow&gt;_adk.py "Your prompt"</code>
+                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
+                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "google-adk>=2.3,<3" litellm httpx</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -3559,7 +3580,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), startCmd);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), directCmd);
     }
 
     // -------------------------------------------------------------------------
@@ -4262,35 +4283,16 @@ class WorkflowEditor {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        // Liveness probe first so the failure mode is "runner not started"
-        // not "looks like it ran but you got nothing". /health is cheap.
+        // Regenerate FIRST (self-contained Run: always executes the CURRENT
+        // workflow; the runner-down modal's command then points at fresh
+        // code), THEN probe the runner.
+        const filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
+        if (!filename) return;
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
             if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
         } catch (e) {
             this._showRunnerNotRunningModal();
-            return;
-        }
-
-        // Derive the filename the same way downloadGeneratedPython does:
-        // fetch from backend with download=1, read Content-Disposition.
-        let filename;
-        try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            filename = m ? m[1] : 'workflow.py';
-            // We don't need the body here — Generate already wrote it to disk
-            // on previous use; if it hasn't been generated, the runner will
-            // return a clear "file not found" via run-file's 400. We don't
-            // re-write here to keep this action read-only on the FS.
-            await resp.text();
-        } catch (e) {
-            alert(`Could not resolve the generated filename: ${e?.message || e}\nClick "Generate" first.`);
             return;
         }
 
@@ -4345,22 +4347,24 @@ class WorkflowEditor {
         // are pip-installed by setup.py into .venv/ only. Activating via
         // `source .venv/bin/activate` would also work but depends on the
         // shell; calling the venv binary by path works in any context.
-        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        // One ready-to-run command with the REAL filename (same sanitize rule
+        // as the backend generator) — mirrors the MAF modal fix.
+        const lgFile = ((this.currentWorkflowName || 'workflow')
+            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_langgraph.py';
+        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${lgFile}`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">LangGraph runner isn't running</h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    The local runner (FastAPI on <code class="text-xs bg-gray-100 px-1 rounded">${this.escapeHtml(this._langgraphRunnerBase)}</code>)
-                    isn't responding. Start it from a terminal:
-                </p>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal (LangGraph)</h3>
+                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
                 <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
                     <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
                 </div>
                 <p class="text-xs text-gray-500 mb-4">
-                    Leave that terminal open, then click Run again. If you've never installed it, click <b>Setup</b> in the LangGraph menu first.
+                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
+                    Never installed the local Python env? Click <b>Setup</b> in the LangGraph menu first.
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4371,7 +4375,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), startCmd);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), directCmd);
     }
 
     /**
