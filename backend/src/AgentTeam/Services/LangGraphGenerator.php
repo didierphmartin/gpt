@@ -622,6 +622,14 @@ class LangGraphGenerator
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
         $lines[] = 'import asyncio, json, os, subprocess, sys, threading, time';
+        $lines[] = '';
+        $lines[] = 'from dotenv import load_dotenv';
+        $lines[] = '';
+        $lines[] = '# Load provider API keys from the runner env .env (one dir up from scripts/).';
+        $lines[] = '# Without this a DIRECT terminal run has no credentials and every provider';
+        $lines[] = '# call fails; runner-mediated runs only worked because main.py loads the';
+        $lines[] = '# same file and subprocesses inherit the environment.';
+        $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))';
         $lines[] = 'from typing import Annotated, Any, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';

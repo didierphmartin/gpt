@@ -226,7 +226,7 @@ NODE-INTERNAL PIPELINE (fixed order):
     The Output node is a non-LLM pass-through: parents' text verbatim.
 
 TO RUN:
-    pip install "google-adk>=2.3,<3" litellm httpx   # 2.3.x: SequentialAgent/ParallelAgent still supported
+    pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported
     # provide the API keys for the providers used, via the environment / a .env, e.g.:
     #   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY
     python this_file.py "your prompt here"
@@ -234,6 +234,14 @@ TO RUN:
 import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
 from typing import Any
+
+from dotenv import load_dotenv
+
+# Load provider API keys from the runner env's .env (one dir up from scripts/).
+# Without this, a DIRECT terminal run has no credentials and every LiteLLM call
+# fails with "Missing credentials … set the OPENAI_API_KEY" — runner-mediated
+# runs only worked because main.py loads the same file and subprocesses inherit.
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
