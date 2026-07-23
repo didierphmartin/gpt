@@ -981,7 +981,8 @@ PY;
             "    print(\"\\n\" + \"=\" * 74, flush=True)\n" .
             "    print(\"RUN SUMMARY\", flush=True)\n" .
             "    print(\"-\" * 74, flush=True)\n" .
-            "    _durs = {NODE_NAMES.get(k, k): _t_last[k] - _t_first[k] for k in _t_first if k in _t_last}\n" .
+            "    # Only named agent nodes (skip output pass-throughs: ~0s, no display name).\n" .
+            "    _durs = {NODE_NAMES[k]: _t_last[k] - _t_first[k] for k in _t_first if k in _t_last and k in NODE_NAMES}\n" .
             "    if _durs:\n" .
             "        _w = max(len(n) for n in _durs)\n" .
             "        print(\"  Time per node:\", flush=True)\n" .
