@@ -187,6 +187,17 @@ class AffiliateRepository
         return $stmt->rowCount();
     }
 
+    /** Set (or clear, with null/null) the per-account commission override. */
+    public function updateAccount(int $affiliateId, int $productId, ?string $type, ?float $value): int
+    {
+        $stmt = $this->db->prepare(
+            "UPDATE affiliate_accounts SET commission_type = :t, commission_value = :v
+             WHERE affiliate_id = :a AND product_id = :p"
+        );
+        $stmt->execute([':a' => $affiliateId, ':p' => $productId, ':t' => $type, ':v' => $value]);
+        return $stmt->rowCount();
+    }
+
     // ---- Sales ------------------------------------------------------------
 
     public function transactionsForAffiliate(int $affiliateId): array

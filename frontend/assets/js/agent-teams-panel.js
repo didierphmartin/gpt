@@ -259,7 +259,7 @@ class AgentTeamsPanel {
                 this.loadError = null;
             } else {
                 // Fallback: load from API directly (same as chat.js)
-                const response = await fetch('/gpt/backend/api/v1/providers', {
+                const response = await fetch(window.apiUrl('/providers'), {
                     headers: this.getAuthHeaders()
                 });
                 const data = await response.json();
@@ -298,7 +298,7 @@ class AgentTeamsPanel {
      */
     async loadAgentTools() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/agents/tools', {
+            const response = await fetch(window.apiUrl('/agents/tools'), {
                 headers: this.getAuthHeaders()
             });
             const data = await response.json();
@@ -367,7 +367,7 @@ class AgentTeamsPanel {
      */
     async loadTeamsFromAPI() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/teams', {
+            const response = await fetch(window.apiUrl('/teams'), {
                 headers: this.getAuthHeaders()
             });
             const data = await response.json();
@@ -440,7 +440,7 @@ class AgentTeamsPanel {
      */
     async createTeamAPI(name, description) {
         try {
-            const response = await fetch('/gpt/backend/api/v1/teams', {
+            const response = await fetch(window.apiUrl('/teams'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({ name, description })
@@ -469,7 +469,7 @@ class AgentTeamsPanel {
      */
     async updateTeamAPI(teamId, name, description) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/teams/${teamId}`, {
+            const response = await fetch(window.apiUrl(`/teams/${teamId}`), {
                 method: 'PUT',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({ name, description })
@@ -491,7 +491,7 @@ class AgentTeamsPanel {
      */
     async deleteTeamAPI(teamId) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/teams/${teamId}`, {
+            const response = await fetch(window.apiUrl(`/teams/${teamId}`), {
                 method: 'DELETE',
                 headers: this.getAuthHeaders()
             });
@@ -512,7 +512,7 @@ class AgentTeamsPanel {
      */
     async createAgentAPI(agentData, teamId) {
         try {
-            const response = await fetch('/gpt/backend/api/v1/agents', {
+            const response = await fetch(window.apiUrl('/agents'), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(this.transformAgentToAPI(agentData, teamId))
@@ -535,7 +535,7 @@ class AgentTeamsPanel {
      */
     async updateAgentAPI(agentId, agentData, teamId) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/agents/${agentId}`, {
+            const response = await fetch(window.apiUrl(`/agents/${agentId}`), {
                 method: 'PUT',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify(this.transformAgentToAPI(agentData, teamId))
@@ -558,7 +558,7 @@ class AgentTeamsPanel {
      */
     async deleteAgentAPI(agentId) {
         try {
-            const response = await fetch(`/gpt/backend/api/v1/agents/${agentId}`, {
+            const response = await fetch(window.apiUrl(`/agents/${agentId}`), {
                 method: 'DELETE',
                 headers: this.getAuthHeaders()
             });
@@ -1059,7 +1059,7 @@ class AgentTeamsPanel {
         console.log('[REORDER] Saving agent order:', { teamId: this.selectedTeamId, agentIds });
 
         try {
-            const response = await fetch('/gpt/backend/api/v1/agents/reorder', {
+            const response = await fetch(window.apiUrl('/agents/reorder'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2189,7 +2189,7 @@ class AgentTeamsPanel {
 
         try {
             // Use SSE endpoint for real-time updates
-            const response = await fetch(`/gpt/backend/api/v1/agents/${manager.id}/chat`, {
+            const response = await fetch(window.apiUrl(`/agents/${manager.id}/chat`), {
                 method: 'POST',
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({

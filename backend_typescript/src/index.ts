@@ -1,7 +1,13 @@
 import express, { Request, Response, NextFunction } from 'express';
+import { initFileLogging } from './Services/Logger';
 import { config } from './config/env';
 import { MiddlewareProcessor } from './Middleware/MiddlewareProcessor';
 import { router } from './routes';
+
+// Mirror all console output into a log file (the Node equivalent of PHP's error_log).
+// File: backend_typescript/logs/backend.log. All request handling happens after this,
+// so every request, provider call, and error is captured.
+initFileLogging();
 
 // PHP runs each request in its own process, so one request's fatal error never takes down the
 // server. Node is a single shared process: an unhandled promise rejection or uncaught exception

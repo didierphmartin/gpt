@@ -284,10 +284,39 @@ class AgentRepository
     }
 
     /**
-     * Create a new agent
+     * Find an agent by exact (user_id, name) — the dedup key. Unlike
+     * findByName(), this is strict: it never matches public/workspace agents
+     * owned by someone else, and ignores the enabled flag. Used by create()
+     * to reuse an existing agent instead of minting a duplicate row.
+     */
+    public function findOwnedByName(string $name, int $userId): ?Agent
+    {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM agents WHERE user_id = ? AND name = ? ORDER BY id ASC LIMIT 1"
+        );
+        $stmt->execute([$userId, $name]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ? new Agent($row) : null;
+    }
+
+    /**
+     * Create a new agent — or reuse an existing one.
+     *
+     * Agents are unique per (user_id, name): reusing the same agent across many
+     * workflows must point at ONE row, not spawn a duplicate. If an agent with
+     * this name already exists for the user, we update that row in place and
+     * return it (keeping its original id) instead of inserting a new one. This
+     * is the app-side guard that backs the UNIQUE(user_id, name) constraint.
      */
     public function create(Agent $agent): Agent
     {
+        $existing = $this->findOwnedByName($agent->getName(), $agent->getUserId());
+        if ($existing !== null) {
+            $agent->setId($existing->getId());
+            return $this->update($agent);
+        }
+
         $sql = "INSERT INTO agents (
             user_id, team_id, category, name, description,
             agent_type, parent_agent_id, can_delegate_to, display_order,

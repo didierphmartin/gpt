@@ -6,7 +6,7 @@
  */
 class FileStorageManager {
     constructor() {
-        this.apiBaseUrl = '/gpt/backend/api/v1';
+        this.apiBaseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
         this.treeContainer = document.getElementById('file-tree-container');
         this.refreshBtn = document.getElementById('refresh-files-btn');
         this.fileContentPanel = document.getElementById('file-content-panel');

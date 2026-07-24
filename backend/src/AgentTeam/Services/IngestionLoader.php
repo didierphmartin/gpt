@@ -45,62 +45,6 @@ final class IngestionLoader
     }
 
     /**
-     * Decode raw file bytes to plain text. `$docType` of "auto" detects from
-     * the extension.
-     *
-     * @throws \InvalidArgumentException on an unsupported / undetected type
-     */
-    public static function decode(string $name, string $data, string $docType = 'auto'): string
-    {
-        if ($docType === '' || $docType === 'auto') {
-            $docType = self::detectType($name) ?? '';
-        }
-
-        switch ($docType) {
-            case 'text':
-            case 'csv':
-                return $data;
-
-            case 'pdf':
-                return (new \Smalot\PdfParser\Parser())->parseContent($data)->getText();
-
-            case 'word':
-                return self::decodeDocx($data);
-
-            case 'html':
-                // HTML -> Markdown keeps headings/lists/links as readable text
-                // (better for retrieval than flat tag-stripping); script/style
-                // are dropped, unknown tags stripped.
-                $converter = new \League\HTMLToMarkdown\HtmlConverter([
-                    'strip_tags'   => true,
-                    'remove_nodes' => 'script style',
-                ]);
-                return trim($converter->convert($data));
-
-            default:
-                throw new \InvalidArgumentException("unsupported file type for '{$name}'");
-        }
-    }
-
-    /** Extract text from .docx bytes via the word/document.xml `<w:t>` runs. */
-    private static function decodeDocx(string $data): string
-    {
-        $tmp = tempnam(sys_get_temp_dir(), 'ufs_docx');
-        file_put_contents($tmp, $data);
-        $text = '';
-        $zip = new \ZipArchive();
-        if ($zip->open($tmp) === true) {
-            $xml = $zip->getFromName('word/document.xml') ?: '';
-            $zip->close();
-            if (preg_match_all('/<w:t[^>]*>(.*?)<\/w:t>/s', $xml, $m)) {
-                $text = implode('', array_map('html_entity_decode', $m[1]));
-            }
-        }
-        @unlink($tmp);
-        return $text;
-    }
-
-    /**
      * Enumerate the files the loader will process.
      *
      * The document type is always detected from the extension; `$allowedTypes`
@@ -195,23 +139,24 @@ final class IngestionLoader
     /**
      * Read one enumerated file via the injected $readFile.
      *
-     * $readFile returns ['is_text'=>bool, 'data'=>string]: langfs already
-     * extracts text (is_text=true → passthrough, since decode() would mis-parse
-     * a PDF's extracted text as raw bytes); UniversalFS returns raw bytes
-     * (is_text=false → decode here). A plain string return is treated as raw
-     * bytes for backward compatibility.
+     * langfs already extracts text server-side, returning ['is_text'=>true,
+     * 'data'=>string] — we pass it straight through. The legacy UniversalFS
+     * raw-bytes path (is_text=false + local decode) has been removed now that
+     * every storage server is a langfs/LangChain loader; a non-text response
+     * throws rather than being decoded here.
      *
      * @param array{provider:string,file_id:string,name:string,doc_type:string} $descriptor
      */
     public static function loadFile(callable $readFile, array $descriptor): string
     {
         $r = $readFile($descriptor['provider'], $descriptor['file_id']);
-        if (is_array($r)) {
-            return !empty($r['is_text'])
-                ? (string) ($r['data'] ?? '')
-                : self::decode($descriptor['name'], (string) ($r['data'] ?? ''), $descriptor['doc_type']);
+        if (is_array($r) && !empty($r['is_text'])) {
+            return (string) ($r['data'] ?? '');
         }
-        return self::decode($descriptor['name'], (string) $r, $descriptor['doc_type']);
+        throw new \RuntimeException(
+            "read_file did not return extracted text for '{$descriptor['name']}' — "
+            . 'the legacy raw-bytes decode path was removed; use a langfs storage server (format=text).'
+        );
     }
 
     /**

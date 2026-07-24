@@ -387,16 +387,14 @@
     <!-- Drawflow JS -->
     <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.60/dist/drawflow.min.js"></script>
 
+    <!-- Backend base URL single source of truth — must load before any module that calls the API. -->
+    <script src="assets/js/api-config.js"></script>
     <!-- Auth Manager (same as main app) -->
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js"></script>
 
-    <!-- Config -->
-    <script>
-        window.CONFIG = {
-            API_BASE_URL: '/gpt/backend/api/v1'
-        };
-    </script>
+    <!-- Backend base URL is provided by api-config.js (window.APP_CONFIG.API_BASE_URL / window.apiUrl). -->
+
 
     <!-- Workflow Editor -->
     <script src="assets/js/workflow-editor.js"></script>
@@ -602,7 +600,7 @@
             console.log('Auth token:', token);
 
             try {
-                const response = await fetch('/gpt/backend/api/v1/agents', {
+                const response = await fetch(window.apiUrl('/agents'), {
                     headers: {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'

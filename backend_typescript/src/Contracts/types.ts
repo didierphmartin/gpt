@@ -23,6 +23,13 @@ export interface AvailableSkill {
   scripts: string[];
 }
 
+/** Base64-encoded attachment for native provider dispatch (images always; PDFs on capable providers). */
+export interface NativeAttachment {
+  mime_type: string;
+  data: string;
+  name: string;
+}
+
 export interface ChatOptions {
   message: string;
   conversation_history: any[];
@@ -38,6 +45,16 @@ export interface ChatOptions {
   available_skills?: AvailableSkill[];
   /** Provider-conditional forcing shape (OpenAI object form or 'required'); providers translate. */
   tool_choice?: string | Record<string, any>;
+  /** Per-request override of the provider-config max_tokens (workflow agent form wins). */
+  max_tokens?: number;
+  /** Per-request override of the provider-config temperature (workflow agent form wins). */
+  temperature?: number;
+  /** MCP/tool selection (allowlist of tool names). Empty/undefined = all tools. */
+  tools?: string[];
+  /** Image attachments for native per-provider dispatch (from AttachmentDispatcher). */
+  image_attachments?: NativeAttachment[];
+  /** PDF attachments for native dispatch on capable providers (from AttachmentDispatcher). */
+  pdf_attachments?: NativeAttachment[];
 }
 
 export interface ChatUsage {
@@ -54,6 +71,14 @@ export interface ChatResult {
   provider: string;
   pending_client_tool_call?: boolean;
   pending_tool_calls?: ToolCall[];
+  /**
+   * The provider's finish/stop reason for the final turn (e.g. 'stop',
+   * 'length', 'tool_calls'). 'length' means the model was truncated at
+   * max_tokens — the caller should surface that so silently-dropped content
+   * (e.g. a downstream agent that only rendered the first of several inputs)
+   * is visible instead of looking like a clean completion.
+   */
+  finish_reason?: string | null;
 }
 
 /** Runtime config for one provider, resolved from system_llm_settings. */

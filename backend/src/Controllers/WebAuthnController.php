@@ -33,7 +33,11 @@ class WebAuthnController
     {
         $this->db = $db;
         $this->config = $config;
-        $this->jwtSecret = $config['auth']['jwt_secret'] ?? 'your-secret-key-change-this-in-production';
+        $this->jwtSecret = (string) ($config['auth']['jwt_secret'] ?? '');
+        if ($this->jwtSecret === '') {
+            // Fail closed: never sign/verify with a weak default secret.
+            throw new \RuntimeException('JWT secret is not configured (set JWT_SECRET).');
+        }
         $this->jwtExpiry = $config['auth']['jwt_expiry'] ?? 28800; // 8 hours
         $this->refreshExpiry = $config['auth']['refresh_expiry'] ?? 604800; // 7 days
     }

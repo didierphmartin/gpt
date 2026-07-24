@@ -7,8 +7,13 @@ import { AuthController } from './Controllers/AuthController';
 import { PromptLibraryController } from './Controllers/PromptLibraryController';
 import { ChatController } from './Controllers/ChatController';
 import { ProviderController } from './Controllers/ProviderController';
+import { ToolsController } from './Controllers/ToolsController';
 import { ContextController } from './Controllers/ContextController';
 import { MCPServerController } from './Controllers/MCPServerController';
+import { MCPAppController } from './Controllers/MCPAppController';
+import { MCPProxyController } from './Controllers/MCPProxyController';
+import { HumeToolController } from './Controllers/HumeToolController';
+import { EVIWebhookController } from './Controllers/EVIWebhookController';
 import { SettingsController } from './Controllers/SettingsController';
 import { UserMemoryController } from './Controllers/UserMemoryController';
 import { TeamController } from './Controllers/TeamController';
@@ -36,8 +41,13 @@ const auth = new AuthController();
 const prompts = new PromptLibraryController();
 const chat = new ChatController();
 const providers = new ProviderController();
+const tools = new ToolsController();
 const contexts = new ContextController();
 const mcpServers = new MCPServerController();
+const mcpApp = new MCPAppController();
+const mcpProxy = new MCPProxyController();
+const humeTools = new HumeToolController();
+const eviWebhook = new EVIWebhookController();
 const settings = new SettingsController();
 const userMemories = new UserMemoryController();
 const teams = new TeamController();
@@ -76,6 +86,20 @@ router.post('/api/v1/fetch-url', handle((ctx) => urlFetch.fetch(ctx)));
 
 // Providers (protected) — the provider picker's data source
 router.get('/api/v1/providers', handle((ctx) => providers.list(ctx)));
+router.get('/api/v1/tools', handle((ctx) => tools.list(ctx)));
+// Direct tool execution (workflow realtime runner) + intent classification (voice realtime).
+router.post('/api/v1/tools/execute', handle((ctx) => tools.execute(ctx)));
+router.post('/api/v1/tools/classify-intent', handle((ctx) => tools.classifyIntent(ctx)));
+
+// Hume EVI voice tools (protected) — mirrors PHP HumeToolController routes.
+router.post('/api/v1/hume/tools/execute', handle((ctx) => humeTools.execute(ctx)));
+router.get('/api/v1/hume/tools/list', handle((ctx) => humeTools.list(ctx)));
+router.post('/api/v1/hume/tools/sync', handle((ctx) => humeTools.sync(ctx)));
+router.get('/api/v1/hume/tools/status', handle((ctx) => humeTools.getStatus(ctx)));
+router.get('/api/v1/hume/tools/test-connection', handle((ctx) => humeTools.testConnection(ctx)));
+router.get('/api/v1/hume/config', handle((ctx) => humeTools.getConfig(ctx)));
+// EVI webhook (PUBLIC — external Hume callback; in MiddlewareProcessor.PUBLIC_ROUTES).
+router.post('/api/v1/evi/webhook', handle((ctx) => eviWebhook.handleWebhook(ctx)));
 router.post('/api/v1/providers', handle((ctx) => providers.switch(ctx)));
 router.post('/api/v1/providers/switch', handle((ctx) => providers.switch(ctx)));
 
@@ -128,6 +152,25 @@ router.post('/api/v1/webauthn/challenge', handle((ctx) => webauthn.challenge(ctx
 router.post('/api/v1/webauthn/register', handle((ctx) => webauthn.register(ctx)));
 router.post('/api/v1/webauthn/authenticate', handle((ctx) => webauthn.authenticate(ctx)));
 router.delete('/api/v1/webauthn/register', handle((ctx) => webauthn.delete(ctx)));
+
+// MCP App UI proxy (PUBLIC — in MiddlewareProcessor.PUBLIC_ROUTES). Serves raw HTML into an
+// iframe that cannot send an auth header, so it uses a raw handler (like generate-python) rather
+// than the JSON handle() wrapper. Mirrors MCPAppController.php / PHP route GET /api/v1/mcp/app.
+router.get('/api/v1/mcp/app', async (req: Request, res: Response) => {
+  try {
+    const result = await mcpApp.getResource(buildCtx(req));
+    res.status(result.status_code ?? 200);
+    for (const [k, v] of Object.entries(result.headers ?? {})) res.setHeader(k, v);
+    res.end(result.raw_body);
+  } catch (err: any) {
+    console.error('[mcp/app] unhandled', err);
+    if (!res.headersSent) res.status(500).type('text/plain').end(err?.message ?? 'Internal error');
+  }
+});
+
+// MCP JSON-RPC proxy (protected) — forwards frontend requests to configured MCP
+// servers (tools/call, resources/read for MCP-UI apps). Mirrors PHP POST /api/v1/mcp/proxy.
+router.post('/api/v1/mcp/proxy', handle((ctx) => mcpProxy.forward(ctx)));
 
 // MCP server management (protected)
 router.get('/api/v1/mcp/servers', handle((ctx) => mcpServers.list(ctx)));
@@ -357,6 +400,14 @@ router.get('/api/v1/workflows/:id(\\d+)/outputs/:filename', handle((ctx) => work
 // Workflow node documents (metadata stored in the node config). The /metadata literal is registered
 // before the :docId param route so it isn't shadowed.
 router.post('/api/v1/workflows/:id(\\d+)/nodes/:nodeId(\\d+)/documents/metadata', handle((ctx) => workflows.saveDocumentMetadata(ctx)));
+// Multipart document upload — raw handler (multer puts the file on req.file; controller applies
+// the handle() status_code convention itself).
+router.post('/api/v1/workflows/:id(\\d+)/nodes/:nodeId(\\d+)/documents', uploadMw.single('file'), (req: Request, res: Response) => {
+  workflows.uploadNodeDocument(req, res).catch((err) => {
+    console.error('[workflows/nodes/documents] unhandled', err);
+    if (!res.headersSent) res.status(500).json({ success: false, error: 'Internal error' });
+  });
+});
 router.get('/api/v1/workflows/:id(\\d+)/nodes/:nodeId(\\d+)/documents', handle((ctx) => workflows.listNodeDocuments(ctx)));
 router.delete('/api/v1/workflows/:id(\\d+)/nodes/:nodeId(\\d+)/documents/:docId', handle((ctx) => workflows.deleteNodeDocument(ctx)));
 
@@ -440,6 +491,17 @@ router.post('/api/v1/workflows/:id(\\d+)/ingestion/node-code', handle((ctx) => i
 router.post('/api/v1/workflows/:id(\\d+)/ingestion/save-script', handle((ctx) => ingestion.saveScript(ctx)));
 router.post('/api/v1/workflows/:id(\\d+)/ingestion/store-find', handle((ctx) => ingestion.storeFind(ctx)));
 router.post('/api/v1/workflows/:id(\\d+)/ingestion/run-start', handle((ctx) => ingestion.runStart(ctx)));
+// Editor node-round endpoints (one interpreted round per node: read file / chunk / store).
+router.post('/api/v1/workflows/:id(\\d+)/ingestion/loader-text', handle((ctx) => ingestion.loaderText(ctx)));
+router.post('/api/v1/workflows/:id(\\d+)/ingestion/splitter-chunks', handle((ctx) => ingestion.splitterChunks(ctx)));
+router.post('/api/v1/workflows/:id(\\d+)/ingestion/store-chunks', handle((ctx) => ingestion.storeChunks(ctx)));
+// run-stream is a raw SSE handler (sets its own headers, ends with data: [DONE]).
+router.post('/api/v1/workflows/:id(\\d+)/ingestion/run-stream', (req: Request, res: Response) => {
+  ingestion.runStream(req, res).catch((err) => {
+    console.error('[ingestion.run-stream] unhandled', err);
+    if (!res.writableEnded) res.end();
+  });
+});
 // run-worker streams SSE — raw handler (mirror of /run-stream): set SSE headers, write each emitted
 // event as `data: <json>\n\n`, and terminate with `data: [DONE]\n\n`. PHP's connection_aborted() is
 // mirrored by a close flag on the request.

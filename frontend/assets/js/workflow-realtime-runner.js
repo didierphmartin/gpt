@@ -384,7 +384,7 @@ class RealtimeWorkflowRunner {
 
     async _executeExternalTool(name, args, callId) {
         try {
-            const apiBase = (typeof window !== 'undefined' && window.CONFIG?.API_BASE_URL)
+            const apiBase = (typeof window !== 'undefined' && window.APP_CONFIG?.API_BASE_URL)
                 || '/gpt/backend/api/v1';
             const authToken = (typeof localStorage !== 'undefined') ? localStorage.getItem('token') : null;
             const headers = { 'Content-Type': 'application/json' };

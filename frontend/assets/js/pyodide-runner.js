@@ -103,6 +103,35 @@
      * `/skill/<dirName>`. Caches per dirName: NativeFS doesn't allow
      * remounting the same path, and a single mount lasts the session.
      */
+    /**
+     * Map a possibly-bare skill name to its real folder path under skills/.
+     * The model frequently calls run_skill_script with just a skill's own
+     * folder name (e.g. "geo-report") even when it lives inside a group
+     * folder (e.g. "GEO/geo-report") — and may target a skill OTHER than the
+     * one bound to its node (a consolidator bound to `html` calling
+     * `GEO/geo-report`). A name that already contains "/" or resolves at the
+     * top level is returned unchanged; otherwise we scan ONE level of group
+     * folders for "<group>/<name>/SKILL.md". Falls back to the original name
+     * so the caller still throws a clear "not found".
+     */
+    async function resolveSkillDir(dirName) {
+        if (!dirName || dirName.includes('/') || !window.localFs) return dirName;
+        // Top-level skill folder? (e.g. "docx")
+        const direct = await window.localFs.resolvePath(`skills/${dirName}/SKILL.md`, { kind: 'file' });
+        if (direct) return dirName;
+        // Otherwise look one level down inside group folders.
+        const skillsDir = await window.localFs.resolvePath('skills');
+        if (!skillsDir) return dirName;
+        for await (const entry of skillsDir.values()) {
+            if (entry.kind !== 'directory') continue;
+            const md = await window.localFs.resolvePath(
+                `skills/${entry.name}/${dirName}/SKILL.md`, { kind: 'file' }
+            );
+            if (md) return `${entry.name}/${dirName}`;
+        }
+        return dirName;
+    }
+
     async function ensureMounted(dirName) {
         if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
         if (!window.localFs) {
@@ -341,7 +370,7 @@
                 const tmpPath = urlToTempPath(arg);
                 let resp;
                 try {
-                    resp = await fetch('/gpt/backend/api/v1/fetch-url', {
+                    resp = await fetch(window.apiUrl('/fetch-url'), {
                         method: 'POST',
                         headers: authHeaders,
                         body: JSON.stringify({ url: arg }),
@@ -887,7 +916,6 @@ _runner_stderr = _stderr_buf.getvalue()
 
     async function _runOne(opts) {
         const {
-            dirName,
             script,
             argv = [],
             inputFiles = null,
@@ -895,6 +923,13 @@ _runner_stderr = _stderr_buf.getvalue()
             dependencies = null,
             persist = true,
         } = opts || {};
+
+        // Normalize the requested skill name to its real on-disk path BEFORE
+        // any helper touches it (mount, deps, fetches_urls, output bucketing
+        // all assume the full group-prefixed form). A bare leaf like
+        // "geo-report" becomes "GEO/geo-report"; an already-pathed or
+        // top-level name is unchanged.
+        const dirName = await resolveSkillDir(opts?.dirName);
 
         if (!dirName) throw new Error('runSkillScript: dirName is required');
         if (!script) throw new Error('runSkillScript: script is required');
@@ -989,6 +1024,18 @@ _runner_stderr = _stderr_buf.getvalue()
                     // null). writeInput already filters most of these but we
                     // wrap defensively so one bad entry doesn't kill the run.
                     console.error(`[pyodide-runner] writeInput threw for ${rel}:`, e?.message || e, 'data type:', typeof data);
+                }
+            }
+            // Post-write verification: confirm each staged path exists in the FS
+            // right before the script runs (definitive vs. inferring from the
+            // model's narration about "missing" inputs).
+            for (const rel of Object.keys(inputFilesObj)) {
+                const abs = resolveAbs(rel);
+                try {
+                    const st = pyodide.FS.stat(abs);
+                    console.log(`[pyodide-runner] staged ${abs}: ok (${st.size}B)`);
+                } catch (e) {
+                    console.warn(`[pyodide-runner] staged ${abs}: MISSING (${e?.message || e})`);
                 }
             }
         }

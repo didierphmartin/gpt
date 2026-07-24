@@ -61,7 +61,21 @@ export class ClaudeProvider extends LLMProvider {
         messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: turn.tool_call_id, content }] });
       }
     }
-    if (opts.message && opts.message.trim() !== '') {
+    // PDFs and images go FIRST so Claude sees them before the text prompt —
+    // matches the order Anthropic documents in their vision/document examples.
+    const imgs = opts.image_attachments ?? [];
+    const pdfs = opts.pdf_attachments ?? [];
+    if (imgs.length || pdfs.length) {
+      const userContent: any[] = [];
+      for (const pdf of pdfs) {
+        userContent.push({ type: 'document', source: { type: 'base64', media_type: pdf.mime_type, data: pdf.data } });
+      }
+      for (const img of imgs) {
+        userContent.push({ type: 'image', source: { type: 'base64', media_type: img.mime_type, data: img.data } });
+      }
+      userContent.push({ type: 'text', text: opts.message });
+      messages.push({ role: 'user', content: userContent });
+    } else if (opts.message && opts.message.trim() !== '') {
       messages.push({ role: 'user', content: [{ type: 'text', text: opts.message }] });
     }
     return messages;

@@ -269,6 +269,11 @@ async def generate_code(
     lines.append("")
     lines.append("# LLM model to use. Override via MODEL_NAME env var.")
     lines.append("MODEL_NAME = os.environ.get('MODEL_NAME', 'claude-sonnet-4-5')")
+    # ChatAnthropic defaults max_tokens to 1024 when unset, which truncates
+    # large outputs (e.g. a full HTML report stops mid-<style>). Set a generous,
+    # env-overridable ceiling so big documents complete. It's a cap, not a
+    # target — billing is on tokens actually generated.
+    lines.append("MAX_TOKENS = int(os.environ.get('MAX_TOKENS', '32000'))")
     lines.append("")
 
     # ---------- MCP server registry (baked) ----------
@@ -726,7 +731,7 @@ async def generate_code(
         lines.append("")
 
     lines.append(textwrap.dedent('''\
-        llm = ChatAnthropic(model=MODEL_NAME, temperature=0)
+        llm = ChatAnthropic(model=MODEL_NAME, temperature=0, max_tokens=MAX_TOKENS)
         sg = StateGraph(WFState)
 
         for nid in ORDER:

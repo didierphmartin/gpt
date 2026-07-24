@@ -65,7 +65,7 @@ class MCPAppHost {
         // Create sandboxed iframe
         const iframe = document.createElement('iframe');
         iframe.className = 'mcp-app-frame';
-        iframe.sandbox = 'allow-scripts allow-forms allow-same-origin';
+        iframe.sandbox = 'allow-scripts allow-forms allow-same-origin allow-downloads allow-modals';
         iframe.allow = 'clipboard-write';
 
         // Inject the bridge script into the HTML content

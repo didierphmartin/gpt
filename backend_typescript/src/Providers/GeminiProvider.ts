@@ -31,7 +31,16 @@ export class GeminiProvider extends LLMProvider {
       const text = this.extractText(turn.content);
       if (text && text.trim() !== '') contents.push({ role, parts: [{ text }] });
     }
-    if (opts.message && opts.message.trim() !== '') {
+    // PDFs and images both ride in inline_data parts, distinguished by mime_type
+    // (Gemini handles both natively from the same shape).
+    const imgs = opts.image_attachments ?? [];
+    const pdfs = opts.pdf_attachments ?? [];
+    if (imgs.length || pdfs.length) {
+      const parts: any[] = [{ text: opts.message }];
+      for (const pdf of pdfs) parts.push({ inline_data: { mime_type: pdf.mime_type, data: pdf.data } });
+      for (const img of imgs) parts.push({ inline_data: { mime_type: img.mime_type, data: img.data } });
+      contents.push({ role: 'user', parts });
+    } else if (opts.message && opts.message.trim() !== '') {
       contents.push({ role: 'user', parts: [{ text: opts.message }] });
     }
     return contents;

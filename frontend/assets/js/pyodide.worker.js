@@ -145,6 +145,44 @@ function writeInput(absPath, data) {
           return;
         }
       }
+      // STRUCTURAL UNWRAP — last-resort, ported from pyodide-runner.js so the
+      // worker matches chat's main-thread runner. Fires when every JSON.parse
+      // strategy failed: typically a `{"<path>": "<HTML>"}` wrap whose HTML
+      // body contains backslash sequences that are INVALID JSON escapes (JS
+      // regex like `\d`, Windows paths, CSS), so the outer JSON can't parse.
+      // Regex-extract the inner body and decode only the VALID JSON escapes,
+      // leaving invalid ones (e.g. `\d`) intact for the document. Without this
+      // the raw `{"...": "..."}` wrapper was written as the file content —
+      // the "broken HTML with literal \n" failure.
+      const headMatch = data.match(/^\s*\{\s*"([^"]+)"\s*:\s*"/);
+      if (headMatch) {
+        const innerKey = headMatch[1];
+        const trimmedTail = data.replace(/\s+$/, '');
+        if ((innerKey === absPath || innerKey.startsWith('/')) && trimmedTail.endsWith('}')) {
+          const withoutBrace = trimmedTail.slice(0, -1).replace(/\s+$/, '');
+          if (withoutBrace.endsWith('"')) {
+            const innerStart = headMatch[0].length;
+            const innerEnd = withoutBrace.length - 1;
+            let inner = data.slice(innerStart, innerEnd);
+            const escapesBefore = (inner.match(/\\["\\\/bfnrt]/g) || []).length;
+            if (escapesBefore > 0) {
+              inner = inner
+                .replace(/\\\\/g, '\x01')   // protect literal backslashes
+                .replace(/\\"/g, '"')
+                .replace(/\\\//g, '/')
+                .replace(/\\n/g, '\n')
+                .replace(/\\r/g, '\r')
+                .replace(/\\t/g, '\t')
+                .replace(/\\b/g, '\b')
+                .replace(/\\f/g, '\f')
+                .replace(/\x01/g, '\\');    // restore protected backslashes
+            }
+            console.log(`[pyodide.worker] writeInput: regex-unwrapped malformed JSON wrap for "${absPath}" (inner key "${innerKey}", ${inner.length} chars, decoded ${escapesBefore} escapes)`);
+            pyodide.FS.writeFile(absPath, new TextEncoder().encode(inner));
+            return;
+          }
+        }
+      }
     }
     bytes = new TextEncoder().encode(data);
   } else if (data instanceof Uint8Array) {
@@ -334,6 +372,19 @@ async function runSkillScript(payload) {
         writeInput(resolveAbs(rel), data);
       } catch (e) {
         console.error(`[pyodide.worker] writeInput threw for ${rel}:`, e?.message || e, 'data type:', typeof data);
+      }
+    }
+    // Post-write verification: stat each staged path so we KNOW whether it
+    // exists in the FS at the moment the script is about to run. This is the
+    // definitive answer to "did input_files actually land in /scratch?" —
+    // surfaced via report() so it shows in the main thread's [wf-pool] logs.
+    for (const rel of Object.keys(inputFilesObj)) {
+      const abs = resolveAbs(rel);
+      try {
+        const st = pyodide.FS.stat(abs);
+        report(`staged ${abs}: ok (${st.size}B)`);
+      } catch (e) {
+        report(`staged ${abs}: MISSING (${e?.message || e})`);
       }
     }
   }

@@ -34,36 +34,17 @@ class AuthController
     {
         $this->db = $db;
         $this->config = $config;
-        $this->jwtSecret = $config['auth']['jwt_secret'] ?? 'your-secret-key-change-this-in-production';
+        $this->jwtSecret = (string) ($config['auth']['jwt_secret'] ?? '');
+        if ($this->jwtSecret === '') {
+            // Fail closed: never sign/verify with a weak default secret.
+            throw new \RuntimeException('JWT secret is not configured (set JWT_SECRET).');
+        }
         $this->jwtExpiry = $config['auth']['jwt_expiry'] ?? 28800; // 8 hours
         $this->refreshExpiry = $config['auth']['refresh_expiry'] ?? 604800; // 7 days
-        $this->ensureUserSubscriptionColumns();
-    }
-
-    /**
-     * Ensure users table has ledger_user_id and plan columns
-     */
-    private function ensureUserSubscriptionColumns(): void
-    {
-        try {
-            $stmt = $this->db->query("SHOW COLUMNS FROM users LIKE 'ledger_user_id'");
-            if ($stmt->rowCount() === 0) {
-                $this->db->exec("ALTER TABLE users ADD COLUMN ledger_user_id VARCHAR(36) DEFAULT NULL AFTER role");
-                $this->db->exec("ALTER TABLE users ADD COLUMN plan VARCHAR(20) DEFAULT 'free' AFTER ledger_user_id");
-                $this->db->exec("ALTER TABLE users ADD INDEX idx_ledger_user_id (ledger_user_id)");
-            }
-            // Per-user app key: HMAC hash (never plaintext) + a short prefix
-            // for last-4 display in settings, + the creation timestamp.
-            $stmt = $this->db->query("SHOW COLUMNS FROM users LIKE 'app_key_hash'");
-            if ($stmt->rowCount() === 0) {
-                $this->db->exec("ALTER TABLE users ADD COLUMN app_key_hash CHAR(64) DEFAULT NULL");
-                $this->db->exec("ALTER TABLE users ADD COLUMN app_key_prefix CHAR(12) DEFAULT NULL");
-                $this->db->exec("ALTER TABLE users ADD COLUMN app_key_created_at TIMESTAMP NULL DEFAULT NULL");
-                $this->db->exec("ALTER TABLE users ADD INDEX idx_app_key_hash (app_key_hash)");
-            }
-        } catch (Exception $e) {
-            error_log("[AuthController] Error ensuring subscription columns: " . $e->getMessage());
-        }
+        // NOTE: the subscription / app-key columns (ledger_user_id, plan,
+        // app_key_hash, app_key_prefix, app_key_created_at) are part of the base
+        // schema (schema/chatbot.sql). No runtime DDL here — schema changes belong
+        // in a migration, not on the request path.
     }
 
     /**
@@ -95,6 +76,82 @@ class AuthController
     private function planRank(?string $plan): int
     {
         return ['free' => 0, 'standard' => 1, 'premium' => 2][$this->normalizePlan($plan)] ?? 0;
+    }
+
+    /** Firebase project id this backend accepts ID tokens for (token `aud`). */
+    private function firebaseProjectId(): string
+    {
+        $fromConfig = (string) ($this->config['firebase']['project_id'] ?? '');
+        if ($fromConfig !== '') {
+            return $fromConfig;
+        }
+        $fromEnv = (string) ($_ENV['FIREBASE_PROJECT_ID'] ?? getenv('FIREBASE_PROJECT_ID') ?: '');
+        return $fromEnv !== '' ? $fromEnv : 'transledgersite';
+    }
+
+    /**
+     * Google's Secure Token x509 signing certs (kid => Key), cached to a temp
+     * file for 1 hour (Firebase rotates these ~daily). Throws on fetch failure.
+     */
+    private function googleSecureTokenKeys(): array
+    {
+        $url = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+        $cacheFile = sys_get_temp_dir() . '/gpt_firebase_securetoken_certs.json';
+
+        $certs = null;
+        if (is_file($cacheFile) && (time() - filemtime($cacheFile) < 3600)) {
+            $raw = @file_get_contents($cacheFile);
+            $decoded = $raw ? json_decode($raw, true) : null;
+            if (is_array($decoded) && $decoded) {
+                $certs = $decoded;
+            }
+        }
+        if ($certs === null) {
+            $raw = @file_get_contents($url);
+            $decoded = $raw ? json_decode($raw, true) : null;
+            if (!is_array($decoded) || !$decoded) {
+                throw new Exception('Unable to fetch Google secure token certificates');
+            }
+            $certs = $decoded;
+            @file_put_contents($cacheFile, json_encode($certs));
+        }
+
+        $keys = [];
+        foreach ($certs as $kid => $pem) {
+            $keys[$kid] = new Key($pem, 'RS256');
+        }
+        return $keys;
+    }
+
+    /**
+     * Verify a Firebase ID token: RS256 signature against Google's secure-token
+     * keys, plus aud/iss bound to OUR project. Returns the verified claims, or
+     * null on any failure. Identity MUST be derived from the returned claims —
+     * NEVER from client-supplied userData (which a caller can forge to
+     * impersonate any account).
+     */
+    private function verifyFirebaseIdToken(string $idToken): ?array
+    {
+        try {
+            $keys = $this->googleSecureTokenKeys();
+            $decoded = JWT::decode($idToken, $keys); // verifies RS256 + exp/iat/nbf, selects key by header kid
+            $claims = (array) $decoded;
+
+            $projectId = $this->firebaseProjectId();
+            if (($claims['aud'] ?? '') !== $projectId) {
+                return null;
+            }
+            if (($claims['iss'] ?? '') !== 'https://securetoken.google.com/' . $projectId) {
+                return null;
+            }
+            if ((string) ($claims['sub'] ?? '') === '') {
+                return null;
+            }
+            return $claims;
+        } catch (\Throwable $e) {
+            error_log('[AuthController] Firebase ID token verification failed: ' . $e->getMessage());
+            return null;
+        }
     }
 
     /**
@@ -130,6 +187,22 @@ class AuthController
     public function handleAction(array $request): array
     {
         $action = $request['body']['action'] ?? '';
+
+        // Defense in depth: /api/v1/auth is a PUBLIC route (it also serves login/
+        // register/verify), so actions that require an authenticated user are gated
+        // here centrally rather than relying solely on each method's own check.
+        $protectedActions = [
+            'link_phone', 'unlink_phone', 'upgrade_plan',
+            'generate_app_key', 'revoke_app_key',
+            'admin_generate_app_key', 'admin_revoke_app_key',
+        ];
+        if (in_array($action, $protectedActions, true) && empty($request['user_id'])) {
+            return [
+                'success' => false,
+                'message' => 'Authentication required',
+                'status_code' => 401,
+            ];
+        }
 
         return match ($action) {
             'login' => $this->login($request),
@@ -317,11 +390,34 @@ class AuthController
         $idToken = $request['body']['idToken'] ?? '';
         $userData = $request['body']['userData'] ?? [];
 
-        // For phone auth, email may be empty but phone_number should be present
-        $hasEmail = !empty($userData['email']);
-        $hasPhone = !empty($userData['phone_number']);
+        if (empty($idToken)) {
+            return [
+                'success' => false,
+                'message' => 'Invalid authentication data',
+                'status_code' => 400
+            ];
+        }
 
-        if (empty($idToken) || (!$hasEmail && !$hasPhone)) {
+        // SECURITY: verify the Firebase ID token server-side and derive identity
+        // (email / phone / firebase_uid) from the VERIFIED claims. Never trust
+        // client-supplied userData for identity — a caller could forge it to
+        // impersonate or provision any account.
+        $claims = $this->verifyFirebaseIdToken($idToken);
+        if ($claims === null) {
+            return [
+                'success' => false,
+                'message' => 'Invalid or expired authentication token',
+                'status_code' => 401
+            ];
+        }
+
+        $verifiedEmail = isset($claims['email']) ? strtolower(trim((string) $claims['email'])) : '';
+        $verifiedPhone = isset($claims['phone_number']) ? trim((string) $claims['phone_number']) : '';
+        $firebaseUid = (string) ($claims['sub'] ?? '');
+
+        $hasEmail = $verifiedEmail !== '';
+        $hasPhone = $verifiedPhone !== '';
+        if (!$hasEmail && !$hasPhone) {
             return [
                 'success' => false,
                 'message' => 'Invalid authentication data',
@@ -330,13 +426,11 @@ class AuthController
         }
 
         // For phone auth, use phone number as email placeholder if no email
-        $email = $hasEmail
-            ? strtolower(trim($userData['email']))
-            : strtolower(trim($userData['phone_number'])) . '@phone.auth';
-        $phoneNumber = $userData['phone_number'] ?? null;
+        $email = $hasEmail ? $verifiedEmail : strtolower($verifiedPhone) . '@phone.auth';
+        $phoneNumber = $hasPhone ? $verifiedPhone : null;
+        // Display-only profile fields are non-identity; client userData is fine here.
         $firstName = $userData['first_name'] ?? '';
         $lastName = $userData['last_name'] ?? '';
-        $firebaseUid = $userData['firebase_uid'] ?? '';
 
         // Check if user exists by email, phone, or firebase_uid
         $stmt = $this->db->prepare("SELECT * FROM users WHERE email = ? OR firebase_uid = ? OR phone = ?");

@@ -12,7 +12,7 @@ class GrokRealtimeAdapter {
     constructor(config = {}) {
         this.ws = null;
         this.ready = false;
-        this.backendTokenUrl = config.backendTokenUrl || '/gpt/backend/api/v1/voice/token';
+        this.backendTokenUrl = config.backendTokenUrl || window.apiUrl('/voice/token');
         this.wsUrl = 'wss://api.x.ai/v1/realtime';
 
         // Audio format
@@ -23,7 +23,7 @@ class GrokRealtimeAdapter {
         this.sessionId = null;
         this.audioInputBytes = 0;
         this.audioOutputBytes = 0;
-        this.usageUrl = config.usageUrl || '/gpt/backend/api/v1/voice/usage';
+        this.usageUrl = config.usageUrl || window.apiUrl('/voice/usage');
 
         // Callbacks (set by runner)
         this.onToolCall = null;         // (name, args, callId)

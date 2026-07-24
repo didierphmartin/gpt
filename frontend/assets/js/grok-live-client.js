@@ -38,7 +38,7 @@ class GrokLiveClient {
 
         // Usage tracking
         this.usageTrackingEnabled = config.usageTrackingEnabled !== false;
-        this.backendUrl = config.backendUrl || '/gpt/backend/api/v1/voice/usage';
+        this.backendUrl = config.backendUrl || window.apiUrl('/voice/usage');
         this.sessionId = null;
         this.audioInputBytes = 0;
         this.audioOutputBytes = 0;

@@ -72,6 +72,7 @@
 </div>
 
 <!-- Reuse existing infrastructure -->
+<script src="/gpt/frontend/assets/js/api-config.js"></script>
 <script src="/gpt/frontend/assets/js/config.js"></script>
 <script src="/gpt/frontend/assets/js/audio-streamer.js"></script>
 
@@ -396,7 +397,7 @@ async function fetchEphemeralToken() {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const response = await fetch('/gpt/backend/api/v1/voice/token', {
+    const response = await fetch(window.apiUrl('/voice/token'), {
         method: 'POST',
         headers,
         credentials: 'include',

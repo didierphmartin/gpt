@@ -366,7 +366,7 @@
         })();
 
         // ========== REGISTRATION ==========
-        const API_BASE = '/gpt/backend/api/v1';
+        const API_BASE = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
 
         document.getElementById('register-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -625,6 +625,8 @@
         });
     </script>
 
+    <!-- Backend base URL single source of truth — must load before any module that calls the API. -->
+    <script src="assets/js/api-config.js"></script>
     <!-- Firebase Config -->
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/config.js"></script>

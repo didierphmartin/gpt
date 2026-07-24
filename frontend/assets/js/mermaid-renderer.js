@@ -72,6 +72,30 @@
         return cleaned !== source ? cleaned : null;
     }
 
+    /**
+     * LLMs frequently emit rectangle labels with unquoted parentheses (or
+     * other characters mermaid treats as syntax), e.g.
+     *   F[Architecture effaced<br/>(normal structure lost)]
+     * Mermaid rejects these with a parse error. The documented fix is to wrap
+     * the label in double quotes: F["Architecture effaced<br/>(normal ...)"].
+     * We only touch `[...]` labels that contain a paren, aren't already quoted,
+     * and hold no double-quote of their own (so the wrap is unambiguous). HTML
+     * tags like <br/> still render inside the quotes because htmlLabels is on.
+     * Returns null when nothing needed quoting.
+     */
+    function quoteBracketLabels(source) {
+        let changed = false;
+        const cleaned = source.replace(/([A-Za-z0-9_]+)\[([^\]]*)\]/g, (m, id, label) => {
+            const trimmed = label.trim();
+            if (/^["'].*["']$/.test(trimmed)) return m; // already quoted
+            if (!/[()]/.test(label)) return m;          // no problem chars
+            if (label.includes('"')) return m;          // can't safely double-quote
+            changed = true;
+            return `${id}["${label}"]`;
+        });
+        return changed ? cleaned : null;
+    }
+
     function isEdgeLabelError(err) {
         const msg = (err && err.message) || '';
         // Known mermaid v11 internal bugs that the edge-label-strip
@@ -137,6 +161,19 @@
                     } catch (err3) {
                         console.warn('[mermaid-renderer] edge-label-strip recovery also failed:', err3);
                     }
+                }
+            }
+
+            // Recovery 3: rectangle labels with unquoted parentheses/special
+            // chars (a very common LLM mistake). Quote them and retry.
+            const quoted = quoteBracketLabels(source);
+            if (quoted) {
+                try {
+                    await attemptRun(target, quoted);
+                    console.info('[mermaid-renderer] rendered after quoting bracket labels with special characters.');
+                    return;
+                } catch (err4) {
+                    console.warn('[mermaid-renderer] label-quoting recovery also failed:', err4);
                 }
             }
 

@@ -1,4 +1,8 @@
+import fs from 'fs';
+import path from 'path';
 import { Request, Response } from 'express';
+import { sql } from 'kysely';
+import { db } from '../db/pools';
 import { Ctx, ControllerResult, buildCtx } from '../Support/Http';
 import {
   WorkflowRepository,
@@ -29,9 +33,11 @@ import { WorkflowOutputStorage } from '../AgentTeam/WorkflowOutputStorage';
  *   index, create, show, update, destroy, toggle, duplicate, executions, generatePython, generateAdk, run, runStream,
  *   listOutputs, getOutput (WorkflowOutputStorage — see that file's class doc for the
  *   universalFS-vs-local-fallback porting decision), saveDocumentMetadata, listNodeDocuments,
- *   deleteNodeDocument.
+ *   deleteNodeDocument, uploadNodeDocument (multipart via multer memoryStorage; file bytes are
+ *   written to local disk under storage/node-documents/ — see the method doc for the universalFS
+ *   divergence).
  *
- * DEFERRED (NOT ported / NOT routed): runByName, uploadNodeDocument (multipart file upload handling).
+ * DEFERRED (NOT ported / NOT routed): runByName.
  *
  * `executions` only needs a plain SELECT from agent_workflow_executions (mirrored in
  * WorkflowRepository.getExecutionHistory) — the WorkflowRunner is NOT pulled in.
@@ -904,6 +910,232 @@ export class WorkflowController {
       pos_y: node.pos_y,
     });
     return { success: true, message: 'Document deleted successfully' };
+  }
+
+  // ---- uploadNodeDocument (multipart) ------------------------------------------------------
+  // Constants mirror the PHP WorkflowController NODE DOCUMENT ATTACHMENT section.
+
+  private static readonly DOC_ROOT_FOLDER = 'synergyaichatroot';
+  private static readonly MAX_DOC_FILE_SIZE = 1024 * 1024; // 1MB
+
+  private static readonly ALLOWED_DOC_MIME_TYPES = [
+    'text/plain', 'text/markdown', 'text/csv', 'text/html', 'text/css',
+    'application/json', 'application/xml', 'application/pdf',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+    'text/x-python', 'text/x-php', 'application/javascript',
+    'application/x-httpd-php', 'text/x-java', 'text/x-c', 'text/x-c++',
+  ];
+
+  /** Local disk root for uploaded node documents (see uploadNodeDocument doc). */
+  private static readonly NODE_DOCS_LOCAL_ROOT = path.resolve(__dirname, '../../storage/node-documents');
+
+  /**
+   * POST /api/v1/workflows/:id/nodes/:nodeId/documents — upload a document to attach to a
+   * workflow node. Mirrors WorkflowController.php uploadNodeDocument.
+   *
+   * Takes raw (req, res) — like runStream — because multer memoryStorage puts the file on
+   * req.file, which the handle(ctx) wrapper does not carry. Response envelope/status codes follow
+   * the same status_code convention as handle().
+   *
+   * PORTING DIVERGENCE (same rationale as WorkflowOutputStorage.ts): PHP stores the bytes through
+   * the universalFS PHP adapter (AdapterFactory->connect('Synergyaichat', provider), root_path
+   * resolved from universalfs' remote credential store) — a same-process PHP library with no
+   * network surface reachable from Node. This port writes the file to local disk at
+   * storage/node-documents/<fullPath> instead, where <fullPath> is the exact
+   * `synergyaichatroot/{userFolder}/workflow_docs/{workflowId}/{docId}_{filename}` path PHP hands
+   * the adapter — so the document metadata recorded in workflow_nodes.config (path/fullPath) is
+   * byte-identical to PHP's. PHP's 503 'Storage system (UniversalFS) not available' branch is
+   * consequently unreachable here (local disk is always "available"; write failures land in the
+   * same catch-all 500 as PHP's adapter exceptions).
+   */
+  async uploadNodeDocument(req: Request, res: Response): Promise<void> {
+    let result: ControllerResult;
+    try {
+      result = await this.doUploadNodeDocument(buildCtx(req), (req as any).file);
+    } catch (e: any) {
+      // Mirrors handle()'s catch for errors thrown outside PHP's own try block (repo lookups etc.).
+      console.error('[controller error]', e);
+      result = { success: false, error: e?.message ?? 'Internal error', status_code: 500 };
+    }
+    const { status_code = 200, ...body } = result;
+    res.status(status_code).json(body);
+  }
+
+  private async doUploadNodeDocument(
+    ctx: Ctx,
+    file?: { buffer: Buffer; originalname?: string; size?: number },
+  ): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const workflowId = phpIntval(ctx.params.id);
+    const nodeId = phpIntval(ctx.params.nodeId);
+
+    if (!userId) return { success: false, error: 'Authentication required', status_code: 401 };
+    if (!workflowId || !nodeId) {
+      return { success: false, error: 'Workflow ID and Node ID are required', status_code: 400 };
+    }
+    if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+      return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+    }
+    const node = await this.graphRepository.getNode(nodeId);
+    if (!node || phpIntval(node.workflow_id) !== workflowId) {
+      return { success: false, error: 'Node not found', status_code: 404 };
+    }
+
+    // PHP: empty($_FILES['file']) || error !== UPLOAD_ERR_OK. With multer memoryStorage a missing
+    // part leaves req.file undefined (PHP's 'No file uploaded' message); transport-level upload
+    // failures are rejected by multer before the handler runs, so PHP's per-error-code
+    // getUploadErrorMessage() table has no Node equivalent.
+    if (!file || !file.buffer) {
+      return { success: false, error: 'No file uploaded', status_code: 400 };
+    }
+
+    const size = file.size ?? file.buffer.length;
+    if (size > WorkflowController.MAX_DOC_FILE_SIZE) {
+      return { success: false, error: 'File exceeds 1MB limit', status_code: 400 };
+    }
+
+    const mimeType = this.detectDocMimeType(file.buffer, file.originalname ?? '');
+    if (!this.isAllowedDocMimeType(mimeType)) {
+      return { success: false, error: `File type not allowed: ${mimeType}`, status_code: 400 };
+    }
+
+    try {
+      const docId = this.generateDocId();
+      const filename = this.sanitizeDocFilename(file.originalname ?? 'file');
+      const userFolder = await this.getUserStorageFolder(userId);
+
+      // Storage path: synergyaichatroot/{user_folder}/workflow_docs/{workflowId}/{docId}_{filename}
+      const storagePath = `workflow_docs/${workflowId}/${docId}_${filename}`;
+      const fullPath = `${WorkflowController.DOC_ROOT_FOLDER}/${userFolder}/${storagePath}`;
+
+      // PHP: adapter->mkdir (errors ignored) + adapter->writeStream. Local-disk equivalent.
+      const diskPath = path.join(WorkflowController.NODE_DOCS_LOCAL_ROOT, fullPath);
+      fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+      fs.writeFileSync(diskPath, file.buffer);
+
+      // NOTE: no `storage` key, matching PHP — deleteNodeDocument treats absent storage as 'remote'.
+      const document = {
+        id: docId,
+        name: filename,
+        path: storagePath,
+        fullPath,
+        mimeType,
+        size,
+        addedAt: new Date().toISOString(),
+      };
+
+      // getNode may return config as [] (empty); coerce to an object so the documents key persists.
+      let config: any = node.config;
+      if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+      if (!Array.isArray(config.documents)) config.documents = [];
+      config.documents.push(document);
+      await this.graphRepository.updateNode(nodeId, {
+        config,
+        node_type: node.node_type,
+        agent_id: node.agent_id,
+        pos_x: node.pos_x,
+        pos_y: node.pos_y,
+      });
+
+      return { success: true, document, message: 'Document uploaded successfully', status_code: 201 };
+    } catch (e: any) {
+      console.error('[WorkflowController] uploadNodeDocument error: ' + (e?.message ?? e));
+      return { success: false, error: 'Failed to upload document: ' + (e?.message ?? ''), status_code: 500 };
+    }
+  }
+
+  /** Mirrors PHP uniqid('doc_', true): 13 hex chars (seconds + microseconds) + '.' + 8-digit entropy. */
+  private generateDocId(): string {
+    const ms = Date.now();
+    const sec = Math.floor(ms / 1000);
+    const usec = (ms % 1000) * 1000 + Math.floor(Math.random() * 1000);
+    const hex = sec.toString(16).padStart(8, '0') + usec.toString(16).padStart(5, '0');
+    const entropy = String(Math.floor(Math.random() * 100000000)).padStart(8, '0');
+    return `doc_${hex}.${entropy}`;
+  }
+
+  /** Mirrors PHP getUserStorageFolder: users.storage_folder, defaulting to "user_{id}". */
+  private async getUserStorageFolder(userId: number): Promise<string> {
+    const r = await sql`SELECT storage_folder FROM users WHERE id = ${userId}`.execute(db);
+    const row = r.rows?.[0] as { storage_folder?: string | null } | undefined;
+    return row?.storage_folder ?? `user_${userId}`;
+  }
+
+  /**
+   * Mirrors PHP detectMimeType (finfo + extension fallback). Node has no bundled libmagic, so this
+   * approximates finfo: sniff the binary signatures in the allowlist, otherwise fall to the
+   * extension map (PHP only consults extensions when finfo says octet-stream, so extension-typed
+   * text files — e.g. .md → text/markdown vs finfo's text/plain — may record a more specific,
+   * equally-allowed MIME than PHP), and finally treat NUL-free content as text/plain.
+   */
+  private detectDocMimeType(buf: Buffer, originalName: string): string {
+    const sniffed = this.sniffDocMagic(buf);
+    if (sniffed) return sniffed;
+    const guess = this.guessMimeTypeFromExtension(originalName);
+    if (guess !== 'application/octet-stream') return guess;
+    return this.looksLikeText(buf) ? 'text/plain' : 'application/octet-stream';
+  }
+
+  /** Binary magic signatures for the types in the allowlist (the subset finfo would recognise). */
+  private sniffDocMagic(b: Buffer): string | null {
+    if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'application/pdf'; // %PDF
+    if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+    if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+    if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif'; // GIF8
+    if (b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+  }
+
+  private looksLikeText(b: Buffer): boolean {
+    const probe = b.subarray(0, 1024);
+    return !probe.includes(0);
+  }
+
+  /** Mirrors PHP guessMimeTypeFromExtension (exact match table). */
+  private guessMimeTypeFromExtension(filename: string): string {
+    const ext = path.extname(filename).replace(/^\./, '').toLowerCase();
+    switch (ext) {
+      case 'txt': return 'text/plain';
+      case 'md': return 'text/markdown';
+      case 'html': case 'htm': return 'text/html';
+      case 'css': return 'text/css';
+      case 'js': return 'application/javascript';
+      case 'json': return 'application/json';
+      case 'xml': return 'application/xml';
+      case 'pdf': return 'application/pdf';
+      case 'png': return 'image/png';
+      case 'jpg': case 'jpeg': return 'image/jpeg';
+      case 'gif': return 'image/gif';
+      case 'webp': return 'image/webp';
+      case 'csv': return 'text/csv';
+      case 'php': return 'text/x-php';
+      case 'py': return 'text/x-python';
+      case 'java': return 'text/x-java';
+      case 'c': case 'h': return 'text/x-c';
+      case 'cpp': case 'hpp': return 'text/x-c++';
+      case 'sql': return 'application/sql';
+      case 'yaml': case 'yml': return 'text/yaml';
+      default: return 'application/octet-stream';
+    }
+  }
+
+  /** Mirrors PHP isAllowedMimeType: any text/* or image/*, else the explicit allowlist. */
+  private isAllowedDocMimeType(mimeType: string): boolean {
+    if (mimeType.startsWith('text/')) return true;
+    if (mimeType.startsWith('image/')) return true;
+    return WorkflowController.ALLOWED_DOC_MIME_TYPES.includes(mimeType);
+  }
+
+  /** Mirrors PHP sanitizeFilename: basename, [^a-zA-Z0-9._-] → _, cap at 100 (90-char stem + ext). */
+  private sanitizeDocFilename(filename: string): string {
+    let name = path.basename(filename);
+    name = name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (name.length > 100) {
+      const parsed = path.parse(name);
+      const ext = parsed.ext.replace(/^\./, '');
+      name = parsed.name.slice(0, 90) + '.' + ext;
+    }
+    return name;
   }
 }
 

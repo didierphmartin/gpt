@@ -10,6 +10,7 @@ Single provider: Anthropic Claude.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_anthropic import ChatAnthropic
@@ -222,8 +223,11 @@ async def build_and_run(
         f"Discovered {len(tool_defs)} tools ({by_type}): {discovered_names}",
     )
 
-    llm = ChatAnthropic(model=model_name, temperature=0)
-    log_sink("info", f"LLM: {model_name}")
+    # max_tokens: ChatAnthropic defaults to 1024 when unset, truncating large
+    # outputs (a full HTML report stops mid-<style>). Generous, env-overridable.
+    _max_tokens = int(os.environ.get("MAX_TOKENS", "32000"))
+    llm = ChatAnthropic(model=model_name, temperature=0, max_tokens=_max_tokens)
+    log_sink("info", f"LLM: {model_name} (max_tokens={_max_tokens})")
 
     sg = StateGraph(WFState)
 

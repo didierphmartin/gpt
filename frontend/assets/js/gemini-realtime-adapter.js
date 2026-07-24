@@ -287,7 +287,7 @@ class GeminiRealtimeAdapter {
         if (!this._currentTools || this._currentTools.length === 0) return null;
 
         try {
-            const apiBase = (typeof window !== 'undefined' && window.CONFIG?.API_BASE_URL)
+            const apiBase = (typeof window !== 'undefined' && window.APP_CONFIG?.API_BASE_URL)
                 || '/gpt/backend/api/v1';
             const authToken = (typeof localStorage !== 'undefined') ? localStorage.getItem('token') : null;
             const headers = { 'Content-Type': 'application/json' };
@@ -488,7 +488,7 @@ class GeminiRealtimeAdapter {
             const authToken = localStorage.getItem('token');
             const headers = { 'Content-Type': 'application/json' };
             if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-            await fetch('/gpt/backend/api/v1/voice/usage', {
+            await fetch(window.apiUrl('/voice/usage'), {
                 method: 'POST',
                 headers,
                 credentials: 'include',

@@ -148,11 +148,44 @@ class SkillsManager {
                 } catch (e) {
                     console.warn(`[skillsManager] could not read SKILL.md for ${s.dirName}:`, e);
                 }
+                // Inline declared reference files INTO skill_content so an authoring LLM that has no
+                // file-read tool (e.g. workflow-compile, whose allowed-tools is run_skill_script only)
+                // actually sees them — e.g. the live, auto-refreshed MCP catalog. Opt-in via the
+                // `context-references` frontmatter key: a comma-separated list of skill-relative paths.
+                // No-op for skills that don't declare it. Re-read each load so the content stays fresh.
+                const ctxRefs = String(s.meta?.['context-references'] || '')
+                    .split(',').map(p => p.trim()).filter(Boolean);
+                for (const rel of ctxRefs) {
+                    try {
+                        const refBody = await window.skillsFs.getSkillFile(s.dirName, rel);
+                        if (refBody && refBody.trim()) {
+                            skill_content += `\n\n---\n\n# Injected reference — ${rel}\n\n${refBody.trim()}\n`;
+                        }
+                    } catch (e) {
+                        console.warn(`[skillsManager] could not inline context-reference ${rel} for ${s.dirName}:`, e);
+                    }
+                }
+                // Inject the user's chosen default LLM provider (a Settings value) for skills that opt in
+                // via `inject-default-provider: true`. Same rationale as context-references — the authoring
+                // LLM can't read settings. workflow-compile uses this so agents the user didn't assign a
+                // provider default to the configured one instead of the SKILL.md template's placeholder.
+                if (String(s.meta?.['inject-default-provider'] || '').toLowerCase() === 'true') {
+                    let dp = '';
+                    try { dp = (localStorage.getItem('workflowDefaultProvider') || '').trim(); } catch (e) { /* ignore */ }
+                    if (!dp) dp = 'deepseek';
+                    skill_content += `\n\n---\n\n# Default provider (user setting)\nUnless the user explicitly names a provider for an agent, set every agent's \`provider\` to \`${dp}\`. If the user names one (e.g. "use Claude", "with GPT"), honor that request instead.\n`;
+                }
                 let scripts = [];
                 try {
                     scripts = await window.skillsFs.listSkillScripts(s.dirName);
                 } catch (e) {
                     console.warn(`[skillsManager] could not list scripts for ${s.dirName}:`, e);
+                }
+                let references = [];
+                try {
+                    references = await window.skillsFs.listSkillReferences(s.dirName);
+                } catch (e) {
+                    console.warn(`[skillsManager] could not list references for ${s.dirName}:`, e);
                 }
                 if (s.spec_issues && s.spec_issues.length > 0) {
                     console.warn(`[skillsManager] SKILL.md spec issues for "${s.dirName}":`, s.spec_issues);
@@ -175,6 +208,7 @@ class SkillsManager {
                     source: 'local',
                     dir_name: s.dirName,               // path relative to skills/ (may include a group prefix)
                     scripts,                           // skill-relative paths to executable scripts (e.g. ['scripts/transform.py'])
+                    references,                         // skill-relative paths to Markdown reference docs (e.g. ['references/second.md'])
                     max_tool_rounds: maxToolRounds,    // orchestrators may raise the client-tool round cap (see chat.js dispatchClientToolCall)
                     spec_compliant: s.spec_compliant !== false,
                     spec_issues: s.spec_issues || [],
@@ -1094,6 +1128,16 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         const isEdit = !!skill;
         const t = this.t.bind ? this.t : (k) => this.t(k);
 
+        // Python scripts shipped under the skill's scripts/ folder (see
+        // listSkillScripts). When present, the right pane gains a "Script" tab
+        // alongside the SKILL.md preview so the source is viewable in-app.
+        const pyScripts = (skill?.scripts || []).filter(p => /\.py$/i.test(p));
+        const hasScripts = pyScripts.length > 0;
+
+        // Markdown docs under the skill's references/ folder. Each gets its own
+        // right-pane tab labelled with the folder over the filename.
+        const refDocs = (skill?.references || []).filter(p => /\.md$/i.test(p));
+
         const modal = document.createElement('div');
         modal.id = 'skill-editor-modal';
         modal.className = 'fixed inset-0 z-[200] flex items-center justify-center';
@@ -1156,8 +1200,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                                        title="Click to expand" readonly>
                             </div>
                         </div>
-                        <div class="px-4 py-2 border-y border-gray-200 bg-gray-100 flex-shrink-0">
-                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Preview</span>
+                        <div class="px-4 py-1.5 border-y border-gray-200 bg-gray-100 flex-shrink-0 flex items-center gap-1 overflow-x-auto" id="skill-ed-tabs">
+                            <button type="button" data-pane="preview" class="skill-ed-tab px-3 py-1 text-xs font-medium rounded-md transition bg-white text-indigo-700 shadow-sm">SKILL.md</button>
                         </div>
                         <div id="skill-ed-preview" class="flex-1 overflow-y-auto p-4 markdown-content prose prose-sm max-w-none bg-gray-50"></div>
                     </div>
@@ -1287,6 +1331,92 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         };
         promptEl.addEventListener('input', renderPreview);
         renderPreview();
+
+        // Right-pane tabs: SKILL.md preview (always), an optional Script tab
+        // when the skill ships Python under scripts/, and one tab per Markdown
+        // doc under references/. Every non-preview pane reads its file(s) from
+        // disk lazily on first activation so opening the editor stays instant.
+        if (hasScripts || refDocs.length) {
+            const tabsEl = modal.querySelector('#skill-ed-tabs');
+            const panes = [{ id: 'preview', el: previewEl, load: null }];
+
+            // Append a tab button. `folder` (when set) is shown as a small
+            // label over the file/label line — e.g. "references" / "second.md".
+            const addTab = (id, folder, label) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.dataset.pane = id;
+                btn.className = 'skill-ed-tab px-3 py-1 text-xs font-medium rounded-md transition text-gray-600 hover:bg-gray-200 flex flex-col items-center leading-tight whitespace-nowrap';
+                btn.innerHTML = folder
+                    ? `<span class="text-[10px] uppercase tracking-wide opacity-70">${this.escapeHtml(folder)}</span><span>${this.escapeHtml(label)}</span>`
+                    : `<span>${this.escapeHtml(label)}</span>`;
+                tabsEl.appendChild(btn);
+            };
+
+            // Append a content pane as a sibling of the preview pane so the
+            // flex-1 sizing matches. Returns the empty div for lazy fill.
+            const addPane = (extraClasses) => {
+                const div = document.createElement('div');
+                div.className = `hidden flex-1 overflow-y-auto bg-gray-50 ${extraClasses}`.trim();
+                previewEl.parentElement.appendChild(div);
+                return div;
+            };
+
+            if (hasScripts) {
+                const pane = addPane('');
+                addTab('script', null, 'Script');
+                panes.push({ id: 'script', el: pane, load: async () => {
+                    const blocks = await Promise.all(pyScripts.map(async (rel) => {
+                        let code = '';
+                        try {
+                            code = await window.skillsFs.getSkillFile(skill.dir_name, rel);
+                        } catch (e) {
+                            code = `# could not read ${rel}: ${e?.message || e}`;
+                        }
+                        return `<div class="px-4 py-2 text-xs font-mono text-gray-500 bg-gray-100 border-b border-gray-200">${this.escapeHtml(rel)}</div>`
+                             + `<pre class="px-4 py-3 text-xs font-mono text-gray-800 whitespace-pre overflow-x-auto"><code>${this.escapeHtml(code || '')}</code></pre>`;
+                    }));
+                    pane.innerHTML = blocks.join('');
+                }});
+            }
+
+            refDocs.forEach((rel, i) => {
+                const id = `ref-${i}`;
+                const file = rel.split('/').pop();
+                const pane = addPane('p-4 markdown-content prose prose-sm max-w-none');
+                addTab(id, 'references', file);
+                panes.push({ id, el: pane, load: async () => {
+                    let md = '';
+                    try {
+                        md = await window.skillsFs.getSkillFile(skill.dir_name, rel);
+                    } catch (e) {
+                        md = `_Could not read ${rel}: ${e?.message || e}_`;
+                    }
+                    pane.innerHTML = window.renderMarkdown(md || '');
+                }});
+            });
+
+            const loaded = new Set();
+            const switchPane = (id) => {
+                panes.forEach(p => p.el.classList.toggle('hidden', p.id !== id));
+                tabsEl.querySelectorAll('.skill-ed-tab').forEach(b => {
+                    const on = b.dataset.pane === id;
+                    b.classList.toggle('bg-white', on);
+                    b.classList.toggle('text-indigo-700', on);
+                    b.classList.toggle('shadow-sm', on);
+                    b.classList.toggle('text-gray-600', !on);
+                    b.classList.toggle('hover:bg-gray-200', !on);
+                });
+                const target = panes.find(p => p.id === id);
+                if (target?.load && !loaded.has(id)) {
+                    loaded.add(id);
+                    target.load();
+                }
+            };
+            tabsEl.querySelectorAll('.skill-ed-tab').forEach(b => {
+                b.addEventListener('click', () => switchPane(b.dataset.pane));
+            });
+        }
 
         // Helper: parse a comma-separated input into a clean array.
         const parseCsv = (id) => {
@@ -1447,6 +1577,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return key.split('.').pop();
     };
 
-    window.skillsManager = new SkillsManager('/gpt/backend/api/v1', getHeaders, t);
+    window.skillsManager = new SkillsManager(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', getHeaders, t);
     window.skillsManager.init();
 });

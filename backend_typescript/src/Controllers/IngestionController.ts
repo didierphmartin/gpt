@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { Request, Response } from 'express';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
-import { Ctx, ControllerResult } from '../Support/Http';
+import { Ctx, ControllerResult, buildCtx } from '../Support/Http';
 import { WorkflowRepository, phpIntval, phpEmpty } from '../AgentTeam/WorkflowRepository';
 import { IngestionCompiler } from '../AgentTeam/IngestionCompiler';
 import { VectorMcpStore } from '../AgentTeam/VectorMcpStore';
@@ -60,11 +61,17 @@ function cpLen(s: string): number {
   return n;
 }
 
+/** PHP mb_substr($s, 0, $len) by code points. */
+function cpSubstr(s: string, len: number): string {
+  return Array.from(s).slice(0, len).join('');
+}
+
 /**
- * Mirrors src/AgentTeam/Controllers/IngestionController.php — slice 1: `compile` (already ported),
- * plus `nodeCode`, `saveScript`, `storeFind`, and the JSON-RPC MCP session client used by the
- * vector-store endpoints. The run-start/run-worker/run-stream + loader/splitter/store-chunks
- * endpoints and `buildLoaderClosures` are slice 2 and intentionally not present here.
+ * Mirrors src/AgentTeam/Controllers/IngestionController.php — `compile`, `nodeCode`, `saveScript`,
+ * `storeFind`, the per-node interpreters (`loaderText`, `splitterChunks`, `storeChunks`), the SSE
+ * run endpoints (`runStream`, `runStart`, `runWorker`), plus the JSON-RPC MCP session client and
+ * `buildLoaderClosures`. `runStream` is a RAW Express handler (same pattern as
+ * WorkflowController.runStream): it owns the SSE headers/frames and the `data: [DONE]` sentinel.
  */
 export class IngestionController {
   private workflowRepository = new WorkflowRepository();
@@ -257,6 +264,530 @@ export class IngestionController {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * POST /api/v1/workflows/{id}/ingestion/loader-text
+   *
+   * The LOADER node's interpreter (first node of the interpreter, built
+   * node-by-node): enumerate the source (single file, or a folder walked
+   * recursively) through the langfs MCP and transform each file into TEXT —
+   * the content shown in the loader's Output tab and, later, fed to the
+   * splitter. Body: { config: { provider, path, is_dir, types[],
+   * storage_mcp_id, storage_mcp_url, ufskey }, cursor }.
+   */
+  async loaderText(ctx: Ctx): Promise<ControllerResult> {
+    const userId = Number(ctx.user_id ?? 0);
+    const workflowId = phpIntval(ctx.params?.id ?? 0);
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    if (!workflowId) {
+      return { success: false, error: 'Workflow ID is required', status_code: 400 };
+    }
+    if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+    }
+
+    const body: any = ctx.body ?? {};
+    const cfg = this.asArr(body.config ?? []);
+    const cursor = Math.max(0, phpIntval(body.cursor ?? 0));
+    // PHP `(string)(... ?? 'local') ?: 'local'` — `?:` treats '' AND '0' as falsy.
+    const providerRaw = phpStrval(cfg.provider ?? 'local');
+    const provider = providerRaw === '' || providerRaw === '0' ? 'local' : providerRaw;
+    const srcPath = phpTrim(cfg.path ?? '');
+    const isDir = !phpEmpty(cfg.is_dir);
+    const types = (Array.isArray(cfg.types) ? cfg.types : Object.values(cfg.types ?? {})).filter(
+      (t: any) => typeof t === 'string'
+    ) as string[];
+
+    if (srcPath === '') {
+      return { success: false, error: 'Choose a file or folder in the loader first.', status_code: 400 };
+    }
+
+    const [listFiles, readFile] = this.buildLoaderClosures(userId, phpStrval(cfg.storage_mcp_id ?? ''));
+
+    try {
+      // One round = one file's text (the store clocks the loop; here the
+      // Output tab's stepper supplies the cursor).
+      const round: Record<string, any> = await IngestionLoader.readRound(
+        listFiles,
+        readFile,
+        provider,
+        srcPath,
+        types,
+        isDir,
+        cursor
+      );
+      const cur = round.current;
+      if (cur === null) {
+        round.logs = [
+          '[loader] ' + (round.count === 0 ? 'no matching files (check Source + File types)' : 'done — ' + round.count + ' file(s)'),
+        ];
+      } else if (cur.error !== undefined) {
+        round.logs = [`[loader] ${cur.source}: ERROR — ${cur.error}`];
+      } else {
+        round.logs = ['[loader] file ' + (round.cursor + 1) + `/${round.count}: ${cur.source} → ${cur.type}, ${cur.chars} chars`];
+      }
+      return { success: true, data: round, status_code: 200 };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 400 };
+    }
+  }
+
+  /**
+   * POST /api/v1/workflows/{id}/ingestion/splitter-chunks
+   *
+   * The SPLITTER node's interpreter: read one file's text from the upstream
+   * loader (round `cursor`), then chunk it with the recursive splitter — the
+   * chunks shown in the splitter's Output tab and, later, fed to the store.
+   * Body: { loader: {...loader config...}, splitter: { chunk_size, overlap },
+   * cursor }.
+   */
+  async splitterChunks(ctx: Ctx): Promise<ControllerResult> {
+    const userId = Number(ctx.user_id ?? 0);
+    const workflowId = phpIntval(ctx.params?.id ?? 0);
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    if (!workflowId) {
+      return { success: false, error: 'Workflow ID is required', status_code: 400 };
+    }
+    if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+    }
+
+    const body: any = ctx.body ?? {};
+    const loaderCfg = this.asArr(body.loader ?? []);
+    const splitterCfg = this.asArr(body.splitter ?? []);
+    const cursor = Math.max(0, phpIntval(body.cursor ?? 0));
+
+    const providerRaw = phpStrval(loaderCfg.provider ?? 'local');
+    const provider = providerRaw === '' || providerRaw === '0' ? 'local' : providerRaw;
+    const srcPath = phpTrim(loaderCfg.path ?? '');
+    const isDir = !phpEmpty(loaderCfg.is_dir);
+    const types = (Array.isArray(loaderCfg.types) ? loaderCfg.types : Object.values(loaderCfg.types ?? {})).filter(
+      (t: any) => typeof t === 'string'
+    ) as string[];
+    const chunkSize = Math.max(1, phpIntval(splitterCfg.chunk_size ?? 1000));
+    const overlap = Math.max(0, phpIntval(splitterCfg.overlap ?? 150));
+
+    if (srcPath === '') {
+      return {
+        success: false,
+        error: 'The upstream loader has no Source set — pick a file or folder first.',
+        status_code: 400,
+      };
+    }
+
+    const [listFiles, readFile] = this.buildLoaderClosures(userId, phpStrval(loaderCfg.storage_mcp_id ?? ''));
+
+    try {
+      // Full text for this file (no display clipping — the splitter needs
+      // the whole document), then chunk it.
+      const round = await IngestionLoader.readRound(
+        listFiles,
+        readFile,
+        provider,
+        srcPath,
+        types,
+        isDir,
+        cursor,
+        5_000_000
+      );
+      const cur = round.current;
+      const out: Record<string, any> = {
+        count: round.count,
+        cursor: round.cursor,
+        sources: round.sources,
+        current: null,
+      };
+      const logs: string[] = [];
+      if (cur === null) {
+        logs.push('[splitter] ' + (round.count === 0 ? 'no files to chunk' : 'done'));
+      } else if (cur.error !== undefined) {
+        out.current = { source: cur.source, type: cur.type ?? null, error: cur.error };
+        logs.push(`[loader] ${cur.source}: ERROR — ${cur.error}`);
+      } else {
+        logs.push('[loader] file ' + (round.cursor + 1) + `/${round.count}: ${cur.source} → ${cur.type}, ` + cpLen(cur.text) + ' chars');
+        const chunks = IngestionSplitter.recursiveSplit(cur.text, chunkSize, overlap);
+        // Cap what we ship to the Output panel (full count kept).
+        const maxChunks = 200;
+        const maxLen = 2000;
+        const shown = chunks.slice(0, maxChunks).map((c: string) => {
+          const len = cpLen(c);
+          return { chars: len, text: len > maxLen ? cpSubstr(c, maxLen) : c, clipped: len > maxLen };
+        });
+        out.current = {
+          source: cur.source,
+          type: cur.type,
+          chunk_count: chunks.length,
+          chunks: shown,
+          truncated: chunks.length > maxChunks,
+        };
+        logs.push(`[splitter] ${cur.source}: ` + chunks.length + ` chunk(s) (size=${chunkSize}, overlap=${overlap})`);
+      }
+      out.logs = logs;
+      return { success: true, data: out, status_code: 200 };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 400 };
+    }
+  }
+
+  /**
+   * POST /api/v1/workflows/{id}/ingestion/store-chunks
+   *
+   * The STORE node's interpreter (terminal node): loader round → split →
+   * write each chunk to the chosen vector-DB MCP (store/find contract).
+   * WRITES. Body: { loader, splitter, vectorstore: { store:"mcp:<id>",
+   * collection, provider, connection, embedding }, cursor }.
+   */
+  async storeChunks(ctx: Ctx): Promise<ControllerResult> {
+    const userId = Number(ctx.user_id ?? 0);
+    const workflowId = phpIntval(ctx.params?.id ?? 0);
+
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    if (!workflowId) {
+      return { success: false, error: 'Workflow ID is required', status_code: 400 };
+    }
+    if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
+    }
+
+    const body: any = ctx.body ?? {};
+    const loaderCfg = this.asArr(body.loader ?? []);
+    const splitterCfg = this.asArr(body.splitter ?? []);
+    const storeCfg = this.asArr(body.vectorstore ?? []);
+    const cursor = Math.max(0, phpIntval(body.cursor ?? 0));
+
+    const providerRaw = phpStrval(loaderCfg.provider ?? 'local');
+    const provider = providerRaw === '' || providerRaw === '0' ? 'local' : providerRaw;
+    const srcPath = phpTrim(loaderCfg.path ?? '');
+    const isDir = !phpEmpty(loaderCfg.is_dir);
+    const types = (Array.isArray(loaderCfg.types) ? loaderCfg.types : Object.values(loaderCfg.types ?? {})).filter(
+      (t: any) => typeof t === 'string'
+    ) as string[];
+    const chunkSize = Math.max(1, phpIntval(splitterCfg.chunk_size ?? 1000));
+    const overlap = Math.max(0, phpIntval(splitterCfg.overlap ?? 150));
+    const collection = phpTrim(storeCfg.collection ?? '');
+    const vsProvider = phpTrim(storeCfg.provider ?? '');
+    const connection = this.asArr(storeCfg.connection ?? []);
+    const embedding = phpTrim(storeCfg.embedding ?? '');
+
+    if (srcPath === '') {
+      return { success: false, error: 'The upstream loader has no Source set.', status_code: 400 };
+    }
+    const m = String(storeCfg.store ?? '').match(/^mcp:(\d+)$/);
+    if (!m) {
+      return { success: false, error: 'Pick a vector-DB MCP server in the store node.', status_code: 400 };
+    }
+    const serverId = phpIntval(m[1]);
+    // headers is a MySQL json column; CAST AS CHAR to get the raw json string
+    // (mcpBaseHeaders json-parses it, mirroring PHP), not the auto-parsed object.
+    const srv = (
+      await sql<any>`SELECT url, CAST(headers AS CHAR) AS headers FROM mcp_servers WHERE id = ${serverId} AND enabled = 1`.execute(
+        db
+      )
+    ).rows[0];
+    if (!srv) {
+      return { success: false, error: `Vector MCP server #${serverId} not found or disabled.`, status_code: 400 };
+    }
+    if (collection === '') {
+      return { success: false, error: 'Set a collection name in the store node.', status_code: 400 };
+    }
+
+    const [listFiles, readFile] = this.buildLoaderClosures(userId, phpStrval(loaderCfg.storage_mcp_id ?? ''));
+    try {
+      const round = await IngestionLoader.readRound(
+        listFiles,
+        readFile,
+        provider,
+        srcPath,
+        types,
+        isDir,
+        cursor,
+        5_000_000
+      );
+      const out: Record<string, any> = {
+        count: round.count,
+        cursor: round.cursor,
+        sources: round.sources,
+        current: null,
+      };
+      const cur = round.current;
+      const logs: string[] = [];
+      if (cur === null) {
+        logs.push('[store] ' + (round.count === 0 ? 'no files to store' : 'done'));
+      } else if (cur.error !== undefined) {
+        out.current = { source: cur.source, type: cur.type ?? null, error: cur.error };
+        logs.push(`[loader] ${cur.source}: ERROR — ${cur.error}`);
+      } else {
+        logs.push('[loader] file ' + (round.cursor + 1) + `/${round.count}: ${cur.source} → ${cur.type}, ` + cpLen(cur.text) + ' chars');
+        const chunks = IngestionSplitter.recursiveSplit(cur.text, chunkSize, overlap);
+        logs.push(`[splitter] ${cur.source}: ` + chunks.length + ` chunk(s) (size=${chunkSize}, overlap=${overlap})`);
+        // One session for this file's chunk writes.
+        const sess = await this.openMcpSession(String(srv.url), this.mcpBaseHeaders(srv.headers ?? null));
+        if (!phpEmpty(sess.error)) {
+          throw new Error('Vector store connection failed: ' + (sess.message ?? 'session error'));
+        }
+        const sessHeaders = sess.headers!;
+        const vs = new VectorMcpStore((_sid: number, tool: string, args: any) =>
+          this.callMcpTool(String(srv.url), sessHeaders, tool, args)
+        );
+        const r = await vs.store(serverId, chunks, {
+          provider: vsProvider,
+          connection,
+          collection: collection !== '' ? collection : null,
+          embedding: embedding !== '' ? embedding : null,
+          metadata: { source: cur.source },
+        });
+        out.current = {
+          source: cur.source,
+          type: cur.type,
+          chunk_count: chunks.length,
+          stored: r.stored,
+          collection: r.collection,
+        };
+        const coll = r.collection ?? '(server default)';
+        logs.push(
+          `[store] ${cur.source}: wrote ${r.stored} chunk(s)` +
+            (r.errors ? ` (${r.errors} failed)` : '') +
+            ` → collection "${coll}" on mcp:${serverId}`
+        );
+      }
+      out.logs = logs;
+      return { success: true, data: out, status_code: 200 };
+    } catch (e: any) {
+      return { success: false, error: e?.message ?? '', status_code: 400 };
+    }
+  }
+
+  /**
+   * POST /api/v1/workflows/{id}/ingestion/run-stream  (SSE)
+   *
+   * The CLOSED event loop, server-side: enumerate the source ONCE (the loader
+   * as a stateful iterator), then loop loader→split→store per file — the loop
+   * continuation IS the store clocking the loader (one file fully to the end
+   * before the next; true backpressure, no browser cursor, no re-enumeration).
+   * Streams per-file progress / logs / node-glow as SSE events so the UI stays
+   * live. Body: { loader, splitter?, vectorstore? }.
+   *
+   * Raw Express handler (same pattern as WorkflowController.runStream): owns the
+   * SSE headers, writes each event as `data: <json>\n\n`, and terminates with
+   * `data: [DONE]\n\n`. Validation failures are emitted as SSE {type:'error'}
+   * frames (NOT HTTP status codes), exactly as PHP does after headers are sent.
+   */
+  async runStream(req: Request, res: Response): Promise<void> {
+    const ctx = buildCtx(req);
+
+    // SSE headers (mirror PHP runStream).
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
+
+    const sse = (event: Record<string, any>) => {
+      if (!res.writableEnded) res.write('data: ' + JSON.stringify(event) + '\n\n');
+    };
+    const done = () => {
+      if (!res.writableEnded) {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
+    };
+    // PHP connection_aborted(): Node signals a client disconnect via 'close'.
+    let aborted = false;
+    res.on('close', () => {
+      aborted = true;
+    });
+
+    try {
+      const userId = Number(ctx.user_id ?? 0);
+      const workflowId = phpIntval(ctx.params?.id ?? 0);
+      if (!userId) {
+        sse({ type: 'error', error: 'Authentication required' });
+        done();
+        return;
+      }
+      if (!workflowId || !(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+        sse({ type: 'error', error: 'Workflow not found or access denied' });
+        done();
+        return;
+      }
+
+      const body: any = ctx.body ?? {};
+      const loaderCfg = this.asArr(body.loader ?? []);
+      // PHP isset() — false when the key is absent OR the value is null.
+      const hasSplitter = body.splitter !== undefined && body.splitter !== null;
+      const hasStore = body.vectorstore !== undefined && body.vectorstore !== null;
+      const splitterCfg = this.asArr(body.splitter ?? []);
+      const storeCfg = this.asArr(body.vectorstore ?? []);
+
+      const providerRaw = phpStrval(loaderCfg.provider ?? 'local');
+      const provider = providerRaw === '' || providerRaw === '0' ? 'local' : providerRaw;
+      const srcPath = phpTrim(loaderCfg.path ?? '');
+      const isDir = !phpEmpty(loaderCfg.is_dir);
+      const types = (Array.isArray(loaderCfg.types) ? loaderCfg.types : Object.values(loaderCfg.types ?? {})).filter(
+        (t: any) => typeof t === 'string'
+      ) as string[];
+      const chunkSize = Math.max(1, phpIntval(splitterCfg.chunk_size ?? 1000));
+      const overlap = Math.max(0, phpIntval(splitterCfg.overlap ?? 150));
+      const collection = phpTrim(storeCfg.collection ?? '');
+      const vsProvider = phpTrim(storeCfg.provider ?? '');
+      const connection = this.asArr(storeCfg.connection ?? []);
+      const embedding = phpTrim(storeCfg.embedding ?? '');
+
+      if (srcPath === '') {
+        sse({ type: 'error', error: 'The loader has no Source set.' });
+        done();
+        return;
+      }
+
+      // Resolve the store server up front (so we fail fast before reading files).
+      let srv: any = null;
+      let serverId = 0;
+      if (hasStore) {
+        const m = String(storeCfg.store ?? '').match(/^mcp:(\d+)$/);
+        if (!m) {
+          sse({ type: 'error', error: 'The store node needs a vector-DB MCP server selected.' });
+          done();
+          return;
+        }
+        serverId = phpIntval(m[1]);
+        srv = (
+          await sql<any>`SELECT url, CAST(headers AS CHAR) AS headers FROM mcp_servers WHERE id = ${serverId} AND enabled = 1`.execute(
+            db
+          )
+        ).rows[0];
+        if (!srv) {
+          sse({ type: 'error', error: `Vector MCP server #${serverId} not found or disabled.` });
+          done();
+          return;
+        }
+        if (collection === '') {
+          sse({ type: 'error', error: 'Set a collection name in the store node.' });
+          done();
+          return;
+        }
+      }
+
+      const [listFiles, readFile] = this.buildLoaderClosures(userId, phpStrval(loaderCfg.storage_mcp_id ?? ''));
+
+      // --- ENUMERATE ONCE (the loader's stateful iterator) ---
+      let descs: LoaderDescriptor[];
+      try {
+        descs = await IngestionLoader.enumerateFiles(listFiles, provider, srcPath, types, isDir);
+      } catch (e: any) {
+        sse({ type: 'error', error: 'Loader enumeration failed: ' + (e?.message ?? '') });
+        done();
+        return;
+      }
+      const count = descs.length;
+      sse({ type: 'start', count, sources: descs.map((d) => d.source) });
+
+      // Open the vector-store session ONCE for the whole run (one handshake),
+      // then every chunk write reuses it.
+      let vs: VectorMcpStore | null = null;
+      if (hasStore) {
+        const sess = await this.openMcpSession(String(srv.url), this.mcpBaseHeaders(srv.headers ?? null));
+        if (!phpEmpty(sess.error)) {
+          sse({ type: 'error', error: 'Vector store connection failed: ' + (sess.message ?? 'session error') });
+          done();
+          return;
+        }
+        const sessHeaders = sess.headers!;
+        vs = new VectorMcpStore((_sid: number, tool: string, args: any) =>
+          this.callMcpTool(String(srv.url), sessHeaders, tool, args)
+        );
+      }
+
+      let files = 0;
+      let chunks = 0;
+      let stored = 0;
+      let errors = 0;
+      for (let i = 0; i < descs.length; i++) {
+        if (aborted) {
+          break;
+        }
+        const desc = descs[i];
+        // loader
+        sse({ type: 'node', node: 'loader', state: 'active' });
+        let text: string;
+        try {
+          text = await IngestionLoader.loadFile(readFile, desc);
+        } catch (e: any) {
+          errors++;
+          sse({ type: 'log', lines: [`[loader] ${desc.source}: ERROR — ` + (e?.message ?? '')] });
+          sse({ type: 'node', node: 'loader', state: 'error' });
+          continue;
+        }
+        sse({
+          type: 'log',
+          lines: ['[loader] file ' + (i + 1) + `/${count}: ${desc.source} → ${desc.doc_type}, ` + cpLen(text) + ' chars'],
+        });
+        sse({ type: 'node', node: 'loader', state: 'done' });
+
+        // splitter (chunk even with no splitter node — the store needs chunks)
+        sse({ type: 'node', node: 'splitter', state: 'active' });
+        const ch = IngestionSplitter.recursiveSplit(text, chunkSize, overlap);
+        chunks += ch.length;
+        if (hasSplitter) {
+          sse({
+            type: 'log',
+            lines: [`[splitter] ${desc.source}: ` + ch.length + ` chunk(s) (size=${chunkSize}, overlap=${overlap})`],
+          });
+        }
+        sse({ type: 'node', node: 'splitter', state: 'done' });
+
+        // store
+        if (hasStore && vs !== null) {
+          sse({ type: 'node', node: 'vectorstore', state: 'active' });
+          try {
+            const r = await vs.store(serverId, ch, {
+              provider: vsProvider,
+              connection,
+              collection: collection !== '' ? collection : null,
+              embedding: embedding !== '' ? embedding : null,
+              metadata: { source: desc.source },
+            });
+            stored += r.stored;
+            errors += r.errors;
+            sse({
+              type: 'log',
+              lines: [
+                `[store] ${desc.source}: wrote ${r.stored} chunk(s)` +
+                  (r.errors ? ` (${r.errors} failed)` : '') +
+                  (collection !== '' ? ` → "${collection}"` : '') +
+                  ` on mcp:${serverId}`,
+              ],
+            });
+            sse({ type: 'node', node: 'vectorstore', state: 'done' });
+          } catch (e: any) {
+            errors++;
+            sse({ type: 'log', lines: [`[store] ${desc.source}: ERROR — ` + (e?.message ?? '')] });
+            sse({ type: 'node', node: 'vectorstore', state: 'error' });
+            continue;
+          }
+        }
+
+        files++;
+        sse({ type: 'progress', cursor: i + 1, count, source: desc.source, files, chunks, stored });
+      }
+
+      // Silence = done (the loader is exhausted → the loop ends).
+      sse({ type: 'done', count, files, chunks, stored, errors, wrote: hasStore });
+    } catch (e: any) {
+      // PHP has no outer catch (a fatal just kills the stream); emitting the
+      // error as an SSE frame before [DONE] matches WorkflowController.runStream.
+      sse({ type: 'error', error: e?.message ?? 'Unknown error' });
+    }
+    done();
   }
 
   /**
@@ -661,7 +1192,8 @@ export class IngestionController {
   ): Promise<{ body: Record<string, any>; session: string | null }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
-    let res: Response;
+    // globalThis.Response = the fetch Response (the express Response import shadows it).
+    let res: globalThis.Response;
     try {
       res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal });
     } catch (e: any) {

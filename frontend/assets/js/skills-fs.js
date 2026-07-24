@@ -303,6 +303,30 @@
         return out;
     }
 
+    /**
+     * Enumerate the Markdown reference docs shipped with a folder-backed
+     * skill. Anthropic's spec keeps supporting material under `references/`,
+     * so we scope the walk there. Returns skill-relative paths (e.g.
+     * ['references/second.md']) sorted alphabetically, or [] when the skill
+     * has no `references/` folder.
+     */
+    async function listSkillReferences(dirName) {
+        if (!dirName || !window.localFs) return [];
+        const refsDir = await window.localFs.resolvePath(`skills/${dirName}/references`);
+        if (!refsDir) return [];
+        const out = [];
+        try {
+            for await (const rel of walkFiles(refsDir, 'references', ['.md'])) {
+                out.push(rel);
+            }
+        } catch (e) {
+            console.warn(`[skillsFs] failed to walk references/ for ${dirName}:`, e);
+            return [];
+        }
+        out.sort();
+        return out;
+    }
+
     // ───────────────────────── Folder & skill mutation ─────────────────────
     //
     // The File System Access API has no native rename or move for
@@ -484,6 +508,7 @@
         listSkills,
         listFolders,
         listSkillScripts,
+        listSkillReferences,
         getSkillContent,
         getSkillFile,
         createFolder,

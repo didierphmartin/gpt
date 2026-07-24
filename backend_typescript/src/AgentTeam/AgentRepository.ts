@@ -346,7 +346,35 @@ export class AgentRepository {
   }
 
   /** Create a new agent. */
+  /**
+   * Strict lookup by the dedup key (user_id, name). Unlike findByName() this
+   * never matches public/workspace agents owned by others and ignores the
+   * enabled flag — used by create() to reuse instead of minting a duplicate.
+   */
+  async findOwnedByName(name: string, userId: number): Promise<Agent | null> {
+    const row = (
+      await sql<any>`
+        SELECT * FROM agents
+        WHERE user_id = ${userId} AND name = ${name}
+        ORDER BY id ASC LIMIT 1`.execute(db)
+    ).rows[0];
+    return row ? hydrateAgent(row) : null;
+  }
+
+  /**
+   * Create a new agent — or reuse an existing one. Agents are unique per
+   * (user_id, name): reusing the same agent across workflows must point at ONE
+   * row, not spawn a duplicate. If a row with this name already exists for the
+   * user, update it in place and return it (keeping its id) instead of
+   * inserting. Backs the UNIQUE(user_id, name) constraint.
+   */
   async create(agent: Agent): Promise<Agent> {
+    const existing = await this.findOwnedByName(agent.name, agent.userId);
+    if (existing !== null) {
+      agent.id = existing.id;
+      return this.update(agent);
+    }
+
     const data = agentToArray(agent);
     const res = await sql`
       INSERT INTO agents (

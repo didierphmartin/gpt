@@ -1198,21 +1198,17 @@ final class IngestionController
             return is_array($decoded) ? $decoded : ['files' => []];
         };
 
-        // Read one file, tolerant of BOTH backends and surfacing real errors:
-        //  - langfs: {"content":"<text>","format":"text"} (already extracted)
-        //    → ['is_text' => true].
+        // Read one file via langfs, which extracts text server-side:
+        //  - langfs: {"content":"<text>"} → ['is_text' => true].
         //  - langfs error: {"error":true,"message":...} → throw that message
         //    (e.g. "path outside allowed roots"), not a generic one.
-        //  - UniversalFS (legacy): base64 of raw bytes → ['is_text' => false]
-        //    so the caller decodes (PDF/DOCX/…).
-        // Sending both `format` and `encoding` lets each server use the param it
-        // understands.
+        // The legacy UniversalFS base64 raw-bytes path (is_text=false + local decode) was removed —
+        // langfs is the only storage backend now, so a response without `content` is an error.
         $readFile = static function (string $provider, string $fileId) use ($mcp): array {
             $res = $mcp->executeTool('read_file', [
                 'provider' => $provider,
                 'file_id'  => $fileId,
                 'format'   => 'text',     // langfs: extracted text
-                'encoding' => 'base64',   // UniversalFS: base64 raw bytes
             ]);
             if (!empty($res['error'])) {
                 throw new \RuntimeException((string) ($res['message'] ?? 'read_file failed'));
@@ -1227,11 +1223,7 @@ final class IngestionController
                     return ['is_text' => true, 'data' => (string) $decoded['content']];
                 }
             }
-            $bytes = base64_decode($raw, true);
-            if ($bytes === false) {
-                throw new \RuntimeException('read_file returned neither {content,format} nor valid base64');
-            }
-            return ['is_text' => false, 'data' => $bytes];
+            throw new \RuntimeException('read_file did not return {content} extracted text (langfs required).');
         };
 
         return [$listFiles, $readFile];

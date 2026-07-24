@@ -53,7 +53,11 @@ class MiddlewareProcessor
         // Initialize Auth middleware with public routes. The full config
         // is passed so the middleware can lazily open a DB connection for
         // app-key (Authorization: AppKey …) validation.
-        $jwtSecret = $config['auth']['jwt_secret'] ?? '';
+        $jwtSecret = (string) ($config['auth']['jwt_secret'] ?? '');
+        if ($jwtSecret === '') {
+            // Fail closed: refuse to run the auth pipeline with no/weak secret.
+            throw new \RuntimeException('JWT secret is not configured (set JWT_SECRET).');
+        }
         $this->authMiddleware = new AuthMiddleware($jwtSecret, self::PUBLIC_ROUTES, $config);
     }
 

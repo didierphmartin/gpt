@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { log } from '../Services/Logger';
+import { logChatTransaction } from '../Services/UsageLogger';
 import { buildCtx } from '../Support/Http';
 import { SSEStream } from '../Services/SseStream';
 import { LLMProviderResolver } from '../Services/LLMProviderResolver';
@@ -6,10 +8,12 @@ import { ProviderFactory } from '../Providers/ProviderFactory';
 import { ToolsManager } from '../Services/ToolsManager';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
 import { CombinedToolsExecutor } from '../Services/CombinedToolsExecutor';
+import { FilteredToolsExecutor } from '../Services/FilteredToolsExecutor';
 import { SearchFunctions } from '../Functions/SearchFunctions';
 import { FunctionExecutor } from '../Contracts/FunctionExecutor';
 import { LLMProvider } from '../Contracts/LLMProvider';
 import { ChatOptions, ChatResult, SkillMetadata, AvailableSkill } from '../Contracts/types';
+import { AttachmentDispatcher } from '../Services/AttachmentDispatcher';
 
 /**
  * Event-renaming SSE adapter for the /verify and /compare panes. The TS providers emit generic
@@ -210,6 +214,11 @@ export class ChatController {
       client_tools: clientTools,
       client_tool_names: clientToolNames,
       user_id: userId,
+      // Per-request overrides from the workflow agent form; when present they win
+      // over the provider-config defaults (applied in resolveProvider).
+      max_tokens: typeof body.max_tokens === 'number' ? body.max_tokens : undefined,
+      temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
+      tools: Array.isArray(body.tools) ? body.tools.filter((t: any) => typeof t === 'string') : undefined,
     };
 
     // Skill-tool routing. The skill tools are CLIENT-SIDE (run_skill_script /
@@ -258,23 +267,53 @@ export class ChatController {
   }
 
   /** Per-request executor: base tools (+ the user's MCP tools when any exist). Fails soft. */
-  private async buildExecutor(userId: number | null): Promise<FunctionExecutor> {
+  private async buildExecutor(userId: number | null, toolsFilter?: string[] | null): Promise<FunctionExecutor> {
+    let executor: FunctionExecutor = this.toolsManager;
+    let mcpLoaded = false;
     try {
       const mcpLoader = new MCPToolsLoader();
       await mcpLoader.loadToolsForUser(userId);
-      if (mcpLoader.hasTools()) return new CombinedToolsExecutor(this.toolsManager, mcpLoader);
+      mcpLoaded = mcpLoader.hasTools();
+      if (mcpLoaded) executor = new CombinedToolsExecutor(this.toolsManager, mcpLoader);
     } catch (e: any) {
       console.error('[chat] MCP load failed:', e?.message ?? e);
     }
-    return this.toolsManager;
+    // Honor the node's MCP/tool selection (workflow agent form). A non-empty
+    // allowlist restricts what the model is offered; null/empty = all tools.
+    if (Array.isArray(toolsFilter) && toolsFilter.length > 0) {
+      executor = new FilteredToolsExecutor(executor, toolsFilter);
+    }
+    log.info('[chat] executor built', {
+      mcp_loaded: mcpLoaded,
+      tools_filter: Array.isArray(toolsFilter) ? toolsFilter.length : toolsFilter,
+      total_tool_defs: executor.getToolDefinitions().length,
+    });
+    return executor;
   }
 
-  private async resolveProvider(provider: string | null, userId: number | null): Promise<LLMProvider> {
+  private async resolveProvider(
+    provider: string | null,
+    userId: number | null,
+    overrides?: { max_tokens?: number; temperature?: number; tools?: string[] },
+  ): Promise<LLMProvider> {
     if (!provider) throw new Error(ChatController.PROVIDER_REQUIRED);
     const cfg = await LLMProviderResolver.getProviderConfig(provider);
     if (!cfg) throw new Error(`Provider '${provider}' not available`);
+    // Per-request overrides (workflow agent form) win over the provider-config defaults.
+    if (overrides?.max_tokens != null) cfg.max_tokens = overrides.max_tokens;
+    if (overrides?.temperature != null) cfg.temperature = overrides.temperature;
+    log.info('[chat] resolved provider config', {
+      provider: cfg.provider_key,
+      model: cfg.model,
+      api_format: cfg.api_format,
+      base_url: cfg.base_url,
+      chat_endpoint: cfg.chat_endpoint,
+      max_tokens: cfg.max_tokens,
+      temperature: cfg.temperature,
+      overrides,
+    });
     const impl = ProviderFactory.create(cfg); // throws for not-yet-ported formats
-    impl.setFunctionExecutor(await this.buildExecutor(userId));
+    impl.setFunctionExecutor(await this.buildExecutor(userId, overrides?.tools));
     return impl;
   }
 
@@ -285,9 +324,22 @@ export class ChatController {
       if (!res.writableEnded) sse.markAborted();
     });
 
+    const started = Date.now();
     try {
-      const impl = await this.resolveProvider(provider, opts.user_id ?? null);
+      const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
       const result: ChatResult = await impl.streamChat(opts, sse);
+
+      // Record usage (fire-and-forget) — TS port of PHP's UsageLogger, previously skipped on /chat.
+      void logChatTransaction({
+        user_id: opts.user_id ?? null,
+        provider: result.provider,
+        model: result.model,
+        prompt_tokens: result.usage?.input_tokens ?? 0,
+        completion_tokens: result.usage?.output_tokens ?? 0,
+        response_time_ms: Date.now() - started,
+        status: 'success',
+        function_calls_count: result.usage?.function_calls ?? 0,
+      });
 
       const providerResp: Record<string, any> = {
         text: result.text, usage: result.usage, model: result.model, provider: result.provider,
@@ -336,15 +388,28 @@ export class ChatController {
   }
 
   private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions): Promise<void> {
+    const started = Date.now();
     try {
-      const impl = await this.resolveProvider(provider, opts.user_id ?? null);
+      const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
       const result = await impl.chat(opts);
-      const body: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider };
+      const body: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider, finish_reason: result.finish_reason ?? null };
       if (result.pending_client_tool_call) {
         body.pending_client_tool_call = true;
         body.pending_tool_calls = result.pending_tool_calls;
       }
       res.status(200).json(body);
+      // Record usage (fire-and-forget; failures are swallowed so they never affect the response).
+      // This is the TS port of PHP's UsageLogger, which the /chat path had been skipping.
+      void logChatTransaction({
+        user_id: opts.user_id ?? null,
+        provider: result.provider,
+        model: result.model,
+        prompt_tokens: result.usage?.input_tokens ?? 0,
+        completion_tokens: result.usage?.output_tokens ?? 0,
+        response_time_ms: Date.now() - started,
+        status: 'success',
+        function_calls_count: result.usage?.function_calls ?? 0,
+      });
     } catch (e: any) {
       // Percolate the upstream provider's status (e.g. 429 rate-limit) instead of masking as 500,
       // and humanize the message. A non-provider error (real bug) has no extractable code → 500.
@@ -635,6 +700,15 @@ export class ChatController {
   async chat(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
     const body = ctx.body;
+    log.info('[chat] request', {
+      provider: body.provider,
+      model: body.model,
+      streaming: body.streaming,
+      max_tokens: body.max_tokens,
+      temperature: body.temperature,
+      tools: Array.isArray(body.tools) ? body.tools.length : body.tools,
+      msg_len: (body.message || '').length,
+    });
 
     if (body.tools !== undefined && body.tools !== null && !Array.isArray(body.tools)) {
       res.status(400).json({ success: false, error: 'tools must be an array of tool names' });
@@ -642,6 +716,27 @@ export class ChatController {
     }
 
     const opts = this.buildOptions(body, ctx.user_id);
+    const provider: string | null = body.provider ?? null;
+
+    // Attachment ids uploaded earlier via /chat/upload. Mirrors PHP: images (and
+    // PDFs on native-PDF providers) ride opts.image_attachments/pdf_attachments to
+    // the provider; text-native files are prepended to the message; skill mode
+    // elides bodies to short /scratch/ references.
+    const attachmentIds: any[] = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
+    if (attachmentIds.length && typeof ctx.user_id === 'number') {
+      try {
+        const dispatcher = new AttachmentDispatcher();
+        const skillModeActive = opts.skill_metadata != null || (opts.available_skills ?? []).length > 0;
+        const built = await dispatcher.buildPrefix(attachmentIds, ctx.user_id, provider, skillModeActive);
+        if (built.prefix !== '') opts.message = built.prefix + opts.message;
+        if (built.image_attachments.length) opts.image_attachments = built.image_attachments;
+        if (built.pdf_attachments.length) opts.pdf_attachments = built.pdf_attachments;
+        if (built.notes.length) console.error('[ChatController] Attachment notes: ' + built.notes.join(' | '));
+      } catch (e: any) {
+        console.error('[ChatController] Attachment dispatch failed:', e?.message ?? e);
+      }
+    }
+
     const history = opts.conversation_history;
     const isToolContinuation = history.length > 0 && history[history.length - 1]?.role === 'tool';
     if ((!opts.message || opts.message.trim() === '') && !isToolContinuation) {
@@ -649,7 +744,6 @@ export class ChatController {
       return;
     }
 
-    const provider: string | null = body.provider ?? null;
     if (body.streaming === true) {
       await this.handleStreamingChat(req, res, provider, opts);
     } else {

@@ -4,6 +4,11 @@
 *.swp
 Thumbs.db
 
+# ───────────────── Scratch / caches / test artifacts ─────────────────
+.scratch_parity/
+backend/.phpunit.result.cache
+frontend/test-results/
+
 # Local Claude Code settings
 .claude/settings.local.json
 

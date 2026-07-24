@@ -362,7 +362,7 @@ class VoicePanel {
      */
     async fetchFunctionDescriptions() {
         try {
-            const response = await fetch('/gpt/backend/api/v1/hume/tools/list', {
+            const response = await fetch(window.apiUrl('/hume/tools/list'), {
                 headers: this.getAuthHeaders()
             });
             if (!response.ok) {
@@ -679,7 +679,7 @@ class VoicePanel {
                 const tokenHeaders = { 'Content-Type': 'application/json' };
                 const jwt = window.authManager?.token || localStorage.getItem('token') || localStorage.getItem('auth_token');
                 if (jwt) tokenHeaders['Authorization'] = `Bearer ${jwt}`;
-                const tokenResp = await fetch('/gpt/backend/api/v1/voice/token', {
+                const tokenResp = await fetch(window.apiUrl('/voice/token'), {
                     method: 'POST',
                     headers: tokenHeaders,
                     credentials: 'include',

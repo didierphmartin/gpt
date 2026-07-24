@@ -56,23 +56,46 @@ class AffiliateController
         $name = trim($body['name'] ?? '');
         $email = trim($body['email'] ?? '');
         $password = (string) ($body['password'] ?? '');
-        if ($name === '' || $email === '' || $password === '') {
-            return $this->badRequest('name, email and password are required');
+        if ($name === '' || $email === '') {
+            return $this->badRequest('name and email are required');
         }
 
-        // Provision the role=affiliate auth user, then the affiliate row, atomically.
+        // Is this email already a registered user (client, prospect, affiliate…)?
+        // Affiliate status lives in the `affiliates` table, independent of the
+        // user's role — so an existing user just needs an affiliate row added,
+        // not a brand-new account.
+        $stmt = $this->db->prepare("SELECT id FROM users WHERE email = :email LIMIT 1");
+        $stmt->execute([':email' => $email]);
+        $existingUserId = $stmt->fetchColumn();
+        $isExisting = $existingUserId !== false;
+
+        if ($isExisting) {
+            if ($this->repo->findAffiliateByUserId((int) $existingUserId)) {
+                return $this->badRequest('This user is already an affiliate');
+            }
+        } elseif ($password === '') {
+            // Only a brand-new person needs a login provisioned, so the
+            // password is required only in that case.
+            return $this->badRequest('password is required to register a new affiliate user');
+        }
+
+        // Provision the auth user only if new, then the affiliate row, atomically.
         $this->db->beginTransaction();
         try {
-            $stmt = $this->db->prepare(
-                "INSERT INTO users (email, password, first_name, role, provider, created_at, updated_at)
-                 VALUES (:email, :password, :name, 'affiliate', 'email', NOW(), NOW())"
-            );
-            $stmt->execute([
-                ':email' => $email,
-                ':password' => password_hash($password, PASSWORD_DEFAULT),
-                ':name' => $name,
-            ]);
-            $userId = (int) $this->db->lastInsertId();
+            if ($isExisting) {
+                $userId = (int) $existingUserId;
+            } else {
+                $stmt = $this->db->prepare(
+                    "INSERT INTO users (email, password, first_name, role, provider, created_at, updated_at)
+                     VALUES (:email, :password, :name, 'affiliate', 'email', NOW(), NOW())"
+                );
+                $stmt->execute([
+                    ':email' => $email,
+                    ':password' => password_hash($password, PASSWORD_DEFAULT),
+                    ':name' => $name,
+                ]);
+                $userId = (int) $this->db->lastInsertId();
+            }
 
             do { $key = AffiliateSupport::generateKey(); } while ($this->repo->keyExists($key));
             $affiliateId = $this->repo->insertAffiliate($userId, $name, $email, $key);
@@ -86,7 +109,12 @@ class AffiliateController
             throw $e;
         }
 
-        return ['success' => true, 'affiliate_id' => $affiliateId, 'affiliate_key' => $key];
+        return [
+            'success' => true,
+            'affiliate_id' => $affiliateId,
+            'affiliate_key' => $key,
+            'existing_user' => $isExisting,
+        ];
     }
 
     public function adminDelete(array $request, int $id): array
@@ -94,14 +122,23 @@ class AffiliateController
         if ($err = $this->requireAdmin($request)) return $err;
         $affiliate = $this->repo->findAffiliate($id);
         if (!$affiliate) return $this->notFound('Affiliate');
-        // There is no FK from affiliates.user_id to users (users.id type differs),
-        // so delete both rows explicitly. Removing the affiliate row cascades to
-        // its accounts + sales via the affiliate-internal FKs; then remove the
-        // affiliate's auth login.
+        $userId = (int) $affiliate['user_id'];
+
+        // Always remove the affiliate row (cascades to its accounts + sales via
+        // the affiliate-internal FKs). There is no FK from affiliates.user_id to
+        // users (id types differ), so the user row is handled separately below.
         $delAffiliate = $this->db->prepare("DELETE FROM affiliates WHERE id = :id");
         $delAffiliate->execute([':id' => $id]);
-        $delUser = $this->db->prepare("DELETE FROM users WHERE id = :uid");
-        $delUser->execute([':uid' => (int) $affiliate['user_id']]);
+
+        // Remove the auth login ONLY if the account exists solely for affiliate
+        // use (role = 'affiliate'). A shared account that is also a client or
+        // prospect keeps its login so we don't destroy their other access/data.
+        $roleStmt = $this->db->prepare("SELECT role FROM users WHERE id = :uid LIMIT 1");
+        $roleStmt->execute([':uid' => $userId]);
+        if ($roleStmt->fetchColumn() === 'affiliate') {
+            $delUser = $this->db->prepare("DELETE FROM users WHERE id = :uid");
+            $delUser->execute([':uid' => $userId]);
+        }
         return ['success' => true];
     }
 
@@ -118,6 +155,18 @@ class AffiliateController
 
         [$type, $value] = $this->readOptionalOverride($body);
         $this->repo->insertAccount($id, $productId, $type, $value);
+        return ['success' => true];
+    }
+
+    public function adminUpdateAccount(array $request, int $id, int $productId): array
+    {
+        if ($err = $this->requireAdmin($request)) return $err;
+        if (!$this->repo->findAffiliate($id)) return $this->notFound('Affiliate');
+        if (!$this->repo->findAccount($id, $productId)) return $this->notFound('Account');
+
+        // Empty/missing override clears it (account then inherits the product default).
+        [$type, $value] = $this->readOptionalOverride($request['body'] ?? []);
+        $this->repo->updateAccount($id, $productId, $type, $value);
         return ['success' => true];
     }
 

@@ -58,7 +58,7 @@ class GeminiLiveClient {
 
         // Usage tracking
         this.usageTrackingEnabled = options.usageTrackingEnabled !== false;
-        this.backendUrl = options.backendUrl || '/gpt/backend/api/v1/voice/usage';
+        this.backendUrl = options.backendUrl || window.apiUrl('/voice/usage');
         this.sessionId = null;
         this.audioInputBytes = 0;
         this.audioOutputBytes = 0;

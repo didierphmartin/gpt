@@ -87,8 +87,9 @@ Examples (emission turn only):
     }
 };
 
-// Make config globally available
-window.APP_CONFIG = CONFIG;
+// Make config globally available. Merge (not reassign) so values set earlier by
+// api-config.js — notably API_BASE_URL — survive. api-config.js loads first.
+window.APP_CONFIG = Object.assign(window.APP_CONFIG || {}, CONFIG);
 
 // Verify it loaded
 console.log('✅ Config loaded:', window.APP_CONFIG);

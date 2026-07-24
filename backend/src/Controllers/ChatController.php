@@ -15,6 +15,7 @@ use Quantis\AIPortfolioAssistant\Services\AttachmentDispatcher;
 use Quantis\AIPortfolioAssistant\Contracts\StreamingClientInterface;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Exceptions\ProviderException;
 
 /**
  * Chat Controller
@@ -29,11 +30,39 @@ class ChatController
 {
     private PDO $db;
     private array $config;
+    /** Memoized enabled provider_keys from system_llm_settings (per request). */
+    private ?array $enabledProviderKeysCache = null;
 
     public function __construct(PDO $db, array $config)
     {
         $this->db = $db;
         $this->config = $config;
+    }
+
+    /**
+     * The provider keys that are ENABLED in system_llm_settings — the single source of
+     * truth for which LLMs the app supports. Drives per-provider setup loops (attaching
+     * the function executor, etc.) so a provider added to the table (e.g. GLM) is picked
+     * up automatically instead of being silently skipped by a hardcoded list. Memoized
+     * per request; falls back to the historical hardcoded set if the query fails.
+     */
+    private function getEnabledProviderKeys(): array
+    {
+        if ($this->enabledProviderKeysCache !== null) {
+            return $this->enabledProviderKeysCache;
+        }
+        try {
+            $stmt = $this->db->query(
+                "SELECT provider_key FROM system_llm_settings WHERE enabled = 1 ORDER BY sort_order ASC"
+            );
+            $keys = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($keys)) {
+                return $this->enabledProviderKeysCache = array_values(array_unique($keys));
+            }
+        } catch (\Throwable $e) {
+            error_log('[ChatController] getEnabledProviderKeys failed: ' . $e->getMessage());
+        }
+        return $this->enabledProviderKeysCache = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
     }
 
     /**
@@ -53,6 +82,14 @@ class ChatController
             $raw
         ) ?? $raw;
 
+        // Model server offline: the provider's gateway is reachable but has no
+        // backend to serve the model (e.g. self-hosted model host down / not
+        // loaded). Distinct from transient overload — retrying right away rarely
+        // helps, so we tell the user it's likely down rather than busy. Must be
+        // checked BEFORE the generic 5xx branch (this is usually a 503 too).
+        if (preg_match('/no (available|healthy) (server|upstream|model|worker|backend|instance)|no (server|model|backend|worker) available|model (is )?not (loaded|available|ready)|upstream connect error/i', $msg)) {
+            return "🚫 This model's server is currently offline — the provider's gateway responded but has no backend available to serve the model right now. This usually isn't temporary: try again later, or switch to a different provider in the picker above.";
+        }
         // Provider overloaded (5xx).
         if (preg_match('/\b(50[023]|52[39])\b|Service Unavailable|currently experiencing high demand|overloaded|temporarily unavailable/i', $msg)) {
             return "⏳ The model provider is temporarily overloaded. Please try again in a moment, or switch to a different provider in the picker above.";
@@ -728,6 +765,13 @@ class ChatController
             ];
         }
 
+        // Per-node overrides from the workflow agent form. When present they WIN over
+        // the provider-config defaults (system_llm_settings). Null = use provider default.
+        $maxTokensOverride = isset($input['max_tokens']) && is_numeric($input['max_tokens'])
+            ? (int) $input['max_tokens'] : null;
+        $temperatureOverride = isset($input['temperature']) && is_numeric($input['temperature'])
+            ? (float) $input['temperature'] : null;
+
         // Attachment ids uploaded earlier via /chat/upload. Loaded here, text
         // is extracted (PDF via smalot/pdfparser, plain text read verbatim) and
         // prepended to the user message so every provider receives the document
@@ -832,7 +876,9 @@ class ChatController
             $clientTools,
             $clientToolNames,
             $systemPromptOverride,
-            $includeMemory
+            $includeMemory,
+            $maxTokensOverride,
+            $temperatureOverride
         );
     }
 
@@ -1482,7 +1528,7 @@ class ChatController
 
                 // Set executor on all providers
                 $llmManager = $assistant->getLLMManager();
-                foreach (['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'] as $providerName) {
+                foreach ($this->getEnabledProviderKeys() as $providerName) {
                     $providerInstance = $llmManager->getProvider($providerName);
                     if ($providerInstance && method_exists($providerInstance, 'setFunctionExecutor')) {
                         $providerInstance->setFunctionExecutor($executor);
@@ -1496,7 +1542,7 @@ class ChatController
                 error_log("[ChatController] Tool filter applied (base tools only): " . implode(', ', $toolsFilter));
 
                 $llmManager = $assistant->getLLMManager();
-                foreach (['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'] as $providerName) {
+                foreach ($this->getEnabledProviderKeys() as $providerName) {
                     $providerInstance = $llmManager->getProvider($providerName);
                     if ($providerInstance && method_exists($providerInstance, 'setFunctionExecutor')) {
                         $providerInstance->setFunctionExecutor($filteredExecutor);
@@ -2237,7 +2283,9 @@ class ChatController
         array $clientTools = [],
         array $clientToolNames = [],
         ?string $systemPromptOverride = null,
-        bool $includeMemory = true
+        bool $includeMemory = true,
+        ?int $maxTokensOverride = null,
+        ?float $temperatureOverride = null
     ): array {
         // Apply database provider settings first (overrides hardcoded config)
         $config = $this->applyDatabaseProviderSettings($this->config);
@@ -2247,6 +2295,21 @@ class ChatController
 
         // Then apply user's custom API keys (user keys override everything)
         $config = $this->applyUserApiKeys($config, $userId, $provider);
+
+        // Per-node overrides from the workflow agent form win over the provider-config
+        // defaults. Write into the provider's config block at its actual location — root
+        // ($config[$provider]) for claude/openai, nested ($config['providers'][$provider])
+        // for the rest — matching LLMProviderResolver so the provider ctor reads them.
+        if (($maxTokensOverride !== null || $temperatureOverride !== null) && $provider) {
+            if (isset($config[$provider]) && is_array($config[$provider])) {
+                if ($maxTokensOverride !== null)   $config[$provider]['max_tokens'] = $maxTokensOverride;
+                if ($temperatureOverride !== null) $config[$provider]['temperature'] = $temperatureOverride;
+            } elseif (isset($config['providers'][$provider]) && is_array($config['providers'][$provider])) {
+                if ($maxTokensOverride !== null)   $config['providers'][$provider]['max_tokens'] = $maxTokensOverride;
+                if ($temperatureOverride !== null) $config['providers'][$provider]['temperature'] = $temperatureOverride;
+            }
+        }
+
         $assistant = new AIPortfolioAssistant($config);
 
         // Initialize usage logger
@@ -2286,7 +2349,7 @@ class ChatController
                 }
 
                 $llmManager = $assistant->getLLMManager();
-                foreach (['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'] as $providerName) {
+                foreach ($this->getEnabledProviderKeys() as $providerName) {
                     $providerInstance = $llmManager->getProvider($providerName);
                     if ($providerInstance && method_exists($providerInstance, 'setFunctionExecutor')) {
                         $providerInstance->setFunctionExecutor($executor);
@@ -2299,7 +2362,7 @@ class ChatController
                 $filteredExecutor->setAllowedTools($toolsFilter);
 
                 $llmManager = $assistant->getLLMManager();
-                foreach (['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'] as $providerName) {
+                foreach ($this->getEnabledProviderKeys() as $providerName) {
                     $providerInstance = $llmManager->getProvider($providerName);
                     if ($providerInstance && method_exists($providerInstance, 'setFunctionExecutor')) {
                         $providerInstance->setFunctionExecutor($filteredExecutor);
@@ -2481,10 +2544,18 @@ class ChatController
                 ]);
             }
 
+            // Surface the REAL cause, not a blanket 500. ProviderException already
+            // carries the true HTTP status (429 rate limit, 401 auth, 400 billing,
+            // 5xx overload); use it so the client can distinguish "retry", "fix key",
+            // "top up credits", etc. humanizeProviderError turns the raw provider text
+            // into a categorized, user-readable message (and redacts any leaked keys).
+            $statusCode = ($e instanceof ProviderException && $e->getHttpStatusCode())
+                ? $e->getHttpStatusCode()
+                : 500;
             return [
                 'success' => false,
-                'error' => $e->getMessage(),
-                'status_code' => 500
+                'error' => self::humanizeProviderError($e->getMessage()),
+                'status_code' => $statusCode,
             ];
         }
     }

@@ -270,6 +270,8 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
                 'mcp_calls_count' => count($mcpToolsCalled),
                 'pending_client_tool_call' => true,
                 'pending_tool_calls' => $response['_pending_tool_calls'] ?? [],
+                // Truncation signal for the workflow runner (see handleToolUseRecursive).
+                'stop_reason' => $response['stop_reason'] ?? null,
             ];
         }
 
@@ -473,6 +475,8 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
                 'mcp_calls_count' => count($mcpToolsCalled),
                 'pending_client_tool_call' => true,
                 'pending_tool_calls' => $response['_pending_tool_calls'] ?? [],
+                // Truncation signal for the workflow runner (see handleToolUseRecursive).
+                'stop_reason' => $response['stop_reason'] ?? null,
             ];
         }
 
@@ -649,6 +653,25 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
                                     error_log("📥 [ClaudeProvider RAW TOOL_USE #{$i}.{$k}] array, json=" . json_encode($v));
                                 } else {
                                     error_log("📥 [ClaudeProvider RAW TOOL_USE #{$i}.{$k}] " . gettype($v) . "=" . json_encode($v));
+                                }
+                            }
+                            // DECISIVE VERDICT: one grep-able line stating the
+                            // SHAPE + validity of input_files — the exact failure
+                            // mode. Claude often emits input_files as a JSON
+                            // STRING instead of an object; if that string is also
+                            // truncated it won't json_decode, so the script's -i
+                            // input never gets staged ("input file not found").
+                            // grep:  INPUT_FILES VERDICT
+                            $ifv = $block['input']['input_files'] ?? null;
+                            if ($ifv !== null) {
+                                if (is_string($ifv)) {
+                                    $valid = json_decode($ifv) !== null && json_last_error() === JSON_ERROR_NONE;
+                                    error_log("📥 [ClaudeProvider INPUT_FILES VERDICT #{$i}] shape=STRING len=" . strlen($ifv)
+                                        . " json_valid=" . ($valid ? 'true (parseable → frontend will stage it)' : 'FALSE → TRUNCATED/MALFORMED, will NOT stage'));
+                                } elseif (is_array($ifv)) {
+                                    error_log("📥 [ClaudeProvider INPUT_FILES VERDICT #{$i}] shape=OBJECT keys=" . json_encode(array_keys($ifv)) . " (correct shape)");
+                                } else {
+                                    error_log("📥 [ClaudeProvider INPUT_FILES VERDICT #{$i}] shape=" . gettype($ifv) . " (unexpected)");
                                 }
                             }
                         }
@@ -1012,6 +1035,11 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
             return array_merge([
                 'content' => $assistantContent,
                 'usage' => $response['usage'] ?? [],
+                // Surface the API stop_reason so the workflow runner can detect
+                // a TRUNCATED tool payload: stop_reason='max_tokens' means the
+                // model hit its output cap mid-tool_use, so a large argument
+                // (e.g. input_files HTML) is cut off and won't parse.
+                'stop_reason' => $response['stop_reason'] ?? null,
             ], $marker);
         }
 

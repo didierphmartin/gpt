@@ -11,7 +11,7 @@
 
 class AuthManager {
     constructor() {
-        this.apiBaseUrl = '/gpt/backend/api/v1';
+        this.apiBaseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
         // One-time migration of the legacy flat 'user' key into the email-keyed store.
         window.accountStore.migrateLegacyUser();
         this.token = window.accountStore.getToken();

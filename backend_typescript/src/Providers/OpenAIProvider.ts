@@ -1,6 +1,7 @@
 import { LLMProvider } from '../Contracts/LLMProvider';
 import { ChatOptions, ChatResult } from '../Contracts/types';
 import { SSEStream } from '../Services/SseStream';
+import { log } from '../Services/Logger';
 
 interface OpenAIToolCall {
   id: string;
@@ -137,10 +138,30 @@ export class OpenAIProvider extends LLMProvider {
     // B3 continuation: tool_result already at the tail with an empty new message — don't append
     // an empty user turn (OpenAI 400s).
     const last = messages[messages.length - 1];
-    const isToolResultContinuation = (!opts.message || opts.message.trim() === '') && last && last.role === 'tool';
+    const imgs = opts.image_attachments ?? [];
+    const pdfs = opts.pdf_attachments ?? [];
+    const isToolResultContinuation =
+      (!opts.message || opts.message.trim() === '') && !imgs.length && !pdfs.length && last && last.role === 'tool';
     if (isToolResultContinuation) return messages;
 
-    if (opts.message && opts.message.trim() !== '') {
+    // If images or PDFs are attached, switch to the structured content-array shape —
+    // OpenAI Vision spec for images (image_url), File-input spec for PDFs (file block).
+    if (imgs.length || pdfs.length) {
+      const parts: any[] = [{ type: 'text', text: opts.message }];
+      pdfs.forEach((pdf, i) => {
+        parts.push({
+          type: 'file',
+          file: {
+            filename: pdf.name ?? `document-${i + 1}.pdf`,
+            file_data: `data:${pdf.mime_type};base64,${pdf.data}`,
+          },
+        });
+      });
+      for (const img of imgs) {
+        parts.push({ type: 'image_url', image_url: { url: `data:${img.mime_type};base64,${img.data}` } });
+      }
+      messages.push({ role: 'user', content: parts });
+    } else if (opts.message && opts.message.trim() !== '') {
       messages.push({ role: 'user', content: opts.message });
     }
     return messages;
@@ -412,29 +433,113 @@ export class OpenAIProvider extends LLMProvider {
     if (!this.config.api_key) throw new Error(`${this.config.provider_key} API key not configured`);
 
     const toolDefs = this.buildToolDefs(opts);
-    const res = await fetch(this.config.base_url + this.config.chat_endpoint, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(this.buildBody(this.buildMessages(opts), toolDefs, false, opts.tool_choice)),
-    });
-    const json: any = await res.json().catch(() => null);
-    if (!res.ok || !json) {
-      throw new Error(`${this.config.provider_key} API error: ${res.status} ${json ? JSON.stringify(json) : ''}`);
+    const messages = this.buildMessages(opts);
+
+    let answerText = '';
+    let finishReason: string | null = null;
+    let totalInput = 0;
+    let totalOutput = 0;
+    let functionCalls = 0;
+
+    // Server-side tool loop — mirrors streamChat's loop (and PHP GrokProvider's continuation loop).
+    // Without this, a model that asks to run an MCP/server tool responds with finish_reason=tool_calls
+    // and EMPTY content; the old code returned that empty text ("no usable content"). Here we execute
+    // the tools, append their results, and re-ask until the model produces a final answer (no tool
+    // calls) or we hit the recursion cap.
+    for (let depth = 0; depth <= OpenAIProvider.MAX_RECURSION_DEPTH; depth++) {
+      const reqBody = this.buildBody(messages, toolDefs, false, opts.tool_choice);
+      log.info('[provider] request', {
+        provider: this.config.provider_key,
+        depth,
+        model: reqBody.model,
+        max_tokens: reqBody.max_tokens,
+        temperature: reqBody.temperature,
+        tool_count: Array.isArray(reqBody.tools) ? reqBody.tools.length : 0,
+      });
+      const res = await fetch(this.config.base_url + this.config.chat_endpoint, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(reqBody),
+      });
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok || !json) {
+        throw new Error(`${this.config.provider_key} API error: ${res.status} ${json ? JSON.stringify(json) : ''}`);
+      }
+
+      const message = json.choices?.[0]?.message ?? {};
+      answerText = message.content ?? '';
+      finishReason = json.choices?.[0]?.finish_reason ?? null;
+      totalInput += json.usage?.prompt_tokens ?? 0;
+      totalOutput += json.usage?.completion_tokens ?? 0;
+      const toolCalls: any[] = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      log.info('[provider] response', {
+        provider: this.config.provider_key,
+        depth,
+        status: res.status,
+        finish_reason: finishReason,
+        content_len: answerText.length,
+        reasoning_len: (message.reasoning_content ?? '').length,
+        tool_calls: toolCalls.length,
+        tool_names: toolCalls.map((tc) => tc.function?.name),
+        usage: json.usage,
+      });
+
+      // No tool calls → final answer.
+      if (toolCalls.length === 0) break;
+
+      const serverCalls = toolCalls.filter((tc) => !this.isClientSide(tc.function?.name ?? '', opts));
+
+      // All client-side → short-circuit so the caller runs them (skills / webMCP tools).
+      if (serverCalls.length === 0) {
+        const normalized = toolCalls.map((tc) => ({ id: tc.id, name: tc.function?.name ?? '', input: this.parseArgs(tc.function?.arguments ?? '{}') }));
+        return {
+          text: answerText,
+          usage: { input_tokens: totalInput, output_tokens: totalOutput, total_tokens: totalInput + totalOutput, function_calls: functionCalls + toolCalls.length },
+          model: this.config.model,
+          provider: this.config.provider_key,
+          pending_client_tool_call: true,
+          pending_tool_calls: normalized,
+        };
+      }
+
+      if (depth >= OpenAIProvider.MAX_RECURSION_DEPTH) break;
+
+      // Append the assistant turn carrying the tool_calls (OpenAI wire shape).
+      messages.push({
+        role: 'assistant',
+        content: answerText !== '' ? answerText : null,
+        tool_calls: toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.function?.name, arguments: tc.function?.arguments || '{}' } })),
+      });
+
+      // Execute each tool call in order; client-side ones in a mixed turn fail closed (mirrors streaming).
+      for (const tc of toolCalls) {
+        functionCalls++;
+        const name = tc.function?.name ?? '';
+        if (this.isClientSide(name, opts)) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: JSON.stringify({ error: 'Client-side tools cannot be mixed with server-side tools in a single turn yet. Issue this tool call in its own turn.' }),
+          });
+          continue;
+        }
+        log.info('[provider] executing tool', { provider: this.config.provider_key, depth, name });
+        const result = await this.executeFunction(name, this.parseArgs(tc.function?.arguments ?? '{}'), opts.user_id ?? null);
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: this.encodeResult(result) });
+      }
+      // Loop continues → next request is the continuation.
     }
 
-    const message = json.choices?.[0]?.message ?? {};
-    const text = message.content ?? '';
-    const input = json.usage?.prompt_tokens ?? 0;
-    const output = json.usage?.completion_tokens ?? 0;
-    const usage = { input_tokens: input, output_tokens: output, total_tokens: input + output, function_calls: 0 };
+    const usage = { input_tokens: totalInput, output_tokens: totalOutput, total_tokens: totalInput + totalOutput, function_calls: functionCalls };
 
-    // Non-streaming client-tool short-circuit (mirrors the streaming path's all-client case).
-    const toolCalls: any[] = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    if (toolCalls.length && toolCalls.every((tc) => this.isClientSide(tc.function?.name ?? '', opts))) {
-      const normalized = toolCalls.map((tc) => ({ id: tc.id, name: tc.function?.name ?? '', input: this.parseArgs(tc.function?.arguments ?? '{}') }));
-      return { text, usage, model: this.config.model, provider: this.config.provider_key, pending_client_tool_call: true, pending_tool_calls: normalized };
+    // Empty content after the loop is a genuine failure — surface WHY (kept from the earlier fix).
+    if (!answerText) {
+      const why = finishReason === 'length'
+        ? `output hit the token limit (finish_reason=length) — raise max_tokens`
+        : `the model returned no content (finish_reason=${finishReason ?? 'unknown'})`;
+      throw new Error(`${this.config.provider_key} returned an empty response: ${why}`);
     }
 
-    return { text, usage, model: this.config.model, provider: this.config.provider_key };
+    return { text: answerText, usage, model: this.config.model, provider: this.config.provider_key, finish_reason: finishReason };
   }
 }

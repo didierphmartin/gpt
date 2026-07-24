@@ -67,7 +67,7 @@
             const headers = { 'Content-Type': 'application/json' };
             const jwt = window.authManager?.token || localStorage.getItem('token') || localStorage.getItem('auth_token');
             if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
-            const resp = await fetch('/gpt/backend/api/v1/voice/token', {
+            const resp = await fetch(window.apiUrl('/voice/token'), {
                 method: 'POST', headers, credentials: 'include',
                 body: JSON.stringify({ provider: 'grok' }),
             });
