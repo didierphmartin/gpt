@@ -241,12 +241,30 @@ export class AgentDelegationFunctions {
     const CAP = 6;
     const results: any[] = new Array(delegations.length);
 
+    const userId = Number(context.user_id ?? 0);
+
     const runOne = async (d: any, index: number) => {
       const agentName = d?.agent_name;
       const task = d?.task;
       if (!agentName || !task) {
         results[index] = { index, agent: agentName ?? 'unknown', task: task ?? '',
           success: false, result: null, error: 'Missing agent_name or task', execution_id: null };
+        return;
+      }
+      // Parity with PHP batch-path guard: managers may not be fanned out in a
+      // parallel batch (worker/standard only). Resolve first, reject pre-flight.
+      // Not-found / disabled / permission cases fall through to delegateToAgent.
+      let resolved: Agent | null = null;
+      try {
+        resolved = d?.agent_id
+          ? await this.repository.findById(Number(d.agent_id))
+          : await this.repository.findByName(String(agentName), userId);
+      } catch {
+        resolved = null;
+      }
+      if (resolved && resolved.agentType === 'manager') {
+        results[index] = { index, agent: agentName, task,
+          success: false, result: null, error: 'Cannot run a manager agent in a parallel batch', execution_id: null };
         return;
       }
       const r = await this.delegateToAgent(
