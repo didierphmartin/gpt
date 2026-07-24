@@ -170,6 +170,16 @@ class ParallelAgentExecutor
      * handle-adding loop is chunked so no more than maxConcurrency requests
      * are ever in flight at once; responses are merged across chunks.
      */
+    /**
+     * Public entry for callers (e.g. GraphWorkflowRunner) that keep their own
+     * round loop but want the shared, concurrency-capped multi-provider LLM
+     * round. Returns key => ['success'=>bool,'parsed'=>?array,'error'=>?string].
+     */
+    public function runConcurrentRound(array $states): array
+    {
+        return $this->callLLMs($states);
+    }
+
     protected function callLLMs(array $agentStates): array
     {
         $responses = [];

@@ -23,6 +23,7 @@ class GraphWorkflowRunner
     private array $config;
     private ?WorkflowOutputStorage $outputStorage = null;
     private ?WorkflowSchemaRepository $schemaRepository = null;
+    private ?ParallelAgentExecutor $parallelExecutor = null;
 
     private array $nodeOutputs = [];
     private ?int $executionId = null;
@@ -1871,8 +1872,9 @@ class GraphWorkflowRunner
 
             error_log("[GraphWorkflowRunner] Parallel round {$round}: " . count($pendingAgents) . " agents pending");
 
-            // Make parallel LLM calls
-            $responses = $this->makeParallelLLMCalls($pendingAgents);
+            // Make parallel LLM calls via the shared, concurrency-capped
+            // executor round (provider-format plumbing lives there now).
+            $responses = $this->getParallelExecutor()->runConcurrentRound($pendingAgents);
 
             // Process responses. Skill calls are emitted during this pass and
             // awaited concurrently right after (see $pendingClientAwaits).
@@ -2038,170 +2040,13 @@ class GraphWorkflowRunner
         return $results;
     }
 
-    /**
-     * Make parallel LLM calls for multiple agents
-     */
-    private function makeParallelLLMCalls(array $agentStates): array
+    /** Shared concurrency-capped LLM-round engine. Protected so tests can inject a fake. */
+    protected function getParallelExecutor(): ParallelAgentExecutor
     {
-        $multiHandle = curl_multi_init();
-        $curlHandles = [];
-
-        foreach ($agentStates as $nodeId => $state) {
-            $request = $this->buildAgentLLMRequestWithTools($state['agent'], $state['messages'], $state['tools']);
-            if (!$request) continue;
-
-            // Force the skill call until it has run once. The parallel path
-            // builds requests via ProviderRequestFactory (no tool_choice
-            // param), so inject the provider-shaped value into the payload.
-            if (!empty($state['force_skill']) && empty($state['skill_ran'])) {
-                $toolChoice = \AgentTeam\Services\SkillToolChoice::forProvider($request['provider']);
-                if ($toolChoice !== null) {
-                    $request['payload']['tool_choice'] = $toolChoice;
-                }
-            }
-
-            $ch = curl_init($request['url']);
-            curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => json_encode($request['payload']),
-                CURLOPT_HTTPHEADER => $request['headers'],
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT => 300,
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_FOLLOWLOCATION => true,
-            ]);
-
-            curl_multi_add_handle($multiHandle, $ch);
-            $curlHandles[$nodeId] = ['handle' => $ch, 'provider' => $request['provider']];
+        if ($this->parallelExecutor === null) {
+            $this->parallelExecutor = $this->agentRunner->createParallelExecutor(false);
         }
-
-        // Execute all in parallel
-        $running = null;
-        do {
-            curl_multi_exec($multiHandle, $running);
-            curl_multi_select($multiHandle, 0.5);
-        } while ($running > 0);
-
-        // Collect responses
-        $responses = [];
-        foreach ($curlHandles as $nodeId => $info) {
-            $ch = $info['handle'];
-            $response = curl_multi_getcontent($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            $curlErrno = curl_errno($ch);
-
-            curl_multi_remove_handle($multiHandle, $ch);
-            curl_close($ch);
-
-            // Log curl errors with more info
-            if ($curlErrno !== 0) {
-                $effectiveUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-                $connectTime = curl_getinfo($ch, CURLINFO_CONNECT_TIME);
-                error_log("[GraphWorkflowRunner] Node {$nodeId} CURL error ({$curlErrno}): {$curlError}, URL: {$effectiveUrl}, connect_time: {$connectTime}");
-                $responses[$nodeId] = ['success' => false, 'error' => "CURL error: {$curlError}"];
-                continue;
-            }
-
-            // Log HTTP code for debugging
-            error_log("[GraphWorkflowRunner] Node {$nodeId} HTTP {$httpCode}, response_len=" . strlen($response));
-
-            // HTTP 0 means connection failed
-            if ($httpCode === 0) {
-                error_log("[GraphWorkflowRunner] Node {$nodeId} connection failed (HTTP 0)");
-                $responses[$nodeId] = ['success' => false, 'error' => "Connection failed"];
-                continue;
-            }
-
-            if ($httpCode >= 400) {
-                error_log("[GraphWorkflowRunner] HTTP error {$httpCode}: " . substr($response, 0, 500));
-                // Extract error message from API response for better debugging
-                $errorMessage = "HTTP {$httpCode}";
-                $decoded = json_decode($response, true);
-                if ($decoded) {
-                    // OpenAI/Grok/DeepSeek format
-                    if (isset($decoded['error']['message'])) {
-                        $errorMessage = $decoded['error']['message'];
-                    }
-                    // Claude format
-                    elseif (isset($decoded['error']['type'])) {
-                        $errorMessage = $decoded['error']['type'] . ': ' . ($decoded['error']['message'] ?? '');
-                    }
-                    // Gemini format
-                    elseif (isset($decoded['error']['status'])) {
-                        $errorMessage = $decoded['error']['status'] . ': ' . ($decoded['error']['message'] ?? '');
-                    }
-                }
-                $responses[$nodeId] = ['success' => false, 'error' => $errorMessage];
-            } else {
-                $parsed = $this->parseParallelLLMResponse($response, $info['provider']);
-                // Debug: Log parsed response
-                $toolCallCount = count($parsed['tool_calls'] ?? []);
-                $textLen = strlen($parsed['text'] ?? '');
-                error_log("[GraphWorkflowRunner] Node {$nodeId} response: provider={$info['provider']}, tool_calls={$toolCallCount}, text_len={$textLen}, has_usage=" . ($parsed['usage'] ? 'yes' : 'no'));
-                // If empty response, log raw response for debugging
-                if ($toolCallCount === 0 && $textLen === 0) {
-                    error_log("[GraphWorkflowRunner] Node {$nodeId} EMPTY response, raw: " . substr($response, 0, 1000));
-                }
-                $responses[$nodeId] = ['success' => true, 'parsed' => $parsed];
-            }
-        }
-
-        curl_multi_close($multiHandle);
-        return $responses;
-    }
-
-    /**
-     * Build LLM request with tools for parallel execution
-     * Supports all providers: OpenAI, Claude, Gemini, Grok, DeepSeek, Kimi
-     * Uses ProviderRequestFactory for unified request building.
-     */
-    private function buildAgentLLMRequestWithTools(\AgentTeam\Models\Agent $agent, array $messages, array $tools): ?array
-    {
-        $provider = strtolower($agent->getProvider());
-        $model = $agent->getModel();
-        $settings = $agent->getSettings();
-
-        $providerConfig = $this->getProviderConfigForParallel($provider);
-        if (!$providerConfig || empty($providerConfig['api_key'])) {
-            error_log("[GraphWorkflowRunner] Agent {$agent->getName()}: No API key for provider {$provider}");
-            return null;
-        }
-
-        $maxTokens = $settings['max_tokens'] ?? ($providerConfig['max_tokens'] ?? 4096);
-        $temperature = $settings['temperature'] ?? 0.7;
-        $modelToUse = $model ?: ($providerConfig['model'] ?? '');
-
-        // Debug log
-        error_log("[GraphWorkflowRunner] Agent {$agent->getName()}: provider={$provider}, model={$modelToUse}");
-
-        // Use the ProviderRequestFactory for unified request building
-        return ProviderRequestFactory::buildRequest(
-            $provider,
-            $modelToUse,
-            $messages,
-            $tools,
-            $providerConfig,
-            $maxTokens,
-            $temperature
-        );
-    }
-
-    /**
-     * Parse LLM response including tool_calls - handles all provider formats.
-     * Uses ProviderRequestFactory for unified response parsing.
-     */
-    private function parseParallelLLMResponse(string $response, string $provider): array
-    {
-        $decoded = json_decode($response, true);
-        if (!$decoded) {
-            error_log("[GraphWorkflowRunner] Failed to decode response for provider {$provider}");
-            return ['text' => '', 'tool_calls' => [], 'usage' => null];
-        }
-
-        // Use the ProviderRequestFactory for unified response parsing
-        return ProviderRequestFactory::parseResponse($provider, $decoded);
+        return $this->parallelExecutor;
     }
 
     /**
@@ -2329,64 +2174,6 @@ class GraphWorkflowRunner
         return array_values(array_filter($allTools, function($tool) use ($toolsFilter) {
             return in_array($tool['name'], $toolsFilter, true);
         }));
-    }
-
-    /**
-     * Get provider config for parallel execution
-     * Handles provider aliases (anthropic/claude, google/gemini)
-     */
-    private function getProviderConfigForParallel(string $name): ?array
-    {
-        $name = strtolower($name);
-
-        // Handle provider aliases
-        $aliases = [
-            'anthropic' => 'claude',
-            'google' => 'gemini',
-        ];
-        $primaryName = $aliases[$name] ?? $name;
-        $alternateName = array_search($name, $aliases) ?: null;
-
-        // Check database first
-        try {
-            // Try primary name first, then alternate
-            $sql = "SELECT * FROM system_llm_settings WHERE provider_key IN (:key1, :key2) AND enabled = 1 LIMIT 1";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([':key1' => $primaryName, ':key2' => $alternateName ?? $primaryName]);
-            $dbConfig = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-            // Get config file for API key fallback - try both names
-            $configSettings = $this->config[$primaryName]
-                ?? $this->config['providers'][$primaryName]
-                ?? ($alternateName ? ($this->config[$alternateName] ?? $this->config['providers'][$alternateName] ?? null) : null)
-                ?? null;
-
-            if ($dbConfig) {
-                $dbApiKey = $dbConfig['api_key'] ?? '';
-                $configApiKey = $configSettings['api_key'] ?? '';
-
-                return [
-                    'api_key' => !empty($dbApiKey) ? $dbApiKey : $configApiKey,
-                    'model' => $dbConfig['model'] ?: ($configSettings['model'] ?? ''),
-                    'base_url' => $dbConfig['base_url'] ?: ($configSettings['base_url'] ?? ''),
-                    'max_tokens' => (int)($dbConfig['max_tokens'] ?: ($configSettings['max_tokens'] ?? 4096)),
-                    'chat_endpoint' => $dbConfig['chat_endpoint'] ?: ($configSettings['chat_endpoint'] ?? '/v1/chat/completions'),
-                ];
-            }
-
-            // No DB config, try config file
-            if ($configSettings) {
-                return $configSettings;
-            }
-        } catch (\Exception $e) {
-            error_log("[GraphWorkflowRunner] Error loading provider config: " . $e->getMessage());
-        }
-
-        // Fallback to config array
-        return $this->config[$primaryName]
-            ?? $this->config['providers'][$primaryName]
-            ?? ($alternateName ? ($this->config[$alternateName] ?? $this->config['providers'][$alternateName] ?? null) : null)
-            ?? null;
     }
 
     /**
