@@ -69,6 +69,6 @@ test('completeTask returns an acknowledgment', async () => {
   assert.equal(r.status, 'workflow_complete');
 });
 
-test('toolNames lists exactly the 3 wired tools', () => {
-  assert.deepEqual(AgentDelegationFunctions.toolNames(), ['delegate_to_agent', 'list_available_agents', 'complete_task']);
+test('toolNames lists exactly the 4 wired tools', () => {
+  assert.deepEqual(AgentDelegationFunctions.toolNames(), ['delegate_to_agent', 'list_available_agents', 'complete_task', 'run_agents_parallel']);
 });

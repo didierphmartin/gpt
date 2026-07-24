@@ -14,8 +14,7 @@ type Handler = (params: any, context: DelegationContext) => Promise<any>;
 
 /**
  * Manager delegation tools — TS port of AgentDelegationFunctions.php.
- * Ported tools: delegate_to_agent, list_available_agents, complete_task.
- * (run_agents_parallel is intentionally NOT ported — unwired in PHP.)
+ * Ported tools: delegate_to_agent, list_available_agents, complete_task, run_agents_parallel.
  * complete_task is a plain signal tool (no marker-switch): with tool_choice='auto'
  * the provider loop lets the manager answer once it stops delegating.
  */
@@ -23,7 +22,7 @@ export class AgentDelegationFunctions {
   constructor(private repository: AgentRepository, private runner: AgentRunner) {}
 
   static toolNames(): string[] {
-    return ['delegate_to_agent', 'list_available_agents', 'complete_task'];
+    return ['delegate_to_agent', 'list_available_agents', 'complete_task', 'run_agents_parallel'];
   }
 
   getAllFunctions(): Record<string, { schema: { description: string; input_schema: any }; handler: Handler }> {
@@ -73,6 +72,32 @@ export class AgentDelegationFunctions {
           },
         },
         handler: (p, c) => this.completeTask(p, c),
+      },
+      run_agents_parallel: {
+        schema: {
+          description:
+            'Run multiple agents in parallel and collect their results. Useful for gathering information from multiple specialists simultaneously. Results are returned together once all agents complete.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              delegations: {
+                type: 'array',
+                description: 'Array of delegation objects, each with agent_name and task',
+                items: {
+                  type: 'object',
+                  properties: {
+                    agent_name: { type: 'string', description: 'Name of the agent to delegate to' },
+                    task: { type: 'string', description: 'The task for this agent' },
+                    context: { type: 'string', description: 'Optional context for this agent' },
+                  },
+                  required: ['agent_name', 'task'],
+                },
+              },
+            },
+            required: ['delegations'],
+          },
+        },
+        handler: (p, c) => this.runAgentsParallel(p, c),
       },
     };
   }
@@ -197,6 +222,64 @@ export class AgentDelegationFunctions {
       reason,
       summary,
       instruction: 'You may now synthesize all results and respond to the user with your final answer.',
+    };
+  }
+
+  async runAgentsParallel(params: any, context: DelegationContext): Promise<any> {
+    const delegations: any[] = Array.isArray(params?.delegations) ? params.delegations : [];
+    if (delegations.length === 0) return { success: false, error: 'No delegations provided' };
+
+    if (context.stream_context) {
+      context.stream_context.emit?.({
+        type: 'parallel_start',
+        count: delegations.length,
+        agents: delegations.map((d) => d?.agent_name ?? 'unknown'),
+        timestamp: Date.now() / 1000,
+      });
+    }
+
+    const CAP = 6;
+    const results: any[] = new Array(delegations.length);
+
+    const runOne = async (d: any, index: number) => {
+      const agentName = d?.agent_name;
+      const task = d?.task;
+      if (!agentName || !task) {
+        results[index] = { index, agent: agentName ?? 'unknown', task: task ?? '',
+          success: false, result: null, error: 'Missing agent_name or task', execution_id: null };
+        return;
+      }
+      const r = await this.delegateToAgent(
+        { agent_name: agentName, task, context: d?.context ?? '' }, context);
+      results[index] = {
+        index, agent: agentName, task,
+        success: !!r.success,
+        result: r.result ?? null,
+        error: r.success ? null : (r.error ?? 'Unknown error'),
+        execution_id: r.execution_id ?? null,
+      };
+    };
+
+    // Window the batch so at most CAP sub-agents are in flight at once.
+    for (let i = 0; i < delegations.length; i += CAP) {
+      const slice = delegations.slice(i, i + CAP);
+      await Promise.all(slice.map((d, j) => runOne(d, i + j)));
+    }
+
+    const successful = results.filter((r) => r.success).length;
+    const failed = results.length - successful;
+
+    if (context.stream_context) {
+      context.stream_context.emit?.({ type: 'parallel_complete', successful, failed, timestamp: Date.now() / 1000 });
+    }
+
+    return {
+      success: failed === 0,
+      total_agents: delegations.length,
+      successful,
+      failed,
+      results,
+      message: `Completed ${successful} of ${delegations.length} delegations`,
     };
   }
 }
