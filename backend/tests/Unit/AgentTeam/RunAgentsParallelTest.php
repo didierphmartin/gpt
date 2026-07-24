@@ -57,4 +57,69 @@ final class RunAgentsParallelTest extends TestCase
         $out = $fns->runAgentsParallel(['delegations' => []], ['user_id' => 1]);
         $this->assertFalse($out['success']);
     }
+
+    public function testPreflightErrorItemCarriesFullSevenKeyShape(): void
+    {
+        // A manager-typed target is rejected pre-flight (worker/standard only),
+        // so this delegation never reaches the executor. The resulting
+        // results[] item must still carry the full seven-key shape.
+        $managerTarget = new Agent(['id' => 9, 'name' => 'BossAgent', 'agent_type' => 'manager', 'provider' => 'claude']);
+
+        $repo = Mockery::mock(\AgentTeam\Services\AgentRepository::class);
+        $repo->shouldReceive('findByName')->with('BossAgent', Mockery::any())->andReturn($managerTarget);
+        $repo->shouldReceive('findById')->andReturnNull();
+
+        // Executor is created but never runs (no valid states) — no run() expectation.
+        $executor = Mockery::mock(\AgentTeam\Services\ParallelAgentExecutor::class);
+        $executor->shouldReceive('buildToolsFor')->andReturn([]);
+
+        $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
+        $runner->shouldReceive('getFreshRepository')->andReturn($repo);
+        $runner->shouldReceive('createParallelExecutor')->andReturn($executor);
+
+        $fns = new AgentDelegationFunctions($repo, $runner);
+        $out = $fns->runAgentsParallel([
+            'delegations' => [
+                ['agent_name' => 'BossAgent', 'task' => 'do boss things'],
+            ],
+        ], ['user_id' => 1, 'current_agent_id' => 1]);
+
+        $this->assertFalse($out['success']);
+        $this->assertSame(1, $out['failed']);
+
+        $item = $out['results'][0];
+        foreach (['index', 'agent', 'task', 'success', 'result', 'error', 'execution_id'] as $key) {
+            $this->assertArrayHasKey($key, $item, "results[0] must carry '{$key}'");
+        }
+        $this->assertSame('do boss things', $item['task']);
+        $this->assertNull($item['result']);
+        $this->assertFalse($item['success']);
+        $this->assertNotNull($item['error']);
+    }
+
+    public function testMissingAgentNameErrorItemCarriesFullSevenKeyShape(): void
+    {
+        $repo = Mockery::mock(\AgentTeam\Services\AgentRepository::class);
+        $repo->shouldReceive('findById')->andReturnNull();
+
+        $executor = Mockery::mock(\AgentTeam\Services\ParallelAgentExecutor::class);
+
+        $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
+        $runner->shouldReceive('getFreshRepository')->andReturn($repo);
+        $runner->shouldReceive('createParallelExecutor')->andReturn($executor);
+
+        $fns = new AgentDelegationFunctions($repo, $runner);
+        $out = $fns->runAgentsParallel([
+            'delegations' => [
+                ['task' => 'orphan task'], // missing agent_name
+            ],
+        ], ['user_id' => 1, 'current_agent_id' => 1]);
+
+        $item = $out['results'][0];
+        foreach (['index', 'agent', 'task', 'success', 'result', 'error', 'execution_id'] as $key) {
+            $this->assertArrayHasKey($key, $item, "results[0] must carry '{$key}'");
+        }
+        $this->assertSame('orphan task', $item['task']);
+        $this->assertNull($item['result']);
+    }
 }

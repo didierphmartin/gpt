@@ -469,23 +469,27 @@ class AgentDelegationFunctions
             $task = $d['task'] ?? null;
             if (!$agentName || !$task) {
                 $errors[$index] = ['index' => $index, 'agent' => $agentName ?? 'unknown',
-                    'success' => false, 'error' => 'Missing agent_name or task', 'execution_id' => null];
+                    'task' => $d['task'] ?? null, 'success' => false, 'result' => null,
+                    'error' => 'Missing agent_name or task', 'execution_id' => null];
                 continue;
             }
             $agent = $repo->findByName($agentName, $userId);
             if (!$agent || !$agent->isEnabled()) {
                 $errors[$index] = ['index' => $index, 'agent' => $agentName,
-                    'success' => false, 'error' => "Agent not found or disabled: {$agentName}", 'execution_id' => null];
+                    'task' => $d['task'] ?? null, 'success' => false, 'result' => null,
+                    'error' => "Agent not found or disabled: {$agentName}", 'execution_id' => null];
                 continue;
             }
             if ($agent->isManager()) {
                 $errors[$index] = ['index' => $index, 'agent' => $agentName,
-                    'success' => false, 'error' => 'Cannot run a manager agent in a parallel batch', 'execution_id' => null];
+                    'task' => $d['task'] ?? null, 'success' => false, 'result' => null,
+                    'error' => 'Cannot run a manager agent in a parallel batch', 'execution_id' => null];
                 continue;
             }
             if ($manager && !$manager->canDelegateToAgent($agent->getId())) {
                 $errors[$index] = ['index' => $index, 'agent' => $agentName,
-                    'success' => false, 'error' => "Manager cannot delegate to '{$agentName}'", 'execution_id' => null];
+                    'task' => $d['task'] ?? null, 'success' => false, 'result' => null,
+                    'error' => "Manager cannot delegate to '{$agentName}'", 'execution_id' => null];
                 continue;
             }
 
@@ -528,7 +532,7 @@ class AgentDelegationFunctions
                 'task' => $indexByKey[$index] ?? ($d['task'] ?? ''),
                 'success' => $ok,
                 'result' => $r['output'] ?? null,
-                'error' => $ok ? null : ($r['error'] ?? 'Agent did not complete'),
+                'error' => $ok ? null : ($r['error'] ?? $r['output'] ?? 'Agent did not complete'),
                 'execution_id' => $r['execution_id'] ?? null,
             ];
             $ok ? $successCount++ : $failCount++;
