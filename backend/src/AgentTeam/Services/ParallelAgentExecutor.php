@@ -176,10 +176,28 @@ class ParallelAgentExecutor
         $chunks = array_chunk($agentStates, max(1, $this->maxConcurrency), true);
 
         foreach ($chunks as $chunk) {
-            $multiHandle = curl_multi_init();
-            $curlHandles = [];
+            // Merge with the union operator (NOT array_merge) to preserve the
+            // string/int state keys across chunks — renumbering would break the
+            // key => response contract the round loop relies on.
+            $responses += $this->dispatchChunk($chunk);
+        }
 
-            foreach ($chunk as $nodeId => $state) {
+        return $responses;
+    }
+
+    /**
+     * Dispatch a single capped chunk of agent states as one concurrent
+     * curl_multi batch. Returns key => ['success'=>bool,'parsed'=>?array,
+     * 'error'=>?string] for the chunk. Split out from callLLMs() so the
+     * chunking/cap/key-preservation is testable without touching the network.
+     */
+    protected function dispatchChunk(array $chunk): array
+    {
+        $responses = [];
+        $multiHandle = curl_multi_init();
+        $curlHandles = [];
+
+        foreach ($chunk as $nodeId => $state) {
                 $request = $this->buildAgentLLMRequestWithTools($state['agent'], $state['messages'], $state['tools']);
                 if (!$request) continue;
 
@@ -280,8 +298,7 @@ class ParallelAgentExecutor
                 }
             }
 
-            curl_multi_close($multiHandle);
-        }
+        curl_multi_close($multiHandle);
 
         return $responses;
     }

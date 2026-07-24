@@ -25,6 +25,32 @@ class FakeExecutor extends ParallelAgentExecutor
     }
 }
 
+/**
+ * Executor subclass that fakes the network at the CHUNK boundary (not the
+ * whole round) so the real callLLMs() chunking/cap/key-preservation logic is
+ * exercised. Records the keys and size of every chunk dispatchChunk() sees.
+ */
+class ChunkSpyExecutor extends ParallelAgentExecutor
+{
+    /** @var array<int, array<int,string>> chunk index => list of keys seen */
+    public array $seenChunkKeys = [];
+    public array $seenChunkSizes = [];
+
+    protected function dispatchChunk(array $chunk): array
+    {
+        $this->seenChunkKeys[] = array_keys($chunk);
+        $this->seenChunkSizes[] = count($chunk);
+        // Canned "completed" response (no tool calls) for every key in the chunk,
+        // preserving the chunk's keys so callLLMs()'s union merge is meaningful.
+        $out = [];
+        foreach ($chunk as $key => $state) {
+            $out[$key] = ['success' => true, 'parsed' =>
+                ['text' => (string) $key . ' done', 'tool_calls' => [], 'usage' => null]];
+        }
+        return $out;
+    }
+}
+
 final class ParallelAgentExecutorTest extends TestCase
 {
     protected function tearDown(): void { Mockery::close(); }
@@ -50,6 +76,16 @@ final class ParallelAgentExecutorTest extends TestCase
         $db = Mockery::mock(\PDO::class);
         // recordExecutions=false, no observer, no client bridge.
         return new FakeExecutor($runner, $db, [], false, null, null);
+    }
+
+    private function makeChunkSpy(int $maxConcurrency): ChunkSpyExecutor
+    {
+        $tools = Mockery::mock(\Quantis\AIPortfolioAssistant\Services\ToolsManager::class);
+        $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
+        $runner->shouldReceive('getToolsManager')->andReturn($tools);
+        $db = Mockery::mock(\PDO::class);
+        // 7th ctor arg is the concurrency cap.
+        return new ChunkSpyExecutor($runner, $db, [], false, null, null, $maxConcurrency);
     }
 
     public function testTwoAgentsCompleteConcurrentlyInOneRound(): void
@@ -93,5 +129,36 @@ final class ParallelAgentExecutorTest extends TestCase
 
         $this->assertSame('final', $res['a']['output']);
         $this->assertSame(2, $exec->round); // took two rounds
+    }
+
+    /**
+     * Exercises the REAL callLLMs() chunking so the concurrency cap and
+     * array_chunk(preserve_keys) are covered. Overriding dispatchChunk (not
+     * callLLMs) leaves the cap/merge logic live. maxConcurrency=2 with three
+     * string-keyed states must split into chunks of [2,1] with keys preserved
+     * (['a','b'] then ['c'], NOT renumbered 0,1,2), and run() must return all
+     * three keyed results.
+     */
+    public function testConcurrencyCapChunksStatesAndPreservesKeys(): void
+    {
+        $exec = $this->makeChunkSpy(2);
+        $states = [];
+        foreach (['a', 'b', 'c'] as $i => $key) {
+            $states[] = ['key' => $key, 'agent' => $this->agent($i + 1, strtoupper($key)),
+                'input' => "t{$key}",
+                'messages' => [['role' => 'user', 'content' => "t{$key}"]],
+                'tools' => [], 'tools_filter' => null];
+        }
+        $res = $exec->run($states);
+
+        // Two chunks: first two keys, then the remaining one (the cap).
+        $this->assertSame([2, 1], $exec->seenChunkSizes);
+        $this->assertSame([['a', 'b'], ['c']], $exec->seenChunkKeys);
+        // All three completed, keyed by their original string keys (preserve_keys).
+        $this->assertSame(['a', 'b', 'c'], array_keys($res));
+        $this->assertSame('a done', $res['a']['output']);
+        $this->assertSame('b done', $res['b']['output']);
+        $this->assertSame('c done', $res['c']['output']);
+        $this->assertTrue($res['a']['success'] && $res['b']['success'] && $res['c']['success']);
     }
 }
