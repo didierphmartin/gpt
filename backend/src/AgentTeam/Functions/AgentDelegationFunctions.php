@@ -439,25 +439,14 @@ class AgentDelegationFunctions
     public function runAgentsParallel(array $params, $context = null): array
     {
         $delegations = $params['delegations'] ?? [];
-
-        if (empty($delegations)) {
-            return [
-                'success' => false,
-                'error' => 'No delegations provided',
-            ];
+        if (empty($delegations) || !is_array($delegations)) {
+            return ['success' => false, 'error' => 'No delegations provided'];
         }
 
-        if (!is_array($delegations)) {
-            return [
-                'success' => false,
-                'error' => 'Delegations must be an array',
-            ];
-        }
-
-        // Get stream context for activity events
+        $userId = $this->extractUserId($context);
+        $currentAgentId = $this->extractCurrentAgentId($context);
         $streamContext = $this->extractStreamContext($context);
 
-        // Log parallel execution start
         if ($streamContext) {
             $streamContext->emit([
                 'type' => 'parallel_start',
@@ -467,61 +456,87 @@ class AgentDelegationFunctions
             ]);
         }
 
-        $results = [];
-        $successCount = 0;
-        $failCount = 0;
+        $repo = $this->runner->getFreshRepository();
+        $executor = $this->runner->createParallelExecutor(true); // record executions; no observer/bridge
+        $manager = $currentAgentId ? $repo->findById($currentAgentId) : null;
 
-        // Execute each delegation
-        // Note: In a production environment, this could use async/parallel execution
-        // For now, we execute sequentially but structure the results as if parallel
-        foreach ($delegations as $index => $delegation) {
-            $agentName = $delegation['agent_name'] ?? null;
-            $task = $delegation['task'] ?? null;
-            $delegationContext = $delegation['context'] ?? '';
-
+        // Build one state per valid delegation; collect index errors separately.
+        $states = [];
+        $indexByKey = [];
+        $errors = [];
+        foreach ($delegations as $index => $d) {
+            $agentName = $d['agent_name'] ?? null;
+            $task = $d['task'] ?? null;
             if (!$agentName || !$task) {
-                $results[] = [
-                    'index' => $index,
-                    'agent' => $agentName ?? 'unknown',
-                    'success' => false,
-                    'error' => 'Missing agent_name or task',
-                ];
-                $failCount++;
+                $errors[$index] = ['index' => $index, 'agent' => $agentName ?? 'unknown',
+                    'success' => false, 'error' => 'Missing agent_name or task', 'execution_id' => null];
+                continue;
+            }
+            $agent = $repo->findByName($agentName, $userId);
+            if (!$agent || !$agent->isEnabled()) {
+                $errors[$index] = ['index' => $index, 'agent' => $agentName,
+                    'success' => false, 'error' => "Agent not found or disabled: {$agentName}", 'execution_id' => null];
+                continue;
+            }
+            if ($agent->isManager()) {
+                $errors[$index] = ['index' => $index, 'agent' => $agentName,
+                    'success' => false, 'error' => 'Cannot run a manager agent in a parallel batch', 'execution_id' => null];
+                continue;
+            }
+            if ($manager && !$manager->canDelegateToAgent($agent->getId())) {
+                $errors[$index] = ['index' => $index, 'agent' => $agentName,
+                    'success' => false, 'error' => "Manager cannot delegate to '{$agentName}'", 'execution_id' => null];
                 continue;
             }
 
-            // Execute the delegation
-            $result = $this->delegateToAgent([
-                'agent_name' => $agentName,
-                'task' => $task,
-                'context' => $delegationContext,
-            ], $context);
+            $input = $task;
+            $ctx = trim($d['context'] ?? '');
+            if ($ctx !== '') $input = "## Context from Previous Analysis\n{$ctx}\n\n## Your Task\n{$task}";
 
-            $results[] = [
-                'index' => $index,
-                'agent' => $agentName,
-                'task' => $task,
-                'success' => $result['success'] ?? false,
-                'result' => $result['result'] ?? null,
-                'error' => $result['error'] ?? null,
-                'execution_id' => $result['execution_id'] ?? null,
+            $states[] = [
+                'key' => $index,
+                'agent' => $agent,
+                'input' => $input,
+                'user_id' => $userId,
+                'messages' => [
+                    ['role' => 'system', 'content' => $agent->buildSystemPrompt()],
+                    ['role' => 'user', 'content' => $input],
+                ],
+                'tools' => $executor->buildToolsFor($agent, $agent->getTools() ?: null),
+                'tools_filter' => $agent->getTools() ?: null,
             ];
-
-            if ($result['success'] ?? false) {
-                $successCount++;
-            } else {
-                $failCount++;
-            }
+            $indexByKey[$index] = $task;
         }
 
-        // Log parallel execution complete
+        $execResults = !empty($states) ? $executor->run($states) : [];
+
+        // Merge executor results with pre-flight errors, preserving delegation order.
+        $results = [];
+        $successCount = 0;
+        $failCount = 0;
+        foreach ($delegations as $index => $d) {
+            if (isset($errors[$index])) {
+                $results[] = $errors[$index];
+                $failCount++;
+                continue;
+            }
+            $r = $execResults[$index] ?? ['success' => false, 'output' => null, 'execution_id' => null];
+            $ok = (bool) ($r['success'] ?? false);
+            $results[] = [
+                'index' => $index,
+                'agent' => $d['agent_name'],
+                'task' => $indexByKey[$index] ?? ($d['task'] ?? ''),
+                'success' => $ok,
+                'result' => $r['output'] ?? null,
+                'error' => $ok ? null : ($r['error'] ?? 'Agent did not complete'),
+                'execution_id' => $r['execution_id'] ?? null,
+            ];
+            $ok ? $successCount++ : $failCount++;
+        }
+
         if ($streamContext) {
-            $streamContext->emit([
-                'type' => 'parallel_complete',
-                'successful' => $successCount,
-                'failed' => $failCount,
-                'timestamp' => microtime(true),
-            ]);
+            $streamContext->emit(['type' => 'parallel_complete',
+                'successful' => $successCount, 'failed' => $failCount, 'timestamp' => microtime(true)]);
         }
 
         return [

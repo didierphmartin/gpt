@@ -556,6 +556,16 @@ class AgentRunner
                 ];
             }
 
+            // Give managers run_agents_parallel to fan out independent sub-agents at once.
+            if (isset($delegationFuncs['run_agents_parallel'])) {
+                $func = $delegationFuncs['run_agents_parallel'];
+                $tools['run_agents_parallel'] = [
+                    'name' => 'run_agents_parallel',
+                    'description' => $func['schema']['description'],
+                    'input_schema' => $func['schema']['input_schema'],
+                ];
+            }
+
             // Managers don't get built-in or MCP tools - they must delegate
             return array_values($tools);
         }

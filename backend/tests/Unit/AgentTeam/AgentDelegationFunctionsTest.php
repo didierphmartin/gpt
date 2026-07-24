@@ -202,11 +202,20 @@ class AgentDelegationFunctionsTest extends TestCase
         );
 
         $this->assertFalse($result['success']);
-        $this->assertStringContainsString('must be an array', $result['error']);
+        // Non-array `delegations` is folded into the same early-return as
+        // "no delegations" by the executor-backed implementation.
+        $this->assertStringContainsString('No delegations', $result['error']);
     }
 
     public function testRunAgentsParallelHandlesMissingFields(): void
     {
+        $this->mockRunner
+            ->shouldReceive('getFreshRepository')
+            ->andReturn($this->mockRepository);
+        $this->mockRunner
+            ->shouldReceive('createParallelExecutor')
+            ->andReturn(Mockery::mock(\AgentTeam\Services\ParallelAgentExecutor::class));
+
         $result = $this->functions->runAgentsParallel(
             ['delegations' => [
                 ['agent_name' => 'Test'], // Missing task
@@ -225,6 +234,12 @@ class AgentDelegationFunctionsTest extends TestCase
             ->shouldReceive('findByName')
             ->with('Test', 1)
             ->andReturn(null);
+        $this->mockRunner
+            ->shouldReceive('getFreshRepository')
+            ->andReturn($this->mockRepository);
+        $this->mockRunner
+            ->shouldReceive('createParallelExecutor')
+            ->andReturn(Mockery::mock(\AgentTeam\Services\ParallelAgentExecutor::class));
 
         $result = $this->functions->runAgentsParallel(
             ['delegations' => [
