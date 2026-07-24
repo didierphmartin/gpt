@@ -74,8 +74,8 @@ final class ParallelAgentExecutorTest extends TestCase
         $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
         $runner->shouldReceive('getToolsManager')->andReturn($tools);
         $db = Mockery::mock(\PDO::class);
-        // recordExecutions=false, no observer, no client bridge.
-        return new FakeExecutor($runner, $db, [], false, null, null);
+        // recordExecutions=false.
+        return new FakeExecutor($runner, $db, [], false);
     }
 
     private function makeChunkSpy(int $maxConcurrency): ChunkSpyExecutor
@@ -84,8 +84,8 @@ final class ParallelAgentExecutorTest extends TestCase
         $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
         $runner->shouldReceive('getToolsManager')->andReturn($tools);
         $db = Mockery::mock(\PDO::class);
-        // 7th ctor arg is the concurrency cap.
-        return new ChunkSpyExecutor($runner, $db, [], false, null, null, $maxConcurrency);
+        // 5th ctor arg is the concurrency cap.
+        return new ChunkSpyExecutor($runner, $db, [], false, $maxConcurrency);
     }
 
     public function testTwoAgentsCompleteConcurrentlyInOneRound(): void

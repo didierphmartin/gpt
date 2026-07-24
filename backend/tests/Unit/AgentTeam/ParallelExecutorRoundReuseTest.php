@@ -29,7 +29,7 @@ final class ParallelExecutorRoundReuseTest extends TestCase
     {
         $runner = Mockery::mock(\AgentTeam\Services\AgentRunner::class);
         $db = Mockery::mock(\PDO::class);
-        $exec = new RoundSpyExecutor($runner, $db, [], false, null, null);
+        $exec = new RoundSpyExecutor($runner, $db, [], false);
 
         $agent = new Agent(['id' => 1, 'name' => 'N1', 'agent_type' => 'worker', 'provider' => 'claude']);
         $states = [

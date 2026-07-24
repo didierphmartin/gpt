@@ -925,12 +925,9 @@ class AgentRunner
         $this->completeExecution($executionId, $response, $responseTimeMs);
     }
 
-    public function createParallelExecutor(
-        bool $recordExecutions,
-        ?\AgentTeam\Services\ParallelRunObserver $observer = null,
-        ?\AgentTeam\Services\ParallelClientToolBridge $bridge = null
-    ): \AgentTeam\Services\ParallelAgentExecutor {
+    public function createParallelExecutor(bool $recordExecutions): \AgentTeam\Services\ParallelAgentExecutor
+    {
         return new \AgentTeam\Services\ParallelAgentExecutor(
-            $this, $this->db, $this->config, $recordExecutions, $observer, $bridge);
+            $this, $this->db, $this->config, $recordExecutions);
     }
 }

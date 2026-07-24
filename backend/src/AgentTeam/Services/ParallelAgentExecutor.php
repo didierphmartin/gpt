@@ -23,8 +23,6 @@ class ParallelAgentExecutor
         private PDO $db,
         private array $config,
         private bool $recordExecutions = false,
-        private ?ParallelRunObserver $observer = null,
-        private ?ParallelClientToolBridge $bridge = null,
         private int $maxConcurrency = 6
     ) {}
 
@@ -40,7 +38,6 @@ class ParallelAgentExecutor
                 $executionId = $this->agentRunner->recordExecutionStart(
                     $agent, (int) ($s['user_id'] ?? 0), $s['input']);
             }
-            $this->observer?->onAgentStart((string) $key, $agent, $s['input']);
             $agentStates[$key] = [
                 'key' => $key,
                 'agent' => $agent,
@@ -82,12 +79,7 @@ class ParallelAgentExecutor
                     ];
                     foreach ($parsed['tool_calls'] as $tc) {
                         $name = $tc['function']['name'] ?? $tc['name'] ?? 'function';
-                        if ($this->bridge && $this->bridge->isClientSideTool($name)) {
-                            $this->bridge->emit($tc, (string) $key, $parsed['text'] ?? '');
-                            $content = $this->bridge->await($tc, (string) $key);
-                        } else {
-                            $content = $this->executeServerTool($tc, $state['tools_filter']);
-                        }
+                        $content = $this->executeServerTool($tc, $state['tools_filter']);
                         $state['messages'][] = [
                             'role' => 'tool',
                             'tool_call_id' => $tc['id'] ?? null,
@@ -130,8 +122,6 @@ class ParallelAgentExecutor
                 'tool_calls' => [],
             ], $rt);
         }
-        $this->observer?->onAgentComplete((string) $key, $agent,
-            (bool) $state['success'], $state['output'], $state['usage']);
         $results[$key] = [
             'agent_id' => $agent->getId(),
             'agent_name' => $agent->getName(),
@@ -163,14 +153,6 @@ class ParallelAgentExecutor
     }
 
     /**
-     * One concurrent round via curl_multi (capped at $this->maxConcurrency
-     * in-flight requests per batch). Overridable in tests.
-     *
-     * Adapted from GraphWorkflowRunner::makeParallelLLMCalls(): the
-     * handle-adding loop is chunked so no more than maxConcurrency requests
-     * are ever in flight at once; responses are merged across chunks.
-     */
-    /**
      * Public entry for callers (e.g. GraphWorkflowRunner) that keep their own
      * round loop but want the shared, concurrency-capped multi-provider LLM
      * round. Returns key => ['success'=>bool,'parsed'=>?array,'error'=>?string].
@@ -180,6 +162,14 @@ class ParallelAgentExecutor
         return $this->callLLMs($states);
     }
 
+    /**
+     * One concurrent round via curl_multi (capped at $this->maxConcurrency
+     * in-flight requests per batch). Overridable in tests.
+     *
+     * Adapted from GraphWorkflowRunner::makeParallelLLMCalls(): the
+     * handle-adding loop is chunked so no more than maxConcurrency requests
+     * are ever in flight at once; responses are merged across chunks.
+     */
     protected function callLLMs(array $agentStates): array
     {
         $responses = [];
