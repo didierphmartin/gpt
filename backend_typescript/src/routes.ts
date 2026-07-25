@@ -33,6 +33,11 @@ import { SchedulerController } from './Controllers/SchedulerController';
 import { TracesController } from './Controllers/TracesController';
 import { HealController } from './Controllers/HealController';
 import { VoiceController } from './Controllers/VoiceController';
+import { UsageController } from './Controllers/UsageController';
+import { DriveController } from './Controllers/DriveController';
+import { FileStorageController } from './Controllers/FileStorageController';
+import { GenesisController } from './Controllers/GenesisController';
+import { AgentMCPController } from './Controllers/AgentMCPController';
 
 export const router = Router();
 
@@ -68,12 +73,18 @@ const scheduler = new SchedulerController();
 const traces = new TracesController();
 const heal = new HealController();
 const voice = new VoiceController();
+const usage = new UsageController();
+const drive = new DriveController();
+const fileStorage = new FileStorageController();
+const genesis = new GenesisController();
+const agentMcp = new AgentMCPController();
 // In-memory multipart parsing for file uploads (the controller writes to disk itself). 50 MB cap
 // matches ChatAttachmentController.MAX_BYTES; the controller returns the friendly 413 on its own check.
 const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
-// Health (public)
+// Health (public). /api/v1 is the same health payload at the API root (PHP RootController alias).
 router.get('/', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
+router.get('/api/v1', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
 
 // Models catalog (public)
 router.get('/api/v1/models/catalog', handle((ctx) => modelCatalog.get(ctx)));
@@ -132,6 +143,9 @@ router.post('/api/v1/compare', (req: Request, res: Response) => {
     if (!res.headersSent) res.status(500).json({ success: false, error: (err && err.message) ? String(err.message) : 'Internal error' });
   });
 });
+
+// Single-pass agent call (protected) — non-streaming JSON, unlike /chat (ChatController.agent).
+router.post('/api/v1/agent', handle((ctx) => chat.agent(ctx)));
 
 // Auth (public)
 router.post('/api/v1/auth', handle((ctx) => auth.handleAction(ctx)));
@@ -200,8 +214,15 @@ router.get('/api/v1/settings/storage', handle((ctx) => settings.getStorageSettin
 router.post('/api/v1/settings/storage', handle((ctx) => settings.saveStorageSettings(ctx)));
 router.get('/api/v1/settings/heal', handle((ctx) => settings.getHealSettings(ctx)));
 router.post('/api/v1/settings/heal', handle((ctx) => settings.saveHealSettings(ctx)));
-// Active avatar/voice provider selection (protected).
+// Skill-genesis settings (promotion mode + cost guards).
+router.get('/api/v1/settings/genesis', handle((ctx) => settings.getGenesisSettings(ctx)));
+router.post('/api/v1/settings/genesis', handle((ctx) => settings.saveGenesisSettings(ctx)));
+// Avatar/voice provider settings. The literal /provider/active is registered before the
+// /provider save/delete pair for clarity; delete reads category/provider from the request body.
+router.get('/api/v1/settings/providers', handle((ctx) => settings.getProviderSettings(ctx)));
 router.post('/api/v1/settings/provider/active', handle((ctx) => settings.setActiveProvider(ctx)));
+router.post('/api/v1/settings/provider', handle((ctx) => settings.saveProvider(ctx)));
+router.delete('/api/v1/settings/provider', handle((ctx) => settings.deleteProvider(ctx)));
 
 // Admin — LLM settings (protected + admin-gated in the controller). Manages the
 // system_llm_settings table (the chat app's provider config). :key is a provider_key STRING
@@ -563,6 +584,33 @@ router.get('/api/v1/traces/diagnosis', handle((ctx) => traces.diagnose(ctx)));
 router.post('/api/v1/heal/authorize', handle((ctx) => heal.authorize(ctx)));
 router.post('/api/v1/heal/record', handle((ctx) => heal.record(ctx)));
 router.get('/api/v1/heal/status', handle((ctx) => heal.status(ctx)));
+
+// Skill genesis (protected) — promotion gate + ledger + reflection-driven skill proposals
+// (spec: docs/specs/2026-07-14-skill-genesis-design.md §7).
+router.get('/api/v1/genesis/promotions', handle((ctx) => genesis.listPromotions(ctx)));
+router.post('/api/v1/genesis/authorize', handle((ctx) => genesis.authorize(ctx)));
+router.post('/api/v1/genesis/record', handle((ctx) => genesis.record(ctx)));
+router.post('/api/v1/genesis/promotions/:id(\\d+)/dismiss', handle((ctx) => genesis.dismiss(ctx)));
+router.post('/api/v1/genesis/proposals', handle((ctx) => genesis.createProposal(ctx)));
+
+// File storage / universalFS (protected) — local provider is live; cloud providers answer with
+// the not-yet-configured message (universalFS is PHP-only).
+router.get('/api/v1/storage/providers', handle((ctx) => fileStorage.getProviders(ctx)));
+router.get('/api/v1/storage/list', handle((ctx) => fileStorage.listFiles(ctx)));
+router.get('/api/v1/storage/read', handle((ctx) => fileStorage.readFile(ctx)));
+
+// Usage / billing balance (protected). /usage and /usage/balance are the same handler (PHP parity).
+router.get('/api/v1/usage', handle((ctx) => usage.getBalance(ctx)));
+router.get('/api/v1/usage/balance', handle((ctx) => usage.getBalance(ctx)));
+router.get('/api/v1/usage/transactions', handle((ctx) => usage.getTransactions(ctx)));
+router.get('/api/v1/usage/stats', handle((ctx) => usage.getStats(ctx)));
+
+// Google Drive save (protected) — 501 placeholder, mirroring the PHP controller.
+router.post('/api/v1/drive/save', handle((ctx) => drive.save(ctx)));
+
+// MCP JSON-RPC endpoint exposing the user's agents as MCP tools to external AI clients
+// (protected). JSON-RPC errors ride inside the 200 body, so plain handle() fits.
+router.post('/api/v1/mcp/agents', handle((ctx) => agentMcp.handle(ctx)));
 
 // Voice (protected — none of /api/v1/voice/* are in MiddlewareProcessor.PUBLIC_ROUTES, so all four
 // require auth; the retired Hume/EVI path is not ported). New voice: Grok (ephemeral token brokered

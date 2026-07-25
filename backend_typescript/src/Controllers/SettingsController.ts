@@ -347,7 +347,202 @@ export class SettingsController {
     }
   }
 
-  // --- Active avatar / voice provider ----------------------------------------------------
+  // --- Skill-genesis settings (promotion mode + cost guards) ------------------------------
+  // Spec: docs/specs/2026-07-14-skill-genesis-design.md §8 (L0 subset).
+  // Default mode 'off' = the system only lists proposals a user creates manually; it never spends.
+
+  private genesisDefaults() {
+    return {
+      genesis_mode: 'off', // off | suggest | ask | auto
+      genesis_daily_budget_usd: 3.0,
+      genesis_per_skill_ceiling_usd: 1.5,
+      genesis_max_skills_per_week: 2,
+      genesis_reflection_provider: 'kimi',
+    } as Record<string, any>;
+  }
+
+  /** GET /api/v1/settings/genesis */
+  async getGenesisSettings(ctx: Ctx): Promise<ControllerResult> {
+    const userId = ctx.user_id;
+    if (!userId) return { status_code: 401, success: false, error: 'Authentication required' };
+    const defaults = this.genesisDefaults();
+    // PHP casts by the default's type (is_int vs is_float); JS can't tell 3.0 from 3, so the
+    // USD fields are listed explicitly to keep their decimals.
+    const floatKeys = new Set(['genesis_daily_budget_usd', 'genesis_per_skill_ceiling_usd']);
+    try {
+      const row =
+        (
+          await sql<any>`
+            SELECT genesis_mode, genesis_daily_budget_usd, genesis_per_skill_ceiling_usd,
+                   genesis_max_skills_per_week, genesis_reflection_provider
+            FROM users WHERE id = ${userId}`.execute(db)
+        ).rows[0] ?? {};
+      const s = { ...defaults };
+      for (const [k, def] of Object.entries(defaults)) {
+        if (row[k] !== undefined && row[k] !== null) {
+          s[k] = typeof def === 'number' ? (floatKeys.has(k) ? parseFloat(row[k]) : parseInt(row[k], 10)) : String(row[k]);
+        }
+      }
+      return { success: true, settings: s };
+    } catch (e: any) {
+      return { success: true, settings: defaults };
+    }
+  }
+
+  /** POST /api/v1/settings/genesis */
+  async saveGenesisSettings(ctx: Ctx): Promise<ControllerResult> {
+    const userId = ctx.user_id;
+    const b = ctx.body ?? {};
+    if (!userId) return { status_code: 401, success: false, error: 'Authentication required' };
+    // NB: genesis accepts a wider provider list than heal (glm/gamma4) — mirrors PHP.
+    const valid = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'glm', 'gamma4'];
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+    const mode = ['off', 'suggest', 'ask', 'auto'].includes(b.genesis_mode) ? b.genesis_mode : 'off';
+    const prov = valid.includes(b.genesis_reflection_provider) ? b.genesis_reflection_provider : 'kimi';
+    const budget = clamp(Number(b.genesis_daily_budget_usd ?? 3.0) || 0, 0, 1000);
+    const ceiling = clamp(Number(b.genesis_per_skill_ceiling_usd ?? 1.5) || 0, 0, 1000);
+    // 0 is a legal value (min bound), so NaN-guard instead of `|| default`.
+    const weeklyRaw = parseInt(b.genesis_max_skills_per_week ?? 2, 10);
+    const weekly = clamp(Number.isNaN(weeklyRaw) ? 0 : weeklyRaw, 0, 50);
+
+    try {
+      await sql`
+        UPDATE users SET genesis_mode = ${mode}, genesis_daily_budget_usd = ${budget},
+               genesis_per_skill_ceiling_usd = ${ceiling}, genesis_max_skills_per_week = ${weekly},
+               genesis_reflection_provider = ${prov} WHERE id = ${userId}`.execute(db);
+      return {
+        success: true,
+        settings: {
+          genesis_mode: mode,
+          genesis_daily_budget_usd: budget,
+          genesis_per_skill_ceiling_usd: ceiling,
+          genesis_max_skills_per_week: weekly,
+          genesis_reflection_provider: prov,
+        },
+      };
+    } catch (e: any) {
+      return { status_code: 500, success: false, error: 'Save failed' };
+    }
+  }
+
+  // --- Avatar / voice provider settings ----------------------------------------------------
+
+  /**
+   * GET /api/v1/settings/providers — mirrors SettingsController.php::getProviderSettings.
+   * Per-category (avatar|voice) enabled flag + configured providers (key presence, settings JSON,
+   * enabled, which one is active). ensure*TableExists DDL is NOT replicated (tables exist).
+   */
+  async getProviderSettings(ctx: Ctx): Promise<ControllerResult> {
+    const userId = ctx.user_id;
+
+    // Category-level enabled settings.
+    const categoryRows = (
+      await sql<{ category: string; enabled: number }>`
+        SELECT category, enabled FROM user_category_settings WHERE user_id = ${userId}`.execute(db)
+    ).rows;
+
+    const categoryEnabled: Record<string, boolean> = { avatar: true, voice: true };
+    for (const row of categoryRows) categoryEnabled[row.category] = !!Number(row.enabled);
+
+    // Provider-level settings.
+    const rows = (
+      await sql<any>`
+        SELECT category, provider, api_key, settings, is_active, enabled
+        FROM user_provider_settings
+        WHERE user_id = ${userId}`.execute(db)
+    ).rows;
+
+    const result: Record<string, any> = {
+      avatar: { active: null, enabled: categoryEnabled.avatar, providers: {} },
+      voice: { active: null, enabled: categoryEnabled.voice, providers: {} },
+    };
+
+    for (const row of rows) {
+      let settings = null;
+      try {
+        settings = row.settings ? (typeof row.settings === 'string' ? JSON.parse(row.settings) : row.settings) : null;
+      } catch {
+        settings = null; // json_decode parity — invalid JSON reads as null
+      }
+      result[row.category].providers[row.provider] = {
+        has_key: !!row.api_key,
+        settings,
+        enabled: row.enabled !== undefined && row.enabled !== null ? !!Number(row.enabled) : true,
+      };
+      if (Number(row.is_active) === 1) result[row.category].active = row.provider;
+    }
+
+    return { success: true, avatar: result.avatar, voice: result.voice, status_code: 200 };
+  }
+
+  /**
+   * POST /api/v1/settings/provider — mirrors SettingsController.php::saveProvider.
+   * Upserts one provider row; a blank/absent api_key on update keeps the stored key.
+   */
+  async saveProvider(ctx: Ctx): Promise<ControllerResult> {
+    const userId = ctx.user_id;
+    const input = ctx.body ?? {};
+
+    const category = input.category ?? '';
+    const provider = input.provider ?? '';
+    const apiKey = input.api_key ?? null;
+    let settings = input.settings ?? null;
+
+    if (!['avatar', 'voice'].includes(category)) {
+      return { success: false, error: 'Invalid category. Must be "avatar" or "voice"', status_code: 400 };
+    }
+
+    const validAvatarProviders = ['did', 'anam', 'heygen', 'tavus'];
+    const validVoiceProviders = ['gemini', 'grok', 'hume', 'elevenlabs'];
+
+    if (category === 'avatar' && !validAvatarProviders.includes(provider)) {
+      return { success: false, error: 'Invalid avatar provider', status_code: 400 };
+    }
+    if (category === 'voice' && !validVoiceProviders.includes(provider)) {
+      return { success: false, error: 'Invalid voice provider', status_code: 400 };
+    }
+
+    // Encrypt API key if provided.
+    let encryptedKey: string | null = null;
+    if (typeof apiKey === 'string' && apiKey.trim() !== '') {
+      encryptedKey = this.encryptApiKey(apiKey.trim());
+    }
+
+    // Parse settings if string (invalid JSON → null, json_decode parity).
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch {
+        settings = null;
+      }
+    }
+    const settingsJson = settings ? JSON.stringify(settings) : null;
+
+    // Check if record exists.
+    const existing = (
+      await sql<{ id: number }>`SELECT id, api_key FROM user_provider_settings
+             WHERE user_id = ${userId} AND category = ${category} AND provider = ${provider}`.execute(db)
+    ).rows[0];
+
+    if (existing) {
+      if (encryptedKey !== null) {
+        await sql`UPDATE user_provider_settings
+                  SET api_key = ${encryptedKey}, settings = ${settingsJson}, updated_at = NOW()
+                  WHERE user_id = ${userId} AND category = ${category} AND provider = ${provider}`.execute(db);
+      } else {
+        await sql`UPDATE user_provider_settings
+                  SET settings = ${settingsJson}, updated_at = NOW()
+                  WHERE user_id = ${userId} AND category = ${category} AND provider = ${provider}`.execute(db);
+      }
+    } else {
+      await sql`INSERT INTO user_provider_settings
+                (user_id, category, provider, api_key, settings, is_active, created_at, updated_at)
+                VALUES (${userId}, ${category}, ${provider}, ${encryptedKey}, ${settingsJson}, 0, NOW(), NOW())`.execute(db);
+    }
+
+    return { success: true, message: `Provider '${provider}' saved for ${category}`, status_code: 200 };
+  }
 
   /**
    * POST /api/v1/settings/provider/active — mirrors SettingsController.php::setActiveProvider.
@@ -389,6 +584,40 @@ export class SettingsController {
               WHERE user_id = ${userId} AND category = ${category} AND provider = ${provider}`.execute(db);
 
     return { success: true, message: `Active ${category} provider set to '${provider}'`, status_code: 200 };
+  }
+
+  /**
+   * DELETE /api/v1/settings/provider — mirrors SettingsController.php::deleteProvider.
+   * Category/provider come from the request body; deleting an unconfigured provider still 200s
+   * (deleted: false) — mirrored faithfully.
+   */
+  async deleteProvider(ctx: Ctx): Promise<ControllerResult> {
+    const userId = ctx.user_id;
+    const input = ctx.body ?? {};
+
+    const category = input.category ?? '';
+    const provider = input.provider ?? '';
+
+    if (!['avatar', 'voice'].includes(category)) {
+      return { success: false, error: 'Invalid category. Must be "avatar" or "voice"', status_code: 400 };
+    }
+
+    if (!provider) {
+      return { success: false, error: 'Provider is required', status_code: 400 };
+    }
+
+    const res = await sql`DELETE FROM user_provider_settings
+              WHERE user_id = ${userId} AND category = ${category} AND provider = ${provider}`.execute(db);
+    const deleted = Number(res.numAffectedRows ?? 0) > 0;
+
+    return {
+      success: true,
+      message: deleted
+        ? `Provider '${provider}' deleted from ${category}`
+        : `Provider '${provider}' was not configured for ${category}`,
+      deleted,
+      status_code: 200,
+    };
   }
 
   // --- Storage settings -------------------------------------------------------------------

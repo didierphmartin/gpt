@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { log } from '../Services/Logger';
 import { logChatTransaction } from '../Services/UsageLogger';
-import { buildCtx } from '../Support/Http';
+import { buildCtx, Ctx, ControllerResult } from '../Support/Http';
 import { SSEStream } from '../Services/SseStream';
 import { LLMProviderResolver } from '../Services/LLMProviderResolver';
 import { ProviderFactory } from '../Providers/ProviderFactory';
@@ -748,6 +748,68 @@ export class ChatController {
       await this.handleStreamingChat(req, res, provider, opts);
     } else {
       await this.handleRegularChat(res, provider, opts);
+    }
+  }
+
+  /**
+   * POST /api/v1/agent — single-pass LLM call: prompt in, text out. No tools, no history,
+   * no streaming, no skill routing. Used by clients (e.g. the skill-creator port) that just
+   * need "spawn an agent, get its answer." Faithful mirror of ChatController::agent (PHP
+   * ~line 892). Plain JSON — a ctx-based method for the handle() wrapper (the one Chat
+   * endpoint that never streams).
+   *
+   * Tools are forced off by NOT attaching a FunctionExecutor and passing no client_tools —
+   * the TS providers only send `tools` when one of those exists (see buildToolDefs), which
+   * matches PHP passing `tools: []` to the provider.
+   *
+   * DIVERGENCES (pre-existing gaps in the ported TS infra — same as /chat, /verify, /compare):
+   *  - checkFreeTrialQuota is not ported (no free-trial gate before the call).
+   *  - applyPackageDefaults / applyUserApiKeys have no TS carrier: LLMProviderResolver reads
+   *    only system_llm_settings, so per-user API keys are NOT overlaid.
+   */
+  async agent(ctx: Ctx): Promise<ControllerResult> {
+    const body = ctx.body;
+    const prompt = String(body.prompt ?? '').trim();
+    const provider: string | null = body.provider ?? null;
+    const model = typeof body.model === 'string' ? body.model.trim() : '';
+    const system = typeof body.system === 'string' ? body.system : '';
+    const userId = ctx.user_id;
+
+    if (prompt === '') {
+      return { success: false, error: 'prompt is required', status_code: 400 };
+    }
+    if (!provider) {
+      return { success: false, error: 'provider is required', status_code: 400 };
+    }
+
+    try {
+      const cfg = await LLMProviderResolver.getProviderConfig(provider);
+      if (!cfg) {
+        return { success: false, error: `Provider '${provider}' not available`, status_code: 400 };
+      }
+      if (model !== '') cfg.model = model; // PHP: setModel() only when a model was passed
+
+      // No setFunctionExecutor and no client_tools → the provider declares zero tools.
+      const impl = ProviderFactory.create(cfg); // throws for not-yet-ported formats
+
+      const opts: ChatOptions = { message: prompt, conversation_history: [], user_id: userId };
+      if (system !== '') opts.system_prompt = system;
+
+      const result = await impl.chat(opts);
+      return {
+        success: true,
+        text: result.text ?? '',
+        usage: result.usage ?? null,
+        provider: result.provider ?? provider,
+        model: result.model ?? null,
+      };
+    } catch (e: any) {
+      console.error('[ChatController::agent]', e?.message ?? e);
+      return {
+        success: false,
+        error: this.humanizeProviderError(e?.message ?? 'Unknown error'),
+        status_code: 500,
+      };
     }
   }
 

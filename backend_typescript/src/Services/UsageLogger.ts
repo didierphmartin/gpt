@@ -162,6 +162,128 @@ async function updateBalance(
   }
 }
 
+/** Optional filters for getTransactions — a key is applied only when present (PHP isset()). */
+export interface TransactionFilters {
+  provider?: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+}
+
+/**
+ * Usage balance for a user — mirrors UsageLogger::getBalance.
+ * With a provider: single ledger row (or [] when none, matching PHP's `fetch() ?: []`).
+ * Without: array of rows across providers.
+ */
+export async function getBalance(userId: number | string, provider?: string | null): Promise<any> {
+  try {
+    if (provider) {
+      const row = (
+        await sql<any>`SELECT * FROM llm_usage_balance
+          WHERE user_id = ${userId} AND provider = ${provider}`.execute(db)
+      ).rows[0];
+      return row ?? [];
+    }
+    return (
+      await sql<any>`SELECT * FROM llm_usage_balance WHERE user_id = ${userId}`.execute(db)
+    ).rows;
+  } catch (e: any) {
+    log.error('[UsageLogger] failed to get balance', e?.message ?? e);
+    return [];
+  }
+}
+
+/** Transaction history for a user — mirrors UsageLogger::getTransactions. */
+export async function getTransactions(
+  userId: number | string,
+  filters: TransactionFilters = {},
+  limit = 100,
+  offset = 0,
+): Promise<any[]> {
+  try {
+    const conditions = [sql`user_id = ${userId}`];
+    if (filters.provider !== undefined) {
+      conditions.push(sql`provider = ${filters.provider}`);
+    }
+    if (filters.date_from !== undefined) {
+      conditions.push(sql`created_at >= ${filters.date_from}`);
+    }
+    if (filters.date_to !== undefined) {
+      conditions.push(sql`created_at < ${filters.date_to}`);
+    }
+    if (filters.status !== undefined) {
+      conditions.push(sql`status = ${filters.status}`);
+    }
+
+    return (
+      await sql<any>`SELECT * FROM llm_usage_transactions
+        WHERE ${sql.join(conditions, sql` AND `)}
+        ORDER BY created_at DESC
+        LIMIT ${sql.lit(Math.trunc(limit))} OFFSET ${sql.lit(Math.trunc(offset))}`.execute(db)
+    ).rows;
+  } catch (e: any) {
+    log.error('[UsageLogger] failed to get transactions', e?.message ?? e);
+    return [];
+  }
+}
+
+/**
+ * Aggregated statistics for a user — mirrors UsageLogger::getStats.
+ * Returns a single aggregate row (or [] on error, matching PHP's `fetch() ?: []`).
+ */
+export async function getStats(
+  userId: number | string,
+  period = 'month',
+  provider?: string | null,
+): Promise<any> {
+  try {
+    const dateCondition = statsDateCondition(period);
+    const providerCondition = provider ? sql` AND provider = ${provider}` : sql``;
+
+    const row = (
+      await sql<any>`SELECT
+        COUNT(*) as total_requests,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful_requests,
+        SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) as failed_requests,
+        SUM(prompt_tokens) as total_prompt_tokens,
+        SUM(completion_tokens) as total_completion_tokens,
+        SUM(total_tokens) as total_tokens,
+        SUM(cost_usd) as total_cost,
+        AVG(response_time_ms) as avg_response_time,
+        MIN(response_time_ms) as min_response_time,
+        MAX(response_time_ms) as max_response_time,
+        SUM(function_calls_count) as total_function_calls,
+        SUM(CASE WHEN is_voice_request = 1 THEN 1 ELSE 0 END) as total_voice_requests,
+        SUM(COALESCE(audio_duration_seconds, 0)) as total_audio_seconds,
+        SUM(CASE WHEN is_voice_request = 1 THEN cost_usd ELSE 0 END) as total_voice_cost
+        FROM llm_usage_transactions
+        WHERE user_id = ${userId} ${dateCondition}${providerCondition}`.execute(db)
+    ).rows[0];
+
+    return row ?? [];
+  } catch (e: any) {
+    log.error('[UsageLogger] failed to get stats', e?.message ?? e);
+    return [];
+  }
+}
+
+/** SQL date filter fragment per period — mirrors UsageLogger::getDateCondition. */
+function statsDateCondition(period: string) {
+  switch (period) {
+    case 'day':
+      return sql.raw("AND DATE(created_at) = CURDATE()");
+    case 'week':
+      return sql.raw('AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)');
+    case 'year':
+      return sql.raw('AND created_at >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)');
+    case 'all':
+      return sql.raw('');
+    case 'month':
+    default:
+      return sql.raw('AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)');
+  }
+}
+
 /** Reset monthly counters when the stored month differs — mirrors UsageLogger::checkMonthReset. */
 async function checkMonthReset(userId: number | string, provider: string, currentMonth: string): Promise<void> {
   try {
