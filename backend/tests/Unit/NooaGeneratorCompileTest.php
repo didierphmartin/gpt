@@ -50,6 +50,20 @@ final class NooaGeneratorCompileTest extends TestCase
         $this->assertSame(0, $rc, "Diamond NOOA failed py_compile:\n{$out}");
     }
 
+    public function testMcpFixtureCompiles(): void
+    {
+        if (!self::python3Available()) { $this->markTestSkipped('python3 not on PATH'); }
+        $a = self::diamondAnalyzed();
+        $a['usedServers'] = ['https://mcp.example/mcp' => ['name' => 'Example Server']];
+        $a['usedCatalog'] = ['web_search' => [
+            'server_url' => 'https://mcp.example/mcp', 'tool_name' => 'web_search',
+            'input_schema' => ['type'=>'object','properties'=>['q'=>['type'=>'string']],'required'=>['q']],
+        ]];
+        $a['agents']['2']['tools'] = ['web_search'];
+        [$rc, $out] = self::pyCompile(NOOAGenerator::emitNooa($a), 'mcp');
+        $this->assertSame(0, $rc, "MCP NOOA failed py_compile:\n{$out}");
+    }
+
     public function testStartDocumentsFixtureCompiles(): void
     {
         if (!self::python3Available()) { $this->markTestSkipped('python3 not on PATH'); }

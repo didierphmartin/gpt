@@ -95,6 +95,41 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('_run_skill_script', $code);
     }
 
+    public function testMcpEmission(): void
+    {
+        $a = $this->analyzed();
+        $a['usedServers'] = ['https://mcp.example/mcp' => ['name' => 'Example Server']];
+        $a['usedCatalog'] = ['web_search' => [
+            'server_url' => 'https://mcp.example/mcp', 'tool_name' => 'web_search',
+            'input_schema' => ['type'=>'object','properties'=>['q'=>['type'=>'string']],'required'=>['q']],
+        ]];
+        $a['agents']['2']['tools'] = ['mcp_web_search'];   // runtime prefix must be stripped
+        $code = NOOAGenerator::emitNooa($a);
+        $this->assertStringContainsString('from nooa.mcp import MCPManager', $code);
+        $this->assertStringContainsString('from datetime import timedelta', $code);
+        $this->assertStringContainsString('MCP_SERVERS = {', $code);
+        $this->assertStringContainsString('MCPManager.create_from_server(', $code);
+        $this->assertStringContainsString('transport="streamable-http"', $code);
+        $this->assertStringContainsString('mcp_0 = MCP["https://mcp.example/mcp"]', $code);
+        $this->assertStringContainsString('Tools selected for this node: web_search', $code);
+    }
+
+    public function testMcpUrlNormalized(): void
+    {
+        $a = $this->analyzed();
+        $a['usedServers'] = ['https://vector.example.com' => ['name' => 'Vector']];
+        $a['usedCatalog'] = ['find' => [
+            'server_url' => 'https://vector.example.com', 'tool_name' => 'find',
+            'input_schema' => new \stdClass(),
+        ]];
+        $a['agents']['2']['tools'] = ['find'];
+        $code = NOOAGenerator::emitNooa($a);
+        // MCPManager does no URL normalization — the /mcp suffix is baked here.
+        $this->assertStringContainsString('url="https://vector.example.com/mcp"', $code);
+        // The dict key stays the raw catalog URL (agent attrs look it up verbatim).
+        $this->assertStringContainsString('MCP["https://vector.example.com"]', $code);
+    }
+
     public function testDiamondParallelLayer(): void
     {
         $code = NOOAGenerator::emitNooa($this->diamond());
