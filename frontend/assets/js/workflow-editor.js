@@ -2500,6 +2500,8 @@ class WorkflowEditor {
             if (adkBtn) { e.stopPropagation(); this._showAdkMenu(adkBtn); return; }
             const mafBtn = e.target.closest('[data-action="maf-menu"]');
             if (mafBtn) { e.stopPropagation(); this._showMafMenu(mafBtn); return; }
+            const nooaBtn = e.target.closest('[data-action="nooa-menu"]');
+            if (nooaBtn) { e.stopPropagation(); this._showNooaMenu(nooaBtn); return; }
             const viewJsonBtn = e.target.closest('[data-action="view-json"]');
             if (viewJsonBtn) {
                 e.stopPropagation();
@@ -3995,6 +3997,428 @@ class WorkflowEditor {
                 <p class="text-xs text-gray-500 mb-4">
                     Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
                     First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
+                </p>
+                <div class="flex justify-end">
+                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-direct'), directCmd);
+    }
+
+    // -------------------------------------------------------------------------
+    // NVIDIA OO Agents (NOOA) — mirrors the MAF block above.
+    // Endpoint: generate-nooa  |  filename: <name>_nooa.py
+    // -------------------------------------------------------------------------
+
+    /**
+     * Dropdown menu for the "NVIDIA OO Agents" button on the Output node.
+     * Mirrors _showMafMenu exactly; differs only in endpoints, action names and copy.
+     */
+    _showNooaMenu(buttonEl) {
+        // Toggle: clicking the button a second time closes the menu.
+        const existing = document.querySelector('.langgraph-menu.nooa-menu');
+        if (existing) { existing.remove(); return; }
+        // Close any open LangGraph/ADK/MAF menu so only one is visible at a time.
+        document.querySelector('.langgraph-menu')?.remove();
+
+        const isIngestion = this._outputConnectedToIngestion();
+
+        const menu = document.createElement('div');
+        menu.className = 'langgraph-menu nooa-menu';
+        menu.innerHTML = isIngestion
+            ? `
+            <button type="button" class="langgraph-menu-item" data-action="nooa-generate">
+                ${this.escapeHtml(this.t('workflow.output.nooaGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-display-code">
+                ${this.escapeHtml(this.t('workflow.output.nooaDisplayCode') || 'Display Code')}
+            </button>
+        `
+            : `
+            <button type="button" class="langgraph-menu-item" data-action="nooa-setup">
+                ${this.escapeHtml(this.t('workflow.output.nooaSetup') || 'Setup')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-generate">
+                ${this.escapeHtml(this.t('workflow.output.nooaGenerate') || 'Generate')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-info">
+                ${this.escapeHtml(this.t('workflow.output.nooaInfo') || 'Info')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-run">
+                ${this.escapeHtml(this.t('workflow.output.nooaRun') || 'Run')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-display-code">
+                ${this.escapeHtml(this.t('workflow.output.nooaDisplayCode') || 'Display Code')}
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        const r = buttonEl.getBoundingClientRect();
+        const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${r.bottom + 4}px`;
+
+        menu.querySelector('[data-action="nooa-setup"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showNooaSetupModal();
+        });
+        menu.querySelector('[data-action="nooa-generate"]')?.addEventListener('click', () => {
+            menu.remove();
+            this.generateNooaScript();
+        });
+        menu.querySelector('[data-action="nooa-info"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showNooaInfoModal();
+        });
+        menu.querySelector('[data-action="nooa-run"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._runNooaScript();
+        });
+        menu.querySelector('[data-action="nooa-display-code"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showNooaCodeModal();
+        });
+
+        setTimeout(() => {
+            const onDocClick = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', onDocClick, true);
+                }
+            };
+            document.addEventListener('click', onDocClick, true);
+        }, 0);
+    }
+
+    /**
+     * Generate the NVIDIA OO Agents Python script and write it into
+     * python/scripts/ so the runner can find and execute it via /api/run-file.
+     * Mirrors generateMafScript; endpoint is generate-nooa, filename is *_nooa.py.
+     */
+    async generateNooaScript() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        if (!window.localFs || !window.localFs.isSupported || !window.localFs.isSupported()) {
+            alert(this.t('workflow.output.fsaUnavailable')
+                || 'Local filesystem access is not available in this browser.');
+            return;
+        }
+
+        // Show the overlay FIRST for instant feedback, THEN do the slow work (flush deferred
+        // node edits to the DB + probe the runner + generate) inside it.
+        const overlay = this._showGeneratingOverlay(
+            this.t('workflow.output.generatingNooa') || 'Generating NVIDIA OO Agents script…'
+        );
+        try {
+            await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) first
+
+            // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
+            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
+            if (!runnerEntry) {
+                this._showRunnerSetupModal();
+                return;
+            }
+
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa?download=1`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err || `HTTP ${resp.status}`);
+            }
+            let filename = 'workflow_nooa.py';
+            const dispo = resp.headers.get('Content-Disposition') || '';
+            const m = dispo.match(/filename="([^"]+)"/);
+            if (m) filename = m[1];
+            const text = await resp.text();
+
+            // Write into python/scripts/ so the runner can find and execute it.
+            const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+            if (!scriptsDir) {
+                throw new Error('Could not resolve synergyAI/python/scripts.');
+            }
+            const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(text);
+            await writable.close();
+
+            // Refresh python/.env with the current provider keys so the script can auth.
+            await this._syncRunnerEnv();
+
+            const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
+            console.log(`[WorkflowEditor] Saved generated NOOA Python to ${rootName}/python/scripts/${filename}`);
+        } catch (e) {
+            console.error('[WorkflowEditor] generate-nooa failed:', e);
+            alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
+        } finally {
+            overlay.close();
+        }
+    }
+
+    /**
+     * Setup modal for the NVIDIA OO Agents runtime.
+     * Self-contained script — install two packages, run directly.
+     * Mirrors _showMafSetupModal visually.
+     */
+    _showNooaSetupModal() {
+        const cmd = 'pip install "nooa[mcp]" python-dotenv';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">
+                    ${this.escapeHtml(this.t('workflow.nooaSetup.title') || 'NVIDIA OO Agents — one-time setup')}
+                </h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    ${this.escapeHtml(this.t('workflow.nooaSetup.body')
+                        || 'The generated NOOA script is self-contained — no separate runner server required. Install the runtime packages once:')}
+                </p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.nooaSetup.copy') || 'Copy command')}">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-2">
+                    ${this.escapeHtml(this.t('workflow.nooaSetup.note')
+                        || 'After installing, click Generate to download the NOOA Python file, then run it directly:')}
+                </p>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_nooa.py "Your prompt here"</pre>
+                <p class="text-xs text-gray-500 mb-4">
+                    ${this.escapeHtml(this.t('workflow.nooaSetup.runnerNote')
+                        || 'NOOA agents answer by writing and executing Python code (CodeAct) — run the file in an environment you trust, ideally a container or VM.')}
+                </p>
+                <div class="flex justify-end">
+                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
+                        ${this.escapeHtml(this.t('common.close') || 'Close')}
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.close-btn').addEventListener('click', close);
+        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
+    }
+
+    /**
+     * Info modal for the NVIDIA OO Agents runtime.
+     * Describes the self-contained NOOA program: install, run, API keys, providers.
+     * Mirrors _showMafInfoModal visually.
+     */
+    _showNooaInfoModal() {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">NVIDIA OO Agents runtime</h3>
+                <p class="text-sm text-gray-600 mb-3">
+                    Generated NOOA workflows are self-contained Python programs built on
+                    <a class="text-blue-600 underline" href="https://github.com/NVIDIA-NeMo/labs-OO-Agents" target="_blank" rel="noopener">NVIDIA-labs OO Agents</a>:
+                    each workflow node is a plain Python class whose docstring is the node's system prompt.
+                    Agents answer by writing and executing Python (CodeAct) instead of chat completions.
+                </p>
+                <table class="w-full text-xs text-left mb-4">
+                    <tbody class="divide-y divide-gray-200">
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "nooa[mcp]" python-dotenv</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_nooa.py</code> (written via Generate)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_nooa.py "Your prompt here"</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Read from <code class="text-xs">.env</code> via <code class="text-xs">load_dotenv()</code> — e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">MCP</td><td>Native <code class="text-xs">MCPManager</code> (streamable-http) — note: a selected server exposes ALL its tools to the node</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Skills</td><td>Mandatory post-agent steps on the shared skill filesystem (<code class="text-xs">~/Documents/synergyAI/skills/</code>)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Providers</td><td>Claude natively via litellm; Gemini / Grok / Kimi / DeepSeek / GLM / OpenAI via OpenAI-compatible endpoints</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Execution model</td><td>The LLM generates Python executed in a sandboxed REPL — prefer a container/VM for untrusted inputs</td></tr>
+                    </tbody>
+                </table>
+                <p class="text-xs text-gray-500 mb-4">
+                    The Output-node's <b>Run</b> menu item executes the NOOA script through the same local runner
+                    (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
+                    used by LangGraph — ensure <code class="text-xs">nooa python-dotenv</code> are installed
+                    in its venv, or run the file directly from a terminal instead.
+                </p>
+                <div class="flex justify-end">
+                    <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+    }
+
+    /**
+     * Display Code modal for the NVIDIA OO Agents script.
+     * Fetches from generate-nooa (no download param) and shows the code
+     * in the same line-numbered scrollable modal as _showMafCodeModal.
+     */
+    async _showNooaCodeModal() {
+        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        let code;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+            // Endpoint may return JSON {data:{code,filename}} or raw text.
+            const contentType = resp.headers.get('Content-Type') || '';
+            if (contentType.includes('application/json')) {
+                const j = await resp.json();
+                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
+            } else {
+                code = await resp.text();
+            }
+        } catch (e) {
+            alert(`Could not fetch the NOOA code: ${e?.message || e}`);
+            return;
+        }
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-gray-900">Generated NVIDIA OO Agents code</h3>
+                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
+                </div>
+                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
+                <div class="flex justify-end mt-3">
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+
+        const preEl = backdrop.querySelector('pre');
+        const codeLines = code.split('\n');
+        const gutterCh = String(codeLines.length).length + 1;
+        const lnStyle = document.createElement('style');
+        lnStyle.textContent = `
+            .nooa-code-modal .code-line { display: block; }
+            .nooa-code-modal .code-ln {
+                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
+                text-align: right; color: #64748b; user-select: none;
+                position: sticky; left: 0; background: #111827;
+            }
+            .nooa-code-modal .code-lc { white-space: pre; }
+        `;
+        backdrop.appendChild(lnStyle);
+        preEl.classList.add('nooa-code-modal', 'code-with-lines');
+        preEl.innerHTML = codeLines.map((ln, i) =>
+            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
+            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
+        ).join('');
+
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
+        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(code);
+                const btn = backdrop.querySelector('.code-copy-btn');
+                const prev = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = prev; }, 1200);
+            } catch (e) { /* user selects + copies manually */ }
+        });
+    }
+
+    /**
+     * Run the NOOA script via the local runner.
+     * Mirrors _runMafScript: liveness-probe /health, derive the NOOA
+     * filename from generate-nooa Content-Disposition, stream output into a modal.
+     * Falls back to a "run manually" hint if the runner isn't reachable.
+     */
+    async _runNooaScript() {
+        await this._persistIfDirty();  // flush deferred node edits to the DB before running
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+
+        // Run is SELF-CONTAINED: regenerate + write FIRST (shared helper —
+        // same behavior as the ADK/MAF/LangGraph Run actions), THEN probe.
+        const filename = await this._generateAndWriteScript('generate-nooa', 'workflow_nooa.py');
+        if (!filename) return;
+
+        // Runner up → execute here and stream the output. Runner down → the
+        // script is already fresh on disk; show the one-command modal.
+        try {
+            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (e) {
+            this._showNooaRunnerNotRunningModal();
+            return;
+        }
+
+        const { append, showDiagnostic } = this._openRunOutputModal(filename);
+
+        try {
+            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename,
+                    // No separate prompt entry: the script uses the workflow's Start-node
+                    // prompt, which the compiler bakes in as the default. Run with no argv.
+                    args: [],
+                }),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
+                return;
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let _runOut = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const _chunk = decoder.decode(value, { stream: true });
+                _runOut += _chunk;
+                append(_chunk);
+            }
+            showDiagnostic(this._diagnoseRunError(_runOut));
+        } catch (e) {
+            append(`\n[fetch failed: ${e?.message || e}]\n`);
+        }
+    }
+
+    /**
+     * Modal shown when the runner liveness probe fails while trying to run
+     * a NOOA script. Same two-option layout as the MAF variant.
+     */
+    _showNooaRunnerNotRunningModal() {
+        // Same sanitize rule as NOOAGenerator::generate (PHP): [^a-z0-9_]+ → _
+        const nooaFile = ((this.currentWorkflowName || 'workflow')
+            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_nooa.py';
+        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${nooaFile}`;
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal</h3>
+                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
+                    <button class="cmd-copy-direct absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                </div>
+                <p class="text-xs text-gray-500 mb-4">
+                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
+                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "nooa[mcp]" python-dotenv</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -9937,6 +10361,10 @@ class WorkflowEditor {
                 </button>
                 <button class="node-langgraph node-maf" title="${this.t('workflow.output.mafTitle') || 'Microsoft Agent Framework: set up the runtime or generate the script'}" data-action="maf-menu">
                     <span class="gen-label">Microsoft Agent Framework - Python</span>
+                    <span class="gen-caret" aria-hidden="true">▾</span>
+                </button>
+                <button class="node-langgraph node-nooa" title="${this.t('workflow.output.nooaTitle') || 'NVIDIA OO Agents: set up the runtime or generate the script'}" data-action="nooa-menu">
+                    <span class="gen-label">NVIDIA OO Agents - Python</span>
                     <span class="gen-caret" aria-hidden="true">▾</span>
                 </button>
                 <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
