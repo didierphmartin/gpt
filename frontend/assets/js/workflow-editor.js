@@ -4169,7 +4169,8 @@ class WorkflowEditor {
      * Mirrors _showMafSetupModal visually.
      */
     _showNooaSetupModal() {
-        const cmd = 'pip install "nooa[mcp]" python-dotenv';
+        // "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (its own pin is unbounded).
+        const cmd = 'pip install "nooa[mcp]" "mcp<2" python-dotenv';
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -4227,7 +4228,7 @@ class WorkflowEditor {
                 </p>
                 <table class="w-full text-xs text-left mb-4">
                     <tbody class="divide-y divide-gray-200">
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "nooa[mcp]" python-dotenv</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "nooa[mcp]" "mcp&lt;2" python-dotenv</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_nooa.py</code> (written via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_nooa.py "Your prompt here"</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Read from <code class="text-xs">.env</code> via <code class="text-xs">load_dotenv()</code> — e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code></td></tr>
@@ -4418,7 +4419,7 @@ class WorkflowEditor {
                 </div>
                 <p class="text-xs text-gray-500 mb-4">
                     Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
-                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "nooa[mcp]" python-dotenv</code>
+                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "nooa[mcp]" "mcp&lt;2" python-dotenv</code>
                 </p>
                 <div class="flex justify-end">
                     <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>

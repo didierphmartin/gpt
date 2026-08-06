@@ -36,6 +36,30 @@ class NOOAGenerator
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
 
+        // Platform default model per provider (system_llm_settings) — the
+        // analyzer resolves blank models but does NOT alias 'anthropic'->'claude'
+        // or 'google'->'gemini', so a node saved with the alias provider stays
+        // empty. Same belt-and-braces pass MAFGenerator carries (NOOA classes
+        // build their llm at import time, so an empty model fails immediately).
+        $defaults = [];
+        try {
+            $rows = $this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1");
+            foreach ($rows as $row) {
+                if (!empty($row['model'])) {
+                    $defaults[strtolower((string) $row['provider_key'])] = (string) $row['model'];
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('[NOOAGenerator] could not load provider default models: ' . $e->getMessage());
+        }
+        foreach ($analyzed['agents'] as $id => $ag) {
+            if ((string) ($ag['model'] ?? '') === '') {
+                $prov  = strtolower((string) ($ag['provider'] ?? 'claude'));
+                $canon = ['anthropic' => 'claude', 'google' => 'gemini'][$prov] ?? $prov;
+                $analyzed['agents'][$id]['model'] = (string) ($defaults[$canon] ?? $defaults[$prov] ?? '');
+            }
+        }
+
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
             'filename' => strtolower($name) . '_nooa.py',
@@ -210,7 +234,9 @@ class NOOAGenerator
 
         TO RUN
         ======
-            pip install "nooa[mcp]" python-dotenv
+            # "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (its own pin is
+            # unbounded; mcp 2.0 changed streamable_http_client's yield shape).
+            pip install "nooa[mcp]" "mcp<2" python-dotenv
             # keys are read from ../.env (ANTHROPIC_API_KEY, OPENAI_API_KEY,
             #   GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY)
             python this_file.py "your prompt here"
