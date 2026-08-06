@@ -130,6 +130,33 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('MCP["https://vector.example.com"]', $code);
     }
 
+    public function testSkillRuntimeEmittedWhenSkillPresent(): void
+    {
+        $a = $this->analyzed();
+        $a['agents']['2']['skills'] = [['dir' => 'html']];
+        $code = NOOAGenerator::emitNooa($a);
+        $this->assertStringContainsString('class SkillStepAgent(Agent):', $code);
+        $this->assertStringContainsString('async def run_skill(', $code);
+        $this->assertStringContainsString('def _run_skill_script(', $code);   // shared FS layer
+        $this->assertStringContainsString('_LAST_SKILL_OUTPUTS', $code);
+        $this->assertStringContainsString('SYNERGYAI_OUTPUT_DIR', $code);
+        $this->assertStringContainsString('"dir": "html"', $code);            // baked into AGENTS
+        // run_agent gains the mandatory skill loop.
+        $this->assertStringContainsString('text = await run_skill(_skill, text, request, ad)', $code);
+        // Regression guard: the NOOA runtime must never pull in LangChain.
+        $block = NOOAGenerator::skillBlockForTest();
+        $this->assertStringNotContainsString('langchain', $block);
+        $this->assertStringNotContainsString('StructuredTool', $block);
+    }
+
+    public function testNoSkillRuntimeWhenNoSkills(): void
+    {
+        $code = NOOAGenerator::emitNooa($this->analyzed());
+        $this->assertStringNotContainsString('SkillStepAgent', $code);
+        $this->assertStringNotContainsString('run_skill(', $code);
+        $this->assertStringNotContainsString('def _run_skill_script(', $code);
+    }
+
     public function testDiamondParallelLayer(): void
     {
         $code = NOOAGenerator::emitNooa($this->diamond());
