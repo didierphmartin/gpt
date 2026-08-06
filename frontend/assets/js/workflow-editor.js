@@ -9814,9 +9814,15 @@ class WorkflowEditor {
      * Load a workflow from backend
      */
     async loadWorkflow(workflowId) {
-        // Leaving the current workflow: flush its pending in-memory edits to the DB first.
-        await this._persistIfDirty();
+        // Recalling a workflow takes seconds (dirty-flush + fetch + graph
+        // render) — show the shared spinner overlay for the whole span so the
+        // click has immediate feedback. Closed in finally, success or error.
+        const overlay = this._showGeneratingOverlay(
+            this.t('workflow.loadingWorkflow') || 'Loading workflow…'
+        );
         try {
+            // Leaving the current workflow: flush its pending in-memory edits to the DB first.
+            await this._persistIfDirty();
             console.log('[WorkflowEditor] Loading workflow ID:', workflowId);
             // Add cache-busting parameter to prevent stale data
             const response = await fetch(`${this.apiBase}/workflows/${workflowId}?_=${Date.now()}`, {
@@ -9943,6 +9949,8 @@ class WorkflowEditor {
         } catch (error) {
             console.error('[WorkflowEditor] Error loading workflow:', error);
             alert(this.t('workflow.errors.loadWorkflowFailed', { error: error.message }));
+        } finally {
+            overlay.close();
         }
     }
 

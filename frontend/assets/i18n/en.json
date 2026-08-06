@@ -544,6 +544,7 @@
     "noteNotExported": "Note: memory is applied at runtime only. It is not included in generated LangGraph Python exports, which remain portable and user-agnostic."
   },
   "workflow": {
+    "loadingWorkflow": "Loading workflow…",
     "dialogs": {
       "renameWorkflowTitle": "Rename workflow",
       "renameWorkflowPrompt": "Enter a new name for this workflow:",
@@ -852,8 +853,16 @@
       "mafInfo": "Info",
       "mafRun": "Run",
       "mafDisplayCode": "Display Code",
+      "nooaTitle": "NVIDIA OO Agents: set up the runtime or generate the script",
+      "nooaSetup": "Setup",
+      "nooaGenerate": "Generate",
+      "nooaInfo": "Info",
+      "nooaRun": "Run",
+      "nooaDisplayCode": "Display Code",
       "generating": "Generating LangGraph Python script…",
       "generatingAdk": "Generating Google ADK script…",
+      "generatingMaf": "Generating Microsoft Agent Framework script…",
+      "generatingNooa": "Generating NVIDIA OO Agents script…",
       "saveFirst": "Save the workflow before generating Python code.",
       "generateFailed": "Code generation failed",
       "viewJson": "{ } View JSON",
