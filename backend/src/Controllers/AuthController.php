@@ -308,6 +308,14 @@ class AuthController
         } catch (\Throwable) {
             return ['success' => false, 'message' => 'Invalid SSO token', 'status_code' => 401];
         }
+        // The login service was ported from gpt and (until secrets are
+        // rotated separately) may share gpt's own JWT signing secret —
+        // without this check a gpt-issued access token would decode fine
+        // here and its 'sub' (a gpt user id) would be misread as a login-DB
+        // user id. 'iss' anchors this token to the login service specifically.
+        if (($claims['iss'] ?? '') !== 'login-service') {
+            return ['success' => false, 'message' => 'Invalid SSO token', 'status_code' => 401];
+        }
         if (($claims['type'] ?? '') !== 'access' || !isset($claims['sub'])) {
             return ['success' => false, 'message' => 'Invalid SSO token', 'status_code' => 401];
         }
@@ -321,14 +329,22 @@ class AuthController
                 (string) ($ld['password'] ?? ''),
                 [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5]
             );
-            $stmt = $ldb->prepare('SELECT email FROM users WHERE id = ?');
+            $stmt = $ldb->prepare('SELECT email, email_verified FROM users WHERE id = ?');
             $stmt->execute([(int) $claims['sub']]);
-            $email = strtolower(trim((string) ($stmt->fetchColumn() ?: '')));
+            $loginUser = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $email = strtolower(trim((string) ($loginUser['email'] ?? '')));
         } catch (\Throwable) {
             return ['success' => false, 'message' => 'SSO temporarily unavailable', 'status_code' => 503];
         }
         if ($email === '') {
             return ['success' => false, 'message' => 'Unknown SSO user', 'status_code' => 401];
+        }
+        // The login service allows registration without verifying email
+        // ownership, and email is our identity anchor into gpt's user table
+        // — an unverified email could belong to someone impersonating an
+        // admin's address. Fail closed until the login service confirms it.
+        if (empty($loginUser['email_verified'])) {
+            return ['success' => false, 'message' => 'SSO account email not verified', 'status_code' => 403];
         }
 
         $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ?');
