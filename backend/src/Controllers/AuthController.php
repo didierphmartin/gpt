@@ -209,6 +209,7 @@ class AuthController
             'register' => $this->register($request),
             'firebase' => $this->firebaseAuth($request),
             'verify' => $this->verify($request),
+            'sso_exchange' => $this->ssoExchange($request),
             'logout' => $this->logout($request),
             'link_phone' => $this->linkPhone($request),
             'unlink_phone' => $this->unlinkPhone($request),
@@ -283,6 +284,89 @@ class AuthController
                 'expires_in' => $this->jwtExpiry
             ],
             'status_code' => 200
+        ];
+    }
+
+    /**
+     * SSO for gpt_admin: exchange a login-microservice JWT for gpt tokens.
+     * The login JWT carries only the login-service user id ('sub'), so the
+     * email is resolved from the shared login DB, then mapped BY EMAIL to a
+     * pre-existing gpt user with role 'admin'. Never creates accounts.
+     */
+    public function ssoExchange(array $request): array
+    {
+        $loginToken = (string) ($request['body']['login_token'] ?? '');
+        if ($loginToken === '') {
+            return ['success' => false, 'message' => 'login_token is required', 'status_code' => 400];
+        }
+        $secret = (string) ($this->config['auth']['login_jwt_secret'] ?? '');
+        if ($secret === '') {
+            return ['success' => false, 'message' => 'SSO is not configured (LOGIN_JWT_SECRET missing)', 'status_code' => 500];
+        }
+        try {
+            $claims = (array) JWT::decode($loginToken, new Key($secret, 'HS256'));
+        } catch (\Throwable) {
+            return ['success' => false, 'message' => 'Invalid SSO token', 'status_code' => 401];
+        }
+        if (($claims['type'] ?? '') !== 'access' || !isset($claims['sub'])) {
+            return ['success' => false, 'message' => 'Invalid SSO token', 'status_code' => 401];
+        }
+
+        // Login JWTs carry no email — resolve it from the shared login DB.
+        $ld = $this->config['login_db'] ?? [];
+        try {
+            $ldb = new PDO(
+                sprintf('mysql:host=%s;dbname=%s;charset=utf8mb4', $ld['host'] ?? '', $ld['database'] ?? ''),
+                (string) ($ld['username'] ?? ''),
+                (string) ($ld['password'] ?? ''),
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5]
+            );
+            $stmt = $ldb->prepare('SELECT email FROM users WHERE id = ?');
+            $stmt->execute([(int) $claims['sub']]);
+            $email = strtolower(trim((string) ($stmt->fetchColumn() ?: '')));
+        } catch (\Throwable) {
+            return ['success' => false, 'message' => 'SSO temporarily unavailable', 'status_code' => 503];
+        }
+        if ($email === '') {
+            return ['success' => false, 'message' => 'Unknown SSO user', 'status_code' => 401];
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ?');
+        $stmt->execute([$email]);
+        $user = $stmt->fetch();
+        if (!$user) {
+            return ['success' => false, 'message' => "No admin account for $email", 'status_code' => 403];
+        }
+        if (($user['role'] ?? '') !== 'admin') {
+            return ['success' => false, 'message' => 'Not an admin', 'status_code' => 403];
+        }
+
+        $tokens = $this->generateTokens((int) $user['id']);
+        $stmt = $this->db->prepare('UPDATE users SET last_login = NOW() WHERE id = ?');
+        $stmt->execute([$user['id']]);
+
+        return [
+            'success' => true,
+            'message' => 'Login successful',
+            'data' => [
+                'user' => [
+                    'id' => (int) $user['id'],
+                    'email' => $user['email'],
+                    'first_name' => $user['first_name'],
+                    'last_name' => $user['last_name'],
+                    'role' => $user['role'] ?? 'prospect',
+                    'plan' => $user['plan'] ?? 'free',
+                    'provider' => 'sso',
+                    'last_login' => date('Y-m-d H:i:s'),
+                    'created_at' => $user['created_at'] ?? null,
+                    'app_key_prefix' => $user['app_key_prefix'] ?? null,
+                    'app_key_created_at' => $user['app_key_created_at'] ?? null,
+                ],
+                'access_token' => $tokens['access_token'],
+                'refresh_token' => $tokens['refresh_token'],
+                'expires_in' => $this->jwtExpiry,
+            ],
+            'status_code' => 200,
         ];
     }
 
