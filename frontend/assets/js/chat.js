@@ -2277,6 +2277,16 @@ class ChatApp {
                 }
             }
 
+            // Any other HTTP failure (500 DB down, 502, …) carries a JSON
+            // error body, not an SSE stream — feeding it to the reader
+            // below ends silently and the turn looks like a hang. Throw so
+            // the catch renders the server's message in the bubble and the
+            // finally block restores the UI.
+            if (!response.ok) {
+                const errData = await response.json().catch(() => null);
+                throw new Error(errData?.error || `HTTP ${response.status}`);
+            }
+
             // NON-STREAMING PATH (skill turns that run a transform).
             // The backend's handleRegularChat returned a single JSON
             // body — no SSE chunks to read. Dispatch any pending
@@ -2913,9 +2923,9 @@ class ChatApp {
             // Auto-save context after assistant response (non-blocking)
             this.saveCurrentContext().catch(err => {
                 console.error('❌ Failed to auto-save context:', err);
-                // Show user-visible error notification
+                // Show user-visible error notification with the actual cause
                 this.showNotification(
-                    '⚠️ Failed to save conversation. Please check if you are logged in.',
+                    `⚠️ Failed to save conversation: ${err?.message || err}`,
                     'error'
                 );
             });
@@ -10032,7 +10042,7 @@ class ChatApp {
                 await this.loadContextsList();
             } else {
                 // Handle specific error cases
-                const errorMsg = data.message || 'Unknown error';
+                const errorMsg = data.error || data.message || 'Unknown error';
                 console.error('❌ Failed to save context:', errorMsg);
                 throw new Error(`Failed to save: ${errorMsg}`);
             }

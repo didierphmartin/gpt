@@ -266,7 +266,12 @@
     "previewPrompt": "Preview Prompt",
     "toolCount": "tool(s)",
     "createdAt": "Created",
-    "updatedAt": "Last updated"
+    "updatedAt": "Last updated",
+    "fsaNotPicked": "Local skills folder not connected. Click below to choose your synergyAI folder — your skills live there.",
+    "fsaPrompt": "Browser permission to read your synergyAI folder needs to be re-granted (Chrome resets this between sessions).",
+    "fsaDenied": "Folder access was denied. Reset the permission in Chrome’s site settings, then grant again.",
+    "fsaUnsupported": "This browser does not expose the File System Access API. Use Chrome, Edge, or Brave.",
+    "fsaGrantBtn": "Grant folder access"
   },
   "fileStorage": {
     "title": "File Storage",

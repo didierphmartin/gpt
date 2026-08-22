@@ -105,10 +105,60 @@ class SkillsManager {
                 }));
             }
             this.skills = await this.loadLocalSkills();
+            // An empty tree is ambiguous: "no skills installed" vs "the
+            // local folder isn't connected so we can't see them". When the
+            // cause is connectivity, show an actionable notice (mirrors the
+            // Files sidebar) instead of the misleading "no skills" state.
+            if (this.skills.length === 0 && this.folders.length === 0 &&
+                await this.renderFsAccessNotice()) {
+                return;
+            }
             this.renderTree();
         } catch (err) {
             console.error('Failed to load skills tree:', err);
         }
+    }
+
+    /**
+     * When window.localFs has no granted root handle (never picked, Chrome
+     * downgraded the grant to 'prompt' between sessions, denied, or FSA
+     * unsupported), render a notice in the tree container with a re-grant
+     * button. Returns true when the notice was rendered so loadTree can
+     * skip the normal empty-state render.
+     */
+    async renderFsAccessNotice() {
+        if (!this.treeContainer || !window.localFs?.getStatus) return false;
+        let status;
+        try { status = await window.localFs.getStatus(); } catch (e) { return false; }
+        if (!status || status.state === 'granted') return false;
+        const msgKey = {
+            not_picked: 'skills.fsaNotPicked',
+            prompt: 'skills.fsaPrompt',
+            denied: 'skills.fsaDenied',
+            unsupported: 'skills.fsaUnsupported',
+        }[status.state] || 'skills.fsaNotPicked';
+        const canGrant = status.state !== 'unsupported';
+        this.treeContainer.innerHTML = `
+            <div class="skills-fsa-notice"
+                 style="background:#fef3c7;border:1px solid #fcd34d;color:#92400e;
+                        font-size:12px;padding:8px 10px;border-radius:6px;margin:4px 2px 8px;">
+                <div data-i18n="${msgKey}" style="margin-bottom:${canGrant ? '6px' : '0'};">${this.t(msgKey)}</div>
+                ${canGrant ? `<button type="button" id="skills-fsa-grant-btn" data-i18n="skills.fsaGrantBtn"
+                        style="background:#fff;border:1px solid #fcd34d;color:#92400e;
+                               border-radius:4px;padding:3px 10px;font-size:12px;cursor:pointer;">
+                    ${this.t('skills.fsaGrantBtn')}
+                </button>` : ''}
+            </div>
+        `;
+        const btn = document.getElementById('skills-fsa-grant-btn');
+        if (btn) {
+            btn.addEventListener('click', async () => {
+                if (!window.localFs?.requestRootAccess) return;
+                const res = await window.localFs.requestRootAccess('synergyAI');
+                if (res?.ok) await this.loadTree();
+            });
+        }
+        return true;
     }
 
     /**

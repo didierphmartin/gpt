@@ -266,7 +266,12 @@
     "previewPrompt": "Aperçu du Prompt",
     "toolCount": "outil(s)",
     "createdAt": "Créé le",
-    "updatedAt": "Dernière mise à jour"
+    "updatedAt": "Dernière mise à jour",
+    "fsaNotPicked": "Le dossier local des skills n’est pas connecté. Cliquez ci-dessous pour choisir votre dossier synergyAI — vos skills s’y trouvent.",
+    "fsaPrompt": "L’autorisation du navigateur pour lire votre dossier synergyAI doit être accordée à nouveau (Chrome la réinitialise entre les sessions).",
+    "fsaDenied": "L’accès au dossier a été refusé. Réinitialisez l’autorisation dans les paramètres du site de Chrome, puis accordez-la à nouveau.",
+    "fsaUnsupported": "Ce navigateur n’expose pas la File System Access API. Utilisez Chrome, Edge ou Brave.",
+    "fsaGrantBtn": "Autoriser l’accès au dossier"
   },
   "fileStorage": {
     "title": "Stockage de Fichiers",

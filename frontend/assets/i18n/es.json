@@ -266,7 +266,12 @@
     "previewPrompt": "Vista previa del Prompt",
     "toolCount": "herramienta(s)",
     "createdAt": "Creado",
-    "updatedAt": "Última actualización"
+    "updatedAt": "Última actualización",
+    "fsaNotPicked": "La carpeta local de skills no está conectada. Haz clic abajo para elegir tu carpeta synergyAI — ahí viven tus skills.",
+    "fsaPrompt": "Hay que volver a conceder el permiso del navegador para leer tu carpeta synergyAI (Chrome lo restablece entre sesiones).",
+    "fsaDenied": "Se denegó el acceso a la carpeta. Restablece el permiso en la configuración del sitio en Chrome y concédelo de nuevo.",
+    "fsaUnsupported": "Este navegador no expone la File System Access API. Usa Chrome, Edge o Brave.",
+    "fsaGrantBtn": "Conceder acceso a la carpeta"
   },
   "fileStorage": {
     "title": "Almacenamiento de Archivos",
