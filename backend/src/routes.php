@@ -195,6 +195,35 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/admin/usage/transactions', ['AdminController', 'getUsageTransactions']);
         $r->get('/api/v1/admin/usage/tools', ['AdminController', 'getToolStats']);
 
+        // Video Editor app — per-generation usage, costs, and price table
+        $r->get('/api/v1/admin/video-editor/usage/stats', ['VideoEditorController', 'getUsageStats']);
+        $r->get('/api/v1/admin/video-editor/usage/summary', ['VideoEditorController', 'getUsageSummary']);
+        $r->get('/api/v1/admin/video-editor/usage/by-user', ['VideoEditorController', 'getUsageByUser']);
+        $r->get('/api/v1/admin/video-editor/transactions', ['VideoEditorController', 'getTransactions']);
+        $r->get('/api/v1/admin/video-editor/prices', ['VideoEditorController', 'getPrices']);
+        $r->post('/api/v1/admin/video-editor/prices', ['VideoEditorController', 'savePrice']);
+        $r->get('/api/v1/admin/video-editor/providers', ['VideoEditorController', 'getProviders']);
+        $r->post('/api/v1/admin/video-editor/providers', ['VideoEditorController', 'saveProvider']);
+        $r->get('/api/v1/admin/video-editor/models', ['VideoEditorController', 'getModels']);
+        $r->post('/api/v1/admin/video-editor/models', ['VideoEditorController', 'saveModel']);
+        $r->get('/api/v1/admin/video-editor/users', ['VideoEditorController', 'getUsers']);
+        $r->post('/api/v1/admin/video-editor/users/role', ['VideoEditorController', 'setUserRole']);
+        $r->get('/api/v1/admin/video-editor/packages', ['VideoEditorController', 'getPackages']);
+        $r->post('/api/v1/admin/video-editor/packages', ['VideoEditorController', 'savePackage']);
+        $r->get('/api/v1/admin/video-editor/user-override', ['VideoEditorController', 'getUserOverride']);
+        $r->post('/api/v1/admin/video-editor/user-override', ['VideoEditorController', 'saveUserOverride']);
+
+        // Login microservice admin (users, apps, passkeys, appkeys)
+        $r->get('/api/v1/admin/login/stats', ['LoginAdminController', 'getStats']);
+        $r->get('/api/v1/admin/login/users', ['LoginAdminController', 'getUsers']);
+        $r->post('/api/v1/admin/login/users', ['LoginAdminController', 'createUser']);
+        $r->post('/api/v1/admin/login/users/update', ['LoginAdminController', 'updateUser']);
+        $r->post('/api/v1/admin/login/users/delete', ['LoginAdminController', 'deleteUser']);
+        $r->get('/api/v1/admin/login/apps', ['LoginAdminController', 'getApps']);
+        $r->get('/api/v1/admin/login/app-users', ['LoginAdminController', 'getAppUsers']);
+        $r->post('/api/v1/admin/login/app-users/role', ['LoginAdminController', 'setAppUserRole']);
+        $r->post('/api/v1/admin/login/app-users/add', ['LoginAdminController', 'addAppMember']);
+
         // Admin MCP Server Management
         $r->get('/api/v1/admin/mcp/servers', ['AdminController', 'listMCPServers']);
         $r->post('/api/v1/admin/mcp/servers', ['AdminController', 'createMCPServer']);

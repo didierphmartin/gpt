@@ -87,12 +87,38 @@ return [
         'charset' => 'utf8mb4',
     ],
 
+    // Read-only access to the shared login-service DB (email lookup for SSO).
+    'login_db' => [
+        'host'     => $_ENV['LOGIN_DB_HOST'] ?? ($_ENV['DB_HOST'] ?? ''),
+        'database' => $_ENV['LOGIN_DB_NAME'] ?? 'netfo587_login',
+        'username' => $_ENV['LOGIN_DB_USER'] ?? '',
+        'password' => $_ENV['LOGIN_DB_PASS'] ?? '',
+    ],
+
     // Contexts Database Configuration (for conversation history)
     'contexts_database' => [
         'host' => $_ENV['CTX_DB_HOST'] ?? '',
         'database' => $_ENV['CTX_DB_NAME'] ?? '',
         'username' => $_ENV['CTX_DB_USER'] ?? '',
         'password' => $_ENV['CTX_DB_PASS'] ?? '',
+        'charset' => 'utf8mb4',
+    ],
+
+    // Video-edit usage DB — per-generation cost tracking, read by the Video
+    // Editor admin pages. Optional: absent creds simply hide that data.
+    'video_editor_database' => [
+        'host' => $_ENV['VE_DB_HOST'] ?? '',
+        'database' => $_ENV['VE_DB_NAME'] ?? '',
+        'username' => $_ENV['VE_DB_USER'] ?? '',
+        'password' => $_ENV['VE_DB_PASS'] ?? '',
+        'charset' => 'utf8mb4',
+    ],
+    // Login users DB — resolves names for video-edit usage (usage.user_id = login user id).
+    'login_database' => [
+        'host' => $_ENV['LOGIN_DB_HOST'] ?? '',
+        'database' => $_ENV['LOGIN_DB_NAME'] ?? '',
+        'username' => $_ENV['LOGIN_DB_USER'] ?? '',
+        'password' => $_ENV['LOGIN_DB_PASS'] ?? '',
         'charset' => 'utf8mb4',
     ],
 
@@ -105,6 +131,10 @@ return [
         // keys without this server-side secret. Rotating it invalidates
         // every existing app key.
         'app_key_secret' => $_ENV['APP_KEY_SECRET'] ?? '',
+
+        // Login-microservice SSO (gpt_admin sign-in): secret that the login
+        // service signs its JWTs with. Empty = SSO exchange disabled.
+        'login_jwt_secret' => $_ENV['LOGIN_JWT_SECRET'] ?? '',
     ],
 
     // Hume EVI Configuration
