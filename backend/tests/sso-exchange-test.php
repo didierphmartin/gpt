@@ -160,10 +160,11 @@ try {
     check('no matching gpt account rejected (403)', $c === 403 && ($r['success'] ?? true) === false);
 
     // (c) Login user verified + a real (temporary) gpt user with the same
-    // email but role 'user' (not admin) → 403 "not an admin". Minimal INSERT:
-    // gpt.users (the contexts_database copy — see the $gdb comment above)
-    // only requires email (NOT NULL, no default); role defaults to
-    // 'prospect' but is set explicitly to 'user' here.
+    // email and role 'user'. Since the gpt app itself signs in over SSO,
+    // ssoExchange no longer gates on role — the exchange succeeds and returns
+    // the stored role verbatim (gpt_admin enforces admin on its side; admin
+    // endpoints stay requireAdmin-gated). Minimal INSERT: gpt.users only
+    // requires email; role is set explicitly to 'user' here.
     $ins = $ldb->prepare('INSERT INTO users (email, email_verified) VALUES (?, 1)');
     $ins->execute([$emailNonAdmin]);
     $loginIdNonAdmin = (int) $ldb->lastInsertId();
@@ -171,7 +172,9 @@ try {
     $ins->execute([$emailNonAdmin]);
     $gptIdNonAdmin = (int) $gdb->lastInsertId();
     [$c, $r] = call(['action' => 'sso_exchange', 'login_token' => mint($secret, $claims($loginIdNonAdmin))]);
-    check('non-admin gpt account rejected (403)', $c === 403 && ($r['success'] ?? true) === false);
+    check('non-admin exchange succeeds with stored role', $c === 200 && ($r['success'] ?? false) === true
+        && ($r['data']['user']['role'] ?? '') === 'user'
+        && !empty($r['data']['access_token']));
 } finally {
     // Unconditional cleanup — runs even if an assertion or exception above failed.
     if ($gptIdAdmin !== null) { $gdb->prepare('DELETE FROM users WHERE id = ?')->execute([$gptIdAdmin]); }

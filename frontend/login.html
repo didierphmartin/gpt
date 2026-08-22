@@ -134,6 +134,18 @@
 
                                 <div class="mt-6 space-y-2">
                                     <!-- Google Login Button -->
+                                    <!-- SynergyAI SSO (login microservice) -->
+                                    <button
+                                        type="button"
+                                        id="sso-login-btn"
+                                        class="w-full h-12 bg-indigo-600 text-white text-sm flex items-center justify-center rounded-md hover:bg-indigo-700 transition-colors hover:shadow-sm cursor-pointer"
+                                    >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" class="mr-3" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 7h3a2 2 0 012 2v6a2 2 0 01-2 2h-3m-4 0H6a2 2 0 01-2-2V9a2 2 0 012-2h5m-1 4h9m0 0l-3-3m3 3l-3 3"/>
+                                        </svg>
+                                        Sign in with SynergyAI
+                                    </button>
+
                                     <button
                                         type="button"
                                         id="google-login-btn"
@@ -329,6 +341,6 @@
 
     <!-- Authentication Logic -->
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
-    <script src="assets/js/auth.js?v=20260502-firebase-forgot-password"></script>
+    <script src="assets/js/auth.js?v=20260820-sso-login"></script>
 </body>
 </html>

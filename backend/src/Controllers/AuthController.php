@@ -288,10 +288,12 @@ class AuthController
     }
 
     /**
-     * SSO for gpt_admin: exchange a login-microservice JWT for gpt tokens.
-     * The login JWT carries only the login-service user id ('sub'), so the
-     * email is resolved from the shared login DB, then mapped BY EMAIL to a
-     * pre-existing gpt user with role 'admin'. Never creates accounts.
+     * SSO for the gpt app and gpt_admin: exchange a login-microservice JWT
+     * for gpt tokens. The login JWT carries only the login-service user id
+     * ('sub'), so the email is resolved from the shared login DB, then mapped
+     * BY EMAIL to a pre-existing gpt user. Never creates accounts. Role is
+     * returned as stored — role gating is the caller's job (gpt_admin rejects
+     * non-admins client-side, and every admin endpoint stays requireAdmin-gated).
      */
     public function ssoExchange(array $request): array
     {
@@ -351,10 +353,7 @@ class AuthController
         $stmt->execute([$email]);
         $user = $stmt->fetch();
         if (!$user) {
-            return ['success' => false, 'message' => "No admin account for $email", 'status_code' => 403];
-        }
-        if (($user['role'] ?? '') !== 'admin') {
-            return ['success' => false, 'message' => 'Not an admin', 'status_code' => 403];
+            return ['success' => false, 'message' => "No account for $email — sign up first", 'status_code' => 403];
         }
 
         $tokens = $this->generateTokens((int) $user['id']);

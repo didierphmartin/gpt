@@ -137,6 +137,17 @@ class AuthManager {
             facebookBtn.addEventListener('click', () => this.handleFacebookLogin());
         }
 
+        // SynergyAI SSO (login microservice) — bounce out on click, and
+        // exchange the returned #token=… when the login service sends us back.
+        const ssoBtn = document.getElementById('sso-login-btn');
+        if (ssoBtn) {
+            ssoBtn.addEventListener('click', () => this.startSsoLogin());
+        }
+        const ssoToken = this.captureSsoToken();
+        if (ssoToken) {
+            this.handleSsoReturn(ssoToken);
+        }
+
         // Phone login button and modal
         this.setupPhoneLogin();
 
@@ -162,6 +173,61 @@ class AuthManager {
                 console.log('Token verification failed, clearing auth data');
                 this.clearAuthData();
             }
+        }
+    }
+
+    // ---------- SynergyAI SSO (login microservice) ----------
+    // Same flow as video-edit and gpt_admin: full-page bounce to the login
+    // service, which returns to this page with #token=<login JWT>; the token
+    // is exchanged server-side (action sso_exchange) for gpt's own tokens +
+    // user object — the exact same shape as the password login, so role,
+    // plan and everything downstream work unchanged.
+    getSsoConfig() {
+        const LOGIN_URLS = { localhost: 'http://localhost/login/' };
+        // One registration per exact origin (the login service pins
+        // scheme+host+port). Minted with login/backend/scripts/mint-app-key.php.
+        const APP_KEYS = {
+            localhost: 'lak_efe9fcbf0ce9686d17327e83a8537c13',
+            'synergyaichat.com': 'lak_98ef4e4143097edd30bbd5c0c7542db2',
+        };
+        return {
+            loginUrl: LOGIN_URLS[location.hostname] || 'https://synergyai.site/login/',
+            appKey: APP_KEYS[location.hostname] || APP_KEYS['synergyaichat.com'],
+        };
+    }
+
+    startSsoLogin() {
+        const { loginUrl, appKey } = this.getSsoConfig();
+        const back = location.origin + location.pathname;
+        location.replace(`${loginUrl}?app_key=${encodeURIComponent(appKey)}&redirect=${encodeURIComponent(back)}`);
+    }
+
+    /** Pull the login-service token out of the URL fragment (login handoff). */
+    captureSsoToken() {
+        if (!location.hash || location.hash.indexOf('token=') === -1) return null;
+        const t = new URLSearchParams(location.hash.slice(1)).get('token');
+        if (t) history.replaceState(null, '', location.pathname + location.search);
+        return t;
+    }
+
+    async handleSsoReturn(loginToken) {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'sso_exchange', login_token: loginToken }),
+            });
+            const data = await response.json();
+            if (data.success) {
+                this.saveAuthData(data.data);
+                sessionStorage.setItem('showSplash', 'true');
+                window.location.href = 'index.html';
+            } else {
+                this.showError(data.message || 'SSO sign-in failed. Please try again.');
+            }
+        } catch (error) {
+            console.error('SSO login error:', error);
+            this.showError('SSO sign-in failed. Please try again.');
         }
     }
 
