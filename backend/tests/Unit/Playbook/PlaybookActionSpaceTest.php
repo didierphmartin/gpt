@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Tests\Unit\Playbook;
 
 use Quantis\AIPortfolioAssistant\Playbook\{
+    GateManager,
     PlaybookActionSpace,
     PlaybookDocument,
     PlaybookNativeTools,
@@ -234,5 +235,30 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
         $result = $space->execute($id, 0, 'unbound__escalate_to_triage_agent', []);
         $this->assertFalse($result['ok']);
         $this->assertTrue($result['unbound']);
+    }
+
+    public function testGateTimeoutIsLedgeredAsFailedNotOk(): void
+    {
+        $mcp = new FakeMcpExecutor();
+        $native = new PlaybookNativeTools($this->state);
+        $bridge = new FakeGateBridge([]); // empty queue => ask() returns null (timeout)
+        $gates = new GateManager($this->state, $bridge);
+        $space = new PlaybookActionSpace($this->actions(), $native, $mcp, $this->state, [
+            'writes_enabled' => false, 'on_unbound' => 'prompt_handoff',
+        ], $gates);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'request_approval', [
+            'approver' => 'mgr', 'question' => 'reset the password?',
+        ]);
+
+        $this->assertFalse($result['ok']);
+        $this->assertTrue($result['timeout']);
+        $this->assertTrue($result['gate']);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(1, $ledger);
+        $this->assertSame('failed', $ledger[0]['outcome']);
+        $this->assertStringContainsString('timeout', $ledger[0]['result_summary']);
     }
 }

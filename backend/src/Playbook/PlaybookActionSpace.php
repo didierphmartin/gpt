@@ -159,7 +159,15 @@ final class PlaybookActionSpace
     private function executeGate(int $runId, int $leg, string $llmToolName, array $args): array
     {
         $result = $this->gates->execute($runId, $leg, $llmToolName, $args);
-        $decision = is_array($result['decision'] ?? null) ? $result['decision'] : [];
+
+        if (!array_key_exists('decision', $result)) {
+            // Unanswered (timeout/error) — audit fidelity wins: ledger the failure with
+            // the full result (no sensitive values ever appear in this path).
+            $this->state->ledgerAppend($runId, $leg, $llmToolName, $llmToolName, $args, 'failed', $this->summarize($result));
+            return $result + ['gate' => true];
+        }
+
+        $decision = is_array($result['decision']) ? $result['decision'] : [];
         $redactedDecision = GateManager::redactSensitiveFields($args, $decision);
         $this->state->ledgerAppend($runId, $leg, $llmToolName, $llmToolName, $args, 'ok', $this->summarize($redactedDecision));
         return $result + ['gate' => true];
