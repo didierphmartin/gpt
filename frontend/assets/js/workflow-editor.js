@@ -346,6 +346,19 @@ class WorkflowEditor {
                             <span class="ingestion-order" title="Step 3 — after the splitter">3</span><div class="agent-icon">🗄️</div><div class="agent-info"><div class="agent-name">Vector store</div><div class="agent-type">Embed → pgvector</div></div></div>
                     </div>
                 </div>
+
+                <!-- Playbooks Section -->
+                <div class="workflow-section">
+                    <div class="workflow-section-header" data-section="playbooks">
+                        <span class="section-toggle">${collapsedSections.playbooks ? '▶' : '▼'}</span>
+                        <span class="section-title">Playbooks</span>
+                        <span class="section-count">1</span>
+                    </div>
+                    <div class="workflow-section-content ${collapsedSections.playbooks ? 'collapsed' : ''}" data-section="playbooks">
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="playbook">
+                            <div class="agent-icon">📖</div><div class="agent-info"><div class="agent-name">Playbook</div><div class="agent-type">Console-style playbook</div></div></div>
+                    </div>
+                </div>
             </div>
 
             <!-- Action Buttons — symmetric with audio workflows: execution
@@ -2378,6 +2391,12 @@ class WorkflowEditor {
                     return;
                 }
 
+                // Playbook nodes: same pen affordance, own config modal.
+                if (editBtn.dataset.playbook === 'true' && nodeId) {
+                    this.showPlaybookConfigModal(nodeId);
+                    return;
+                }
+
                 // Check if this is a realtime agent node
                 if (editBtn.dataset.rtNode === 'true' && nodeId) {
                     this.showRealtimeAgentEditForm(nodeId);
@@ -2433,6 +2452,19 @@ class WorkflowEditor {
                 if (drawflowNode) {
                     const nodeId = drawflowNode.id.replace('node-', '');
                     this.showIngestionConfigModal(nodeId);
+                }
+                return;
+            }
+
+            // Handle Playbook node clicks to open their editable config modal.
+            // Skip the delete button.
+            const playbookNode = e.target.closest('.workflow-node.playbook-node');
+            if (playbookNode && !e.target.closest('.node-delete-btn')) {
+                e.stopPropagation();
+                const drawflowNode = playbookNode.closest('.drawflow-node');
+                if (drawflowNode) {
+                    const nodeId = drawflowNode.id.replace('node-', '');
+                    this.showPlaybookConfigModal(nodeId);
                 }
                 return;
             }
@@ -7359,6 +7391,9 @@ class WorkflowEditor {
             case 'vectorstore':
                 this.addIngestionNode(x, y, nodeType);
                 break;
+            case 'playbook':
+                this.addPlaybookNode(x, y);
+                break;
             case 'realtime-start':
                 this.addRealtimeStartNode(x, y);
                 break;
@@ -7484,6 +7519,64 @@ class WorkflowEditor {
             default:
                 return '';
         }
+    }
+
+    /**
+     * Add a Playbook node to the canvas: a single 1-input/1-output node that
+     * runs a Console-style playbook document server-side (see
+     * showPlaybookConfigModal / _runNodeAsPlaybookUnit). Mirrors
+     * addIngestionNode's structure (custom HTML + config modal, own ✏️
+     * affordance) but is a free-standing node like an agent — no fixed
+     * pipeline position, connects like any other agent-workflow node.
+     */
+    addPlaybookNode(x, y, config = null) {
+        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook' };
+        const nodeConfig = config ? { ...defaults, ...config } : { ...defaults };
+        const summary = this._playbookNodeSummary(nodeConfig);
+
+        const html = `
+            <div class="workflow-node playbook-node configurable ${nodeConfig.disabled ? 'node-disabled' : ''}">
+                <div class="node-header">
+                    <span class="node-icon">📖</span>
+                    <span class="node-title">${this.escapeHtml(nodeConfig.name || 'Playbook')}</span>
+                    <button class="node-delete-btn" title="Delete node">×</button>
+                </div>
+                <div class="node-body">
+                    <small class="node-config-display">${this.escapeHtml(summary)}</small>
+                    <button class="node-edit-btn" data-playbook="true" title="Edit">✏️</button>
+                </div>
+            </div>
+        `;
+
+        const drawflowId = this.editor.addNode(
+            'playbook',
+            1, // inputs
+            1, // outputs
+            x, y,
+            'playbook',
+            {
+                type: 'playbook',
+                node_type: 'playbook',
+                name: nodeConfig.name,
+                playbook: nodeConfig.playbook,
+                agent_provider: nodeConfig.agent_provider,
+                model: nodeConfig.model,
+                disabled: !!nodeConfig.disabled,
+            },
+            html
+        );
+
+        this.hideHelpOverlay();
+        return drawflowId;
+    }
+
+    /** One-line summary shown on a playbook node's body (first non-blank line of the pasted text). */
+    _playbookNodeSummary(config) {
+        const raw = config?.playbook;
+        const text = typeof raw === 'string' ? raw : (raw ? JSON.stringify(raw) : '');
+        const firstLine = text.split('\n').map(l => l.trim()).find(l => l) || '';
+        if (!firstLine) return 'No playbook pasted yet';
+        return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
     }
 
     /**
@@ -8619,6 +8712,173 @@ class WorkflowEditor {
 
             closeModal();
         });
+    }
+
+    /**
+     * Config modal for a Playbook node — mirrors showIngestionConfigModal's
+     * overlay/grid/footer structure (same .storage-config-* CSS classes) but
+     * with playbook-specific fields: a textarea bound to node.data.playbook
+     * (accepts pasted Console text or JSON), provider+model controls reusing
+     * the agent node's markup, and a Validate button hitting
+     * POST /api/v1/playbooks/validate.
+     */
+    async showPlaybookConfigModal(nodeId) {
+        const nodeData = this.editor.getNodeFromId(nodeId);
+        if (!nodeData) return;
+        const data = nodeData.data || {};
+
+        try { await this.loadProviders(); } catch (_) { /* best-effort */ }
+        const providersOptions = (this.providers || []).map(p =>
+            `<option value="${this.escapeHtml(p.name)}" ${data.agent_provider === p.name ? 'selected' : ''}>${this.escapeHtml(p.display_name || p.name)}</option>`
+        ).join('');
+
+        const existingModal = document.getElementById('playbook-config-modal');
+        if (existingModal) existingModal.remove();
+
+        const modalHtml = `
+            <div id="playbook-config-modal" class="storage-config-overlay">
+                <div class="storage-config-modal">
+                    <div class="storage-config-header">
+                        <h3><span>📖</span> Playbook</h3>
+                        <button class="storage-config-close" id="playbook-config-close">×</button>
+                    </div>
+                    <div class="storage-config-body">
+                        <div class="storage-config-grid">
+                            <div class="storage-config-folder full">
+                                <label for="playbook-name-input">Name</label>
+                                <input type="text" id="playbook-name-input" value="${this.escapeHtml(data.name || 'Playbook')}">
+                            </div>
+                            <div class="storage-config-folder">
+                                <label for="playbook-provider-select">Provider</label>
+                                <select id="playbook-provider-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    <option value="">(default)</option>
+                                    ${providersOptions}
+                                </select>
+                            </div>
+                            <div class="storage-config-folder">
+                                <label for="playbook-model-input">Model</label>
+                                <input type="text" id="playbook-model-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" value="${this.escapeHtml(data.model || '')}" placeholder="model name">
+                            </div>
+                            <div class="storage-config-folder full">
+                                <label for="playbook-text">Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span></label>
+                                <textarea id="playbook-text" rows="16" style="width:100%;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;">${this.escapeHtml(data.playbook || '')}</textarea>
+                            </div>
+                            <div class="storage-config-folder full">
+                                <button type="button" id="playbook-validate-btn" class="storage-config-btn cancel" style="padding:4px 14px;">Validate</button>
+                                <span id="playbook-validate-status" style="margin-left:8px;font-size:12px;color:#9ca3af;"></span>
+                                <div id="playbook-validate-result" style="margin-top:10px;font-size:13px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="storage-config-footer">
+                        <button class="storage-config-btn cancel" id="playbook-config-cancel">${this.t('common.cancel')}</button>
+                        <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        const modal = document.getElementById('playbook-config-modal');
+        const nodeEl = document.getElementById('node-' + nodeId);
+        if (nodeEl) nodeEl.classList.add('node-active');
+
+        const closeModal = () => {
+            if (nodeEl) nodeEl.classList.remove('node-active');
+            modal.remove();
+            document.removeEventListener('keydown', escHandler);
+        };
+        const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+        document.getElementById('playbook-config-close').addEventListener('click', closeModal);
+        document.getElementById('playbook-config-cancel').addEventListener('click', closeModal);
+        document.addEventListener('keydown', escHandler);
+
+        document.getElementById('playbook-validate-btn').addEventListener('click', async () => {
+            const statusEl = document.getElementById('playbook-validate-status');
+            const resultEl = document.getElementById('playbook-validate-result');
+            const text = document.getElementById('playbook-text').value;
+            statusEl.textContent = 'Validating…';
+            resultEl.innerHTML = '';
+            const trimmed = text.trim();
+            let playbookPayload = text;
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try { playbookPayload = JSON.parse(trimmed); } catch (_) { playbookPayload = text; }
+            }
+            try {
+                const resp = await fetch(`${this.apiBase}/playbooks/validate`, {
+                    method: 'POST',
+                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ playbook: playbookPayload }),
+                });
+                const json = await resp.json().catch(() => ({}));
+                statusEl.textContent = '';
+                resultEl.innerHTML = this._renderPlaybookValidateResult(json, resp.status);
+            } catch (e) {
+                statusEl.textContent = '';
+                resultEl.innerHTML = `<p style="color:#dc2626;">${this.escapeHtml(e?.message || String(e))}</p>`;
+            }
+        });
+
+        document.getElementById('playbook-config-save').addEventListener('click', () => {
+            const updatedData = {
+                ...data,
+                type: 'playbook',
+                node_type: 'playbook',
+                name: (document.getElementById('playbook-name-input').value || 'Playbook').trim(),
+                agent_provider: document.getElementById('playbook-provider-select').value || '',
+                model: (document.getElementById('playbook-model-input').value || '').trim(),
+                playbook: document.getElementById('playbook-text').value,
+            };
+            this.editor.updateNodeDataFromId(nodeId, updatedData);
+
+            const summary = this._playbookNodeSummary(updatedData);
+            const displayEl = nodeEl?.querySelector('.node-config-display');
+            if (displayEl) displayEl.textContent = summary;
+            const titleEl = nodeEl?.querySelector('.node-title');
+            if (titleEl) titleEl.textContent = updatedData.name;
+
+            closeModal();
+        });
+    }
+
+    /** Render the /playbooks/validate response: red errors, amber warnings, actions table. */
+    _renderPlaybookValidateResult(json, httpStatus) {
+        if (json && json.success === false) {
+            return `<p style="color:#dc2626;">${this.escapeHtml(json.error || `Validation failed (HTTP ${httpStatus})`)}</p>`;
+        }
+        const errors = Array.isArray(json?.errors) ? json.errors : [];
+        const warnings = Array.isArray(json?.warnings) ? json.warnings : [];
+        const actions = Array.isArray(json?.actions) ? json.actions : [];
+        let html = '';
+        if (errors.length) {
+            html += `<div style="color:#dc2626;margin-bottom:8px;"><strong>Errors</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${this.escapeHtml(e)}</li>`).join('')}</ul></div>`;
+        }
+        if (warnings.length) {
+            html += `<div style="color:#b8860b;margin-bottom:8px;"><strong>Warnings</strong><ul style="margin:4px 0 0 18px;">${warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul></div>`;
+        }
+        if (actions.length) {
+            html += `<table style="width:100%;border-collapse:collapse;">
+                <thead><tr>
+                    <th style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.18);padding:4px;">Name</th>
+                    <th style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.18);padding:4px;">Kind</th>
+                    <th style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.18);padding:4px;">Target</th>
+                </tr></thead>
+                <tbody>${actions.map(a => `<tr>
+                    <td style="padding:4px;">${this.escapeHtml(a.name || '')}</td>
+                    <td style="padding:4px;">${this.escapeHtml(a.kind || '')}</td>
+                    <td style="padding:4px;">${this.escapeHtml(a.target || '')}</td>
+                </tr>`).join('')}</tbody>
+            </table>`;
+        }
+        if (!errors.length && !warnings.length && !actions.length) {
+            html = `<p style="color:#22c55e;">Valid — no actions detected.</p>` + html;
+        } else if (!errors.length) {
+            html = `<p style="color:#22c55e;">Valid.</p>` + html;
+        }
+        return html;
     }
 
     /**
@@ -10015,6 +10275,19 @@ class WorkflowEditor {
                         }
                         return; // next forEach iteration
                     }
+                    case 'playbook': {
+                        // Playbook nodes manage their own addNode() call (custom
+                        // HTML + config modal), same as ingestion nodes above.
+                        const x = node.position?.x || node.pos_x || 100;
+                        const y = node.position?.y || node.pos_y || 100;
+                        const dbNodeId = node.db_id || node.id;
+                        const drawflowId = this.addPlaybookNode(x, y, node.config || {});
+                        idMap[node.id] = String(drawflowId);
+                        if (dbNodeId) {
+                            this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+                        }
+                        return; // next forEach iteration
+                    }
                     case 'realtime-start':
                         html = this.createRealtimeStartNodeHtml();
                         inputs = 0;
@@ -11103,6 +11376,268 @@ class WorkflowEditor {
         }
     }
 
+    // ---- Playbook node execution --------------------------------------------
+    // Runs a Playbook node server-side via SSE (POST /workflows/playbook-node/run).
+    // The interpreter loop, gate bridge and ledger all live in PHP; the browser
+    // just streams progress into the node's activity log and, on gate_request,
+    // blocks on a modal before POSTing the human's answer back to the existing
+    // /workflows/tool-result endpoint (SkillToolBridge rendezvous — see
+    // backend/src/Playbook/Adapters/SkillBridgeGateBridge.php).
+
+    /**
+     * Run one Playbook node as its own SSE conversation. Mirrors
+     * _runNodeAsChatUnit's contract (returns {success, output}) but the
+     * multi-round tool loop, gates and ledgering happen server-side.
+     */
+    async _runNodeAsPlaybookUnit(node, inputText) {
+        const dfId = String(node.id);
+        const data = node.data || {};
+
+        if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
+        this.nodeExecutionData[dfId].input = inputText;
+        this.nodeExecutionData[dfId].activity = [];
+        this.nodeExecutionData[dfId].logs = [];
+        this.nodeExecutionData[dfId].agentName = data.name || null;
+        const _startedAt = Date.now();
+        this.nodeExecutionData[dfId].startTime = _startedAt;
+        try { this.startNodeTimer(dfId, dfId); } catch (_) {}
+        this.highlightNode(dfId, 'active', dfId, 'agent');
+        this.updateModalInputOutput(dfId);
+        this._wfNodeLog(dfId, 'llm', 'starting playbook run');
+
+        const nodeConfig = {
+            playbook: data.playbook,
+            agent_provider: data.agent_provider || '',
+            model: data.model || '',
+            name: data.name || '',
+        };
+
+        try {
+            const resp = await fetch(`${this.apiBase}/workflows/playbook-node/run`, {
+                method: 'POST',
+                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                credentials: 'include',
+                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText }),
+            });
+            if (!resp.ok || !resp.body) throw new Error(`playbook run HTTP ${resp.status}`);
+
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            let finalResult = null;
+            let runError = null;
+
+            readLoop:
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                let sep;
+                while ((sep = buf.indexOf('\n\n')) !== -1) {
+                    const rawBlock = buf.slice(0, sep);
+                    buf = buf.slice(sep + 2);
+                    let eventType = 'message';
+                    let dataStr = '';
+                    for (const line of rawBlock.split('\n')) {
+                        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                        else if (line.startsWith('data:')) dataStr += (dataStr ? '\n' : '') + line.slice(5).trim();
+                    }
+                    if (!dataStr) continue;
+                    let ev;
+                    try { ev = JSON.parse(dataStr); } catch (_) { continue; }
+
+                    if (eventType === 'done') { finalResult = ev; break readLoop; }
+                    if (eventType === 'error') { runError = ev?.error || 'Playbook run failed'; break readLoop; }
+
+                    await this._handlePlaybookEvent(dfId, ev);
+                }
+            }
+
+            if (runError) throw new Error(runError);
+
+            const output = (finalResult && finalResult.output) || '';
+            const nd = this.nodeExecutionData[dfId];
+            nd.output = output;
+            nd.success = true;
+            nd.runId = finalResult?.run_id;
+            nd.executionTime = Date.now() - _startedAt;
+            try { this.stopNodeTimer(dfId); } catch (_) {}
+            this._wfNodeLog(dfId, 'done', `playbook run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? ''}`.trim());
+            this.highlightNode(dfId, 'completed', dfId, 'agent');
+            this.updateModalInputOutput(dfId);
+            return { success: true, output };
+        } catch (e) {
+            const msg = String(e?.message || e);
+            const nd = this.nodeExecutionData[dfId] || (this.nodeExecutionData[dfId] = {});
+            nd.output = 'Error: ' + msg;
+            nd.success = false;
+            nd.executionTime = Date.now() - _startedAt;
+            try { this.stopNodeTimer(dfId); } catch (_) {}
+            this._wfNodeLog(dfId, 'error', msg, 'error');
+            this.highlightNode(dfId, 'error', dfId, 'agent');
+            this.updateModalInputOutput(dfId);
+            return { success: false, output: 'Error: ' + msg };
+        }
+    }
+
+    /** Dispatch one playbook SSE progress event: log it, or block on a gate modal. */
+    async _handlePlaybookEvent(dfId, ev) {
+        switch (ev?.type) {
+            case 'round':
+                this._wfNodeLog(dfId, 'llm', `round ${ev.round}`);
+                return;
+            case 'tool_call':
+                this._wfNodeLog(dfId, 'skill', `${ev.name}(${JSON.stringify(ev.args || {}).slice(0, 200)})`);
+                return;
+            case 'tool_result':
+                this._wfNodeLog(dfId, 'skill', `${ev.name} → ${JSON.stringify(ev.result ?? {}).slice(0, 200)}`);
+                return;
+            case 'message':
+                this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));
+                return;
+            case 'final':
+                this._wfNodeLog(dfId, 'done', `leg ${ev.leg} ${ev.status}`);
+                return;
+            case 'gate_request':
+                await this._handlePlaybookGate(dfId, ev);
+                return;
+            default:
+                this._wfNodeLog(dfId, 'info', JSON.stringify(ev));
+        }
+    }
+
+    /** Show the gate modal, wait for the human's answer, POST it back to unblock the run. */
+    async _handlePlaybookGate(dfId, ev) {
+        this._wfNodeLog(dfId, 'skill', `waiting on a human (${ev.kind})`);
+        const answer = await this._showPlaybookGateModal(ev);
+        this._wfNodeLog(dfId, 'skill', `gate answered (${ev.kind})`);
+        try {
+            await fetch(`${this.apiBase}/workflows/tool-result`, {
+                method: 'POST',
+                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ tool_call_id: ev.tool_call_id, ...answer }),
+            });
+        } catch (e) {
+            this._wfNodeLog(dfId, 'error', 'failed to post gate answer: ' + (e?.message || e), 'error');
+        }
+    }
+
+    /**
+     * Modal for one human gate (form / approval / handoff / await_message).
+     * Reuses the ingestion modal's .storage-config-* CSS classes. Resolves to
+     * the answer payload posted to /workflows/tool-result — see
+     * GateManagerTest.php for the verified flat shape (NOT nested under a
+     * `fields` key for forms; the sensitive-field redaction in
+     * GateManager::redactSensitiveFields() matches decision keys against the
+     * TOP LEVEL of the answer object).
+     * @returns {Promise<object>}
+     */
+    _showPlaybookGateModal(ev) {
+        return new Promise((resolve) => {
+            const kind = ev.kind;
+            const payload = ev.payload || {};
+
+            const existing = document.getElementById('playbook-gate-modal');
+            if (existing) existing.remove();
+
+            let title = 'Playbook needs input';
+            let bodyHtml = '';
+            const fieldRow = (labelText, inner) => `
+                <div class="storage-config-folder full">
+                    <label>${this.escapeHtml(labelText)}</label>
+                    ${inner}
+                </div>`;
+
+            if (kind === 'form') {
+                title = 'Playbook — form request';
+                const fields = Array.isArray(payload.fields) ? payload.fields : [];
+                bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
+                    + fields.map(f => {
+                        const name = String(f.name || '');
+                        const label = f.label || name;
+                        if (f.type === 'select' && Array.isArray(f.options)) {
+                            const opts = f.options.map(o => `<option value="${this.escapeHtml(o)}">${this.escapeHtml(o)}</option>`).join('');
+                            return fieldRow(label, `<select data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg">${opts}</select>`);
+                        }
+                        const inputType = f.sensitive ? 'password' : (f.type === 'number' ? 'number' : 'text');
+                        return fieldRow(label, `<input type="${inputType}" data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="${this.escapeHtml(label)}">`);
+                    }).join('');
+            } else if (kind === 'approval') {
+                title = 'Playbook — approval requested';
+                bodyHtml = `<p class="storage-config-folder full">${this.escapeHtml(payload.question || '')}</p>`
+                    + (payload.context ? `<p class="storage-config-folder full" style="color:#9ca3af;">${this.escapeHtml(payload.context)}</p>` : '')
+                    + fieldRow('Comment (optional)', `<textarea id="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+            } else if (kind === 'handoff') {
+                title = 'Playbook — handed off to a human';
+                bodyHtml = `<p class="storage-config-folder full"><strong>${this.escapeHtml(payload.team_or_person || '')}</strong> — ${this.escapeHtml(payload.reason || '')}</p>`
+                    + (payload.summary ? `<p class="storage-config-folder full">${this.escapeHtml(payload.summary)}</p>` : '')
+                    + fieldRow('Comment (optional)', `<textarea id="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+            } else if (kind === 'await_message') {
+                title = 'Playbook — waiting for a message';
+                bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
+                    + fieldRow('Message', `<textarea id="pb-gate-text" rows="3" style="width:100%;"></textarea>`);
+            } else {
+                bodyHtml = `<p class="storage-config-folder full">Unknown gate kind: ${this.escapeHtml(String(kind))}</p>`;
+            }
+
+            const footerHtml = kind === 'approval'
+                ? `<button class="storage-config-btn cancel" id="pb-gate-deny">Deny</button>
+                   <button class="storage-config-btn save" id="pb-gate-approve">Approve</button>`
+                : kind === 'handoff'
+                    ? `<button class="storage-config-btn cancel" id="pb-gate-cancel">Cancel</button>
+                       <button class="storage-config-btn save" id="pb-gate-done">Done</button>`
+                    : `<button class="storage-config-btn save" id="pb-gate-submit">Submit</button>`;
+
+            const modalHtml = `
+                <div id="playbook-gate-modal" class="storage-config-overlay">
+                    <div class="storage-config-modal">
+                        <div class="storage-config-header">
+                            <h3><span>📖</span> ${this.escapeHtml(title)}</h3>
+                        </div>
+                        <div class="storage-config-body">
+                            <div class="storage-config-grid">${bodyHtml}</div>
+                        </div>
+                        <div class="storage-config-footer">${footerHtml}</div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            const modal = document.getElementById('playbook-gate-modal');
+
+            const finish = (answer) => { modal.remove(); resolve(answer); };
+            const actor = window.authManager?.user?.email || window.authManager?.user?.name || '';
+
+            if (kind === 'form') {
+                document.getElementById('pb-gate-submit')?.addEventListener('click', () => {
+                    const fields = {};
+                    modal.querySelectorAll('[data-field-name]').forEach(el => { fields[el.dataset.fieldName] = el.value; });
+                    finish({ ...fields });
+                });
+            } else if (kind === 'approval') {
+                document.getElementById('pb-gate-approve')?.addEventListener('click', () => {
+                    finish({ decision: 'approved', comment: document.getElementById('pb-gate-comment')?.value || '', actor });
+                });
+                document.getElementById('pb-gate-deny')?.addEventListener('click', () => {
+                    finish({ decision: 'denied', comment: document.getElementById('pb-gate-comment')?.value || '', actor });
+                });
+            } else if (kind === 'handoff') {
+                document.getElementById('pb-gate-done')?.addEventListener('click', () => {
+                    finish({ decision: 'handoff_done', comment: document.getElementById('pb-gate-comment')?.value || '' });
+                });
+                document.getElementById('pb-gate-cancel')?.addEventListener('click', () => {
+                    finish({ decision: 'cancelled', comment: document.getElementById('pb-gate-comment')?.value || '' });
+                });
+            } else if (kind === 'await_message') {
+                document.getElementById('pb-gate-submit')?.addEventListener('click', () => {
+                    finish({ text: document.getElementById('pb-gate-text')?.value || '' });
+                });
+            } else {
+                document.getElementById('pb-gate-submit')?.addEventListener('click', () => finish({}));
+            }
+        });
+    }
+
     // ---- Browser-driven concurrent orchestrator ---------------------------
     // Runs the whole graph as N chat-units: seed Start with the prompt, then
     // run each node when all its upstream are done (allSettled per ready layer,
@@ -11123,6 +11658,7 @@ class WorkflowEditor {
         const t = d.type || d.node_type || n.name || '';
         if (t === 'start' || (n.class || '').includes('start-node')) return 'start';
         if (t === 'output' || (n.class || '').includes('output-node')) return 'output';
+        if (t === 'playbook') return 'playbook';
         return 'agent';
     }
 
@@ -11160,7 +11696,7 @@ class WorkflowEditor {
             if (kind === 'start') { this._wfOutputs[id] = userPrompt; done.add(id); }
             else {
                 remaining.add(id);
-                if (kind === 'agent') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
+                if (kind === 'agent' || kind === 'playbook') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
             }
         }
 
@@ -11180,7 +11716,9 @@ class WorkflowEditor {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
-                        const res = await this._runNodeAsChatUnit(node, ctx);
+                        const res = this._wfNodeKind(id, nodes) === 'playbook'
+                            ? await this._runNodeAsPlaybookUnit(node, ctx)
+                            : await this._runNodeAsChatUnit(node, ctx);
                         this._wfOutputs[id] = res.output;
                         try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: res?.success !== false }); } catch (_) {}
                         // _runNodeAsChatUnit already highlighted the node red on a
