@@ -382,6 +382,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
         $r->post('/api/v1/workflows/{id:\d+}/duplicate', ['AgentTeam:WorkflowController', 'duplicate']);
 
+        // Playbook registration-time validation (spec T4): parse + resolve
+        // bindings against the caller's MCP tools/agents, no run created.
+        $r->post('/api/v1/playbooks/validate', ['PlaybookController', 'validate']);
+
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);
         $r->get('/api/v1/workflows/{id:\d+}/outputs/{filename}', ['AgentTeam:WorkflowController', 'getOutput']);
