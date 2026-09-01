@@ -216,6 +216,48 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
         $this->assertSame('resolve_request', $ledger[0]['tool']);
     }
 
+    public function testNativeVerbNeverBlockedByWritePolicy(): void
+    {
+        // Controller ruling: the write policy governs MCP/connector writes only. Native verbs
+        // act on our own run record and must never be blocked, even with writes_enabled=false.
+        $mcp = new FakeMcpExecutor();
+        $actions = array_merge($this->actions(), [
+            ['name' => '#Send Direct Message', 'kind' => 'native', 'target' => 'send_direct_message'],
+        ]);
+        $space = $this->space($actions, $mcp, ['writes_enabled' => false]);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'send_direct_message', ['text' => 'hello']);
+        $this->assertTrue($result['ok']);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(1, $ledger);
+        $this->assertSame('ok', $ledger[0]['outcome']);
+    }
+
+    public function testSensitiveNativeArgsAreRedactedInLedger(): void
+    {
+        $mcp = new FakeMcpExecutor();
+        $actions = array_merge($this->actions(), [
+            ['name' => '#Send Direct Message', 'kind' => 'native', 'target' => 'send_direct_message'],
+        ]);
+        $space = $this->space($actions, $mcp);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'send_direct_message', [
+            'text' => 'Secret token 12345',
+            'sensitive' => true,
+        ]);
+        $this->assertTrue($result['ok']);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(1, $ledger);
+        $this->assertSame(1, (int)$ledger[0]['sensitive']);
+        $this->assertStringNotContainsString('Secret token', $ledger[0]['args']);
+        $this->assertStringContainsString('«redacted»', $ledger[0]['args']);
+        $this->assertSame('«redacted»', $ledger[0]['result_summary']);
+    }
+
     public function testAgentBoundTargetTreatedAsUnboundForNow(): void
     {
         $mcp = new FakeMcpExecutor();

@@ -137,7 +137,7 @@ final class PlaybookActionSpace
         return match ($entry['kind']) {
             'native' => $this->executeNative($runId, $leg, $llmToolName, $entry, $args),
             'mcp' => $this->executeMcp($runId, $leg, $entry, $args),
-            'unbound' => $this->executeUnbound($runId, $leg, $entry, $args),
+            'unbound' => $this->executeUnbound($runId, $leg, $llmToolName, $entry, $args),
             default => (function () use ($runId, $leg, $llmToolName, $args) {
                 $this->state->ledgerAppend($runId, $leg, $llmToolName, $llmToolName, $args, 'skipped', null);
                 return ['ok' => false, 'error' => 'tool not allowed'];
@@ -149,7 +149,8 @@ final class PlaybookActionSpace
     {
         $result = $this->native->execute($runId, $leg, $llmToolName, $args);
         $outcome = ($result['ok'] ?? false) === false ? 'failed' : 'ok';
-        $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $llmToolName, $args, $outcome, $this->summarize($result));
+        $sensitive = !empty($args['sensitive']);
+        $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $llmToolName, $args, $outcome, $this->summarize($result), $sensitive);
         return $result;
     }
 
@@ -165,6 +166,8 @@ final class PlaybookActionSpace
             return ['ok' => true, 'outcome' => 'replayed', 'result' => $replay['result_summary']];
         }
 
+        // Write policy applies to MCP/connector tools only (spec: each MCP tool is tagged
+        // read|write); native verbs act on the run record and are never blocked here.
         $writesEnabled = (bool)($this->policy['writes_enabled'] ?? false);
         if (!$writesEnabled && preg_match(self::WRITE_VERB_PATTERN, $tool) === 1) {
             $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $target, $args, 'skipped', null);
@@ -177,10 +180,9 @@ final class PlaybookActionSpace
         return $result;
     }
 
-    private function executeUnbound(int $runId, int $leg, array $entry, array $args): array
+    private function executeUnbound(int $runId, int $leg, string $llmToolName, array $entry, array $args): array
     {
-        $llmName = 'unbound__' . $this->slug($entry['action_name']);
-        $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $llmName, $args, 'skipped', null);
+        $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $llmToolName, $args, 'skipped', null);
         return [
             'ok' => false,
             'unbound' => true,
