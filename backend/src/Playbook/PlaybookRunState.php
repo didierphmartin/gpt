@@ -111,6 +111,36 @@ final class PlaybookRunState
         return $row === false ? null : $row;
     }
 
+    public function gateOpen(int $runId, int $leg, string $kind, array $args, string $askedOf): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO playbook_run_gates (run_id, leg, kind, args, asked_of, opened_at, closed_at, decision, actor)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)'
+        );
+        $stmt->execute([
+            $runId,
+            $leg,
+            $kind,
+            json_encode($args, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            $askedOf,
+            date('Y-m-d H:i:s'),
+        ]);
+        return (int)$this->pdo->lastInsertId();
+    }
+
+    public function gateClose(int $gateId, array $decision, string $actor): void
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE playbook_run_gates SET closed_at = ?, decision = ?, actor = ? WHERE id = ?'
+        );
+        $stmt->execute([
+            date('Y-m-d H:i:s'),
+            json_encode($decision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            $actor,
+            $gateId,
+        ]);
+    }
+
     public function getRun(int $runId): array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM playbook_runs WHERE id = ?');

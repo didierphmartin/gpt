@@ -13,6 +13,8 @@ final class PlaybookActionSpace
 
     private const UNBOUND_DESCRIPTION = 'NOT AVAILABLE — calling this applies the on_unbound policy';
 
+    private const GATE_TOOL_NAMES = ['trigger_form', 'request_approval', 'prompt_handoff', 'await_message'];
+
     /** @var array<string,array{kind:string,action_name:string,server?:string,tool?:string,target?:?string}> */
     private array $map = [];
 
@@ -28,6 +30,7 @@ final class PlaybookActionSpace
         private readonly McpExecutorInterface $mcp,
         private readonly PlaybookRunState $state,
         private readonly array $policy,
+        private readonly ?GateManager $gates = null,
     ) {
         foreach ($analyzedActions as $action) {
             $name = (string)($action['name'] ?? '');
@@ -122,11 +125,19 @@ final class PlaybookActionSpace
             ];
         }
 
+        if ($this->gates !== null) {
+            $defs = array_merge($defs, $this->gates->definitions());
+        }
+
         return $defs;
     }
 
     public function execute(int $runId, int $leg, string $llmToolName, array $args): array
     {
+        if ($this->gates !== null && in_array($llmToolName, self::GATE_TOOL_NAMES, true)) {
+            return $this->executeGate($runId, $leg, $llmToolName, $args);
+        }
+
         $entry = $this->map[$llmToolName] ?? null;
 
         if ($entry === null) {
@@ -143,6 +154,15 @@ final class PlaybookActionSpace
                 return ['ok' => false, 'error' => 'tool not allowed'];
             })(),
         };
+    }
+
+    private function executeGate(int $runId, int $leg, string $llmToolName, array $args): array
+    {
+        $result = $this->gates->execute($runId, $leg, $llmToolName, $args);
+        $decision = is_array($result['decision'] ?? null) ? $result['decision'] : [];
+        $redactedDecision = GateManager::redactSensitiveFields($args, $decision);
+        $this->state->ledgerAppend($runId, $leg, $llmToolName, $llmToolName, $args, 'ok', $this->summarize($redactedDecision));
+        return $result + ['gate' => true];
     }
 
     private function executeNative(int $runId, int $leg, string $llmToolName, array $entry, array $args): array
