@@ -52,6 +52,31 @@ class PlaybookAnalyzerTest extends TestCase
         $this->assertSame('#Resolve Request', end($r['checklist']));
     }
 
+    public function testChecklistOrderHandlesOverlappingActionNames(): void
+    {
+        // "#Reset User Factor" is a literal prefix of "#Reset User Factors
+        // (Custom)". The long name's real occurrence comes first in the prose;
+        // the short name's real (standalone) occurrence comes later. Without
+        // masking the long name's match first, a naive stripos() for the short
+        // name would find it embedded inside the long name's earlier occurrence
+        // and misreport it as coming first.
+        $doc = PlaybookDocument::fromArray([
+            'title' => 'Overlap',
+            'trigger' => ['kind' => 'request', 'description' => 'd'],
+            'instructions' => '#Reset User Factors (Custom) if the device is lost. '
+                . 'Separately, later, #Reset User Factor for legacy systems. #Resolve Request.',
+            'actions_used' => ['#Reset User Factor', '#Reset User Factors (Custom)', '#Resolve Request'],
+            'bindings' => ['#Reset User Factor' => null, '#Reset User Factors (Custom)' => null],
+        ]);
+
+        $r = (new PlaybookAnalyzer())->analyze($doc, []);
+
+        $this->assertSame(
+            ['#Reset User Factors (Custom)', '#Reset User Factor', '#Resolve Request'],
+            $r['checklist']
+        );
+    }
+
     public function testAgentBinding(): void
     {
         $doc = $this->doc(['bindings' => ['#Search Okta User by Email' => 'agent.researcher',

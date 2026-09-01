@@ -95,14 +95,16 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
 
     public function testReplayGuardAvoidsSecondMcpCall(): void
     {
+        // Replay guard applies to write-classified tools only — reset_password
+        // is a write (fails the read-verb allowlist), so it gets the guard.
         $mcp = new FakeMcpExecutor();
-        $space = $this->space($this->actions(), $mcp);
+        $space = $this->space($this->actions(), $mcp, ['writes_enabled' => true]);
         $id = $this->state->createRun(1, $this->doc(), [], []);
 
-        $first = $space->execute($id, 0, 'okta__search_users', ['email' => 'a@b.com']);
+        $first = $space->execute($id, 0, 'okta__reset_password', ['user_id' => '123']);
         $this->assertTrue($first['ok']);
 
-        $second = $space->execute($id, 1, 'okta__search_users', ['email' => 'a@b.com']);
+        $second = $space->execute($id, 1, 'okta__reset_password', ['user_id' => '123']);
         $this->assertTrue($second['ok']);
         $this->assertSame('replayed', $second['outcome']);
 
@@ -113,6 +115,30 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
         $this->assertCount(2, $ledger);
         $this->assertSame('ok', $ledger[0]['outcome']);
         $this->assertSame('replayed', $ledger[1]['outcome']);
+    }
+
+    public function testReadToolAlwaysReExecutesNoReplayGuard(): void
+    {
+        // okta.search_users matches the read allowlist (^search), so a repeated
+        // call always re-executes rather than being served from the replay guard.
+        $mcp = new FakeMcpExecutor();
+        $space = $this->space($this->actions(), $mcp);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $first = $space->execute($id, 0, 'okta__search_users', ['email' => 'a@b.com']);
+        $this->assertTrue($first['ok']);
+
+        $second = $space->execute($id, 1, 'okta__search_users', ['email' => 'a@b.com']);
+        $this->assertTrue($second['ok']);
+        $this->assertArrayNotHasKey('outcome', $second);
+
+        // Both calls actually reached the MCP fake.
+        $this->assertCount(2, $mcp->calls);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(2, $ledger);
+        $this->assertSame('ok', $ledger[0]['outcome']);
+        $this->assertSame('ok', $ledger[1]['outcome']);
     }
 
     public function testWritePolicyBlocksWhenDisabled(): void
@@ -146,6 +172,45 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
         $this->assertSame('ok', $ledger[0]['outcome']);
     }
 
+    public function testUnrecognizedToolNameFailsClosedAsWrite(): void
+    {
+        // okta.deactivate_user matches neither a write verb nor our read
+        // allowlist — the fail-closed policy must still block it.
+        $mcp = new FakeMcpExecutor();
+        $actions = array_merge($this->actions(), [
+            ['name' => '#Deactivate Okta User', 'kind' => 'bound', 'target' => 'okta.deactivate_user'],
+        ]);
+        $space = $this->space($actions, $mcp, ['writes_enabled' => false]);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'okta__deactivate_user', ['user_id' => '123']);
+        $this->assertFalse($result['ok']);
+        $this->assertSame('writes disabled by policy', $result['error']);
+        $this->assertCount(0, $mcp->calls);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(1, $ledger);
+        $this->assertSame('skipped', $ledger[0]['outcome']);
+    }
+
+    public function testNativeVerbExecutableEvenWhenNotInActionsUsed(): void
+    {
+        // Spec: native verbs are built-in and executable unconditionally — this
+        // action list never mentions #Leave Internal Note, yet the LLM must
+        // still be able to call it.
+        $mcp = new FakeMcpExecutor();
+        $space = $this->space($this->actions(), $mcp);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'leave_internal_note', ['text' => 'noted']);
+        $this->assertTrue($result['ok']);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertCount(1, $ledger);
+        $this->assertSame('ok', $ledger[0]['outcome']);
+        $this->assertSame('leave_internal_note', $ledger[0]['tool']);
+    }
+
     public function testUnboundExecuteReturnsGuidance(): void
     {
         $mcp = new FakeMcpExecutor();
@@ -160,6 +225,39 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
 
         $ledger = $this->state->ledgerAll($id);
         $this->assertCount(1, $ledger);
+        $this->assertSame('skipped', $ledger[0]['outcome']);
+    }
+
+    public function testUnboundPolicySkipReturnsSkippedGuidance(): void
+    {
+        $mcp = new FakeMcpExecutor();
+        $space = $this->space($this->actions(), $mcp, ['on_unbound' => 'skip']);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'unbound__reset_user_factors_custom', []);
+        $this->assertFalse($result['ok']);
+        $this->assertTrue($result['unbound']);
+        $this->assertTrue($result['skipped']);
+        $this->assertStringContainsString('skip it', $result['guidance']);
+
+        $ledger = $this->state->ledgerAll($id);
+        $this->assertSame('skipped', $ledger[0]['outcome']);
+    }
+
+    public function testUnboundPolicyFailReturnsFatalGuidance(): void
+    {
+        $mcp = new FakeMcpExecutor();
+        $space = $this->space($this->actions(), $mcp, ['on_unbound' => 'fail']);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $result = $space->execute($id, 0, 'unbound__reset_user_factors_custom', []);
+        $this->assertFalse($result['ok']);
+        $this->assertTrue($result['unbound']);
+        $this->assertTrue($result['fatal']);
+        $this->assertStringContainsString('fail', $result['guidance']);
+
+        // Ledger records the same 'skipped' outcome regardless of policy arm.
+        $ledger = $this->state->ledgerAll($id);
         $this->assertSame('skipped', $ledger[0]['outcome']);
     }
 

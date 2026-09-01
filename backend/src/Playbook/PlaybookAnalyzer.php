@@ -24,14 +24,21 @@ final class PlaybookAnalyzer
     public function analyze(PlaybookDocument $doc, array $availableTools, array $availableAgents = []): array
     {
         $actions = []; $gates = []; $errors = []; $warnings = [];
-        // Checklist = #Actions in prose order (longest-name-first match so
-        // "#Reset User Factors (Custom)" wins over "#Reset User Factor").
+        // Checklist = #Actions in prose order. Find positions longest-name-first
+        // on a working copy of the instructions, masking each match (blanking it
+        // out) as it's found, so a shorter name occurring only as a prefix/substring
+        // of a longer one (e.g. "#Reset User Factor" inside "#Reset User Factors
+        // (Custom)") isn't mistaken for its own, earlier occurrence.
         $names = $doc->actionsUsed;
         usort($names, fn($a, $b) => strlen($b) <=> strlen($a));
+        $working = $doc->instructions;
         $positions = [];
         foreach ($names as $name) {
-            $pos = stripos($doc->instructions, $name);
+            $pos = stripos($working, $name);
             $positions[$name] = $pos === false ? PHP_INT_MAX : $pos;
+            if ($pos !== false) {
+                $working = substr_replace($working, str_repeat(' ', strlen($name)), $pos, strlen($name));
+            }
         }
         $ordered = $doc->actionsUsed;
         usort($ordered, fn($a, $b) => $positions[$a] <=> $positions[$b]);

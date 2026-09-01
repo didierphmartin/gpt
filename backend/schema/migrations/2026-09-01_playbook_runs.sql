@@ -1,5 +1,7 @@
 -- 2026-09-01_playbook_runs.sql — playbook interpreter run record (spec §Data model)
 -- VARCHAR statuses (not enum): unit tests recreate these tables in SQLite.
+-- `sensitive` is backtick-escaped below because it's a reserved word as of
+-- MySQL 8.4 (closes an old deferral to actually quote it, not just note it).
 CREATE TABLE IF NOT EXISTS playbook_runs (
   id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
@@ -67,5 +69,9 @@ CREATE TABLE IF NOT EXISTS playbook_run_gates (
   INDEX idx_pbg_run (run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE workflow_nodes MODIFY node_type
-  ENUM('start','output','agent','parallel','playbook') NOT NULL;
+-- Widen, don't narrow: node_type also stores 'agent-template', 'loader',
+-- 'splitter', 'vectorstore', and 'realtime-*' values (see
+-- WorkflowGraphRepository.php, IngestionCompiler.php) that an ENUM listing
+-- only the values this migration cares about would silently truncate to ''
+-- under non-strict SQL modes, or reject outright under strict mode.
+ALTER TABLE workflow_nodes MODIFY node_type VARCHAR(32) NOT NULL;

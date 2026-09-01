@@ -999,6 +999,10 @@ class WorkflowController
      */
     public function runPlaybookNode(array $request): void
     {
+        // Playbook legs run rounds of LLM calls + tool execution and can run
+        // well past PHP's default 120s — same reasoning as run()'s @set_time_limit(600) above.
+        @set_time_limit(0);
+
         $userId = (int) ($request['user_id'] ?? 0);
         $body = $request['body'] ?? [];
 

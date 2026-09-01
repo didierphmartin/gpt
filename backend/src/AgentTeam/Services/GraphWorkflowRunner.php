@@ -676,6 +676,7 @@ class GraphWorkflowRunner
         return match ($nodeType) {
             'agent' => $this->executeAgentNode($node, $userId, $userPrompt, $edges, $executedNodes),
             'agent-template' => throw new \RuntimeException("Unconfigured agent template node found. Please configure all agent nodes before running the workflow."),
+            'playbook' => throw new \RuntimeException("Playbook nodes run only from the workflow editor's browser run path (server-side durable runs arrive in slice 1c)."),
             'output' => $this->executeOutputNode($node, $edges, $executedNodes),
             default => ['type' => $nodeType, 'output' => null],
         };

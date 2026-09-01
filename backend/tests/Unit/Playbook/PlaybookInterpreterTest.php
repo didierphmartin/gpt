@@ -148,10 +148,16 @@ final class PlaybookInterpreterTest extends PlaybookDbTestCase
         $this->assertSame(1, (int)$row['sensitive']);
         $this->assertStringNotContainsString('Your password has been reset.', $row['text']);
 
-        // System prompt is the verbatim constant with {instructions}/{policy_json} filled in.
+        // System prompt is the verbatim constant with {instructions}/{policy_json}/
+        // {requester_json}/{approvers_json} filled in.
         $expectedSystemPrompt = str_replace(
-            ['{instructions}', '{policy_json}'],
-            [$doc->instructions, json_encode($doc->policy, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)],
+            ['{instructions}', '{policy_json}', '{requester_json}', '{approvers_json}'],
+            [
+                $doc->instructions,
+                json_encode($doc->policy, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                json_encode(['id' => 'req1'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                '{}',
+            ],
             <<<'PROMPT'
 You are a playbook interpreter for an IT service desk. Execute the PLAYBOOK below
 for the current REQUEST, step by step, using ONLY the tools provided.
@@ -165,6 +171,8 @@ Rules:
 PLAYBOOK:
 {instructions}
 POLICY: {policy_json}
+REQUESTER: {requester_json}
+APPROVERS: {approvers_json}
 PROMPT
         );
         $this->assertSame($expectedSystemPrompt, $captured[0][0]['content']);

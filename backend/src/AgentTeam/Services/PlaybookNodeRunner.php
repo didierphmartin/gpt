@@ -73,7 +73,7 @@ final class PlaybookNodeRunner
         $transcript = new PlaybookTranscript(WorkflowRunLog::defaultDir($this->config));
         $state = new PlaybookRunState($pdo, $transcript);
 
-        $requester = ['id' => (string)$userId];
+        $requester = $this->buildRequester($pdo, $userId);
         $runId = $state->createRun($userId, $doc, $requester, []);
 
         $native = new PlaybookNativeTools($state);
@@ -99,6 +99,34 @@ final class PlaybookNodeRunner
         $output = (string)($result['output'] ?? '') . "\n\n[playbook run {$runId}: {$result['status']}]";
 
         return ['output' => $output, 'run_id' => $runId, 'status' => (string)$result['status']];
+    }
+
+    /**
+     * Enrich the requester the interpreter sees (REQUESTER: block of the system
+     * prompt) with email/name from the users table, falling back to id-only when
+     * the row (or the table itself, e.g. a test's minimal SQLite fixture) isn't
+     * available — the interpreter must still run.
+     */
+    private function buildRequester(PDO $pdo, int $userId): array
+    {
+        $requester = ['id' => (string)$userId];
+        try {
+            $stmt = $pdo->prepare('SELECT email, first_name, last_name FROM users WHERE id = ? LIMIT 1');
+            $stmt->execute([$userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                if (!empty($row['email'])) {
+                    $requester['email'] = $row['email'];
+                }
+                $name = trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
+                if ($name !== '') {
+                    $requester['name'] = $name;
+                }
+            }
+        } catch (\Throwable $e) {
+            // users table unavailable (different DB, or a minimal test fixture) — id-only.
+        }
+        return $requester;
     }
 
     private function parseDocument(mixed $playbook): PlaybookDocument

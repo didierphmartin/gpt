@@ -26,6 +26,8 @@ Rules:
 PLAYBOOK:
 {instructions}
 POLICY: {policy_json}
+REQUESTER: {requester_json}
+APPROVERS: {approvers_json}
 PROMPT;
 
     private const MESSAGE_TOOL_NAMES = ['send_direct_message', 'send_channel_message', 'send_email'];
@@ -50,7 +52,7 @@ PROMPT;
         $toolDefs = $this->space->toolDefinitions();
 
         $messages = [
-            ['role' => 'system', 'content' => $this->buildSystemPrompt($doc)],
+            ['role' => 'system', 'content' => $this->buildSystemPrompt($doc, $requester)],
             ['role' => 'user', 'content' => $this->buildUserMessage($requestText, $variables)],
         ];
 
@@ -66,6 +68,16 @@ PROMPT;
 
             if (empty($toolCalls)) {
                 return $this->endLeg($runId, $leg, $this->currentStatus($runId), $text ?? '');
+            }
+
+            // Normalize once so the assistant message and its matching tool-result
+            // message(s) below always agree on the same id, even if the LLM
+            // closure omitted one (defensive — the real WorkflowLlmClient path
+            // always supplies one via normalizeToolCalls()).
+            foreach ($toolCalls as $i => $toolCall) {
+                if (!isset($toolCall['id'])) {
+                    $toolCalls[$i]['id'] = uniqid('tc_');
+                }
             }
 
             $messages[] = $this->buildAssistantMessage($text, $toolCalls);
@@ -99,7 +111,7 @@ PROMPT;
 
                 $messages[] = [
                     'role' => 'tool',
-                    'tool_call_id' => $toolCall['id'],
+                    'tool_call_id' => $toolCall['id'] ?? uniqid('tc_'),
                     'name' => $name,
                     'content' => json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
                 ];
@@ -140,7 +152,7 @@ PROMPT;
         $calls = [];
         foreach ($toolCalls as $toolCall) {
             $calls[] = [
-                'id' => $toolCall['id'],
+                'id' => $toolCall['id'] ?? uniqid('tc_'),
                 'type' => 'function',
                 'function' => [
                     'name' => $toolCall['name'],
@@ -154,12 +166,19 @@ PROMPT;
         return ['role' => 'assistant', 'content' => $text, 'tool_calls' => $calls];
     }
 
-    private function buildSystemPrompt(PlaybookDocument $doc): string
+    private function buildSystemPrompt(PlaybookDocument $doc, array $requester): string
     {
         $policyJson = json_encode($doc->policy, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $requesterJson = json_encode($requester, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        // Empty object, not [], when the document has no approvers — {} reads
+        // unambiguously to the model as "none", where [] could be misread as
+        // a list placeholder still to be filled in.
+        $approversJson = empty($doc->approvers)
+            ? '{}'
+            : json_encode($doc->approvers, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         return str_replace(
-            ['{instructions}', '{policy_json}'],
-            [$doc->instructions, $policyJson],
+            ['{instructions}', '{policy_json}', '{requester_json}', '{approvers_json}'],
+            [$doc->instructions, $policyJson, $requesterJson, $approversJson],
             self::SYSTEM_PROMPT_TEMPLATE
         );
     }

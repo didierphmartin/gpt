@@ -9,7 +9,12 @@ namespace Quantis\AIPortfolioAssistant\Playbook;
  */
 final class PlaybookActionSpace
 {
-    private const WRITE_VERB_PATTERN = '/reset|create|update|delete|write|add|remove|assign|invite|unlock/i';
+    // Fail-closed write classification: a tool is a WRITE unless its name part
+    // is recognizably read-only. New/unrecognized tool names (e.g. a target
+    // added to an MCP server we don't know about, like okta.deactivate_user)
+    // are therefore blocked under writes_enabled=false rather than allowed
+    // through by default.
+    private const READ_VERB_PATTERN = '/^(get|list|search|read|find|describe|verify|check)/i';
 
     private const UNBOUND_DESCRIPTION = 'NOT AVAILABLE — calling this applies the on_unbound policy';
 
@@ -88,6 +93,24 @@ final class PlaybookActionSpace
                 'kind' => 'unbound',
                 'action_name' => $name,
                 'target' => $target,
+            ];
+        }
+
+        // Spec: native verbs are built-in and executable unconditionally — no
+        // binding required. Register every PlaybookNativeTools verb in the
+        // dispatch map regardless of whether the playbook's actionsUsed
+        // mentions it (toolDefinitions() below already always exposes them to
+        // the LLM; dispatch must match). An action already registered above
+        // (kind='native' with its own #Action name) is left untouched.
+        foreach ($this->native->definitions() as $def) {
+            $toolName = $def['function']['name'] ?? null;
+            if ($toolName === null || isset($this->map[$toolName])) {
+                continue;
+            }
+            $this->map[$toolName] = [
+                'kind' => 'native',
+                'action_name' => $toolName,
+                'target' => $toolName,
             ];
         }
     }
@@ -187,17 +210,23 @@ final class PlaybookActionSpace
         $target = $entry['target'];
         $server = $entry['server'];
         $tool = $entry['tool'];
+        $isWrite = $this->isWriteTool($tool);
 
-        $replay = $this->state->ledgerFindOk($runId, $target, $args);
-        if ($replay !== null) {
-            $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $target, $args, 'replayed', $replay['result_summary']);
-            return ['ok' => true, 'outcome' => 'replayed', 'result' => $replay['result_summary']];
+        // Replay guard applies to write-classified tools only — a read (e.g. a
+        // repeated search) always re-executes, since re-running it is safe and
+        // the requester may expect fresh data.
+        if ($isWrite) {
+            $replay = $this->state->ledgerFindOk($runId, $target, $args);
+            if ($replay !== null) {
+                $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $target, $args, 'replayed', $replay['result_summary']);
+                return ['ok' => true, 'outcome' => 'replayed', 'result' => $replay['result_summary']];
+            }
         }
 
         // Write policy applies to MCP/connector tools only (spec: each MCP tool is tagged
         // read|write); native verbs act on the run record and are never blocked here.
         $writesEnabled = (bool)($this->policy['writes_enabled'] ?? false);
-        if (!$writesEnabled && preg_match(self::WRITE_VERB_PATTERN, $tool) === 1) {
+        if (!$writesEnabled && $isWrite) {
             $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $target, $args, 'skipped', null);
             return ['ok' => false, 'error' => 'writes disabled by policy'];
         }
@@ -208,15 +237,37 @@ final class PlaybookActionSpace
         return $result;
     }
 
+    /** Fail-closed classifier: anything not recognizably read-only counts as a write. */
+    private function isWriteTool(string $tool): bool
+    {
+        return preg_match(self::READ_VERB_PATTERN, $tool) !== 1;
+    }
+
     private function executeUnbound(int $runId, int $leg, string $llmToolName, array $entry, array $args): array
     {
         $this->state->ledgerAppend($runId, $leg, $entry['action_name'], $llmToolName, $args, 'skipped', null);
-        return [
-            'ok' => false,
-            'unbound' => true,
-            'policy' => $this->policy['on_unbound'] ?? null,
-            'guidance' => 'This action has no connected implementation. Follow the policy: hand off to a human with prompt_handoff and note what could not be done.',
-        ];
+        $policy = $this->policy['on_unbound'] ?? null;
+
+        return match ($policy) {
+            'skip' => [
+                'ok' => false,
+                'unbound' => true,
+                'skipped' => true,
+                'guidance' => 'This action is unavailable and the policy says skip it: note it in the internal record and continue with the rest of the playbook.',
+            ],
+            'fail' => [
+                'ok' => false,
+                'unbound' => true,
+                'fatal' => true,
+                'guidance' => 'This action is unavailable and the policy says fail: leave an internal note and resolve the request as not completed.',
+            ],
+            default => [
+                'ok' => false,
+                'unbound' => true,
+                'policy' => $policy,
+                'guidance' => 'This action has no connected implementation. Follow the policy: hand off to a human with prompt_handoff and note what could not be done.',
+            ],
+        };
     }
 
     /** @return array{0:string,1:string} */
@@ -245,6 +296,9 @@ final class PlaybookActionSpace
         if ($json === false) {
             return null;
         }
-        return strlen($json) > 500 ? substr($json, 0, 500) : $json;
+        // Multibyte-safe truncation: a byte-oriented substr() can split a UTF-8
+        // sequence mid-character, producing invalid UTF-8 that later breaks
+        // json_encode() of anything the interpreter builds around this summary.
+        return mb_strlen($json) > 500 ? mb_substr($json, 0, 500) : $json;
     }
 }
