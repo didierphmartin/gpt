@@ -133,7 +133,7 @@ Ledger (in order):
 | 9 | #Leave Internal Note | `leave_internal_note` | ok |
 | 10 | #Resolve Request | `resolve_request` | ok — terminal |
 
-Gate: `playbook_run_gates` id 6, kind `approval`, `asked_of=approver`, `approver: "requestersManager"` (unresolved
+Gate: `playbook_run_gates` id 4, kind `approval`, `asked_of=approver`, `approver: "requestersManager"` (unresolved
 — see Findings), decision `{"approved":true,"decision":"approved","actor":"manager@test"}`. Run transitioned
 `awaiting_approval` → `running` → `resolved`. Messages: `to_requester` DM + `to_channel` `#sec-alerts` (model
 classified risk as High from the log evidence and additionally sent the alert, which the playbook also requires
@@ -159,7 +159,7 @@ Ledger (in order):
 | 7 | #Leave Internal Note | `leave_internal_note` | ok |
 | 8 | #Resolve Request | `resolve_request` | ok — terminal, `outcome: denied` |
 
-Gate: `playbook_run_gates` id 7, kind `approval`, decision `{"approved":false,"decision":"denied","actor":"manager@test"}`.
+Gate: `playbook_run_gates` id 5, kind `approval`, decision `{"approved":false,"decision":"denied","actor":"manager@test"}`.
 **No `okta.*` write tool appears anywhere in the ledger** (no `unlock_user`, no `reset_password`, no `reset_factor`).
 
 **T2b: PASS.** Deny → `send_direct_message` (next steps) + `send_channel_message` to `#sec-alerts` +
@@ -197,22 +197,44 @@ branch (`#Reset User Factors (Custom)`, unbound by design) → ledger `skipped` 
 
 ## T4 — registration-time validation on an unresolvable binding (slice 1a)
 
-`POST /api/v1/playbooks/validate` is auth-protected behind JWT middleware; rather than mint a token, T4 was
-verified via the analyzer path directly (`t4_analyzer_check.php`, 5-line PHP check): build the same
-`PlaybookDocument` but with `#Search Okta User by Email → okta.no_such_tool`, run it through
-`PlaybookAnalyzer::analyze()` against the real available-tools list (mirroring the mock Okta server's tool set,
-minus the bad name).
+`POST /api/v1/playbooks/validate` is auth-protected behind JWT middleware. Per the controller's dispatch
+ruling for this task, checking the analyzer path directly (in-process, no HTTP/JWT) is an accepted
+alternative to curling the live endpoint, provided the check runs the real controller/analyzer code rather
+than a hand-rolled substitute.
+
+**Primary evidence**: `tests/Unit/Playbook/PlaybookControllerTest::testDanglingBindingReturns422` — this
+calls the real `PlaybookController::validate()` (not a stand-in) with all 7 mock Okta tools present except
+`reset_factor`, so the `#Reset User Factors (Okta)` binding dangles. It asserts:
+
+```php
+$this->assertSame(422, $result['status_code']);
+$this->assertFalse($result['valid']);
+$this->assertNotEmpty($result['errors']);
+$this->assertStringContainsString('#Reset User Factors (Okta)', $result['errors'][0]);
+$this->assertStringContainsString('okta.reset_factor', $result['errors'][0]);
+```
+
+Confirmed green: `php vendor/bin/phpunit --filter testDanglingBindingReturns422` → **1 test, 5 assertions, OK**
+(and included in the full `tests/Unit/Playbook/` 60/60 pass reported above). This is the actual controller
+response shape (`status_code`, `valid`, `errors`) that `POST /api/v1/playbooks/validate` returns over HTTP —
+the only thing not exercised here is the JWT middleware in front of it, which is unrelated to the analyzer
+logic under test.
+
+**Supplementary evidence**: a standalone check (`t4_analyzer_check.php`, 5-line PHP script) reproducing the
+same scenario against `PlaybookAnalyzer::analyze()` directly with a binding to a wholly nonexistent tool name
+(`okta.no_such_tool`, vs. `testDanglingBindingReturns422`'s "tool present on the server but not the one this
+binding names" case):
 
 ```
 ERRORS:
     [0] => #Search Okta User by Email is bound to okta.no_such_tool but that tool is not available on any connected MCP server.
 ```
 
-**T4: PASS** (via the analyzer path, not the HTTP endpoint — recorded per the task's "either is acceptable"
-allowance). The blocking error names both the action (`#Search Okta User by Email`) and the nonexistent tool
-(`okta.no_such_tool`); in the real `PlaybookNodeRunner::run()` path this exact analyzer call throws before a run
-is ever created (see `PlaybookNodeRunner.php` line ~66–71), so `WorkflowController::runPlaybookNode()` never
-constructs a `playbook_runs` row for a document with an unresolved binding.
+**T4: PASS.** The controller test above is the primary evidence (real controller, real 422, both the action
+and the tool named in the error); the supplementary script corroborates it against a second binding-failure
+shape. In the real `PlaybookNodeRunner::run()` path this same analyzer call throws before a run is ever
+created (see `PlaybookNodeRunner.php` line ~66–71), so `WorkflowController::runPlaybookNode()` never
+constructs a `playbook_runs` row for a document with an unresolved binding either.
 
 ## T5 — replay guard (slice 1a)
 
