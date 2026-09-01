@@ -67,7 +67,7 @@ final class WorkflowLlmClient
             'agent' => $agent,
             'input' => '',
             'messages' => $messages,
-            'tools' => $toolDefs,
+            'tools' => $this->flattenToolDefs($toolDefs),
             'tools_filter' => null,
         ];
 
@@ -83,6 +83,37 @@ final class WorkflowLlmClient
             'text' => $parsed['text'] ?? null,
             'tool_calls' => $this->normalizeToolCalls($parsed['tool_calls'] ?? []),
         ];
+    }
+
+    /**
+     * Convert the interpreter's OpenAI-nested tool definitions
+     * ({type:'function', function:{name, description, parameters}} — the
+     * shape pinned by PlaybookActionSpaceTest/PlaybookNativeToolsTest) to the
+     * flat {name, description, input_schema} shape the rest of the AgentTeam
+     * engine actually expects for the 'tools' state entry (see
+     * MCPToolsLoader::getToolDefinitions and OpenAIProvider::convertToOpenAITools,
+     * which converts FROM this flat shape — i.e. flat is the common-denominator
+     * format ParallelAgentExecutor/ProviderRequestFactory/ClaudeProvider read;
+     * passing the nested shape through verbatim, as this adapter used to do,
+     * makes ClaudeProvider send tools with no top-level `name` and the API
+     * rejects the request with "tools.0.custom.name: Input should be a valid string").
+     */
+    private function flattenToolDefs(array $toolDefs): array
+    {
+        $flat = [];
+        foreach ($toolDefs as $def) {
+            if (isset($def['function']) && is_array($def['function'])) {
+                $flat[] = [
+                    'name' => $def['function']['name'] ?? '',
+                    'description' => $def['function']['description'] ?? '',
+                    'input_schema' => $def['function']['parameters'] ?? ['type' => 'object', 'properties' => []],
+                ];
+            } else {
+                // Already flat (defensive — no current caller does this).
+                $flat[] = $def;
+            }
+        }
+        return $flat;
     }
 
     /**

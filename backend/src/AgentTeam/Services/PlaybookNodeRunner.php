@@ -84,9 +84,13 @@ final class PlaybookNodeRunner
 
         $space = new PlaybookActionSpace($analysis['actions'], $native, $mcp, $state, $doc->policy, $gates);
 
+        // PlaybookInterpreter's $llm parameter is typed \Closure; the default
+        // WorkflowLlmClient is an invokable object, not a Closure instance, so it
+        // must be wrapped. (llmFactory overrides — see PlaybookNodeRunnerTest —
+        // already return real closures and pass through unchanged.)
         $llm = $this->llmFactory !== null
             ? ($this->llmFactory)($nodeConfig)
-            : new WorkflowLlmClient($nodeConfig, $this->config, $pdo);
+            : \Closure::fromCallable(new WorkflowLlmClient($nodeConfig, $this->config, $pdo));
 
         $interpreter = new PlaybookInterpreter($space, $state, $transcript, $llm, 40, $emit);
 
