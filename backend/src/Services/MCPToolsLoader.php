@@ -226,12 +226,13 @@ class MCPToolsLoader
      */
     private function callMCPServer(string $serverUrl, string $toolName, array $arguments, array $extraHeaders = []): array
     {
-        // Use URL as provided - don't force any suffix. Stripping a trailing
-        // slash here used to send directory-root MCP URLs (e.g.
-        // "http://host/server/") to Apache without it, which 301-redirects
-        // to the slash form; curl doesn't follow redirects by default, so
-        // the JSON-RPC response was a redirect HTML body that failed to
-        // parse. Use the URL exactly as stored.
+        // The stored server_url is used byte-for-byte — NEVER rtrim the
+        // trailing slash. Apache 301-redirects a directory-style URL (e.g.
+        // "http://host/server/") requested without its trailing slash, and
+        // curl does not follow redirects by default, so the JSON-RPC
+        // response ends up being the redirect's HTML body, which fails to
+        // parse. Several registered servers legitimately have trailing-slash
+        // URLs, so this must not be "fixed" by re-adding an rtrim.
         $mcpUrl = $serverUrl;
 
         // Ensure empty arguments is an object {} not array []
