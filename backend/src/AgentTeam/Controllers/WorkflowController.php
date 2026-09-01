@@ -990,6 +990,60 @@ class WorkflowController
     }
 
     /**
+     * POST /api/v1/workflows/playbook-node/run
+     * SSE endpoint for the Playbook-interpreter node runner: streams the
+     * interpreter's round/tool_call/tool_result/message/gate_request/final
+     * events as they happen, then a terminal `event: done` (or
+     * `event: error`) frame. Body: { node_config, prompt }. Mirrors the SSE
+     * header/flush pattern of runStream() above.
+     */
+    public function runPlaybookNode(array $request): void
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        $body = $request['body'] ?? [];
+
+        header('Content-Type: text/event-stream');
+        header('Cache-Control: no-cache');
+        header('Connection: keep-alive');
+        header('X-Accel-Buffering: no');
+
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
+
+        $sseCallback = function (array $event) {
+            echo "data: " . json_encode($event) . "\n\n";
+            if (ob_get_level()) {
+                ob_flush();
+            }
+            flush();
+        };
+
+        if (!$userId) {
+            echo "event: error\n";
+            echo "data: " . json_encode(['error' => 'Authentication required']) . "\n\n";
+            flush();
+            return;
+        }
+
+        $nodeConfig = is_array($body['node_config'] ?? null) ? $body['node_config'] : [];
+        $prompt = (string) ($body['prompt'] ?? '');
+
+        try {
+            $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
+            $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
+
+            echo "event: done\n";
+            echo "data: " . json_encode($result) . "\n\n";
+            flush();
+        } catch (\Throwable $e) {
+            echo "event: error\n";
+            echo "data: " . json_encode(['error' => $e->getMessage()]) . "\n\n";
+            flush();
+        }
+    }
+
+    /**
      * POST /api/v1/workflows/tool-result
      * Browser-side dispatcher posts here after running a workflow's
      * client-side tool (run_skill_script). Body shape:

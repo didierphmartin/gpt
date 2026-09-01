@@ -377,6 +377,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows/{id:\d+}/run', ['AgentTeam:WorkflowController', 'run']);
         $r->post('/api/v1/workflows/{id:\d+}/run-stream', ['AgentTeam:WorkflowController', 'runStream']);
         $r->post('/api/v1/workflows/tool-result', ['AgentTeam:WorkflowController', 'toolResult']);
+        $r->post('/api/v1/workflows/playbook-node/run', ['AgentTeam:WorkflowController', 'runPlaybookNode']);
         $r->get('/api/v1/workflows/{id:\d+}/executions', ['AgentTeam:WorkflowController', 'executions']);
         $r->get('/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ['AgentTeam:WorkflowController', 'runEvents']);
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
