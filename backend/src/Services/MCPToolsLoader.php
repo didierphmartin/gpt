@@ -226,8 +226,13 @@ class MCPToolsLoader
      */
     private function callMCPServer(string $serverUrl, string $toolName, array $arguments, array $extraHeaders = []): array
     {
-        // Use URL as provided - don't force any suffix
-        $mcpUrl = rtrim($serverUrl, '/');
+        // Use URL as provided - don't force any suffix. Stripping a trailing
+        // slash here used to send directory-root MCP URLs (e.g.
+        // "http://host/server/") to Apache without it, which 301-redirects
+        // to the slash form; curl doesn't follow redirects by default, so
+        // the JSON-RPC response was a redirect HTML body that failed to
+        // parse. Use the URL exactly as stored.
+        $mcpUrl = $serverUrl;
 
         // Ensure empty arguments is an object {} not array []
         // MCP servers expect "arguments" to be a record/object
