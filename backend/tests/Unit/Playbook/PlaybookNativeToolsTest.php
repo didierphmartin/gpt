@@ -54,9 +54,14 @@ class PlaybookNativeToolsTest extends PlaybookDbTestCase
         $this->assertArrayHasKey('ok', $result);
         $this->assertTrue($result['ok']);
 
-        $run = $this->state->getRun($id);
-        $messages = $this->pdo->query('SELECT * FROM playbook_run_messages WHERE run_id = ?')->fetchAll(\PDO::FETCH_ASSOC);
-        // Note: execute() is not yet implemented, so we're testing the interface
+        $stmt = $this->pdo->prepare('SELECT * FROM playbook_run_messages WHERE run_id = ?');
+        $stmt->execute([$id]);
+        $messages = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $this->assertCount(1, $messages);
+        $this->assertSame('to_requester', $messages[0]['direction']);
+        $this->assertNull($messages[0]['audience']);
+        $this->assertSame('Hello user', $messages[0]['text']);
+        $this->assertSame(0, (int)$messages[0]['sensitive']);
     }
 
     public function testSendDirectMessageWithSensitive(): void
@@ -68,6 +73,14 @@ class PlaybookNativeToolsTest extends PlaybookDbTestCase
         ]);
         $this->assertArrayHasKey('ok', $result);
         $this->assertTrue($result['ok']);
+
+        $stmt = $this->pdo->prepare('SELECT * FROM playbook_run_messages WHERE run_id = ?');
+        $stmt->execute([$id]);
+        $messages = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $this->assertCount(1, $messages);
+        $this->assertSame('to_requester', $messages[0]['direction']);
+        $this->assertSame('«redacted»', $messages[0]['text']);
+        $this->assertSame(1, (int)$messages[0]['sensitive']);
     }
 
     public function testSendChannelMessage(): void
@@ -79,6 +92,14 @@ class PlaybookNativeToolsTest extends PlaybookDbTestCase
         ]);
         $this->assertArrayHasKey('ok', $result);
         $this->assertTrue($result['ok']);
+
+        $stmt = $this->pdo->prepare('SELECT * FROM playbook_run_messages WHERE run_id = ?');
+        $stmt->execute([$id]);
+        $messages = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $this->assertCount(1, $messages);
+        $this->assertSame('to_channel', $messages[0]['direction']);
+        $this->assertSame('general', $messages[0]['audience']);
+        $this->assertSame('Channel message', $messages[0]['text']);
     }
 
     public function testSendEmail(): void
@@ -91,6 +112,14 @@ class PlaybookNativeToolsTest extends PlaybookDbTestCase
         ]);
         $this->assertArrayHasKey('ok', $result);
         $this->assertTrue($result['ok']);
+
+        $stmt = $this->pdo->prepare('SELECT * FROM playbook_run_messages WHERE run_id = ?');
+        $stmt->execute([$id]);
+        $messages = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $this->assertCount(1, $messages);
+        $this->assertSame('to_email', $messages[0]['direction']);
+        $this->assertSame('user@example.com', $messages[0]['audience']);
+        $this->assertSame('Email body', $messages[0]['text']);
     }
 
     public function testLeaveInternalNote(): void
