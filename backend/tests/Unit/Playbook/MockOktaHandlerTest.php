@@ -82,7 +82,7 @@ class MockOktaHandlerTest extends TestCase
         $this->assertArrayHasKey('result', $response);
         $this->assertArrayHasKey('tools', $response['result']);
         $tools = $response['result']['tools'];
-        $this->assertCount(7, $tools);
+        $this->assertCount(11, $tools);
 
         $names = array_map(fn($t) => $t['name'], $tools);
         $this->assertContains('search_users', $names);
