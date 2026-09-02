@@ -7541,7 +7541,7 @@ class WorkflowEditor {
                     <span class="node-title">${this.escapeHtml(nodeConfig.name || 'Playbook')}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
-                <div class="playbook-badges" style="padding:0 8px;">${this._playbookBadgesHtml(nodeConfig)}</div>
+                <div class="playbook-badges" style="padding:0 8px;display:flex;flex-wrap:wrap;max-width:230px;">${this._playbookBadgesHtml(nodeConfig)}</div>
                 <div class="node-body">
                     <small class="node-config-display">${this.escapeHtml(summary)}</small>
                     <button class="node-edit-btn" data-playbook="true" title="Edit">✏️</button>
@@ -11735,9 +11735,10 @@ class WorkflowEditor {
         const html = `
             <div id="playbook-run-overlay" class="storage-config-overlay">
                 <div class="storage-config-modal" style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;">
-                    <div class="storage-config-header">
-                        <h3><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span>${badges}</h3>
+                    <div class="storage-config-header" style="flex-wrap:wrap;">
+                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span></h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
+                        ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
                     <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
                     <div class="storage-config-footer">
