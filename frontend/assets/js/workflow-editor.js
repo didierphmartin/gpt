@@ -11731,6 +11731,7 @@ class WorkflowEditor {
 
     _pbOverlayOpen(dfId, name, servers, prompt) {
         document.getElementById('playbook-run-overlay')?.remove();
+        this._pbCurrentName = name || 'Playbook';
         const badges = (servers || []).map(n =>
             `<span style="display:inline-block;padding:1px 8px;margin-left:6px;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;">${this.escapeHtml(n)}</span>`
         ).join('');
@@ -11875,6 +11876,9 @@ class WorkflowEditor {
                 ? `<button class="storage-config-btn cancel pb-gate-cancel">Cancel</button>
                    <button class="storage-config-btn save pb-gate-done">Done</button>`
                 : `<button class="storage-config-btn save pb-gate-submit">Submit</button>`;
+        // Gate cards lead with the playbook's title so the requester knows
+        // which playbook is asking (user request 2026-09-02).
+        if (this._pbCurrentName) title = `${this._pbCurrentName} — ${title}`;
         return { title, bodyHtml, footerHtml };
     }
 
