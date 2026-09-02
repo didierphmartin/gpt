@@ -11766,9 +11766,25 @@ class WorkflowEditor {
         const once = (fn) => { let used = false; return (...a) => { if (!used) { used = true; fn(...a); } }; };
         const done = once(finish);
         if (kind === 'form') {
-            root.querySelector('.pb-gate-submit')?.addEventListener('click', () => {
+            const btn = root.querySelector('.pb-gate-submit');
+            const inputs = [...root.querySelectorAll('[data-field-name]')];
+            // Partial submits caused the playbook to re-ask the same questions
+            // (run 22: security_q2 arrived empty because the field sat below
+            // the card's internal fold). Submit stays disabled until every
+            // field has a value, with a progress hint on the button.
+            const refresh = () => {
+                if (!btn) return;
+                const filled = inputs.filter(el => String(el.value || '').trim() !== '').length;
+                const complete = filled === inputs.length;
+                btn.disabled = !complete;
+                btn.style.opacity = complete ? '' : '0.5';
+                btn.textContent = complete ? 'Submit' : `Submit (${filled}/${inputs.length} answered)`;
+            };
+            inputs.forEach(el => { el.addEventListener('input', refresh); el.addEventListener('change', refresh); });
+            refresh();
+            btn?.addEventListener('click', () => {
                 const fields = {};
-                root.querySelectorAll('[data-field-name]').forEach(el => { fields[el.dataset.fieldName] = el.value; });
+                inputs.forEach(el => { fields[el.dataset.fieldName] = el.value; });
                 done({ ...fields });
             });
         } else if (kind === 'approval') {
