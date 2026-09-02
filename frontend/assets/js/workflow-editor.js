@@ -11852,8 +11852,12 @@ class WorkflowEditor {
                 + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="5" style="width:100%;min-height:110px;resize:vertical;"></textarea>`);
         } else if (kind === 'handoff') {
             title = 'Handed off to a human';
+            // The requester-facing card stays short (who + why). The model's
+            // step-by-step run summary is for the RECEIVING TEAM, not the
+            // requester — shown collapsed so it doesn't read like the playbook
+            // internals being dumped at run time (user report 2026-09-02).
             bodyHtml = `<p class="storage-config-folder full"><strong>${this.escapeHtml(payload.team_or_person || '')}</strong> — ${this.escapeHtml(payload.reason || '')}</p>`
-                + (payload.summary ? `<p class="storage-config-folder full">${this.escapeHtml(payload.summary)}</p>` : '')
+                + (payload.summary ? `<details class="storage-config-folder full" style="font-size:12px;color:#9ca3af;"><summary style="cursor:pointer;">Internal notes for the receiving team</summary><div style="white-space:pre-wrap;margin-top:6px;">${this.escapeHtml(payload.summary)}</div></details>` : '')
                 + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="5" style="width:100%;min-height:110px;resize:vertical;"></textarea>`);
         } else if (kind === 'await_message') {
             title = 'Waiting for your message';
