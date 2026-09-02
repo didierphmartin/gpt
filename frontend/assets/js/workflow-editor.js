@@ -7618,6 +7618,30 @@ class WorkflowEditor {
         if (sections.trigger.trim()) { h.push(label('Trigger')); h.push(`<div>${decorate(sections.trigger.trim(), actionNames)}</div>`); }
         if (sections.instructions.trim()) {
             h.push(label('Instructions'));
+            const instrLines = sections.instructions.trim().split(/\r?\n/);
+            const explicitNums = instrLines.filter(l => /^\s*\d+(\.\d+)*[.)]?\s+/.test(l)).length;
+            if (explicitNums >= 2) {
+                // Author-supplied hierarchical numbering (2 / 2.1 / 2.1.1):
+                // keep the author's numbers verbatim and indent each level
+                // under its parent (depth = dot count; unnumbered sub-lines
+                // indent by leading spaces, bullets one level deeper).
+                let html = '<div style="margin-top:4px;display:flex;flex-direction:column;gap:5px;">';
+                for (const ln of instrLines) {
+                    if (!ln.trim()) continue;
+                    const m2 = ln.match(/^(\s*)(\d+(?:\.\d+)*)([.)]?)\s+(.*)$/);
+                    if (m2) {
+                        const depth = (m2[2].match(/\./g) || []).length;
+                        html += `<div style="margin-left:${depth * 22}px;"><span style="font-weight:600;color:#6b7280;">${m2[2]}${m2[3] || '.'}</span> ${decorate(m2[4], actionNames)}</div>`;
+                    } else {
+                        const lead = ln.match(/^\s*/)[0].length;
+                        const isBullet = /^[-•*]\s+/.test(ln.trim());
+                        const depth2 = Math.floor(lead / 2) + (isBullet ? 1 : 0);
+                        html += `<div style="margin-left:${depth2 * 22}px;">${isBullet ? '• ' : ''}${decorate(ln.trim().replace(/^[-•*]\s+/, ''), actionNames)}</div>`;
+                    }
+                }
+                html += '</div>';
+                h.push(html);
+            } else {
             // Steps: the Console format separates steps with double spaces.
             const segs = sections.instructions.trim().split(/ {2,}|\n+/).map(t => t.trim()).filter(Boolean);
             // NB: display:flex on an <ol> suppresses the browser's list
@@ -7642,6 +7666,7 @@ class WorkflowEditor {
             if (open) html += '</li>';
             html += '</ol>';
             h.push(html);
+            }
         }
         const chipsRow = (csv, color) => csv.split(/[;,]/).map(t => t.trim()).filter(Boolean)
             .map(t => `<span style="display:inline-block;padding:1px 9px;margin:2px 4px 0 0;border-radius:999px;background:${color};font-size:12px;font-weight:600;">${esc(t)}</span>`).join('');
