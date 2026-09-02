@@ -8889,11 +8889,18 @@ class WorkflowEditor {
         const existingModal = document.getElementById('playbook-config-modal');
         if (existingModal) existingModal.remove();
 
+        // The amber header carries the playbook's Title (user request
+        // 2026-09-02); falls back to 'Playbook' when none is pasted yet.
+        const _pbModalTitle = (pb) => {
+            if (pb && typeof pb === 'object' && pb.title) return String(pb.title);
+            const t = typeof pb === 'string' ? (pb.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '').trim() : '';
+            return t || 'Playbook';
+        };
         const modalHtml = `
             <div id="playbook-config-modal" class="storage-config-overlay">
                 <div class="storage-config-modal">
                     <div class="storage-config-header">
-                        <h3><span>📖</span> Playbook</h3>
+                        <h3><span>📖</span> <span id="playbook-modal-title">${this.escapeHtml(_pbModalTitle(data.playbook))}</span></h3>
                         <button class="storage-config-close" id="playbook-config-close">×</button>
                     </div>
                     <div class="storage-config-body">
@@ -9066,6 +9073,8 @@ class WorkflowEditor {
                 this._refreshPlaybookBadges(curNodeId, updatedData);
                 const titleEl = curEl?.querySelector('.node-title');
                 if (titleEl) titleEl.textContent = updatedData.name;
+                const modalTitleEl = document.getElementById('playbook-modal-title');
+                if (modalTitleEl) modalTitleEl.textContent = _pbModalTitle(updatedData.playbook);
             } catch (_) { /* cosmetics must never block persistence */ }
 
             // Save applies AND persists — the modal stays open so you can
