@@ -51,7 +51,10 @@ final class WorkflowLlmClient
         // the first entry of $messages (see PlaybookInterpreter::buildSystemPrompt),
         // so anything set here would never reach the model.
         $agent = new Agent([
-            'provider' => $this->nodeConfig['agent_provider'] ?? $this->nodeConfig['provider'] ?? 'openai',
+            // ?: not ??  — the node modal's "(default)" option submits an
+            // EMPTY STRING, which null-coalescing passes through; run 33
+            // then died with "No API key for provider ''".
+            'provider' => ($this->nodeConfig['agent_provider'] ?? '') ?: (($this->nodeConfig['provider'] ?? '') ?: 'openai'),
             'model' => $this->nodeConfig['model'] ?? null,
             'instructions' => '',
             'settings' => $this->nodeConfig['settings'] ?? [],
@@ -75,7 +78,11 @@ final class WorkflowLlmClient
         $response = $responses['playbook'] ?? ['success' => false, 'error' => 'No response from LLM'];
 
         if (!($response['success'] ?? false)) {
-            return ['text' => 'Error: ' . ($response['error'] ?? 'LLM call failed'), 'tool_calls' => []];
+            // Throw, don't return error-as-text: a returned string reads to
+            // the interpreter as a benign final answer and the leg ends
+            // silently with nothing done (run 33). An exception surfaces as
+            // a red SSE error event with the real cause.
+            throw new \RuntimeException('LLM call failed: ' . ($response['error'] ?? 'no response'));
         }
 
         $parsed = $response['parsed'] ?? [];
