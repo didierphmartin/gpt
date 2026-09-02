@@ -397,6 +397,11 @@ class ParallelAgentExecutor
                     'model' => $dbConfig['model'] ?: ($configSettings['model'] ?? ''),
                     'base_url' => $dbConfig['base_url'] ?: ($configSettings['base_url'] ?? ''),
                     'max_tokens' => (int)($dbConfig['max_tokens'] ?: ($configSettings['max_tokens'] ?? 4096)),
+                    // Temperature was omitted here, so callers' providerConfig
+                    // fallback could never see the stored value (kimi needs 1.00).
+                    'temperature' => isset($dbConfig['temperature']) && $dbConfig['temperature'] !== '' && $dbConfig['temperature'] !== null
+                        ? (float)$dbConfig['temperature']
+                        : (isset($configSettings['temperature']) ? (float)$configSettings['temperature'] : null),
                     'chat_endpoint' => $dbConfig['chat_endpoint'] ?: ($configSettings['chat_endpoint'] ?? '/v1/chat/completions'),
                 ];
             }
