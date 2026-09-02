@@ -7644,13 +7644,17 @@ class WorkflowEditor {
         return `<div style="font-size:13px;line-height:1.55;">${h.join('')}</div>`;
     }
 
-    /** One-line summary shown on a playbook node's body (first non-blank line of the pasted text). */
+    /** One-line summary shown on a playbook node's body: the playbook's Title
+     *  when present (the preamble first line was meaningless on the canvas),
+     *  else the first non-blank line. */
     _playbookNodeSummary(config) {
         const raw = config?.playbook;
+        if (raw && typeof raw === 'object' && raw.title) return String(raw.title);
         const text = typeof raw === 'string' ? raw : (raw ? JSON.stringify(raw) : '');
-        const firstLine = text.split('\n').map(l => l.trim()).find(l => l) || '';
-        if (!firstLine) return 'No playbook pasted yet';
-        return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+        const m = text.match(/^\s*Title\s*:\s*(.+)$/mi);
+        const line = (m ? m[1] : (text.split('\n').map(l => l.trim()).find(l => l) || '')).trim();
+        if (!line) return 'No playbook pasted yet';
+        return line.length > 60 ? line.slice(0, 60) + '…' : line;
     }
 
     /**
