@@ -8933,15 +8933,15 @@ class WorkflowEditor {
                                 <textarea id="playbook-text" rows="16" style="width:100%;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;">${this.escapeHtml(data.playbook || '')}</textarea>
                             </div>
                             <div class="storage-config-folder full">
-                                <button type="button" id="playbook-validate-btn" class="storage-config-btn cancel" style="padding:4px 14px;">Validate</button>
-                                <span id="playbook-validate-status" style="margin-left:8px;font-size:12px;color:#9ca3af;"></span>
-                                <div id="playbook-validate-result" style="margin-top:10px;font-size:13px;"></div>
+                                <div id="playbook-validate-result" style="font-size:13px;"></div>
                             </div>
                         </div>
                     </div>
                     <div class="storage-config-footer">
                         <style>@keyframes pb-save-spin { to { transform: rotate(360deg); } }</style>
-                        <span id="playbook-save-status" style="margin-right:auto;font-size:12px;align-self:center;"></span>
+                        <button type="button" id="playbook-validate-btn" class="storage-config-btn cancel">Validate</button>
+                        <span id="playbook-validate-status" style="font-size:12px;align-self:center;"></span>
+                        <span id="playbook-save-status" style="margin-right:auto;margin-left:auto;font-size:12px;align-self:center;"></span>
                         <button class="storage-config-btn cancel" id="playbook-config-cancel">Close</button>
                         <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
                     </div>
@@ -9159,7 +9159,7 @@ class WorkflowEditor {
             const detail = actions.length
                 ? ` — ${actions.length} action${actions.length > 1 ? 's' : ''} (${counts.bound} bound, ${counts.native} native, ${counts.unbound} unbound)`
                 : ' — but no #Actions were detected; check the "Actions used" section of your playbook';
-            html += banner(true, `✓ Playbook is VALID${detail}${warnings.length ? ` · ${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : ''}`);
+            html += banner(true, `✓ Playbook is VALID${detail}`);
         } else {
             html += banner(false, `✗ Playbook is INVALID — ${errors.length || 'see'} error${errors.length === 1 ? '' : 's'} below`);
         }
@@ -9167,7 +9167,10 @@ class WorkflowEditor {
             html += `<div style="color:#dc2626;margin-bottom:8px;"><strong>Errors</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${this.escapeHtml(e)}</li>`).join('')}</ul></div>`;
         }
         if (warnings.length) {
-            html += `<div style="color:#b8860b;margin-bottom:8px;"><strong>Warnings</strong><ul style="margin:4px 0 0 18px;">${warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul></div>`;
+            // These are unbound-action notes, not problems — the runtime
+            // policy (handoff by default) covers them. 'Warnings' read as
+            // errors to users (feedback 2026-09-02).
+            html += `<div style="color:#b8860b;margin-bottom:8px;"><strong>Unbound actions</strong><ul style="margin:4px 0 0 18px;">${warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul></div>`;
         }
         if (notices.length) {
             html += `<div style="color:#60a5fa;margin-bottom:8px;"><strong>Auto-bindings</strong><ul style="margin:4px 0 0 18px;">${notices.map(n => `<li>${this.escapeHtml(n)}</li>`).join('')}</ul></div>`;
