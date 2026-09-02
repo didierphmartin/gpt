@@ -8940,7 +8940,7 @@ class WorkflowEditor {
                         </div>
                     </div>
                     <div class="storage-config-footer">
-                        <style>@keyframes pb-save-spin { to { transform: rotate(360deg); } } .pb-saving, .pb-saving * { cursor: progress !important; }</style>
+                        <style>@keyframes pb-save-spin { to { transform: rotate(360deg); } }</style>
                         <span id="playbook-save-status" style="margin-right:auto;font-size:12px;align-self:center;"></span>
                         <button class="storage-config-btn cancel" id="playbook-config-cancel">Close</button>
                         <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
@@ -9084,9 +9084,6 @@ class WorkflowEditor {
             // The button itself is where the user is looking on click — turn
             // it into a disabled spinner too (the footer-only spinner was too
             // easy to miss, user feedback 2026-09-02).
-            // OS-level busy cursor attached to the pointer — the most
-            // noticeable progress signal (user request 2026-09-02).
-            document.body.classList.add('pb-saving');
             const saveBtn = document.getElementById('playbook-config-save');
             const origBtnHtml = saveBtn?.innerHTML;
             if (saveBtn) {
@@ -9107,7 +9104,6 @@ class WorkflowEditor {
             } catch (e) {
                 if (statusEl) { statusEl.textContent = 'save failed: ' + (e?.message || e); statusEl.style.color = '#ef4444'; }
             } finally {
-                document.body.classList.remove('pb-saving');
                 if (saveBtn && origBtnHtml != null) {
                     saveBtn.disabled = false;
                     saveBtn.style.opacity = '';
