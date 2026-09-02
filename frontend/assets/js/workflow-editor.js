@@ -7530,7 +7530,7 @@ class WorkflowEditor {
      * pipeline position, connects like any other agent-workflow node.
      */
     addPlaybookNode(x, y, config = null) {
-        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook' };
+        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook', writes_enabled: false };
         const nodeConfig = config ? { ...defaults, ...config } : { ...defaults };
         const summary = this._playbookNodeSummary(nodeConfig);
 
@@ -7563,6 +7563,7 @@ class WorkflowEditor {
                 agent_provider: nodeConfig.agent_provider,
                 model: nodeConfig.model,
                 mcp_servers: Array.isArray(nodeConfig.mcp_servers) ? nodeConfig.mcp_servers : [],
+                writes_enabled: !!nodeConfig.writes_enabled,
                 disabled: !!nodeConfig.disabled,
             },
             html
