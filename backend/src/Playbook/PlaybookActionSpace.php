@@ -14,7 +14,10 @@ final class PlaybookActionSpace
     // added to an MCP server we don't know about, like okta.deactivate_user)
     // are therefore blocked under writes_enabled=false rather than allowed
     // through by default.
-    private const READ_VERB_PATTERN = '/^(get|list|search|read|find|describe|verify|check)/i';
+    // A tool is read-classified when its name starts with a read verb, or with
+    // one namespace token followed by a read verb (aws's iam_list_*). 'lookup'
+    // added after okta.lookup_users was blocked as a write in live run 38.
+    private const READ_VERB_PATTERN = '/^(?:[a-z0-9]+_)?(get|list|search|read|find|describe|verify|check|lookup)(_|$)/i';
 
     private const UNBOUND_DESCRIPTION = 'NOT AVAILABLE — calling this applies the on_unbound policy';
 

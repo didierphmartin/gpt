@@ -172,6 +172,25 @@ final class PlaybookActionSpaceTest extends PlaybookDbTestCase
         $this->assertSame('ok', $ledger[0]['outcome']);
     }
 
+    public function testLookupAndNamespacedListClassifyAsReads(): void
+    {
+        // Live run 38 regression: okta.lookup_users and
+        // aws.iam_list_attached_user_policies are reads and must execute even
+        // with writes disabled ('lookup' verb + one namespace token before a
+        // read verb).
+        $mcp = new FakeMcpExecutor();
+        $actions = array_merge($this->actions(), [
+            ['name' => '#Lookup Users', 'kind' => 'bound', 'target' => 'okta.lookup_users'],
+            ['name' => '#List IAM Policies', 'kind' => 'bound', 'target' => 'aws.iam_list_attached_user_policies'],
+        ]);
+        $space = $this->space($actions, $mcp, ['writes_enabled' => false]);
+        $id = $this->state->createRun(1, $this->doc(), [], []);
+
+        $this->assertTrue($space->execute($id, 0, 'okta__lookup_users', ['email' => 'a@b.com'])['ok']);
+        $this->assertTrue($space->execute($id, 0, 'aws__iam_list_attached_user_policies', ['user_name' => 'a'])['ok']);
+        $this->assertCount(2, $mcp->calls);
+    }
+
     public function testUnrecognizedToolNameFailsClosedAsWrite(): void
     {
         // okta.deactivate_user matches neither a write verb nor our read
