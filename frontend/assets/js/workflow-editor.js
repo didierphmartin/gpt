@@ -7620,7 +7620,10 @@ class WorkflowEditor {
             h.push(label('Instructions'));
             // Steps: the Console format separates steps with double spaces.
             const segs = sections.instructions.trim().split(/ {2,}|\n+/).map(t => t.trim()).filter(Boolean);
-            let html = '<ol style="margin:4px 0 0 20px;display:flex;flex-direction:column;gap:6px;">';
+            // NB: display:flex on an <ol> suppresses the browser's list
+            // numbering (list-item display is replaced) — keep it a plain
+            // list so steps render 1. 2. 3. like Console's viewer.
+            let html = '<ol style="margin:4px 0 0 0;padding-left:24px;">';
             let subs = null;
             const flushSubs = () => { if (subs) { html += `<ul style="margin:4px 0 0 16px;">${subs}</ul>`; subs = null; } };
             let open = false;
@@ -7632,7 +7635,7 @@ class WorkflowEditor {
                 }
                 flushSubs();
                 if (open) html += '</li>';
-                html += `<li>${decorate(seg, actionNames)}`;
+                html += `<li style="margin:5px 0;">${decorate(seg, actionNames)}`;
                 open = true;
             }
             flushSubs();
