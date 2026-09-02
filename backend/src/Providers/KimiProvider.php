@@ -291,6 +291,9 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
                 $payload['temperature'] = 0.6;
                 $payload['top_p'] = 0.95;
             }
+        } elseif (str_starts_with($this->model, 'kimi-k3')) {
+            // K3 accepts exactly temperature 1 — same forcing rationale as K2.
+            $payload['temperature'] = 1.0;
         } else {
             $payload['temperature'] = $this->temperature;
         }
@@ -874,6 +877,10 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
             $payload['thinking'] = ['type' => 'disabled'];
             $payload['temperature'] = 0.6;
             $payload['top_p'] = 0.95;
+        } elseif (str_starts_with($model, 'kimi-k3')) {
+            // K3 accepts exactly temperature 1 ("invalid temperature: only 1
+            // is allowed for this model"); force it like the K2 pair above.
+            $payload['temperature'] = 1.0;
         } else {
             $payload['temperature'] = $temperature;
         }
