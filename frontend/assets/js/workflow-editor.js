@@ -8909,6 +8909,7 @@ class WorkflowEditor {
         }
         const errors = Array.isArray(json.errors) ? json.errors : [];
         const warnings = Array.isArray(json.warnings) ? json.warnings : [];
+        const notices = Array.isArray(json.notices) ? json.notices : [];
         const actions = Array.isArray(json.actions) ? json.actions : [];
         const counts = { bound: 0, native: 0, unbound: 0 };
         for (const a of actions) if (counts[a.kind] !== undefined) counts[a.kind]++;
@@ -8926,6 +8927,9 @@ class WorkflowEditor {
         }
         if (warnings.length) {
             html += `<div style="color:#b8860b;margin-bottom:8px;"><strong>Warnings</strong><ul style="margin:4px 0 0 18px;">${warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul></div>`;
+        }
+        if (notices.length) {
+            html += `<div style="color:#60a5fa;margin-bottom:8px;"><strong>Auto-bindings</strong><ul style="margin:4px 0 0 18px;">${notices.map(n => `<li>${this.escapeHtml(n)}</li>`).join('')}</ul></div>`;
         }
         if (actions.length) {
             html += `<table style="width:100%;border-collapse:collapse;">

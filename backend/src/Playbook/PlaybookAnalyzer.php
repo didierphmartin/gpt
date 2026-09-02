@@ -23,7 +23,7 @@ final class PlaybookAnalyzer
     /** @param string[] $availableTools "server.tool" ids @param string[] $availableAgents agent names */
     public function analyze(PlaybookDocument $doc, array $availableTools, array $availableAgents = []): array
     {
-        $actions = []; $gates = []; $errors = []; $warnings = [];
+        $actions = []; $gates = []; $errors = []; $warnings = []; $notices = [];
         // Checklist = #Actions in prose order. Find positions longest-name-first
         // on a working copy of the instructions, masking each match (blanking it
         // out) as it's found, so a shorter name occurring only as a prefix/substring
@@ -61,7 +61,8 @@ final class PlaybookAnalyzer
                 $auto = $hasExplicit ? null : $this->autoBind($name, $availableTools);
                 if ($auto !== null) {
                     $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $auto, 'auto' => true];
-                    $warnings[] = "Auto-bound {$name} → {$auto} (matched by name; add an explicit binding to override).";
+                    // Informational, not a problem: goes to 'notices', never 'warnings'.
+                    $notices[] = "Auto-bound {$name} → {$auto} (matched by name; add an explicit binding to override).";
                     continue;
                 }
                 $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => null, 'auto' => false];
@@ -86,7 +87,7 @@ final class PlaybookAnalyzer
             }
         }
         return ['actions' => $actions, 'gates' => array_values(array_unique($gates)),
-                'checklist' => $ordered, 'errors' => $errors, 'warnings' => $warnings];
+                'checklist' => $ordered, 'errors' => $errors, 'warnings' => $warnings, 'notices' => $notices];
     }
 
     /**

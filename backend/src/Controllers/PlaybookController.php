@@ -81,6 +81,7 @@ class PlaybookController
             'checklist' => $result['checklist'],
             'errors' => $result['errors'],
             'warnings' => $result['warnings'],
+            'notices' => $result['notices'] ?? [],
             'status_code' => $valid ? 200 : 422,
         ];
     }

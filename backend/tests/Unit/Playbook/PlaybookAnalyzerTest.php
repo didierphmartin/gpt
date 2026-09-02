@@ -107,8 +107,10 @@ class PlaybookAnalyzerTest extends TestCase
         $this->assertSame('okta.reset_factor', $byName['#Reset User Factors (Custom)']['target']);
         $this->assertSame('native', $byName['#Leave Internal Note']['kind']);
         $this->assertSame([], $r['errors']);
-        // Auto-bindings are surfaced transparently.
-        $this->assertNotEmpty(array_filter($r['warnings'], fn($w) => str_contains($w, 'Auto-bound')));
+        // Auto-bindings are surfaced transparently as NOTICES, not warnings
+        // (a Warning tag reads as a problem; auto-binding is the success path).
+        $this->assertNotEmpty(array_filter($r['notices'], fn($n) => str_contains($n, 'Auto-bound')));
+        $this->assertSame([], array_filter($r['warnings'], fn($w) => str_contains($w, 'Auto-bound')));
     }
 
     public function testExplicitNullBindingIsNotAutoBound(): void
