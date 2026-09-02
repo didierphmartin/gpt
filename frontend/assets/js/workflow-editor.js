@@ -8728,6 +8728,16 @@ class WorkflowEditor {
         const data = nodeData.data || {};
 
         try { await this.loadProviders(); } catch (_) { /* best-effort */ }
+        // Shared model catalog (same source as the Settings panel:
+        // GET /api/v1/models/catalog → {providers: {provider: [{id,label,…}]}}).
+        // Fetched once per session; failure degrades to a free "(default)" choice.
+        if (!this._modelCatalog) {
+            try {
+                const res = await fetch(window.apiUrl('/models/catalog'));
+                const body = await res.json();
+                this._modelCatalog = body?.providers || {};
+            } catch (_) { this._modelCatalog = {}; }
+        }
         const providersOptions = (this.providers || []).map(p =>
             `<option value="${this.escapeHtml(p.name)}" ${data.agent_provider === p.name ? 'selected' : ''}>${this.escapeHtml(p.display_name || p.name)}</option>`
         ).join('');
@@ -8756,8 +8766,10 @@ class WorkflowEditor {
                                 </select>
                             </div>
                             <div class="storage-config-folder">
-                                <label for="playbook-model-input">Model</label>
-                                <input type="text" id="playbook-model-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" value="${this.escapeHtml(data.model || '')}" placeholder="model name">
+                                <label for="playbook-model-select">Model</label>
+                                <select id="playbook-model-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                    ${this._playbookModelOptions(data.agent_provider || '', data.model || '')}
+                                </select>
                             </div>
                             <div class="storage-config-folder full">
                                 <label for="playbook-text">Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span></label>
@@ -8794,6 +8806,12 @@ class WorkflowEditor {
         document.getElementById('playbook-config-close').addEventListener('click', closeModal);
         document.getElementById('playbook-config-cancel').addEventListener('click', closeModal);
         document.addEventListener('keydown', escHandler);
+
+        document.getElementById('playbook-provider-select').addEventListener('change', (ev) => {
+            const modelSel = document.getElementById('playbook-model-select');
+            const current = modelSel.value;
+            modelSel.innerHTML = this._playbookModelOptions(ev.target.value, current);
+        });
 
         document.getElementById('playbook-validate-btn').addEventListener('click', async () => {
             const statusEl = document.getElementById('playbook-validate-status');
@@ -8840,7 +8858,7 @@ class WorkflowEditor {
                 node_type: 'playbook',
                 name: (document.getElementById('playbook-name-input').value || 'Playbook').trim(),
                 agent_provider: document.getElementById('playbook-provider-select').value || '',
-                model: (document.getElementById('playbook-model-input').value || '').trim(),
+                model: (document.getElementById('playbook-model-select').value || '').trim(),
                 playbook: document.getElementById('playbook-text').value,
             };
             this.editor.updateNodeDataFromId(nodeId, updatedData);
@@ -8853,6 +8871,27 @@ class WorkflowEditor {
 
             closeModal();
         });
+    }
+
+    /**
+     * <option> list for the playbook model select: the provider's models from
+     * the shared catalog, plus "(provider default)" and — when the stored
+     * model isn't in the catalog (admin-configured) — the stored value itself,
+     * so saved nodes never lose their model on reopen.
+     */
+    _playbookModelOptions(provider, current) {
+        const models = (this._modelCatalog && this._modelCatalog[provider]) || [];
+        let html = `<option value="" ${!current ? 'selected' : ''}>(provider default)</option>`;
+        let found = false;
+        for (const m of models) {
+            const sel = current === m.id;
+            if (sel) found = true;
+            html += `<option value="${this.escapeHtml(m.id)}" ${sel ? 'selected' : ''}>${this.escapeHtml(m.label || m.id)}</option>`;
+        }
+        if (current && !found) {
+            html += `<option value="${this.escapeHtml(current)}" selected>${this.escapeHtml(current)} (not in catalog)</option>`;
+        }
+        return html;
     }
 
     /** Render the /playbooks/validate response: red errors, amber warnings, actions table. */
