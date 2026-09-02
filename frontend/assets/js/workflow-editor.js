@@ -7580,10 +7580,17 @@ class WorkflowEditor {
     _playbookPrettyHtml(text) {
         const esc = (t) => this.escapeHtml(t);
         const chip = (name) => `<span style="display:inline-block;padding:0 7px;border-radius:6px;background:rgba(59,130,246,0.15);color:#2563eb;font-weight:600;">${esc(name)}</span>`;
-        const decorate = (t) => {
+        const decorate = (t, actionNames) => {
             let h = esc(t);
-            // #Action tokens → chips (longest match first: known names, then a generic pattern)
-            h = h.replace(/#[A-Z][A-Za-z0-9'’ ]*(?:\([A-Za-z ]+\))?(?=[\s.,;:]|$)/g, (m) => chip(m));
+            // Chip ONLY known action names (longest first) — a greedy generic
+            // pattern swallowed whole sentences into one chip.
+            for (const name of actionNames) {
+                const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+                h = h.replace(re, chip(name));
+            }
+            // Conservative fallback for unlisted actions: '#' + up to 4 capitalized words.
+            h = h.replace(/#(?:[A-Z][\w'’]*)(?: [A-Z][\w'’]*){0,3}(?: \([A-Za-z ]+\))?/g,
+                (m) => m.includes('<span') ? m : chip(m));
             // #channels, $vars, {{templates}}, key = value → code style
             h = h.replace(/#[a-z][\w-]+/g, (m) => `<code>${m}</code>`);
             h = h.replace(/\$[a-zA-Z_.]+|\{\{[^}]+\}\}|\b\w+ = \w+\b/g, (m) => `<code>${m}</code>`);
@@ -7598,11 +7605,14 @@ class WorkflowEditor {
             if (m) { current = m[1].toLowerCase(); sections[current] = m[2]; }
             else if (sections[current] !== undefined) sections[current] += (sections[current] ? '\n' : '') + line;
         }
+        const actionNames = (sections['actions used'] || '')
+            .split(/[;,]/).map(t => t.trim()).filter(t => t.startsWith('#'))
+            .sort((a, b) => b.length - a.length);
         const h = [];
         const label = (t) => `<div style="font-size:11px;font-weight:700;letter-spacing:0.05em;color:#9ca3af;text-transform:uppercase;margin:14px 0 4px;">${t}</div>`;
         if (sections.title.trim()) h.push(`<div style="font-size:18px;font-weight:700;">${esc(sections.title.trim())}</div>`);
         if (sections.preamble.trim()) h.push(`<div style="color:#9ca3af;font-size:12px;margin-top:6px;font-style:italic;">${esc(sections.preamble.trim())}</div>`);
-        if (sections.trigger.trim()) { h.push(label('Trigger')); h.push(`<div>${decorate(sections.trigger.trim())}</div>`); }
+        if (sections.trigger.trim()) { h.push(label('Trigger')); h.push(`<div>${decorate(sections.trigger.trim(), actionNames)}</div>`); }
         if (sections.instructions.trim()) {
             h.push(label('Instructions'));
             // Steps: the Console format separates steps with double spaces.
@@ -7614,12 +7624,12 @@ class WorkflowEditor {
             for (const seg of segs) {
                 // Branch lines like "Low → …" / "Engineering → …" / "3+ resets… → High" become sub-bullets.
                 if (/^[^#]{0,40}→/.test(seg) && open) {
-                    subs = (subs || '') + `<li>${decorate(seg)}</li>`;
+                    subs = (subs || '') + `<li>${decorate(seg, actionNames)}</li>`;
                     continue;
                 }
                 flushSubs();
                 if (open) html += '</li>';
-                html += `<li>${decorate(seg)}`;
+                html += `<li>${decorate(seg, actionNames)}`;
                 open = true;
             }
             flushSubs();
