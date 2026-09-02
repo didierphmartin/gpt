@@ -1413,8 +1413,29 @@ class WorkflowEditor {
             this.updateLocalStorageGroupState();
         });
 
-        saveBtn.addEventListener('click', () => {
-            this.saveWorkflow();
+        saveBtn.addEventListener('click', async () => {
+            if (saveBtn.disabled) return;
+            // Same in-button progress as the playbook modal's Save / the top
+            // Save button: disabled + spinner + "Saving…" until the round
+            // trip (remote DB + canvas reload) completes.
+            const _orig = saveBtn.innerHTML;
+            saveBtn.disabled = true;
+            saveBtn.style.opacity = '0.7';
+            saveBtn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:wf-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>'
+                + this.tWithFallback('workflow.buttons.saving', 'Saving…');
+            if (!document.getElementById('wf-save-spin-style')) {
+                document.head.insertAdjacentHTML('beforeend',
+                    '<style id="wf-save-spin-style">@keyframes wf-save-spin { to { transform: rotate(360deg); } }</style>');
+            }
+            try {
+                await this.saveWorkflow();
+            } finally {
+                if (document.body.contains(saveBtn)) {
+                    saveBtn.disabled = false;
+                    saveBtn.style.opacity = '';
+                    saveBtn.innerHTML = _orig;
+                }
+            }
         });
 
         // Import / Export — JSON interchange. Export reuses the existing
