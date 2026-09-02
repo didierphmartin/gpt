@@ -11522,6 +11522,8 @@ class WorkflowEditor {
         this.highlightNode(dfId, 'active', dfId, 'agent');
         this.updateModalInputOutput(dfId);
         this._wfNodeLog(dfId, 'llm', 'starting playbook run');
+        // Conversation overlay (default feedback surface for playbook runs).
+        this._pbOverlayOpen(dfId, data.name || 'Playbook', this._playbookServerNames(data), inputText);
 
         const nodeConfig = {
             playbook: data.playbook,
@@ -11581,6 +11583,7 @@ class WorkflowEditor {
             nd.executionTime = Date.now() - _startedAt;
             try { this.stopNodeTimer(dfId); } catch (_) {}
             this._wfNodeLog(dfId, 'done', `playbook run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? ''}`.trim());
+            this._pbOverlayFinish(true, `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
             this.highlightNode(dfId, 'completed', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             return { success: true, output };
@@ -11592,10 +11595,211 @@ class WorkflowEditor {
             nd.executionTime = Date.now() - _startedAt;
             try { this.stopNodeTimer(dfId); } catch (_) {}
             this._wfNodeLog(dfId, 'error', msg, 'error');
+            this._pbOverlayFinish(false, msg);
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             return { success: false, output: 'Error: ' + msg };
         }
+    }
+
+    // ---- Playbook conversation overlay ------------------------------------
+    // Live chat-style feed of a playbook run (user request, tool activity,
+    // playbook messages, inline gates, final resolution). Opens by default
+    // when a playbook node starts; closing it never stops the run (the node
+    // activity log keeps recording).
+
+    _pbOverlayOpen(dfId, name, servers, prompt) {
+        document.getElementById('playbook-run-overlay')?.remove();
+        const badges = (servers || []).map(n =>
+            `<span style="display:inline-block;padding:1px 8px;margin-left:6px;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;">${this.escapeHtml(n)}</span>`
+        ).join('');
+        const html = `
+            <div id="playbook-run-overlay" class="storage-config-overlay">
+                <div class="storage-config-modal" style="max-width:720px;width:92%;">
+                    <div class="storage-config-header">
+                        <h3><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span>${badges}</h3>
+                        <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
+                    </div>
+                    <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;"></div>
+                    <div class="storage-config-footer">
+                        <span id="pb-ov-status" style="margin-right:auto;color:#9ca3af;font-size:12px;">running…</span>
+                        <button class="storage-config-btn cancel" id="pb-ov-hide">Hide</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        const hide = () => document.getElementById('playbook-run-overlay')?.remove();
+        document.getElementById('pb-ov-close')?.addEventListener('click', hide);
+        document.getElementById('pb-ov-hide')?.addEventListener('click', hide);
+        this._pbBubble('you', prompt);
+    }
+
+    _pbOverlayEl() { return document.getElementById('pb-ov-feed'); }
+
+    _pbAppend(html) {
+        const feed = this._pbOverlayEl();
+        if (!feed) return null;
+        feed.insertAdjacentHTML('beforeend', html);
+        feed.scrollTop = feed.scrollHeight;
+        return feed.lastElementChild;
+    }
+
+    _pbBubble(who, text, opts = {}) {
+        const you = who === 'you';
+        const bg = you ? 'rgba(59,130,246,0.12)' : (opts.channel ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.12)');
+        const align = you ? 'flex-end' : 'flex-start';
+        const label = you ? 'You' : (opts.channel ? `📢 ${opts.channel}` : '📖 Playbook');
+        let body;
+        if (opts.sensitive) {
+            const esc = this.escapeHtml(text);
+            body = `<span class="pb-sensitive" style="cursor:pointer;color:#9ca3af;" data-revealed="0">•••••• (sensitive — click to reveal)</span><span hidden>${esc}</span>`;
+        } else {
+            body = this.escapeHtml(text);
+        }
+        const el = this._pbAppend(`
+            <div style="align-self:${align};max-width:85%;background:${bg};border-radius:10px;padding:8px 12px;">
+                <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">${this.escapeHtml(label)}</div>
+                <div style="font-size:13px;white-space:pre-wrap;">${body}</div>
+            </div>`);
+        el?.querySelector('.pb-sensitive')?.addEventListener('click', (e) => {
+            const hiddenEl = e.target.nextElementSibling;
+            const shown = e.target.dataset.revealed === '1';
+            e.target.dataset.revealed = shown ? '0' : '1';
+            e.target.textContent = shown ? '•••••• (sensitive — click to reveal)' : '';
+            if (hiddenEl) hiddenEl.hidden = shown;
+        });
+        return el;
+    }
+
+    _pbActivity(name) {
+        return this._pbAppend(`
+            <div data-pb-tool="${this.escapeHtml(name)}" style="align-self:flex-start;font-size:11px;color:#9ca3af;padding:0 4px;">🔧 ${this.escapeHtml(name)} <span class="pb-tool-state">…</span></div>`);
+    }
+
+    _pbActivityDone(name, ok) {
+        const feed = this._pbOverlayEl();
+        if (!feed) return;
+        const els = feed.querySelectorAll(`[data-pb-tool="${CSS.escape(name)}"]:not([data-done])`);
+        const el = els[els.length - 1];
+        if (!el) return;
+        el.setAttribute('data-done', '1');
+        const st = el.querySelector('.pb-tool-state');
+        if (st) { st.textContent = ok ? '✓' : '✗'; st.style.color = ok ? '#22c55e' : '#ef4444'; }
+    }
+
+    _pbOverlayFinish(ok, text) {
+        const title = document.getElementById('pb-ov-title');
+        if (title) title.textContent = title.textContent.replace('— running…', ok ? '— finished' : '— failed');
+        const st = document.getElementById('pb-ov-status');
+        if (st) { st.textContent = ok ? 'finished' : 'failed'; st.style.color = ok ? '#22c55e' : '#ef4444'; }
+        const hideBtn = document.getElementById('pb-ov-hide');
+        if (hideBtn) hideBtn.textContent = 'Close';
+        this._pbAppend(`
+            <div style="align-self:center;max-width:95%;border:1px solid ${ok ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)'};border-radius:10px;padding:8px 14px;color:${ok ? '#22c55e' : '#ef4444'};font-size:13px;">
+                ${ok ? '✅' : '❌'} ${this.escapeHtml(text || (ok ? 'resolved' : 'failed'))}
+            </div>`);
+    }
+
+    /** Shared gate UI parts, used by the inline feed card AND the fallback modal. */
+    _pbGateParts(ev) {
+        const kind = ev.kind;
+        const payload = ev.payload || {};
+        const fieldRow = (labelText, inner) => `
+            <div class="storage-config-folder full">
+                <label>${this.escapeHtml(labelText)}</label>
+                ${inner}
+            </div>`;
+        let title = 'Playbook needs input';
+        let bodyHtml = '';
+        if (kind === 'form') {
+            title = 'Form request';
+            const fields = Array.isArray(payload.fields) ? payload.fields : [];
+            bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
+                + fields.map(f => {
+                    const name = String(f.name || '');
+                    const label = f.label || name;
+                    if (f.type === 'select' && Array.isArray(f.options)) {
+                        const opts = f.options.map(o => `<option value="${this.escapeHtml(o)}">${this.escapeHtml(o)}</option>`).join('');
+                        return fieldRow(label, `<select data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg">${opts}</select>`);
+                    }
+                    const inputType = f.sensitive ? 'password' : (f.type === 'number' ? 'number' : 'text');
+                    return fieldRow(label, `<input type="${inputType}" data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="${this.escapeHtml(label)}">`);
+                }).join('');
+        } else if (kind === 'approval') {
+            title = 'Approval requested';
+            bodyHtml = `<p class="storage-config-folder full">${this.escapeHtml(payload.question || '')}</p>`
+                + (payload.context ? `<p class="storage-config-folder full" style="color:#9ca3af;">${this.escapeHtml(payload.context)}</p>` : '')
+                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+        } else if (kind === 'handoff') {
+            title = 'Handed off to a human';
+            bodyHtml = `<p class="storage-config-folder full"><strong>${this.escapeHtml(payload.team_or_person || '')}</strong> — ${this.escapeHtml(payload.reason || '')}</p>`
+                + (payload.summary ? `<p class="storage-config-folder full">${this.escapeHtml(payload.summary)}</p>` : '')
+                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+        } else if (kind === 'await_message') {
+            title = 'Waiting for your message';
+            bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
+                + fieldRow('Message', `<textarea class="pb-gate-text" rows="3" style="width:100%;"></textarea>`);
+        } else {
+            bodyHtml = `<p class="storage-config-folder full">Unknown gate kind: ${this.escapeHtml(String(kind))}</p>`;
+        }
+        const footerHtml = kind === 'approval'
+            ? `<button class="storage-config-btn cancel pb-gate-deny">Deny</button>
+               <button class="storage-config-btn save pb-gate-approve">Approve</button>`
+            : kind === 'handoff'
+                ? `<button class="storage-config-btn cancel pb-gate-cancel">Cancel</button>
+                   <button class="storage-config-btn save pb-gate-done">Done</button>`
+                : `<button class="storage-config-btn save pb-gate-submit">Submit</button>`;
+        return { title, bodyHtml, footerHtml };
+    }
+
+    /** Wire gate buttons inside `root`; calls finish(answer) exactly once. */
+    _pbGateBind(root, kind, finish) {
+        const actor = window.authManager?.user?.email || window.authManager?.user?.name || '';
+        const once = (fn) => { let used = false; return (...a) => { if (!used) { used = true; fn(...a); } }; };
+        const done = once(finish);
+        if (kind === 'form') {
+            root.querySelector('.pb-gate-submit')?.addEventListener('click', () => {
+                const fields = {};
+                root.querySelectorAll('[data-field-name]').forEach(el => { fields[el.dataset.fieldName] = el.value; });
+                done({ ...fields });
+            });
+        } else if (kind === 'approval') {
+            root.querySelector('.pb-gate-approve')?.addEventListener('click', () =>
+                done({ decision: 'approved', comment: root.querySelector('.pb-gate-comment')?.value || '', actor }));
+            root.querySelector('.pb-gate-deny')?.addEventListener('click', () =>
+                done({ decision: 'denied', comment: root.querySelector('.pb-gate-comment')?.value || '', actor }));
+        } else if (kind === 'handoff') {
+            root.querySelector('.pb-gate-done')?.addEventListener('click', () =>
+                done({ decision: 'handoff_done', comment: root.querySelector('.pb-gate-comment')?.value || '' }));
+            root.querySelector('.pb-gate-cancel')?.addEventListener('click', () =>
+                done({ decision: 'cancelled', comment: root.querySelector('.pb-gate-comment')?.value || '' }));
+        } else if (kind === 'await_message') {
+            root.querySelector('.pb-gate-submit')?.addEventListener('click', () =>
+                done({ text: root.querySelector('.pb-gate-text')?.value || '' }));
+        } else {
+            root.querySelector('.pb-gate-submit')?.addEventListener('click', () => done({}));
+        }
+    }
+
+    /** Inline gate card in the conversation feed; resolves with the answer. */
+    _showPlaybookGateInline(ev) {
+        return new Promise((resolve) => {
+            const { title, bodyHtml, footerHtml } = this._pbGateParts(ev);
+            const card = this._pbAppend(`
+                <div style="align-self:stretch;border:1px solid rgba(245,158,11,0.6);border-radius:10px;overflow:hidden;">
+                    <div style="background:rgba(245,158,11,0.15);padding:6px 12px;font-weight:600;font-size:13px;">🖐 ${this.escapeHtml(title)}</div>
+                    <div class="storage-config-grid" style="padding:10px 12px;">${bodyHtml}</div>
+                    <div style="padding:8px 12px;display:flex;justify-content:flex-end;gap:8px;">${footerHtml}</div>
+                </div>`);
+            if (!card) { resolve(null); return; }
+            this._pbGateBind(card, ev.kind, (answer) => {
+                card.style.opacity = '0.55';
+                card.querySelectorAll('button,input,select,textarea').forEach(el => { el.disabled = true; });
+                const label = answer?.decision || (ev.kind === 'form' ? 'submitted' : 'sent');
+                card.insertAdjacentHTML('beforeend', `<div style="padding:4px 12px 8px;font-size:11px;color:#9ca3af;">answered: ${this.escapeHtml(String(label))}</div>`);
+                resolve(answer);
+            });
+        });
     }
 
     /** Dispatch one playbook SSE progress event: log it, or block on a gate modal. */
@@ -11606,12 +11810,15 @@ class WorkflowEditor {
                 return;
             case 'tool_call':
                 this._wfNodeLog(dfId, 'skill', `${ev.name}(${JSON.stringify(ev.args || {}).slice(0, 200)})`);
+                this._pbActivity(ev.name);
                 return;
             case 'tool_result':
                 this._wfNodeLog(dfId, 'skill', `${ev.name} → ${JSON.stringify(ev.result ?? {}).slice(0, 200)}`);
+                this._pbActivityDone(ev.name, (ev.result?.ok) !== false);
                 return;
             case 'message':
                 this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));
+                this._pbBubble('playbook', String(ev.text || ''), { sensitive: !!ev.sensitive });
                 return;
             case 'final':
                 this._wfNodeLog(dfId, 'done', `leg ${ev.leg} ${ev.status}`);
@@ -11627,7 +11834,9 @@ class WorkflowEditor {
     /** Show the gate modal, wait for the human's answer, POST it back to unblock the run. */
     async _handlePlaybookGate(dfId, ev) {
         this._wfNodeLog(dfId, 'skill', `waiting on a human (${ev.kind})`);
-        const answer = await this._showPlaybookGateModal(ev);
+        const answer = this._pbOverlayEl()
+            ? await this._showPlaybookGateInline(ev)
+            : await this._showPlaybookGateModal(ev);
         this._wfNodeLog(dfId, 'skill', `gate answered (${ev.kind})`);
         try {
             await fetch(`${this.apiBase}/workflows/tool-result`, {
@@ -11653,65 +11862,14 @@ class WorkflowEditor {
      */
     _showPlaybookGateModal(ev) {
         return new Promise((resolve) => {
-            const kind = ev.kind;
-            const payload = ev.payload || {};
-
             const existing = document.getElementById('playbook-gate-modal');
             if (existing) existing.remove();
-
-            let title = 'Playbook needs input';
-            let bodyHtml = '';
-            const fieldRow = (labelText, inner) => `
-                <div class="storage-config-folder full">
-                    <label>${this.escapeHtml(labelText)}</label>
-                    ${inner}
-                </div>`;
-
-            if (kind === 'form') {
-                title = 'Playbook — form request';
-                const fields = Array.isArray(payload.fields) ? payload.fields : [];
-                bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
-                    + fields.map(f => {
-                        const name = String(f.name || '');
-                        const label = f.label || name;
-                        if (f.type === 'select' && Array.isArray(f.options)) {
-                            const opts = f.options.map(o => `<option value="${this.escapeHtml(o)}">${this.escapeHtml(o)}</option>`).join('');
-                            return fieldRow(label, `<select data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg">${opts}</select>`);
-                        }
-                        const inputType = f.sensitive ? 'password' : (f.type === 'number' ? 'number' : 'text');
-                        return fieldRow(label, `<input type="${inputType}" data-field-name="${this.escapeHtml(name)}" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="${this.escapeHtml(label)}">`);
-                    }).join('');
-            } else if (kind === 'approval') {
-                title = 'Playbook — approval requested';
-                bodyHtml = `<p class="storage-config-folder full">${this.escapeHtml(payload.question || '')}</p>`
-                    + (payload.context ? `<p class="storage-config-folder full" style="color:#9ca3af;">${this.escapeHtml(payload.context)}</p>` : '')
-                    + fieldRow('Comment (optional)', `<textarea id="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
-            } else if (kind === 'handoff') {
-                title = 'Playbook — handed off to a human';
-                bodyHtml = `<p class="storage-config-folder full"><strong>${this.escapeHtml(payload.team_or_person || '')}</strong> — ${this.escapeHtml(payload.reason || '')}</p>`
-                    + (payload.summary ? `<p class="storage-config-folder full">${this.escapeHtml(payload.summary)}</p>` : '')
-                    + fieldRow('Comment (optional)', `<textarea id="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
-            } else if (kind === 'await_message') {
-                title = 'Playbook — waiting for a message';
-                bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
-                    + fieldRow('Message', `<textarea id="pb-gate-text" rows="3" style="width:100%;"></textarea>`);
-            } else {
-                bodyHtml = `<p class="storage-config-folder full">Unknown gate kind: ${this.escapeHtml(String(kind))}</p>`;
-            }
-
-            const footerHtml = kind === 'approval'
-                ? `<button class="storage-config-btn cancel" id="pb-gate-deny">Deny</button>
-                   <button class="storage-config-btn save" id="pb-gate-approve">Approve</button>`
-                : kind === 'handoff'
-                    ? `<button class="storage-config-btn cancel" id="pb-gate-cancel">Cancel</button>
-                       <button class="storage-config-btn save" id="pb-gate-done">Done</button>`
-                    : `<button class="storage-config-btn save" id="pb-gate-submit">Submit</button>`;
-
+            const { title, bodyHtml, footerHtml } = this._pbGateParts(ev);
             const modalHtml = `
                 <div id="playbook-gate-modal" class="storage-config-overlay">
                     <div class="storage-config-modal">
                         <div class="storage-config-header">
-                            <h3><span>📖</span> ${this.escapeHtml(title)}</h3>
+                            <h3><span>📖</span> Playbook — ${this.escapeHtml(title)}</h3>
                         </div>
                         <div class="storage-config-body">
                             <div class="storage-config-grid">${bodyHtml}</div>
@@ -11722,37 +11880,7 @@ class WorkflowEditor {
             `;
             document.body.insertAdjacentHTML('beforeend', modalHtml);
             const modal = document.getElementById('playbook-gate-modal');
-
-            const finish = (answer) => { modal.remove(); resolve(answer); };
-            const actor = window.authManager?.user?.email || window.authManager?.user?.name || '';
-
-            if (kind === 'form') {
-                document.getElementById('pb-gate-submit')?.addEventListener('click', () => {
-                    const fields = {};
-                    modal.querySelectorAll('[data-field-name]').forEach(el => { fields[el.dataset.fieldName] = el.value; });
-                    finish({ ...fields });
-                });
-            } else if (kind === 'approval') {
-                document.getElementById('pb-gate-approve')?.addEventListener('click', () => {
-                    finish({ decision: 'approved', comment: document.getElementById('pb-gate-comment')?.value || '', actor });
-                });
-                document.getElementById('pb-gate-deny')?.addEventListener('click', () => {
-                    finish({ decision: 'denied', comment: document.getElementById('pb-gate-comment')?.value || '', actor });
-                });
-            } else if (kind === 'handoff') {
-                document.getElementById('pb-gate-done')?.addEventListener('click', () => {
-                    finish({ decision: 'handoff_done', comment: document.getElementById('pb-gate-comment')?.value || '' });
-                });
-                document.getElementById('pb-gate-cancel')?.addEventListener('click', () => {
-                    finish({ decision: 'cancelled', comment: document.getElementById('pb-gate-comment')?.value || '' });
-                });
-            } else if (kind === 'await_message') {
-                document.getElementById('pb-gate-submit')?.addEventListener('click', () => {
-                    finish({ text: document.getElementById('pb-gate-text')?.value || '' });
-                });
-            } else {
-                document.getElementById('pb-gate-submit')?.addEventListener('click', () => finish({}));
-            }
+            this._pbGateBind(modal, ev.kind, (answer) => { modal.remove(); resolve(answer); });
         });
     }
 
