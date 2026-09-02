@@ -8892,9 +8892,10 @@ class WorkflowEditor {
         // The amber header carries the playbook's Title (user request
         // 2026-09-02); falls back to 'Playbook' when none is pasted yet.
         const _pbModalTitle = (pb) => {
-            if (pb && typeof pb === 'object' && pb.title) return String(pb.title);
-            const t = typeof pb === 'string' ? (pb.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '').trim() : '';
-            return t || 'Playbook';
+            let t = '';
+            if (pb && typeof pb === 'object' && pb.title) t = String(pb.title);
+            else if (typeof pb === 'string') t = (pb.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '').trim();
+            return t ? `Playbook: ${t}` : 'Playbook';
         };
         const modalHtml = `
             <div id="playbook-config-modal" class="storage-config-overlay">
