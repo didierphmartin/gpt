@@ -7530,7 +7530,9 @@ class WorkflowEditor {
      * pipeline position, connects like any other agent-workflow node.
      */
     addPlaybookNode(x, y, config = null) {
-        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook', writes_enabled: false };
+        // writes_enabled defaults ON for new nodes (user request 2026-09-02);
+        // the checkbox stays the way to turn a node read-only.
+        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook', writes_enabled: true };
         const nodeConfig = config ? { ...defaults, ...config } : { ...defaults };
         const summary = this._playbookNodeSummary(nodeConfig);
 
