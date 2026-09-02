@@ -7540,7 +7540,7 @@ class WorkflowEditor {
             <div class="workflow-node playbook-node configurable ${nodeConfig.disabled ? 'node-disabled' : ''}">
                 <div class="node-header">
                     <span class="node-icon">📖</span>
-                    <span class="node-title">${this.escapeHtml(nodeConfig.name || 'Playbook')}</span>
+                    <span class="node-title">${this.escapeHtml(this._playbookHeaderTitle(nodeConfig))}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
                 <div class="playbook-badges" style="padding:0 8px;display:flex;flex-wrap:wrap;max-width:230px;">${this._playbookBadgesHtml(nodeConfig)}</div>
@@ -7678,6 +7678,17 @@ class WorkflowEditor {
     /** One-line summary shown on a playbook node's body: the playbook's Title
      *  when present (the preamble first line was meaningless on the canvas),
      *  else the first non-blank line. */
+    /** Header text for the node's yellow title bar: the playbook's Title
+     *  (user request 2026-09-02), falling back to the node's name. */
+    _playbookHeaderTitle(config) {
+        const raw = config?.playbook;
+        let t = '';
+        if (raw && typeof raw === 'object' && raw.title) t = String(raw.title);
+        else if (typeof raw === 'string') t = (raw.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '').trim();
+        if (!t) t = config?.name || 'Playbook';
+        return t.length > 60 ? t.slice(0, 60) + '…' : t;
+    }
+
     _playbookNodeSummary(config) {
         const raw = config?.playbook;
         if (raw && typeof raw === 'object' && raw.title) return String(raw.title);
@@ -9065,7 +9076,7 @@ class WorkflowEditor {
                 if (displayEl) displayEl.textContent = this._playbookNodeSummary(updatedData);
                 this._refreshPlaybookBadges(curNodeId, updatedData);
                 const titleEl = curEl?.querySelector('.node-title');
-                if (titleEl) titleEl.textContent = updatedData.name;
+                if (titleEl) titleEl.textContent = this._playbookHeaderTitle(updatedData);
             } catch (_) { /* cosmetics must never block persistence */ }
 
             // Save applies AND persists — the modal stays open so you can
