@@ -8910,7 +8910,8 @@ class WorkflowEditor {
                         </div>
                     </div>
                     <div class="storage-config-footer">
-                        <button class="storage-config-btn cancel" id="playbook-config-cancel">${this.t('common.cancel')}</button>
+                        <span id="playbook-save-status" style="margin-right:auto;font-size:12px;align-self:center;"></span>
+                        <button class="storage-config-btn cancel" id="playbook-config-cancel">Close</button>
                         <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
                     </div>
                 </div>
@@ -9005,7 +9006,7 @@ class WorkflowEditor {
             }
         });
 
-        document.getElementById('playbook-config-save').addEventListener('click', () => {
+        document.getElementById('playbook-config-save').addEventListener('click', async () => {
             const updatedData = {
                 ...data,
                 type: 'playbook',
@@ -9025,7 +9026,19 @@ class WorkflowEditor {
             const titleEl = nodeEl?.querySelector('.node-title');
             if (titleEl) titleEl.textContent = updatedData.name;
 
-            closeModal();
+            // Save applies AND persists — the modal stays open so you can
+            // keep editing / previewing (user request 2026-09-02). Persisting
+            // the workflow here also removes the modal-save vs workflow-save
+            // trap that silently reverted node settings on reload.
+            const statusEl = document.getElementById('playbook-save-status');
+            if (statusEl) { statusEl.textContent = 'saving…'; statusEl.style.color = '#9ca3af'; }
+            try {
+                await this.saveWorkflow();
+                if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = '#22c55e'; }
+            } catch (e) {
+                if (statusEl) { statusEl.textContent = 'save failed: ' + (e?.message || e); statusEl.style.color = '#ef4444'; }
+            }
+            setTimeout(() => { if (statusEl && statusEl.textContent === 'Saved ✓') statusEl.textContent = ''; }, 4000);
         });
     }
 
