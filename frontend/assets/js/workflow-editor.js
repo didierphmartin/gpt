@@ -8940,6 +8940,7 @@ class WorkflowEditor {
                         </div>
                     </div>
                     <div class="storage-config-footer">
+                        <style>@keyframes pb-save-spin { to { transform: rotate(360deg); } }</style>
                         <span id="playbook-save-status" style="margin-right:auto;font-size:12px;align-self:center;"></span>
                         <button class="storage-config-btn cancel" id="playbook-config-cancel">Close</button>
                         <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
@@ -9072,7 +9073,13 @@ class WorkflowEditor {
             // the workflow here also removes the modal-save vs workflow-save
             // trap that silently reverted node settings on reload.
             const statusEl = document.getElementById('playbook-save-status');
-            if (statusEl) { statusEl.textContent = 'saving…'; statusEl.style.color = '#9ca3af'; }
+            // The save round-trips to the remote DB + reloads the canvas —
+            // easily seconds. Show a turning circle so the wait reads as
+            // progress, not a dead button (user request 2026-09-02).
+            if (statusEl) {
+                statusEl.style.color = '#9ca3af';
+                statusEl.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid #9ca3af;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>saving…';
+            }
             try {
                 await this.saveWorkflow();
                 // Re-resolve this node's id in the rebuilt canvas (match by
