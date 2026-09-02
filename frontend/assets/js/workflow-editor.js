@@ -8814,10 +8814,21 @@ class WorkflowEditor {
                     body: JSON.stringify({ playbook: playbookPayload }),
                 });
                 const json = await resp.json().catch(() => ({}));
-                statusEl.textContent = '';
+                // Verdict must be visible right next to the button: the modal
+                // body scrolls and the detail div below the 16-row textarea
+                // can sit under the fold, so a cleared status span looked
+                // like "no feedback" (reported 2026-09-02).
+                const verdict = (json && typeof json.valid !== 'undefined') ? json.valid === true : null;
+                statusEl.textContent = verdict === true ? '✓ VALID'
+                    : (verdict === false ? '✗ INVALID — details below' : '✗ validation failed — details below');
+                statusEl.style.color = verdict === true ? '#22c55e' : '#ef4444';
+                statusEl.style.fontWeight = '600';
                 resultEl.innerHTML = this._renderPlaybookValidateResult(json, resp.status);
+                resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             } catch (e) {
-                statusEl.textContent = '';
+                statusEl.textContent = '✗ validation failed';
+                statusEl.style.color = '#ef4444';
+                statusEl.style.fontWeight = '600';
                 resultEl.innerHTML = `<p style="color:#dc2626;">${this.escapeHtml(e?.message || String(e))}</p>`;
             }
         });
