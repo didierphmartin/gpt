@@ -9077,8 +9077,19 @@ class WorkflowEditor {
             // easily seconds. Show a turning circle so the wait reads as
             // progress, not a dead button (user request 2026-09-02).
             if (statusEl) {
-                statusEl.style.color = '#9ca3af';
-                statusEl.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid #9ca3af;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>saving…';
+                statusEl.style.color = '#2563eb';
+                statusEl.style.fontSize = '13px';
+                statusEl.innerHTML = '<span style="display:inline-block;width:16px;height:16px;border:3px solid #2563eb;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-3px;margin-right:8px;"></span><b>Saving…</b>';
+            }
+            // The button itself is where the user is looking on click — turn
+            // it into a disabled spinner too (the footer-only spinner was too
+            // easy to miss, user feedback 2026-09-02).
+            const saveBtn = document.getElementById('playbook-config-save');
+            const origBtnHtml = saveBtn?.innerHTML;
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.style.opacity = '0.7';
+                saveBtn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>Saving…';
             }
             try {
                 await this.saveWorkflow();
@@ -9092,6 +9103,12 @@ class WorkflowEditor {
                 if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = '#22c55e'; }
             } catch (e) {
                 if (statusEl) { statusEl.textContent = 'save failed: ' + (e?.message || e); statusEl.style.color = '#ef4444'; }
+            } finally {
+                if (saveBtn && origBtnHtml != null) {
+                    saveBtn.disabled = false;
+                    saveBtn.style.opacity = '';
+                    saveBtn.innerHTML = origBtnHtml;
+                }
             }
             setTimeout(() => { if (statusEl && statusEl.textContent === 'Saved ✓') statusEl.textContent = ''; }, 4000);
         });
