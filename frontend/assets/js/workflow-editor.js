@@ -7572,6 +7572,68 @@ class WorkflowEditor {
         return drawflowId;
     }
 
+    /**
+     * Console-style pretty rendering of a playbook text: section headers,
+     * numbered instruction steps with branch sub-bullets, #Action chips and
+     * code tokens — modeled on console.com's own playbook viewer.
+     */
+    _playbookPrettyHtml(text) {
+        const esc = (t) => this.escapeHtml(t);
+        const chip = (name) => `<span style="display:inline-block;padding:0 7px;border-radius:6px;background:rgba(59,130,246,0.15);color:#2563eb;font-weight:600;">${esc(name)}</span>`;
+        const decorate = (t) => {
+            let h = esc(t);
+            // #Action tokens → chips (longest match first: known names, then a generic pattern)
+            h = h.replace(/#[A-Z][A-Za-z0-9'’ ]*(?:\([A-Za-z ]+\))?(?=[\s.,;:]|$)/g, (m) => chip(m));
+            // #channels, $vars, {{templates}}, key = value → code style
+            h = h.replace(/#[a-z][\w-]+/g, (m) => `<code>${m}</code>`);
+            h = h.replace(/\$[a-zA-Z_.]+|\{\{[^}]+\}\}|\b\w+ = \w+\b/g, (m) => `<code>${m}</code>`);
+            h = h.replace(/→/g, '<span style="color:#9ca3af;">→</span>');
+            return h;
+        };
+        const raw = typeof text === 'string' ? text : JSON.stringify(text ?? '', null, 2);
+        const sections = { preamble: '', title: '', trigger: '', instructions: '', 'tools used': '', 'actions used': '' };
+        let current = 'preamble';
+        for (const line of raw.split(/\r?\n/)) {
+            const m = line.match(/^\s*(Title|Trigger|Instructions|Tools used|Actions used)\s*:\s*(.*)$/i);
+            if (m) { current = m[1].toLowerCase(); sections[current] = m[2]; }
+            else if (sections[current] !== undefined) sections[current] += (sections[current] ? '\n' : '') + line;
+        }
+        const h = [];
+        const label = (t) => `<div style="font-size:11px;font-weight:700;letter-spacing:0.05em;color:#9ca3af;text-transform:uppercase;margin:14px 0 4px;">${t}</div>`;
+        if (sections.title.trim()) h.push(`<div style="font-size:18px;font-weight:700;">${esc(sections.title.trim())}</div>`);
+        if (sections.preamble.trim()) h.push(`<div style="color:#9ca3af;font-size:12px;margin-top:6px;font-style:italic;">${esc(sections.preamble.trim())}</div>`);
+        if (sections.trigger.trim()) { h.push(label('Trigger')); h.push(`<div>${decorate(sections.trigger.trim())}</div>`); }
+        if (sections.instructions.trim()) {
+            h.push(label('Instructions'));
+            // Steps: the Console format separates steps with double spaces.
+            const segs = sections.instructions.trim().split(/ {2,}|\n+/).map(t => t.trim()).filter(Boolean);
+            let html = '<ol style="margin:4px 0 0 20px;display:flex;flex-direction:column;gap:6px;">';
+            let subs = null;
+            const flushSubs = () => { if (subs) { html += `<ul style="margin:4px 0 0 16px;">${subs}</ul>`; subs = null; } };
+            let open = false;
+            for (const seg of segs) {
+                // Branch lines like "Low → …" / "Engineering → …" / "3+ resets… → High" become sub-bullets.
+                if (/^[^#]{0,40}→/.test(seg) && open) {
+                    subs = (subs || '') + `<li>${decorate(seg)}</li>`;
+                    continue;
+                }
+                flushSubs();
+                if (open) html += '</li>';
+                html += `<li>${decorate(seg)}`;
+                open = true;
+            }
+            flushSubs();
+            if (open) html += '</li>';
+            html += '</ol>';
+            h.push(html);
+        }
+        const chipsRow = (csv, color) => csv.split(/[;,]/).map(t => t.trim()).filter(Boolean)
+            .map(t => `<span style="display:inline-block;padding:1px 9px;margin:2px 4px 0 0;border-radius:999px;background:${color};font-size:12px;font-weight:600;">${esc(t)}</span>`).join('');
+        if (sections['tools used'].trim()) { h.push(label('Tools used')); h.push(`<div>${chipsRow(sections['tools used'], 'rgba(59,130,246,0.15);color:#2563eb')}</div>`); }
+        if (sections['actions used'].trim()) { h.push(label('Actions used')); h.push(`<div>${chipsRow(sections['actions used'], 'rgba(148,163,184,0.18);color:inherit')}</div>`); }
+        return `<div style="font-size:13px;line-height:1.55;">${h.join('')}</div>`;
+    }
+
     /** One-line summary shown on a playbook node's body (first non-blank line of the pasted text). */
     _playbookNodeSummary(config) {
         const raw = config?.playbook;
@@ -8815,7 +8877,14 @@ class WorkflowEditor {
                                 </label>
                             </div>
                             <div class="storage-config-folder full">
-                                <label for="playbook-text">Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span></label>
+                                <label for="playbook-text" style="display:flex;align-items:center;gap:10px;">
+                                    Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span>
+                                    <span style="margin-left:auto;display:inline-flex;border:1px solid rgba(148,163,184,0.4);border-radius:6px;overflow:hidden;font-size:12px;">
+                                        <button type="button" id="playbook-view-edit" style="padding:2px 10px;border:none;background:rgba(59,130,246,0.2);cursor:pointer;">Edit</button>
+                                        <button type="button" id="playbook-view-preview" style="padding:2px 10px;border:none;background:transparent;cursor:pointer;">Preview</button>
+                                    </span>
+                                </label>
+                                <div id="playbook-pretty" style="display:none;max-height:420px;overflow-y:auto;border:1px solid rgba(148,163,184,0.35);border-radius:8px;padding:12px 14px;"></div>
                                 <textarea id="playbook-text" rows="16" style="width:100%;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;">${this.escapeHtml(data.playbook || '')}</textarea>
                             </div>
                             <div class="storage-config-folder full">
@@ -8849,6 +8918,20 @@ class WorkflowEditor {
         document.getElementById('playbook-config-close').addEventListener('click', closeModal);
         document.getElementById('playbook-config-cancel').addEventListener('click', closeModal);
         document.addEventListener('keydown', escHandler);
+
+        const _pbEditBtn = document.getElementById('playbook-view-edit');
+        const _pbPrevBtn = document.getElementById('playbook-view-preview');
+        const _pbSetView = (preview) => {
+            const ta = document.getElementById('playbook-text');
+            const pretty = document.getElementById('playbook-pretty');
+            if (preview) pretty.innerHTML = this._playbookPrettyHtml(ta.value);
+            pretty.style.display = preview ? '' : 'none';
+            ta.style.display = preview ? 'none' : '';
+            _pbPrevBtn.style.background = preview ? 'rgba(59,130,246,0.2)' : 'transparent';
+            _pbEditBtn.style.background = preview ? 'transparent' : 'rgba(59,130,246,0.2)';
+        };
+        _pbEditBtn?.addEventListener('click', () => _pbSetView(false));
+        _pbPrevBtn?.addEventListener('click', () => _pbSetView(true));
 
         document.getElementById('playbook-provider-select').addEventListener('change', (ev) => {
             const modelSel = document.getElementById('playbook-model-select');
