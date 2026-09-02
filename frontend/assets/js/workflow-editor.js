@@ -6281,7 +6281,7 @@ class WorkflowEditor {
                 transferDelay: delay,
                 selectedTools: selectedTools
             };
-            this.editor.updateNodeDataFromId(nodeId, updatedData);
+            this.editor.updateNodeDataFromId(curNodeId, updatedData);
 
             // Update the visual card on the canvas
             const nodeEl = document.querySelector(`#node-${nodeId}`);
@@ -9036,6 +9036,11 @@ class WorkflowEditor {
             }
         });
 
+        // saveWorkflow() reloads the entire canvas (fresh drawflow ids), so a
+        // modal left open across a save must re-bind — otherwise its next Save
+        // writes to a dead node id and silently reverts the user's edits
+        // (lost-indentation data loss, 2026-09-02).
+        let curNodeId = nodeId;
         document.getElementById('playbook-config-save').addEventListener('click', async () => {
             const updatedData = {
                 ...data,
@@ -9064,6 +9069,13 @@ class WorkflowEditor {
             if (statusEl) { statusEl.textContent = 'saving…'; statusEl.style.color = '#9ca3af'; }
             try {
                 await this.saveWorkflow();
+                // Re-resolve this node's id in the rebuilt canvas (match by
+                // type + name; a name collision just re-binds to a twin that
+                // holds identical saved data).
+                const g = this.editor?.drawflow?.drawflow?.Home?.data || {};
+                const rebound = Object.keys(g).find(id =>
+                    g[id]?.data?.node_type === 'playbook' && (g[id].data.name || '') === updatedData.name);
+                if (rebound) curNodeId = rebound;
                 if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = '#22c55e'; }
             } catch (e) {
                 if (statusEl) { statusEl.textContent = 'save failed: ' + (e?.message || e); statusEl.style.color = '#ef4444'; }
