@@ -1343,6 +1343,17 @@ svg.connection.selected .main-path,
     background: rgba(139, 92, 246, 0.15);
 }
 
+/* Playbook node: yellow is the playbook color code (matches the amber
+   gate cards in the run overlay). */
+.workflow-node.playbook-node .node-header {
+    background: linear-gradient(135deg, #fef9c3 0%, #fde68a 100%);
+}
+
+.workflow-node.playbook-node .node-icon {
+    color: #d97706;
+    background: rgba(245, 158, 11, 0.18);
+}
+
 /* Ingestion component node (loader / splitter / vectorstore) */
 .workflow-node.ingestion-node .node-header {
     background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
