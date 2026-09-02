@@ -7541,6 +7541,7 @@ class WorkflowEditor {
                     <span class="node-title">${this.escapeHtml(nodeConfig.name || 'Playbook')}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
+                <div class="playbook-badges" style="padding:0 8px;">${this._playbookBadgesHtml(nodeConfig)}</div>
                 <div class="node-body">
                     <small class="node-config-display">${this.escapeHtml(summary)}</small>
                     <button class="node-edit-btn" data-playbook="true" title="Edit">✏️</button>
@@ -7561,6 +7562,7 @@ class WorkflowEditor {
                 playbook: nodeConfig.playbook,
                 agent_provider: nodeConfig.agent_provider,
                 model: nodeConfig.model,
+                mcp_servers: Array.isArray(nodeConfig.mcp_servers) ? nodeConfig.mcp_servers : [],
                 disabled: !!nodeConfig.disabled,
             },
             html
@@ -7577,6 +7579,41 @@ class WorkflowEditor {
         const firstLine = text.split('\n').map(l => l.trim()).find(l => l) || '';
         if (!firstLine) return 'No playbook pasted yet';
         return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+    }
+
+    /**
+     * MCP server names a playbook uses (Console-style service badges).
+     * Preference order: servers persisted from the last Validate
+     * (config.mcp_servers, derived from bound targets), else the document's
+     * "Tools used:" line (Console text) or tools_used (JSON).
+     */
+    _playbookServerNames(config) {
+        if (Array.isArray(config?.mcp_servers) && config.mcp_servers.length) {
+            return config.mcp_servers;
+        }
+        const raw = config?.playbook;
+        if (raw && typeof raw === 'object' && Array.isArray(raw.tools_used)) {
+            return raw.tools_used.map(t => String(t).trim()).filter(Boolean);
+        }
+        const text = typeof raw === 'string' ? raw : '';
+        const m = text.match(/^Tools used:\s*(.+)$/mi);
+        if (m) return m[1].split(/[;,]/).map(t => t.trim()).filter(Boolean);
+        return [];
+    }
+
+    /** Pill-row HTML for the node header badges ('' when no servers known). */
+    _playbookBadgesHtml(config) {
+        const names = this._playbookServerNames(config);
+        if (!names.length) return '';
+        return names.map(n =>
+            `<span style="display:inline-block;padding:1px 8px;margin:2px 4px 0 0;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;letter-spacing:0.02em;">${this.escapeHtml(n)}</span>`
+        ).join('');
+    }
+
+    /** Refresh the badge row on a playbook node's DOM in place. */
+    _refreshPlaybookBadges(nodeId, config) {
+        const el = document.getElementById(`node-${nodeId}`)?.querySelector('.playbook-badges');
+        if (el) el.innerHTML = this._playbookBadgesHtml(config);
     }
 
     /**
@@ -8843,6 +8880,19 @@ class WorkflowEditor {
                 statusEl.style.fontWeight = '600';
                 resultEl.innerHTML = this._renderPlaybookValidateResult(json, resp.status);
                 resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                // Console-style service badges: persist the bound servers on
+                // the node and refresh the pills on the canvas.
+                if (Array.isArray(json?.actions)) {
+                    const servers = [...new Set(json.actions
+                        .filter(a => a.kind === 'bound' && typeof a.target === 'string' && a.target.includes('.'))
+                        .map(a => a.target.split('.')[0]))];
+                    if (servers.length) {
+                        const nd = this.editor.getNodeFromId(nodeId)?.data || {};
+                        const merged = { ...nd, mcp_servers: servers };
+                        this.editor.updateNodeDataFromId(nodeId, merged);
+                        this._refreshPlaybookBadges(nodeId, merged);
+                    }
+                }
             } catch (e) {
                 statusEl.textContent = '✗ validation failed';
                 statusEl.style.color = '#ef4444';
@@ -8866,6 +8916,7 @@ class WorkflowEditor {
             const summary = this._playbookNodeSummary(updatedData);
             const displayEl = nodeEl?.querySelector('.node-config-display');
             if (displayEl) displayEl.textContent = summary;
+            this._refreshPlaybookBadges(nodeId, updatedData);
             const titleEl = nodeEl?.querySelector('.node-title');
             if (titleEl) titleEl.textContent = updatedData.name;
 
