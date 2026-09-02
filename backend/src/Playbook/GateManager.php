@@ -117,6 +117,11 @@ final class GateManager
         $gateId = $this->state->gateOpen($runId, $leg, $mapping['kind'], $args, $mapping['asked_of']);
         $this->state->setStatus($runId, $mapping['status']);
 
+        // Human gates can block for minutes; the remote DB drops idle
+        // connections long before that. Drop ours on purpose and let the
+        // post-gate writes reconnect fresh (PlaybookRunState::disconnect()).
+        $this->state->disconnect();
+
         $answer = $this->bridge->ask($runId, $mapping['kind'], $args, $this->timeoutMs);
 
         if ($answer === null) {

@@ -81,6 +81,8 @@ final class PlaybookNodeRunner
 
         $transcript = new PlaybookTranscript(WorkflowRunLog::defaultDir($this->config));
         $state = new PlaybookRunState($pdo, $transcript);
+        // Fresh-connection factory for post-gate reconnects (see GateManager).
+        $state->setReconnector(fn(): \PDO => $this->pdoFactory !== null ? ($this->pdoFactory)() : $this->defaultPdo());
 
         $requester = $this->buildRequester($pdo, $userId);
         $runId = $state->createRun($userId, $doc, $requester, []);

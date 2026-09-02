@@ -41,6 +41,23 @@ class PlaybookRunStateTest extends PlaybookDbTestCase
         $this->assertSame('«redacted»', $row['result_summary']);
     }
 
+    public function testDisconnectReconnectsLazilyViaReconnector(): void
+    {
+        $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray(['title' => 'T',
+            'trigger' => ['kind' => 'request', 'description' => 'd'], 'instructions' => '#Resolve Request.']);
+        $id = $this->state->createRun(1, $doc, [], []);
+        $calls = 0;
+        $pdo = $this->pdo;
+        $this->state->setReconnector(function () use (&$calls, $pdo): \PDO { $calls++; return $pdo; });
+        $this->state->disconnect();
+        // First DB op after disconnect must reconnect exactly once and work.
+        $this->state->addNote($id, 'after reconnect');
+        $this->assertSame(1, $calls);
+        $row = $this->pdo->query("SELECT text FROM playbook_run_notes WHERE run_id = $id")->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame('after reconnect', $row['text']);
+        // Without a reconnector, disconnect() is a no-op (SQLite tests keep working).
+    }
+
     public function testTranscriptRoundTrip(): void
     {
         $id = $this->state->createRun(1, $this->doc(), [], []);
