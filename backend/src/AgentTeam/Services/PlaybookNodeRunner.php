@@ -54,6 +54,15 @@ final class PlaybookNodeRunner
      */
     public function run(int $userId, array $nodeConfig, string $requestText, \Closure $emit): array
     {
+        // Playbook legs are long-lived (human gates can block for minutes)
+        // and talk to a REMOTE contexts DB. If that connection dies while a
+        // gate blocks (observed live 2026-09-01: sockets in CLOSE_WAIT after
+        // a 44s handoff gate), a PDO call with no read timeout hangs the SSE
+        // request forever. These timeouts turn the eternal hang into a clean
+        // PDOException within ~30s, which surfaces as an SSE error event.
+        @ini_set('default_socket_timeout', '30');
+        @ini_set('mysqlnd.net_read_timeout', '30');
+
         $doc = $this->parseDocument($nodeConfig['playbook'] ?? null);
 
         $pdo = $this->pdoFactory !== null ? ($this->pdoFactory)() : $this->defaultPdo();
