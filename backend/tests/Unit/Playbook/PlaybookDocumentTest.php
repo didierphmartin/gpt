@@ -38,6 +38,24 @@ class PlaybookDocumentTest extends TestCase
         $this->assertSame([], $d->bindings);
     }
 
+    public function testDomainField(): void
+    {
+        $d = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
+            'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'x'],
+            'instructions' => '#Resolve Request.', 'domain' => 'an HR benefits desk',
+        ]);
+        $this->assertSame('an HR benefits desk', $d->domain);
+
+        $text = "Title: T\n\nDomain: a finance operations team\n\nTrigger: y\n\nInstructions: #Resolve Request.";
+        $t = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromConsoleText($text);
+        $this->assertSame('a finance operations team', $t->domain);
+        // Default: empty (interpreter substitutes a neutral phrase).
+        $none = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
+            'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'x'],
+            'instructions' => '#Resolve Request.']);
+        $this->assertSame('', $none->domain);
+    }
+
     public function testMissingTitleThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);

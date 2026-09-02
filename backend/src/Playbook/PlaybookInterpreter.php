@@ -14,7 +14,7 @@ namespace Quantis\AIPortfolioAssistant\Playbook;
 final class PlaybookInterpreter
 {
     private const SYSTEM_PROMPT_TEMPLATE = <<<'PROMPT'
-You are a playbook interpreter for an IT service desk. Execute the PLAYBOOK below
+You are a playbook interpreter for {domain}. Execute the PLAYBOOK below
 for the current REQUEST, step by step, using ONLY the tools provided.
 Rules:
 - Never invent tool results, user input, or tools. If information from the requester
@@ -168,6 +168,9 @@ PROMPT;
 
     private function buildSystemPrompt(PlaybookDocument $doc, array $requester): string
     {
+        // Domain is configurable (general-purpose interpreter): document field
+        // 'domain' / 'Domain:' line, neutral default.
+
         $policyJson = json_encode($doc->policy, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $requesterJson = json_encode($requester, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         // Empty object, not [], when the document has no approvers — {} reads
@@ -177,8 +180,9 @@ PROMPT;
             ? '{}'
             : json_encode($doc->approvers, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         return str_replace(
-            ['{instructions}', '{policy_json}', '{requester_json}', '{approvers_json}'],
-            [$doc->instructions, $policyJson, $requesterJson, $approversJson],
+            ['{domain}', '{instructions}', '{policy_json}', '{requester_json}', '{approvers_json}'],
+            [$doc->domain !== '' ? $doc->domain : 'this organization',
+             $doc->instructions, $policyJson, $requesterJson, $approversJson],
             self::SYSTEM_PROMPT_TEMPLATE
         );
     }

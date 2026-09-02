@@ -159,7 +159,7 @@ final class PlaybookInterpreterTest extends PlaybookDbTestCase
                 '{}',
             ],
             <<<'PROMPT'
-You are a playbook interpreter for an IT service desk. Execute the PLAYBOOK below
+You are a playbook interpreter for this organization. Execute the PLAYBOOK below
 for the current REQUEST, step by step, using ONLY the tools provided.
 Rules:
 - Never invent tool results, user input, or tools. If information from the requester
