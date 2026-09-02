@@ -11623,12 +11623,12 @@ class WorkflowEditor {
         ).join('');
         const html = `
             <div id="playbook-run-overlay" class="storage-config-overlay">
-                <div class="storage-config-modal" style="max-width:720px;width:92%;">
+                <div class="storage-config-modal" style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;">
                     <div class="storage-config-header">
                         <h3><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span>${badges}</h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
                     </div>
-                    <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;"></div>
+                    <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
                     <div class="storage-config-footer">
                         <span id="pb-ov-status" style="margin-right:auto;color:#9ca3af;font-size:12px;">running…</span>
                         <button class="storage-config-btn cancel" id="pb-ov-hide">Hide</button>
@@ -11737,16 +11737,16 @@ class WorkflowEditor {
             title = 'Approval requested';
             bodyHtml = `<p class="storage-config-folder full">${this.escapeHtml(payload.question || '')}</p>`
                 + (payload.context ? `<p class="storage-config-folder full" style="color:#9ca3af;">${this.escapeHtml(payload.context)}</p>` : '')
-                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="5" style="width:100%;min-height:110px;resize:vertical;"></textarea>`);
         } else if (kind === 'handoff') {
             title = 'Handed off to a human';
             bodyHtml = `<p class="storage-config-folder full"><strong>${this.escapeHtml(payload.team_or_person || '')}</strong> — ${this.escapeHtml(payload.reason || '')}</p>`
                 + (payload.summary ? `<p class="storage-config-folder full">${this.escapeHtml(payload.summary)}</p>` : '')
-                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="3" style="width:100%;"></textarea>`);
+                + fieldRow('Comment (optional)', `<textarea class="pb-gate-comment" rows="5" style="width:100%;min-height:110px;resize:vertical;"></textarea>`);
         } else if (kind === 'await_message') {
             title = 'Waiting for your message';
             bodyHtml = (payload.prompt ? `<p class="storage-config-folder full">${this.escapeHtml(payload.prompt)}</p>` : '')
-                + fieldRow('Message', `<textarea class="pb-gate-text" rows="3" style="width:100%;"></textarea>`);
+                + fieldRow('Message', `<textarea class="pb-gate-text" rows="6" style="width:100%;min-height:140px;resize:vertical;"></textarea>`);
         } else {
             bodyHtml = `<p class="storage-config-folder full">Unknown gate kind: ${this.escapeHtml(String(kind))}</p>`;
         }
@@ -11814,7 +11814,7 @@ class WorkflowEditor {
             // the feed's fold (reported 2026-09-01 — the browser scrolls the
             // focused field's top into view and the footer disappears).
             const card = this._pbAppend(`
-                <div style="align-self:stretch;border:1px solid rgba(245,158,11,0.6);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;max-height:44vh;">
+                <div style="align-self:stretch;flex:none;border:1px solid rgba(245,158,11,0.6);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;max-height:62vh;">
                     <div style="background:rgba(245,158,11,0.15);padding:6px 12px;font-weight:600;font-size:13px;flex:none;">🖐 ${this.escapeHtml(title)}</div>
                     <div class="storage-config-grid" style="padding:10px 12px;overflow-y:auto;flex:1 1 auto;">${bodyHtml}</div>
                     <div style="padding:8px 12px;display:flex;justify-content:flex-end;gap:8px;flex:none;border-top:1px solid rgba(245,158,11,0.25);">${footerHtml}</div>
