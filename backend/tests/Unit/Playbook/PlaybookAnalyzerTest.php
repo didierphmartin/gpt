@@ -77,6 +77,66 @@ class PlaybookAnalyzerTest extends TestCase
         );
     }
 
+    public function testAutoBindingFromConsoleTextWithNoBindings(): void
+    {
+        // The markdown/Console text is the source format: with no bindings
+        // block, the analyzer must translate #Actions to connected tools
+        // by name-matching (explicit null still means deliberately unbound).
+        $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
+            'title' => 'MFA', 'trigger' => ['kind' => 'request', 'description' => 'locked out'],
+            'instructions' => "#Search Okta User by Email first. #Search Okta System Log Custom next. " .
+                "#List User Factors. Then #Reset Password (Okta) or #Reset User Factor. " .
+                "#Reset User Factors (Custom) if lost device. #Leave Internal Note. #Resolve Request.",
+            'tools_used' => ['Okta'],
+            'actions_used' => ['#Search Okta User by Email', '#Search Okta System Log Custom',
+                '#List User Factors', '#Reset Password (Okta)', '#Reset User Factor',
+                '#Reset User Factors (Custom)', '#Leave Internal Note', '#Resolve Request'],
+            // no bindings at all — plain pasted text
+        ]);
+        $tools = ['okta.search_users', 'okta.search_system_log', 'okta.list_user_factors',
+            'okta.verify_security_answers', 'okta.reset_password', 'okta.reset_factor', 'okta.unlock_user'];
+        $r = (new PlaybookAnalyzer())->analyze($doc, $tools);
+        $byName = array_column($r['actions'], null, 'name');
+        $this->assertSame('bound', $byName['#Search Okta User by Email']['kind']);
+        $this->assertSame('okta.search_users', $byName['#Search Okta User by Email']['target']);
+        $this->assertTrue($byName['#Search Okta User by Email']['auto']);
+        $this->assertSame('okta.search_system_log', $byName['#Search Okta System Log Custom']['target']);
+        $this->assertSame('okta.list_user_factors', $byName['#List User Factors']['target']);
+        $this->assertSame('okta.reset_password', $byName['#Reset Password (Okta)']['target']);
+        $this->assertSame('okta.reset_factor', $byName['#Reset User Factor']['target']);
+        $this->assertSame('okta.reset_factor', $byName['#Reset User Factors (Custom)']['target']);
+        $this->assertSame('native', $byName['#Leave Internal Note']['kind']);
+        $this->assertSame([], $r['errors']);
+        // Auto-bindings are surfaced transparently.
+        $this->assertNotEmpty(array_filter($r['warnings'], fn($w) => str_contains($w, 'Auto-bound')));
+    }
+
+    public function testExplicitNullBindingIsNotAutoBound(): void
+    {
+        $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
+            'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'd'],
+            'instructions' => '#Reset User Factors (Custom) then #Resolve Request.',
+            'actions_used' => ['#Reset User Factors (Custom)', '#Resolve Request'],
+            'bindings' => ['#Reset User Factors (Custom)' => null],
+        ]);
+        $r = (new PlaybookAnalyzer())->analyze($doc, ['okta.reset_factor']);
+        $byName = array_column($r['actions'], null, 'name');
+        $this->assertSame('unbound', $byName['#Reset User Factors (Custom)']['kind']);
+    }
+
+    public function testAmbiguousNameStaysUnbound(): void
+    {
+        $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
+            'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'd'],
+            'instructions' => '#Do Thing then #Resolve Request.',
+            'actions_used' => ['#Do Thing', '#Resolve Request'],
+        ]);
+        // No token overlap at all -> no auto-bind, stays a warning.
+        $r = (new PlaybookAnalyzer())->analyze($doc, ['okta.reset_password', 'okta.reset_factor']);
+        $byName = array_column($r['actions'], null, 'name');
+        $this->assertSame('unbound', $byName['#Do Thing']['kind']);
+    }
+
     public function testAgentBinding(): void
     {
         $doc = $this->doc(['bindings' => ['#Search Okta User by Email' => 'agent.researcher',

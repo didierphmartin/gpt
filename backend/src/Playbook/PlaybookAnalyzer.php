@@ -47,34 +47,93 @@ final class PlaybookAnalyzer
             $key = strtolower(trim($name));
             if (isset(self::NATIVE_VERBS[$key])) {
                 $native = self::NATIVE_VERBS[$key];
-                $actions[] = ['name' => $name, 'kind' => 'native', 'target' => $native];
+                $actions[] = ['name' => $name, 'kind' => 'native', 'target' => $native, 'auto' => false];
                 if (isset(self::GATE_BY_NATIVE[$native])) $gates[] = self::GATE_BY_NATIVE[$native];
                 continue;
             }
+            $hasExplicit = array_key_exists($name, $doc->bindings);
             $target = $doc->bindings[$name] ?? null;
             if ($target === null) {
-                $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => null];
+                // Markdown/Console text is the source format: when the author
+                // gave NO binding (key absent), translate the #Action to a
+                // connected tool by name-matching. An explicit null stays
+                // deliberately unbound.
+                $auto = $hasExplicit ? null : $this->autoBind($name, $availableTools);
+                if ($auto !== null) {
+                    $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $auto, 'auto' => true];
+                    $warnings[] = "Auto-bound {$name} → {$auto} (matched by name; add an explicit binding to override).";
+                    continue;
+                }
+                $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => null, 'auto' => false];
                 $warnings[] = "Unbound action {$name}: at run time the '{$doc->policy['on_unbound']}' policy applies.";
                 continue;
             }
             if (str_starts_with($target, 'agent.')) {
                 $agent = substr($target, 6);
                 if (in_array($agent, $availableAgents, true)) {
-                    $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target];
+                    $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target, 'auto' => false];
                 } else {
-                    $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target];
+                    $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target, 'auto' => false];
                     $errors[] = "{$name} is bound to {$target} but no such agent exists.";
                 }
                 continue;
             }
             if (in_array($target, $availableTools, true)) {
-                $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target];
+                $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target, 'auto' => false];
             } else {
-                $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target];
+                $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target, 'auto' => false];
                 $errors[] = "{$name} is bound to {$target} but that tool is not available on any connected MCP server.";
             }
         }
         return ['actions' => $actions, 'gates' => array_values(array_unique($gates)),
                 'checklist' => $ordered, 'errors' => $errors, 'warnings' => $warnings];
+    }
+
+    /**
+     * Deterministic name-match of a prose #Action to one connected
+     * "server.tool". Tokens are lowercased, de-pluralized words; a match
+     * needs score >= 2 and a strictly unique best candidate. Server-name
+     * tokens in the action name weigh double ("Okta" in "#Reset Password
+     * (Okta)" is a strong signal). Returns the tool id or null.
+     */
+    private function autoBind(string $actionName, array $availableTools): ?string
+    {
+        $stop = ['custom', 'the', 'a', 'an', 'by', 'for', 'to', 'and', 'of', 'action'];
+        $tok = function (string $t) use ($stop): array {
+            $words = preg_split('/[^a-z0-9]+/', strtolower($t)) ?: [];
+            $out = [];
+            foreach ($words as $w) {
+                if ($w === '' || in_array($w, $stop, true)) continue;
+                $out[] = rtrim($w, 's') ?: $w;
+            }
+            return array_values(array_unique($out));
+        };
+        $actionTokens = $tok($actionName);
+        if ($actionTokens === []) return null;
+
+        $best = null; $bestScore = 0; $tie = false;
+        foreach ($availableTools as $id) {
+            $dot = strpos($id, '.');
+            $server = $dot === false ? '' : substr($id, 0, $dot);
+            $tool = $dot === false ? $id : substr($id, $dot + 1);
+            // Integer-scaled: server token = 4, tool token = 2, +1 when the
+            // action covers the WHOLE tool name (breaks ties like
+            // "#Reset User Factor" between reset_factor and list_user_factors
+            // in favor of the fully-covered reset_factor).
+            $score = 0;
+            foreach ($tok($server) as $st) {
+                if (in_array($st, $actionTokens, true)) $score += 4;
+            }
+            $toolTokens = $tok($tool);
+            $toolHits = 0;
+            foreach ($toolTokens as $tt) {
+                if (in_array($tt, $actionTokens, true)) $toolHits++;
+            }
+            $score += 2 * $toolHits;
+            if ($toolTokens !== [] && $toolHits === count($toolTokens)) $score += 1;
+            if ($score > $bestScore) { $best = $id; $bestScore = $score; $tie = false; }
+            elseif ($score === $bestScore && $score > 0) { $tie = true; }
+        }
+        return ($bestScore >= 4 && !$tie) ? $best : null;
     }
 }

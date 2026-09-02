@@ -8936,7 +8936,7 @@ class WorkflowEditor {
                 </tr></thead>
                 <tbody>${actions.map(a => `<tr>
                     <td style="padding:4px;">${this.escapeHtml(a.name || '')}</td>
-                    <td style="padding:4px;">${this.escapeHtml(a.kind || '')}</td>
+                    <td style="padding:4px;">${this.escapeHtml(a.kind || '')}${a.auto ? ' <span style="color:#9ca3af;">(auto)</span>' : ''}</td>
                     <td style="padding:4px;">${this.escapeHtml(a.target || '')}</td>
                 </tr>`).join('')}</tbody>
             </table>`;
