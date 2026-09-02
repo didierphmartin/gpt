@@ -321,7 +321,10 @@ class ParallelAgentExecutor
         }
 
         $maxTokens = $settings['max_tokens'] ?? ($providerConfig['max_tokens'] ?? 4096);
-        $temperature = $settings['temperature'] ?? 0.7;
+        // Fall back to the provider's stored temperature (system_llm_settings)
+        // like max_tokens above — kimi stores 1.00 because kimi-k3 rejects
+        // any other value ("invalid temperature: only 1 is allowed").
+        $temperature = $settings['temperature'] ?? ($providerConfig['temperature'] ?? 0.7);
         $modelToUse = $model ?: ($providerConfig['model'] ?? '');
 
         // Debug log
