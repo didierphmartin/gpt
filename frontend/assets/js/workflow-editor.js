@@ -6281,7 +6281,7 @@ class WorkflowEditor {
                 transferDelay: delay,
                 selectedTools: selectedTools
             };
-            this.editor.updateNodeDataFromId(curNodeId, updatedData);
+            this.editor.updateNodeDataFromId(nodeId, updatedData);
 
             // Update the visual card on the canvas
             const nodeEl = document.querySelector(`#node-${nodeId}`);
@@ -9052,14 +9052,20 @@ class WorkflowEditor {
                 writes_enabled: !!document.getElementById('playbook-writes-enabled')?.checked,
                 playbook: document.getElementById('playbook-text').value,
             };
-            this.editor.updateNodeDataFromId(nodeId, updatedData);
+            // curNodeId (not the captured nodeId): after the first save the
+            // canvas is reloaded with fresh ids, and Drawflow's
+            // updateNodeDataFromId throws on a dead id — which killed this
+            // handler before the fetch, so the second Save did nothing.
+            this.editor.updateNodeDataFromId(curNodeId, updatedData);
 
-            const summary = this._playbookNodeSummary(updatedData);
-            const displayEl = nodeEl?.querySelector('.node-config-display');
-            if (displayEl) displayEl.textContent = summary;
-            this._refreshPlaybookBadges(nodeId, updatedData);
-            const titleEl = nodeEl?.querySelector('.node-title');
-            if (titleEl) titleEl.textContent = updatedData.name;
+            try {
+                const curEl = document.getElementById('node-' + curNodeId);
+                const displayEl = curEl?.querySelector('.node-config-display');
+                if (displayEl) displayEl.textContent = this._playbookNodeSummary(updatedData);
+                this._refreshPlaybookBadges(curNodeId, updatedData);
+                const titleEl = curEl?.querySelector('.node-title');
+                if (titleEl) titleEl.textContent = updatedData.name;
+            } catch (_) { /* cosmetics must never block persistence */ }
 
             // Save applies AND persists — the modal stays open so you can
             // keep editing / previewing (user request 2026-09-02). Persisting
