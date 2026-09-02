@@ -5727,16 +5727,41 @@ class WorkflowEditor {
         const saveBtnOption = document.getElementById('save-option-save');
         const saveAsBtn = document.getElementById('save-option-saveas');
 
+        // Progress on the visible "Save Workflow" toolbar button while the
+        // save runs — same treatment as the playbook modal's Save (spinner +
+        // Saving…, disabled). The popup itself closes immediately.
+        const _busy = async (fn) => {
+            const btn = document.getElementById('workflow-save-toggle');
+            const orig = btn?.innerHTML;
+            if (btn) {
+                btn.disabled = true;
+                btn.style.opacity = '0.7';
+                btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:wf-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>'
+                    + this.tWithFallback('workflow.buttons.saving', 'Saving…');
+                if (!document.getElementById('wf-save-spin-style')) {
+                    document.head.insertAdjacentHTML('beforeend',
+                        '<style id="wf-save-spin-style">@keyframes wf-save-spin { to { transform: rotate(360deg); } }</style>');
+                }
+            }
+            try { await fn(); } finally {
+                if (btn && document.body.contains(btn)) {
+                    btn.disabled = false;
+                    btn.style.opacity = '';
+                    btn.innerHTML = orig;
+                }
+            }
+        };
+
         // Handle Save
         saveBtnOption.addEventListener('click', () => {
             modal.remove();
-            this.saveWorkflow();
+            _busy(() => this.saveWorkflow());
         });
 
         // Handle Save As
         saveAsBtn.addEventListener('click', () => {
             modal.remove();
-            this.saveWorkflowAs();
+            _busy(() => this.saveWorkflowAs());
         });
 
         // Close on overlay click
