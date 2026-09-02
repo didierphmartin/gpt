@@ -11793,11 +11793,15 @@ class WorkflowEditor {
     _showPlaybookGateInline(ev) {
         return new Promise((resolve) => {
             const { title, bodyHtml, footerHtml } = this._pbGateParts(ev);
+            // The card is its own scroll container with the action buttons
+            // pinned at the bottom: a tall form must never hide Submit below
+            // the feed's fold (reported 2026-09-01 — the browser scrolls the
+            // focused field's top into view and the footer disappears).
             const card = this._pbAppend(`
-                <div style="align-self:stretch;border:1px solid rgba(245,158,11,0.6);border-radius:10px;overflow:hidden;">
-                    <div style="background:rgba(245,158,11,0.15);padding:6px 12px;font-weight:600;font-size:13px;">🖐 ${this.escapeHtml(title)}</div>
-                    <div class="storage-config-grid" style="padding:10px 12px;">${bodyHtml}</div>
-                    <div style="padding:8px 12px;display:flex;justify-content:flex-end;gap:8px;">${footerHtml}</div>
+                <div style="align-self:stretch;border:1px solid rgba(245,158,11,0.6);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;max-height:44vh;">
+                    <div style="background:rgba(245,158,11,0.15);padding:6px 12px;font-weight:600;font-size:13px;flex:none;">🖐 ${this.escapeHtml(title)}</div>
+                    <div class="storage-config-grid" style="padding:10px 12px;overflow-y:auto;flex:1 1 auto;">${bodyHtml}</div>
+                    <div style="padding:8px 12px;display:flex;justify-content:flex-end;gap:8px;flex:none;border-top:1px solid rgba(245,158,11,0.25);">${footerHtml}</div>
                 </div>`);
             if (!card) { resolve(null); return; }
             this._pbGateBind(card, ev.kind, (answer) => {
