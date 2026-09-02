@@ -8809,6 +8809,12 @@ class WorkflowEditor {
                                 </select>
                             </div>
                             <div class="storage-config-folder full">
+                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                    <input type="checkbox" id="playbook-writes-enabled" ${data.writes_enabled ? 'checked' : ''}>
+                                    Allow write actions <span style="font-weight:400;color:#6b7280;">(resets, unlocks, creates… — read-only when off)</span>
+                                </label>
+                            </div>
+                            <div class="storage-config-folder full">
                                 <label for="playbook-text">Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span></label>
                                 <textarea id="playbook-text" rows="16" style="width:100%;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;">${this.escapeHtml(data.playbook || '')}</textarea>
                             </div>
@@ -8909,6 +8915,7 @@ class WorkflowEditor {
                 name: (document.getElementById('playbook-name-input').value || 'Playbook').trim(),
                 agent_provider: document.getElementById('playbook-provider-select').value || '',
                 model: (document.getElementById('playbook-model-select').value || '').trim(),
+                writes_enabled: !!document.getElementById('playbook-writes-enabled')?.checked,
                 playbook: document.getElementById('playbook-text').value,
             };
             this.editor.updateNodeDataFromId(nodeId, updatedData);
@@ -11530,6 +11537,7 @@ class WorkflowEditor {
             agent_provider: data.agent_provider || '',
             model: data.model || '',
             name: data.name || '',
+            writes_enabled: !!data.writes_enabled,
         };
 
         try {

@@ -65,6 +65,16 @@ final class PlaybookNodeRunner
 
         $doc = $this->parseDocument($nodeConfig['playbook'] ?? null);
 
+        // Node-level write authorization: markdown playbooks have no way to
+        // set policy.writes_enabled, so the node config carries an explicit
+        // toggle (checkbox in the editor). JSON documents keep their own
+        // policy unless the toggle is set.
+        if (!empty($nodeConfig['writes_enabled'])) {
+            $arr = $doc->toArray();
+            $arr['policy'] = array_merge($arr['policy'] ?? [], ['writes_enabled' => true]);
+            $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray($arr);
+        }
+
         $pdo = $this->pdoFactory !== null ? ($this->pdoFactory)() : $this->defaultPdo();
         $mcp = $this->mcpFactory !== null ? ($this->mcpFactory)($pdo, $userId) : $this->defaultMcp($pdo, $userId);
 
