@@ -62,11 +62,20 @@ final class SkillToolBridge
     {
         $dir = self::dir();
         if (!is_dir($dir)) {
-            @mkdir($dir, 0700, true);
+            // World-writable on purpose: XAMPP/Apache can run children under
+            // MIXED uids, and the writer (tool-result POST) and the reader
+            // (the blocked run) may land on children with different uids. A
+            // 0700 dir owned by one uid made the other's write fail silently
+            // and the waiting leg poll forever (observed live 2026-09-01,
+            // playbook runs 14/15). Tool-call ids are 128-bit secrets, so a
+            // shared dir leaks nothing.
+            @mkdir($dir, 0777, true);
+            @chmod($dir, 0777); // mkdir mode is masked by umask; force it.
         }
         $path = self::resultPath($toolCallId);
         $tmp = $path . '.' . bin2hex(random_bytes(4));
         @file_put_contents($tmp, json_encode($result, JSON_UNESCAPED_SLASHES));
+        @chmod($tmp, 0666);
         @rename($tmp, $path);
     }
 
