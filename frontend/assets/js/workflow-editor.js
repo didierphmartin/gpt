@@ -8846,13 +8846,31 @@ class WorkflowEditor {
 
     /** Render the /playbooks/validate response: red errors, amber warnings, actions table. */
     _renderPlaybookValidateResult(json, httpStatus) {
+        const banner = (ok, text) => `<div style="padding:8px 12px;border-radius:6px;margin-bottom:10px;font-weight:600;${ok
+            ? 'background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.4);'
+            : 'background:rgba(220,38,38,0.12);color:#ef4444;border:1px solid rgba(220,38,38,0.4);'}">${text}</div>`;
         if (json && json.success === false) {
-            return `<p style="color:#dc2626;">${this.escapeHtml(json.error || `Validation failed (HTTP ${httpStatus})`)}</p>`;
+            // Auth-layer error shape ({success:false, error}) — not a validation verdict.
+            return banner(false, `✗ Could not validate: ${this.escapeHtml(json.error || `HTTP ${httpStatus}`)}`);
         }
-        const errors = Array.isArray(json?.errors) ? json.errors : [];
-        const warnings = Array.isArray(json?.warnings) ? json.warnings : [];
-        const actions = Array.isArray(json?.actions) ? json.actions : [];
+        if (!json || typeof json.valid === 'undefined') {
+            // Unparseable / unexpected response must NEVER read as valid.
+            return banner(false, `✗ Could not validate: unexpected server response (HTTP ${httpStatus}).`);
+        }
+        const errors = Array.isArray(json.errors) ? json.errors : [];
+        const warnings = Array.isArray(json.warnings) ? json.warnings : [];
+        const actions = Array.isArray(json.actions) ? json.actions : [];
+        const counts = { bound: 0, native: 0, unbound: 0 };
+        for (const a of actions) if (counts[a.kind] !== undefined) counts[a.kind]++;
         let html = '';
+        if (json.valid === true) {
+            const detail = actions.length
+                ? ` — ${actions.length} action${actions.length > 1 ? 's' : ''} (${counts.bound} bound, ${counts.native} native, ${counts.unbound} unbound)`
+                : ' — but no #Actions were detected; check the "Actions used" section of your playbook';
+            html += banner(true, `✓ Playbook is VALID${detail}${warnings.length ? ` · ${warnings.length} warning${warnings.length > 1 ? 's' : ''}` : ''}`);
+        } else {
+            html += banner(false, `✗ Playbook is INVALID — ${errors.length || 'see'} error${errors.length === 1 ? '' : 's'} below`);
+        }
         if (errors.length) {
             html += `<div style="color:#dc2626;margin-bottom:8px;"><strong>Errors</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${this.escapeHtml(e)}</li>`).join('')}</ul></div>`;
         }
@@ -8872,11 +8890,6 @@ class WorkflowEditor {
                     <td style="padding:4px;">${this.escapeHtml(a.target || '')}</td>
                 </tr>`).join('')}</tbody>
             </table>`;
-        }
-        if (!errors.length && !warnings.length && !actions.length) {
-            html = `<p style="color:#22c55e;">Valid — no actions detected.</p>` + html;
-        } else if (!errors.length) {
-            html = `<p style="color:#22c55e;">Valid.</p>` + html;
         }
         return html;
     }
