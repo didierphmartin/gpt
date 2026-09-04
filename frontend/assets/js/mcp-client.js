@@ -66,7 +66,12 @@ class MCPClient {
         try { parsed = raw ? JSON.parse(raw) : null; } catch { /* non-JSON body */ }
 
         if (!response.ok) {
-            const detail = parsed?.error || parsed?.message || raw || response.statusText;
+            // `error` is usually a plain string, but JSON-RPC-style proxy
+            // errors (e.g. from the MCP proxy) come back as {code, message} —
+            // stringifying that object directly renders "[object Object]".
+            const errField = parsed?.error;
+            const errDetail = errField && typeof errField === 'object' ? errField.message : errField;
+            const detail = errDetail || parsed?.message || raw || response.statusText;
             throw new Error(`HTTP ${response.status}: ${detail}`);
         }
 
