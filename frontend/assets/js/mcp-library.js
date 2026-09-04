@@ -318,10 +318,14 @@ class MCPLibrary {
             let res;
             if (isNew) {
                 res = await window.mcpClient.addServer(f.name, f.url, f.description, f.headers || {}, f.transport);
+                if (res?.success && res.server_id && !f.enabled) {
+                    await window.mcpClient.toggleServer(Number(res.server_id), false);
+                }
             } else {
                 res = await window.mcpClient.updateServer(server.id, f.name, f.url, f.description, f.headers, f.transport);
                 if (res?.success && (Number(server.enabled) === 1) !== f.enabled) {
-                    await window.mcpClient.toggleServer(server.id, f.enabled);
+                    const toggleRes = await window.mcpClient.toggleServer(server.id, f.enabled);
+                    if (!toggleRes?.success) return this.showMsg(this.t('mcpLibrary.saveFailed'), false);
                 }
             }
             if (!res?.success) return this.showMsg(res?.error || this.t('mcpLibrary.saveFailed'), false);
