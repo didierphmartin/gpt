@@ -383,6 +383,7 @@ CREATE TABLE `mcp_servers` (
   `url` varchar(500) NOT NULL,
   `description` text,
   `headers` json DEFAULT NULL,
+  `transport` enum('http','sse') NOT NULL DEFAULT 'http',
   `enabled` tinyint(1) DEFAULT '1',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

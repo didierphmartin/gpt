@@ -28,6 +28,34 @@ class MCPServerController
         $this->ensureMcpSettingsTableExists();
     }
 
+    /** Allowed MCP transports. Kept here so the proxy and tests share one source. */
+    public const TRANSPORTS = ['http', 'sse'];
+
+    /**
+     * Normalize a request-supplied transport. null/empty => 'http' (default);
+     * a known value (case-insensitive) => canonical; anything else => null.
+     */
+    public static function normalizeTransport($value): ?string
+    {
+        if ($value === null) {
+            return 'http';
+        }
+        if (!is_string($value)) {
+            return null;
+        }
+        $v = strtolower(trim($value));
+        if ($v === '') {
+            return 'http';
+        }
+        return in_array($v, self::TRANSPORTS, true) ? $v : null;
+    }
+
+    /** 'mcp_app' when at least one cached tool exposes a UI resource, else 'mcp'. */
+    public static function deriveServerType(int $uiToolCount): string
+    {
+        return $uiToolCount > 0 ? 'mcp_app' : 'mcp';
+    }
+
     /**
      * List enabled MCP servers visible to the caller: every global server
      * (user_id IS NULL) plus the caller's own per-user servers.
@@ -35,14 +63,18 @@ class MCPServerController
     public function list(array $request): array
     {
         $userId = (string) ($request['query']['user_id'] ?? $request['user_id'] ?? '');
+        // The sidebar needs disabled private servers too (to re-enable them);
+        // chat-side callers keep the enabled-only default.
+        $includeDisabled = !empty($request['query']['include_disabled']);
 
+        $enabledClause = $includeDisabled ? '1=1' : 's.enabled = 1';
         $sql = "
             SELECT s.*,
                    COUNT(t.id) as tool_count,
                    SUM(CASE WHEN t.has_ui = 1 THEN 1 ELSE 0 END) as ui_tool_count
             FROM mcp_servers s
             LEFT JOIN mcp_server_tools t ON s.id = t.server_id
-            WHERE s.enabled = 1 AND (s.user_id IS NULL" . ($userId !== '' ? " OR s.user_id = :uid" : "") . ")
+            WHERE $enabledClause AND (s.user_id IS NULL" . ($userId !== '' ? " OR s.user_id = :uid" : "") . ")
             GROUP BY s.id
             ORDER BY s.name ASC
         ";
@@ -55,6 +87,19 @@ class MCPServerController
 
         // Apply the caller's package MCP allowlist: hide servers the role isn't permitted to use.
         $servers = $this->applyPackageAllowlist($servers, $userId);
+
+        foreach ($servers as &$s) {
+            $s['tool_count']    = (int)($s['tool_count'] ?? 0);
+            $s['ui_tool_count'] = (int)($s['ui_tool_count'] ?? 0);
+            $s['enabled']       = (int)($s['enabled'] ?? 1);
+            $s['is_mock']       = (int)($s['is_mock'] ?? 0);
+            $s['transport']     = self::normalizeTransport($s['transport'] ?? null) ?? 'http';
+            $s['server_type']   = self::deriveServerType($s['ui_tool_count']);
+            $s['headers']       = isset($s['headers']) && is_string($s['headers'])
+                ? (json_decode($s['headers'], true) ?: null)
+                : null;
+        }
+        unset($s);
 
         return [
             'success' => true,
@@ -263,6 +308,15 @@ class MCPServerController
         $headers = $input['headers'] ?? null;
         $headersJson = (is_array($headers) && $headers) ? json_encode($headers) : null;
 
+        $transport = self::normalizeTransport($input['transport'] ?? null);
+        if ($transport === null) {
+            return [
+                'success' => false,
+                'error' => 'Invalid transport (expected "http" or "sse")',
+                'status_code' => 400
+            ];
+        }
+
         if (!$name || !$url) {
             return [
                 'success' => false,
@@ -282,10 +336,10 @@ class MCPServerController
 
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO mcp_servers (user_id, name, url, description, headers)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport)
+                VALUES (?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$userId, $name, $url, $description, $headersJson]);
+            $stmt->execute([$userId, $name, $url, $description, $headersJson, $transport]);
 
             $serverId = $this->db->lastInsertId();
 
@@ -336,12 +390,32 @@ class MCPServerController
             ];
         }
 
-        $stmt = $this->db->prepare("
-            UPDATE mcp_servers
-            SET name = ?, url = ?, description = ?
-            WHERE id = ? AND user_id = ?
-        ");
-        $stmt->execute([$name, $url, $description, $serverId, $userId]);
+        $transport = self::normalizeTransport($input['transport'] ?? null);
+        if ($transport === null) {
+            return [
+                'success' => false,
+                'error' => 'Invalid transport (expected "http" or "sse")',
+                'status_code' => 400
+            ];
+        }
+
+        $sets   = ['name = ?', 'url = ?', 'description = ?', 'transport = ?'];
+        $params = [$name, $url, $description, $transport];
+
+        // Headers are only touched when the key is present in the body:
+        // {} or null clears them, an object replaces them.
+        if (array_key_exists('headers', $input)) {
+            $headers = $input['headers'];
+            $sets[]   = 'headers = ?';
+            $params[] = (is_array($headers) && $headers) ? json_encode($headers) : null;
+        }
+
+        $params[] = $serverId;
+        $params[] = $userId;
+        $stmt = $this->db->prepare(
+            "UPDATE mcp_servers SET " . implode(', ', $sets) . " WHERE id = ? AND user_id = ?"
+        );
+        $stmt->execute($params);
 
         if ($stmt->rowCount() === 0) {
             return [
@@ -486,7 +560,7 @@ class MCPServerController
         $allowlist = (new PackageResolver($this->db))->allowedMcpServers($userId); // null = all
 
         // Globals + this user's private servers, with tool counts.
-        $sql = "SELECT s.id, s.name, s.url, s.user_id, s.enabled, COUNT(t.id) AS tool_count
+        $sql = "SELECT s.id, s.name, s.url, s.user_id, s.enabled, s.is_mock, COUNT(t.id) AS tool_count
                 FROM mcp_servers s
                 LEFT JOIN mcp_server_tools t ON t.server_id = s.id
                 WHERE s.user_id IS NULL OR s.user_id = :uid
@@ -523,6 +597,7 @@ class MCPServerController
                 'name' => $row['name'],
                 'url' => $row['url'],
                 'is_global' => $isGlobal,
+                'is_mock' => (bool)($row['is_mock'] ?? false),
                 'tool_count' => (int)$row['tool_count'],
                 'effective_on' => (bool)$effective,
             ];
