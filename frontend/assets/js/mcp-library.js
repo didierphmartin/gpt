@@ -385,7 +385,11 @@ class MCPLibrary {
         }
         this.tester = new window.MCPToolTester({ container: cards, server, t: this.t });
         this.tester.render(tools);
-        if (force) this.loadTree(); // tool_count / server_type changed
+        // Keep the sidebar's tool_count / server_type badge in sync: refresh the
+        // tree whenever what we just rendered disagrees with what it shows
+        // (covers force-refresh and the initial discovery right after creating
+        // a server, without refetching on every routine tab open).
+        if (force || Number(server.tool_count) !== tools.length) this.loadTree();
     }
 
     esc(s) {
