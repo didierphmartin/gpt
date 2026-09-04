@@ -164,3 +164,30 @@ ALTER TABLE mcp_servers
 - True streamed-SSE transport through the PHP proxy.
 - Removing the Settings modal MCP tab.
 - OAuth flows (MCPeek's `MCPOAuthClient`); custom headers cover bearer tokens.
+
+## Verification 2026-09-04
+
+Manual end-to-end pass in the real browser against `http://localhost/gpt/frontend/index.html`:
+
+1. Open the app — ✅ no console errors; all MCP assets loaded with `?v=20260904-mcplib`.
+2. Sidebar — ✅ My servers / Global servers folders, badges, tool counts, dots; rail-icon
+   reopen works.
+3. Create a server and discover tools — ✅ bug fixed: sidebar tool-count stayed `0` right
+   after creating a server until an explicit "Refresh tools". Fixed in
+   `frontend/assets/js/mcp-library.js` (commit `271f010`).
+4. Call a tool with typed params — ✅ numeric `limit` sent as a JSON number; array param
+   (`Clinical Trials.list_studies`, `fields`) sent as `["a","b"]`.
+5. Error path — ✅ bug fixed: inline error rendered `[object Object]` for JSON-RPC-style
+   `{code, message}` proxy errors. Fixed in `frontend/assets/js/mcp-client.js`
+   (commit `c11ba0a`).
+6. MCP App server — ✅ verified against the global `Google Map` App server (no
+   `mockstack`/`mockokta` global App server exists in this environment); disabled Settings
+   fields, hidden Save/Delete, working Test connection, UI tool call rendered its app iframe.
+7. Delete two-step and disabled servers — ⚠️ partially verified: two-step delete, recreate,
+   and Disable (grey dot + strikethrough) all confirmed; the final check (Tools tab still
+   works via discovery on a disabled server) was not captured — the browser session's auth
+   token expired immediately after the Disable check.
+8. Settings modal regression — ⏭️ skipped: blocked by the same session expiry; not an app
+   bug, just needs re-authentication to resume.
+
+Full findings: `.superpowers/sdd/2026-09-04-mcp-servers-collection/task-7-report.md`.
