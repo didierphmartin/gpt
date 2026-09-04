@@ -265,6 +265,7 @@
     "typeHelp": "Auto-detected: MCP App when a tool exposes a UI resource.",
     "typeUnknown": "unknown (discover tools)",
     "headers": "Custom headers (JSON)",
+    "headersAdminManaged": "Headers for global servers are managed by an administrator.",
     "enabled": "Enabled",
     "testConnection": "Test connection",
     "testing": "Testing…",

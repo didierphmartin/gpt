@@ -95,7 +95,11 @@ class MCPServerController
             $s['is_mock']       = (int)($s['is_mock'] ?? 0);
             $s['transport']     = self::normalizeTransport($s['transport'] ?? null) ?? 'http';
             $s['server_type']   = self::deriveServerType($s['ui_tool_count']);
-            $s['headers']       = isset($s['headers']) && is_string($s['headers'])
+            // Never expose a global server's headers to users — they may
+            // contain admin-managed credentials (e.g. Authorization). Only
+            // the caller's own private servers get their headers decoded.
+            $isGlobal           = ($s['user_id'] ?? null) === null;
+            $s['headers']       = (!$isGlobal && isset($s['headers']) && is_string($s['headers']))
                 ? (json_decode($s['headers'], true) ?: null)
                 : null;
         }
@@ -390,17 +394,24 @@ class MCPServerController
             ];
         }
 
-        $transport = self::normalizeTransport($input['transport'] ?? null);
-        if ($transport === null) {
-            return [
-                'success' => false,
-                'error' => 'Invalid transport (expected "http" or "sse")',
-                'status_code' => 400
-            ];
-        }
+        $sets   = ['name = ?', 'url = ?', 'description = ?'];
+        $params = [$name, $url, $description];
 
-        $sets   = ['name = ?', 'url = ?', 'description = ?', 'transport = ?'];
-        $params = [$name, $url, $description, $transport];
+        // Transport is only touched when the key is present in the body —
+        // omitting it (e.g. the Settings-modal MCP tab, which doesn't send
+        // transport) must not silently reset SSE servers to 'http'.
+        if (array_key_exists('transport', $input)) {
+            $transport = self::normalizeTransport($input['transport']);
+            if ($transport === null) {
+                return [
+                    'success' => false,
+                    'error' => 'Invalid transport (expected "http" or "sse")',
+                    'status_code' => 400
+                ];
+            }
+            $sets[]   = 'transport = ?';
+            $params[] = $transport;
+        }
 
         // Headers are only touched when the key is present in the body:
         // {} or null clears them, an object replaces them.

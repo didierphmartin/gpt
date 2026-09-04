@@ -385,6 +385,7 @@ CREATE TABLE `mcp_servers` (
   `headers` json DEFAULT NULL,
   `transport` enum('http','sse') NOT NULL DEFAULT 'http',
   `enabled` tinyint(1) DEFAULT '1',
+  `is_mock` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

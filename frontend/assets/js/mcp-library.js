@@ -180,7 +180,10 @@ class MCPLibrary {
         const t = this.t;
         document.getElementById('mcp-server-modal')?.remove();
 
-        const headersText = server?.headers && Object.keys(server.headers).length
+        // Never populate headers for a global server — the list API withholds
+        // them from non-owners anyway, but keep the textarea empty even if a
+        // stale cached copy slips through, and explain why instead.
+        const headersText = own && server?.headers && Object.keys(server.headers).length
             ? JSON.stringify(server.headers, null, 2) : '';
         const typeLabel = isNew || !server.tool_count
             ? t('mcpLibrary.typeUnknown')
@@ -219,6 +222,7 @@ class MCPLibrary {
                   </div>
                 </div>
                 <label class="mcp-field">${this.esc(t('mcpLibrary.headers'))}<textarea id="mcp-f-headers" class="mcp-input" ${dis} placeholder='{"Authorization": "Bearer ..."}'>${this.esc(headersText)}</textarea></label>
+                ${!own ? `<div class="mcp-help">${this.esc(t('mcpLibrary.headersAdminManaged'))}</div>` : ''}
                 <label class="mcp-field flex items-center gap-2"><input type="checkbox" id="mcp-f-enabled" ${dis} ${isNew || Number(server.enabled) === 1 ? 'checked' : ''}> ${this.esc(t('mcpLibrary.enabled'))}</label>
                 <div id="mcp-f-msg" class="mcp-msg hidden"></div>
                 <div class="flex items-center gap-2 mt-4">

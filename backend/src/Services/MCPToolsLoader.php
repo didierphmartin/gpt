@@ -56,7 +56,8 @@ class MCPToolsLoader
             // server back that the package allowlist would otherwise hide.
             if ($userId !== null && $userId !== '') {
                 $sql = "SELECT t.*, s.id as server_id_col, s.url as server_url, s.name as server_name,
-                               s.user_id as server_user_id, s.headers as server_headers
+                               s.user_id as server_user_id, s.headers as server_headers,
+                               s.transport as server_transport
                         FROM mcp_server_tools t
                         JOIN mcp_servers s ON t.server_id = s.id
                         WHERE s.enabled = 1 AND (s.user_id IS NULL OR s.user_id = ?)
@@ -65,7 +66,8 @@ class MCPToolsLoader
                 $stmt->execute([(string)$userId]);
             } else {
                 $sql = "SELECT t.*, s.id as server_id_col, s.url as server_url, s.name as server_name,
-                               s.user_id as server_user_id, s.headers as server_headers
+                               s.user_id as server_user_id, s.headers as server_headers,
+                               s.transport as server_transport
                         FROM mcp_server_tools t
                         JOIN mcp_servers s ON t.server_id = s.id
                         WHERE s.user_id IS NULL AND s.enabled = 1
@@ -118,6 +120,7 @@ class MCPToolsLoader
                     'server_url' => $row['server_url'],
                     'server_name' => $row['server_name'],
                     'server_headers' => $this->parseServerHeaders($row['server_headers'] ?? null),
+                    'server_transport' => $row['server_transport'] ?? 'http',
                     'description' => $row['tool_description'],
                     'input_schema_json' => $row['input_schema'],  // Keep raw JSON to avoid {} -> [] corruption
                     'has_ui' => (bool) $row['has_ui'],
@@ -185,7 +188,13 @@ class MCPToolsLoader
         $originalName = $tool['original_name'];
 
         // Call the MCP server (returns both formatted and raw result)
-        $callResult = $this->callMCPServer($serverUrl, $originalName, $arguments, $tool['server_headers'] ?? []);
+        $callResult = $this->callMCPServer(
+            $serverUrl,
+            $originalName,
+            $arguments,
+            $tool['server_headers'] ?? [],
+            $tool['server_transport'] ?? 'http'
+        );
         $result = $callResult['formatted'];
         $rawResult = $callResult['raw'];
 
@@ -224,7 +233,7 @@ class MCPToolsLoader
     /**
      * Call an MCP server to execute a tool
      */
-    private function callMCPServer(string $serverUrl, string $toolName, array $arguments, array $extraHeaders = []): array
+    private function callMCPServer(string $serverUrl, string $toolName, array $arguments, array $extraHeaders = [], string $transport = 'http'): array
     {
         // The stored server_url is used byte-for-byte — NEVER rtrim the
         // trailing slash. Apache 301-redirects a directory-style URL (e.g.
@@ -233,7 +242,18 @@ class MCPToolsLoader
         // response ends up being the redirect's HTML body, which fails to
         // parse. Several registered servers legitimately have trailing-slash
         // URLs, so this must not be "fixed" by re-adding an rtrim.
+        //
+        // Unlike MCPProxyController::resolveEndpointUrl(), this loader does
+        // NOT append "/mcp" to the stored URL — doing so here would change
+        // behavior for every already-registered server. We only apply the
+        // narrower SSE rewrite (MCPeek's SSEMCPClient.initializeSession
+        // behaviour: a trailing "/sse" is really the "/mcp" JSON-RPC
+        // endpoint) so SSE-transport servers stop getting POSTed at their
+        // event-stream URL.
         $mcpUrl = $serverUrl;
+        if ($transport === 'sse' && str_ends_with(rtrim($mcpUrl, '/'), '/sse')) {
+            $mcpUrl = substr(rtrim($mcpUrl, '/'), 0, -4) . '/mcp';
+        }
 
         // Ensure empty arguments is an object {} not array []
         // MCP servers expect "arguments" to be a record/object

@@ -265,6 +265,7 @@
     "typeHelp": "Détecté automatiquement : MCP App lorsqu'un outil expose une ressource UI.",
     "typeUnknown": "inconnu (découvrir les outils)",
     "headers": "En-têtes personnalisés (JSON)",
+    "headersAdminManaged": "Les en-têtes des serveurs globaux sont gérés par un administrateur.",
     "enabled": "Activé",
     "testConnection": "Tester la connexion",
     "testing": "Test en cours…",

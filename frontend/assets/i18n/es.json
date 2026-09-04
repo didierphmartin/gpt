@@ -265,6 +265,7 @@
     "typeHelp": "Detectado automáticamente: MCP App cuando una herramienta expone un recurso de UI.",
     "typeUnknown": "desconocido (descubrir herramientas)",
     "headers": "Cabeceras personalizadas (JSON)",
+    "headersAdminManaged": "Las cabeceras de los servidores globales las gestiona un administrador.",
     "enabled": "Activado",
     "testConnection": "Probar conexión",
     "testing": "Probando…",

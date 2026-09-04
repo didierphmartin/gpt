@@ -148,19 +148,27 @@ class MCPClient {
 
     /**
      * Update an MCP server
+     *
+     * @param {*} transport - 'http'|'sse', or undefined to leave the stored
+     *   transport untouched. Omitting it matters: the Settings-modal MCP tab
+     *   doesn't send transport, and the backend only resets it when the key
+     *   is present in the body — sending a default here would silently flip
+     *   SSE servers back to 'http'.
      */
-    async updateServer(serverId, name, url, description = '', headers = undefined, transport = 'http') {
+    async updateServer(serverId, name, url, description = '', headers = undefined, transport = undefined) {
         try {
             const body = {
                 user_id: this.getUserId(),
                 server_id: serverId,
                 name,
                 url,
-                description,
-                transport
+                description
             };
             if (headers !== undefined) {
                 body.headers = headers;   // {} or null clears, object replaces
+            }
+            if (transport !== undefined) {
+                body.transport = transport;
             }
             const data = await this.request('/mcp/servers/update', {
                 method: 'POST',
