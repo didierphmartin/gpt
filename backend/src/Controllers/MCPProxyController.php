@@ -198,10 +198,7 @@ class MCPProxyController
         $response = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders, $transport);
 
         if ($response === null) {
-            $trimmed = rtrim($serverUrl, '/');
-            $urlTried = (str_ends_with($trimmed, '/mcp') || str_ends_with($trimmed, '.php'))
-                ? $trimmed
-                : $trimmed . '/mcp';
+            $urlTried = self::resolveEndpointUrl($serverUrl, $transport);
             return [
                 'success' => false,
                 'error' => $this->lastError ?? 'Failed to connect to MCP server',
