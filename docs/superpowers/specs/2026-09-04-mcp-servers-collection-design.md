@@ -37,7 +37,7 @@ This work adds a sidebar entry point and the MCPeek-style tool tester; it reuses
   - tree `#mcp-servers-tree`.
   - context menu `#mcp-servers-context-menu` (Edit / Enable-Disable / Delete).
 - `switchView('mcp-servers')` case in `chat.js`, wired like the other collections.
-- Package gating: `applyUserPackage()` reads `capabilities.sidebar.mcpServers`; when absent the
+- Package gating: `applyUserPackage()` reads `capabilities.sidebar.mcp_servers`; when absent the
   button is shown (backwards compatible with existing package rows).
 
 ### `frontend/assets/js/mcp-library.js` — class `MCPLibrary`
