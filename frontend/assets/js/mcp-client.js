@@ -76,10 +76,11 @@ class MCPClient {
     /**
      * Load configured MCP servers from backend
      */
-    async loadServers() {
+    async loadServers(includeDisabled = false) {
         try {
             const userId = this.getUserId();
-            const data = await this.request(`/mcp/servers?user_id=${encodeURIComponent(userId)}`);
+            const qs = `user_id=${encodeURIComponent(userId)}` + (includeDisabled ? '&include_disabled=1' : '');
+            const data = await this.request(`/mcp/servers?${qs}`);
 
             if (data.success) {
                 this.servers.clear();
@@ -98,14 +99,15 @@ class MCPClient {
     /**
      * Add a new MCP server
      */
-    async addServer(name, url, description = '', headers = {}) {
+    async addServer(name, url, description = '', headers = {}, transport = 'http') {
         try {
             const body = {
                 action: 'add',
                 user_id: this.getUserId(),
                 name,
                 url,
-                description
+                description,
+                transport
             };
             if (headers && Object.keys(headers).length) {
                 body.headers = headers;
@@ -142,17 +144,22 @@ class MCPClient {
     /**
      * Update an MCP server
      */
-    async updateServer(serverId, name, url, description = '') {
+    async updateServer(serverId, name, url, description = '', headers = undefined, transport = 'http') {
         try {
+            const body = {
+                user_id: this.getUserId(),
+                server_id: serverId,
+                name,
+                url,
+                description,
+                transport
+            };
+            if (headers !== undefined) {
+                body.headers = headers;   // {} or null clears, object replaces
+            }
             const data = await this.request('/mcp/servers/update', {
                 method: 'POST',
-                body: JSON.stringify({
-                    user_id: this.getUserId(),
-                    server_id: serverId,
-                    name,
-                    url,
-                    description
-                })
+                body: JSON.stringify(body)
             });
 
             if (data.success) {
@@ -307,11 +314,12 @@ class MCPClient {
     /**
      * Test connection to an MCP server
      */
-    async testConnection(serverUrl, headers = {}) {
+    async testConnection(serverUrl, headers = {}, transport = 'http') {
         try {
             const body = {
                 action: 'test_connection',
-                server_url: serverUrl
+                server_url: serverUrl,
+                transport
             };
             if (headers && Object.keys(headers).length) {
                 body.headers = headers;
@@ -487,6 +495,54 @@ class MCPClient {
      */
     getTool(toolName) {
         return this.tools.get(toolName);
+    }
+
+    /**
+     * Cached tools for one server (from mcp_server_tools). Empty array when
+     * the cache is empty or the server is disabled/not visible.
+     */
+    async getServerTools(serverId) {
+        try {
+            const userId = this.getUserId();
+            const data = await this.request(
+                `/mcp/servers/tools?server_id=${encodeURIComponent(serverId)}&user_id=${encodeURIComponent(userId)}`
+            );
+            return data.success && Array.isArray(data.tools) ? data.tools : [];
+        } catch (error) {
+            console.error('Failed to load server tools:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Seed this.tools with a server's tools so callTool()/createAppFrame()
+     * resolve them even when loadAllTools() has not run (or the server is
+     * disabled). Accepts either cached rows (tool_name/input_schema) or raw
+     * tools/list entries (name/inputSchema). Returns the normalized list.
+     */
+    registerTools(server, tools) {
+        const out = [];
+        for (const t of tools || []) {
+            const name = t.name ?? t.tool_name;
+            if (!name) continue;
+            const uiUri = t.uiResourceUri ?? t.ui_resource_uri ?? t._meta?.ui?.resourceUri ?? null;
+            const hasUi = t.hasUi !== undefined
+                ? Boolean(t.hasUi)
+                : (t.has_ui === 1 || t.has_ui === true || Boolean(uiUri));
+            const tool = {
+                server_id: server.id,
+                server_url: server.url,
+                server_name: server.name,
+                name,
+                description: t.description ?? t.tool_description ?? '',
+                inputSchema: t.inputSchema ?? t.input_schema ?? null,
+                hasUi,
+                uiResourceUri: uiUri
+            };
+            this.tools.set(name, tool);
+            out.push(tool);
+        }
+        return out;
     }
 
     /**
