@@ -101,6 +101,10 @@ class ChatApp {
         this.navAgents = document.getElementById('nav-agents');
         this.agentsView = document.getElementById('agents-view');
 
+        // MCP servers library elements
+        this.navMcpServers = document.getElementById('nav-mcp-servers');
+        this.mcpServersView = document.getElementById('mcp-servers-view');
+
         // File Storage elements
         this.navFileStorage = document.getElementById('nav-file-storage');
         this.fileStorageView = document.getElementById('file-storage-view');
@@ -308,6 +312,24 @@ class ChatApp {
      * Get authorization headers for API requests
      * @returns {Object} Headers object with Authorization and Content-Type
      */
+    /** Tool definition (Claude shape) for the playbook-author skill's save step. */
+    _playbookSaveToolDef() {
+        return {
+            name: 'save_playbook_agent',
+            description: 'Save a finished Console-style playbook as a Playbook agent in the user\'s Agents list (category "Playbooks"), so it can be dragged onto a workflow canvas. Call it ONCE, after scripts/create.py reported VALID, with the playbook text verbatim.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Agent name — use the playbook Title.' },
+                    description: { type: 'string', description: 'One line — use the Trigger.' },
+                    playbook: { type: 'string', description: 'The full playbook text exactly as create.py printed it.' },
+                    provider: { type: 'string', description: 'Optional LLM provider key for the node (defaults to the current one).' },
+                },
+                required: ['name', 'playbook'],
+            },
+        };
+    }
+
     getAuthHeaders() {
         const headers = {
             'Content-Type': 'application/json'
@@ -447,6 +469,9 @@ class ChatApp {
         if (this.navAgents) {
             this.navAgents.addEventListener('click', () => this.switchView('agents'));
         }
+        if (this.navMcpServers) {
+            this.navMcpServers.addEventListener('click', () => this.switchView('mcp-servers'));
+        }
         if (this.navSkills) {
             this.navSkills.addEventListener('click', () => this.switchView('skills'));
         }
@@ -558,6 +583,7 @@ class ChatApp {
                 prompt_library:  'nav-prompt-library',
                 skills:          'nav-skills',
                 agent_teams:     'nav-agent-teams',
+                mcp_servers:     'nav-mcp-servers',
                 file_storage:    'nav-file-storage',
             };
 
@@ -1957,6 +1983,11 @@ class ChatApp {
             const requestBody = {
                 message: outgoingMessage,
                 conversation_history: this.conversationHistory.slice(-10),
+                // View Context: the backend echoes what it actually sent.
+                return_context: true,
+                // playbook-author skill: the browser saves the finished playbook as a
+                // Playbook agent (scripts run sandboxed, without an API session).
+                ...(effectiveSkill?.dir_name === 'playbook-author' ? { client_tools: [this._playbookSaveToolDef()] } : {}),
                 streaming: !turnRunsSkillTransform,
                 user_id: storedUser?.id || 'demo-user',
                 provider: this.currentProvider,
@@ -2320,6 +2351,7 @@ class ChatApp {
                         const continuation = await this.dispatchClientToolCall(
                             {
                                 assistant_text: data.assistant_text || data.text || '',
+                                assistant_reasoning: data.assistant_reasoning || '',
                                 tool_calls: data.pending_tool_calls || [],
                             },
                             {
@@ -2753,7 +2785,7 @@ class ChatApp {
                             // it after the stream ends.
                             try {
                                 pendingClientToolCall = JSON.parse(data);
-                                console.log('🔧 [client_tool_call] received:', pendingClientToolCall);
+                                console.log('🔧 [client_tool_call] received:', pendingClientToolCall, 'keys=' + Object.keys(pendingClientToolCall || {}).join(','), 'reasoning=' + String(pendingClientToolCall?.assistant_reasoning || '').length);
                             } catch (e) {
                                 console.error('Failed to parse client_tool_call payload:', e);
                             }
@@ -3455,6 +3487,41 @@ class ChatApp {
         // only in tool_result) leaves the model treating the body as
         // optional reference material rather than a binding contract,
         // which is what we kept observing on the failed retests.
+        if (call.name === 'save_playbook_agent') {
+            // playbook-author skill → POST /agents (agent_type playbook). The
+            // card appears in the Agents list under "Playbooks" and drops onto a
+            // workflow canvas as a Playbook node.
+            const input = call.input || {};
+            let payload;
+            try {
+                const name = String(input.name || '').trim();
+                const playbook = String(input.playbook || '');
+                if (!name || !/Title:\s*\S/.test(playbook) || !/Instructions:/.test(playbook)) {
+                    payload = { success: false, error: 'save_playbook_agent needs a name and the full playbook text (with Title: and Instructions:).' };
+                } else {
+                    const resp = await fetch(window.apiUrl('/agents'), {
+                        method: 'POST',
+                        headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name, agent_type: 'playbook', category: 'Playbooks',
+                            description: String(input.description || '').slice(0, 500),
+                            provider: String(input.provider || this.currentProvider || 'claude'),
+                            instructions: playbook,
+                        }),
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    const id = data?.data?.id ?? data?.id;
+                    payload = (resp.ok && id)
+                        ? { success: true, agent_id: id, name, category: 'Playbooks', hint: 'Drag the card from the Agents list onto a workflow canvas to use it.' }
+                        : { success: false, error: data?.error || `agents endpoint returned ${resp.status}` };
+                    if (resp.ok) { try { await window.agentsLibrary?.loadTree?.(); } catch (_) {} }
+                }
+            } catch (e) {
+                payload = { success: false, error: `save_playbook_agent failed: ${e?.message || e}` };
+            }
+            return { toolResultPayload: payload, followUpExtras: {} };
+        }
+
         if (call.name === 'discover_skill') {
             const skillContent = chosenSkill?.skill_content || '';
             // Enumerate the user's attached files with their /scratch/
@@ -3975,6 +4042,28 @@ class ChatApp {
             }
         } else {
             llmInputFiles = {};
+        }
+        // Loose-fields recovery: some models (DeepSeek) hand the draft's
+        // fields directly as input_files ({name, title, steps, …}) instead
+        // of ONE file keyed by its path. If no key looks like a path and
+        // argv names an input file, the whole object IS that file.
+        if (llmInputFiles && typeof llmInputFiles === 'object') {
+            const keys = Object.keys(llmInputFiles);
+            const noneLookLikePaths = keys.length > 0 && keys.every(k => !String(k).includes('/') && !String(k).includes('.'));
+            if (noneLookLikePaths) {
+                let inputPathFromArgv = null;
+                for (let i = 0; i < argv.length - 1; i++) {
+                    if ((argv[i] === '-i' || argv[i] === '--input' || argv[i] === '--in')
+                        && typeof argv[i + 1] === 'string' && !argv[i + 1].startsWith('-')) {
+                        inputPathFromArgv = argv[i + 1];
+                        break;
+                    }
+                }
+                if (inputPathFromArgv) {
+                    console.log(`[coerceInputFiles] input_files keys look like fields, not paths (${keys.join(',')}); wrapping the object as JSON under "${inputPathFromArgv}"`);
+                    llmInputFiles = { [inputPathFromArgv]: JSON.stringify(llmInputFiles) };
+                }
+            }
         }
         return this._sanitizeInputFilesKeys(llmInputFiles);
     }
@@ -4528,6 +4617,7 @@ class ChatApp {
             {
                 role: 'assistant',
                 content: payload.assistant_text || '',
+                ...(payload.assistant_reasoning ? { reasoning_content: payload.assistant_reasoning } : {}),
                 tool_calls: [{
                     id: call.id,
                     type: 'function',
@@ -4554,6 +4644,7 @@ class ChatApp {
             ...ctx.baseRequestBody,
             message: '',
             conversation_history: continuationHistory,
+            return_context: true,
             compare_provider: this.selectedComparer,
             attachment_ids: [],
             // Same rule as the primary continuation: stream only when
@@ -4695,7 +4786,7 @@ class ChatApp {
         // (window.AgentTurn) so the format — incl. Gemini's thought_signature
         // and per-tool function name — lives in ONE place and never drifts.
         const { assistantTurn, toolResultTurns } =
-            window.AgentTurn.buildToolRoundTurns(results, payload.assistant_text);
+            window.AgentTurn.buildToolRoundTurns(results, payload.assistant_text, payload.assistant_reasoning || '');
 
         const continuationHistory = [
             ...this.conversationHistory,
@@ -4724,6 +4815,7 @@ class ChatApp {
             ...ctx.baseRequestBody,
             message: '',
             conversation_history: continuationHistory,
+            return_context: true,
             // The user turn is already inside conversation_history, so
             // suppress verifier/compare for the follow-up — those phases
             // are turn-level and the first shot already triggered them
@@ -4740,6 +4832,27 @@ class ChatApp {
             streaming,
             ...followUpExtras,
         };
+        // playbook-author is usually AUTO-picked via discover_skill inside the
+        // turn, so the first request could not declare its save tool; declare
+        // it on every follow-up once the promoted skill is that one.
+        {
+            // ctx.activeSkill is set by the run_skill_script branch, so this
+            // also covers the FINAL turn after the script ran — where the
+            // regular flow drops skill_metadata (no forced run_skill_script)
+            // and the model would otherwise have no save tool to call.
+            const promoted = followUpExtras?.skill_metadata?.dir_name || ctx.activeSkill?.dir_name || ctx.baseRequestBody?.skill_metadata?.dir_name;
+            if (promoted === 'playbook-author') {
+                const existing = Array.isArray(followUpBody.client_tools) ? followUpBody.client_tools : [];
+                if (!existing.some(t => t?.name === 'save_playbook_agent')) {
+                    followUpBody.client_tools = [...existing, this._playbookSaveToolDef()];
+                }
+                // Keep the skill's instructions (system prompt) on that final
+                // turn too — without skill_metadata, so nothing is forced.
+                if (!followUpBody.skill_content && ctx.activeSkill?.skill_content) {
+                    followUpBody.skill_content = ctx.activeSkill.skill_content;
+                }
+            }
+        }
         if (Object.keys(followUpExtras).length > 0) {
             console.log('[B3 continue] follow-up body extras:', Object.keys(followUpExtras));
         }
@@ -5581,6 +5694,10 @@ class ChatApp {
             case 'response':
                 try {
                     const response = JSON.parse(data);
+                    if (response.context && typeof response.context === 'object') {
+                        // What the backend actually sent this turn (View Context).
+                        this.lastLlmContext = { sessionId: this.currentContextId, snapshot: response.context };
+                    }
                     if (response.text) {
                         // Final render with complete content, isStreaming = false
                         this.updateMessage(messageId, response.text, false);
@@ -8348,6 +8465,7 @@ class ChatApp {
             </div>
         `;
         this.conversationHistory = [];
+        this.lastLlmContext = null;
         this.totalTokens = 0;
         this.tokenInfo.textContent = window.i18n.t('infoBar.ready');
         this.currentContextId = null; // Reset context to start a new conversation
@@ -8393,22 +8511,72 @@ class ChatApp {
         const pendingPrompt = (this.userInput?.value || '').trim();
         const activeSkill = this.activeSkill || null;
 
-        // Build the ordered list of context items as they reach the LLM
-        const items = this.buildContextItems(history, pendingPrompt, activeSkill);
+        // Prefer the REAL context captured server-side on the last turn of
+        // this session (system prompt, memory, skill, tools, messages);
+        // fall back to the client-side approximation before the first turn.
+        const captured = this.lastLlmContext;
+        const snap = (captured && (captured.sessionId == null || captured.sessionId === this.currentContextId))
+            ? captured.snapshot : null;
+        const items = snap
+            ? this.buildContextItemsFromSnapshot(snap, pendingPrompt)
+            : this.buildContextItems(history, pendingPrompt, activeSkill);
 
         // Stats — count chars across displayed items (including placeholders)
         const totalChars = items.reduce((acc, it) => acc + (it.content?.length || 0), 0);
         const approxTokens = Math.ceil(totalChars / 4);
         if (this.contextStats) {
-            this.contextStats.textContent =
-                `${items.length} item${items.length !== 1 ? 's' : ''} · ${totalChars.toLocaleString()} chars · ~${approxTokens.toLocaleString()} tokens`;
+            this.contextStats.textContent = snap
+                ? `last turn · ${snap.provider}${snap.model ? ' · ' + snap.model : ''} · ${(snap.tools || []).length} tools · ~${Number(snap.estimated_tokens || approxTokens).toLocaleString()} tokens`
+                : `${items.length} item${items.length !== 1 ? 's' : ''} · ${totalChars.toLocaleString()} chars · ~${approxTokens.toLocaleString()} tokens`;
         }
 
         this.renderContextArrayTab(items);
-        this.renderContextJsonTab(history, pendingPrompt, activeSkill);
+        this.renderContextJsonTab(history, pendingPrompt, activeSkill, snap);
 
         this.switchContextTab(this.activeContextTab || 'array');
         this.contextModal.classList.remove('hidden');
+    }
+
+    /**
+     * Context items from the server-side snapshot (what was ACTUALLY sent on
+     * the last turn): system → memory → skill → tools → messages → pending.
+     */
+    buildContextItemsFromSnapshot(snap, pendingPrompt) {
+        const items = [];
+        const limits = [snap.max_tokens != null ? `max_tokens ${snap.max_tokens}` : null,
+                        snap.temperature != null ? `temperature ${snap.temperature}` : null].filter(Boolean).join(' · ');
+        items.push({
+            role: 'system',
+            content: snap.system_prompt || '',
+            note: `Final system prompt as sent on the last turn — ${snap.provider}${snap.model ? ' · ' + snap.model : ''}${limits ? ' · ' + limits : ''}.`
+        });
+        items.push(snap.memory_included
+            ? { role: 'memory', content: snap.memory_context || '', note: "Frozen memory appended to the system prompt (options['memory_context'])." }
+            : { role: 'memory', content: '(no memory sent on the last turn)', serverSide: true });
+        items.push(snap.skill_included
+            ? { role: 'skill', content: snap.skill_content || '', note: 'Active skill body appended to the system prompt.' }
+            : { role: 'skill', content: '(no active skill on the last turn)', serverSide: true });
+        const tools = Array.isArray(snap.tools) ? snap.tools : [];
+        items.push({
+            role: 'tools',
+            content: tools.length
+                ? tools.map(t => `${t.name}${t.source === 'client' ? '  [client]' : ''}\n    ${t.description || ''}`).join('\n')
+                : '(no tools offered on the last turn)',
+            note: `${tools.length} tool definition${tools.length === 1 ? '' : 's'} offered to the model (function schemas are sent alongside the messages).`,
+            serverSide: !tools.length
+        });
+        for (const m of (snap.messages || [])) {
+            items.push({ role: m.role || 'unknown', content: m.content || '' });
+        }
+        items.push({
+            role: 'user',
+            content: pendingPrompt,
+            note: pendingPrompt
+                ? 'Next user prompt — current content of the input box, what will be sent on Send.'
+                : 'Next user prompt — input is empty.',
+            pending: true
+        });
+        return items;
     }
 
     /**
@@ -8493,6 +8661,7 @@ class ChatApp {
                 case 'system':    return 'bg-purple-100 text-purple-800 border-purple-200';
                 case 'memory':    return 'bg-amber-100 text-amber-800 border-amber-200';
                 case 'skill':     return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+                case 'tools':     return 'bg-teal-100 text-teal-800 border-teal-200';
                 default:          return 'bg-gray-100 text-gray-800 border-gray-200';
             }
         };
@@ -8526,8 +8695,26 @@ class ChatApp {
      * Shows the messages array as it would appear in the provider request body,
      * annotated with a comment about server-added fields (system prompt, tools)
      */
-    renderContextJsonTab(history, pendingPrompt, activeSkill) {
+    renderContextJsonTab(history, pendingPrompt, activeSkill, snap = null) {
         if (!this.contextJsonContent) return;
+
+        if (snap) {
+            // The server-side snapshot of the last turn, verbatim.
+            const captured = {
+                captured: 'server-side, last turn of this session',
+                provider: snap.provider, model: snap.model,
+                max_tokens: snap.max_tokens, temperature: snap.temperature,
+                estimated_tokens: snap.estimated_tokens,
+                system_prompt: snap.system_prompt,
+                memory_context: snap.memory_included ? snap.memory_context : null,
+                skill_content: snap.skill_included ? snap.skill_content : null,
+                tools: snap.tools,
+                messages: snap.messages,
+                pending_user_message: pendingPrompt || ''
+            };
+            this.contextJsonContent.textContent = JSON.stringify(captured, null, 2);
+            return;
+        }
 
         const messages = history.map(msg => ({
             role: msg.role,
@@ -10187,6 +10374,7 @@ class ChatApp {
         if (this.skillsView) this.skillsView.classList.add('hidden');
         if (this.agentTeamsView) this.agentTeamsView.classList.add('hidden');
         if (this.agentsView) this.agentsView.classList.add('hidden');
+        if (this.mcpServersView) this.mcpServersView.classList.add('hidden');
         if (this.fileStorageView) this.fileStorageView.classList.add('hidden');
         this.navConversations.classList.remove('active');
         this.navPromptLibrary.classList.remove('active');
@@ -10195,6 +10383,7 @@ class ChatApp {
         if (this.navSkills) this.navSkills.classList.remove('active');
         if (this.navAgentTeams) this.navAgentTeams.classList.remove('active');
         if (this.navAgents) this.navAgents.classList.remove('active');
+        if (this.navMcpServers) this.navMcpServers.classList.remove('active');
         if (this.navFileStorage) this.navFileStorage.classList.remove('active');
 
         if (view === 'conversations') {
@@ -10303,6 +10492,22 @@ class ChatApp {
                 window.agentsLibrary.init();
             }
             window.agentsLibrary?.loadTree();
+
+            if (window.i18n && window.i18n.updateAllTranslations) {
+                window.i18n.updateAllTranslations();
+            }
+        } else if (view === 'mcp-servers') {
+            if (this.mcpServersView) this.mcpServersView.classList.remove('hidden');
+            if (this.navMcpServers) this.navMcpServers.classList.add('active');
+
+            // Lazy-init the MCP library on first visit, then reload its tree.
+            if (!window.mcpLibrary && window.MCPLibrary) {
+                window.mcpLibrary = new window.MCPLibrary(
+                    (k, p) => (window.i18n?.t ? window.i18n.t(k, p) : k),
+                );
+                window.mcpLibrary.init();
+            }
+            window.mcpLibrary?.loadTree();
 
             if (window.i18n && window.i18n.updateAllTranslations) {
                 window.i18n.updateAllTranslations();

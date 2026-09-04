@@ -64,9 +64,10 @@
     <script src="assets/js/mermaid-renderer.js?v=20260712-7-quote-labels"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <link rel="stylesheet" href="assets/css/mcp-apps.css">
+    <link rel="stylesheet" href="assets/css/mcp-library.css?v=20260904-mcplib">
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
-    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20260902-playbook-yellow">
+    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20260902-dispatcher">
     <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect3">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
@@ -2152,7 +2153,7 @@
          - On resumed sessions (no fresh-login flag) the splash hides
            immediately so the empty overlay never flashes.
          - On fresh logins the splash stays visible until StartupTasksRunner.
-           runAll() (in assets/js/startup-tasks.js) finishes its tasks and
+           runAll() (in assets/js/startup-tasks.js?v=20260903-playbook-author) finishes its tasks and
            fades it out. The outer 10s setTimeout below is a safety net:
            if runAll never fires (stale-cached auth.js, network failure
            before authVerified, etc.) the user shouldn't be stuck on the
@@ -2263,6 +2264,7 @@
                 <button data-rail-target="skills"         class="rail-btn" title="Skills"            aria-label="Skills">🎯</button>
                 <button data-rail-target="agent-teams"    class="rail-btn" title="Workflows"         aria-label="Workflows">🔀</button>
                 <button data-rail-target="agents"         class="rail-btn" title="Agents"            aria-label="Agents">🤖</button>
+                <button data-rail-target="mcp-servers"    class="rail-btn" title="MCP Servers"       aria-label="MCP Servers">🔌</button>
                 <button data-rail-target="file-storage"   class="rail-btn" title="File Storage"      aria-label="File Storage">📁</button>
             </aside>
 
@@ -2299,6 +2301,9 @@
                         </button>
                         <button id="nav-agents" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             🤖 <span>Agents</span>
+                        </button>
+                        <button id="nav-mcp-servers" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
+                            🔌 <span data-i18n="sidebar.mcpServers">MCP Servers</span>
                         </button>
                         <button id="nav-file-storage" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             📁 <span data-i18n="sidebar.fileStorage">File Storage</span>
@@ -2345,6 +2350,25 @@
                         </div>
                         <div id="agents-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
                             <div class="text-center text-gray-400 text-xs py-6">Loading agents…</div>
+                        </div>
+                    </div>
+
+                    <!-- MCP Servers View (hidden by default) -->
+                    <div id="mcp-servers-view" class="h-full hidden bg-gray-200 flex flex-col">
+                        <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex flex-col gap-2">
+                            <div class="flex gap-1 items-center">
+                                <button id="mcp-servers-new-btn" class="flex-1 text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
+                                    ➕ <span data-i18n="mcpLibrary.newServer">New Server</span>
+                                </button>
+                                <label class="text-xs text-gray-600 flex items-center gap-1 px-1" title="Enable/disable MCP tools for your chats">
+                                    <input type="checkbox" id="mcp-servers-master-toggle" checked>
+                                    <span data-i18n="mcpLibrary.master">MCP on</span>
+                                </label>
+                            </div>
+                            <input id="mcp-servers-search" type="text" class="w-full text-xs border border-gray-300 rounded px-2 py-1" placeholder="Search servers..." data-i18n-placeholder="mcpLibrary.search">
+                        </div>
+                        <div id="mcp-servers-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
+                            <div class="text-center text-gray-400 text-xs py-6">Loading…</div>
                         </div>
                     </div>
 
@@ -4057,6 +4081,12 @@
         </button>
     </div>
 
+    <div id="mcp-servers-context-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 140px;">
+        <button data-action="edit"   class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="mcpLibrary.edit">Edit</button>
+        <button data-action="toggle" class="block w-full text-left px-3 py-1 hover:bg-gray-100">Enable</button>
+        <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="mcpLibrary.delete">Delete</button>
+    </div>
+
     <!-- Functions Modal -->
     <div id="functions-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div class="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] md:max-h-[80vh] overflow-hidden">
@@ -4118,7 +4148,7 @@
     <!-- Config and app scripts -->
     <!-- StartupTasksRunner must load before auth.js so window.startupTasks
          exists by the time checkAuth() succeeds and runAll() is invoked. -->
-    <script src="assets/js/startup-tasks.js?v=20260515-mcp-prefix"></script>
+    <script src="assets/js/startup-tasks.js?v=20260903-playbook-author"></script>
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js?v=20260820-sso-login"></script>
     <script src="assets/js/config.js"></script>
@@ -4127,13 +4157,13 @@
     <script src="assets/js/audio-streamer.js"></script>
     <script src="assets/js/gemini-live-client.js"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/mcp-client.js?v=20260617-mcpauth"></script>
+    <script src="assets/js/mcp-client.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
     <script src="assets/js/settings-panel.js?v=20260709-glm"></script>
-    <script src="assets/js/agent-teams-panel.js"></script>
+    <script src="assets/js/agent-teams-panel.js?v=20260903-playbook-agent"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
@@ -4147,7 +4177,7 @@
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20260625-inputfiles"></script>
+    <script src="assets/js/pyodide-runner.js?v=20260903-trimkeys"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -4164,11 +4194,13 @@
     <script src="assets/js/skillopt-panel.js?v=20260614-selfheal"></script>
     <script src="assets/js/heal-panel.js?v=20260709-glm"></script>
     <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
-    <script src="assets/js/agent-turn.js?v=20260624-shared1"></script>
-    <script src="assets/js/workflow-editor.js?v=20260902-toggle-spin"></script>
-    <script src="assets/js/agents-library.js?v=20260520-drag-to-workflow"></script>
+    <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
+    <script src="assets/js/workflow-editor.js?v=20260904-showcode"></script>
+    <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
+    <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
+    <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20260811-httperr"></script>
+    <script src="assets/js/chat.js?v=20260904-mcplib"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');
