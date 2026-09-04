@@ -47,7 +47,8 @@ class MCPProxyController
                 return $this->proxyRequest($serverUrl, $serverId, $input['jsonrpc'] ?? null, $userId);
 
             case 'test_connection':
-                return $this->testConnection($serverUrl, $this->normalizeHeaders($input['headers'] ?? null));
+                $transport = MCPServerController::normalizeTransport($input['transport'] ?? null) ?? 'http';
+                return $this->testConnection($serverUrl, $this->normalizeHeaders($input['headers'] ?? null), $transport);
 
             case 'discover_tools':
                 if (!is_string($serverUrl) || $serverUrl === '') {
@@ -80,6 +81,7 @@ class MCPProxyController
 
         // Look up custom headers by server id (global or caller's user scope)
         $extraHeaders = $serverId ? $this->getServerHeaders($serverId, $userId) : [];
+        $transport = $serverId ? $this->getServerTransport($serverId, $userId) : 'http';
 
         if (!$serverUrl) {
             return [
@@ -130,7 +132,7 @@ class MCPProxyController
                 ]
             ];
 
-            $initResponse = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders);
+            $initResponse = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders, $transport);
             if ($initResponse === null || isset($initResponse['error'])) {
                 return [
                     'success' => false,
@@ -144,11 +146,11 @@ class MCPProxyController
                 'jsonrpc' => '2.0',
                 'method' => 'notifications/initialized',
                 'params' => new \stdClass()
-            ], false, $extraHeaders);
+            ], false, $extraHeaders, $transport);
         }
 
         // Forward request to MCP server
-        $response = $this->sendToMCPServer($serverUrl, $jsonrpc, true, $extraHeaders);
+        $response = $this->sendToMCPServer($serverUrl, $jsonrpc, true, $extraHeaders, $transport);
 
         if ($response === null) {
             return [
@@ -168,7 +170,7 @@ class MCPProxyController
     /**
      * Test connection to an MCP server
      */
-    private function testConnection(?string $serverUrl, array $extraHeaders = []): array
+    private function testConnection(?string $serverUrl, array $extraHeaders = [], string $transport = 'http'): array
     {
         if (!$serverUrl) {
             return [
@@ -193,7 +195,7 @@ class MCPProxyController
             ]
         ];
 
-        $response = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders);
+        $response = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders, $transport);
 
         if ($response === null) {
             $trimmed = rtrim($serverUrl, '/');
@@ -231,6 +233,7 @@ class MCPProxyController
     private function discoverTools(string $serverUrl, ?int $serverId, string $userId): array
     {
         $extraHeaders = $serverId ? $this->getServerHeaders($serverId, $userId) : [];
+        $transport = $serverId ? $this->getServerTransport($serverId, $userId) : 'http';
         if (!$serverUrl) {
             return [
                 'success' => false,
@@ -254,7 +257,7 @@ class MCPProxyController
             ]
         ];
 
-        $initResponse = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders);
+        $initResponse = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders, $transport);
 
         if ($initResponse === null) {
             return [
@@ -277,7 +280,7 @@ class MCPProxyController
             'jsonrpc' => '2.0',
             'method' => 'notifications/initialized',
             'params' => new \stdClass()
-        ], false, $extraHeaders);
+        ], false, $extraHeaders, $transport);
 
         // List tools
         $toolsRequest = [
@@ -287,7 +290,7 @@ class MCPProxyController
             'params' => new \stdClass()
         ];
 
-        $toolsResponse = $this->sendToMCPServer($serverUrl, $toolsRequest, true, $extraHeaders);
+        $toolsResponse = $this->sendToMCPServer($serverUrl, $toolsRequest, true, $extraHeaders, $transport);
 
         if ($toolsResponse === null || isset($toolsResponse['error'])) {
             return [
@@ -313,19 +316,33 @@ class MCPProxyController
     }
 
     /**
+     * Compute the URL the proxy POSTs JSON-RPC to.
+     *  - 'sse' transport: a trailing "/sse" is replaced by "/mcp" (MCPeek's
+     *    SSEMCPClient.initializeSession behaviour). Servers that only answer
+     *    over the event stream are not supported by this proxy.
+     *  - then, for every transport: append "/mcp" unless the URL already ends
+     *    in "/mcp" or ".php" (XAMPP-style script endpoints).
+     */
+    public static function resolveEndpointUrl(string $serverUrl, string $transport = 'http'): string
+    {
+        $url = rtrim($serverUrl, '/');
+        if ($transport === 'sse' && str_ends_with($url, '/sse')) {
+            $url = substr($url, 0, -4) . '/mcp';
+        }
+        if (!str_ends_with($url, '/mcp') && !str_ends_with($url, '.php')) {
+            $url .= '/mcp';
+        }
+        return $url;
+    }
+
+    /**
      * Send request to MCP server
      */
-    private function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = []): ?array
+    private function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = [], string $transport = 'http'): ?array
     {
         $this->lastError = null;
 
-        // Normalize URL: some MCP servers are exposed as XAMPP-style
-        // .php scripts (e.g. mcp-server.php) that ARE the endpoint already.
-        // Only append /mcp when the URL doesn't already end in /mcp or .php.
-        $mcpUrl = rtrim($serverUrl, '/');
-        if (!str_ends_with($mcpUrl, '/mcp') && !str_ends_with($mcpUrl, '.php')) {
-            $mcpUrl .= '/mcp';
-        }
+        $mcpUrl = self::resolveEndpointUrl($serverUrl, $transport);
 
         $baseHeaders = [
             'Content-Type: application/json',
@@ -458,6 +475,23 @@ class MCPProxyController
         } catch (\Exception $e) {
             error_log('[MCPProxy] getServerHeaders failed: ' . $e->getMessage());
             return [];
+        }
+    }
+
+    /** Transport stored for a global or caller-owned server; 'http' when unknown. */
+    private function getServerTransport(int $serverId, string $userId): string
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT transport FROM mcp_servers
+                WHERE id = ? AND (user_id IS NULL OR user_id = ?)
+                LIMIT 1
+            ");
+            $stmt->execute([$serverId, $userId]);
+            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+            return MCPServerController::normalizeTransport($row['transport'] ?? null) ?? 'http';
+        } catch (\Exception $e) {
+            return 'http';
         }
     }
 
