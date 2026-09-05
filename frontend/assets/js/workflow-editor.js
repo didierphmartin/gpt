@@ -3256,9 +3256,8 @@ class WorkflowEditor {
             menu.remove();
             if (!isIngestion && this._codegenOptions().a2a) {
                 try {
-                    const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
-                    const j = await resp.json();
-                    this._showLangGraphCodeModal('', j?.data?.files || [], '');
+                    const data = await this._fetchManifest();
+                    this._showLangGraphCodeModal('', data.files, '');
                 } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
                 return;
             }
@@ -4642,6 +4641,7 @@ class WorkflowEditor {
         } catch (_) { return { a2a: false }; }
     }
 
+    /** Persist code-generation options for the current workflow to `wf:<id>:codegen` in localStorage. Storage failures (e.g. private-browsing mode) are swallowed. */
     _saveCodegenOptions(opts) {
         try { localStorage.setItem(`wf:${this.currentWorkflowId}:codegen`, JSON.stringify({ a2a: !!opts.a2a })); } catch (_) { /* private mode */ }
     }
@@ -4683,15 +4683,26 @@ class WorkflowEditor {
     }
 
     /**
+     * Fetch and validate the A2A manifest (generate-python?a2a=1) without writing
+     * anything to disk. Throws on an HTTP error, an explicit {success:false}
+     * response, or a malformed payload. Returns { root, files }.
+     */
+    async _fetchManifest() {
+        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
+        if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+        const j = await resp.json();
+        if (j?.success === false) throw new Error(j.error || 'Manifest request failed');
+        const data = j?.data;
+        if (!data?.root || !Array.isArray(data.files)) throw new Error('Unexpected manifest response');
+        return data;
+    }
+
+    /**
      * Fetch the A2A manifest and write it under python/scripts/<root>/ (orchestrator.py
      * + agents/*.py) through the File System Access root. Returns { root, files } or null.
      */
     async _writeManifest() {
-        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
-        if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-        const j = await resp.json();
-        const data = j?.data;
-        if (!data?.root || !Array.isArray(data.files)) throw new Error('Unexpected manifest response');
+        const data = await this._fetchManifest();
         for (const f of data.files) {
             const rel = `python/scripts/${data.root}/${f.path}`;
             const dirPath = rel.slice(0, rel.lastIndexOf('/'));
@@ -4723,8 +4734,15 @@ class WorkflowEditor {
         // fetches its LangGraph script from generate-python. A2A generation
         // passes an array of { path, code } files instead of a single string.
         let code = providedCode;
-        const files = Array.isArray(providedCode) ? providedCode : null;
-        if (files) code = files[0]?.code || '';
+        let files = Array.isArray(providedCode) ? providedCode : null;
+        if (files && files.length === 0) {
+            // Manifest fetched but produced no files — fall back to the plain
+            // single-file view instead of a selector with nothing to select.
+            files = null;
+            code = '(no files generated)';
+        } else if (files) {
+            code = files[0]?.code || '';
+        }
         if (code === null) {
             try {
                 const resp = await fetch(
@@ -4775,11 +4793,15 @@ class WorkflowEditor {
         `;
         document.body.appendChild(backdrop);
         const preEl = backdrop.querySelector('pre');
+        // Single <style> element reused across re-renders (file-selector
+        // switches) — only its textContent (gutter width) is updated, so
+        // switching files doesn't accumulate duplicate style tags.
+        const lnStyle = document.createElement('style');
+        backdrop.appendChild(lnStyle);
         /** Re-render `preEl` with a line-number gutter for the given text. */
         const render = (text) => {
             const codeLines = text.split('\n');
             const gutterCh = String(codeLines.length).length + 1;
-            const lnStyle = document.createElement('style');
             lnStyle.textContent = `
                 .code-with-lines .code-line { display: block; }
                 .code-with-lines .code-ln {
@@ -4789,7 +4811,6 @@ class WorkflowEditor {
                 }
                 .code-with-lines .code-lc { white-space: pre; }
             `;
-            backdrop.appendChild(lnStyle);
             preEl.classList.add('code-with-lines');
             preEl.innerHTML = codeLines.map((ln, i) =>
                 `<span class="code-line"><span class="code-ln">${i + 1}</span>`
