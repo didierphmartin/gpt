@@ -199,19 +199,23 @@ async def generate_workflow(req: GenerateReq):
 def _resolve_script_path(filename: str) -> Path:
     """Resolve a filename into an absolute path under SCRIPTS_DIR.
 
-    Guards against path traversal: the resolved path must live under the
-    scripts directory. Raises ValueError on a bad filename, FileNotFoundError
-    if the file doesn't exist.
+    Accepts a plain file ("workflow.py") or ONE folder level
+    ("workflow_a2a/orchestrator.py" -- the A2A compile mode's entry point).
+    Guards against traversal: no backslashes, no leading dots in any segment,
+    at most two segments, must end with .py, and the resolved path must stay
+    under the scripts directory. Raises ValueError on a bad filename,
+    FileNotFoundError if the file doesn't exist.
     """
-    # Reject anything that looks like a path (slashes, drive letters, etc.).
-    # Generated filenames are always plain like "workflow_42_my-skill.py".
-    if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
+    if not filename or "\\" in filename or filename.startswith("/"):
+        raise ValueError(f"Invalid script filename: {filename!r}")
+    segments = filename.split("/")
+    if len(segments) > 2 or any((not s) or s.startswith(".") for s in segments):
         raise ValueError(f"Invalid script filename: {filename!r}")
     if not filename.endswith(".py"):
         raise ValueError(f"Only .py files can be executed: {filename!r}")
-    candidate = (SCRIPTS_DIR / filename).resolve()
+    candidate = SCRIPTS_DIR.joinpath(*segments).resolve()
     scripts_root = SCRIPTS_DIR.resolve()
-    if scripts_root not in candidate.parents and candidate != scripts_root:
+    if scripts_root not in candidate.parents:
         raise ValueError(f"Path escapes scripts directory: {filename!r}")
     if not candidate.exists():
         raise FileNotFoundError(f"Script not found: {candidate}")

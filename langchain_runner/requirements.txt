@@ -29,3 +29,6 @@ agent-framework>=1.10,<2
 anthropic>=0.80
 pydantic>=2.8.0
 python-dotenv>=1.0.0
+# A2A compile mode (LangGraph): each generated agent is an A2A server
+# (a2a-sdk + starlette/uvicorn); the orchestrator is an A2A client.
+a2a-sdk[http-server]>=1.1,<2
