@@ -129,7 +129,10 @@ class LangGraphA2AGeneratorTest extends TestCase
                   'AGENT_CARD = build_agent_card(', 'Skill id:   node-3', 'def _make_llm(', 'def _call_mcp_tool(',
                   'def build_tools_from_catalog', 'async def run_node(', 'uvicorn.run(', '"--port"',
                   '# ---- node 3: IT claims (agent-template)', 'NODE = {', '"kind": "agent"',
-                  '<== this agent', 'A2A SERVING', 'A2A_GATE_TIMEOUT_S'] as $needle) {
+                  '<== this agent', 'A2A SERVING', 'A2A_GATE_TIMEOUT_S',
+                  // A follow-up on a task with no paused run (completed/expired) must be rejected,
+                  // not silently started as a second run under the same task id (live-run fix).
+                  'task {tid} is not waiting for input'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // Only this node's tools are baked.
@@ -178,7 +181,13 @@ class LangGraphA2AGeneratorTest extends TestCase
                   'from a2a.client import create_client, ClientConfig', 'class AgentSupervisor', 'async def _run_remote_node(',
                   'def _handle_gate(', 'add_conditional_edges', 'A2A_AGENT_2_URL', '"file": "agents/2_techbuddy.py"',
                   '"port": 8701', '--keep-serving', '--no-spawn', 'TASK_STATE_INPUT_REQUIRED', '[gate] ', '[gate-answer] ',
-                  '# ---- node 2: techBuddy (agent-template)', 'elif ntype in ("agent", "playbook"):', 'PLAYBOOK_GATE_MODE'] as $needle) {
+                  '# ---- node 2: techBuddy (agent-template)', 'elif ntype in ("agent", "playbook"):', 'PLAYBOOK_GATE_MODE',
+                  // AGENTS dict keys must be strings ("2", not 2) so they match ORDER/NODE_TYPES/state (live-run fix).
+                  '    "2": {"display": "techBuddy"',
+                  // Documentation nits from the Task 3 review: docstrings + the NODE_DURATIONS comment.
+                  "def _is_local(url: str) -> bool:\n    \"\"\"True when `url` is a loopback address",
+                  "def _stream_kind(ev: \"T.StreamResponse\") -> str:\n    \"\"\"Which oneof field is set",
+                  'NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         $this->assertStringNotContainsString('def build_playbook_tools', $code, 'the orchestrator runs no node logic itself');

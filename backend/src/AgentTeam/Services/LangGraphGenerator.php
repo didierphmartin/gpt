@@ -1332,7 +1332,7 @@ class LangGraphGenerator
         foreach ($layout['agents'] as $nid => $e) {
             foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($docById[$nid], '    ')) as $cl) $L[] = $cl;
             $dispatch = $e['kind'] === 'dispatcher' ? array_map(fn($t) => ['id' => (string) $t['id'], 'name' => $t['name']], $facts['agentData'][$nid]['dispatch']) : [];
-            $L[] = '    ' . $j($nid) . ': {"display": ' . $j($e['display']) . ', "file": ' . $j($e['file']) . ', "kind": ' . $j($e['kind'])
+            $L[] = '    ' . $j((string) $nid) . ': {"display": ' . $j($e['display']) . ', "file": ' . $j($e['file']) . ', "kind": ' . $j($e['kind'])
                 . ', "port": ' . $e['port'] . ', "index": ' . $i . ', "dispatch": ' . $j($dispatch) . '},';
             $i++;
         }
@@ -1384,6 +1384,7 @@ def agent_url(nid: str) -> str:
 
 
 def _is_local(url: str) -> bool:
+    """True when `url` is a loopback address the supervisor can spawn and own."""
     return url.startswith("http://127.0.0.1") or url.startswith("http://localhost")
 
 
@@ -1489,6 +1490,7 @@ def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
 # 'result' artifact.
 # ==============================================================
 def _stream_kind(ev: "T.StreamResponse") -> str:
+    """Which oneof field is set on this streaming response, or "" if none is."""
     for k in ("task", "message", "status_update", "artifact_update"):
         if ev.HasField(k):
             return k
@@ -1548,7 +1550,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
 # ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over A2A tasks
 # ==============================================================
-NODE_DURATIONS = {}
+NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)
 _RUN_T0 = None
 
 
@@ -2098,9 +2100,16 @@ class NodeExecutor(AgentExecutor):
             answer = dict(data[0]) if data and isinstance(data[0], dict) else {"decision": context.get_user_input() or "answered"}
             run.answer.set_result(answer)
         else:
-            if context.current_task is None:
-                # SDK 1.x: the executor enqueues the initial Task itself (submitted, history = the user message).
-                await event_queue.enqueue_event(new_task_from_user_message(context.message))
+            if context.current_task is not None:
+                # A follow-up on an existing task, but no run is paused waiting for it:
+                # the run already completed, failed, or expired. Reject instead of
+                # silently starting a second run under the same task id.
+                updater = TaskUpdater(event_queue, tid, cid)
+                await updater.failed(updater.new_agent_message(
+                    [T.Part(text=f"task {tid} is not waiting for input")]))
+                return
+            # SDK 1.x: the executor enqueues the initial Task itself (submitted, history = the user message).
+            await event_queue.enqueue_event(new_task_from_user_message(context.message))
             run = _NodeRun(TaskUpdater(event_queue, tid, cid))
             _RUNS[tid] = run
             await run.updater.start_work()
