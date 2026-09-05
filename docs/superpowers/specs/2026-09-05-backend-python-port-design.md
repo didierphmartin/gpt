@@ -132,6 +132,6 @@ Phases 5 and 6 can run in parallel. Phase 7 is largest by lines, simplest per ro
 
 ## 7. Dependencies (initial)
 
-fastapi, uvicorn[standard], httpx, PyMySQL (or mysqlclient), PyJWT, bcrypt, python-dotenv,
+fastapi, uvicorn[standard], httpx, PyMySQL, PyJWT, bcrypt, python-dotenv,
 pydantic, python-docx, openpyxl, python-pptx, pypdf, markdownify (html→markdown),
 feedparser (SimplePie), webauthn, pytest, pytest-asyncio. Added per phase as needed.
