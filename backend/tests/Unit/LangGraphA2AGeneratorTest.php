@@ -161,4 +161,27 @@ class LangGraphA2AGeneratorTest extends TestCase
         $this->assertStringContainsString('requires_input(', $code);
         $this->assertCompiles($code, 'agent 5');
     }
+
+    private function orchestrator(): string
+    {
+        $gen = self::generator();
+        $facts = self::facts();
+        $m = new \ReflectionMethod($gen, 'emitA2AOrchestrator');
+        $m->setAccessible(true);
+        return $m->invoke($gen, $facts, LangGraphGenerator::a2aLayout($facts));
+    }
+
+    public function testOrchestratorDrivesAgentsOverA2A(): void
+    {
+        $code = $this->orchestrator();
+        foreach (['"""A2A orchestrator for workflow "Dispatcher demo"', 'AGENT ENDPOINTS', 'A2A RUN',
+                  'from a2a.client import create_client, ClientConfig', 'class AgentSupervisor', 'async def _run_remote_node(',
+                  'def _handle_gate(', 'add_conditional_edges', 'A2A_AGENT_2_URL', '"file": "agents/2_techbuddy.py"',
+                  '"port": 8701', '--keep-serving', '--no-spawn', 'TASK_STATE_INPUT_REQUIRED', '[gate] ', '[gate-answer] ',
+                  '# ---- node 2: techBuddy (agent-template)', 'elif ntype in ("agent", "playbook"):', 'PLAYBOOK_GATE_MODE'] as $needle) {
+            $this->assertStringContainsString($needle, $code, "missing: {$needle}");
+        }
+        $this->assertStringNotContainsString('def build_playbook_tools', $code, 'the orchestrator runs no node logic itself');
+        $this->assertCompiles($code, 'orchestrator');
+    }
 }

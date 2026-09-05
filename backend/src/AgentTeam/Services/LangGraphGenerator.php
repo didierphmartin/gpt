@@ -1257,6 +1257,429 @@ class LangGraphGenerator
         throw new RuntimeException('A2A emitter not wired yet');
     }
 
+    /** orchestrator.py: the graph, the agent endpoint table, the supervisor and the A2A node runner. */
+    private function emitA2AOrchestrator(array $facts, array $layout): string
+    {
+        $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+        $sep = '# ' . str_repeat('=', 62);
+        $nodes = $this->a2aDocNodes($facts, $layout);
+        $docById = [];
+        foreach ($nodes as $dn) $docById[$dn['id']] = $dn;
+        $endpoints = [];
+        foreach ($layout['agents'] as $nid => $e) {
+            $endpoints[] = sprintf('  %-6s %-24s %-32s http://127.0.0.1:%d/   (env A2A_AGENT_%s_URL)', $nid, $e['display'], $e['file'], $e['port'], $nid);
+        }
+        $body = PythonEmitHelpers::workflowDocBlock([
+            'target' => 'LangGraph A2A orchestrator (Python) -- StateGraph over A2A tasks, one agent process per node',
+            'dispatch_supported' => true,
+            'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
+            'nodes' => $nodes, 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
+            'data_flow' => self::a2aOrchestratorDataFlowDoc(),
+            'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
+                      'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
+                      'extra' => ['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.']],
+            'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
+        ]);
+        $body .= "\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n" . implode("\n", $endpoints)
+            . "\n\nA2A RUN\n=======\n"
+            . "  1. AgentSupervisor starts every local agent (python <file> --port N) and waits for its card.\n"
+            . "  2. Each agent node = one A2A task: the framed input goes in as text, status updates are\n"
+            . "     relayed as [<agent>] lines, an input-required status is a GATE (answered on the console,\n"
+            . "     or by PLAYBOOK_GATE_MODE when no terminal), the 'result' artifact is the node output\n"
+            . "     (+ data {route, notes, status}; a dispatcher's route drives the conditional edge).\n"
+            . "  3. Start and Output run locally; the Output merges parent outputs verbatim.\n"
+            . "  4. Agents are stopped at the end unless --keep-serving; --no-spawn expects them reachable.";
+
+        $L = [];
+        $L[] = '"""A2A orchestrator for workflow ' . $j($facts['wfName']);
+        $L[] = '';
+        foreach (explode("\n", $esc($body)) as $dl) $L[] = $dl;
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'from typing import Annotated, Any, TypedDict';
+        $L[] = '';
+        $L[] = 'from dotenv import load_dotenv';
+        $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
+        $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
+        $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))';
+        $L[] = '';
+        $L[] = 'import httpx';
+        $L[] = 'from langgraph.graph import END, START, StateGraph';
+        $L[] = 'from a2a import types as T';
+        $L[] = 'from a2a.client import create_client, ClientConfig';
+        $L[] = 'from a2a.helpers.proto_helpers import new_data_part, get_data_parts, get_text_parts';
+        $L[] = '';
+        $L[] = 'WORKFLOW_ID = ' . (int) $facts['workflowId'];
+        $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($facts['wfName']);
+        $L[] = 'OUTPUT_STORAGE_ENABLED = ' . ($facts['workflow']->isOutputStorageEnabled() ? 'True' : 'False');
+        $L[] = 'OUTPUT_FOLDER = ' . (($facts['workflow']->getOutputFolder() ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $facts['workflow']->getOutputFolder()) : 'None');
+        $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
+        $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($facts['startDocuments'] ?: []);
+        $L[] = 'A2A_BASE_PORT = int(os.environ.get("A2A_BASE_PORT", "8701"))   # agent i listens on A2A_BASE_PORT + i';
+        $L[] = '';
+        $L[] = $sep; $L[] = '# AGENTS -- the endpoint table (one A2A server per agent/playbook node)'; $L[] = $sep;
+        $L[] = 'AGENTS = {';
+        $i = 0;
+        foreach ($layout['agents'] as $nid => $e) {
+            foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($docById[$nid], '    ')) as $cl) $L[] = $cl;
+            $dispatch = $e['kind'] === 'dispatcher' ? array_map(fn($t) => ['id' => (string) $t['id'], 'name' => $t['name']], $facts['agentData'][$nid]['dispatch']) : [];
+            $L[] = '    ' . $j($nid) . ': {"display": ' . $j($e['display']) . ', "file": ' . $j($e['file']) . ', "kind": ' . $j($e['kind'])
+                . ', "port": ' . $e['port'] . ', "index": ' . $i . ', "dispatch": ' . $j($dispatch) . '},';
+            $i++;
+        }
+        $L[] = '}';
+        $L[] = '';
+        $L[] = $sep; $L[] = '# GRAPH STRUCTURE (same shape as the single-file script)'; $L[] = $sep;
+        $L[] = 'EDGES = ' . PythonEmitHelpers::jsonToPython($facts['edgeList']);
+        $L[] = 'ORDER = ' . PythonEmitHelpers::jsonToPython($facts['order']);
+        $typeMap = [];
+        foreach ($facts['order'] as $nid) $typeMap[$nid] = isset($layout['agents'][$nid]) ? ($layout['agents'][$nid]['kind'] === 'playbook' ? 'playbook' : 'agent') : self::nodeType($facts['byId'][$nid]);
+        $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
+        $L[] = '';
+        $L[] = self::parentsChildrenBlock();
+        $L[] = self::stateBlock();
+        $L[] = self::datetimeInjectorBlock();
+        $L[] = self::contextBuilderBlock();
+        $L[] = PythonEmitHelpers::documentConverterBlock();
+        $L[] = self::a2aOrchestratorBlock();
+        return implode("\n", $L) . "\n";
+    }
+
+    /** DATA FLOW text for the orchestrator. */
+    private static function a2aOrchestratorDataFlowDoc(): string
+    {
+        return <<<'TXT'
+The orchestrator owns the graph and the human; the agents own the models,
+tools and playbooks. Every agent node is one A2A task on that node's
+server: the orchestrator sends the framed input (original prompt + labelled
+parent outputs), relays status updates, answers gates, and takes the
+'result' artifact as the node output. A dispatcher's chosen child comes back
+in the artifact's data part and drives a LangGraph conditional edge, so only
+that child runs. Start and Output nodes are local (no LLM).
+TXT;
+    }
+
+    /** Supervisor, remote node runner, gate handler, graph wiring, CLI entry. */
+    private static function a2aOrchestratorBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# AGENT SUPERVISOR
+# Starts one python process per local agent, relays its stdout with a
+# [<agent>] prefix, waits for the Agent Card, stops them at the end.
+# ==============================================================
+def agent_url(nid: str) -> str:
+    """The agent's base URL: env A2A_AGENT_<id>_URL wins, else local port A2A_BASE_PORT + index."""
+    env = os.environ.get(f"A2A_AGENT_{nid}_URL", "").strip()
+    return env if env else f"http://127.0.0.1:{A2A_BASE_PORT + AGENTS[nid]['index']}/"
+
+
+def _is_local(url: str) -> bool:
+    return url.startswith("http://127.0.0.1") or url.startswith("http://localhost")
+
+
+class AgentSupervisor:
+    """Owns the agent subprocesses for one run."""
+    def __init__(self, spawn: bool = True):
+        self.spawn = spawn
+        self.procs: dict[str, subprocess.Popen] = {}
+
+    def start(self) -> None:
+        """Spawn every local agent whose URL is ours to serve, then wait for all cards (60 s)."""
+        for nid, ad in AGENTS.items():
+            url = agent_url(nid)
+            if not (self.spawn and _is_local(url)):
+                continue
+            port = int(url.rsplit(":", 1)[1].strip("/"))
+            path = os.path.join(_HERE, ad["file"])
+            proc = subprocess.Popen([sys.executable, "-u", path, "--port", str(port)], cwd=_HERE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.procs[nid] = proc
+            threading.Thread(target=self._relay, args=(ad["display"], proc), daemon=True).start()
+        deadline = time.monotonic() + 60
+        for nid in AGENTS:
+            url = agent_url(nid)
+            while True:
+                try:
+                    if httpx.get(url.rstrip("/") + "/.well-known/agent-card.json", timeout=2).status_code == 200:
+                        break
+                except Exception:
+                    pass
+                proc = self.procs.get(nid)
+                if proc is not None and proc.poll() is not None:
+                    raise RuntimeError(f"agent {AGENTS[nid]['display']!r} exited with code {proc.returncode} before serving {url}")
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"agent {AGENTS[nid]['display']!r} did not serve its card at {url} within 60s")
+                time.sleep(0.3)
+            print(f"[supervisor] {AGENTS[nid]['display']!r} ready at {url}", flush=True)
+
+    @staticmethod
+    def _relay(name: str, proc: subprocess.Popen) -> None:
+        """Copy an agent's stdout to ours, line by line, prefixed with its name."""
+        for line in proc.stdout:
+            print(f"[{name}] {line.rstrip()}", flush=True)
+
+    def stop(self) -> None:
+        """Terminate the agents we started (5 s grace, then kill)."""
+        for nid, proc in self.procs.items():
+            if proc.poll() is None:
+                proc.terminate()
+        for nid, proc in self.procs.items():
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if self.procs:
+            print("[supervisor] agents stopped", flush=True)
+
+
+# ==============================================================
+# GATE HANDLER
+# An agent's input-required status reaches the human here. Terminal:
+# ask on the console. Otherwise PLAYBOOK_GATE_MODE: auto (default) approves
+# approvals and acknowledges handoffs, forms/await are 'unavailable';
+# deny denies; prompt forces the console. Every gate and answer is also
+# printed as a JSON line so the app can render them.
+# ==============================================================
+def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
+    """Return the answer data part for one gate: {decision, comment, fields?}."""
+    kind = str(gate.get("gate") or "gate")
+    args = gate.get("args") or {}
+    question = args.get("question") or args.get("prompt") or args.get("reason") or kind
+    print("[gate] " + json.dumps({"agent": agent_name, "task": task_id, "kind": kind, "question": question, "args": args}, ensure_ascii=False), flush=True)
+    mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or ("prompt" if sys.stdin.isatty() else "auto")
+    if mode == "prompt":
+        print(f"\n✋ [{agent_name}] {kind}: {question}", flush=True)
+        if kind == "approval":
+            ans = input("approve/deny [comment]: ").strip()
+            answer = {"decision": "denied" if ans.lower().startswith("d") else "approved",
+                      "comment": ans.split(" ", 1)[1] if " " in ans else "", "actor": "console"}
+        elif kind == "form":
+            fields = {}
+            for f in args.get("fields") or []:
+                if isinstance(f, dict) and f.get("name"):
+                    fields[f["name"]] = input(f"  {f.get('label') or f['name']}: ").strip()
+            answer = {"decision": "submitted", "fields": fields, "actor": "console"}
+        else:
+            answer = {"decision": "answered", "comment": input("your answer: ").strip(), "actor": "console"}
+    elif mode == "deny":
+        answer = {"decision": "denied", "comment": "denied by PLAYBOOK_GATE_MODE=deny", "actor": "policy"}
+    elif kind == "approval":
+        answer = {"decision": "approved", "comment": "auto-approved (non-interactive run)", "actor": "policy"}
+    elif kind == "handoff":
+        answer = {"decision": "acknowledged", "comment": "handed off; no human available in this non-interactive run", "actor": "policy"}
+    else:
+        answer = {"decision": "unavailable", "comment": "no human available in this non-interactive run", "actor": "policy"}
+    print("[gate-answer] " + json.dumps({"agent": agent_name, "task": task_id, **answer}, ensure_ascii=False), flush=True)
+    return answer
+
+
+# ==============================================================
+# REMOTE NODE RUNNER
+# One A2A task per agent node: send, stream, answer gates, collect the
+# 'result' artifact.
+# ==============================================================
+def _stream_kind(ev: "T.StreamResponse") -> str:
+    for k in ("task", "message", "status_update", "artifact_update"):
+        if ev.HasField(k):
+            return k
+    return ""
+
+
+async def _run_remote_node(nid: str, request_text: str) -> dict:
+    """Run node `nid` on its A2A server. Returns {"text", "route", "notes", "status"}."""
+    ad = AGENTS[nid]
+    url = agent_url(nid)
+    t0 = time.monotonic()
+    text_parts: list[str] = []
+    data: dict = {}
+    async with httpx.AsyncClient(timeout=None) as hc:
+        client = await create_client(url, ClientConfig(streaming=True, httpx_client=hc))
+        req = T.SendMessageRequest(message=T.Message(message_id=str(uuid.uuid4()), role=T.Role.ROLE_USER, parts=[T.Part(text=request_text)]))
+        task_id = ctx_id = None
+        pending = req
+        while pending is not None:
+            gate_payload = None
+            async for ev in client.send_message(pending):
+                kind = _stream_kind(ev)
+                if kind == "task":
+                    task_id, ctx_id = ev.task.id, ev.task.context_id
+                elif kind == "status_update":
+                    su = ev.status_update
+                    task_id, ctx_id = su.task_id, su.context_id
+                    if su.status.HasField("message"):
+                        for line in get_text_parts(su.status.message.parts):
+                            if line and su.status.state != T.TaskState.TASK_STATE_INPUT_REQUIRED:
+                                print(f"[{ad['display']}] {line}", flush=True)
+                    if su.status.state == T.TaskState.TASK_STATE_INPUT_REQUIRED:
+                        parts = get_data_parts(su.status.message.parts) if su.status.HasField("message") else []
+                        gate_payload = dict(parts[0]) if parts and isinstance(parts[0], dict) else {"gate": "gate", "args": {}}
+                        break
+                    if su.status.state in (T.TaskState.TASK_STATE_FAILED, T.TaskState.TASK_STATE_CANCELED, T.TaskState.TASK_STATE_REJECTED):
+                        raise RuntimeError(f"agent {ad['display']!r} task {task_id} ended in {T.TaskState.Name(su.status.state)}")
+                elif kind == "artifact_update":
+                    art = ev.artifact_update.artifact
+                    text_parts.extend(get_text_parts(art.parts))
+                    for d in get_data_parts(art.parts):
+                        if isinstance(d, dict):
+                            data.update(d)
+            if gate_payload is None:
+                pending = None
+            else:
+                answer = _handle_gate(ad["display"], task_id, gate_payload)
+                pending = T.SendMessageRequest(message=T.Message(message_id=str(uuid.uuid4()), task_id=task_id, context_id=ctx_id, role=T.Role.ROLE_USER,
+                                                                 parts=[T.Part(text=str(answer.get("decision", ""))), new_data_part(answer)]))
+        await client.close()
+    dt = time.monotonic() - t0
+    NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
+    print(f"[node] [{nid}] {ad['display']!r} done over A2A -- {sum(len(t) for t in text_parts)} chars ({dt:.1f}s)", flush=True)
+    return {"text": "\n".join(text_parts), "route": str(data.get("route") or ""), "notes": str(data.get("notes") or ""), "status": str(data.get("status") or "ok")}
+
+
+# ==============================================================
+# MAIN EXECUTION -- the LangGraph state graph over A2A tasks
+# ==============================================================
+NODE_DURATIONS = {}
+_RUN_T0 = None
+
+
+async def run(user_prompt: str) -> str:
+    """Build the graph (agent nodes call their A2A servers), run it, return the final output."""
+    sg = StateGraph(WFState)
+    for nid in ORDER:
+        ntype = NODE_TYPES.get(nid, "")
+        if ntype == "start":
+            def make_start(n=nid):
+                def _run(state):
+                    text = state.get("user_prompt", "")
+                    if START_DOCUMENTS:
+                        doc_parts = []
+                        for doc in START_DOCUMENTS:
+                            name = doc.get("name", "Document")
+                            path = doc.get("path", "")
+                            try:
+                                doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
+                            except Exception as e:
+                                doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+                        text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
+                    print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
+                    return {"node_outputs": {n: {"source": "start", "text": text}}}
+                return _run
+            sg.add_node(nid, make_start())
+        elif ntype in ("agent", "playbook"):
+            def make_remote(n=nid):
+                async def _run(state):
+                    ad = AGENTS[n]
+                    outs = state.get("node_outputs", {})
+                    if ad["kind"] == "playbook":
+                        inputs = [outs[p]["text"] for p in parents(n) if p in outs]
+                        request = "\n\n".join(inputs) or state.get("user_prompt", "")
+                    else:
+                        request = build_context(state.get("user_prompt", ""), parents(n), outs)
+                    out = await _run_remote_node(n, request)
+                    result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
+                    if ad["dispatch"]:
+                        # Dispatcher: the agent chose a child (or none) -> conditional edge input.
+                        route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
+                        if route == END:
+                            print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
+                            result["final_output"] = out["text"]
+                        result["routes"] = {n: route}
+                    return result
+                return _run
+            sg.add_node(nid, make_remote())
+        elif ntype == "output":
+            def make_output(n=nid):
+                def _run(state):
+                    pids = parents(n)
+                    outs = state.get("node_outputs", {})
+                    if len(pids) == 1 and pids[0] in outs:
+                        final = outs[pids[0]]["text"]
+                    else:
+                        blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                        final = "\n\n---\n\n".join(blocks)
+                    print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
+                    return {"final_output": final}
+                return _run
+            sg.add_node(nid, make_output())
+        else:
+            sg.add_node(nid, lambda s: {})
+    # Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
+    pos = {n: i for i, n in enumerate(ORDER)}
+    sg.add_edge(START, ORDER[0])
+    for nid in ORDER:
+        menu = {t["id"] for t in AGENTS.get(nid, {}).get("dispatch", [])}
+        for child in children(nid):
+            if child in pos and pos[child] > pos[nid] and child not in menu:
+                sg.add_edge(nid, child)
+        if menu:
+            def make_router(n=nid):
+                def _route(state):
+                    return state.get("routes", {}).get(n) or END
+                return _route
+            sg.add_conditional_edges(nid, make_router(), {t: t for t in menu} | {END: END})
+    for nid in ORDER:
+        if not children(nid):
+            sg.add_edge(nid, END)
+    graph = sg.compile()
+    print("[info] Running...", flush=True)
+    global _RUN_T0
+    _RUN_T0 = time.monotonic()
+    result = await graph.ainvoke({"user_prompt": user_prompt, "node_outputs": {}})
+    return result.get("final_output", "")
+
+
+def _save_output(output: str) -> str | None:
+    """Honour the Output node's storage setting (same rule as the single-file script)."""
+    if not OUTPUT_STORAGE_ENABLED:
+        return None
+    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+    folder = OUTPUT_FOLDER or os.path.join(root, "workflow")
+    if not os.path.isabs(folder):
+        folder = os.path.join(root, folder)
+    os.makedirs(folder, exist_ok=True)
+    m = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
+    ext = "html" if m else "md"
+    slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
+    path = os.path.join(folder, f"{WORKFLOW_ID}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(m.group(0) if m else output)
+    return path
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=f"A2A orchestrator for workflow {WORKFLOW_NAME!r}")
+    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
+    ap.add_argument("--keep-serving", action="store_true", help="leave the agent servers running after the run")
+    ap.add_argument("--no-spawn", action="store_true", help="do not start agents; expect their URLs to be reachable")
+    a = ap.parse_args()
+    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
+    print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+    sup = AgentSupervisor(spawn=not a.no_spawn)
+    try:
+        sup.start()
+        output = asyncio.run(run(prompt))
+    finally:
+        if not a.keep_serving:
+            sup.stop()
+    print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
+    saved = _save_output(output)
+    print("\n" + "=" * 74 + "\nRUN SUMMARY\n" + "-" * 74, flush=True)
+    if NODE_DURATIONS:
+        w = max(len(n) for n in NODE_DURATIONS)
+        print("  Time per node (A2A round trip):", flush=True)
+        for name, secs in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
+            print(f"    {name:<{w}}   {secs:7.1f}s", flush=True)
+    print(f"  Total wall-clock: {time.monotonic() - _RUN_T0:.1f}s" if _RUN_T0 else "  Total wall-clock: n/a", flush=True)
+    print(f"  Final output: {len(output)} chars", flush=True)
+    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
+    print("=" * 74, flush=True)
+PY;
+    }
+
     /**
      * One self-contained A2A agent server for node $nid. Reuses the same
      * Python blocks as the single-file script (LLM factory, MCP client, tool
