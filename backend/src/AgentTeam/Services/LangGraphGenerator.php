@@ -340,114 +340,9 @@ class LangGraphGenerator
         $lines[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $lines[] = '';
         $lines[] = '';
-        $lines[] = 'def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096, thinking=None):';
-        $lines[] = '    """Build a LangChain chat model for the given provider/model.';
-        $lines[] = '';
-        $lines[] = '    The (provider, model) pair was resolved by the generator: the';
-        $lines[] = "    agent's explicit model overrides the provider's default from";
-        $lines[] = '    system_llm_settings, and that result is what reaches this';
-        $lines[] = '    function. No hardcoded model fallbacks here — every value comes';
-        $lines[] = '    from the database, so changing a model in the editor propagates';
-        $lines[] = '    via the next Generate Python.';
-        $lines[] = '';
-        $lines[] = '    Recognised providers (case-insensitive):';
-        $lines[] = '      claude     → langchain_anthropic.ChatAnthropic';
-        $lines[] = '      openai     → langchain_openai.ChatOpenAI';
-        $lines[] = '      gemini     → langchain_google_genai.ChatGoogleGenerativeAI';
-        $lines[] = '      grok       → ChatOpenAI on https://api.x.ai/v1';
-        $lines[] = '      deepseek   → ChatOpenAI on https://api.deepseek.com';
-        $lines[] = '      kimi       → ChatOpenAI on https://api.moonshot.ai/v1';
-        $lines[] = '      glm        → ChatOpenAI on https://api.z.ai/api/paas/v4';
-        $lines[] = '';
-        $lines[] = '    Reads API keys from the environment (loaded from .env at startup).';
-        $lines[] = '    """';
-        $lines[] = '    p = (provider or "claude").lower()';
-        $lines[] = '    if MODEL_NAME_OVERRIDE:';
-        $lines[] = '        model = MODEL_NAME_OVERRIDE';
-        $lines[] = '    if not model:';
-        $lines[] = '        raise RuntimeError(';
-        $lines[] = '            f"No model specified for provider {p!r}. "';
-        $lines[] = '            "Set a model name on the agent in the workflow editor, "';
-        $lines[] = '            "or set MODEL_NAME in .env."';
-        $lines[] = '        )';
-        $lines[] = '    if p == "claude":';
-        $lines[] = '        from langchain_anthropic import ChatAnthropic';
-        $lines[] = '        return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens)';
-        $lines[] = '    if p == "openai":';
-        $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens)';
-        $lines[] = '    if p == "gemini":';
-        $lines[] = '        from langchain_google_genai import ChatGoogleGenerativeAI';
-        $lines[] = '        return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens)';
-        $lines[] = '    if p == "grok":';
-        $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        return ChatOpenAI(';
-        $lines[] = '            model=model,';
-        $lines[] = '            base_url="https://api.x.ai/v1",';
-        $lines[] = '            api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),';
-        $lines[] = '            temperature=temperature,';
-        $lines[] = '            max_tokens=max_tokens,';
-        $lines[] = '        )';
-        $lines[] = '    if p == "deepseek":';
-        $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        kwargs = dict(';
-        $lines[] = '            model=model,';
-        $lines[] = '            base_url="https://api.deepseek.com",';
-        $lines[] = '            api_key=os.environ.get("DEEPSEEK_API_KEY"),';
-        $lines[] = '            temperature=temperature,';
-        $lines[] = '            max_tokens=max_tokens,';
-        $lines[] = '        )';
-        $lines[] = '        if model.startswith("deepseek-v4"):';
-        $lines[] = '            # The node form Thinking attribute governs (platform parity):';
-        $lines[] = '            # off -> disabled, form temperature kept; on/default -> V4 thinking';
-        $lines[] = '            # stays enabled and the API rejects sampling params, so temperature';
-        $lines[] = '            # is dropped (set Thinking=Off on the node to use a temperature).';
-        $lines[] = '            if thinking == "off":';
-        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
-        $lines[] = '            else:';
-        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "enabled"}}}';
-        $lines[] = '                if "temperature" in kwargs:';
-        $lines[] = '                    print(f"[info] deepseek {model}: temperature dropped (thinking mode)", flush=True)';
-        $lines[] = '                    kwargs.pop("temperature", None)';
-        $lines[] = '        return ChatOpenAI(**kwargs)';
-        $lines[] = '    if p == "kimi":';
-        $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        # Kimi is OpenAI-compatible. The node form Thinking attribute governs';
-        $lines[] = '        # K2 reasoning mode (default off, matching the PHP KimiProvider); the';
-        $lines[] = '        # API then constrains sampling: thinking OFF -> temperature MUST be 0.6,';
-        $lines[] = '        # thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).';
-        $lines[] = '        _k2 = model.startswith("kimi-k2")';
-        $lines[] = '        if _k2:';
-        $lines[] = '            _want = 1.0 if thinking == "on" else 0.6';
-        $lines[] = '            if temperature != _want:';
-        $lines[] = '                print(f"[info] kimi {model}: temperature {temperature} -> {_want} (model constraint)", flush=True)';
-        $lines[] = '                temperature = _want';
-        $lines[] = '        kwargs = dict(';
-        $lines[] = '            model=model,';
-        $lines[] = '            base_url="https://api.moonshot.ai/v1",';
-        $lines[] = '            api_key=os.environ.get("KIMI_API_KEY"),';
-        $lines[] = '            temperature=temperature,';
-        $lines[] = '            max_tokens=max_tokens,';
-        $lines[] = '        )';
-        $lines[] = '        if _k2:';
-        $lines[] = '            _mode = "enabled" if thinking == "on" else "disabled"';
-        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": _mode}}}';
-        $lines[] = '        return ChatOpenAI(**kwargs)';
-        $lines[] = '    if p == "glm":';
-        $lines[] = '        from langchain_openai import ChatOpenAI';
-        $lines[] = '        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.';
-        $lines[] = '        return ChatOpenAI(';
-        $lines[] = '            model=model,';
-        $lines[] = '            base_url="https://api.z.ai/api/paas/v4",';
-        $lines[] = '            api_key=os.environ.get("GLM_API_KEY"),';
-        $lines[] = '            temperature=temperature,';
-        $lines[] = '            max_tokens=max_tokens,';
-        $lines[] = '            # GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.';
-        $lines[] = '            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},';
-        $lines[] = '        )';
-        $lines[] = '    raise RuntimeError(';
-        $lines[] = '        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi, glm."';
-        $lines[] = '    )';
+        foreach (self::llmFactoryLines() as $l) {
+            $lines[] = $l;
+        }
         $lines[] = '';
 
         // ---------- MCP server registry (baked) ----------
@@ -1214,6 +1109,121 @@ class LangGraphGenerator
         return substr($s !== '' ? $s : 'node', 0, 40);
     }
 
+    /** The `_make_llm(provider, model, temperature, max_tokens, thinking)` factory, one emitted line per entry. */
+    private static function llmFactoryLines(): array
+    {
+        $lines = [];
+        $lines[] = 'def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096, thinking=None):';
+        $lines[] = '    """Build a LangChain chat model for the given provider/model.';
+        $lines[] = '';
+        $lines[] = '    The (provider, model) pair was resolved by the generator: the';
+        $lines[] = "    agent's explicit model overrides the provider's default from";
+        $lines[] = '    system_llm_settings, and that result is what reaches this';
+        $lines[] = '    function. No hardcoded model fallbacks here — every value comes';
+        $lines[] = '    from the database, so changing a model in the editor propagates';
+        $lines[] = '    via the next Generate Python.';
+        $lines[] = '';
+        $lines[] = '    Recognised providers (case-insensitive):';
+        $lines[] = '      claude     → langchain_anthropic.ChatAnthropic';
+        $lines[] = '      openai     → langchain_openai.ChatOpenAI';
+        $lines[] = '      gemini     → langchain_google_genai.ChatGoogleGenerativeAI';
+        $lines[] = '      grok       → ChatOpenAI on https://api.x.ai/v1';
+        $lines[] = '      deepseek   → ChatOpenAI on https://api.deepseek.com';
+        $lines[] = '      kimi       → ChatOpenAI on https://api.moonshot.ai/v1';
+        $lines[] = '      glm        → ChatOpenAI on https://api.z.ai/api/paas/v4';
+        $lines[] = '';
+        $lines[] = '    Reads API keys from the environment (loaded from .env at startup).';
+        $lines[] = '    """';
+        $lines[] = '    p = (provider or "claude").lower()';
+        $lines[] = '    if MODEL_NAME_OVERRIDE:';
+        $lines[] = '        model = MODEL_NAME_OVERRIDE';
+        $lines[] = '    if not model:';
+        $lines[] = '        raise RuntimeError(';
+        $lines[] = '            f"No model specified for provider {p!r}. "';
+        $lines[] = '            "Set a model name on the agent in the workflow editor, "';
+        $lines[] = '            "or set MODEL_NAME in .env."';
+        $lines[] = '        )';
+        $lines[] = '    if p == "claude":';
+        $lines[] = '        from langchain_anthropic import ChatAnthropic';
+        $lines[] = '        return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens)';
+        $lines[] = '    if p == "openai":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens)';
+        $lines[] = '    if p == "gemini":';
+        $lines[] = '        from langchain_google_genai import ChatGoogleGenerativeAI';
+        $lines[] = '        return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens)';
+        $lines[] = '    if p == "grok":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        return ChatOpenAI(';
+        $lines[] = '            model=model,';
+        $lines[] = '            base_url="https://api.x.ai/v1",';
+        $lines[] = '            api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),';
+        $lines[] = '            temperature=temperature,';
+        $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '        )';
+        $lines[] = '    if p == "deepseek":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        kwargs = dict(';
+        $lines[] = '            model=model,';
+        $lines[] = '            base_url="https://api.deepseek.com",';
+        $lines[] = '            api_key=os.environ.get("DEEPSEEK_API_KEY"),';
+        $lines[] = '            temperature=temperature,';
+        $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '        )';
+        $lines[] = '        if model.startswith("deepseek-v4"):';
+        $lines[] = '            # The node form Thinking attribute governs (platform parity):';
+        $lines[] = '            # off -> disabled, form temperature kept; on/default -> V4 thinking';
+        $lines[] = '            # stays enabled and the API rejects sampling params, so temperature';
+        $lines[] = '            # is dropped (set Thinking=Off on the node to use a temperature).';
+        $lines[] = '            if thinking == "off":';
+        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}';
+        $lines[] = '            else:';
+        $lines[] = '                kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "enabled"}}}';
+        $lines[] = '                if "temperature" in kwargs:';
+        $lines[] = '                    print(f"[info] deepseek {model}: temperature dropped (thinking mode)", flush=True)';
+        $lines[] = '                    kwargs.pop("temperature", None)';
+        $lines[] = '        return ChatOpenAI(**kwargs)';
+        $lines[] = '    if p == "kimi":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        # Kimi is OpenAI-compatible. The node form Thinking attribute governs';
+        $lines[] = '        # K2 reasoning mode (default off, matching the PHP KimiProvider); the';
+        $lines[] = '        # API then constrains sampling: thinking OFF -> temperature MUST be 0.6,';
+        $lines[] = '        # thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).';
+        $lines[] = '        _k2 = model.startswith("kimi-k2")';
+        $lines[] = '        if _k2:';
+        $lines[] = '            _want = 1.0 if thinking == "on" else 0.6';
+        $lines[] = '            if temperature != _want:';
+        $lines[] = '                print(f"[info] kimi {model}: temperature {temperature} -> {_want} (model constraint)", flush=True)';
+        $lines[] = '                temperature = _want';
+        $lines[] = '        kwargs = dict(';
+        $lines[] = '            model=model,';
+        $lines[] = '            base_url="https://api.moonshot.ai/v1",';
+        $lines[] = '            api_key=os.environ.get("KIMI_API_KEY"),';
+        $lines[] = '            temperature=temperature,';
+        $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '        )';
+        $lines[] = '        if _k2:';
+        $lines[] = '            _mode = "enabled" if thinking == "on" else "disabled"';
+        $lines[] = '            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": _mode}}}';
+        $lines[] = '        return ChatOpenAI(**kwargs)';
+        $lines[] = '    if p == "glm":';
+        $lines[] = '        from langchain_openai import ChatOpenAI';
+        $lines[] = '        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.';
+        $lines[] = '        return ChatOpenAI(';
+        $lines[] = '            model=model,';
+        $lines[] = '            base_url="https://api.z.ai/api/paas/v4",';
+        $lines[] = '            api_key=os.environ.get("GLM_API_KEY"),';
+        $lines[] = '            temperature=temperature,';
+        $lines[] = '            max_tokens=max_tokens,';
+        $lines[] = '            # GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.';
+        $lines[] = '            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},';
+        $lines[] = '        )';
+        $lines[] = '    raise RuntimeError(';
+        $lines[] = '        f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi, glm."';
+        $lines[] = '    )';
+        return $lines;
+    }
+
     /**
      * File names, ports and kinds of the A2A agents, in ORDER: one per
      * agent/playbook node. Port = A2A base (8701) + index; the emitted
@@ -1245,6 +1255,466 @@ class LangGraphGenerator
     private function generateA2A(array $facts): array
     {
         throw new RuntimeException('A2A emitter not wired yet');
+    }
+
+    /**
+     * One self-contained A2A agent server for node $nid. Reuses the same
+     * Python blocks as the single-file script (LLM factory, MCP client, tool
+     * builder, skills, playbook runtime, dispatcher tool) and adds the A2A
+     * server block. Self-contained on purpose: the file can be copied to
+     * another host alone (see the design's "duplication" decision).
+     */
+    private function emitA2AAgentFile(array $facts, array $layout, string $nid): string
+    {
+        $entry = $layout['agents'][$nid];
+        $kind = $entry['kind'];
+        $isPlaybook = $kind === 'playbook';
+        $def = $isPlaybook ? $facts['playbookData'][$nid] : $facts['agentData'][$nid];
+        $wfName = $facts['wfName'];
+        $sep = '# ' . str_repeat('=', 62);
+        $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+
+        // Tool catalog restricted to this node.
+        $catalog = [];
+        if (!$isPlaybook) {
+            foreach ($def['tool_names'] as $tn) {
+                if (isset($facts['usedCatalog'][$tn])) {
+                    $catalog[$tn] = $facts['usedCatalog'][$tn];
+                }
+            }
+        }
+        $servers = [];
+        foreach ($catalog as $c) {
+            if (isset($facts['serverRegistry'][$c['server_url']])) $servers[$c['server_url']] = $facts['serverRegistry'][$c['server_url']];
+        }
+        if ($isPlaybook) {
+            foreach ($def['actions'] as $a) {
+                if (($a['kind'] ?? '') === 'mcp' && isset($facts['serverRegistry'][$a['server_url']])) $servers[$a['server_url']] = $facts['serverRegistry'][$a['server_url']];
+            }
+        }
+
+        $L = [];
+        // ---- module docstring (standard body + agent-specific sections) ----
+        $L[] = '"""A2A agent ' . $j($entry['display']) . " -- node {$nid} of workflow " . $j($wfName);
+        $L[] = '';
+        foreach (explode("\n", $esc($this->a2aDocBody($facts, $layout, $nid))) as $dl) $L[] = $dl;
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'from typing import Annotated, Any, Literal, TypedDict';
+        $L[] = '';
+        $L[] = 'from dotenv import load_dotenv';
+        $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
+        $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
+        $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))), ".env"))';
+        $L[] = '';
+        $L[] = 'import httpx';
+        $L[] = 'import uvicorn';
+        $L[] = 'from starlette.applications import Starlette';
+        $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
+        $L[] = 'from langchain_core.tools import StructuredTool';
+        $L[] = 'from langgraph.graph import END';
+        $L[] = 'try:';
+        $L[] = '    from langchain.agents import create_agent as create_react_agent';
+        $L[] = 'except ImportError:';
+        $L[] = '    from langgraph.prebuilt import create_react_agent';
+        $L[] = 'from pydantic import BaseModel, Field, create_model';
+        $L[] = 'from a2a import types as T';
+        $L[] = 'from a2a.server.agent_execution import AgentExecutor, RequestContext';
+        $L[] = 'from a2a.server.events import EventQueue';
+        $L[] = 'from a2a.server.request_handlers import DefaultRequestHandler';
+        $L[] = 'from a2a.server.tasks import InMemoryTaskStore, TaskUpdater';
+        $L[] = 'from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes';
+        $L[] = 'from a2a.helpers.proto_helpers import new_task_from_user_message, new_data_part, get_data_parts, get_text_parts';
+        $L[] = '';
+        $L[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
+        $L[] = '';
+        $L[] = $sep; $L[] = '# LLM FACTORY'; $L[] = '# Provider/model -> LangChain chat model (same rules as the single-file script).'; $L[] = $sep;
+        foreach (self::llmFactoryLines() as $l) $L[] = $l;
+        $L[] = '';
+        $L[] = $sep; $L[] = '# MCP SERVER REGISTRY + TOOL CATALOG (this node only)'; $L[] = $sep;
+        $L[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($servers, true);
+        $L[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($catalog, true);
+        $L[] = '';
+        $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP (shared block)'; $L[] = $sep;
+        $L[] = PythonEmitHelpers::mcpClientBlock();
+        $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME (shared blocks)'; $L[] = $sep;
+        $L[] = self::toolBuilderBlock();
+        $L[] = self::dispatchBlock();
+        $L[] = self::datetimeInjectorBlock();
+        if ($isPlaybook) {
+            $L[] = self::playbookRuntimeBlock();
+        }
+        $L[] = 'NODE_DURATIONS = {}';
+        $L[] = 'def parents(_n): return []';
+        $L[] = '';
+        // ---- node definition ----
+        $L[] = $sep; $L[] = '# NODE DEFINITION -- frozen from the workflow editor'; $L[] = $sep;
+        $docNodes = $this->a2aDocNodes($facts, $layout);
+        foreach ($docNodes as $dn) {
+            if ($dn['id'] === $nid) { foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($dn)) as $cl) $L[] = $cl; }
+        }
+        $L[] = 'NODE = {';
+        $L[] = '    "id": ' . $j($nid) . ',';
+        $L[] = '    "kind": ' . $j($kind) . ',';
+        $L[] = '    "display": ' . $j($entry['display']) . ',';
+        $L[] = '    "provider": ' . $j($def['provider']) . ',';
+        $L[] = '    "model": ' . $j($def['model']) . ',';
+        $L[] = '    "temperature": ' . json_encode((float) $def['temperature']) . ',';
+        $L[] = '    "max_tokens": ' . (int) $def['max_tokens'] . ',';
+        $L[] = '    "thinking": ' . (in_array($def['thinking'] ?? null, ['on', 'off'], true) ? '"' . $def['thinking'] . '"' : 'None') . ',';
+        if ($isPlaybook) {
+            $L[] = '    "title": ' . $j($def['title']) . ',';
+            $L[] = '    "domain": ' . $j($def['domain']) . ',';
+            $L[] = '    "writes_enabled": ' . ($def['writes_enabled'] ? 'True' : 'False') . ',';
+            $L[] = '    "policy": ' . PythonEmitHelpers::jsonToPython($def['policy'], true) . ',';
+            $L[] = '    "approvers": ' . PythonEmitHelpers::jsonToPython($def['approvers'], true) . ',';
+            $L[] = '    "requester": ' . PythonEmitHelpers::jsonToPython($def['requester'], true) . ',';
+            $L[] = '    "instructions": """';
+            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['instructions'])) as $pl) $L[] = $pl;
+            $L[] = '""",';
+            $L[] = '    "actions": ' . PythonEmitHelpers::jsonToPython($def['actions'], false) . ',';
+        } else {
+            $L[] = '    "system_prompt": """';
+            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['system_prompt'])) as $pl) $L[] = $pl;
+            $L[] = '""",';
+            $L[] = '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
+            $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
+            $L[] = '    "dispatch": [' . implode(', ', array_map(fn($t) => '{"id": ' . $j((string) $t['id']) . ', "name": ' . $j($t['name']) . '}', $def['dispatch'] ?? [])) . '],';
+        }
+        $L[] = '}';
+        $L[] = '';
+        $L[] = self::a2aNodeLogicBlock();
+        $L[] = self::a2aAgentServerBlock();
+        $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
+        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr($facts['workflowId'] . '-' . date('Ymd'));
+        $L[] = '# Default card (port from A2A_PORT or the layout); main() rebuilds it for the real host/port.';
+        $L[] = 'AGENT_CARD = build_agent_card(f"http://127.0.0.1:{os.environ.get(\'A2A_PORT\', \'' . $entry['port'] . '\')}/")';
+        $L[] = '';
+        $L[] = 'if __name__ == "__main__":';
+        $L[] = '    main()';
+        return implode("\n", $L) . "\n";
+    }
+
+    /** docNodes descriptors for the A2A layout: every node, with the agent file recorded under 'file'. */
+    private function a2aDocNodes(array $facts, array $layout): array
+    {
+        $docAgents = []; $docExtra = [];
+        foreach ($facts['agentData'] as $n => $ad) {
+            $docAgents[$n] = ['name' => $ad['display'], 'provider' => $ad['provider'], 'model' => $ad['model'], 'temperature' => $ad['temperature'],
+                'max_tokens' => $ad['max_tokens'], 'thinking' => $ad['thinking'], 'tools' => $ad['tool_names'], 'skills' => $ad['skills']];
+            if (!empty($ad['dispatch'])) $docExtra[$n]['dispatch'] = array_column($ad['dispatch'], 'name');
+        }
+        foreach ($facts['playbookData'] as $n => $pd) {
+            $mcp = count(array_filter($pd['actions'], fn($a) => ($a['kind'] ?? '') === 'mcp'));
+            $docExtra[$n]['playbook'] = ['title' => $pd['title'], 'writes' => $pd['writes_enabled'], 'bound' => $mcp, 'unbound' => count($pd['actions']) - $mcp];
+            $docAgents[$n] = ['name' => $pd['display'], 'provider' => $pd['provider'], 'model' => $pd['model'], 'temperature' => $pd['temperature'],
+                'max_tokens' => $pd['max_tokens'], 'thinking' => $pd['thinking'], 'tools' => [], 'skills' => []];
+        }
+        $nodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($facts['byId'], $facts['order'], $facts['edges'], $docAgents, $docExtra,
+            ['start', 'agent', 'agent-template', 'playbook', 'output']);
+        foreach ($nodes as &$n) { $n['file'] = $layout['agents'][$n['id']]['file'] ?? ''; }
+        return $nodes;
+    }
+
+    /** Module-docstring body of an agent file: standard sections + NODE + A2A SERVING + TO RUN. */
+    private function a2aDocBody(array $facts, array $layout, string $nid): string
+    {
+        $nodes = $this->a2aDocNodes($facts, $layout);
+        foreach ($nodes as &$n) { if ($n['id'] === $nid) $n['name'] .= '   <== this agent'; }
+        $entry = $layout['agents'][$nid];
+        $body = PythonEmitHelpers::workflowDocBlock([
+            'target' => 'LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph',
+            'dispatch_supported' => true,
+            'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
+            'nodes' => $nodes, 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
+            'data_flow' => self::a2aAgentDataFlowDoc(),
+            'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
+                      'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
+                      'extra' => ['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /']],
+            'storage' => ['enabled' => false, 'folder' => null],
+        ]);
+        return $body . "\n\nA2A SERVING\n===========\n"
+            . "  Skill id:   node-{$nid}\n"
+            . "  Task in:    one text part = the node input the orchestrator built (original prompt + parent outputs)\n"
+            . "  Task out:   artifact 'result' = text part (node output) + data part {route, notes, status}\n"
+            . "  Gates:      the task moves to input-required with data {gate, tool, args}; the orchestrator answers on\n"
+            . "              the same task with data {decision, comment, fields}; the run resumes in memory\n"
+            . "              (A2A_GATE_TIMEOUT_S, default 900 s, then the gate fails and the playbook continues).\n"
+            . "  One task at a time: runs are serialised with a lock; a second task waits for the first.";
+    }
+
+    /** DATA FLOW text for agent files. */
+    private static function a2aAgentDataFlowDoc(): string
+    {
+        return <<<'TXT'
+This file serves ONE node of the workflow as an A2A agent. The orchestrator
+(orchestrator.py in the parent folder) builds the node input, sends it as a
+task, streams the status updates, answers gates, and reads the result
+artifact. Inside this process the node runs exactly as in the single-file
+script: an AGENT node = LangChain ReAct loop over its MCP tools plus
+mandatory skill steps; a DISPATCHER node = one forced route_to call whose
+choice travels back as the artifact's "route"; a PLAYBOOK node = the playbook
+runtime (native verbs, gates, write-policed MCP actions), whose transcript is
+the text part of the result.
+TXT;
+    }
+
+    /** run_node(): the node body, shared by the three kinds; called by the executor. */
+    private static function a2aNodeLogicBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# NODE LOGIC
+# run_node() executes this node once for one request text and returns
+# {"text", "route", "notes", "status"}. It is the single-file script's
+# node function with the LangGraph state replaced by plain arguments.
+# ==============================================================
+PLAYBOOK_MAX_ROUNDS = 40
+
+
+def _llm():
+    """The chat model for this node, built from NODE (provider/model/sampling/thinking)."""
+    return _make_llm(NODE["provider"], NODE["model"], float(NODE["temperature"]), int(NODE["max_tokens"]), thinking=NODE.get("thinking"))
+
+
+async def run_node(request_text: str, trace) -> dict:
+    """Run the node on `request_text` (the orchestrator's framed input).
+
+    trace(line) is an async callback that reports progress to the A2A client.
+    Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
+    Exceptions propagate to the executor, which fails the task.
+    """
+    kind = NODE["kind"]
+    if kind == "playbook":
+        return await _run_playbook_kind(request_text, trace)
+    catalog = build_tools_from_catalog()
+    tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]
+    msgs = [SystemMessage(content=inject_datetime(NODE["system_prompt"])), HumanMessage(content=request_text)]
+    await trace(f"{NODE['display']!r} -- {len(tools)} tools (provider={NODE['provider']}, model={NODE['model']})")
+    if kind == "dispatcher":
+        return await _run_dispatcher_kind(request_text, msgs)
+    agent = create_react_agent(_llm(), tools)
+    result = await agent.ainvoke({"messages": msgs})
+    final = result["messages"][-1]
+    text = final.content if isinstance(final, AIMessage) else str(final)
+    if isinstance(text, list):
+        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+    for skill in NODE.get("skills", []):
+        text = await _run_skill_step(skill, text, _llm())
+        await trace(f"after skill {skill.get('dir') or 'inline'!r}: {len(text)} chars")
+    return {"text": text, "route": "", "notes": "", "status": "ok"}
+
+
+async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
+    """Dispatcher: one forced route_to call; the chosen child id travels back as "route"."""
+    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"]}
+    state = {"node_outputs": {}, "user_prompt": request_text}
+    out = await _run_dispatcher("self", ad, state, msgs, _llm())
+    route = out.get("routes", {}).get("self", "")
+    text = out["node_outputs"]["self"]["text"]
+    notes = text.split("## Dispatcher notes\n", 1)[1] if "## Dispatcher notes\n" in text else ""
+    return {"text": text, "route": "" if route == END else str(route), "notes": notes, "status": "ok" if route != END else "unrouted"}
+
+
+async def _run_playbook_kind(request_text: str, trace) -> dict:
+    """Playbook: the playbook runtime; gates go through _a2a_gate (see the A2A block)."""
+    run = _PlaybookRun(bool(NODE.get("writes_enabled")), NODE.get("policy") or {})
+    tools = build_playbook_tools(NODE, run)
+    await trace(f"{NODE['display']!r} playbook -- {len(tools)} tools (writes={'on' if run.writes_enabled else 'off'})")
+    system = PLAYBOOK_SYSTEM_PROMPT.format(
+        domain=NODE.get("domain") or "this organization", instructions=NODE["instructions"],
+        policy_json=json.dumps(run.policy, ensure_ascii=False),
+        requester_json=json.dumps(NODE.get("requester") or {}, ensure_ascii=False),
+        approvers_json=json.dumps(NODE["approvers"], ensure_ascii=False) if NODE.get("approvers") else "{}")
+    msgs = [SystemMessage(content=inject_datetime(system)), HumanMessage(content="REQUEST:\n" + request_text)]
+    agent = create_react_agent(_llm(), tools)
+    text = ""
+    try:
+        result = await agent.ainvoke({"messages": msgs}, config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
+        final = result["messages"][-1]
+        text = final.content if isinstance(final, AIMessage) else str(final)
+        if isinstance(text, list):
+            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+    except Exception as e:
+        run.status = "failed"
+        run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
+    transcript = render_playbook_transcript(NODE["title"], run.events, text, run.status)
+    return {"text": transcript, "route": "", "notes": "", "status": run.status}
+
+
+PY;
+    }
+
+    /** Agent Card, executor with pause/resume legs, gate bridge, CLI entry. */
+    private static function a2aAgentServerBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# A2A SERVING
+# Agent Card, the AgentExecutor (one task = one node run, paused at
+# gates), the gate bridge used by the playbook runtime, and the uvicorn
+# entry point. Verified against a2a-sdk 1.1.0.
+# ==============================================================
+A2A_GATE_TIMEOUT_S = int(os.environ.get("A2A_GATE_TIMEOUT_S", "900"))   # how long a gate waits for the orchestrator's answer
+
+
+def build_agent_card(url: str) -> "T.AgentCard":
+    """The Agent Card served at /.well-known/agent-card.json: what this node is and how to talk to it.
+
+    The card advertises ONE skill (this node's role); tools, prompts and credentials stay private.
+    """
+    desc = (NODE.get("system_prompt") or NODE.get("instructions") or "").strip().replace("\n", " ")
+    return T.AgentCard(
+        name=NODE["display"],
+        description=(desc[:300] + ("…" if len(desc) > 300 else "")) or f"Workflow node {NODE['id']}",
+        version=WORKFLOW_VERSION,
+        supported_interfaces=[T.AgentInterface(url=url, protocol_binding="JSONRPC", protocol_version="1.0")],
+        capabilities=T.AgentCapabilities(streaming=True),
+        default_input_modes=["text/plain"], default_output_modes=["text/plain"],
+        skills=[T.AgentSkill(id=f"node-{NODE['id']}", name=NODE["display"],
+                             description=f"{NODE['kind']} node of workflow {WORKFLOW_NAME!r}",
+                             tags=[NODE["kind"], NODE["provider"]])],
+    )
+
+
+class _NodeRun:
+    """One node run that may pause at gates.
+
+    `updater` is swapped on every A2A leg (first request, then each follow-up)
+    so events go to the queue of the request currently being served -- the
+    SDK closes a request's queue as soon as execute() returns.
+    """
+    def __init__(self, updater: TaskUpdater):
+        self.updater = updater
+        self.answer: asyncio.Future | None = None   # pending gate answer
+        self.paused = asyncio.Event()                # set when the run enters input-required
+        self.task: asyncio.Task | None = None
+        self.loop = asyncio.get_event_loop()
+
+    async def gate(self, kind: str, name: str, args: dict) -> dict:
+        """Raise a gate: publish input-required, wait for the answer, resume. Returns the single-file gate result shape."""
+        self.answer = self.loop.create_future()
+        question = args.get("question") or args.get("prompt") or args.get("reason") or name
+        print(f"[gate] {kind}: {question}", flush=True)
+        await self.updater.requires_input(self.updater.new_agent_message(
+            [T.Part(text=str(question)), new_data_part({"gate": kind, "tool": name, "args": args})]))
+        self.paused.set()
+        try:
+            ans = await asyncio.wait_for(self.answer, A2A_GATE_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self.answer = None
+            return {"ok": False, "timeout": True,
+                    "guidance": "No answer arrived in time. Leave an internal note and resolve as uncompleted."}
+        self.answer = None
+        await self.updater.start_work()
+        decision = str(ans.get("decision") or "answered")
+        if decision == "unavailable":
+            return {"ok": False, "timeout": True,
+                    "guidance": "No human is available for this run. Continue with what you already know and note the gap with leave_internal_note."}
+        d = {"decision": decision, "comment": str(ans.get("comment") or ""), "actor": str(ans.get("actor") or "a2a-client")}
+        if isinstance(ans.get("fields"), dict):
+            d["fields"] = ans["fields"]
+        return {"ok": True, "decision": d}
+
+
+_ACTIVE: _NodeRun | None = None      # the run currently executing (one at a time, see _RUN_LOCK)
+_RUNS: dict[str, _NodeRun] = {}      # task id -> paused/active run
+_RUN_LOCK = asyncio.Lock()           # serialises node runs: the gate bridge relies on a single active run
+
+
+def _a2a_gate(run, kind: str, name: str, args: dict) -> dict:
+    """Gate bridge for the playbook runtime (called from a tool, i.e. a worker thread):
+    forwards to the active run's async gate and blocks the thread until the answer arrives."""
+    active = _ACTIVE
+    if active is None:
+        return {"ok": False, "timeout": True, "guidance": "No A2A task is active for this gate."}
+    fut = asyncio.run_coroutine_threadsafe(active.gate(kind, name, args), active.loop)
+    return fut.result(timeout=A2A_GATE_TIMEOUT_S + 5)
+
+
+if NODE["kind"] == "playbook":
+    _playbook_gate = _a2a_gate   # the playbook runtime calls _playbook_gate(run, kind, name, args)
+
+
+class NodeExecutor(AgentExecutor):
+    """A2A executor: a new task starts a node run; a follow-up message answers its gate."""
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        global _ACTIVE
+        tid, cid = context.task_id, context.context_id
+        run = _RUNS.get(tid)
+        if run is not None and run.answer is not None and not run.answer.done():
+            # Resume leg: point the run at this request's queue and hand over the answer.
+            run.updater = TaskUpdater(event_queue, tid, cid)
+            run.paused.clear()
+            data = get_data_parts(context.message.parts)
+            answer = dict(data[0]) if data and isinstance(data[0], dict) else {"decision": context.get_user_input() or "answered"}
+            run.answer.set_result(answer)
+        else:
+            if context.current_task is None:
+                # SDK 1.x: the executor enqueues the initial Task itself (submitted, history = the user message).
+                await event_queue.enqueue_event(new_task_from_user_message(context.message))
+            run = _NodeRun(TaskUpdater(event_queue, tid, cid))
+            _RUNS[tid] = run
+            await run.updater.start_work()
+            request_text = context.get_user_input()
+            run.task = asyncio.create_task(self._serve(run, request_text))
+        # Return when the run pauses at a gate or finishes; the SDK closes this request's queue after that.
+        pause = asyncio.create_task(run.paused.wait())
+        done, _ = await asyncio.wait({run.task, pause}, return_when=asyncio.FIRST_COMPLETED)
+        pause.cancel()
+        if run.task in done:
+            _RUNS.pop(tid, None)
+            run.task.result()   # re-raise a failure so the SDK marks the task failed
+
+    async def _serve(self, run: _NodeRun, request_text: str) -> None:
+        """Run the node under the lock, publish progress, deliver the result artifact."""
+        global _ACTIVE
+        async with _RUN_LOCK:
+            _ACTIVE = run
+            t0 = time.monotonic()
+            try:
+                async def trace(line: str):
+                    print(f"[node] {line}", flush=True)
+                    await run.updater.update_status(T.TaskState.TASK_STATE_WORKING, run.updater.new_agent_message([T.Part(text=line)]))
+                out = await run_node(request_text, trace)
+                await run.updater.add_artifact(
+                    [T.Part(text=out["text"]), new_data_part({"route": out["route"], "notes": out["notes"], "status": out["status"]})],
+                    name="result")
+                await run.updater.complete()
+                print(f"[node] done -- {len(out['text'])} chars, status={out['status']} ({time.monotonic() - t0:.1f}s)", flush=True)
+            except Exception as e:
+                print(f"[node] FAILED: {e}", flush=True)
+                await run.updater.failed(run.updater.new_agent_message([T.Part(text=f"node failed: {e}")]))
+                raise
+            finally:
+                _ACTIVE = None
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Cancel the run behind a task (the SDK marks the task canceled)."""
+        run = _RUNS.pop(context.task_id, None)
+        if run and run.task:
+            run.task.cancel()
+
+
+def main() -> None:
+    """CLI entry: `python <this file> --host 127.0.0.1 --port 8701` (env A2A_HOST / A2A_PORT are the defaults)."""
+    ap = argparse.ArgumentParser(description=f"A2A agent server for workflow node {NODE['id']} ({NODE['display']})")
+    ap.add_argument("--host", default=os.environ.get("A2A_HOST", "127.0.0.1"))
+    ap.add_argument("--port", type=int, default=int(os.environ.get("A2A_PORT", "8700")))
+    a = ap.parse_args()
+    url = f"http://{a.host}:{a.port}/"
+    card = build_agent_card(url)
+    handler = DefaultRequestHandler(agent_executor=NodeExecutor(), task_store=InMemoryTaskStore(), agent_card=card)
+    app = Starlette(routes=create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/"))
+    print(f"[agent {NODE['display']}] serving {url}", flush=True)
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
+
+
+PY;
     }
 
     /**

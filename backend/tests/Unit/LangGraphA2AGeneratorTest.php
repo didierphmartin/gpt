@@ -101,4 +101,64 @@ class LangGraphA2AGeneratorTest extends TestCase
         $this->assertStringContainsString('"""Standalone LangGraph workflow: Dispatcher demo', $code);
         $this->assertStringContainsString('PLAYBOOKS = {', $code);
     }
+
+    private function agentFile(string $nid): string
+    {
+        $gen = self::generator();
+        $facts = self::facts();
+        $m = new \ReflectionMethod($gen, 'emitA2AAgentFile');
+        $m->setAccessible(true);
+        return $m->invoke($gen, $facts, LangGraphGenerator::a2aLayout($facts), $nid);
+    }
+
+    private function assertCompiles(string $code, string $label): void
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'a2a') . '.py';
+        file_put_contents($tmp, $code);
+        exec('python3 -m py_compile ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
+        @unlink($tmp);
+        $this->assertSame(0, $rc, "{$label}: " . implode("\n", $out));
+    }
+
+    public function testAgentFileIsASelfContainedA2AServer(): void
+    {
+        $code = $this->agentFile('3');
+        foreach (['"""A2A agent "IT claims" -- node 3 of workflow "Dispatcher demo"',
+                  'from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes',
+                  'new_task_from_user_message', 'class NodeExecutor(AgentExecutor)', 'def build_agent_card',
+                  'AGENT_CARD = build_agent_card(', 'Skill id:   node-3', 'def _make_llm(', 'def _call_mcp_tool(',
+                  'def build_tools_from_catalog', 'async def run_node(', 'uvicorn.run(', '"--port"',
+                  '# ---- node 3: IT claims (agent-template)', 'NODE = {', '"kind": "agent"',
+                  '<== this agent', 'A2A SERVING', 'A2A_GATE_TIMEOUT_S'] as $needle) {
+            $this->assertStringContainsString($needle, $code, "missing: {$needle}");
+        }
+        // Only this node's tools are baked.
+        $this->assertStringContainsString('"get_news"', $code);
+        $this->assertStringNotContainsString('get_pto_balance', $code);
+        // No playbook runtime in a plain agent file.
+        $this->assertStringNotContainsString('def build_playbook_tools', $code);
+        $this->assertCompiles($code, 'agent 3');
+    }
+
+    public function testDispatcherAgentFileCarriesTheMenu(): void
+    {
+        $code = $this->agentFile('2');
+        $this->assertStringContainsString('"kind": "dispatcher"', $code);
+        $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims"}, {"id": "4", "name": "Human resources"}]', $code);
+        $this->assertStringContainsString('async def _run_dispatcher(', $code);
+        $this->assertStringContainsString('## Routing', $code);
+        $this->assertCompiles($code, 'agent 2');
+    }
+
+    public function testPlaybookAgentFileBridgesGatesToA2A(): void
+    {
+        $code = $this->agentFile('5');
+        $this->assertStringContainsString('"kind": "playbook"', $code);
+        $this->assertStringContainsString('def build_playbook_tools', $code);
+        $this->assertStringContainsString('"workday__get_pto_balance"', $code);
+        $this->assertStringContainsString('def _a2a_gate(run, kind: str, name: str, args: dict) -> dict:', $code);
+        $this->assertStringContainsString('_playbook_gate = _a2a_gate', $code);
+        $this->assertStringContainsString('requires_input(', $code);
+        $this->assertCompiles($code, 'agent 5');
+    }
 }
