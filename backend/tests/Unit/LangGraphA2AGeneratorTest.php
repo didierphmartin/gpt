@@ -184,4 +184,19 @@ class LangGraphA2AGeneratorTest extends TestCase
         $this->assertStringNotContainsString('def build_playbook_tools', $code, 'the orchestrator runs no node logic itself');
         $this->assertCompiles($code, 'orchestrator');
     }
+
+    public function testA2AOptionReturnsAManifest(): void
+    {
+        $m = self::generator()->generate(44, '3', ['a2a' => true]);
+        $this->assertSame('dispatcher_demo_a2a', $m['root']);
+        $this->assertSame(['orchestrator.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py'],
+            array_column($m['files'], 'path'));
+        foreach ($m['files'] as $f) {
+            $this->assertStringContainsString('PROVENANCE', $f['code'], $f['path']);
+            $this->assertStringContainsString('GRAPH EDGES', $f['code'], $f['path']);
+            $this->assertCompiles($f['code'], $f['path']);
+        }
+        $this->assertStringContainsString('<== this agent', $m['files'][1]['code']);
+        $this->assertStringContainsString('AGENT ENDPOINTS', $m['files'][0]['code']);
+    }
 }

@@ -1252,9 +1252,15 @@ class LangGraphGenerator
     }
 
     /** A2A manifest emitter — replaced in Task 4. */
+    /** A2A mode: orchestrator first, then one agent file per agent/playbook node (see a2aLayout). */
     private function generateA2A(array $facts): array
     {
-        throw new RuntimeException('A2A emitter not wired yet');
+        $layout = self::a2aLayout($facts);
+        $files = [['path' => 'orchestrator.py', 'code' => $this->emitA2AOrchestrator($facts, $layout)]];
+        foreach ($layout['agents'] as $nid => $e) {
+            $files[] = ['path' => $e['file'], 'code' => $this->emitA2AAgentFile($facts, $layout, (string)$nid)];
+        }
+        return ['root' => $layout['root'], 'files' => $files];
     }
 
     /** orchestrator.py: the graph, the agent endpoint table, the supervisor and the A2A node runner. */

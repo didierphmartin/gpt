@@ -228,9 +228,14 @@ class WorkflowController
      * GET /api/v1/workflows/{id}/generate-python
      * Generate a standalone LangGraph Python script from the workflow.
      *
+     * Query parameters:
+     *   - ?a2a=1: Multi-file A2A manifest mode. Returns {root, files: [{path, code}, ...]} (always JSON).
+     *   - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in A2A mode.
+     *
      * Returns either:
-     *   - Content-Type: text/x-python  (raw source) when ?download=1
-     *   - application/json {filename, code} otherwise (default)
+     *   - A2A mode (?a2a=1): {success: true, data: {root, files}} (JSON only)
+     *   - Single-file with ?download=1: Content-Type: text/x-python (raw source)
+     *   - Single-file default: application/json {filename, code}
      */
     public function generatePython(array $request): array
     {
@@ -257,7 +262,12 @@ class WorkflowController
                 $this->graphRepository,
                 $agentRepo
             );
-            $result = $gen->generate($workflowId, (string) $userId);
+            $a2a = ($request['query']['a2a'] ?? '0') === '1';
+            $result = $gen->generate($workflowId, (string) $userId, ['a2a' => $a2a]);
+            if ($a2a) {
+                // Multi-file output: always JSON (the editor writes the folder itself).
+                return ['success' => true, 'data' => $result, 'status_code' => 200];
+            }
 
             if ($download) {
                 return [
