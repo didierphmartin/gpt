@@ -1302,8 +1302,8 @@ class LangGraphGenerator
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
-        $L[] = 'from typing import Annotated, Any, Literal, TypedDict';
+        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time';
+        $L[] = 'from typing import Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
@@ -1643,6 +1643,21 @@ class NodeExecutor(AgentExecutor):
     """A2A executor: a new task starts a node run; a follow-up message answers its gate."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Handle one A2A request: either start a node run or resume one paused at a gate.
+
+        A first request (no run recorded for this task, or a run with no pending
+        gate answer) enqueues the initial Task when context.current_task is None,
+        then starts the node run as a background asyncio task. A follow-up message
+        on a run that is waiting at a gate is a resume leg: its data part is handed
+        to the paused run as the gate's answer instead of starting a new run.
+
+        Returns as soon as the run pauses at the next gate or finishes -- the SDK
+        closes this request's event queue right after this method returns, so a
+        still-running node keeps making progress in the background and reports on
+        the NEXT request (another gate pause, or the terminal task update). If the
+        run itself raised, run.task.result() re-raises here so the SDK marks the
+        task failed instead of leaving it stuck in "working".
+        """
         global _ACTIVE
         tid, cid = context.task_id, context.context_id
         run = _RUNS.get(tid)
