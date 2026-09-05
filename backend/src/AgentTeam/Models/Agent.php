@@ -397,7 +397,7 @@ class Agent
 
     public function setAgentType(string $agentType): self
     {
-        if (!in_array($agentType, ['standard', 'manager', 'worker'], true)) {
+        if (!in_array($agentType, ['standard', 'manager', 'worker', 'dispatcher', 'playbook'], true)) {
             throw new \InvalidArgumentException("Invalid agent type: {$agentType}");
         }
         $this->agentType = $agentType;

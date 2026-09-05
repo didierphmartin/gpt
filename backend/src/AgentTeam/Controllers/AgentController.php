@@ -119,14 +119,20 @@ class AgentController
 
         // Validate agent type
         $agentType = $data['agent_type'] ?? 'standard';
-        if (!in_array($agentType, ['standard', 'manager', 'worker'])) {
-            return $this->error('Invalid agent_type. Must be: standard, manager, or worker', 400);
+        if (!in_array($agentType, ['standard', 'manager', 'worker', 'dispatcher', 'playbook'])) {
+            return $this->error('Invalid agent_type. Must be: standard, manager, worker, dispatcher, or playbook', 400);
         }
 
         // Validate visibility
         $visibility = $data['visibility'] ?? 'personal';
         if (!in_array($visibility, ['personal', 'workspace', 'public'])) {
             return $this->error('Invalid visibility. Must be: personal, workspace, or public', 400);
+        }
+
+        // Playbook agents: the tool selection is derived from the playbook's
+        // bound #Actions (see PlaybookAgentTools), not typed by hand.
+        if ($agentType === 'playbook' && trim((string)($data['instructions'] ?? '')) !== '') {
+            $data['tools'] = \AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$userId, (string)$data['instructions']);
         }
 
         // Create agent model
@@ -255,6 +261,10 @@ class AgentController
         }
 
         try {
+            // Playbook agents: keep the tool selection in step with the text.
+            if ($agent->getAgentType() === 'playbook' && trim((string)$agent->getInstructions()) !== '') {
+                $agent->setTools(\AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$agent->getUserId(), (string)$agent->getInstructions()));
+            }
             $updated = $this->repository->update($agent);
 
             return [

@@ -922,7 +922,7 @@ class WorkflowEditor {
      * Render a single agent card
      */
     renderAgentCard(agent, isRealtimeMode = false) {
-        const typeIcon = agent.agent_type === 'worker' ? '⚙️' : '🤖';
+        const typeIcon = agent.agent_type === 'worker' ? '⚙️' : (agent.agent_type === 'dispatcher' ? '🔀' : (agent.agent_type === 'playbook' ? '📖' : '🤖'));
         const typeClass = agent.agent_type || 'standard';
         const providerDisplay = agent.provider || agent.llm_provider || '';
         const isTemplate = agent.is_template || false;
@@ -2414,7 +2414,7 @@ class WorkflowEditor {
 
                 // Playbook nodes: same pen affordance, own config modal.
                 if (editBtn.dataset.playbook === 'true' && nodeId) {
-                    this.showPlaybookConfigModal(nodeId);
+                    this.showAgentEditForm(this.editor.getNodeFromId(nodeId)?.data?.agent_id || null, nodeId);
                     return;
                 }
 
@@ -2485,7 +2485,7 @@ class WorkflowEditor {
                 const drawflowNode = playbookNode.closest('.drawflow-node');
                 if (drawflowNode) {
                     const nodeId = drawflowNode.id.replace('node-', '');
-                    this.showPlaybookConfigModal(nodeId);
+                    this.showAgentEditForm(this.editor.getNodeFromId(nodeId)?.data?.agent_id || null, nodeId);
                 }
                 return;
             }
@@ -2898,6 +2898,7 @@ class WorkflowEditor {
             return;
         }
 
+        let generated = null;
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generating') || 'Generating LangGraph Python script…'
         );
@@ -2932,6 +2933,7 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
         } catch (e) {
             console.error('[WorkflowEditor] generate-python failed:', e);
             alert(this.t('workflow.output.generateFailed') + ': ' + (e.message || e));
@@ -2939,6 +2941,8 @@ class WorkflowEditor {
             // Overlay disappears once the python doc is written (success or error).
             overlay.close();
         }
+        // Show the code right away so the user sees what was produced and where it went.
+        if (generated) this._showLangGraphCodeModal(generated.path, generated.code);
     }
 
     /**
@@ -3026,6 +3030,7 @@ class WorkflowEditor {
             return;
         }
 
+        let generated = null;
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generatingAdk') || 'Generating Google ADK script…'
         );
@@ -3059,6 +3064,7 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated ADK Python to ${rootName}/python/scripts/${filename}`);
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
         } catch (e) {
             console.error('[WorkflowEditor] generate-adk failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
@@ -3066,6 +3072,8 @@ class WorkflowEditor {
             // Overlay disappears once the python doc is written (success or error).
             overlay.close();
         }
+        // Show the code right away so the user sees what was produced and where it went.
+        if (generated) this._showAdkCodeModal(generated.path, generated.code);
     }
 
     /**
@@ -3428,14 +3436,14 @@ class WorkflowEditor {
      * Fetches from generate-adk (no download param) and shows the code
      * in the same line-numbered scrollable modal as _showLangGraphCodeModal.
      */
-    async _showAdkCodeModal() {
-        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
+    async _showAdkCodeModal(savedPath = '', providedCode = null) {
+        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        let code;
-        try {
+        let code = providedCode;
+        if (code === null) try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk`,
                 { headers: this.getAuthHeaders() }
@@ -3462,6 +3470,7 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">Generated Google ADK code</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
+                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
                 <div class="flex justify-end mt-3">
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -3741,6 +3750,7 @@ class WorkflowEditor {
 
         // Show the overlay FIRST for instant feedback, THEN do the slow work (flush deferred
         // node edits to the DB + probe the runner + generate) inside it.
+        let generated = null;
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generatingMaf') || 'Generating Microsoft Agent Framework script…'
         );
@@ -3783,12 +3793,15 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated MAF Python to ${rootName}/python/scripts/${filename}`);
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
         } catch (e) {
             console.error('[WorkflowEditor] generate-maf failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
         } finally {
             overlay.close();
         }
+        // Show the code right away so the user sees what was produced and where it went.
+        if (generated) this._showMafCodeModal(generated.path, generated.code);
     }
 
     /**
@@ -3884,14 +3897,14 @@ class WorkflowEditor {
      * Fetches from generate-maf (no download param) and shows the code
      * in the same line-numbered scrollable modal as _showAdkCodeModal.
      */
-    async _showMafCodeModal() {
-        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
+    async _showMafCodeModal(savedPath = '', providedCode = null) {
+        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        let code;
-        try {
+        let code = providedCode;
+        if (code === null) try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf`,
                 { headers: this.getAuthHeaders() }
@@ -3918,6 +3931,7 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">Generated Microsoft Agent Framework code</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
+                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
                 <div class="flex justify-end mt-3">
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4166,6 +4180,7 @@ class WorkflowEditor {
 
         // Show the overlay FIRST for instant feedback, THEN do the slow work (flush deferred
         // node edits to the DB + probe the runner + generate) inside it.
+        let generated = null;
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generatingNooa') || 'Generating NVIDIA OO Agents script…'
         );
@@ -4208,12 +4223,15 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated NOOA Python to ${rootName}/python/scripts/${filename}`);
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
         } catch (e) {
             console.error('[WorkflowEditor] generate-nooa failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
         } finally {
             overlay.close();
         }
+        // Show the code right away so the user sees what was produced and where it went.
+        if (generated) this._showNooaCodeModal(generated.path, generated.code);
     }
 
     /**
@@ -4313,14 +4331,14 @@ class WorkflowEditor {
      * Fetches from generate-nooa (no download param) and shows the code
      * in the same line-numbered scrollable modal as _showMafCodeModal.
      */
-    async _showNooaCodeModal() {
-        await this._persistIfDirty();  // reflect the latest node edits in the displayed code
+    async _showNooaCodeModal(savedPath = '', providedCode = null) {
+        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        let code;
-        try {
+        let code = providedCode;
+        if (code === null) try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa`,
                 { headers: this.getAuthHeaders() }
@@ -4347,6 +4365,7 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">Generated NVIDIA OO Agents code</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
+                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
                 <div class="flex justify-end mt-3">
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4629,7 +4648,7 @@ class WorkflowEditor {
         // Ingestion passes the code directly → offer a "Store location" field
         // (pre-filled with the default langchain_runner env) so the user can save
         // the script wherever they want.
-        const isIngestion = providedCode !== null;
+        const isIngestion = this._isIngestionWorkflow();
         const defaultDir = savedPath ? savedPath.replace(/\/[^\/]*$/, '') : 'langchain_runner';
         const saveFilename = filename || (savedPath ? savedPath.replace(/^.*\//, '') : 'ingestion_pipeline.py');
 
@@ -5727,30 +5746,9 @@ class WorkflowEditor {
         const saveBtnOption = document.getElementById('save-option-save');
         const saveAsBtn = document.getElementById('save-option-saveas');
 
-        // Progress on the visible "Save Workflow" toolbar button while the
-        // save runs — same treatment as the playbook modal's Save (spinner +
-        // Saving…, disabled). The popup itself closes immediately.
-        const _busy = async (fn) => {
-            const btn = document.getElementById('workflow-save-toggle');
-            const orig = btn?.innerHTML;
-            if (btn) {
-                btn.disabled = true;
-                btn.style.opacity = '0.7';
-                btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:wf-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>'
-                    + this.tWithFallback('workflow.buttons.saving', 'Saving…');
-                if (!document.getElementById('wf-save-spin-style')) {
-                    document.head.insertAdjacentHTML('beforeend',
-                        '<style id="wf-save-spin-style">@keyframes wf-save-spin { to { transform: rotate(360deg); } }</style>');
-                }
-            }
-            try { await fn(); } finally {
-                if (btn && document.body.contains(btn)) {
-                    btn.disabled = false;
-                    btn.style.opacity = '';
-                    btn.innerHTML = orig;
-                }
-            }
-        };
+        // saveWorkflow() spins the toolbar "Save Workflow" button itself (any
+        // save path); Save As bypasses it, so wrap that one here.
+        const _busy = (fn) => this._withSaveButtonBusy(fn);
 
         // Handle Save
         saveBtnOption.addEventListener('click', () => {
@@ -7425,9 +7423,23 @@ class WorkflowEditor {
             case 'output':
                 this.addOutputNode(x, y);
                 break;
-            case 'agent':
+            case 'agent': {
+                if (agentType === 'playbook') {
+                    // A playbook agent (library card) drops as a PLAYBOOK node
+                    // preloaded with its text and linked back by agent_id.
+                    const pa = this.agents.find(a => String(a.id) === String(agentId)) || {};
+                    this.addPlaybookNode(x, y, {
+                        name: agentName || pa.name || 'Playbook',
+                        playbook: pa.instructions || pa.system_prompt || '',
+                        agent_provider: agentProvider || pa.provider || '',
+                        model: pa.model || '',
+                        agent_id: agentId ? parseInt(agentId, 10) : null,
+                    });
+                    break;
+                }
                 this.addAgentNode(x, y, agentId, agentName, agentType, agentProvider, agentTools);
                 break;
+            }
             case 'agent-template':
                 // Create an empty agent node that will be configured
                 this.addAgentTemplateNode(x, y);
@@ -7570,7 +7582,7 @@ class WorkflowEditor {
     /**
      * Add a Playbook node to the canvas: a single 1-input/1-output node that
      * runs a Console-style playbook document server-side (see
-     * showPlaybookConfigModal / _runNodeAsPlaybookUnit). Mirrors
+     * showAgentEditForm (playbook facet) / _runNodeAsPlaybookUnit). Mirrors
      * addIngestionNode's structure (custom HTML + config modal, own ✏️
      * affordance) but is a free-standing node like an agent — no fixed
      * pipeline position, connects like any other agent-workflow node.
@@ -7610,6 +7622,7 @@ class WorkflowEditor {
                 playbook: nodeConfig.playbook,
                 agent_provider: nodeConfig.agent_provider,
                 model: nodeConfig.model,
+                agent_id: nodeConfig.agent_id || null, // set when dropped from a playbook agent card
                 mcp_servers: Array.isArray(nodeConfig.mcp_servers) ? nodeConfig.mcp_servers : [],
                 writes_enabled: !!nodeConfig.writes_enabled,
                 disabled: !!nodeConfig.disabled,
@@ -7650,8 +7663,14 @@ class WorkflowEditor {
         const sections = { preamble: '', title: '', trigger: '', instructions: '', 'tools used': '', 'actions used': '' };
         let current = 'preamble';
         for (const line of raw.split(/\r?\n/)) {
-            const m = line.match(/^\s*(Title|Trigger|Instructions|Tools used|Actions used)\s*:\s*(.*)$/i);
-            if (m) { current = m[1].toLowerCase(); sections[current] = m[2]; }
+            // Tolerate "1. Instructions: …", "## Title: …", "**Trigger:** …" —
+            // a numeric marker is kept so the author's step 1 survives.
+            const m = line.match(/^\s*(\d+[.)]|[-*•]|#{1,6})?\s*\**(Title|Trigger|Instructions|Tools used|Actions used)\**\s*:\**\s*(.*)$/i);
+            if (m) {
+                current = m[2].toLowerCase();
+                const marker = /^\d/.test(m[1] || '') ? m[1] + ' ' : '';
+                sections[current] = m[3] ? marker + m[3] : '';
+            }
             else if (sections[current] !== undefined) sections[current] += (sections[current] ? '\n' : '') + line;
         }
         const actionNames = (sections['actions used'] || '')
@@ -8905,272 +8924,6 @@ class WorkflowEditor {
     }
 
     /**
-     * Config modal for a Playbook node — mirrors showIngestionConfigModal's
-     * overlay/grid/footer structure (same .storage-config-* CSS classes) but
-     * with playbook-specific fields: a textarea bound to node.data.playbook
-     * (accepts pasted Console text or JSON), provider+model controls reusing
-     * the agent node's markup, and a Validate button hitting
-     * POST /api/v1/playbooks/validate.
-     */
-    async showPlaybookConfigModal(nodeId) {
-        const nodeData = this.editor.getNodeFromId(nodeId);
-        if (!nodeData) return;
-        const data = nodeData.data || {};
-
-        try { await this.loadProviders(); } catch (_) { /* best-effort */ }
-        // Shared model catalog (same source as the Settings panel:
-        // GET /api/v1/models/catalog → {providers: {provider: [{id,label,…}]}}).
-        // Fetched once per session; failure degrades to a free "(default)" choice.
-        if (!this._modelCatalog) {
-            try {
-                const res = await fetch(window.apiUrl('/models/catalog'));
-                const body = await res.json();
-                this._modelCatalog = body?.providers || {};
-            } catch (_) { this._modelCatalog = {}; }
-        }
-        const providersOptions = (this.providers || []).map(p =>
-            `<option value="${this.escapeHtml(p.name)}" ${data.agent_provider === p.name ? 'selected' : ''}>${this.escapeHtml(p.display_name || p.name)}</option>`
-        ).join('');
-
-        const existingModal = document.getElementById('playbook-config-modal');
-        if (existingModal) existingModal.remove();
-
-        // The amber header carries the playbook's Title (user request
-        // 2026-09-02); falls back to 'Playbook' when none is pasted yet.
-        const _pbModalTitle = (pb) => {
-            let t = '';
-            if (pb && typeof pb === 'object' && pb.title) t = String(pb.title);
-            else if (typeof pb === 'string') t = (pb.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '').trim();
-            return t ? `Playbook: ${t}` : 'Playbook';
-        };
-        const modalHtml = `
-            <div id="playbook-config-modal" class="storage-config-overlay">
-                <div class="storage-config-modal">
-                    <div class="storage-config-header">
-                        <h3><span>📖</span> <span id="playbook-modal-title">${this.escapeHtml(_pbModalTitle(data.playbook))}</span></h3>
-                        <button class="storage-config-close" id="playbook-config-close">×</button>
-                    </div>
-                    <div class="storage-config-body">
-                        <div class="storage-config-grid">
-                            <div class="storage-config-folder full">
-                                <label for="playbook-name-input">Name</label>
-                                <input type="text" id="playbook-name-input" value="${this.escapeHtml(data.name || 'Playbook')}">
-                            </div>
-                            <div class="storage-config-folder">
-                                <label for="playbook-provider-select">Provider</label>
-                                <select id="playbook-provider-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                                    <option value="">(default)</option>
-                                    ${providersOptions}
-                                </select>
-                            </div>
-                            <div class="storage-config-folder">
-                                <label for="playbook-model-select">Model</label>
-                                <select id="playbook-model-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                                    ${this._playbookModelOptions(data.agent_provider || '', data.model || '')}
-                                </select>
-                            </div>
-                            <div class="storage-config-folder full">
-                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                                    <input type="checkbox" id="playbook-writes-enabled" ${data.writes_enabled ? 'checked' : ''}>
-                                    Allow write actions <span style="font-weight:400;color:#6b7280;">(resets, unlocks, creates… — read-only when off)</span>
-                                </label>
-                            </div>
-                            <div class="storage-config-folder full">
-                                <label for="playbook-text" style="display:flex;align-items:center;gap:10px;">
-                                    Playbook <span style="font-weight:400;color:#6b7280;">(paste Console text or JSON)</span>
-                                    <span style="margin-left:auto;display:inline-flex;border:1px solid rgba(148,163,184,0.4);border-radius:6px;overflow:hidden;font-size:12px;">
-                                        <button type="button" id="playbook-view-edit" style="padding:2px 10px;border:none;background:rgba(59,130,246,0.2);cursor:pointer;">Edit</button>
-                                        <button type="button" id="playbook-view-preview" style="padding:2px 10px;border:none;background:transparent;cursor:pointer;">Preview</button>
-                                    </span>
-                                </label>
-                                <div id="playbook-pretty" style="display:none;max-height:420px;overflow-y:auto;border:1px solid rgba(148,163,184,0.35);border-radius:8px;padding:12px 14px;"></div>
-                                <textarea id="playbook-text" rows="16" style="width:100%;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px;line-height:1.5;">${this.escapeHtml(data.playbook || '')}</textarea>
-                            </div>
-                            <div class="storage-config-folder full">
-                                <div id="playbook-validate-result" style="font-size:13px;"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="storage-config-footer">
-                        <style>@keyframes pb-save-spin { to { transform: rotate(360deg); } }</style>
-                        <button type="button" id="playbook-validate-btn" class="storage-config-btn cancel">Validate</button>
-                        <span id="playbook-validate-status" style="font-size:12px;align-self:center;"></span>
-                        <span id="playbook-save-status" style="margin-right:auto;margin-left:auto;font-size:12px;align-self:center;"></span>
-                        <button class="storage-config-btn cancel" id="playbook-config-cancel">Close</button>
-                        <button class="storage-config-btn save" id="playbook-config-save">${this.t('common.save')}</button>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-        const modal = document.getElementById('playbook-config-modal');
-        const nodeEl = document.getElementById('node-' + nodeId);
-        if (nodeEl) nodeEl.classList.add('node-active');
-
-        const closeModal = () => {
-            if (nodeEl) nodeEl.classList.remove('node-active');
-            modal.remove();
-            document.removeEventListener('keydown', escHandler);
-        };
-        const escHandler = (e) => { if (e.key === 'Escape') closeModal(); };
-        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-        document.getElementById('playbook-config-close').addEventListener('click', closeModal);
-        document.getElementById('playbook-config-cancel').addEventListener('click', closeModal);
-        document.addEventListener('keydown', escHandler);
-
-        const _pbEditBtn = document.getElementById('playbook-view-edit');
-        const _pbPrevBtn = document.getElementById('playbook-view-preview');
-        const _pbSetView = (preview) => {
-            const ta = document.getElementById('playbook-text');
-            const pretty = document.getElementById('playbook-pretty');
-            if (preview) pretty.innerHTML = this._playbookPrettyHtml(ta.value);
-            pretty.style.display = preview ? '' : 'none';
-            ta.style.display = preview ? 'none' : '';
-            _pbPrevBtn.style.background = preview ? 'rgba(59,130,246,0.2)' : 'transparent';
-            _pbEditBtn.style.background = preview ? 'transparent' : 'rgba(59,130,246,0.2)';
-        };
-        _pbEditBtn?.addEventListener('click', () => _pbSetView(false));
-        _pbPrevBtn?.addEventListener('click', () => _pbSetView(true));
-
-        document.getElementById('playbook-provider-select').addEventListener('change', (ev) => {
-            const modelSel = document.getElementById('playbook-model-select');
-            const current = modelSel.value;
-            modelSel.innerHTML = this._playbookModelOptions(ev.target.value, current);
-        });
-
-        document.getElementById('playbook-validate-btn').addEventListener('click', async () => {
-            const statusEl = document.getElementById('playbook-validate-status');
-            const resultEl = document.getElementById('playbook-validate-result');
-            const text = document.getElementById('playbook-text').value;
-            statusEl.textContent = 'Validating…';
-            resultEl.innerHTML = '';
-            const trimmed = text.trim();
-            let playbookPayload = text;
-            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                try { playbookPayload = JSON.parse(trimmed); } catch (_) { playbookPayload = text; }
-            }
-            try {
-                const resp = await fetch(`${this.apiBase}/playbooks/validate`, {
-                    method: 'POST',
-                    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ playbook: playbookPayload }),
-                });
-                const json = await resp.json().catch(() => ({}));
-                // Verdict must be visible right next to the button: the modal
-                // body scrolls and the detail div below the 16-row textarea
-                // can sit under the fold, so a cleared status span looked
-                // like "no feedback" (reported 2026-09-02).
-                const verdict = (json && typeof json.valid !== 'undefined') ? json.valid === true : null;
-                statusEl.textContent = verdict === true ? '✓ VALID'
-                    : (verdict === false ? '✗ INVALID — details below' : '✗ validation failed — details below');
-                statusEl.style.color = verdict === true ? '#22c55e' : '#ef4444';
-                statusEl.style.fontWeight = '600';
-                resultEl.innerHTML = this._renderPlaybookValidateResult(json, resp.status);
-                resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                // Console-style service badges: persist the bound servers on
-                // the node and refresh the pills on the canvas.
-                if (Array.isArray(json?.actions)) {
-                    const servers = [...new Set(json.actions
-                        .filter(a => a.kind === 'bound' && typeof a.target === 'string' && a.target.includes('.'))
-                        .map(a => a.target.split('.')[0]))];
-                    if (servers.length) {
-                        const nd = this.editor.getNodeFromId(nodeId)?.data || {};
-                        const merged = { ...nd, mcp_servers: servers };
-                        this.editor.updateNodeDataFromId(nodeId, merged);
-                        this._refreshPlaybookBadges(nodeId, merged);
-                    }
-                }
-            } catch (e) {
-                statusEl.textContent = '✗ validation failed';
-                statusEl.style.color = '#ef4444';
-                statusEl.style.fontWeight = '600';
-                resultEl.innerHTML = `<p style="color:#dc2626;">${this.escapeHtml(e?.message || String(e))}</p>`;
-            }
-        });
-
-        // saveWorkflow() reloads the entire canvas (fresh drawflow ids), so a
-        // modal left open across a save must re-bind — otherwise its next Save
-        // writes to a dead node id and silently reverts the user's edits
-        // (lost-indentation data loss, 2026-09-02).
-        let curNodeId = nodeId;
-        document.getElementById('playbook-config-save').addEventListener('click', async () => {
-            const updatedData = {
-                ...data,
-                type: 'playbook',
-                node_type: 'playbook',
-                name: (document.getElementById('playbook-name-input').value || 'Playbook').trim(),
-                agent_provider: document.getElementById('playbook-provider-select').value || '',
-                model: (document.getElementById('playbook-model-select').value || '').trim(),
-                writes_enabled: !!document.getElementById('playbook-writes-enabled')?.checked,
-                playbook: document.getElementById('playbook-text').value,
-            };
-            // curNodeId (not the captured nodeId): after the first save the
-            // canvas is reloaded with fresh ids, and Drawflow's
-            // updateNodeDataFromId throws on a dead id — which killed this
-            // handler before the fetch, so the second Save did nothing.
-            this.editor.updateNodeDataFromId(curNodeId, updatedData);
-
-            try {
-                const curEl = document.getElementById('node-' + curNodeId);
-                const displayEl = curEl?.querySelector('.node-config-display');
-                if (displayEl) displayEl.textContent = this._playbookNodeSummary(updatedData);
-                this._refreshPlaybookBadges(curNodeId, updatedData);
-                const titleEl = curEl?.querySelector('.node-title');
-                if (titleEl) titleEl.textContent = updatedData.name;
-                const modalTitleEl = document.getElementById('playbook-modal-title');
-                if (modalTitleEl) modalTitleEl.textContent = _pbModalTitle(updatedData.playbook);
-            } catch (_) { /* cosmetics must never block persistence */ }
-
-            // Save applies AND persists — the modal stays open so you can
-            // keep editing / previewing (user request 2026-09-02). Persisting
-            // the workflow here also removes the modal-save vs workflow-save
-            // trap that silently reverted node settings on reload.
-            const statusEl = document.getElementById('playbook-save-status');
-            // The save round-trips to the remote DB + reloads the canvas —
-            // easily seconds. Show a turning circle so the wait reads as
-            // progress, not a dead button (user request 2026-09-02).
-            if (statusEl) {
-                statusEl.style.color = '#2563eb';
-                statusEl.style.fontSize = '13px';
-                statusEl.innerHTML = '<span style="display:inline-block;width:16px;height:16px;border:3px solid #2563eb;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-3px;margin-right:8px;"></span><b>Saving…</b>';
-            }
-            // The button itself is where the user is looking on click — turn
-            // it into a disabled spinner too (the footer-only spinner was too
-            // easy to miss, user feedback 2026-09-02).
-            const saveBtn = document.getElementById('playbook-config-save');
-            const origBtnHtml = saveBtn?.innerHTML;
-            if (saveBtn) {
-                saveBtn.disabled = true;
-                saveBtn.style.opacity = '0.7';
-                saveBtn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:pb-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>Saving…';
-            }
-            try {
-                await this.saveWorkflow();
-                // Re-resolve this node's id in the rebuilt canvas (match by
-                // type + name; a name collision just re-binds to a twin that
-                // holds identical saved data).
-                const g = this.editor?.drawflow?.drawflow?.Home?.data || {};
-                const rebound = Object.keys(g).find(id =>
-                    g[id]?.data?.node_type === 'playbook' && (g[id].data.name || '') === updatedData.name);
-                if (rebound) curNodeId = rebound;
-                if (statusEl) { statusEl.textContent = 'Saved ✓'; statusEl.style.color = '#22c55e'; }
-            } catch (e) {
-                if (statusEl) { statusEl.textContent = 'save failed: ' + (e?.message || e); statusEl.style.color = '#ef4444'; }
-            } finally {
-                if (saveBtn && origBtnHtml != null) {
-                    saveBtn.disabled = false;
-                    saveBtn.style.opacity = '';
-                    saveBtn.innerHTML = origBtnHtml;
-                }
-            }
-            setTimeout(() => { if (statusEl && statusEl.textContent === 'Saved ✓') statusEl.textContent = ''; }, 4000);
-        });
-    }
-
-    /**
      * <option> list for the playbook model select: the provider's models from
      * the shared catalog, plus "(provider default)" and — when the stored
      * model isn't in the catalog (admin-configured) — the stored value itself,
@@ -9927,7 +9680,7 @@ class WorkflowEditor {
      * Add an Agent node
      */
     addAgentNode(x, y, agentId, agentName, agentType, agentProvider = '', agentTools = null) {
-        const typeIcon = agentType === 'worker' ? '⚙️' : '🤖';
+        const typeIcon = agentType === 'worker' ? '⚙️' : (agentType === 'dispatcher' ? '🔀' : '🤖');
         const providerDisplay = agentProvider ? `<span class="node-provider">${this.escapeHtml(agentProvider)}</span>` : '';
 
         const html = `
@@ -10251,13 +10004,44 @@ class WorkflowEditor {
         }
         this._saveInFlight = (async () => {
             try {
-                return await this._saveWorkflowImpl();
+                return await this._withSaveButtonBusy(() => this._saveWorkflowImpl());
             } finally {
                 this._saveInFlight = null;
                 if (this._savePending) { this._savePending = false; this.saveWorkflow().catch(() => {}); }
             }
         })();
         return this._saveInFlight;
+    }
+
+    /**
+     * Run fn() while the toolbar "Save Workflow" button (#workflow-save-toggle)
+     * is disabled and shows a spinner + "Saving…". Every save path goes through
+     * here — popup Save, Save As, node-modal saves, keyboard save, auto-save —
+     * so the user always sees the button working.
+     */
+    async _withSaveButtonBusy(fn) {
+        const btn = document.getElementById('workflow-save-toggle');
+        const alreadyBusy = !!btn?.dataset.saving;
+        const orig = btn?.innerHTML;
+        if (btn && !alreadyBusy) {
+            btn.dataset.saving = '1';
+            btn.disabled = true;
+            btn.style.opacity = '0.7';
+            btn.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:wf-save-spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>'
+                + this.tWithFallback('workflow.buttons.saving', 'Saving…');
+            if (!document.getElementById('wf-save-spin-style')) {
+                document.head.insertAdjacentHTML('beforeend',
+                    '<style id="wf-save-spin-style">@keyframes wf-save-spin { to { transform: rotate(360deg); } }</style>');
+            }
+        }
+        try { return await fn(); } finally {
+            if (btn && !alreadyBusy && document.body.contains(btn)) {
+                delete btn.dataset.saving;
+                btn.disabled = false;
+                btn.style.opacity = '';
+                btn.innerHTML = orig;
+            }
+        }
     }
 
     async _saveWorkflowImpl() {
@@ -10755,6 +10539,20 @@ class WorkflowEditor {
                 // Store mapping from database node ID to Drawflow ID (for SSE highlighting)
                 if (dbNodeId) {
                     this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+
+                    // A template node that has been configured (name/provider/
+                    // instructions) must look like every other agent node — timer,
+                    // provider badge, ✏️ edit button — not like an empty template.
+                    // The Done button converts it for the session (updateAgentNodeVisual);
+                    // a reload rebuilt the yellow template look instead (UI inconsistency, 2026-09-03).
+                    if (type === 'agent-template'
+                        && (nodeData.agent_name || nodeData.instructions || nodeData.agent_provider || nodeData.provider)) {
+                        this.updateAgentNodeVisual(drawflowId, {
+                            name: nodeData.agent_name || nodeData.name || this.t('agentTeams.newTemplate'),
+                            provider: nodeData.agent_provider || nodeData.provider || '',
+                            merge_strategy: nodeData.merge_strategy || 'labeled',
+                        }, nodeData);
+                    }
                     console.log(`[WorkflowEditor] Stored mapping: dbNodeId ${dbNodeId} -> drawflowId ${drawflowId}`);
                 }
 
@@ -11431,12 +11229,24 @@ class WorkflowEditor {
         return false;
     }
 
-    async _runNodeAsChatUnit(node, inputText) {
+    async _runNodeAsChatUnit(node, inputText, { dispatchTargets = null, routedBy = null } = {}) {
         const dfId = String(node.id);
         const data = node.data || {};
         const provider = data.agent_provider || data.provider || 'openai';
         const model = data.model || null;
-        const instructions = data.instructions || '';
+        // Dispatcher (agent_type 'dispatcher'): its outgoing edges are a MENU of
+        // branches, not a fan-out. Append the routing rules to the system
+        // prompt and declare route_to as a client tool; the model's choice is
+        // resolved right here (see executeWorkflowInBrowser for the skip set).
+        // Twin of DispatchRouting.php — keep the two in step.
+        // A blank node must not inherit the conversation persona (the chat
+        // fallback) — give it a minimal role prompt. A routed target is told
+        // who sent the request and not to re-route it. Twins of
+        // DispatchRouting::defaultInstructions / routedPrompt.
+        const agentLabel = data.agent_name || data.name || `Agent ${dfId}`;
+        const instructions = ((data.instructions || '').trim() || this._wfDefaultInstructions(agentLabel, data.description || ''))
+            + (routedBy ? '\n\n' + this._wfRoutedPrompt(agentLabel, routedBy.from, routedBy.notes) : '')
+            + (dispatchTargets?.length ? '\n\n' + this._wfDispatchPrompt(dispatchTargets) : '');
         const dirName = data.bound_skill?.dir_name || null;
         // Per-node context from the agent form. These OVERRIDE the backend
         // provider-config defaults (the user's form is the source of truth).
@@ -11450,6 +11260,7 @@ class WorkflowEditor {
         this.nodeExecutionData[dfId].input = inputText;
         this.nodeExecutionData[dfId].activity = [];
         this.nodeExecutionData[dfId].logs = [];
+        this.nodeExecutionData[dfId].llmContext = []; // Context tab: one entry per LLM round
         this.nodeExecutionData[dfId].agentName = data.agent_name || data.name || null;
         const _startedAt = Date.now();
         this.nodeExecutionData[dfId].startTime = _startedAt;
@@ -11511,7 +11322,13 @@ class WorkflowEditor {
                 // Per-node overrides from the agent form (source of truth over
                 // backend provider-config defaults). Omitted when unset so the
                 // backend falls back to its default.
-                if (nodeTools) body.tools = nodeTools;
+                // Exact allow-list: the node's selected tools, [] = none (never "all").
+                body.tools = nodeTools || [];
+                // Workflow nodes run memory-free: no memory in the prompt, no post-response extraction.
+                body.memory = false;
+                // Ask the backend to echo what it actually sent (Context tab).
+                body.return_context = true;
+                if (dispatchTargets?.length) body.client_tools = [this._wfDispatchTool(dispatchTargets)];
                 if (nodeMaxTokens != null) body.max_tokens = nodeMaxTokens;
                 if (nodeTemperature != null) body.temperature = nodeTemperature;
                 const resp = await fetch(`${this.apiBase}/chat`, {
@@ -11540,10 +11357,39 @@ class WorkflowEditor {
                     throw new Error(detail ? `${detail} (HTTP ${resp.status})` : `Request failed (HTTP ${resp.status})`);
                 }
                 const r = await resp.json();
+                if (r.context && typeof r.context === 'object') {
+                    this.nodeExecutionData[dfId].llmContext.push(r.context);
+                    this.updateModalInputOutput(dfId);
+                }
                 const _u = r.usage || {};
                 _inTok += (_u.input_tokens ?? _u.prompt_tokens ?? 0);
                 _outTok += (_u.output_tokens ?? _u.completion_tokens ?? 0);
 
+                if (r.pending_client_tool_call && dispatchTargets?.length
+                    && (r.pending_tool_calls || []).some(c => c?.name === 'route_to')) {
+                    const route = this._wfResolveRoute(r.pending_tool_calls, dispatchTargets);
+                    const nd = this.nodeExecutionData[dfId];
+                    nd.executionTime = Date.now() - _startedAt;
+                    nd.inputTokens = _inTok; nd.outputTokens = _outTok;
+                    try { this.stopNodeTimer(dfId); } catch (_) {}
+                    if (!route) {
+                        const names = dispatchTargets.map(t => t.name).join(', ');
+                        nd.output = `Error: dispatcher did not route the request. Expected route_to with target in [${names}].`;
+                        nd.success = false;
+                        this._wfNodeLog(dfId, 'error', nd.output, 'error');
+                        this.highlightNode(dfId, 'error', dfId, 'agent');
+                        this.updateModalInputOutput(dfId);
+                        return { success: false, output: nd.output };
+                    }
+                    // The target receives the dispatcher's ORIGINAL input (+ notes),
+                    // not the dispatcher's prose — the batch analog of transferring the caller.
+                    nd.output = inputText + (route.notes ? `\n\n## Dispatcher notes\n${route.notes}` : '');
+                    nd.success = true;
+                    this._wfNodeLog(dfId, 'routing', `routed to ${route.name}${route.notes ? ' — ' + route.notes : ''}`);
+                    this.highlightNode(dfId, 'completed', dfId, 'agent');
+                    this.updateModalInputOutput(dfId);
+                    return { success: true, output: nd.output, route };
+                }
                 if (r.pending_client_tool_call) {
                     const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
                     const assistantText = r.assistant_text || r.text || '';
@@ -11688,7 +11534,7 @@ class WorkflowEditor {
                         this.updateModalInputOutput(dfId);
                     }
                     const { assistantTurn, toolResultTurns } =
-                        window.AgentTurn.buildToolRoundTurns(roundResults, assistantText);
+                        window.AgentTurn.buildToolRoundTurns(roundResults, assistantText, r.assistant_reasoning || '');
                     conversationHistory.push(assistantTurn, ...toolResultTurns);
                 } else {
                     const finalText = r.text || r.assistant_text || '';
@@ -11764,6 +11610,7 @@ class WorkflowEditor {
         this.nodeExecutionData[dfId].input = inputText;
         this.nodeExecutionData[dfId].activity = [];
         this.nodeExecutionData[dfId].logs = [];
+        this.nodeExecutionData[dfId].pbEvents = []; // what the overlay showed → the node's output
         this.nodeExecutionData[dfId].agentName = data.name || null;
         const _startedAt = Date.now();
         this.nodeExecutionData[dfId].startTime = _startedAt;
@@ -11825,7 +11672,14 @@ class WorkflowEditor {
 
             if (runError) throw new Error(runError);
 
-            const output = (finalResult && finalResult.output) || '';
+            // The next node receives the same story the overlay showed (twin of
+            // PlaybookNodeRunner::renderTranscript); the backend already builds
+            // this on the server path, the browser path assembles it from the
+            // SSE events it rendered.
+            const rawOutput = (finalResult && finalResult.output) || '';
+            const output = /^# Playbook: /.test(rawOutput)
+                ? rawOutput
+                : this._pbTranscriptText(this._playbookNodeSummary(data), nd.pbEvents || [], rawOutput, finalResult?.run_id ?? null, finalResult?.status || 'finished');
             const nd = this.nodeExecutionData[dfId];
             nd.output = output;
             nd.success = true;
@@ -12082,7 +11936,52 @@ class WorkflowEditor {
     }
 
     /** Dispatch one playbook SSE progress event: log it, or block on a gate modal. */
+    /** Markdown transcript of a playbook run — twin of PlaybookNodeRunner::renderTranscript. */
+    _pbTranscriptText(title, events, finalOutput, runId, status) {
+        const gateTitles = { approval: 'Approval requested', form: 'Form request', handoff: 'Handed off to a human', await_message: 'Waiting for the requester', wait: 'Waiting' };
+        const gateTools = new Set(['request_approval', 'trigger_form', 'prompt_handoff', 'await_message', 'wait_until']);
+        const lines = []; const pending = {};
+        for (const ev of events) {
+            const t = ev?.type;
+            if (t === 'tool_call') {
+                const name = ev.name || 'tool';
+                if (gateTools.has(name)) continue;
+                lines.push(`- 🔧 ${name} …`); pending[name] = lines.length - 1;
+            } else if (t === 'tool_result') {
+                const name = ev.name || 'tool'; const res = (ev.result && typeof ev.result === 'object') ? ev.result : {};
+                if (gateTools.has(name)) {
+                    // GateManager stores the whole answer under 'decision'; unwrap it.
+                    let d = res.decision ?? res.status ?? '';
+                    let comment = String(res.comment || '').trim();
+                    if (d && typeof d === 'object') { comment = String(d.comment || comment).trim(); d = d.decision || d.status || d.outcome || 'answered'; }
+                    const decision = String(d);
+                    if (decision) lines.push(`  → ${decision}${comment ? ` (${comment})` : ''}`);
+                    continue;
+                }
+                const ok = res.ok !== false; const mark = ok ? '✓' : '✗';
+                const line = `- 🔧 ${name} ${mark}${!ok && res.error ? ' — ' + res.error : ''}`;
+                if (pending[name] != null) { lines[pending[name]] = line; delete pending[name]; } else lines.push(line);
+            } else if (t === 'message') {
+                const text = ev.sensitive ? '(message redacted)' : String(ev.text || '').trim();
+                if (text) lines.push('- 💬 Playbook:\n' + text.replace(/^/gm, '  '));
+            } else if (t === 'gate_request') {
+                const p = ev.payload || {};
+                const what = String(p.question || p.prompt || ((p.team_or_person || '') + (p.reason ? ' — ' + p.reason : ''))).trim();
+                lines.push(`- ✋ ${gateTitles[ev.kind] || ev.kind}${what ? ': ' + what : ''}`);
+            } else if (t === 'gate_answer') {
+                const d = ev.decision || ''; const c = String(ev.comment || '').trim();
+                if (d) lines.push(`  → ${d}${c ? ` (${c})` : ''}`);
+            }
+        }
+        const head = `# Playbook: ${title}${runId != null ? ` (run ${runId} — ${status})` : ` (${status})`}`;
+        let out = head + '\n\n## Timeline\n' + (lines.length ? lines.join('\n') : '- (no steps recorded)');
+        const fin = String(finalOutput || '').trim();
+        if (fin) out += '\n\n## Result\n' + fin;
+        return out + `\n\n[playbook run ${runId ?? ''}: ${status}]`;
+    }
+
     async _handlePlaybookEvent(dfId, ev) {
+        this.nodeExecutionData[dfId]?.pbEvents?.push(ev);
         switch (ev?.type) {
             case 'round':
                 this._wfNodeLog(dfId, 'llm', `round ${ev.round}`);
@@ -12117,6 +12016,7 @@ class WorkflowEditor {
             ? await this._showPlaybookGateInline(ev)
             : await this._showPlaybookGateModal(ev);
         this._wfNodeLog(dfId, 'skill', `gate answered (${ev.kind})`);
+        this.nodeExecutionData[dfId]?.pbEvents?.push({ type: 'gate_answer', kind: ev.kind, decision: answer?.decision || (ev.kind === 'form' ? 'submitted' : 'sent'), comment: answer?.comment || '' });
         try {
             await fetch(`${this.apiBase}/workflows/tool-result`, {
                 method: 'POST',
@@ -12170,6 +12070,88 @@ class WorkflowEditor {
     // rest). Fan-in nodes (geo-report) get the merged upstream outputs. No
     // server blocking — each node is its own chat conversation.
 
+    /** Downstream ids of a node (drawflow outputs → connections). */
+    _wfDownstreamIds(nodeId, nodes) {
+        const outs = nodes[nodeId]?.outputs || {};
+        const out = [];
+        for (const k in outs) for (const c of (outs[k].connections || [])) out.push(String(c.node));
+        return out;
+    }
+
+    /** Dispatcher targets: downstream AGENT nodes as [{id, name}] (edge order). */
+    _wfDispatchTargets(nodeId, nodes) {
+        return this._wfDownstreamIds(nodeId, nodes)
+            .filter(id => this._wfNodeKind(id, nodes) === 'agent')
+            .map(id => ({ id, name: nodes[id]?.data?.agent_name || nodes[id]?.data?.name || `Agent ${id}` }));
+    }
+
+    _wfDispatchTool(targets) {
+        const names = targets.map(t => t.name);
+        return {
+            name: 'route_to',
+            description: 'REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent whose role matches the request. '
+                + `Available targets: ${names.join(', ')}. The chosen agent receives the original request, plus your notes.`,
+            input_schema: {
+                type: 'object',
+                properties: {
+                    target: { type: 'string', enum: names, description: 'Name of the agent to route to. MUST be one of the listed values.' },
+                    notes: { type: 'string', description: 'Optional short note for the target agent (what you understood, what to focus on).' },
+                },
+                required: ['target'],
+            },
+        };
+    }
+
+    _wfDispatchPrompt(targets) {
+        return '## Routing\n'
+            + 'You are a dispatcher. Your only job is to decide which ONE of these agents should handle the request:\n'
+            + targets.map(t => `  - ${t.name}`).join('\n') + '\n'
+            + "Read the request, then call the route_to function with target set to that agent's exact name "
+            + '(optionally add notes). You MUST call route_to — answering in prose does not route the request. '
+            + 'Never call it more than once.';
+    }
+
+    _wfDefaultInstructions(agentName, description) {
+        const desc = String(description || '').trim();
+        return `You are "${agentName}"${desc ? ', ' + desc : ''}, an agent in the workflow "${this.currentWorkflowName || ''}". `
+            + 'Handle the request you receive directly and completely, in the role your name implies.';
+    }
+
+    _wfRoutedPrompt(targetName, fromName, notes) {
+        const n = String(notes || '').trim();
+        return '## Routed request\n'
+            + `The dispatcher "${fromName}" reviewed this request and routed it to you, "${targetName}", `
+            + `because it falls under your responsibility. Handle it yourself as "${targetName}". `
+            + 'Do not redirect the requester to another department or agent, and do not ask who should handle it.'
+            + (n ? `\nNotes from the dispatcher: ${n}` : '');
+    }
+
+    _wfResolveRoute(calls, targets) {
+        for (const c of (calls || [])) {
+            if (c?.name !== 'route_to') continue;
+            const input = c.input || c.arguments || {};
+            const want = String(input.target || '').trim().toLowerCase();
+            const hit = targets.find(t => t.name.trim().toLowerCase() === want);
+            if (hit) return { id: hit.id, name: hit.name, notes: String(input.notes || '').trim() };
+        }
+        return null;
+    }
+
+    /** Ids to skip after a route: the unchosen targets plus everything reachable only through them. */
+    _wfSkipSet(unchosenIds, nodes) {
+        const skipped = new Set(unchosenIds.map(String));
+        let grew = true;
+        while (grew) {
+            grew = false;
+            for (const id of Object.keys(nodes)) {
+                if (skipped.has(id)) continue;
+                const ups = this._wfUpstreamIds(id, nodes);
+                if (ups.length && ups.every(u => skipped.has(u))) { skipped.add(id); grew = true; }
+            }
+        }
+        return [...skipped];
+    }
+
     _wfUpstreamIds(nodeId, nodes) {
         const ins = nodes[nodeId]?.inputs || {};
         const out = [];
@@ -12212,6 +12194,7 @@ class WorkflowEditor {
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
+        this._wfRoutedBy = {}; // target id → {from, notes} once a dispatcher chose it
         const done = new Set();
         const remaining = new Set();
 
@@ -12241,10 +12224,25 @@ class WorkflowEditor {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
+                        const dispatchTargets = (node.data.agent_type === 'dispatcher')
+                            ? this._wfDispatchTargets(id, nodes) : null;
                         const res = this._wfNodeKind(id, nodes) === 'playbook'
                             ? await this._runNodeAsPlaybookUnit(node, ctx)
-                            : await this._runNodeAsChatUnit(node, ctx);
+                            : await this._runNodeAsChatUnit(node, ctx, { dispatchTargets, routedBy: this._wfRoutedBy[String(id)] || null });
                         this._wfOutputs[id] = res.output;
+                        // Dispatcher routed: only the chosen branch runs. Mark the
+                        // rest (and what is reachable only through them) as done
+                        // with no output so a downstream merge is not blocked.
+                        if (res?.route && dispatchTargets?.length) {
+                            this._wfRoutedBy[String(res.route.id)] = { from: agentName, notes: res.route.notes || '' };
+                            const unchosen = this._wfDownstreamIds(id, nodes).filter(d => String(d) !== String(res.route.id));
+                            for (const s of this._wfSkipSet(unchosen, nodes)) {
+                                if (done.has(s) || String(s) === String(id)) continue;
+                                this._wfOutputs[s] = '';
+                                done.add(s); remaining.delete(s);
+                                this.highlightNode(s, 'skipped', s, 'agent');
+                            }
+                        }
                         try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: res?.success !== false }); } catch (_) {}
                         // _runNodeAsChatUnit already highlighted the node red on a
                         // soft failure (error/refusal text); reflect it in the run.
@@ -12397,7 +12395,7 @@ class WorkflowEditor {
         }
 
         // Remove previous states
-        nodeEl.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning');
+        nodeEl.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped');
 
         // Add new state
         switch (state) {
@@ -12414,6 +12412,9 @@ class WorkflowEditor {
                 break;
             case 'error':
                 nodeEl.classList.add('node-error');
+                break;
+            case 'skipped':
+                nodeEl.classList.add('node-skipped');
                 break;
         }
     }
@@ -12530,7 +12531,7 @@ class WorkflowEditor {
      */
     resetNodeStates() {
         document.querySelectorAll('.drawflow-node').forEach(node => {
-            node.classList.remove('node-active', 'node-completed', 'node-error');
+            node.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped');
 
             // Reset timer to 0:00
             const timerEl = node.querySelector('.node-timer');
@@ -13751,6 +13752,17 @@ class WorkflowEditor {
         if (nodeId) {
             loadPromises.push(this.loadWorkflowSchemas());
         }
+        // Shared model catalog (same source + cache as the playbook modal) so
+        // the Model field is a per-provider dropdown, not a free-text id.
+        if (!this._modelCatalog) {
+            loadPromises.push((async () => {
+                try {
+                    const res = await fetch(window.apiUrl('/models/catalog'));
+                    const body = await res.json();
+                    this._modelCatalog = body?.providers || {};
+                } catch (_) { this._modelCatalog = {}; }
+            })());
+        }
         await Promise.all(loadPromises);
 
         // Store the node ID for saving node-specific config
@@ -13818,7 +13830,23 @@ class WorkflowEditor {
                 // If isTemplate is explicitly false, use ONLY node data - no fallback to template
                 const useOnlyNodeData = data.isTemplate === false;
 
-                if (useOnlyNodeData) {
+                if (data.type === 'playbook' || data.node_type === 'playbook') {
+                    // Playbook node: one facet of a playbook agent. The text lives in
+                    // data.playbook, the write policy in data.writes_enabled.
+                    agent = {
+                        id: data.agent_id ?? null,
+                        name: data.name ?? 'Playbook',
+                        description: data.description ?? '',
+                        agent_type: 'playbook',
+                        provider: data.agent_provider ?? '',
+                        model: data.model ?? '',
+                        instructions: typeof data.playbook === 'string' ? data.playbook : JSON.stringify(data.playbook ?? '', null, 2),
+                        tools: Array.isArray(data.tools) ? data.tools : [],
+                        settings: { ...(data.settings || {}), writes_enabled: data.writes_enabled !== false },
+                        merge_strategy: 'labeled', output_schema_id: null, output_schema: null,
+                        disabled: data.disabled ?? false
+                    };
+                } else if (useOnlyNodeData) {
                     // Node has local configuration - use only its data, no template fallback
                     console.log('[WorkflowEditor] Node has local config (isTemplate=false), using only node data');
                     agent = {
@@ -13896,9 +13924,11 @@ class WorkflowEditor {
             <div id="agent-edit-modal" class="fixed inset-0 z-[200] flex items-center justify-center" style="background-color: rgba(0, 0, 0, 0.5);">
                 <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
                     <!-- Modal Header -->
-                    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+                    <div id="agent-modal-header" class="flex items-center justify-between px-4 py-3 border-b border-gray-200 ${agent.agent_type === 'playbook' ? 'bg-gradient-to-r from-amber-50 to-yellow-100' : 'bg-gradient-to-r from-blue-50 to-indigo-50'}">
                         <h3 id="agent-modal-title" class="text-base font-semibold text-gray-800 truncate pr-4">
-                            ${this.escapeHtml(agent.name || '') || (isNew ? tf('createTitle') : tf('editTitle'))}
+                            ${agent.agent_type === 'playbook'
+                                ? '📖 ' + this.escapeHtml(this._pbTitleOf(agent.instructions, agent.name))
+                                : (this.escapeHtml(agent.name || '') || (isNew ? tf('createTitle') : tf('editTitle')))}
                         </h3>
                         <button id="close-agent-modal" class="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition">
                             ✕
@@ -13915,9 +13945,12 @@ class WorkflowEditor {
                                 ${tf('tabs.settings')}
                             </button>
                             <button id="tab-system-prompt" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
-                                ${tf('tabs.systemPrompt') || 'System Prompt'}
+                                ${agent.agent_type === 'playbook' ? tf('tabs.playbook') : (tf('tabs.systemPrompt') || 'System Prompt')}
                             </button>
-                            ${this.editingNodeId ? `
+                            <button id="tab-mcp-servers" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent ${agent.agent_type === 'playbook' ? '' : 'hidden'}">
+                                ${tf('tabs.mcpServers')}
+                            </button>
+                            ${(this.editingNodeId || agent.agent_type === 'playbook') ? `
                             <button id="tab-skills" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
                                 ${tf('tabs.skills') || 'Skills'}
                             </button>
@@ -13929,6 +13962,9 @@ class WorkflowEditor {
                             </button>
                             <button id="tab-output" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
                                 ${tf('tabs.outputResponse')}
+                            </button>
+                            <button id="tab-context" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
+                                ${tf('tabs.context')}
                             </button>
                             <button id="tab-statistics" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
                                 ${tf('tabs.statistics')}
@@ -13951,6 +13987,8 @@ class WorkflowEditor {
                                         <select id="agent-type-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                                             <option value="worker" ${agent.agent_type === 'worker' ? 'selected' : ''}>⚙️ ${tf('typeWorker')}</option>
                                             <option value="standard" ${agent.agent_type === 'standard' ? 'selected' : ''}>🤖 ${tf('typeStandard')}</option>
+                                            <option value="dispatcher" ${agent.agent_type === 'dispatcher' ? 'selected' : ''}>🔀 ${tf('typeDispatcher')}</option>
+                                            <option value="playbook" ${agent.agent_type === 'playbook' ? 'selected' : ''}>📖 ${tf('typePlaybook')}</option>
                                         </select>
                                     </div>
                                     <div class="col-span-2">
@@ -13977,8 +14015,9 @@ class WorkflowEditor {
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-1">${tf('model')}</label>
-                                        <input type="text" id="agent-model-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                               value="${this.escapeHtml(agent.model || '')}" placeholder="${tf('modelPlaceholder')}">
+                                        <select id="agent-model-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                            ${this._playbookModelOptions(agent.provider || (this.providers?.[0]?.name || ''), agent.model || '')}
+                                        </select>
                                     </div>
                                 </div>
 
@@ -14010,6 +14049,13 @@ class WorkflowEditor {
                                         </select>
                                         <p class="text-xs text-gray-500 mt-1">${tf('thinkingHint')}</p>
                                     </div>
+                                    <div id="agent-writes-block" class="${agent.agent_type === 'playbook' ? '' : 'hidden'}">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" id="agent-writes-enabled" class="w-4 h-4 text-blue-600 rounded" ${agent.settings?.writes_enabled !== false ? 'checked' : ''}>
+                                            <span class="text-sm font-medium text-gray-700">${tf('writesEnabled')}</span>
+                                            <span class="text-xs text-gray-500">${tf('writesEnabledHint')}</span>
+                                        </label>
+                                    </div>
                                 </div>
 
                                 <!-- Save as Template (shown when editing workflow node) -->
@@ -14026,7 +14072,7 @@ class WorkflowEditor {
                                 ` : ''}
 
                                 <!-- Disable execution (shown only when editing a workflow node) -->
-                                ${this.editingNodeId ? `
+                                ${(this.editingNodeId && agent.agent_type !== 'playbook') ? `
                                 <div class="border-t border-gray-200 pt-4 mt-2">
                                     <label class="flex items-center gap-3 cursor-pointer">
                                         <input type="checkbox" id="agent-node-disabled" class="w-4 h-4 text-gray-600 rounded focus:ring-gray-500" ${agent.disabled ? 'checked' : ''}>
@@ -14083,10 +14129,27 @@ class WorkflowEditor {
                         <!-- System Prompt Tab Content (always rendered, hidden by default;
                              both library and workflow modes use this single textarea). -->
                         <div id="system-prompt-tab-content" class="tab-content hidden">
-                            <label class="block text-sm font-medium text-gray-700 mb-2">${tf('systemPrompt')}</label>
+                            <div class="flex items-center justify-between mb-2">
+                                <label id="agent-instructions-label" class="block text-sm font-medium text-gray-700">${agent.agent_type === 'playbook' ? tf('playbook') : tf('systemPrompt')}</label>
+                                <div id="agent-pb-toolbar" class="flex items-center gap-2 ${agent.agent_type === 'playbook' ? '' : 'hidden'}">
+                                    <span id="agent-pb-validate-status" class="text-xs"></span>
+                                    <button type="button" id="agent-pb-validate" class="px-3 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100">${tf('pbValidate')}</button>
+                                    <span class="inline-flex border border-gray-300 rounded overflow-hidden text-xs">
+                                        <button type="button" id="agent-pb-edit" class="px-2 py-1 bg-blue-100 text-blue-800">${tf('pbEdit')}</button>
+                                        <button type="button" id="agent-pb-preview" class="px-2 py-1 hover:bg-gray-100">${tf('pbPreview')}</button>
+                                    </span>
+                                </div>
+                            </div>
+                            <div id="agent-pb-pretty" class="hidden border border-gray-200 rounded-lg bg-white p-4 text-sm" style="min-height: 500px; max-height: 60vh; overflow-y: auto;"></div>
+                            <div id="agent-pb-validate-result" class="hidden mt-3 text-sm"></div>
                             <textarea id="agent-instructions-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
-                                      placeholder="${tf('systemPromptPlaceholder')}"
+                                      placeholder="${agent.agent_type === 'playbook' ? tf('playbookPlaceholder') : tf('systemPromptPlaceholder')}"
                                       style="min-height: 500px; resize: vertical; line-height: 1.5;">${this.escapeHtml(agent.instructions || '')}</textarea>
+                        </div>
+
+                        <!-- MCP Servers tab (playbook agents): the servers whose functions the playbook binds to -->
+                        <div id="mcp-servers-tab-content" class="tab-content hidden">
+                            <div id="agent-mcp-servers-display" class="border border-gray-200 rounded-lg bg-gray-50 p-4" style="min-height: 400px; max-height: 500px; overflow-y: auto;"></div>
                         </div>
 
                         ${this.editingNodeId ? `
@@ -14124,7 +14187,7 @@ class WorkflowEditor {
                         </div>
                         ` : ''}
 
-                        ${this.editingNodeId ? `
+                        ${(this.editingNodeId || agent.agent_type === 'playbook') ? `
                         <!-- Output Schema Tab Content (hidden by default) -->
                         <div id="schema-tab-content" class="tab-content hidden">
                             <div class="space-y-3">
@@ -14184,6 +14247,13 @@ class WorkflowEditor {
                             <div class="border border-gray-200 rounded-lg bg-gray-50 p-4" style="min-height: 400px; max-height: 500px; overflow-y: auto;">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">${tf('agentOutputResponse')}</label>
                                 <pre id="agent-output-display" class="whitespace-pre-wrap text-sm text-gray-800 font-mono bg-white border border-gray-200 rounded p-3" style="min-height: 350px;">${this.escapeHtml(this.getNodeOutputForModal(this.editingNodeId))}</pre>
+                            </div>
+                        </div>
+
+                        <!-- Context Tab Content: everything this node sent to the LLM (hidden by default) -->
+                        <div id="context-tab-content" class="tab-content hidden">
+                            <div id="agent-context-display" class="border border-gray-200 rounded-lg bg-gray-50 p-4" style="min-height: 400px; max-height: 500px; overflow-y: auto;">
+                                ${this.getNodeContextHtml(this.editingNodeId)}
                             </div>
                         </div>
 
@@ -14261,6 +14331,24 @@ class WorkflowEditor {
             if (this.editingNodeId) this.saveAgent(); else this.closeAgentEditModal();
         });
         document.getElementById('cancel-agent-btn')?.addEventListener('click', () => this.closeAgentEditModal());
+
+        // Type change → the instructions tab/label read "Playbook" for playbook agents.
+        document.getElementById('agent-type-select')?.addEventListener('change', (e) => {
+            const isPb = e.target.value === 'playbook';
+            const tf2 = (k) => this.t('workflow.agentForm.' + k);
+            const tab = document.getElementById('tab-system-prompt');
+            if (tab) tab.textContent = isPb ? tf2('tabs.playbook') : (tf2('tabs.systemPrompt') || 'System Prompt');
+            const lbl = document.getElementById('agent-instructions-label');
+            if (lbl) lbl.textContent = isPb ? tf2('playbook') : tf2('systemPrompt');
+            const ta = document.getElementById('agent-instructions-input');
+            if (ta) ta.placeholder = isPb ? tf2('playbookPlaceholder') : tf2('systemPromptPlaceholder');
+            document.getElementById('tab-mcp-servers')?.classList.toggle('hidden', !isPb);
+        });
+        // Provider change → model dropdown follows (keeps the current choice when the new provider lists it).
+        document.getElementById('agent-provider-select')?.addEventListener('change', (e) => {
+            const modelSel = document.getElementById('agent-model-input');
+            if (modelSel) modelSel.innerHTML = this._playbookModelOptions(e.target.value, modelSel.value);
+        });
 
         // Node "Done": apply the form to the node in-memory + close (no per-form DB save;
         // the DB write is deferred to Generate/Run/leave via _persistIfDirty).
@@ -14346,6 +14434,13 @@ class WorkflowEditor {
         document.getElementById('tab-schema')?.addEventListener('click', () => {
             this.switchAgentModalTab('schema');
         });
+        document.getElementById('tab-context')?.addEventListener('click', () => {
+            this.switchAgentModalTab('context');
+        });
+        document.getElementById('tab-mcp-servers')?.addEventListener('click', () => {
+            this.switchAgentModalTab('mcp-servers');
+        });
+        this._wirePlaybookFacet();
         document.getElementById('tab-input')?.addEventListener('click', () => {
             this.switchAgentModalTab('input');
         });
@@ -14503,6 +14598,10 @@ class WorkflowEditor {
         const outputTab = document.getElementById('tab-output');
         const statisticsTab = document.getElementById('tab-statistics');
         const logsTab = document.getElementById('tab-logs');
+        const contextTab = document.getElementById('tab-context');
+        const contextContent = document.getElementById('context-tab-content');
+        const mcpTab = document.getElementById('tab-mcp-servers');
+        const mcpContent = document.getElementById('mcp-servers-tab-content');
         const settingsContent = document.getElementById('settings-tab-content');
         const systemPromptContent = document.getElementById('system-prompt-tab-content');
         const skillsContent = document.getElementById('skills-tab-content');
@@ -14517,13 +14616,13 @@ class WorkflowEditor {
         if (!settingsTab || !settingsContent) return;
 
         // Deactivate all tabs
-        [settingsTab, systemPromptTab, skillsTab, schemaTab, inputTab, outputTab, statisticsTab, logsTab].filter(Boolean).forEach(tab => {
+        [settingsTab, systemPromptTab, mcpTab, skillsTab, schemaTab, inputTab, outputTab, contextTab, statisticsTab, logsTab].filter(Boolean).forEach(tab => {
             tab.classList.remove('text-blue-600', 'border-blue-600');
             tab.classList.add('text-gray-500', 'border-transparent');
         });
 
         // Hide all content
-        [settingsContent, systemPromptContent, skillsContent, schemaContent, inputContent, outputContent, statisticsContent, logsContent].filter(Boolean).forEach(content => {
+        [settingsContent, systemPromptContent, mcpContent, skillsContent, schemaContent, inputContent, outputContent, contextContent, statisticsContent, logsContent].filter(Boolean).forEach(content => {
             content.classList.add('hidden');
         });
 
@@ -14555,6 +14654,16 @@ class WorkflowEditor {
             outputTab.classList.add('text-blue-600', 'border-blue-600');
             outputTab.classList.remove('text-gray-500', 'border-transparent');
             outputContent.classList.remove('hidden');
+        } else if (tabName === 'mcp-servers' && mcpTab && mcpContent) {
+            mcpTab.classList.add('text-blue-600', 'border-blue-600');
+            mcpTab.classList.remove('text-gray-500', 'border-transparent');
+            mcpContent.classList.remove('hidden');
+            this._renderAgentMcpServers();
+        } else if (tabName === 'context' && contextTab && contextContent) {
+            contextTab.classList.add('text-blue-600', 'border-blue-600');
+            contextTab.classList.remove('text-gray-500', 'border-transparent');
+            contextContent.classList.remove('hidden');
+            this._renderNodeContext(this.editingNodeId);
         } else if (tabName === 'statistics' && statisticsTab && statisticsContent) {
             statisticsTab.classList.add('text-blue-600', 'border-blue-600');
             statisticsTab.classList.remove('text-gray-500', 'border-transparent');
@@ -15045,6 +15154,200 @@ Based on the analysis...
         if (document.getElementById('agent-logs-display')) {
             this._renderNodeLogs(drawflowId);
         }
+        if (document.getElementById('agent-context-display')) {
+            this._renderNodeContext(drawflowId);
+        }
+    }
+
+    /** "Playbook: <Title>" from the Console text (Title: line), else the agent name. */
+    _pbTitleOf(text, fallback) {
+        const t = (typeof text === 'string' ? (text.match(/^\s*Title\s*:\s*(.+)$/mi)?.[1] || '') : '').trim();
+        return 'Playbook: ' + (t || fallback || '');
+    }
+
+    /**
+     * The playbook facet of the agent form (library card AND playbook node):
+     * Edit/Preview toggle, Validate (POST /playbooks/validate) with the same
+     * report as before, no tool checklist / skills / schema (tools are
+     * derived from the text — see the MCP Servers tab).
+     */
+    _wirePlaybookFacet() {
+        const isPb = () => document.getElementById('agent-type-select')?.value === 'playbook';
+        const applyVisibility = () => {
+            const pb = isPb();
+            document.getElementById('tools-content')?.closest('.flex-col')?.classList.toggle('hidden', pb);
+            document.getElementById('tab-skills')?.classList.toggle('hidden', pb);
+            document.getElementById('tab-schema')?.classList.toggle('hidden', pb);
+            document.getElementById('agent-writes-block')?.classList.toggle('hidden', !pb);
+            document.getElementById('agent-pb-toolbar')?.classList.toggle('hidden', !pb);
+            // Identical Settings on both facets: no "Save as template" for playbooks
+            // (the agent row IS the template; a linked node syncs to it on save).
+            document.getElementById('save-as-template-checkbox')?.closest('.border-t')?.classList.toggle('hidden', pb);
+        };
+        applyVisibility();
+        document.getElementById('agent-type-select')?.addEventListener('change', applyVisibility);
+
+        const ta = document.getElementById('agent-instructions-input');
+        const pretty = document.getElementById('agent-pb-pretty');
+        const editBtn = document.getElementById('agent-pb-edit');
+        const prevBtn = document.getElementById('agent-pb-preview');
+        const setView = (preview) => {
+            if (!ta || !pretty) return;
+            if (preview) pretty.innerHTML = this._playbookPrettyHtml(ta.value);
+            pretty.classList.toggle('hidden', !preview);
+            ta.classList.toggle('hidden', preview);
+            prevBtn?.classList.toggle('bg-blue-100', preview); prevBtn?.classList.toggle('text-blue-800', preview);
+            editBtn?.classList.toggle('bg-blue-100', !preview); editBtn?.classList.toggle('text-blue-800', !preview);
+        };
+        editBtn?.addEventListener('click', () => setView(false));
+        prevBtn?.addEventListener('click', () => setView(true));
+
+        document.getElementById('agent-pb-validate')?.addEventListener('click', async () => {
+            const statusEl = document.getElementById('agent-pb-validate-status');
+            const resultEl = document.getElementById('agent-pb-validate-result');
+            if (!ta || !statusEl || !resultEl) return;
+            statusEl.textContent = '…'; statusEl.style.color = '';
+            const trimmed = ta.value.trim();
+            let payload = ta.value;
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) { try { payload = JSON.parse(trimmed); } catch (_) { payload = ta.value; } }
+            try {
+                const resp = await fetch(`${this.apiBase}/playbooks/validate`, {
+                    method: 'POST', headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                    credentials: 'include', body: JSON.stringify({ playbook: payload }),
+                });
+                const json = await resp.json().catch(() => ({}));
+                const verdict = (json && typeof json.valid !== 'undefined') ? json.valid === true : null;
+                statusEl.textContent = verdict === true ? '✓ VALID' : '✗ INVALID';
+                statusEl.style.color = verdict === true ? '#22c55e' : '#ef4444';
+                statusEl.style.fontWeight = '600';
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = this._renderPlaybookValidateResult(json, resp.status);
+                if (Array.isArray(json?.actions)) {
+                    const bound = json.actions.filter(a => a.kind === 'bound' && typeof a.target === 'string' && a.target.includes('.'));
+                    this._pbAgentBound = bound.map(a => 'mcp_' + a.target.split('.').slice(1).join('.'));
+                    try {
+                        const nid = this.editingNodeId;
+                        if (nid && this.editor.drawflow.drawflow.Home.data[String(nid)]) {
+                            const servers = [...new Set(bound.map(a => a.target.split('.')[0]))];
+                            const nd = this.editor.getNodeFromId(nid)?.data || {};
+                            const merged = { ...nd, mcp_servers: servers };
+                            this.editor.updateNodeDataFromId(nid, merged);
+                            this._refreshPlaybookBadges(nid, merged);
+                        }
+                    } catch (_) { /* badges are cosmetic */ }
+                }
+            } catch (e) {
+                statusEl.textContent = '✗ ' + (e?.message || e); statusEl.style.color = '#ef4444';
+            }
+        });
+        this._pbAgentBound = null;
+        // The (hidden) checklist still carries the saved ticks = the derived tools.
+        this._editingAgentTools = [...document.querySelectorAll('#agent-edit-modal input.tool-checkbox:checked')].map(b => b.dataset.tool);
+    }
+
+    /**
+     * "MCP Servers" tab (playbook agents): groups the agent's tool selection
+     * (= the playbook's bound functions, see PlaybookAgentTools) by server,
+     * using the server tag the /tools endpoint puts on each function, and
+     * decorates each server with its state from /me/mcp-servers (on/off, mock).
+     */
+    async _renderAgentMcpServers() {
+        const el = document.getElementById('agent-mcp-servers-display');
+        if (!el) return;
+        const tm = (k) => this.t('workflow.agentForm.mcpServersTab.' + k);
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        // Current selection from the form (ticked boxes), falling back to the saved agent.
+        let ticked = [...document.querySelectorAll('#agent-edit-modal input.tool-checkbox:checked')].map(b => b.dataset.tool);
+        // Playbook facet: a Validate run wins (it reflects the text being edited);
+        // the hidden checklist otherwise carries the saved (derived) tools.
+        if (this._pbAgentBound && this._pbAgentBound.length) ticked = this._pbAgentBound;
+        else if (!ticked.length) ticked = this._editingAgentTools || [];
+        const byServer = new Map();
+        for (const name of ticked) {
+            if (!name.startsWith('mcp_')) continue;
+            const t = (this.availableTools || []).find(x => x.name === name);
+            const server = t?.server || '?';
+            if (!byServer.has(server)) byServer.set(server, []);
+            byServer.get(server).push({ name, description: t?.description || '' });
+        }
+        if (!byServer.size) {
+            el.innerHTML = `<p class="text-sm text-gray-400 italic">${tm('empty')}</p>`;
+            return;
+        }
+        el.innerHTML = `<p class="text-sm text-gray-400 italic">…</p>`;
+        if (!this._mcpServersMeta) {
+            try {
+                const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
+                const j = await r.json();
+                this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
+            } catch (_) { this._mcpServersMeta = []; }
+        }
+        const meta = (name) => (this._mcpServersMeta || []).find(s => s.name === name) || null;
+        el.innerHTML = [...byServer.entries()].map(([server, fns]) => {
+            const m = meta(server);
+            const on = m ? m.effective_on !== false : null;
+            const badges = [
+                on === null ? '' : `<span class="px-2 py-0.5 rounded text-xs ${on ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${on ? tm('enabled') : tm('disabled')}</span>`,
+                m?.is_mock ? `<span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-700">${tm('mock')}</span>` : '',
+                m?.is_global ? `<span class="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-600">${tm('global')}</span>` : '',
+            ].join(' ');
+            return `<div class="mb-3 bg-white border border-gray-200 rounded-lg">
+                <div class="px-3 py-2 border-b border-gray-100 flex items-center gap-2">
+                    <span class="text-sm font-semibold text-gray-800">🔌 ${esc(server)}</span>${badges}
+                    ${m?.url ? `<span class="ml-auto text-xs text-gray-400 font-mono truncate" title="${esc(m.url)}">${esc(m.url)}</span>` : ''}
+                </div>
+                <div class="px-3 py-2 text-xs text-gray-500">${tm('functions')} (${fns.length})</div>
+                <ul class="px-3 pb-3 space-y-1">${fns.map(f => `<li class="text-xs"><code class="px-1 rounded bg-gray-100">${esc(f.name)}</code> <span class="text-gray-600">${esc(f.description).slice(0, 140)}</span></li>`).join('')}</ul>
+            </div>`;
+        }).join('');
+    }
+
+    _renderNodeContext(drawflowId) {
+        const el = document.getElementById('agent-context-display');
+        if (el) el.innerHTML = this.getNodeContextHtml(drawflowId);
+    }
+
+    /**
+     * Context tab: one block per LLM round with provider/model, token
+     * estimate, memory/skill flags, the system prompt, the messages and the
+     * tools actually offered (server + client). Data comes from the chat
+     * response's `context` field (return_context) captured in
+     * _runNodeAsChatUnit — i.e. what the BACKEND sent, not what the browser
+     * posted.
+     */
+    getNodeContextHtml(drawflowId) {
+        const rounds = this.nodeExecutionData?.[drawflowId]?.llmContext;
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        const tc = (k) => this.t('workflow.agentForm.contextTab.' + k);
+        if (!Array.isArray(rounds) || !rounds.length) {
+            return `<p class="text-sm text-gray-400 italic">${tc('empty')}</p>`;
+        }
+        const section = (title, body, open = false) =>
+            `<details class="mb-2 bg-white border border-gray-200 rounded" ${open ? 'open' : ''}>
+                <summary class="px-3 py-2 text-sm font-medium text-gray-700 cursor-pointer select-none">${title}</summary>
+                <div class="px-3 pb-3">${body}</div>
+            </details>`;
+        const pre = (txt) => `<pre class="whitespace-pre-wrap text-xs text-gray-800 font-mono bg-gray-50 border border-gray-100 rounded p-2 mt-1">${esc(txt)}</pre>`;
+        return rounds.map((c, i) => {
+            const flags = [c.memory_included ? tc('memory') : null, c.skill_included ? tc('skill') : null].filter(Boolean).join(' · ');
+            const head = `<div class="flex flex-wrap items-center gap-2 mb-2 text-xs text-gray-600">
+                    <span class="font-semibold text-gray-800">${tc('round')} ${i + 1}</span>
+                    <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-700">${esc(c.provider)}${c.model ? ' · ' + esc(c.model) : ''}</span>
+                    <span class="px-2 py-0.5 rounded bg-gray-100">~${esc(c.estimated_tokens)} ${tc('tokens')}</span>
+                    ${c.max_tokens != null ? `<span class="px-2 py-0.5 rounded bg-gray-100">max_tokens ${esc(c.max_tokens)}</span>` : ''}
+                    ${c.temperature != null ? `<span class="px-2 py-0.5 rounded bg-gray-100">temp ${esc(c.temperature)}</span>` : ''}
+                    ${flags ? `<span class="px-2 py-0.5 rounded bg-amber-50 text-amber-700">${esc(flags)}</span>` : ''}
+                </div>`;
+            const tools = Array.isArray(c.tools) && c.tools.length
+                ? `<ul class="text-xs mt-1 space-y-1">${c.tools.map(t => `<li><code class="px-1 rounded bg-gray-100">${esc(t.name)}</code> <span class="text-gray-400">${esc(t.source)}</span> <span class="text-gray-600">${esc(t.description).slice(0, 160)}</span></li>`).join('')}</ul>`
+                : `<p class="text-xs text-gray-400 italic mt-1">${tc('noTools')}</p>`;
+            const msgs = (c.messages || []).map(m => `<div class="mt-1"><span class="text-xs font-semibold text-gray-500">${esc(m.role)}</span>${pre(m.content)}</div>`).join('');
+            return `<div class="mb-4">${head}
+                ${section(tc('systemPrompt'), pre(c.system_prompt || ''), true)}
+                ${section(`${tc('tools')} (${(c.tools || []).length})`, tools, true)}
+                ${section(`${tc('messages')} (${(c.messages || []).length})`, msgs)}
+            </div>`;
+        }).join('');
     }
 
     /**
@@ -15434,6 +15737,10 @@ Based on the analysis...
                 // Only persisted when set so legacy agents stay untouched.
                 ...(document.getElementById('agent-thinking-select')?.value
                     ? { thinking: document.getElementById('agent-thinking-select').value }
+                    : {}),
+                // Playbook facet: write policy travels with the agent and the node.
+                ...(document.getElementById('agent-type-select')?.value === 'playbook'
+                    ? { writes_enabled: !!document.getElementById('agent-writes-enabled')?.checked }
                     : {})
             },
             is_template: saveAsTemplate,
@@ -15531,6 +15838,16 @@ Based on the analysis...
                         // Disabled flag for node-level skip
                         disabled: agentData.disabled
                     };
+                    // Playbook node: the form's instructions ARE the playbook text.
+                    const isPlaybookNode = (nodeData.data.type === 'playbook' || nodeData.data.node_type === 'playbook' || agentData.agent_type === 'playbook');
+                    if (isPlaybookNode) {
+                        Object.assign(newNodeData, {
+                            type: 'playbook', node_type: 'playbook',
+                            name: agentData.name || 'Playbook',
+                            playbook: agentData.instructions,
+                            writes_enabled: agentData.settings?.writes_enabled !== false,
+                        });
+                    }
 
                     // Update node locally in Drawflow
                     const nodeIdStr = String(this.editingNodeId);
@@ -15543,7 +15860,16 @@ Based on the analysis...
                     }
 
                     // Update the visual display of the node
-                    this.updateAgentNodeVisual(this.editingNodeId, agentData, newNodeData);
+                    if (isPlaybookNode) {
+                        try {
+                            const el = document.getElementById('node-' + this.editingNodeId);
+                            const titleEl = el?.querySelector('.node-title'); if (titleEl) titleEl.textContent = newNodeData.name;
+                            const disp = el?.querySelector('.node-config-display'); if (disp) disp.textContent = this._playbookNodeSummary(newNodeData);
+                            this._refreshPlaybookBadges(this.editingNodeId, newNodeData);
+                        } catch (_) { /* cosmetics must never block persistence */ }
+                    } else {
+                        this.updateAgentNodeVisual(this.editingNodeId, agentData, newNodeData);
+                    }
 
                     // Grey the node out on the canvas when disabled (mirrors ingestion pattern).
                     const _agentNodeEl = document.getElementById(`node-${this.editingNodeId}`);

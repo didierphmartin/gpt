@@ -94,9 +94,9 @@ fwrite(STDOUT, 'Fetched ' . count($tools) . " tools from mock Okta server\n");
 
 // -------- upsert mcp_servers row ---------------------------------------------
 $stmt = $pdo->prepare('
-    INSERT INTO mcp_servers (user_id, name, url, description, headers, enabled)
-    VALUES (:user_id, :name, :url, :description, NULL, 1)
-    ON DUPLICATE KEY UPDATE url = VALUES(url), description = VALUES(description), enabled = 1
+    INSERT INTO mcp_servers (user_id, name, url, description, headers, enabled, is_mock)
+    VALUES (:user_id, :name, :url, :description, NULL, 1, 1)
+    ON DUPLICATE KEY UPDATE url = VALUES(url), description = VALUES(description), enabled = 1, is_mock = 1
 ');
 $stmt->execute([
     ':user_id' => $userId,

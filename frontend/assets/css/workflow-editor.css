@@ -1648,6 +1648,29 @@ svg.connection.selected .main-path,
     animation: pulse-active-halo 1.5s ease-in-out infinite !important;
 }
 
+/* Skipped node — a dispatcher routed elsewhere; this branch never ran */
+.drawflow .drawflow-node.node-skipped .workflow-node,
+#drawflow .drawflow-node.node-skipped .workflow-node {
+    border: 2px dashed #9ca3af !important;
+    opacity: 0.55;
+    box-shadow: none !important;
+}
+.drawflow-node.node-skipped .workflow-node::after,
+#drawflow .drawflow-node.node-skipped .workflow-node::after {
+    content: 'skipped';
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    padding: 0 6px;
+    height: 20px;
+    line-height: 20px;
+    border-radius: 10px;
+    background: #9ca3af;
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+}
+
 /* Completed node - beautiful green gradient halo */
 .drawflow .drawflow-node.node-completed .workflow-node,
 #drawflow .drawflow-node.node-completed .workflow-node {

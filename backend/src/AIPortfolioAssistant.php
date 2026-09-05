@@ -130,6 +130,30 @@ class AIPortfolioAssistant
      * @param array $options Additional options (provider, system_prompt, etc.)
      * @return array Response with 'text', 'usage', and metadata
      */
+    /**
+     * The tool list handed to the provider (providers prefer options['tools']
+     * over their executor, so this is where a filter must be enforced):
+     *  - default (conversation): base tools + caller tools (e.g. MCP);
+     *  - skill turn (skill_metadata set): caller tools only — see the note in
+     *    git history about Gemini dropping required fields when diluted;
+     *  - tools_filter array (workflow node): EXACTLY the named tools from both
+     *    sets, [] meaning no tools at all.
+     */
+    public static function resolveToolsForRequest(array $baseTools, array $callerTools, array $options): array
+    {
+        if (isset($options['tools_filter']) && is_array($options['tools_filter'])) {
+            $allow = array_flip(array_map('strval', $options['tools_filter']));
+            return array_values(array_filter(
+                array_merge($baseTools, $callerTools),
+                fn($t) => isset($allow[(string)($t['name'] ?? '')])
+            ));
+        }
+        if (!empty($options['skill_metadata'])) {
+            return $callerTools;
+        }
+        return array_merge($baseTools, $callerTools);
+    }
+
     public function chat(
         string $message,
         mixed $userId = null,
@@ -150,13 +174,11 @@ class AIPortfolioAssistant
         // "Tool execution failed: runSkillScript: script is required" when the
         // model attached the rest of the call (argv, input_files, read_outputs)
         // but omitted the script enum value.
-        $additionalTools = $options['tools'] ?? [];
-        if (!empty($options['skill_metadata'])) {
-            $options['tools'] = $additionalTools;
-        } else {
-            $baseTools = $this->toolsManager->getToolDefinitions();
-            $options['tools'] = array_merge($baseTools, $additionalTools);
-        }
+        $options['tools'] = self::resolveToolsForRequest(
+            $this->toolsManager->getToolDefinitions(),
+            $options['tools'] ?? [],
+            $options
+        );
 
         return $this->llmManager->chat($message, $conversationHistory, $options);
     }
@@ -216,13 +238,11 @@ class AIPortfolioAssistant
         // "Tool execution failed: runSkillScript: script is required" when the
         // model attached the rest of the call (argv, input_files, read_outputs)
         // but omitted the script enum value.
-        $additionalTools = $options['tools'] ?? [];
-        if (!empty($options['skill_metadata'])) {
-            $options['tools'] = $additionalTools;
-        } else {
-            $baseTools = $this->toolsManager->getToolDefinitions();
-            $options['tools'] = array_merge($baseTools, $additionalTools);
-        }
+        $options['tools'] = self::resolveToolsForRequest(
+            $this->toolsManager->getToolDefinitions(),
+            $options['tools'] ?? [],
+            $options
+        );
 
         try {
             // Use streamChat instead of chat

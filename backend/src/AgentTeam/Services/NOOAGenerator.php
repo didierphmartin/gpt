@@ -163,34 +163,53 @@ class NOOAGenerator
     // Header
     // -------------------------------------------------------------------------
 
+    /** DATA FLOW section of the module docstring (NOOA-specific mechanics). */
+    private static function dataFlowDoc(): string
+    {
+        return <<<'TXT'
+NOOA (github.com/NVIDIA-NeMo/labs-OO-Agents) has no graph API -- agents are
+plain Python classes and orchestration is ordinary asyncio code. Every editor
+agent node below is one `class <Node>(Agent, llm=...)`: its class docstring
+is the node's system prompt and respond() is the generation method the model
+fulfils. Under NOOA's default CodeAct strategy the model answers by WRITING
+AND EXECUTING PYTHON in a sandboxed REPL with access to the agent's methods
+(the LangGraph/ADK/MAF targets use chat completions instead). main() replays
+the canvas topology: nodes whose parents are all done run concurrently via
+asyncio.gather.
+
+NODE-INTERNAL PIPELINE (fixed order):
+    merged fan-in
+      ==> AGENT: the node's NOOA class with the form's provider/model/
+          sampling and its selected MCP server(s) attached (tools via self).
+          NOTE: attaching a server exposes ALL its tools to the node; the
+          editor's selected-tool list is docstring guidance, not a filter.
+      ==> SKILL(s), mandatory, in order: SKILL.md instructions + the skill's
+          scripts via run_skill_script. A produced output file becomes the
+          node output; a failed step keeps the pre-skill text.
+The Output node is not an LLM: it merges its parents' text untouched.
+Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+TXT;
+    }
+
     private static function headerBlock(array $analyzed, bool $hasMcp): string
     {
         $esc  = fn(string $s): string => str_replace(['"""', "\\"], ["'''", "\\\\"], $s);
         $name = $esc((string) $analyzed['workflow']['name']);
 
-        // Frozen-graph outline: one line per topological layer.
-        $outlineLines = [];
-        foreach (array_values($analyzed['layers']) as $i => $layer) {
-            $names = [];
-            foreach ((array) $layer as $nid) {
-                $key = (string) $nid;
-                if (isset($analyzed['agents'][$key])) {
-                    $ag = $analyzed['agents'][$key];
-                    $label = (string) ($ag['name'] ?? ('node ' . $key));
-                    $prov  = (string) ($ag['provider'] ?? '?');
-                    $model = (string) ($ag['model'] ?? '');
-                    $skillCount = count($ag['skills'] ?? []);
-                    $names[] = $label . ' [' . $prov . ($model !== '' ? '/' . $model : '')
-                        . ($skillCount ? ', ' . $skillCount . ' skill(s)' : '') . ']';
-                } else {
-                    $names[] = ($i === 0) ? 'Start (receives the user prompt)' : 'Output (fan-in sink, pass-through)';
-                }
-            }
-            $sep = count($names) > 1 ? '  ||  ' : '';
-            $outlineLines[] = '    layer ' . $i . ':  ' . implode($sep !== '' ? $sep : ', ', $names)
-                . (count($names) > 1 ? '   (run in PARALLEL)' : '');
-        }
-        $outline = $esc(implode("\n", $outlineLines));
+        $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
+            'target' => 'NVIDIA OO Agents (Python) -- one NOOA Agent class per node, asyncio orchestration',
+            'workflow' => $analyzed['workflow'],
+            'nodes' => WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed),
+            'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
+            'layers' => $analyzed['layers'] ?? [],
+            'data_flow' => self::dataFlowDoc(),
+            'run' => [
+                'deps' => ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
+                           'pip install "nooa[mcp]" "mcp<2" python-dotenv'],
+                'usage' => 'python this_file.py "your prompt here"',
+            ],
+            'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
+        ]));
 
         $mcpImports = $hasMcp
             ? "\nfrom datetime import timedelta\nfrom nooa.mcp import MCPManager"
@@ -199,47 +218,7 @@ class NOOAGenerator
         return <<<PY
         """Standalone NVIDIA OO Agents (NOOA) workflow: {$name}
 
-        Auto-generated from the visual workflow editor (frozen at generation time —
-        re-generate from the editor to pick up workflow changes). Backend-independent
-        and self-contained: this ONE file calls the LLM providers, MCP servers, and
-        folder-backed skills directly.
-
-        WORKFLOW IMPLEMENTATION
-        =======================
-        NOOA (github.com/NVIDIA-NeMo/labs-OO-Agents) has no graph API — agents are
-        plain Python classes and orchestration is ordinary asyncio code. Every editor
-        agent node below is one `class <Node>(Agent, llm=...)`: its class docstring
-        is the node's system prompt and respond() is the generation method the model
-        fulfils. Under NOOA's default CodeAct strategy the model answers by WRITING
-        AND EXECUTING PYTHON in a sandboxed REPL with access to the agent's methods
-        (this differs from the LangGraph/ADK/MAF targets, which use chat
-        completions). main() replays the canvas topology: nodes whose parents are
-        all done run concurrently via asyncio.gather. The frozen graph:
-
-        {$outline}
-
-        NODE-INTERNAL PIPELINE (fixed order):
-            merged fan-in
-              ==> AGENT: the node's NOOA class with the form's provider/model/
-                  sampling and its selected MCP server(s) attached (tools via
-                  self). NOTE: attaching a server exposes ALL its tools to the
-                  node; the editor's selected-tool list is enforced as method
-                  docstring guidance, not a hard filter (LAN deployment).
-              ==> SKILL(s), mandatory, in order: SKILL.md instructions + the
-                  skill's scripts via run_skill_script. A produced output file
-                  (read_outputs) becomes the node output; a failed step keeps
-                  the pre-skill text.
-        The Output node is not an LLM: it merges its parents' text untouched, so
-        the deliverable is never reworded by another model.
-
-        TO RUN
-        ======
-            # "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (its own pin is
-            # unbounded; mcp 2.0 changed streamable_http_client's yield shape).
-            pip install "nooa[mcp]" "mcp<2" python-dotenv
-            # keys are read from ../.env (ANTHROPIC_API_KEY, OPENAI_API_KEY,
-            #   GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY)
-            python this_file.py "your prompt here"
+        {$docBody}
         """
         import asyncio
         import json
@@ -586,6 +565,10 @@ PY;
         $classNames = self::classNames($analyzed);
         $catalog    = (array) ($analyzed['usedCatalog'] ?? []);
         $out        = [];
+        $docById    = [];
+        foreach (WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed) as $dn) {
+            $docById[$dn['id']] = $dn;
+        }
 
         foreach ($analyzed['agents'] as $id => $ag) {
             $id    = (string) $id;
@@ -621,6 +604,9 @@ PY;
             }
 
             $lines   = [];
+            if (isset($docById[$id])) {
+                $lines[] = PythonEmitHelpers::nodeCommentBlock($docById[$id]);
+            }
             $lines[] = "class {$cls}(Agent, llm=make_llm(" . PythonEmitHelpers::pyStr($prov)
                 . ', ' . PythonEmitHelpers::pyStr($model) . ", {$maxT}, {$temp}, {$think})):";
             $lines[] = '    ' . PythonEmitHelpers::pyStr($prompt);

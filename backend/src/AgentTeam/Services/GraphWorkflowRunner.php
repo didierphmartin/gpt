@@ -26,6 +26,9 @@ class GraphWorkflowRunner
     private ?ParallelAgentExecutor $parallelExecutor = null;
 
     private array $nodeOutputs = [];
+    /** Nodes indexed by id for the current run (DispatchRouting needs target names). */
+    private array $graphNodes = [];
+    private string $workflowName = '';
     private ?int $executionId = null;
     private ?StreamContext $streamContext = null;
     private ?int $currentUserId = null;
@@ -309,6 +312,8 @@ class GraphWorkflowRunner
             // Get all nodes and edges for traversal
             $graph = $this->graphRepository->getGraph($workflow->getId());
             $nodes = $this->indexNodesById($graph['nodes']);
+            $this->graphNodes = $nodes;
+            $this->workflowName = (string)$workflow->getName();
             $edges = $graph['edges'];
 
             // Emit workflow_start event
@@ -462,6 +467,11 @@ class GraphWorkflowRunner
                     $finalOutput = $this->collectFinalOutput($currentNodeId, $edges);
                     error_log("[GraphWorkflowRunner] Output node reached, final output collected");
                     continue; // Don't queue nodes after output
+                }
+
+                // Dispatcher routing: one chosen branch, siblings skipped.
+                if ($this->applyRoute($currentNodeId, $output, $edges, $queue, $executedNodes)) {
+                    continue;
                 }
 
                 // Check for parallel execution opportunity
@@ -630,6 +640,30 @@ class GraphWorkflowRunner
     }
 
     /**
+     * Dispatcher routing (see DispatchRouting): when a node's output carries
+     * a 'route', queue ONLY the chosen target and mark the unchosen branches
+     * — and everything reachable solely through them — as done, so a merge
+     * node downstream is not blocked waiting for a branch that never runs.
+     * Returns false (and touches nothing) for ordinary outputs.
+     */
+    private function applyRoute(int $nodeId, array $output, array $edges, array &$queue, array &$executedNodes): bool
+    {
+        $route = $output['route'] ?? null;
+        if (!is_array($route) || !isset($route['id'])) return false;
+        $chosen = (int)$route['id'];
+        $unchosen = array_values(array_filter(
+            $this->getNextNodeIds($nodeId, $edges),
+            fn($id) => $id !== $chosen
+        ));
+        foreach (DispatchRouting::skipSet($unchosen, $edges) as $skipId) {
+            if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
+        }
+        if (!in_array($chosen, $queue, true) && !in_array($chosen, $executedNodes, true)) $queue[] = $chosen;
+        error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} routed to {$chosen} ({$route['name']}); skipped " . json_encode($unchosen));
+        return true;
+    }
+
+    /**
      * Get IDs of nodes connected from the given node
      */
     private function getNextNodeIds(int $nodeId, array $edges): array
@@ -694,6 +728,8 @@ class GraphWorkflowRunner
         $config = $node['config'] ?? [];
 
         $agent = null;
+        // Dispatcher routing targets (filled once the agent's type is known).
+        $dispatchTargets = [];
 
         // Build agent context for template processing
         $agentContext = [
@@ -824,6 +860,36 @@ class GraphWorkflowRunner
             throw new \RuntimeException("Agent node has no agent_id and no inline configuration");
         }
 
+        // A blank node must not inherit the user's conversation persona
+        // (the chat fallback): give it a minimal role prompt instead.
+        if (trim((string)$agent->getInstructions()) === '') {
+            $agent = new \AgentTeam\Models\Agent(array_merge($agent->toArray(), [
+                'instructions' => DispatchRouting::defaultInstructions($agent->getName(), (string)$agent->getDescription(), $this->workflowName),
+            ]));
+        }
+        // The node a dispatcher routed to is told so (and not to re-route).
+        $routedBy = DispatchRouting::routedBy((int)$node['id'], $edges, $this->nodeOutputs);
+        if ($routedBy !== null) {
+            $agent = new \AgentTeam\Models\Agent(array_merge($agent->toArray(), [
+                'instructions' => rtrim((string)$agent->getInstructions()) . "\n\n" . DispatchRouting::routedPrompt($agent->getName(), $routedBy['from'], $routedBy['notes']),
+            ]));
+        }
+
+        // Dispatcher agents: outgoing edges are a MENU of branches the model
+        // picks from by name, never a parallel fan-out (batch twin of the
+        // voice runner's handoff_to). Append the routing rules to the
+        // instructions; the route_to tool is declared with the extra tools.
+        if ($agent->getAgentType() === 'dispatcher') {
+            $dispatchTargets = DispatchRouting::targets((int)$node['id'], $edges, $this->graphNodes);
+            if ($dispatchTargets !== []) {
+                $agent = new \AgentTeam\Models\Agent(array_merge($agent->toArray(), [
+                    'instructions' => rtrim((string)$agent->getInstructions()) . "\n\n" . DispatchRouting::promptBlock($dispatchTargets),
+                ]));
+            } else {
+                error_log("[GraphWorkflowRunner] Dispatcher node {$node['id']} has no downstream agent — running as a plain agent.");
+            }
+        }
+
         // Build context from previous nodes (with merge strategy from config)
         $mergeStrategy = $config['merge_strategy'] ?? 'labeled';
         $context = $this->buildContextForNode($node['id'], $edges, $executedNodes, $mergeStrategy);
@@ -847,7 +913,8 @@ class GraphWorkflowRunner
 
         // Extract tools filter from node config (if specified)
         $toolsFilter = null;
-        if (!empty($config['tools']) && is_array($config['tools'])) {
+        // The node's tool selection is an exact allow-list; [] = no tools.
+        if (is_array($config['tools'] ?? null)) {
             $toolsFilter = $config['tools'];
             error_log("[GraphWorkflowRunner] Using node-level tools filter: " . json_encode($toolsFilter));
         }
@@ -901,6 +968,16 @@ class GraphWorkflowRunner
             ];
         }
 
+        // Dispatcher: declare route_to and force the call so the model cannot
+        // answer in prose and skip the routing. Grok/DeepSeek ignore the
+        // specific-function form, so they get bare 'required'.
+        if ($dispatchTargets !== []) {
+            $runContext['extra_tools'][] = DispatchRouting::toolDefinition($dispatchTargets);
+            $runContext['tool_choice'] = in_array(strtolower((string)$agent->getProvider()), ['grok', 'deepseek'], true)
+                ? 'required'
+                : ['type' => 'function', 'function' => ['name' => DispatchRouting::TOOL_NAME]];
+        }
+
         // Run the agent. If the LLM emits run_skill_script, B3 short-
         // circuits and we round-trip through the browser before
         // re-calling the agent with the tool_result in history.
@@ -914,6 +991,38 @@ class GraphWorkflowRunner
             $runContext,
             $node
         );
+
+        // Dispatcher: the provider short-circuited on route_to (a client-side
+        // tool name); resolve the choice here. The chosen agent receives the
+        // dispatcher's ORIGINAL input plus the notes — not the dispatcher's
+        // prose — the batch analog of transferring the caller.
+        if ($dispatchTargets !== []) {
+            if (($result['success'] ?? true) === false) {
+                // The LLM call itself failed — say so, not "did not route".
+                $err = (string)($result['error'] ?? 'agent execution failed');
+                $this->nodeLog($node, 'error', 'llm', $err);
+                return [
+                    'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                    'output' => "Error: {$err}", 'success' => false, 'usage' => $result['usage'] ?? null, 'provider' => $agent->getProvider(),
+                ];
+            }
+            $route = DispatchRouting::resolve($result['pending_tool_calls'] ?? [], $dispatchTargets);
+            if ($route === null) {
+                $names = implode(', ', array_column($dispatchTargets, 'name'));
+                $this->nodeLog($node, 'error', 'routing', "dispatcher did not call route_to with one of: {$names}");
+                return [
+                    'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                    'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request. Expected a route_to call with target in [{$names}].",
+                    'success' => false, 'usage' => $result['usage'] ?? null, 'provider' => $agent->getProvider(),
+                ];
+            }
+            $this->nodeLog($node, 'info', 'routing', "routed to {$route['name']}" . ($route['notes'] !== '' ? " — {$route['notes']}" : ''));
+            return [
+                'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                'output' => $task . ($route['notes'] !== '' ? "\n\n## Dispatcher notes\n{$route['notes']}" : ''),
+                'route' => $route, 'success' => true, 'usage' => $result['usage'] ?? null, 'provider' => $agent->getProvider(),
+            ];
+        }
 
         $rawOutput = $result['text'] ?? $result['output'] ?? '';
         $this->nodeLog($node, 'info', 'analysis', 'generating final output');
@@ -1158,6 +1267,10 @@ class GraphWorkflowRunner
                 error_log("[GraphWorkflowRunner] pending_client_tool_call set but no tool_calls payload — aborting round-trip.");
                 return $result;
             }
+            // route_to is resolved by executeAgentNode (DispatchRouting), not the browser.
+            if (($pending[0]['name'] ?? '') === DispatchRouting::TOOL_NAME) {
+                return $result;
+            }
             if ($round === $MAX_ROUNDS) {
                 error_log("[GraphWorkflowRunner] client-tool round limit ({$MAX_ROUNDS}) hit on node {$node['id']} — returning last assistant text.");
                 return $result;
@@ -1176,6 +1289,7 @@ class GraphWorkflowRunner
                 'input' => $call['input'] ?? [],
             ];
             $assistantText = $result['pending_assistant_text'] ?? '';
+            $assistantReasoning = (string)($result['pending_assistant_reasoning'] ?? '');
 
             $this->nodeLog($node, 'info', 'skill',
                 \AgentTeam\Services\NodeLogFormat::runningSkill(
@@ -1233,6 +1347,7 @@ class GraphWorkflowRunner
             $history[] = ['role' => 'user', 'content' => $currentTask];
             $history[] = [
                 'role' => 'assistant',
+                ...($assistantReasoning !== '' ? ['reasoning_content' => $assistantReasoning] : []),
                 'content' => $assistantText,
                 'tool_calls' => [$assistantToolCall],
             ];

@@ -368,7 +368,7 @@ export class AgentRunner {
     for (const tool of mcpLoader.getToolDefinitions()) byName.set(tool.name, tool);
     const allTools = [...byName.values()];
 
-    if (toolsFilter !== null && toolsFilter.length > 0) {
+    if (toolsFilter !== null) { // [] = no tools; null = all
       return allTools.filter((t) => toolsFilter.includes(t.name));
     }
     return allTools;

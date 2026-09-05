@@ -1274,6 +1274,8 @@ class AgentTeamsPanel {
                 <option value="standard" ${agent.agent_type === 'standard' ? 'selected' : ''}>🤖 Standard</option>
                 <option value="manager" selected>👔 Manager</option>
                 <option value="worker" ${agent.agent_type === 'worker' ? 'selected' : ''}>⚙️ Worker</option>
+                <option value="dispatcher" ${agent.agent_type === 'dispatcher' ? 'selected' : ''}>🔀 Dispatcher</option>
+                <option value="playbook" ${agent.agent_type === 'playbook' ? 'selected' : ''}>📖 Playbook</option>
             `;
         } else {
             // No manager in team yet - show all options
@@ -1282,6 +1284,8 @@ class AgentTeamsPanel {
                 <option value="standard" ${agent.agent_type === 'standard' ? 'selected' : ''}>🤖 Standard</option>
                 <option value="manager" ${agent.agent_type === 'manager' ? 'selected' : ''}>👔 Manager</option>
                 <option value="worker" ${agent.agent_type === 'worker' ? 'selected' : ''}>⚙️ Worker</option>
+                <option value="dispatcher" ${agent.agent_type === 'dispatcher' ? 'selected' : ''}>🔀 Dispatcher</option>
+                <option value="playbook" ${agent.agent_type === 'playbook' ? 'selected' : ''}>📖 Playbook</option>
             `;
         }
 
@@ -2566,6 +2570,8 @@ class AgentTeamsPanel {
             case 'standard': return '🤖';
             case 'manager': return '👔';
             case 'worker': return '⚙️';
+            case 'dispatcher': return '🔀';
+            case 'playbook': return '📖';
             default: return '📄';
         }
     }

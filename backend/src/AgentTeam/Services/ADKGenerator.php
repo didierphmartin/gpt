@@ -176,60 +176,25 @@ class ADKGenerator
      */
     private static function headerBlock(array $analyzed): string
     {
-        $name = $analyzed['workflow']['name'];
+        $esc  = fn(string $s): string => str_replace(['"""', "\\"], ["'''", "\\\\"], $s);
+        $name = $esc((string) $analyzed['workflow']['name']);
+        $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
+            'target' => 'Google ADK (Python) -- LlmAgent per node, Sequential/Parallel layers',
+            'workflow' => $analyzed['workflow'],
+            'nodes' => self::docNodes($analyzed),
+            'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
+            'layers' => $analyzed['layers'] ?? [],
+            'data_flow' => self::dataFlowDoc(),
+            'run' => [
+                'deps' => ['pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported'],
+                'usage' => 'python this_file.py "your prompt here"',
+            ],
+            'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
+        ]));
         return <<<PY
 """Standalone Google ADK workflow: {$name}
 
-Auto-generated from the visual workflow editor. Backend-independent and
-self-contained: it calls the LLM providers, MCP servers, and folder-backed
-skills entirely from this one file -- no dependency on the app that produced it.
-
-HOW THIS FILE IS ORGANISED (top to bottom):
-  1. _make_model(provider, model)  -- maps a workflow node's provider+model to an
-                                      ADK model (Gemini = native string; every other
-                                      provider goes through LiteLLM, with Grok/Kimi/
-                                      DeepSeek routed to their OpenAI-compatible API).
-  2. MCP_SERVERS / TOOL_CATALOG    -- the MCP tools this workflow uses, baked in.
-  3. _call_mcp_tool + build_tools_from_catalog()
-                                   -- an HTTP JSON-RPC MCP client; each tool is wrapped
-                                      as an ADK FunctionTool the model can call.
-  4. Skill runner (only when the workflow uses skills)
-                                   -- runs a skill folder Python script as a subprocess here.
-  5. node_<id> = LlmAgent(...)     -- ONE agent per workflow node. Each agent writes its
-                                      answer to session.state["node_<id>"]; a downstream
-                                      agent reads a parent's output through the literal
-                                      {node_<id>} placeholder in its instruction (that is
-                                      ADK "state templating" -- the runtime substitutes it).
-  6. root_agent = SequentialAgent([...])
-                                   -- the workflow graph expressed as TOPOLOGICAL LAYERS:
-                                      independent nodes at the same depth run together in a
-                                      ParallelAgent; the layers themselves run in order.
-  7. main()                        -- seeds the prompt (plus any attached documents), runs
-                                      the graph via Runner, streams a [node]/[tool] trace to
-                                      stdout, saves the final result under outputs/, and
-                                      closes with a RUN SUMMARY (time per node, total
-                                      wall-clock, document location).
-
-NODE-INTERNAL PIPELINE (fixed order):
-    merged fan-in (parents' outputs via {node_<id>} state placeholders)
-      ==> AGENT: the node's LlmAgent — its system prompt, MCP tools and
-          sampling settings come verbatim from the editor form (provider
-          CONSTRAINT clamps only, each documented as an emitted comment:
-          kimi-k2 temperature 0.6; anthropic 16384 non-streaming ceiling).
-          Instructions are grounded in today's date at import time.
-      ==> SKILL step(s), each a SequentialAgent pair: an LLM turn whose
-          system prompt is the skill's SKILL.md (fresh context; the node's
-          budget so document-carrying tool calls don't truncate), then a
-          capture agent that makes the node output the file the skill's
-          script PRODUCED (else the LLM text). Staged input_files are
-          repaired if a model delivers them JSON-over-escaped.
-    The Output node is a non-LLM pass-through: parents' text verbatim.
-
-TO RUN:
-    pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported
-    # provide the API keys for the providers used, via the environment / a .env, e.g.:
-    #   ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY
-    python this_file.py "your prompt here"
+{$docBody}
 """
 import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request
 import httpx
@@ -581,9 +546,60 @@ PY;
      *
      * All nodes emitted at column 0.
      */
+    /** Uniform node descriptors (shared documentation; see WorkflowGraphAnalyzer::docNodes). */
+    private static function docNodes(array $analyzed): array
+    {
+        return WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed);
+    }
+
+    /** DATA FLOW section of the module docstring (ADK-specific mechanics). */
+    private static function dataFlowDoc(): string
+    {
+        return <<<'TXT'
+HOW THIS FILE IS ORGANISED (top to bottom):
+  1. _make_model(provider, model)  -- maps a node's provider+model to an ADK model
+                                      (Gemini = native string; every other provider goes
+                                      through LiteLLM, Grok/Kimi/DeepSeek routed to their
+                                      OpenAI-compatible API).
+  2. MCP_SERVERS / TOOL_CATALOG    -- the MCP tools this workflow uses, baked in.
+  3. _call_mcp_tool + build_tools_from_catalog()
+                                   -- an HTTP JSON-RPC MCP client; each tool is wrapped
+                                      as an ADK FunctionTool the model can call.
+  4. Skill runner (only when the workflow uses skills)
+                                   -- runs a skill folder Python script as a subprocess.
+  5. node_<id> = LlmAgent(...)     -- ONE agent per workflow node. Each agent writes its
+                                      answer to session.state["node_<id>"]; a downstream
+                                      agent reads a parent's output through the literal
+                                      {node_<id>} placeholder in its instruction (ADK
+                                      "state templating" -- the runtime substitutes it).
+  6. root_agent = SequentialAgent  -- the graph as TOPOLOGICAL LAYERS: independent nodes
+                                      at the same depth run together in a ParallelAgent;
+                                      the layers themselves run in order.
+  7. main()                        -- seeds the prompt (plus attached documents), runs the
+                                      graph via Runner, streams a [node]/[tool] trace,
+                                      saves the result, and prints a RUN SUMMARY.
+
+NODE-INTERNAL PIPELINE (fixed order):
+    merged fan-in (parents' outputs via {node_<id>} state placeholders)
+      ==> AGENT: the node's LlmAgent -- system prompt, MCP tools and sampling
+          verbatim from the editor form (provider CONSTRAINT clamps only, each
+          documented as an emitted comment). Instructions are grounded in
+          today's date at import time.
+      ==> SKILL step(s), each a SequentialAgent pair: an LLM turn whose system
+          prompt is the skill's SKILL.md, then a capture agent that makes the
+          node output the file the skill's script PRODUCED (else the LLM text).
+    The Output node is a non-LLM pass-through: parents' text verbatim.
+Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+TXT;
+    }
+
     private static function agentsBlock(array $analyzed): string
     {
         $out = [];
+        $docById = [];
+        foreach (self::docNodes($analyzed) as $dn) {
+            $docById[$dn['id']] = $dn;
+        }
         foreach ($analyzed['agents'] as $id => $ag) {
             $instr = $ag['systemPrompt'];
             // NOTE: ## Skill / skill_content is NOT appended — skills are now
@@ -661,8 +677,7 @@ PY;
             $agentVar    = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
             $agentOutKey = $hasSkills ? "node_{$id}_agent" : "node_{$id}";
 
-            $agentComment = str_replace(["\r", "\n"], ' ', (string) $ag['name']);
-            $entry  = "# Agent \"{$agentComment}\" ({$ag['provider']}/{$ag['model']}) -- workflow node {$id}\n";
+            $entry  = (isset($docById[(string) $id]) ? PythonEmitHelpers::nodeCommentBlock($docById[(string) $id]) . "\n" : '');
             foreach ($clampNotes as $cn) {
                 $entry .= "# constraint clamp: {$cn}\n";
             }

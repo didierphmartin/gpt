@@ -92,8 +92,8 @@ export class AgentController {
     }
 
     const agentType = data.agent_type ?? 'standard';
-    if (!['standard', 'manager', 'worker'].includes(agentType)) {
-      return this.error('Invalid agent_type. Must be: standard, manager, or worker', 400);
+    if (!['standard', 'manager', 'worker', 'dispatcher', 'playbook'].includes(agentType)) {
+      return this.error('Invalid agent_type. Must be: standard, manager, worker, dispatcher, or playbook', 400);
     }
 
     const visibility = data.visibility ?? 'personal';

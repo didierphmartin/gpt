@@ -746,8 +746,9 @@ export class GraphWorkflowRunner {
 
     const task = !phpEmpty(context) ? `Do your job on the following input:\n\n${context}` : userPrompt;
 
+    // The node's tool selection is an exact allow-list; [] = no tools.
     let toolsFilter: string[] | null = null;
-    if (!phpEmpty(config.tools) && Array.isArray(config.tools)) {
+    if (Array.isArray(config.tools)) {
       toolsFilter = config.tools;
     }
 
@@ -1492,7 +1493,7 @@ export class GraphWorkflowRunner {
     // Per-agent tools filter (config.tools overrides the agent's own tools list).
     const toolsFilterFor = (state: ParallelState): string[] | null => {
       const config = state.node.config ?? {};
-      if (!phpEmpty(config.tools) && Array.isArray(config.tools)) return config.tools;
+      if (Array.isArray(config.tools)) return config.tools; // exact allow-list; [] = none
       const at = state.agent.tools;
       return Array.isArray(at) && at.length > 0 ? at : null;
     };

@@ -1015,7 +1015,10 @@ _runner_stderr = _stderr_buf.getvalue()
             }
         }
         if (inputFilesObj && typeof inputFilesObj === 'object') {
-            for (const [rel, data] of Object.entries(inputFilesObj)) {
+            for (const [relRaw, data] of Object.entries(inputFilesObj)) {
+                // Models sometimes emit keys with stray whitespace (" /scratch/x.json") —
+                // the File System Access API then throws "Name is not allowed".
+                const rel = String(relRaw).trim();
                 try {
                     writeInput(resolveAbs(rel), data);
                 } catch (e) {
@@ -1198,7 +1201,8 @@ _inline_stderr_str = _inline_stderr.getvalue()
             await ensureDeps(dependencies);
         }
         if (inputFiles && typeof inputFiles === 'object') {
-            for (const [absPath, data] of Object.entries(inputFiles)) {
+            for (const [absRaw, data] of Object.entries(inputFiles)) {
+                const absPath = String(absRaw).trim();
                 if (!absPath.startsWith('/')) {
                     throw new Error(`runInline: inputFiles paths must be absolute, got "${absPath}"`);
                 }

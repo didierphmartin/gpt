@@ -238,6 +238,7 @@ class AgentRunner
                 $result['pending_client_tool_call'] = true;
                 $result['pending_tool_calls'] = $response['pending_tool_calls'] ?? [];
                 $result['pending_assistant_text'] = $text;
+                $result['pending_assistant_reasoning'] = (string)($response['assistant_reasoning'] ?? $response['_pending_assistant_reasoning'] ?? '');
             }
 
             return $result;
@@ -587,8 +588,9 @@ class AgentRunner
 
         $allTools = array_values($tools);
 
-        // Apply tools filter if specified
-        if ($toolsFilter !== null && !empty($toolsFilter)) {
+        // Apply tools filter if specified — an EMPTY list means no tools
+        // (the node selected none); only null means "all".
+        if ($toolsFilter !== null) {
             $filteredTools = array_filter($allTools, function ($tool) use ($toolsFilter) {
                 return in_array($tool['name'], $toolsFilter, true);
             });

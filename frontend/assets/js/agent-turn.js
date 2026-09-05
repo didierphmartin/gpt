@@ -19,7 +19,7 @@
          * @param {string} assistantText  text the model emitted alongside the calls
          * @returns {{assistantTurn:object, toolResultTurns:object[]}}
          */
-        buildToolRoundTurns(results, assistantText) {
+        buildToolRoundTurns(results, assistantText, assistantReasoning = '') {
             const list = Array.isArray(results) ? results : [];
             const assistantToolCalls = list.map(({ call }) => ({
                 id: call.id,
@@ -39,7 +39,9 @@
                 content: (typeof toolResultPayload === 'string') ? toolResultPayload : JSON.stringify(toolResultPayload),
             }));
             return {
-                assistantTurn: { role: 'assistant', content: assistantText || '', tool_calls: assistantToolCalls },
+                // reasoning_content: DeepSeek thinking mode must see it again on the replay.
+                assistantTurn: { role: 'assistant', content: assistantText || '', tool_calls: assistantToolCalls,
+                    ...(assistantReasoning ? { reasoning_content: assistantReasoning } : {}) },
                 toolResultTurns,
             };
         },

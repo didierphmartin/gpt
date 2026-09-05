@@ -124,7 +124,7 @@ export class ChatController {
   private sanitizeClientTools(raw: any): Array<{ name: string; description?: string; input_schema?: any }> {
     if (!Array.isArray(raw)) return [];
     return raw.filter(
-      (t) => t && typeof t === 'object' && typeof t.name === 'string' && /^webmcp_/.test(t.name) && t.input_schema && typeof t.input_schema === 'object',
+      (t) => t && typeof t === 'object' && typeof t.name === 'string' && /^(?:webmcp_|route_to$|save_playbook_agent$)/.test(t.name) && t.input_schema && typeof t.input_schema === 'object',
     );
   }
 
@@ -267,6 +267,35 @@ export class ChatController {
   }
 
   /** Per-request executor: base tools (+ the user's MCP tools when any exist). Fails soft. */
+  private lastResolved: { cfg: any; executor: FunctionExecutor } | null = null;
+
+  /** Snapshot of what a request sends to the LLM (Context tab). Mirrors the PHP helper. */
+  static buildLlmContextSnapshot(
+    provider: string, model: string | null, opts: ChatOptions, serverTools: any[], history: any[], message: string,
+    limits: { max_tokens: number | null; temperature: number | null },
+  ): Record<string, any> {
+    const tools: Array<{ name: string; description: string; source: 'server' | 'client' }> = [];
+    for (const t of serverTools) tools.push({ name: String(t?.name ?? ''), description: String(t?.description ?? ''), source: 'server' });
+    for (const t of opts.client_tools ?? []) tools.push({ name: String((t as any)?.name ?? ''), description: String((t as any)?.description ?? ''), source: 'client' });
+    const messages = history
+      .filter((h) => h && typeof h === 'object')
+      .map((h) => ({ role: String(h.role ?? ''), content: typeof h.content === 'string' ? h.content : JSON.stringify(h.content ?? '') }));
+    messages.push({ role: 'user', content: message });
+    const systemPrompt = opts.system_prompt ?? '';
+    const chars = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
+      + JSON.stringify(serverTools).length + JSON.stringify(opts.client_tools ?? []).length
+      + (opts.skill_content ?? '').length;
+    return {
+      provider, model, max_tokens: limits.max_tokens, temperature: limits.temperature,
+      system_prompt: systemPrompt,
+      memory_included: false, // the TS chat path injects no memory
+      memory_context: '',
+      skill_included: !!(opts.skill_content && opts.skill_content.length),
+      skill_content: opts.skill_content ?? '',
+      messages, tools, estimated_tokens: Math.ceil(chars / 4),
+    };
+  }
+
   private async buildExecutor(userId: number | null, toolsFilter?: string[] | null): Promise<FunctionExecutor> {
     let executor: FunctionExecutor = this.toolsManager;
     let mcpLoaded = false;
@@ -278,9 +307,9 @@ export class ChatController {
     } catch (e: any) {
       console.error('[chat] MCP load failed:', e?.message ?? e);
     }
-    // Honor the node's MCP/tool selection (workflow agent form). A non-empty
-    // allowlist restricts what the model is offered; null/empty = all tools.
-    if (Array.isArray(toolsFilter) && toolsFilter.length > 0) {
+    // Honor the node's MCP/tool selection (workflow agent form): an exact
+    // allow-list — [] = no tools; only null/undefined = all tools.
+    if (Array.isArray(toolsFilter)) {
       executor = new FilteredToolsExecutor(executor, toolsFilter);
     }
     log.info('[chat] executor built', {
@@ -313,7 +342,10 @@ export class ChatController {
       overrides,
     });
     const impl = ProviderFactory.create(cfg); // throws for not-yet-ported formats
-    impl.setFunctionExecutor(await this.buildExecutor(userId, overrides?.tools));
+    const executor = await this.buildExecutor(userId, overrides?.tools);
+    impl.setFunctionExecutor(executor);
+    // Remembered for the workflow node modal's Context tab (return_context).
+    this.lastResolved = { cfg, executor };
     return impl;
   }
 
@@ -346,6 +378,19 @@ export class ChatController {
         functions_called: [], mcp_tools_called: [], mcp_calls_count: 0,
       };
       const controllerResp: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider };
+      // Conversations' View Context asks for what was actually sent (return_context).
+      if (req.body?.return_context) {
+        const cfg = this.lastResolved?.cfg;
+        controllerResp.context = ChatController.buildLlmContextSnapshot(
+          result.provider ?? provider ?? '',
+          cfg?.model ?? null,
+          { ...opts, system_prompt: opts.system_prompt ?? cfg?.system_prompt ?? '' },
+          this.lastResolved?.executor?.getToolDefinitions() ?? [],
+          opts.conversation_history ?? [],
+          opts.message ?? '',
+          { max_tokens: cfg?.max_tokens ?? null, temperature: cfg?.temperature ?? null },
+        );
+      }
       if (result.pending_client_tool_call) {
         for (const r of [providerResp, controllerResp]) {
           r.pending_client_tool_call = true;
@@ -387,7 +432,7 @@ export class ChatController {
     }
   }
 
-  private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions): Promise<void> {
+  private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions, returnContext = false): Promise<void> {
     const started = Date.now();
     try {
       const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
@@ -396,6 +441,21 @@ export class ChatController {
       if (result.pending_client_tool_call) {
         body.pending_client_tool_call = true;
         body.pending_tool_calls = result.pending_tool_calls;
+      }
+      // Workflow nodes ask for the context they sent (Context tab). Mirrors
+      // ChatController::buildLlmContextSnapshot.
+      if (returnContext) {
+        const cfg = this.lastResolved?.cfg;
+        body.context = ChatController.buildLlmContextSnapshot(
+          result.provider ?? provider ?? '',
+          cfg?.model ?? null,
+          // No override → the provider uses its configured persona; report that, not ''.
+          { ...opts, system_prompt: opts.system_prompt ?? cfg?.system_prompt ?? '' },
+          this.lastResolved?.executor?.getToolDefinitions() ?? [],
+          opts.conversation_history ?? [],
+          opts.message ?? '',
+          { max_tokens: cfg?.max_tokens ?? null, temperature: cfg?.temperature ?? null },
+        );
       }
       res.status(200).json(body);
       // Record usage (fire-and-forget; failures are swallowed so they never affect the response).
@@ -747,7 +807,7 @@ export class ChatController {
     if (body.streaming === true) {
       await this.handleStreamingChat(req, res, provider, opts);
     } else {
-      await this.handleRegularChat(res, provider, opts);
+      await this.handleRegularChat(res, provider, opts, body.return_context === true);
     }
   }
 
@@ -907,7 +967,8 @@ export class ChatController {
         '2. Identify any errors or omissions\n' +
         '3. Assess the quality of reasoning\n' +
         '4. Provide a brief verification summary\n\n' +
-        'Be concise and focus on the most important points.';
+        'Be concise and focus on the most important points.\n' +
+        'IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.).';
 
       const impl = await this.resolveProvider(verifierProvider, userId);
       const sink = new PaneSseSink(sse, VERIFY_EVENT_MAP) as unknown as SSEStream;

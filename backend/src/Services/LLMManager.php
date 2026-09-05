@@ -153,11 +153,17 @@ class LLMManager
             // through with tool_calls preserved instead of skipping.
             if ($role === 'assistant' && !empty($entry['tool_calls'])) {
                 $textContent = $this->extractTextContent($entry['content'] ?? '');
-                $normalized[] = [
+                $turn = [
                     'role' => 'assistant',
                     'content' => $textContent,
                     'tool_calls' => $entry['tool_calls'],
                 ];
+                // DeepSeek thinking mode: the reasoning that preceded the
+                // tool calls must travel back with the replayed turn.
+                if (is_string($entry['reasoning_content'] ?? null) && $entry['reasoning_content'] !== '') {
+                    $turn['reasoning_content'] = $entry['reasoning_content'];
+                }
+                $normalized[] = $turn;
                 continue;
             }
 

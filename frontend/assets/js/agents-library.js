@@ -158,7 +158,7 @@ class AgentsLibrary {
                  data-agent-type="${agentType}"
                  data-agent-provider="${provider}">
                 <div class="flex items-center gap-1 min-w-0 flex-1">
-                    <span class="text-xs">🤖</span>
+                    <span class="text-xs">${({ worker: '⚙️', manager: '👔', dispatcher: '🔀', playbook: '📖' })[agentType] || '🤖'}</span>
                     <span class="text-xs truncate" title="${desc || safeName}">${safeName}</span>
                 </div>
                 <button class="agents-item-menu text-gray-700 hover:text-black font-bold text-xs px-1"

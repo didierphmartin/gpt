@@ -152,7 +152,109 @@ class WorkflowGraphAnalyzer
      */
     public static function typeOf(array $n): string
     {
-        return (string) ($n['node_type'] ?? $n['type'] ?? ($n['config']['type'] ?? 'agent'));
+        // The DB column can be '' for editor-saved agent-template nodes: an
+        // empty value falls through to config.type (else those nodes vanished
+        // from every compile target that reads the type from here).
+        foreach ([$n['node_type'] ?? null, $n['type'] ?? null, $n['config']['type'] ?? null] as $t) {
+            if ($t !== null && (string) $t !== '') {
+                return (string) $t;
+            }
+        }
+        return 'agent';
+    }
+
+    /**
+     * Uniform node descriptors for the generated-script documentation, the
+     * same for every compile target and every workflow shape. One entry per
+     * node in topological order:
+     *   id, type, name, provider, model, temperature, max_tokens, thinking,
+     *   tools (names), skills (labels), dispatch (menu names, dispatcher
+     *   agents only), playbook (title/writes/bound/unbound, playbook nodes
+     *   only), supported (does this target run the node?), parents/children
+     *   ("name (id)" labels), prompt (start node only).
+     *
+     * @param array $byId     nodes by id           @param string[] $order   topological order
+     * @param array $edges    normalised {from,to}  @param array $agents  analyze()-shaped agent map
+     * @param array $extra    per-node overrides: ['dispatch' => [...], 'playbook' => [...]]
+     * @param string[] $runnable node types this target executes
+     */
+    /**
+     * docNodes() over an analyze()-shaped array. Hand-built fixtures (tests)
+     * may carry only 'agents': the graph is then reconstructed from them.
+     */
+    public static function docNodesFromAnalyzed(array $analyzed, array $extra = [],
+                                                array $runnable = ['start', 'agent', 'agent-template', 'output']): array
+    {
+        $agents = (array) ($analyzed['agents'] ?? []);
+        $byId = (array) ($analyzed['byId'] ?? []);
+        if ($byId === []) {
+            foreach ($agents as $id => $ag) {
+                $byId[(string) $id] = ['id' => (string) $id, 'config' => ['type' => 'agent', 'agent_name' => $ag['name'] ?? "agent_{$id}"]];
+            }
+        }
+        $order = (array) ($analyzed['order'] ?? array_keys($byId));
+        return self::docNodes($byId, $order, (array) ($analyzed['edges'] ?? []), $agents, $extra, $runnable);
+    }
+
+    public static function docNodes(array $byId, array $order, array $edges, array $agents,
+                                    array $extra = [], array $runnable = ['start', 'agent', 'agent-template', 'output']): array
+    {
+        $children = []; $parents = [];
+        foreach ($edges as $e) {
+            $f = (string) ($e['from'] ?? $e['from_node_id'] ?? ''); $t = (string) ($e['to'] ?? $e['to_node_id'] ?? '');
+            if ($f === '' || $t === '') continue;
+            $children[$f][] = $t; $parents[$t][] = $f;
+        }
+        $nameOf = function (string $id) use ($byId, $agents): string {
+            $n = $byId[$id] ?? [];
+            $c = is_array($n['config'] ?? null) ? $n['config'] : [];
+            $t = self::typeOf($n);
+            if ($t === 'start') return 'Start';
+            if ($t === 'output') return 'Output';
+            $name = (string) ($agents[$id]['name'] ?? $c['agent_name'] ?? $c['name'] ?? $n['name'] ?? '');
+            return $name !== '' ? $name : "node_{$id}";
+        };
+        $label = fn(string $id) => $nameOf($id) . " ({$id})";
+        $out = [];
+        foreach ($order as $id) {
+            $id = (string) $id;
+            $n = $byId[$id] ?? [];
+            $c = is_array($n['config'] ?? null) ? $n['config'] : [];
+            $t = self::typeOf($n);
+            $ag = $agents[$id] ?? null;
+            $d = [
+                'id' => $id, 'type' => $t, 'name' => $nameOf($id),
+                'provider' => (string) ($ag['provider'] ?? $c['agent_provider'] ?? $c['provider'] ?? $c['llm_provider'] ?? ''),
+                'model' => (string) ($ag['model'] ?? $c['model'] ?? ''),
+                'temperature' => $ag['temperature'] ?? ($c['settings']['temperature'] ?? null),
+                'max_tokens' => $ag['max_tokens'] ?? ($c['settings']['max_tokens'] ?? null),
+                'thinking' => $ag['thinking'] ?? ($c['settings']['thinking'] ?? null),
+                'tools' => array_values(array_map(fn($x) => (string) (is_array($x) ? ($x['name'] ?? '') : $x), $ag['tools'] ?? [])),
+                'skills' => array_map(fn($s) => $s['dir'] ?? (isset($s['inline']) ? 'inline skill' : 'skill'), $ag['skills'] ?? self::skillsFromConfig($c)),
+                'dispatch' => [], 'playbook' => null,
+                'supported' => in_array($t, $runnable, true),
+                'parents' => array_map($label, $parents[$id] ?? []),
+                'children' => array_map($label, $children[$id] ?? []),
+                'prompt' => $t === 'start' ? (string) ($c['prompt'] ?? '') : '',
+            ];
+            if ($t === 'start' || $t === 'output') {
+                $d['provider'] = ''; $d['model'] = ''; $d['temperature'] = null; $d['max_tokens'] = null; $d['thinking'] = null;
+            }
+            $x = $extra[$id] ?? [];
+            if (isset($x['dispatch'])) {
+                $d['dispatch'] = array_values($x['dispatch']);
+            } elseif (in_array($t, ['agent', 'agent-template'], true) && (string) ($c['agent_type'] ?? '') === 'dispatcher') {
+                $d['dispatch'] = array_map($nameOf, array_values(array_filter($children[$id] ?? [],
+                    fn($ch) => in_array(self::typeOf($byId[$ch] ?? []), ['agent', 'agent-template', 'playbook'], true))));
+            }
+            if ($t === 'playbook') {
+                $text = is_string($c['playbook'] ?? null) ? $c['playbook'] : '';
+                $title = preg_match('/^\s*(?:#+\s*|\*\*)?Title:\s*(.+?)\s*(?:\*\*)?$/mi', $text, $m) ? trim($m[1]) : '';
+                $d['playbook'] = ($x['playbook'] ?? []) + ['title' => $title, 'writes' => !empty($c['writes_enabled']), 'bound' => null, 'unbound' => null];
+            }
+            $out[] = $d;
+        }
+        return $out;
     }
 
     /**
@@ -289,7 +391,7 @@ class WorkflowGraphAnalyzer
         }
 
         // Reuse the exact same tool/server catalog logic LangGraphGenerator uses.
-        [$usedCatalog, $usedServers] = $this->buildToolCatalog($agents);
+        [$usedCatalog, $usedServers] = $this->buildToolCatalog($agents, $userId);
 
         $startNode = $base['byId'][$base['startNodeId']] ?? [];
         return array_merge($base, [
@@ -319,13 +421,16 @@ class WorkflowGraphAnalyzer
      *
      * @return array<int, array<string,mixed>>
      */
-    private function loadMcpToolsWithServers(): array
+    private function loadMcpToolsWithServers(?string $userId = null): array
     {
+        // Global servers plus the caller's own registrations — the registry
+        // chat and the browser runner see (mirrors LangGraphGenerator).
         $sql  = "SELECT t.*, s.name AS server_name, s.url AS server_url
                 FROM mcp_server_tools t
                 JOIN mcp_servers s ON t.server_id = s.id
-                WHERE s.enabled = 1 AND s.user_id IS NULL";
-        $stmt = $this->db->query($sql);
+                WHERE s.enabled = 1 AND (s.user_id IS NULL" . ($userId !== null && $userId !== '' ? " OR s.user_id = :uid" : '') . ")";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($userId !== null && $userId !== '' ? ['uid' => $userId] : []);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $out = [];
@@ -361,10 +466,10 @@ class WorkflowGraphAnalyzer
      * @return array{0: array<string,array>, 1: array<string,array>}
      *                                      [usedCatalog, usedServers]
      */
-    private function buildToolCatalog(array $agents): array
+    private function buildToolCatalog(array $agents, ?string $userId = null): array
     {
-        // Load all enabled global MCP tools with their server info.
-        $mcpTools = $this->loadMcpToolsWithServers();
+        // Load the enabled MCP tools (global + the user's own) with their server info.
+        $mcpTools = $this->loadMcpToolsWithServers($userId);
 
         // Build the full server registry and tool catalog (same logic as LangGraphGenerator).
         $serverRegistry = [];

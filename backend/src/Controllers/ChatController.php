@@ -240,6 +240,52 @@ class ChatController
     }
 
     /**
+     * Snapshot of what a request sends to the LLM, for the workflow node
+     * modal's "Context" tab: provider/model, the final system prompt, the
+     * messages (history + current turn), the tool definitions actually
+     * offered (server executor + per-request client tools), the memory /
+     * skill inclusion flags and a rough token estimate (chars / 4).
+     * Provider-agnostic on purpose: it reflects the inputs handed to the
+     * provider, not one provider's wire format.
+     */
+    public static function buildLlmContextSnapshot(string $provider, ?string $model, array $options, array $serverTools, array $history, string $message): array
+    {
+        $tools = [];
+        foreach ($serverTools as $t) {
+            $tools[] = ['name' => (string)($t['name'] ?? ''), 'description' => (string)($t['description'] ?? ''), 'source' => 'server'];
+        }
+        foreach (($options['client_tools'] ?? []) as $t) {
+            $tools[] = ['name' => (string)($t['name'] ?? ''), 'description' => (string)($t['description'] ?? ''), 'source' => 'client'];
+        }
+        $messages = [];
+        foreach ($history as $h) {
+            if (!is_array($h)) continue;
+            $c = $h['content'] ?? '';
+            $messages[] = ['role' => (string)($h['role'] ?? ''), 'content' => is_string($c) ? $c : json_encode($c, JSON_UNESCAPED_UNICODE)];
+        }
+        $messages[] = ['role' => 'user', 'content' => $message];
+        $systemPrompt = (string)($options['system_prompt'] ?? '');
+        $chars = strlen($systemPrompt) + strlen($message)
+            + array_sum(array_map(fn($m) => strlen($m['content']), $messages))
+            + strlen(json_encode($serverTools)) + strlen(json_encode($options['client_tools'] ?? []))
+            + strlen((string)($options['memory_context'] ?? '')) + strlen((string)($options['skill_content'] ?? ''));
+        return [
+            'provider' => $provider,
+            'model' => $model,
+            'max_tokens' => $options['max_tokens'] ?? null,
+            'temperature' => $options['temperature'] ?? null,
+            'system_prompt' => $systemPrompt,
+            'memory_included' => !empty($options['memory_context']),
+            'memory_context' => (string)($options['memory_context'] ?? ''),
+            'skill_included' => !empty($options['skill_content']),
+            'skill_content' => (string)($options['skill_content'] ?? ''),
+            'messages' => $messages,
+            'tools' => $tools,
+            'estimated_tokens' => (int)ceil($chars / 4),
+        ];
+    }
+
+    /**
      * Sanitize the per-request client_tools field. Frontend may attach tools
      * discovered from the active tab's webMCP registry. Each accepted entry
      * is a {name, description, input_schema} triple. Names must begin with
@@ -263,7 +309,9 @@ class ChatController
             $name = $entry['name'] ?? null;
             if (!is_string($name)
                 || $name === ''
-                || !preg_match('/^webmcp_[a-zA-Z0-9_\-\.]{1,120}$/', $name)) {
+                // route_to: the workflow dispatcher's branch choice (browser run path);
+                // resolved client-side, so it rides the same per-request channel.
+                || !preg_match('/^(?:webmcp_[a-zA-Z0-9_\-\.]{1,120}|route_to|save_playbook_agent)$/', $name)) {
                 error_log("[ChatController] client_tools[$i] dropped: invalid name " . var_export($name, true));
                 continue;
             }
@@ -857,7 +905,8 @@ class ChatController
                 $clientTools,
                 $clientToolNames,
                 $systemPromptOverride,
-                $includeMemory
+                $includeMemory,
+                !empty($input['return_context'])
             );
         }
 
@@ -878,7 +927,8 @@ class ChatController
             $systemPromptOverride,
             $includeMemory,
             $maxTokensOverride,
-            $temperatureOverride
+            $temperatureOverride,
+            !empty($input['return_context'])
         );
     }
 
@@ -1034,7 +1084,8 @@ class ChatController
                 . "2. Identify any errors or omissions\n"
                 . "3. Assess the quality of reasoning\n"
                 . "4. Provide a brief verification summary\n\n"
-                . "Be concise and focus on the most important points.";
+                . "Be concise and focus on the most important points.\n"
+                . "IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.).";
 
             $verifierProviderInstance = $assistant->getLLMManager()->getProvider($verifierProvider);
             if (!$verifierProviderInstance) {
@@ -1463,7 +1514,8 @@ class ChatController
         array $clientTools = [],
         array $clientToolNames = [],
         ?string $systemPromptOverride = null,
-        bool $includeMemory = true
+        bool $includeMemory = true,
+        bool $returnContext = false
     ): array {
         // Increase execution time limit for large responses
         set_time_limit(600);
@@ -1501,15 +1553,26 @@ class ChatController
             );
         }
 
-        // Load MCP tools
+        // Load MCP tools. A workflow node's selection is an exact allow-list:
+        // when it names no mcp_* tool, skip the (remote-DB) MCP load entirely —
+        // the definitions would be filtered out anyway.
         $mcpToolsLoader = null;
+        $snapshotExecutor = $assistant->getToolsManager(); // what the Context view reports as offered tools
+        $wantsMcp = $toolsFilter === null || array_filter($toolsFilter, fn($t) => str_starts_with((string)$t, 'mcp_')) !== [];
         try {
-            error_log("[ChatController] Loading MCP tools for user: {$userId}");
-            $mcpToolsLoader = new MCPToolsLoader($this->db);
-            $mcpToolsLoader->loadToolsForUser($userId);
-            error_log("[ChatController] MCP hasTools: " . ($mcpToolsLoader->hasTools() ? 'yes' : 'no'));
+            if ($wantsMcp) {
+                error_log("[ChatController] Loading MCP tools for user: {$userId}");
+                $mcpToolsLoader = new MCPToolsLoader($this->db);
+                $mcpToolsLoader->loadToolsForUser($userId);
+                error_log("[ChatController] MCP hasTools: " . ($mcpToolsLoader->hasTools() ? 'yes' : 'no'));
+            } else {
+                error_log("[MCP] Skipped MCP load: node selected no MCP tools");
+            }
 
-            if ($mcpToolsLoader->hasTools()) {
+            // NB: the filter must still be applied when MCP is skipped —
+            // otherwise the providers keep their default executor and every
+            // basic function is offered (seen in the Context tab, 2026-09-02).
+            if ($mcpToolsLoader && $mcpToolsLoader->hasTools()) {
                 $mcpTools = $mcpToolsLoader->getTools();
                 error_log("[MCP] Loaded " . count($mcpTools) . " MCP tools for user: {$userId}");
 
@@ -1519,7 +1582,7 @@ class ChatController
 
                 // Wrap with FilteredToolsExecutor if tools filter is specified
                 $executor = $combinedExecutor;
-                if ($toolsFilter !== null && !empty($toolsFilter)) {
+                if ($toolsFilter !== null) {
                     $filteredExecutor = new FilteredToolsExecutor($combinedExecutor);
                     $filteredExecutor->setAllowedTools($toolsFilter);
                     $executor = $filteredExecutor;
@@ -1534,7 +1597,7 @@ class ChatController
                         $providerInstance->setFunctionExecutor($executor);
                     }
                 }
-            } elseif ($toolsFilter !== null && !empty($toolsFilter)) {
+            } elseif ($toolsFilter !== null) {
                 // No MCP tools but filter is specified - filter base tools only
                 $baseToolsManager = $assistant->getToolsManager();
                 $filteredExecutor = new FilteredToolsExecutor($baseToolsManager);
@@ -1822,6 +1885,10 @@ class ChatController
             // setPerRequestClientSideToolNames() on themselves before the LLM call.
             $options['client_tools'] = $clientTools;
             $options['client_tool_names'] = $clientToolNames;
+            // Workflow nodes: exact allow-list enforced at the assistant's tool merge.
+            if ($toolsFilter !== null) {
+                $options['tools_filter'] = $toolsFilter;
+            }
 
             $response = $assistant->streamChat($message, $sessionId, $userId, $conversationHistory, $options);
 
@@ -1845,6 +1912,23 @@ class ChatController
             if (!empty($response['pending_client_tool_call'])) {
                 $responseData['pending_client_tool_call'] = true;
                 $responseData['pending_tool_calls'] = $response['pending_tool_calls'] ?? [];
+            }
+
+            // Conversations' View Context asks for what was actually sent
+            // (system prompt, memory, skill, tools, messages) — same snapshot
+            // the workflow node modal's Context tab uses.
+            if ($returnContext) {
+                $pKey = (string)($provider ?? ($responseData['provider'] ?? 'claude'));
+                $pCfg = $config[$pKey] ?? $config['providers'][$pKey] ?? [];
+                $effectiveSystemPrompt = $options['system_prompt'] ?? (string)($pCfg['system_prompt'] ?? '');
+                $responseData['context'] = self::buildLlmContextSnapshot(
+                    $pKey,
+                    isset($pCfg['model']) && $pCfg['model'] !== '' ? (string)$pCfg['model'] : null,
+                    ['system_prompt' => $effectiveSystemPrompt] + $options + ['max_tokens' => $pCfg['max_tokens'] ?? null, 'temperature' => $pCfg['temperature'] ?? null],
+                    $options['tools'] ?? ($snapshotExecutor ? $snapshotExecutor->getToolDefinitions() : []),
+                    $conversationHistory,
+                    $message
+                );
             }
 
             $sendEvent('response', $responseData);
@@ -1924,7 +2008,10 @@ class ChatController
 
             // Post-response tail: run the memory auto-updater after the client
             // has received everything. Failures here must never affect the user.
-            if (is_numeric($userId) && !empty($response['text'])) {
+            // Workflow nodes send memory=false: no memory injection AND no
+            // post-response extraction (that extra Claude call blocked the
+            // response ~3s under mod_php, where fastcgi_finish_request is absent).
+            if ($includeMemory && is_numeric($userId) && !empty($response['text'])) {
                 if (function_exists('fastcgi_finish_request')) {
                     @fastcgi_finish_request();
                 }
@@ -2028,7 +2115,8 @@ class ChatController
             $verificationPrompt .= "2. Identify any errors or omissions\n";
             $verificationPrompt .= "3. Assess the quality of reasoning\n";
             $verificationPrompt .= "4. Provide a brief verification summary\n\n";
-            $verificationPrompt .= "Be concise and focus on the most important points.";
+            $verificationPrompt .= "Be concise and focus on the most important points.\n";
+            $verificationPrompt .= "IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.).";
 
             $verifierSessionId = uniqid('verify_', true);
 
@@ -2285,7 +2373,8 @@ class ChatController
         ?string $systemPromptOverride = null,
         bool $includeMemory = true,
         ?int $maxTokensOverride = null,
-        ?float $temperatureOverride = null
+        ?float $temperatureOverride = null,
+        bool $returnContext = false
     ): array {
         // Apply database provider settings first (overrides hardcoded config)
         $config = $this->applyDatabaseProviderSettings($this->config);
@@ -2329,24 +2418,34 @@ class ChatController
             );
         }
 
-        // Load MCP tools
+        // Load MCP tools. A workflow node's selection is an exact allow-list:
+        // when it names no mcp_* tool, skip the (remote-DB) MCP load entirely.
         $mcpToolsLoader = null;
+        $snapshotExecutor = $assistant->getToolsManager(); // what the Context tab reports as offered tools
+        $wantsMcp = $toolsFilter === null || array_filter($toolsFilter, fn($t) => str_starts_with((string)$t, 'mcp_')) !== [];
         try {
-            $mcpToolsLoader = new MCPToolsLoader($this->db);
-            $mcpToolsLoader->loadToolsForUser($userId);
+            if ($wantsMcp) {
+                $mcpToolsLoader = new MCPToolsLoader($this->db);
+                $mcpToolsLoader->loadToolsForUser($userId);
+            } else {
+                error_log("[MCP] Skipped MCP load: node selected no MCP tools");
+            }
 
-            if ($mcpToolsLoader->hasTools()) {
+            // The filter must still be applied when MCP is skipped (see the
+            // streaming twin above).
+            if ($mcpToolsLoader && $mcpToolsLoader->hasTools()) {
                 $baseToolsManager = $assistant->getToolsManager();
                 $combinedExecutor = new CombinedToolsExecutor($baseToolsManager, $mcpToolsLoader);
 
                 // Wrap with FilteredToolsExecutor if tools filter is specified
                 $executor = $combinedExecutor;
-                if ($toolsFilter !== null && !empty($toolsFilter)) {
+                if ($toolsFilter !== null) {
                     $filteredExecutor = new FilteredToolsExecutor($combinedExecutor);
                     $filteredExecutor->setAllowedTools($toolsFilter);
                     $executor = $filteredExecutor;
                     error_log("[ChatController] Tool filter applied: " . implode(', ', $toolsFilter));
                 }
+                $snapshotExecutor = $executor;
 
                 $llmManager = $assistant->getLLMManager();
                 foreach ($this->getEnabledProviderKeys() as $providerName) {
@@ -2355,11 +2454,12 @@ class ChatController
                         $providerInstance->setFunctionExecutor($executor);
                     }
                 }
-            } elseif ($toolsFilter !== null && !empty($toolsFilter)) {
+            } elseif ($toolsFilter !== null) {
                 // No MCP tools but filter is specified - filter base tools only
                 $baseToolsManager = $assistant->getToolsManager();
                 $filteredExecutor = new FilteredToolsExecutor($baseToolsManager);
                 $filteredExecutor->setAllowedTools($toolsFilter);
+                $snapshotExecutor = $filteredExecutor;
 
                 $llmManager = $assistant->getLLMManager();
                 foreach ($this->getEnabledProviderKeys() as $providerName) {
@@ -2450,6 +2550,10 @@ class ChatController
             // setPerRequestClientSideToolNames() on themselves before the LLM call.
             $options['client_tools'] = $clientTools;
             $options['client_tool_names'] = $clientToolNames;
+            // Workflow nodes: exact allow-list enforced at the assistant's tool merge.
+            if ($toolsFilter !== null) {
+                $options['tools_filter'] = $toolsFilter;
+            }
 
             $response = $assistant->chat($message, $userId, $conversationHistory, $options);
 
@@ -2475,7 +2579,10 @@ class ChatController
 
             // Register the memory auto-updater on shutdown so it runs after PHP
             // has written the response body. Failures must never affect the user.
-            if (is_numeric($userId) && !empty($response['text'])) {
+            // Workflow nodes send memory=false: no memory injection AND no
+            // post-response extraction (that extra Claude call blocked the
+            // response ~3s under mod_php, where fastcgi_finish_request is absent).
+            if ($includeMemory && is_numeric($userId) && !empty($response['text'])) {
                 $dbRef = $this->db;
                 // Capture the DB-merged config (local $config), NOT
                 // $this->config — the Claude API key now lives in
@@ -2524,6 +2631,25 @@ class ChatController
                 if (isset($response['assistant_text']) && $response['assistant_text'] !== '') {
                     $payload['assistant_text'] = $response['assistant_text'];
                 }
+                if (!empty($response['assistant_reasoning'])) {
+                    $payload['assistant_reasoning'] = $response['assistant_reasoning'];
+                }
+            }
+
+            // Workflow nodes ask for the context they sent (Context tab).
+            if ($returnContext) {
+                $pKey = (string)($provider ?? ($payload['provider'] ?? 'claude'));
+                $pCfg = $config[$pKey] ?? $config['providers'][$pKey] ?? [];
+                // No override → the provider uses its configured persona; report that, not ''.
+                $effectiveSystemPrompt = $options['system_prompt'] ?? (string)($pCfg['system_prompt'] ?? '');
+                $payload['context'] = self::buildLlmContextSnapshot(
+                    $pKey,
+                    isset($pCfg['model']) && $pCfg['model'] !== '' ? (string)$pCfg['model'] : null,
+                    ['system_prompt' => $effectiveSystemPrompt] + $options + ['max_tokens' => $pCfg['max_tokens'] ?? null, 'temperature' => $pCfg['temperature'] ?? null],
+                    $options['tools'] ?? ($snapshotExecutor ? $snapshotExecutor->getToolDefinitions() : []),
+                    $conversationHistory,
+                    $message
+                );
             }
 
             return $payload;

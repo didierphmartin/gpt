@@ -7,8 +7,8 @@ import { FunctionExecutor, ToolDefinition } from '../Contracts/FunctionExecutor'
  *   - Only getToolDefinitions() is filtered (what the model sees).
  *   - execute() / hasFunction() are NOT filtered — they delegate to the base,
  *     since the model can only call tools it was offered.
- *   - A null OR empty allowlist means "all tools" (no filtering), so a node that
- *     selects nothing keeps the default toolset rather than losing everything.
+ *   - null = no filtering (all tools). An EMPTY allowlist = NO tools: a workflow
+ *     node that selected nothing must not be offered all 100+ tools.
  */
 export class FilteredToolsExecutor implements FunctionExecutor {
   constructor(
@@ -17,7 +17,7 @@ export class FilteredToolsExecutor implements FunctionExecutor {
   ) {}
 
   private isFiltering(): boolean {
-    return this.allowedTools !== null && this.allowedTools.length > 0;
+    return this.allowedTools !== null;
   }
 
   execute(name: string, params: any, context?: any): Promise<any> {

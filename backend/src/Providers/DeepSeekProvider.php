@@ -243,6 +243,7 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
             $this->trackUsage($userId, $inputTokens, $outputTokens, $functionCallCount, $responseTimeMs);
             return [
                 'text' => $response['_pending_assistant_text'] ?? '',
+                'assistant_reasoning' => $response['_pending_assistant_reasoning'] ?? '',
                 'usage' => [
                     'input_tokens' => $inputTokens,
                     'output_tokens' => $outputTokens,
@@ -365,6 +366,12 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
 
         } catch (GuzzleException $e) {
             $statusCode = $e->getCode();
+            // Log the API's own explanation: a 400 on a tool-heavy turn is
+            // otherwise reduced to "Bad Request" and impossible to diagnose.
+            if ($e instanceof \GuzzleHttp\Exception\RequestException && $e->hasResponse()) {
+                error_log('[DeepSeekProvider] HTTP ' . $statusCode . ' response body: '
+                    . substr((string) $e->getResponse()->getBody(), 0, 1500));
+            }
 
             if ($statusCode === 429) {
                 throw ProviderException::rateLimited('deepseek');
@@ -542,7 +549,9 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
                 ];
             }, $clientCalls);
             error_log("🔧 [DeepSeekProvider] Client-side tool call detected; surfacing to frontend: " . json_encode(array_column($normalized, 'name')));
-            $marker = $this->emitClientToolCallEvent($normalized, $assistantText);
+            $reasoning = $assistantMessage['reasoning_content'] ?? '';
+            $marker = $this->emitClientToolCallEvent($normalized, $assistantText,
+                is_string($reasoning) && $reasoning !== '' ? ['assistant_reasoning' => $reasoning] : []);
             foreach ($clientCalls as $tc) {
                 $functionCallCount++;
                 $functionsCalled[] = $tc['function']['name'] ?? '';
@@ -713,6 +722,13 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
                 $messages[] = [
                     'role'       => 'assistant',
                     'content'    => $textContent !== '' ? $textContent : null,
+                    // Thinking mode: DeepSeek 400s ("The reasoning_content in
+                    // the thinking mode must be passed back") when a replayed
+                    // tool-call turn has NO reasoning_content key, but accepts
+                    // an empty string. A forced-tool turn (thinking disabled,
+                    // e.g. the skill turn's tool_choice=required) yields no
+                    // reasoning, so the key must ALWAYS be present.
+                    'reasoning_content' => is_string($msg['reasoning_content'] ?? null) ? $msg['reasoning_content'] : '',
                     'tool_calls' => $normalizedToolCalls,
                 ];
                 continue;

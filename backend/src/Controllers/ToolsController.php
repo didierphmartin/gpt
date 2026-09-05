@@ -109,7 +109,12 @@ class ToolsController
             try {
                 $mcpLoader = new MCPToolsLoader($this->db);
                 $allowlist = $this->resolvePackageMcpAllowlist($request);
-                $mcpLoader->loadToolsForUser(null, $allowlist);
+                // Load the CALLER's registry (globals + their own servers). With
+                // null only global servers came back, so the agent form's tool
+                // checklist could never show/tick a user-registered server's
+                // tools (Okta, Workday, GitHub… — seen on playbook agents, 2026-09-03).
+                $uid = $request['user_id'] ?? null;
+                $mcpLoader->loadToolsForUser(($uid === null || $uid === '') ? null : (string)$uid, $allowlist);
 
                 if ($mcpLoader->hasTools()) {
                     $mcpDefinitions = $mcpLoader->getToolDefinitions();

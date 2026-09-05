@@ -43,7 +43,36 @@ final class PlaybookAnalyzer
         $ordered = $doc->actionsUsed;
         usort($ordered, fn($a, $b) => $positions[$a] <=> $positions[$b]);
 
+        // "where" = the step/line of the Instructions the action first appears
+        // on, quoted, so the author can find and fix the faulty statement.
+        $where = fn(string $name): string => self::locate($doc->instructions, $name);
+
+        // #Actions written in the prose but absent from "Actions used" never
+        // get an action-space entry (they silently fall to the unbound
+        // policy at run time) — point at the exact line.
+        $listed = array_map(fn($n) => strtolower(trim($n)), $doc->actionsUsed);
+        $seen = [];
+        $step = '';
+        foreach (preg_split('/\r?\n/', $doc->instructions) as $i => $line) {
+            $step = self::stepOf($line, $step);
+            if (!preg_match_all('/#[A-Z][\w\'’]*(?: [A-Z][\w\'’]*){0,5}(?: \([A-Za-z ]+\))?/u', $line, $mm)) continue;
+            foreach ($mm[0] as $found) {
+                $k = strtolower($found);
+                if (isset($seen[$k])) continue;
+                // Skip if it is (a prefix of) a listed action on this line.
+                $covered = false;
+                foreach ($listed as $l) { if (str_starts_with($l, $k) || str_starts_with($k, $l)) { $covered = true; break; } }
+                if ($covered) continue;
+                $seen[$k] = true;
+                $warnings[] = "{$found} is used in the Instructions but not listed under \"Actions used\", so it will not be bound"
+                    . ' — ' . self::describeLine($i, $line, $step) . '.';
+            }
+        }
+
         foreach ($ordered as $name) {
+            if ($positions[$name] === PHP_INT_MAX) {
+                $notices[] = "{$name} is listed under \"Actions used\" but never appears in the Instructions.";
+            }
             $key = strtolower(trim($name));
             if (isset(self::NATIVE_VERBS[$key])) {
                 $native = self::NATIVE_VERBS[$key];
@@ -66,7 +95,7 @@ final class PlaybookAnalyzer
                     continue;
                 }
                 $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => null, 'auto' => false];
-                $warnings[] = "Unbound action {$name}: at run time the '{$doc->policy['on_unbound']}' policy applies.";
+                $warnings[] = "Unbound action {$name}: at run time the '{$doc->policy['on_unbound']}' policy applies" . $where($name) . '.';
                 continue;
             }
             if (str_starts_with($target, 'agent.')) {
@@ -75,7 +104,7 @@ final class PlaybookAnalyzer
                     $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target, 'auto' => false];
                 } else {
                     $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target, 'auto' => false];
-                    $errors[] = "{$name} is bound to {$target} but no such agent exists.";
+                    $errors[] = "{$name} is bound to {$target} but no such agent exists" . $where($name) . '.';
                 }
                 continue;
             }
@@ -83,11 +112,38 @@ final class PlaybookAnalyzer
                 $actions[] = ['name' => $name, 'kind' => 'bound', 'target' => $target, 'auto' => false];
             } else {
                 $actions[] = ['name' => $name, 'kind' => 'unbound', 'target' => $target, 'auto' => false];
-                $errors[] = "{$name} is bound to {$target} but that tool is not available on any connected MCP server.";
+                $errors[] = "{$name} is bound to {$target} but that tool is not available on any connected MCP server" . $where($name) . '.';
             }
         }
         return ['actions' => $actions, 'gates' => array_values(array_unique($gates)),
                 'checklist' => $ordered, 'errors' => $errors, 'warnings' => $warnings, 'notices' => $notices];
+    }
+
+    /** " — step 7: \"7. #Foo …\"" for the first Instructions line containing $name, else "". */
+    private static function locate(string $instructions, string $name): string
+    {
+        $step = '';
+        foreach (preg_split('/\r?\n/', $instructions) as $i => $line) {
+            $step = self::stepOf($line, $step);
+            if (stripos($line, $name) !== false) return ' — ' . self::describeLine($i, $line, $step);
+        }
+        return '';
+    }
+
+    /** The author's step number on this line ("7", "2.1"), else the enclosing one carried in. */
+    private static function stepOf(string $line, string $current): string
+    {
+        return preg_match('/^\s*(\d+(?:\.\d+)*)[.)]?\s/', $line, $m) ? $m[1] : $current;
+    }
+
+    /** 'step 7: "…"' on a numbered line; 'step 4, line 7: "…"' for a sub-line; 'line N: "…"' outside any step. */
+    private static function describeLine(int $index, string $line, string $step): string
+    {
+        $t = trim($line);
+        $numbered = preg_match('/^\d+(?:\.\d+)*[.)]?\s/', $t);
+        $label = $numbered ? "step {$step}" : ($step !== '' ? "step {$step}, line " . ($index + 1) : 'Instructions line ' . ($index + 1));
+        if (mb_strlen($t) > 90) $t = mb_substr($t, 0, 87) . '…';
+        return $label . ': "' . $t . '"';
     }
 
     /**

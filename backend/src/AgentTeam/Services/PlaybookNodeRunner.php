@@ -89,6 +89,16 @@ final class PlaybookNodeRunner
             );
         }
 
+        // Capture every event so the node's OUTPUT can mirror the run overlay
+        // (tools, messages, gates, result) — the next node needs the story,
+        // not just the interpreter's last sentence.
+        $events = [];
+        $emitInner = $emit;
+        $emit = function (array $ev) use (&$events, $emitInner): void {
+            $events[] = $ev;
+            $emitInner($ev);
+        };
+
         $transcript = new PlaybookTranscript(WorkflowRunLog::defaultDir($this->config));
         $state = new PlaybookRunState($pdo, $transcript);
         // Fresh-connection factory for post-gate reconnects (see GateManager).
@@ -117,9 +127,68 @@ final class PlaybookNodeRunner
 
         $result = $interpreter->runLeg($runId, 0, $doc, [], $requester, $requestText);
 
-        $output = (string)($result['output'] ?? '') . "\n\n[playbook run {$runId}: {$result['status']}]";
+        $output = self::renderTranscript($doc->title, $events, (string)($result['output'] ?? ''), $runId, (string)$result['status']);
 
         return ['output' => $output, 'run_id' => $runId, 'status' => (string)$result['status']];
+    }
+
+    /**
+     * The node's output text: a Markdown transcript mirroring the run
+     * overlay — chronological tool calls with ✓/✗, the playbook's messages
+     * (sensitive ones redacted), human gates with their decision, then the
+     * final result and status. Twin of workflow-editor.js _pbTranscriptText.
+     */
+    public static function renderTranscript(string $title, array $events, string $finalOutput, ?int $runId, string $status): string
+    {
+        $gateTitles = ['approval' => 'Approval requested', 'form' => 'Form request', 'handoff' => 'Handed off to a human',
+                       'await_message' => 'Waiting for the requester', 'wait' => 'Waiting'];
+        $gateTools = ['request_approval', 'trigger_form', 'prompt_handoff', 'await_message', 'wait_until'];
+        $lines = [];
+        $pendingTools = []; // name => index in $lines
+        $str = fn($v): string => is_scalar($v) || $v === null ? trim((string)$v) : json_encode($v, JSON_UNESCAPED_UNICODE);
+        foreach ($events as $ev) {
+            $type = (string)($ev['type'] ?? '');
+            if ($type === 'tool_call') {
+                $name = (string)($ev['name'] ?? 'tool');
+                if (in_array($name, $gateTools, true)) continue; // rendered via gate_request + decision
+                $lines[] = "- 🔧 {$name} …";
+                $pendingTools[$name] = count($lines) - 1;
+            } elseif ($type === 'tool_result') {
+                $name = (string)($ev['name'] ?? 'tool');
+                $res = is_array($ev['result'] ?? null) ? $ev['result'] : [];
+                if (in_array($name, $gateTools, true)) {
+                    // GateManager stores the whole answer under 'decision'
+                    // ({tool_call_id, decision, comment, actor}); unwrap it.
+                    $d = $res['decision'] ?? ($res['status'] ?? '');
+                    if (is_array($d)) { $res = $d + $res; $d = $d['decision'] ?? ($d['status'] ?? ($d['outcome'] ?? 'answered')); }
+                    $decision = $str($d);
+                    $comment = $str($res['comment'] ?? '');
+                    if ($decision !== '') $lines[] = "  → {$decision}" . ($comment !== '' ? " ({$comment})" : '');
+                    continue;
+                }
+                $ok = ($res['ok'] ?? true) !== false;
+                $mark = $ok ? '✓' : '✗';
+                if (isset($pendingTools[$name])) {
+                    $lines[$pendingTools[$name]] = "- 🔧 {$name} {$mark}" . (!$ok && !empty($res['error']) ? ' — ' . $str($res['error']) : '');
+                    unset($pendingTools[$name]);
+                } else {
+                    $lines[] = "- 🔧 {$name} {$mark}";
+                }
+            } elseif ($type === 'message') {
+                $text = !empty($ev['sensitive']) ? '(message redacted)' : trim((string)($ev['text'] ?? ''));
+                if ($text !== '') $lines[] = "- 💬 Playbook:\n" . preg_replace('/^/m', '  ', $text);
+            } elseif ($type === 'gate_request') {
+                $kind = (string)($ev['kind'] ?? 'gate');
+                $p = is_array($ev['payload'] ?? null) ? $ev['payload'] : [];
+                $what = $str($p['question'] ?? $p['prompt'] ?? ($str($p['team_or_person'] ?? '') . (isset($p['reason']) ? ' — ' . $str($p['reason']) : '')));
+                $lines[] = '- ✋ ' . ($gateTitles[$kind] ?? ucfirst($kind)) . ($what !== '' ? ": {$what}" : '');
+            }
+        }
+        $head = "# Playbook: {$title}" . ($runId !== null ? " (run {$runId} — {$status})" : " ({$status})");
+        $out = $head . "\n\n## Timeline\n" . ($lines ? implode("\n", $lines) : '- (no steps recorded)');
+        $final = trim($finalOutput);
+        if ($final !== '') $out .= "\n\n## Result\n" . $final;
+        return $out . "\n\n[playbook run {$runId}: {$status}]";
     }
 
     /**

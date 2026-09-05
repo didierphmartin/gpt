@@ -82,7 +82,7 @@ class MockOktaHandlerTest extends TestCase
         $this->assertArrayHasKey('result', $response);
         $this->assertArrayHasKey('tools', $response['result']);
         $tools = $response['result']['tools'];
-        $this->assertCount(12, $tools);
+        $this->assertCount(13, $tools);
 
         $names = array_map(fn($t) => $t['name'], $tools);
         $this->assertContains('search_users', $names);
@@ -92,6 +92,7 @@ class MockOktaHandlerTest extends TestCase
         $this->assertContains('reset_password', $names);
         $this->assertContains('reset_factor', $names);
         $this->assertContains('unlock_user', $names);
+        $this->assertContains('deactivate_user', $names);
 
         // Hidden test-hook tools must NOT appear in tools/list
         $this->assertNotContains('_reset_call_log', $names);
@@ -103,6 +104,16 @@ class MockOktaHandlerTest extends TestCase
             $this->assertArrayHasKey('inputSchema', $tool);
             $this->assertSame('object', $tool['inputSchema']['type']);
         }
+    }
+
+    public function testDeactivateUserReturnsDeprovisionedState(): void
+    {
+        $response = $this->call('deactivate_user', ['user_id' => 'u-low']);
+        $this->assertArrayNotHasKey('error', $response);
+        $decoded = json_decode($this->contentText($response), true);
+        $this->assertSame('success', $decoded['status']);
+        $this->assertSame('u-low', $decoded['user_id']);
+        $this->assertSame('DEPROVISIONED', $decoded['state']);
     }
 
     public function testSearchUsersLowFixture(): void

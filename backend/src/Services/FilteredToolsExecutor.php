@@ -58,7 +58,8 @@ class FilteredToolsExecutor implements FunctionExecutorInterface
      */
     public function isFiltering(): bool
     {
-        return $this->allowedTools !== null && !empty($this->allowedTools);
+        // An EMPTY allow-list is still a filter (= no tools); only null means "all".
+        return $this->allowedTools !== null;
     }
 
     /**
@@ -91,15 +92,16 @@ class FilteredToolsExecutor implements FunctionExecutorInterface
     /**
      * Get filtered tool definitions for LLM API
      *
-     * If allowedTools is set, only returns tools whose names are in the list.
-     * If allowedTools is null or empty, returns all tools.
+     * If allowedTools is set, only returns tools whose names are in the list —
+     * an empty list returns NO tools (a workflow node that selected nothing).
+     * Only null returns all tools (conversation mode).
      */
     public function getToolDefinitions(): array
     {
         $allTools = $this->baseExecutor->getToolDefinitions();
 
         // If no filter is set, return all tools
-        if ($this->allowedTools === null || empty($this->allowedTools)) {
+        if ($this->allowedTools === null) {
             return $allTools;
         }
 

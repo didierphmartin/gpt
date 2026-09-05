@@ -88,7 +88,9 @@ def _normalize_mcp_url(url: str) -> str:
         return url
     return url + "/mcp"
 
-def _init_mcp_session(url: str, headers: dict) -> bool:
+_MCP_ENDPOINTS: dict = {}   # registered server URL -> endpoint that accepted the handshake
+
+def _init_mcp_session(url: str, headers: dict) -> str | None:
     """Initialize an MCP session with the server.
 
     The MCP protocol requires a handshake before tool calls:
@@ -96,9 +98,11 @@ def _init_mcp_session(url: str, headers: dict) -> bool:
     2. Server responds with its capabilities
     3. Client sends 'notifications/initialized' to confirm
 
-    Returns True on success, False on failure.
+    Tries the /mcp-normalised URL first, then the URL exactly as registered
+    (servers mounted at their bare URL, e.g. PHP mock servers, answer there
+    and 404 or error on /mcp). The endpoint that answers is remembered.
+    Returns that endpoint URL, or None when no candidate accepted the handshake.
     """
-    mcp_url = _normalize_mcp_url(url)
     init_req = {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -107,23 +111,32 @@ def _init_mcp_session(url: str, headers: dict) -> bool:
             "capabilities": {}
         }
     }
-    try:
-        with httpx.Client(timeout=30) as c:
-            r = c.post(mcp_url, json=init_req, headers=headers)
-            r.raise_for_status()
-            data = _parse_mcp_response(r.text)
-            if data is None or "error" in (data or {}):
-                return False
-            # Send initialized notification
-            c.post(mcp_url, json={
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {}
-            }, headers=headers)
-            return True
-    except Exception as e:
-        print(f"[warn] MCP init failed for {url}: {e}")
-        return False
+    candidates = [_MCP_ENDPOINTS[url]] if url in _MCP_ENDPOINTS else []
+    for cand in (_normalize_mcp_url(url), url):
+        if cand not in candidates:
+            candidates.append(cand)
+    last_err = None
+    for mcp_url in candidates:
+        try:
+            with httpx.Client(timeout=30) as c:
+                r = c.post(mcp_url, json=init_req, headers=headers)
+                r.raise_for_status()
+                data = _parse_mcp_response(r.text)
+                if data is None or "error" in (data or {}):
+                    last_err = (data or {}).get("error") if data else "invalid response"
+                    continue
+                # Send initialized notification
+                c.post(mcp_url, json={
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {}
+                }, headers=headers)
+                _MCP_ENDPOINTS[url] = mcp_url
+                return mcp_url
+        except Exception as e:
+            last_err = e
+    print(f"[warn] MCP init failed for {url}: {last_err}")
+    return None
 
 def _parse_mcp_response(text: str) -> dict | None:
     """Parse a JSON-RPC response from an MCP server.
@@ -157,11 +170,10 @@ def _call_mcp_tool(server_url: str, tool_name: str,
     The MCP response contains a 'content' array; we extract all text items
     and join them. If no text is found, falls back to raw JSON.
     """
-    mcp_url = _normalize_mcp_url(server_url)
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream, */*"}
 
-    _init_mcp_session(server_url, headers)
+    mcp_url = _init_mcp_session(server_url, headers) or _normalize_mcp_url(server_url)
 
     request = {
         "jsonrpc": "2.0", "id": int(time.time()),
@@ -549,5 +561,191 @@ def _convert_doc_to_markdown(path: str) -> str:
     raise ValueError(f"unsupported document format: {ext}")
 
 PY;
+    }
+
+    // ------------------------------------------------------------------
+    // Generated-script documentation (shared by every compile target)
+    // ------------------------------------------------------------------
+
+    /** Env var that carries the API key of a provider (as the runner's .env names them). */
+    public static function providerKeyEnv(string $provider): ?string
+    {
+        return [
+            'claude' => 'ANTHROPIC_API_KEY', 'anthropic' => 'ANTHROPIC_API_KEY',
+            'openai' => 'OPENAI_API_KEY', 'gemini' => 'GOOGLE_API_KEY', 'google' => 'GOOGLE_API_KEY',
+            'grok' => 'XAI_API_KEY', 'xai' => 'XAI_API_KEY', 'kimi' => 'KIMI_API_KEY', 'moonshot' => 'KIMI_API_KEY',
+            'deepseek' => 'DEEPSEEK_API_KEY', 'glm' => 'GLM_API_KEY',
+        ][strtolower($provider)] ?? null;
+    }
+
+    /** One-line summary of a node descriptor (see WorkflowGraphAnalyzer::docNodes). */
+    private static function nodeSummary(array $n): string
+    {
+        $t = $n['type'];
+        if ($t === 'start') {
+            $p = trim((string) ($n['prompt'] ?? ''));
+            return 'receives the user prompt' . ($p !== '' ? ' -- default: ' . json_encode(mb_strimwidth($p, 0, 70, '…'), JSON_UNESCAPED_UNICODE) : '');
+        }
+        if ($t === 'output') {
+            return 'merges its parents\' outputs verbatim (no LLM) -- the workflow result';
+        }
+        $bits = [];
+        if (($n['provider'] ?? '') !== '' || ($n['model'] ?? '') !== '') {
+            $bits[] = ($n['provider'] ?: '?') . '/' . ($n['model'] !== '' ? $n['model'] : '(platform default)');
+        }
+        if (($n['temperature'] ?? null) !== null) $bits[] = 'temp ' . json_encode((float) $n['temperature']);
+        if (($n['max_tokens'] ?? null) !== null) $bits[] = 'max_tokens ' . (int) $n['max_tokens'];
+        if (in_array($n['thinking'] ?? null, ['on', 'off'], true)) $bits[] = 'thinking ' . $n['thinking'];
+        if ($n['playbook'] !== null) {
+            $pb = $n['playbook'];
+            $s = 'playbook ' . json_encode((string) ($pb['title'] ?? ''), JSON_UNESCAPED_UNICODE);
+            if (($pb['bound'] ?? null) !== null) $s .= ", {$pb['bound']} bound / " . (int) ($pb['unbound'] ?? 0) . ' unbound action(s)';
+            $s .= ', writes ' . (!empty($pb['writes']) ? 'ON' : 'OFF');
+            $bits[] = $s;
+        } else {
+            $bits[] = count($n['tools']) . ' tool(s)';
+            if ($n['skills']) $bits[] = count($n['skills']) . ' skill(s): ' . implode(', ', $n['skills']);
+        }
+        if ($n['dispatch']) $bits[] = 'DISPATCHER -> one of: ' . implode(' | ', $n['dispatch']);
+        $s = implode(', ', $bits);
+        if ($n['dispatch'] && empty($n['dispatch_supported'])) {
+            $s .= ' (menu NOT honoured by this target: all children run)';
+        }
+        if (empty($n['supported'])) {
+            $s .= " -- NOT RUN BY THIS TARGET (" . $t . " nodes are not supported here; the node is skipped)";
+        }
+        return $s;
+    }
+
+    /**
+     * The uniform documentation body every generated script carries in its
+     * module docstring: provenance, graph nodes, graph edges, execution
+     * order, target data flow, how to run. Same sections for every target
+     * and every workflow shape. Returned WITHOUT the surrounding quotes.
+     *
+     * $doc keys: target, workflow{id,name}, nodes (docNodes), edges [[from,to]],
+     * layers [[ids]], data_flow (target text), run{deps[],usage,extra[]},
+     * storage{enabled,folder}.
+     */
+    public static function workflowDocBlock(array $doc): string
+    {
+        $nodes = $doc['nodes'];
+        $byId = [];
+        foreach ($nodes as $n) $byId[$n['id']] = $n;
+        $lbl = fn(string $id) => (isset($byId[$id]) ? $byId[$id]['name'] : 'node') . " ({$id})";
+        $dispatchers = [];
+        foreach ($nodes as $n) if ($n['dispatch']) $dispatchers[$n['id']] = true;
+        // Only LangGraph turns a dispatcher's fan-out into a choice today; the other
+        // targets run the menu children in parallel, and the doc must say so.
+        $dispatchOk = !empty($doc['dispatch_supported']);
+        $menuNote = $dispatchOk ? '   (dispatcher menu: one of)' : '   (dispatcher menu: NOT honoured by this target -- runs in parallel)';
+        $L = [];
+        $L[] = 'PROVENANCE';
+        $L[] = '==========';
+        $L[] = "  Workflow:   {$doc['workflow']['name']} (id {$doc['workflow']['id']})";
+        $L[] = "  Target:     {$doc['target']}";
+        $L[] = "  Generated:  " . ($doc['generated_at'] ?? date('Y-m-d H:i:s T')) . ' by the SynergyAI workflow editor';
+        $L[] = '  This file is a frozen snapshot of the workflow. Edits made here are';
+        $L[] = '  overwritten by the next Generate: change the workflow in the editor and';
+        $L[] = '  re-generate instead.';
+        $L[] = '';
+        $L[] = 'GRAPH NODES  (id (type): name -- settings; topological order)';
+        $L[] = '===========';
+        $w = 0;
+        foreach ($nodes as $n) $w = max($w, strlen("{$n['id']} ({$n['type']}):"));
+        foreach ($nodes as $n) {
+            $L[] = '  ' . str_pad("{$n['id']} ({$n['type']}):", $w) . ' ' . $n['name'] . ' -- ' . self::nodeSummary($n + ['dispatch_supported' => $dispatchOk]);
+        }
+        $L[] = '';
+        $L[] = 'GRAPH EDGES  (from -> to)';
+        $L[] = '===========';
+        if (empty($doc['edges'])) $L[] = '  (none)';
+        foreach ($doc['edges'] as $e) {
+            [$f, $t] = [(string) $e[0], (string) $e[1]];
+            $L[] = '  ' . $lbl($f) . ' -> ' . $lbl($t) . (isset($dispatchers[$f]) && isset($byId[$t]) && $byId[$t]['type'] !== 'output' ? $menuNote : '');
+        }
+        $L[] = '';
+        $L[] = 'EXECUTION ORDER  (topological layers; nodes on one line run in PARALLEL)';
+        $L[] = '===============';
+        foreach (array_values($doc['layers'] ?? []) as $i => $layer) {
+            $ids = array_map('strval', (array) $layer);
+            $names = array_map(fn($id) => isset($byId[$id]) ? $byId[$id]['name'] : "node_{$id}", $ids);
+            $line = "  layer {$i}:  " . implode('  ||  ', $names);
+            $viaDispatcher = false;
+            foreach ($ids as $id) foreach ($nodes as $n) if ($n['id'] === $id) foreach ($n['parents'] as $p) {
+                if (preg_match('/\((\S+)\)$/', $p, $m) && isset($dispatchers[$m[1]])) $viaDispatcher = true;
+            }
+            if (count($ids) > 1) {
+                $line .= ($viaDispatcher && $dispatchOk) ? '   (dispatcher: only the chosen one runs)'
+                    : ($viaDispatcher ? '   (run in PARALLEL -- dispatcher menu not honoured by this target)' : '   (run in PARALLEL)');
+            }
+            $L[] = $line;
+        }
+        $L[] = '';
+        $L[] = 'DATA FLOW';
+        $L[] = '=========';
+        foreach (explode("\n", rtrim((string) ($doc['data_flow'] ?? ''))) as $dl) $L[] = $dl;
+        $L[] = '';
+        $L[] = 'TO RUN';
+        $L[] = '======';
+        foreach ((array) ($doc['run']['deps'] ?? []) as $dep) $L[] = '  ' . $dep;
+        $keys = [];
+        foreach ($nodes as $n) {
+            if (($n['provider'] ?? '') === '' || empty($n['supported'])) continue;
+            $k = self::providerKeyEnv($n['provider']);
+            if ($k !== null) $keys[$k][] = strtolower($n['provider']);
+        }
+        if ($keys) {
+            $L[] = '  # API keys read from ../.env for the providers this workflow uses:';
+            foreach ($keys as $k => $provs) $L[] = "  #   {$k} (" . implode(', ', array_unique($provs)) . ')';
+        } else {
+            $L[] = '  # No LLM provider is used by a runnable node of this workflow.';
+        }
+        $L[] = '  ' . ($doc['run']['usage'] ?? 'python this_file.py "your prompt here"');
+        foreach ((array) ($doc['run']['extra'] ?? []) as $x) $L[] = '  ' . $x;
+        $hasPlaybook = false;
+        foreach ($nodes as $n) if ($n['playbook'] !== null && !empty($n['supported'])) $hasPlaybook = true;
+        if ($hasPlaybook) {
+            $L[] = '  # Human gates (playbook nodes): on a terminal the script asks on the console;';
+            $L[] = '  #   otherwise PLAYBOOK_GATE_MODE=auto (default: approve/acknowledge) | deny | prompt.';
+        }
+        $st = $doc['storage'] ?? [];
+        $L[] = '  # Output storage (Output node setting): ' . (!empty($st['enabled'])
+            ? 'ON -> ' . (($st['folder'] ?? '') !== '' ? $st['folder'] : '~/Documents/synergyAI/outputs/workflow/')
+            : 'OFF (the result is printed, not saved)');
+        return implode("\n", $L);
+    }
+
+    /**
+     * The uniform comment block that precedes every node definition in the
+     * generated code (same fields in every target).
+     */
+    public static function nodeCommentBlock(array $n, string $indent = ''): string
+    {
+        $head = "# ---- node {$n['id']}: {$n['name']} ({$n['type']}) ";
+        $L = [$indent . $head . str_repeat('-', max(4, 78 - strlen($head)))];
+        $row = fn(string $k, string $v) => $indent . '#   ' . str_pad($k, 15) . ': ' . $v;
+        if (($n['provider'] ?? '') !== '' || ($n['model'] ?? '') !== '') {
+            $s = ($n['provider'] ?: '?') . ' / ' . ($n['model'] !== '' ? $n['model'] : '(platform default)');
+            if (($n['temperature'] ?? null) !== null) $s .= '   temp ' . json_encode((float) $n['temperature']);
+            if (($n['max_tokens'] ?? null) !== null) $s .= '   max_tokens ' . (int) $n['max_tokens'];
+            $s .= '   thinking ' . (in_array($n['thinking'] ?? null, ['on', 'off'], true) ? $n['thinking'] : 'default');
+            $L[] = $row('provider/model', $s);
+        }
+        if ($n['playbook'] !== null) {
+            $pb = $n['playbook'];
+            $s = json_encode((string) ($pb['title'] ?? ''), JSON_UNESCAPED_UNICODE);
+            if (($pb['bound'] ?? null) !== null) $s .= " -- {$pb['bound']} bound / " . (int) ($pb['unbound'] ?? 0) . ' unbound action(s)';
+            $s .= ', writes ' . (!empty($pb['writes']) ? 'ON' : 'OFF');
+            $L[] = $row('playbook', $s);
+        } else {
+            $L[] = $row('tools', $n['tools'] ? implode(', ', $n['tools']) : '(none)');
+            $L[] = $row('skills', $n['skills'] ? implode(', ', $n['skills']) : '(none)');
+        }
+        if ($n['dispatch']) $L[] = $row('dispatcher', 'routes to one of: ' . implode(' | ', $n['dispatch']));
+        $L[] = $row('parents', $n['parents'] ? implode(' | ', $n['parents']) : '(none)');
+        $L[] = $row('children', $n['children'] ? implode(' | ', $n['children']) : '(none)');
+        if (empty($n['supported'])) $L[] = $row('NOTE', 'not run by this target');
+        return implode("\n", $L);
     }
 }

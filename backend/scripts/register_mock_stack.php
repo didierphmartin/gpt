@@ -24,6 +24,7 @@ $servers = [
     ['name' => 'GitHub',           'url' => 'http://localhost/mockstack/index.php/github',           'desc' => 'Mock GitHub org/team management.'],
     ['name' => 'Datadog',          'url' => 'http://localhost/mockstack/index.php/datadog',          'desc' => 'Mock Datadog user invites.'],
     ['name' => 'AWS',              'url' => 'http://localhost/mockstack/index.php/aws',              'desc' => 'Mock AWS IAM (sandbox).'],
+    ['name' => 'Workday',          'url' => 'http://localhost/mockstack/index.php/workday',          'desc' => 'Mock Workday time-off (balances, blackout, team calendar, submit).'],
 ];
 
 $config = require __DIR__ . '/../config/ai_config.php';
@@ -66,9 +67,9 @@ function stack_fetch_tools(string $url): array
     return $tools;
 }
 
-$upsert = $pdo->prepare('INSERT INTO mcp_servers (user_id, name, url, description, headers, enabled)
-    VALUES (:u, :n, :url, :d, NULL, 1)
-    ON DUPLICATE KEY UPDATE url = VALUES(url), description = VALUES(description), enabled = 1');
+$upsert = $pdo->prepare('INSERT INTO mcp_servers (user_id, name, url, description, headers, enabled, is_mock)
+    VALUES (:u, :n, :url, :d, NULL, 1, 1)
+    ON DUPLICATE KEY UPDATE url = VALUES(url), description = VALUES(description), enabled = 1, is_mock = 1');
 $findId = $pdo->prepare('SELECT id FROM mcp_servers WHERE user_id = :u AND name = :n');
 $clear  = $pdo->prepare('DELETE FROM mcp_server_tools WHERE server_id = :s');
 $ins    = $pdo->prepare('INSERT INTO mcp_server_tools (server_id, tool_name, tool_description, input_schema, has_ui, ui_resource_uri)

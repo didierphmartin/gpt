@@ -20,9 +20,9 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testMcpClientBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::mcpClientBlock();
-        $this->assertSame(4091, strlen($block), 'mcpClientBlock byte length changed');
+        $this->assertSame(4868, strlen($block), 'mcpClientBlock byte length changed');
         $this->assertSame(
-            'dea9689a2fe6887f70ec4a4671d974317bbef325ebba577b2764e844406f8557',
+            '873230865dafdbdbaa7fdccf4189c99f6cf47d9fac32977350dbdb1545b94ab4',
             hash('sha256', $block),
             'mcpClientBlock content changed — this alters generated Python for both generators'
         );

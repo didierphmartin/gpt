@@ -38,6 +38,21 @@ class PlaybookDocumentTest extends TestCase
         $this->assertSame([], $d->bindings);
     }
 
+    /** Playbook 4 (wf 42) wrote "1. Instructions: …" and markdown headers;
+     *  the keyword must still be detected and step 1's number kept. */
+    public function testSectionHeadersTolerateListMarkersAndMarkdown(): void
+    {
+        $text = "## Title: Time Off\n\n**Trigger:** Requester asks for PTO.\n\n" .
+            "1. Instructions: Parse start date.\n2. #Lookup Users on the requester.\n" .
+            "- Tools used: Slack; Workday\n\nActions used: #Lookup Users";
+        $d = PlaybookDocument::fromConsoleText($text);
+        $this->assertSame('Time Off', $d->title);
+        $this->assertSame('Requester asks for PTO.', $d->trigger['description']);
+        $this->assertStringStartsWith("1. Parse start date.\n2. #Lookup Users", $d->instructions);
+        $this->assertSame(['Slack', 'Workday'], $d->toolsUsed);
+        $this->assertSame(['#Lookup Users'], $d->actionsUsed);
+    }
+
     public function testDomainField(): void
     {
         $d = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromArray([
@@ -54,6 +69,17 @@ class PlaybookDocumentTest extends TestCase
             'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'x'],
             'instructions' => '#Resolve Request.']);
         $this->assertSame('', $none->domain);
+    }
+
+    public function testMissingSectionMessageNamesItAndWhatWasFound(): void
+    {
+        try {
+            PlaybookDocument::fromConsoleText("Title: T\n\nTrigger: y\n\nSteps: do things\n\nActions used: #Resolve Request");
+            $this->fail('expected exception');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('Missing "Instructions:" section', $e->getMessage());
+            $this->assertStringContainsString('Recognized sections: Title, Trigger, Actions used', $e->getMessage());
+        }
     }
 
     public function testMissingTitleThrows(): void

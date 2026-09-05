@@ -25,7 +25,9 @@ trait ClientSideToolsTrait
      */
     public static function getClientSideToolNames(): array
     {
-        return ['run_skill_script', 'discover_skill', 'Task'];
+        // route_to: dispatcher agents' branch choice — resolved by the
+        // workflow runner (DispatchRouting), never executed server-side.
+        return ['run_skill_script', 'discover_skill', 'Task', 'route_to'];
     }
 
     /**
@@ -60,17 +62,21 @@ trait ClientSideToolsTrait
      * Emit the standard `client_tool_call` SSE event the frontend listens
      * for. Unchanged from before.
      */
-    protected function emitClientToolCallEvent(array $toolCalls, string $assistantText = ''): array
+    protected function emitClientToolCallEvent(array $toolCalls, string $assistantText = '', array $extra = []): array
     {
-        $payload = [
+        // $extra: provider-specific fields the frontend must replay on the
+        // next turn, e.g. DeepSeek's reasoning_content ("The reasoning_content
+        // in the thinking mode must be passed back to the API", HTTP 400).
+        $payload = array_merge($extra, [
             'assistant_text' => $assistantText,
             'tool_calls' => $toolCalls,
-        ];
+        ]);
         $this->sseClient?->sendCustomEvent('client_tool_call', $payload);
         return [
             '_pending_client_tool_call' => true,
             '_pending_tool_calls' => $toolCalls,
             '_pending_assistant_text' => $assistantText,
+            '_pending_assistant_reasoning' => (string)($extra['assistant_reasoning'] ?? ''),
         ];
     }
 }

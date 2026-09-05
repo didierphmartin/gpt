@@ -211,6 +211,13 @@ class StartupTasksRunner {
 
         const mcpMd = this._formatMcpCatalog(servers, toolsByServer);
         await this._writeIfChanged(referencesHandle, 'mcp-catalog.md', mcpMd);
+        // playbook-author binds #Actions against the same catalog.
+        try {
+            const skillsHandle = await root.getDirectoryHandle('skills', { create: false });
+            const pbHandle = await skillsHandle.getDirectoryHandle('playbook-author', { create: false });
+            const pbRefs = await pbHandle.getDirectoryHandle('references', { create: true });
+            await this._writeIfChanged(pbRefs, 'mcp-catalog.md', mcpMd);
+        } catch { /* skill not installed — nothing to refresh */ }
 
         // Skills catalog now comes straight from the filesystem (single
         // source of truth). skillsManager.loadTree() has already populated

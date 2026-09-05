@@ -349,119 +349,74 @@ PY;
         return $out;
     }
 
+    /** DATA FLOW section of the module docstring (MAF-specific mechanics). */
+    private static function dataFlowDoc(): string
+    {
+        return <<<'TXT'
+The visual graph is compiled onto Microsoft Agent Framework's GRAPH-BASED
+workflow API (WorkflowBuilder / Executor / add_edge): every editor node
+becomes an Executor instance, every drawn connection one `add_edge(...)`
+line in create_workflow(), and MAF's own engine schedules execution from
+that topology -- nodes whose parents are all done run concurrently.
+
+Nodes exchange a typed NodeMessage (source node + text). A node with
+several parents holds a FAN-IN BARRIER: its handler buffers one message
+per parent edge and only fires when all have arrived.
+
+NODE-INTERNAL PIPELINE (fixed order, isolated contexts):
+    merged fan-in
+      ==> AGENT: one MAF Agent with the NODE's system prompt, MCP tools,
+          provider/model/sampling (verbatim from the editor form) applied to
+          the merged content; the original request is parameter context.
+      ==> SKILL(s), each in a FRESH context: system prompt = SKILL.md, empty
+          history, tools = stage_file + the dir-scoped run_skill_script.
+          A failed skill step degrades to "skill skipped" -- it never
+          replaces the node's output with a stub.
+The Output node is not an LLM: it merges its parents' text untouched and
+yields it as the workflow result.
+Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+
+FILE MAP (in emission order)
+  ProviderClients    -- class; builds the MAF chat client per provider and
+                        the per-call ChatOptions (token cap, temperature,
+                        provider quirks like k2/GLM thinking mode).
+  MCP tool layer     -- module functions; one `_tool_*` wrapper per MCP tool
+                        + `build_tools_from_catalog()` (shared with the other targets).
+  Skill FS layer     -- module functions shared with the other targets.
+  SkillRuntime       -- class; a node's bound skills as MAF FunctionTools.
+  AGENTS             -- dict; the frozen per-node metadata.
+  ProgressReporter   -- class; console liveness + the final RUN SUMMARY.
+  NodeMessage        -- dataclass; the typed payload on every edge.
+  StartExecutor / AgentNodeExecutor / OutputNodeExecutor
+                     -- the three node kinds.
+  create_workflow()  -- the canvas, reconstructed 1:1.
+  __main__           -- CLI entry.
+TXT;
+    }
+
     private static function headerBlock(array $analyzed): string
     {
         $esc  = fn(string $s): string => str_replace(['"""', "\\"], ["'''", "\\\\"], $s);
         $name = $esc((string) $analyzed['workflow']['name']);
 
-        // Frozen-graph outline: one line per topological layer, so a reader sees
-        // the whole execution plan (what runs in parallel, what waits for what)
-        // before any code.
-        $outlineLines = [];
-        foreach (array_values($analyzed['layers']) as $i => $layer) {
-            $names = [];
-            foreach ((array) $layer as $nid) {
-                $key = (string) $nid;
-                if (isset($analyzed['agents'][$key]) || isset($analyzed['agents'][$nid])) {
-                    $ag = $analyzed['agents'][$key] ?? $analyzed['agents'][$nid];
-                    $label = (string) ($ag['name'] ?? ('node ' . $key));
-                    $prov  = (string) ($ag['provider'] ?? '?');
-                    $model = (string) ($ag['model'] ?? '');
-                    $skillCount = count($ag['skills'] ?? []);
-                    $names[] = $label . ' [' . $prov . ($model !== '' ? '/' . $model : '')
-                        . ($skillCount ? ', ' . $skillCount . ' skill(s)' : '') . ']';
-                } else {
-                    $names[] = ($i === 0) ? 'Start (receives the user prompt)' : 'Output (fan-in sink, pass-through)';
-                }
-            }
-            $sep = count($names) > 1 ? '  ||  ' : '';
-            $outlineLines[] = '    layer ' . $i . ':  ' . implode($sep !== '' ? $sep : ', ', $names)
-                . (count($names) > 1 ? '   (run in PARALLEL)' : '');
-        }
-        $outline = $esc(implode("\n", $outlineLines));
+        $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
+            'target' => 'Microsoft Agent Framework (Python) -- WorkflowBuilder graph, one Executor per node',
+            'workflow' => $analyzed['workflow'],
+            'nodes' => WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed),
+            'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
+            'layers' => $analyzed['layers'] ?? [],
+            'data_flow' => self::dataFlowDoc(),
+            'run' => [
+                'deps' => ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'],
+                'usage' => 'python this_file.py "your prompt here"',
+            ],
+            'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
+        ]));
 
         return <<<PY
         """Standalone Microsoft Agent Framework workflow: {$name}
 
-        Auto-generated from the visual workflow editor (frozen at generation time —
-        re-generate from the editor to pick up workflow changes). Backend-independent
-        and self-contained: this ONE file calls the LLM providers, MCP servers, and
-        folder-backed skills directly.
-
-        WORKFLOW IMPLEMENTATION
-        =======================
-        The visual graph is compiled onto Microsoft Agent Framework's GRAPH-BASED
-        workflow API (WorkflowBuilder / Executor / add_edge): every editor node
-        becomes an Executor instance, every drawn connection becomes one
-        `add_edge(...)` line in create_workflow(), and MAF's own engine schedules
-        execution from that topology -- nodes whose parents are all done run
-        concurrently, exactly as the canvas implies. The frozen graph:
-
-        {$outline}
-
-        Nodes exchange a typed NodeMessage (source node + text). A node with
-        several parents holds a FAN-IN BARRIER: its handler buffers one message
-        per parent edge and only fires when all have arrived.
-
-        NODE-INTERNAL PIPELINE (fixed order, isolated contexts):
-            merged fan-in
-              ==> AGENT: one MAF Agent with the NODE's system prompt, MCP
-                  tools, provider/model/sampling (all verbatim from the editor
-                  form) applied to the merged content; the original request is
-                  included only as parameter context.
-              ==> SKILL(s), each in a FRESH context: system prompt = SKILL.md
-                  (not the node instructions), empty history (sees only the
-                  agent's result + the original request), tools = stage_file +
-                  the dir-scoped run_skill_script (not the node's MCP tools).
-                  Two shapes, chosen by the skill itself in phase A:
-                    author-first  -- author deliverable as text -> runtime
-                                     stages it -> script renders it;
-                    script-first  -- full SKILL.md process with tools (gather
-                                     script first, then compose).
-                  A failed skill step degrades to "skill skipped" — it can
-                  never replace the node's output with a stub.
-        The Output node is not an LLM: it merges its parents' text untouched
-        and yields it as the workflow result, so the deliverable is never
-        reworded by another model.
-
-        FILE MAP (in emission order)
-        ============================
-          ProviderClients    -- class; builds the MAF chat client for each provider
-                                and the per-call ChatOptions (token cap, temperature,
-                                provider quirks like disabling k2/GLM thinking mode).
-          MCP tool layer     -- module functions; one `_tool_*` wrapper per MCP tool
-                                used by any node + `build_tools_from_catalog()`.
-                                (Function-based: this block is shared verbatim with
-                                the LangGraph/ADK compile targets.)
-          Skill FS layer     -- module functions shared with the other targets:
-                                stage input files, run skill scripts, read outputs.
-          SkillRuntime       -- class; wraps a node's bound skills as MAF
-                                FunctionTools with bounded-retry fail-fast, and runs
-                                the mandatory skill step after the agent's answer.
-          AGENTS             -- dict; the frozen per-node metadata (name, provider,
-                                model, instructions, tools, skills, sampling).
-          ProgressReporter   -- class; console liveness: run banner, per-node
-                                start/done lines with a counter, fan-in status,
-                                a 15s heartbeat naming the in-flight nodes, and
-                                the final summary.
-          NodeMessage        -- dataclass; the typed payload on every edge.
-          StartExecutor      -- class; the Start node: broadcasts the run prompt.
-          AgentNodeExecutor  -- class; one agent node: fan-in barrier -> MAF Agent
-                                -> mandatory skills -> send downstream.
-          OutputNodeExecutor -- class; the Output node: fan-in sink, merges parent
-                                text verbatim and yields the workflow output.
-          create_workflow()  -- the canvas, reconstructed 1:1: one executor per
-                                node, one add_edge per drawn connection.
-          __main__           -- CLI entry: prompt from argv (or the baked default),
-                                runs the workflow, prints the final output,
-                                optionally saves it as .html/.md.
-
-        TO RUN
-        ======
-            pip install "agent-framework>=1.10,<2" httpx python-dotenv
-            # keys are read from ../.env (ANTHROPIC_API_KEY, OPENAI_API_KEY,
-            #   GOOGLE_API_KEY, XAI_API_KEY, KIMI_API_KEY, DEEPSEEK_API_KEY)
-            python this_file.py "your prompt here"
+        {$docBody}
         """
         import asyncio
         import json
@@ -955,7 +910,14 @@ PY;
     {
         $entries = [];
         $defaultModels = (array) ($analyzed['providerDefaultModels'] ?? []);
+        $docById = [];
+        foreach (WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed) as $dn) {
+            $docById[$dn['id']] = $dn;
+        }
         foreach ($analyzed['agents'] as $id => $ag) {
+            if (isset($docById[(string) $id])) {
+                $entries[] = PythonEmitHelpers::nodeCommentBlock($docById[(string) $id], '    ');
+            }
             $instr = (string) ($ag['systemPrompt'] ?? '');
             // Node forms store tool names with the runtime 'mcp_' prefix, but the
             // catalog (usedCatalog, mirrored into TOOL_CATALOG) is keyed on the

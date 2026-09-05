@@ -45,6 +45,27 @@ class PlaybookAnalyzerTest extends TestCase
         $this->assertStringContainsString('#Reset Password (Okta)', $r['errors'][0]);
     }
 
+    public function testMessagesPointAtTheFaultyStep(): void
+    {
+        $doc = PlaybookDocument::fromArray([
+            'title' => 'T', 'trigger' => ['kind' => 'request', 'description' => 'x'],
+            'instructions' => "1. Greet.\n2. #Reset Password (Okta) for the user.\n3. #Slack Pin Message on it.\n- then #Sub Bullet Action too\n4. #Resolve Request.",
+            'actions_used' => ['#Reset Password (Okta)', '#Resolve Request', '#Never Used'],
+            'bindings' => ['#Reset Password (Okta)' => 'okta.reset_password', '#Never Used' => null],
+        ]);
+        $r = (new PlaybookAnalyzer())->analyze($doc, []);
+        $this->assertStringContainsString('step 2: "2. #Reset Password (Okta) for the user."', $r['errors'][0]);
+        $unlisted = array_values(array_filter($r['warnings'], fn($w) => str_contains($w, '#Slack Pin Message')));
+        $this->assertCount(1, $unlisted);
+        $this->assertStringContainsString('not listed under "Actions used"', $unlisted[0]);
+        $this->assertStringContainsString('step 3:', $unlisted[0]);
+        $sub = array_values(array_filter($r['warnings'], fn($w) => str_contains($w, '#Sub Bullet Action')));
+        $this->assertStringContainsString('step 3, line 4: "- then #Sub Bullet Action too"', $sub[0]);
+        $this->assertStringContainsString('#Never Used is listed under "Actions used" but never appears', implode("\n", $r['notices']));
+        // Listed actions must not be re-reported as unlisted.
+        $this->assertStringNotContainsString('#Resolve Request is used', implode("\n", $r['warnings']));
+    }
+
     public function testChecklistPreservesProseOrder(): void
     {
         $r = (new PlaybookAnalyzer())->analyze($this->doc(), ['okta.search_users', 'okta.reset_password']);
