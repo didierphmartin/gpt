@@ -242,417 +242,15 @@ class LangGraphGenerator
      *
      * @return array{filename: string, code: string}
      */
-    public function generate(int $workflowId, ?string $userId = null): array
+    public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
-        // Force shortest round-tripping floats: the web SAPI's serialize_precision=100 makes
-        // json_encode bake temperatures like 0.5999999999999999… which strict models reject
-        // ("only 0.6 is allowed"). See MAFGenerator::emitMaf for the full note.
-        ini_set('serialize_precision', '-1');
-        $workflow = $this->workflowRepo->findById($workflowId);
-        if (!$workflow) {
-            throw new RuntimeException("Workflow $workflowId not found.");
+        $facts = $this->analyzeForEmit($workflowId, $userId);
+        if (!empty($options['a2a'])) {
+            return $this->generateA2A($facts);   // Task 4
         }
-        $wfName = $workflow->getName() ?: ('workflow_' . $workflowId);
-        $safeName = self::safeVar($wfName);
-        if ($safeName === '') {
-            $safeName = 'workflow_' . $workflowId;
-        }
-
-        $graph = $this->graphRepo->getGraph($workflowId);
-        // Route pure graph analysis through WorkflowGraphAnalyzer.
-        // Returns: byId, order (Kahn topo), edges (normalised), startNodeId.
-        $gdata   = WorkflowGraphAnalyzer::analyzeGraph($graph);
-        $byId    = $gdata['byId'];
-        $order   = $gdata['order'];
-        $startId = $gdata['startNodeId'];
-        if ($startId === '') {
-            throw new RuntimeException('No start node found.');
-        }
-        // Normalised edges ({from, to}) are compatible with edgeFrom()/edgeTo().
-        $edges     = $gdata['edges'];
-        $startNode = $byId[$startId];
-        $startCfg = $startNode['config'] ?? $startNode['data'] ?? [];
-        if (!is_array($startCfg)) {
-            $startCfg = [];
-        }
-        $startPrompt = (string) ($startCfg['prompt'] ?? '');
-        $startDocuments = $startCfg['documents'] ?? [];
-        if (!is_array($startDocuments)) {
-            $startDocuments = [];
-        }
-
-        // Provider default models (system_llm_settings.model). Used when
-        // an agent has no explicit `model` field set — same source the
-        // workflow editor's "Default: <name>" placeholder reads from, so
-        // the generated script uses exactly what the UI would have used.
-        $providerDefaults = [];
-        try {
-            $stmtP = $this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1");
-            foreach ($stmtP as $rowP) {
-                $providerDefaults[strtolower((string) ($rowP['provider_key'] ?? ''))] = (string) ($rowP['model'] ?? '');
-            }
-        } catch (\Throwable $_) {
-            // If the table is missing or unreadable, fall through with an
-            // empty map — agents that left their model blank will fail
-            // loudly at run-time rather than silently using a stale
-            // hardcoded fallback.
-        }
-
-        // Fetch MCP tools with server info (url, name, headers)
-        $mcpTools = $this->loadMcpToolsWithServers($userId);
-
-        // Build server registry and tool catalog
-        $serverRegistry = [];
-        $toolCatalog = [];
-        foreach ($mcpTools as $t) {
-            $surl = (string) ($t['server_url'] ?? '');
-            $sname = (string) ($t['server_name'] ?? '');
-            $tname = (string) ($t['tool_name'] ?? $t['name'] ?? '');
-            if ($surl === '' || $tname === '') {
-                continue;
-            }
-            if (!isset($serverRegistry[$surl])) {
-                $serverRegistry[$surl] = ['name' => $sname];
-            }
-            $desc = $t['tool_description'] ?? $t['description'] ?? '';
-            if ($desc === null) {
-                $desc = '';
-            }
-            $schema = $t['input_schema'] ?? null;
-            // If null/missing, use empty object (Python uses {} default).
-            if ($schema === null) {
-                $schema = new \stdClass();
-            }
-            $toolCatalog[$tname] = [
-                'server_url' => $surl,
-                'description' => $desc,
-                'input_schema' => $schema,
-            ];
-        }
-
-        // Playbook binding ids ("<server slug>.<tool>") over the same registry,
-        // keyed the way LoaderMcpExecutor::availableTools() keys them.
-        $availableById = [];
-        foreach ($mcpTools as $t) {
-            $surl = (string) ($t['server_url'] ?? '');
-            $tname = (string) ($t['tool_name'] ?? $t['name'] ?? '');
-            if ($surl === '' || $tname === '') {
-                continue;
-            }
-            $schema = $t['input_schema'] ?? null;
-            $availableById[self::serverSlug((string) ($t['server_name'] ?? '')) . '.' . $tname] = [
-                'server_url' => $surl,
-                'tool' => $tname,
-                'description' => (string) ($t['tool_description'] ?? $t['description'] ?? ''),
-                'input_schema' => $schema === null ? new \stdClass() : $schema,
-            ];
-        }
-
-        // Dispatcher agents: their fan-out is a MENU, not a parallel fan-out
-        // (DispatchRouting). Resolve each dispatcher's targets (agent/playbook
-        // children, edge order) and which child is routed-to by whom BEFORE the
-        // per-node loops, so a child's prompt can carry the routed fragment.
-        $agentTypeCache = [];
-        $agentTypeOf = function (array $node) use (&$agentTypeCache): string {
-            $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
-            $t = (string) ($cfg['agent_type'] ?? '');
-            if ($t !== '') {
-                return $t;
-            }
-            $aid = $node['agent_id'] ?? ($cfg['agent_id'] ?? null);
-            if ($aid === null || $aid === '') {
-                return 'standard';
-            }
-            $aid = (int) $aid;
-            if (!array_key_exists($aid, $agentTypeCache)) {
-                try {
-                    $a = $this->agentRepo->findById($aid);
-                    $agentTypeCache[$aid] = $a ? (string) ($a->toArray()['agent_type'] ?? 'standard') : 'standard';
-                } catch (\Throwable $_) {
-                    $agentTypeCache[$aid] = 'standard';
-                }
-            }
-            return $agentTypeCache[$aid];
-        };
-        $dispatchTargets = []; // dispatcher nid => [['id' => child nid, 'name' => display], …]
-        $routedBy = [];        // child nid => dispatcher display name
-        foreach ($order as $nid) {
-            $node = $byId[$nid];
-            if (!in_array(self::nodeType($node), ['agent', 'agent-template'], true) || $agentTypeOf($node) !== 'dispatcher') {
-                continue;
-            }
-            $targets = [];
-            foreach ($edges as $e) {
-                if (self::edgeFrom($e) !== $nid) {
-                    continue;
-                }
-                $childId = self::edgeTo($e);
-                $child = $byId[$childId] ?? null;
-                if (!$child || !in_array(self::nodeType($child), ['agent', 'agent-template', 'playbook'], true)) {
-                    continue;
-                }
-                $targets[] = ['id' => $childId, 'name' => self::displayName($child)];
-                $routedBy[$childId] = self::displayName($node);
-            }
-            if ($targets !== []) {
-                $dispatchTargets[$nid] = $targets;
-            }
-        }
-
-        // Resolve agent data for each agent node
-        $agentData = [];
-        $allNeededTools = [];
-        foreach ($order as $nid) {
-            $node = $byId[$nid];
-            $ntype = self::nodeType($node);
-            if ($ntype !== 'agent' && $ntype !== 'agent-template') {
-                continue;
-            }
-            $cfg = $node['config'] ?? [];
-            if (!is_array($cfg)) {
-                $cfg = [];
-            }
-            $agentId = $node['agent_id'] ?? ($cfg['agent_id'] ?? null);
-            $systemPrompt = (string) ($cfg['systemPrompt'] ?? $cfg['instructions'] ?? '');
-            // The editor saves selected MCP tools under `tools` (array of names
-            // like "mcp_get_crypto_news"). Legacy/realtime nodes use
-            // `selectedTools`. Accept both, normalise to bare names without
-            // the `mcp_` prefix so they match the tool catalog keys.
-            $rawTools = $cfg['selectedTools'] ?? $cfg['tools'] ?? [];
-            if (!is_array($rawTools)) {
-                $rawTools = [];
-            }
-            $toolNames = [];
-            foreach ($rawTools as $tool) {
-                $tname = null;
-                if (is_string($tool)) {
-                    $tname = $tool;
-                } elseif (is_array($tool)) {
-                    $tname = $tool['name'] ?? $tool['tool_name'] ?? null;
-                }
-                if ($tname) {
-                    if (strpos($tname, 'mcp_') === 0) {
-                        $tname = substr($tname, 4);
-                    }
-                    $toolNames[] = $tname;
-                }
-            }
-
-            // Default provider/model — overridden below if the agent
-            // record carries explicit fields.
-            $agentProvider = '';
-            $agentModel = '';
-            if ($agentId !== null && $agentId !== '') {
-                try {
-                    $agent = $this->agentRepo->findById((int) $agentId);
-                    if ($agent !== null) {
-                        $agentArr = $agent->toArray();
-                        if ($systemPrompt === '') {
-                            $systemPrompt = (string) (
-                                $agentArr['instructions']
-                                ?? $agentArr['system_prompt']
-                                ?? $agentArr['prompt']
-                                ?? ''
-                            );
-                        }
-                        $agentProvider = (string) ($agentArr['provider'] ?? '');
-                        $agentModel = (string) ($agentArr['model'] ?? '');
-                        $agentTools = $agentArr['tools'] ?? null;
-                        if (empty($toolNames) && is_array($agentTools)) {
-                            foreach ($agentTools as $tool) {
-                                $tname = null;
-                                if (is_string($tool)) {
-                                    $tname = $tool;
-                                } elseif (is_array($tool)) {
-                                    $tname = $tool['name'] ?? $tool['tool_name'] ?? null;
-                                }
-                                if ($tname) {
-                                    if (strpos($tname, 'mcp_') === 0) {
-                                        $tname = substr($tname, 4);
-                                    }
-                                    $toolNames[] = $tname;
-                                }
-                            }
-                        }
-                    }
-                } catch (\Throwable $_) {
-                    // Swallow: matches Python's broad except.
-                }
-            }
-            // Node-level overrides (config layer beats the agent record).
-            // The editor saves the picked provider under `agent_provider`;
-            // legacy/realtime paths use `llm_provider` or `provider`.
-            $nodeProvider = (string) ($cfg['llm_provider'] ?? $cfg['provider'] ?? $cfg['agent_provider'] ?? '');
-            $nodeModel = (string) ($cfg['model'] ?? '');
-            if ($nodeProvider !== '') $agentProvider = $nodeProvider;
-            if ($nodeModel !== '') $agentModel = $nodeModel;
-            if ($agentProvider === '') $agentProvider = 'claude';
-            // Final resolution: if nothing set the model explicitly, use
-            // the provider's default from system_llm_settings — the same
-            // value the editor's form shows in the "Default: <name>"
-            // placeholder. This is the single source of truth for "what
-            // model does provider X use by default?".
-            if ($agentModel === '') {
-                $agentModel = $providerDefaults[strtolower($agentProvider)] ?? '';
-            }
-
-            // Skills are mandatory POST-agent steps (not prompt text, not an optional
-            // tool): the main agent runs, then each skill runs on its result and the last
-            // skill's produced deliverable becomes the node output. Surface the ordered
-            // skill bindings; skill_content is NO LONGER appended to the prompt. Mirrors ADK.
-            $skills = \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig($cfg);
-
-            // HTML-output nudge. Some agent/skill prompts (e.g. the GEO report
-            // consolidator) ask for a "production-quality HTML file". In the
-            // browser the html skill's create.py turns that into a file; the
-            // compiled path has no create.py wiring in the prompt, so the model
-            // tends to emit Markdown instead (saved as .md). The runner saves a
-            // node's FINAL message verbatim and auto-detects HTML by signature,
-            // so the reliable fix is to force the final message to be the raw
-            // HTML document itself — and because it's the plain final message
-            // (not a JSON tool argument) it also sidesteps the big-HTML escaping
-            // bugs. Detect a strong "produce HTML" intent and append an explicit
-            // output-format instruction.
-            $pl = strtolower($systemPrompt);
-            $wantsHtml = strpos($pl, 'output only the html') !== false
-                || strpos($pl, 'production-quality html') !== false
-                || strpos($pl, '<!doctype') !== false
-                || (strpos($pl, 'self-contained') !== false && strpos($pl, '<style') !== false);
-            // Only nudge the MAIN agent to emit HTML when the node has NO skill to render
-            // it. When a skill (e.g. html) is attached, that skill step produces the HTML
-            // deliverable, so the main agent should just write the report content.
-            if ($wantsHtml && empty($skills)) {
-                $systemPrompt = rtrim($systemPrompt)
-                    . "\n\n## Output format (CRITICAL — read carefully)\n"
-                    . "Your FINAL message MUST be the complete, self-contained HTML "
-                    . "document itself: start with `<!DOCTYPE html>` and end with "
-                    . "`</html>`. Output ONLY the raw HTML — no Markdown, no triple-backtick "
-                    . "code fences, no preamble, and no commentary before or after. Do NOT "
-                    . "narrate what you are about to do; produce the HTML directly as your "
-                    . "answer. The runtime saves your final message verbatim to an .html "
-                    . "file, so anything that is not HTML breaks the deliverable.";
-            }
-
-            // Dispatcher routing (twin of GraphWorkflowRunner): the dispatcher's
-            // prompt lists its menu and demands route_to; a routed-to child is
-            // told it was chosen so it handles the request instead of re-routing.
-            if ($systemPrompt === '') {
-                $systemPrompt = DispatchRouting::defaultInstructions(self::displayName($node), (string) ($cfg['description'] ?? ''), $wfName);
-            }
-            $dispatch = $dispatchTargets[$nid] ?? [];
-            if ($dispatch !== []) {
-                $systemPrompt = rtrim($systemPrompt) . "\n\n" . DispatchRouting::promptBlock($dispatch);
-            }
-            if (isset($routedBy[$nid])) {
-                $systemPrompt = rtrim($systemPrompt) . "\n\n" . DispatchRouting::routedPrompt(self::displayName($node), $routedBy[$nid], '');
-            }
-
-            // Per-agent sampling/limits saved by the editor under `settings`.
-            // Defaults mirror the editor form defaults so a regenerated
-            // script behaves the same as the PHP runner.
-            $cfgSettings = $cfg['settings'] ?? [];
-            if (!is_array($cfgSettings)) {
-                $cfgSettings = [];
-            }
-            $agentTemperature = (float) ($cfgSettings['temperature'] ?? 0.7);
-            // max_tokens comes from the agent form VERBATIM -- no substitution. If a node's
-            // output truncates (e.g. a full HTML report needs more than 4096), raise it in
-            // that node's form; the compiler never overrides a form-stated value.
-            $agentMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 4096);
-
-            // Skill-bound agents must be GIVEN the run_skill_script tool so
-            // they can actually execute their folder-backed skill. The browser
-            // auto-provides it whenever a node has a skill; the compiler never
-            // did — so every skill agent had 0 tools and FABRICATED its output
-            // (e.g. "Missing /llms.txt" when the file exists). Detect via the
-            // assembled prompt, which carries the skill's "call run_skill_script
-            // with dir_name …" instructions. The tool itself is a LOCAL
-            // subprocess runner registered into the catalog (see toolBuilderBlock).
-            // NOTE: the main agent NEVER gets run_skill_script — skills run as separate
-            // mandatory steps after it (see the skill loop in the node function).
-
-            foreach ($toolNames as $tn) {
-                $allNeededTools[$tn] = true;
-            }
-            $agentData[$nid] = [
-                'display' => self::displayName($node),
-                'system_prompt' => $systemPrompt,
-                'tool_names' => $toolNames,
-                'provider' => strtolower($agentProvider),
-                'model' => $agentModel,
-                'temperature' => $agentTemperature,
-                'max_tokens' => $agentMaxTokens,
-                // Per-agent Thinking switch ('on'|'off'|null) — node form attribute.
-                'thinking' => (in_array($cfgSettings['thinking'] ?? null, ['on', 'off'], true)
-                                ? $cfgSettings['thinking'] : null),
-                'skills' => $skills,
-                'dispatch' => $dispatch,
-            ];
-        }
-
-        // Playbook nodes: bind the playbook's #Actions against the registry at
-        // generation time (same PlaybookAnalyzer the browser runner uses) and
-        // bake what the emitted playbook runtime needs.
-        $playbookData = [];
-        $playbookServerUrls = [];
-        foreach ($order as $nid) {
-            $node = $byId[$nid];
-            if (self::nodeType($node) !== 'playbook') {
-                continue;
-            }
-            $pd = $this->playbookData($node, $availableById, $providerDefaults, $userId);
-            $playbookData[$nid] = $pd;
-            foreach ($pd['actions'] as $a) {
-                if (($a['kind'] ?? '') === 'mcp') {
-                    $playbookServerUrls[$a['server_url']] = true;
-                }
-            }
-        }
-
-        // Filter catalog to only tools actually used by agents
-        $usedCatalog = [];
-        foreach ($toolCatalog as $k => $v) {
-            if (isset($allNeededTools[$k])) {
-                $usedCatalog[$k] = $v;
-            }
-        }
-        // Filter MCP_SERVERS the same way. It's a baked registry that's never
-        // read at runtime (tool calls take their URL from each TOOL_CATALOG
-        // entry's server_url), so emitting the FULL server inventory was just
-        // noise — and leaked every configured MCP server into the script. Keep
-        // only the servers whose tools are actually used.
-        $usedServers = [];
-        foreach ($usedCatalog as $entry) {
-            $surl = $entry['server_url'] ?? '';
-            if ($surl !== '' && isset($serverRegistry[$surl])) {
-                $usedServers[$surl] = $serverRegistry[$surl];
-            }
-        }
-        foreach (array_keys($playbookServerUrls) as $surl) {
-            if (isset($serverRegistry[$surl])) {
-                $usedServers[$surl] = $serverRegistry[$surl];
-            }
-        }
-        // Flag tools that agents need but aren't available as MCP.
-        // run_skill_script is a LOCAL (non-MCP) tool registered directly into
-        // the catalog at runtime, so it's not in $toolCatalog — exclude it from
-        // the "missing" warning (it IS available).
-        $missing = [];
-        foreach (array_keys($allNeededTools) as $tn) {
-            if ($tn === 'run_skill_script') {
-                continue;
-            }
-            if (!array_key_exists($tn, $toolCatalog)) {
-                $missing[] = $tn;
-            }
-        }
-        sort($missing, SORT_STRING);
-
-        $edgeList = [];
-        foreach ($edges as $e) {
-            $edgeList[] = [self::edgeFrom($e), self::edgeTo($e)];
-        }
-
+        // The emitter below was written against local variables; expose the
+        // facts under their original names (EXTR_SKIP: never clobber $this).
+        extract($facts, EXTR_SKIP);
         // ---- emit code ----
         $lines = [];
         // Box-drawing separator used in section headers (62 '═' chars,
@@ -1185,6 +783,468 @@ class LangGraphGenerator
         // (LangGraph was the original default and previously had no suffix).
         $filename = "{$safeName}_langgraph.py";
         return ['filename' => $filename, 'code' => $code];
+    }
+
+    /**
+     * Everything the emitters need, computed once: workflow identity, graph
+     * (byId/order/edges/layers), start node, provider defaults, the MCP
+     * registry and per-agent tool catalog, dispatcher targets, agent and
+     * playbook definitions, documentation descriptors. No Python is produced
+     * here. Shared by the single-file and the A2A emitters.
+     */
+    private function analyzeForEmit(int $workflowId, ?string $userId): array
+    {
+        // Force shortest round-tripping floats: the web SAPI's serialize_precision=100 makes
+        // json_encode bake temperatures like 0.5999999999999999… which strict models reject
+        // ("only 0.6 is allowed"). See MAFGenerator::emitMaf for the full note.
+        ini_set('serialize_precision', '-1');
+        $workflow = $this->workflowRepo->findById($workflowId);
+        if (!$workflow) {
+            throw new RuntimeException("Workflow $workflowId not found.");
+        }
+        $wfName = $workflow->getName() ?: ('workflow_' . $workflowId);
+        $safeName = self::safeVar($wfName);
+        if ($safeName === '') {
+            $safeName = 'workflow_' . $workflowId;
+        }
+
+        $graph = $this->graphRepo->getGraph($workflowId);
+        // Route pure graph analysis through WorkflowGraphAnalyzer.
+        // Returns: byId, order (Kahn topo), edges (normalised), startNodeId.
+        $gdata   = WorkflowGraphAnalyzer::analyzeGraph($graph);
+        $byId    = $gdata['byId'];
+        $order   = $gdata['order'];
+        $startId = $gdata['startNodeId'];
+        if ($startId === '') {
+            throw new RuntimeException('No start node found.');
+        }
+        // Normalised edges ({from, to}) are compatible with edgeFrom()/edgeTo().
+        $edges     = $gdata['edges'];
+        $startNode = $byId[$startId];
+        $startCfg = $startNode['config'] ?? $startNode['data'] ?? [];
+        if (!is_array($startCfg)) {
+            $startCfg = [];
+        }
+        $startPrompt = (string) ($startCfg['prompt'] ?? '');
+        $startDocuments = $startCfg['documents'] ?? [];
+        if (!is_array($startDocuments)) {
+            $startDocuments = [];
+        }
+
+        // Provider default models (system_llm_settings.model). Used when
+        // an agent has no explicit `model` field set — same source the
+        // workflow editor's "Default: <name>" placeholder reads from, so
+        // the generated script uses exactly what the UI would have used.
+        $providerDefaults = [];
+        try {
+            $stmtP = $this->db->query("SELECT provider_key, model FROM system_llm_settings WHERE enabled = 1");
+            foreach ($stmtP as $rowP) {
+                $providerDefaults[strtolower((string) ($rowP['provider_key'] ?? ''))] = (string) ($rowP['model'] ?? '');
+            }
+        } catch (\Throwable $_) {
+            // If the table is missing or unreadable, fall through with an
+            // empty map — agents that left their model blank will fail
+            // loudly at run-time rather than silently using a stale
+            // hardcoded fallback.
+        }
+
+        // Fetch MCP tools with server info (url, name, headers)
+        $mcpTools = $this->loadMcpToolsWithServers($userId);
+
+        // Build server registry and tool catalog
+        $serverRegistry = [];
+        $toolCatalog = [];
+        foreach ($mcpTools as $t) {
+            $surl = (string) ($t['server_url'] ?? '');
+            $sname = (string) ($t['server_name'] ?? '');
+            $tname = (string) ($t['tool_name'] ?? $t['name'] ?? '');
+            if ($surl === '' || $tname === '') {
+                continue;
+            }
+            if (!isset($serverRegistry[$surl])) {
+                $serverRegistry[$surl] = ['name' => $sname];
+            }
+            $desc = $t['tool_description'] ?? $t['description'] ?? '';
+            if ($desc === null) {
+                $desc = '';
+            }
+            $schema = $t['input_schema'] ?? null;
+            // If null/missing, use empty object (Python uses {} default).
+            if ($schema === null) {
+                $schema = new \stdClass();
+            }
+            $toolCatalog[$tname] = [
+                'server_url' => $surl,
+                'description' => $desc,
+                'input_schema' => $schema,
+            ];
+        }
+
+        // Playbook binding ids ("<server slug>.<tool>") over the same registry,
+        // keyed the way LoaderMcpExecutor::availableTools() keys them.
+        $availableById = [];
+        foreach ($mcpTools as $t) {
+            $surl = (string) ($t['server_url'] ?? '');
+            $tname = (string) ($t['tool_name'] ?? $t['name'] ?? '');
+            if ($surl === '' || $tname === '') {
+                continue;
+            }
+            $schema = $t['input_schema'] ?? null;
+            $availableById[self::serverSlug((string) ($t['server_name'] ?? '')) . '.' . $tname] = [
+                'server_url' => $surl,
+                'tool' => $tname,
+                'description' => (string) ($t['tool_description'] ?? $t['description'] ?? ''),
+                'input_schema' => $schema === null ? new \stdClass() : $schema,
+            ];
+        }
+
+        // Dispatcher agents: their fan-out is a MENU, not a parallel fan-out
+        // (DispatchRouting). Resolve each dispatcher's targets (agent/playbook
+        // children, edge order) and which child is routed-to by whom BEFORE the
+        // per-node loops, so a child's prompt can carry the routed fragment.
+        $agentTypeCache = [];
+        $agentTypeOf = function (array $node) use (&$agentTypeCache): string {
+            $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+            $t = (string) ($cfg['agent_type'] ?? '');
+            if ($t !== '') {
+                return $t;
+            }
+            $aid = $node['agent_id'] ?? ($cfg['agent_id'] ?? null);
+            if ($aid === null || $aid === '') {
+                return 'standard';
+            }
+            $aid = (int) $aid;
+            if (!array_key_exists($aid, $agentTypeCache)) {
+                try {
+                    $a = $this->agentRepo->findById($aid);
+                    $agentTypeCache[$aid] = $a ? (string) ($a->toArray()['agent_type'] ?? 'standard') : 'standard';
+                } catch (\Throwable $_) {
+                    $agentTypeCache[$aid] = 'standard';
+                }
+            }
+            return $agentTypeCache[$aid];
+        };
+        $dispatchTargets = []; // dispatcher nid => [['id' => child nid, 'name' => display], …]
+        $routedBy = [];        // child nid => dispatcher display name
+        foreach ($order as $nid) {
+            $node = $byId[$nid];
+            if (!in_array(self::nodeType($node), ['agent', 'agent-template'], true) || $agentTypeOf($node) !== 'dispatcher') {
+                continue;
+            }
+            $targets = [];
+            foreach ($edges as $e) {
+                if (self::edgeFrom($e) !== $nid) {
+                    continue;
+                }
+                $childId = self::edgeTo($e);
+                $child = $byId[$childId] ?? null;
+                if (!$child || !in_array(self::nodeType($child), ['agent', 'agent-template', 'playbook'], true)) {
+                    continue;
+                }
+                $targets[] = ['id' => $childId, 'name' => self::displayName($child)];
+                $routedBy[$childId] = self::displayName($node);
+            }
+            if ($targets !== []) {
+                $dispatchTargets[$nid] = $targets;
+            }
+        }
+
+        // Resolve agent data for each agent node
+        $agentData = [];
+        $allNeededTools = [];
+        foreach ($order as $nid) {
+            $node = $byId[$nid];
+            $ntype = self::nodeType($node);
+            if ($ntype !== 'agent' && $ntype !== 'agent-template') {
+                continue;
+            }
+            $cfg = $node['config'] ?? [];
+            if (!is_array($cfg)) {
+                $cfg = [];
+            }
+            $agentId = $node['agent_id'] ?? ($cfg['agent_id'] ?? null);
+            $systemPrompt = (string) ($cfg['systemPrompt'] ?? $cfg['instructions'] ?? '');
+            // The editor saves selected MCP tools under `tools` (array of names
+            // like "mcp_get_crypto_news"). Legacy/realtime nodes use
+            // `selectedTools`. Accept both, normalise to bare names without
+            // the `mcp_` prefix so they match the tool catalog keys.
+            $rawTools = $cfg['selectedTools'] ?? $cfg['tools'] ?? [];
+            if (!is_array($rawTools)) {
+                $rawTools = [];
+            }
+            $toolNames = [];
+            foreach ($rawTools as $tool) {
+                $tname = null;
+                if (is_string($tool)) {
+                    $tname = $tool;
+                } elseif (is_array($tool)) {
+                    $tname = $tool['name'] ?? $tool['tool_name'] ?? null;
+                }
+                if ($tname) {
+                    if (strpos($tname, 'mcp_') === 0) {
+                        $tname = substr($tname, 4);
+                    }
+                    $toolNames[] = $tname;
+                }
+            }
+
+            // Default provider/model — overridden below if the agent
+            // record carries explicit fields.
+            $agentProvider = '';
+            $agentModel = '';
+            if ($agentId !== null && $agentId !== '') {
+                try {
+                    $agent = $this->agentRepo->findById((int) $agentId);
+                    if ($agent !== null) {
+                        $agentArr = $agent->toArray();
+                        if ($systemPrompt === '') {
+                            $systemPrompt = (string) (
+                                $agentArr['instructions']
+                                ?? $agentArr['system_prompt']
+                                ?? $agentArr['prompt']
+                                ?? ''
+                            );
+                        }
+                        $agentProvider = (string) ($agentArr['provider'] ?? '');
+                        $agentModel = (string) ($agentArr['model'] ?? '');
+                        $agentTools = $agentArr['tools'] ?? null;
+                        if (empty($toolNames) && is_array($agentTools)) {
+                            foreach ($agentTools as $tool) {
+                                $tname = null;
+                                if (is_string($tool)) {
+                                    $tname = $tool;
+                                } elseif (is_array($tool)) {
+                                    $tname = $tool['name'] ?? $tool['tool_name'] ?? null;
+                                }
+                                if ($tname) {
+                                    if (strpos($tname, 'mcp_') === 0) {
+                                        $tname = substr($tname, 4);
+                                    }
+                                    $toolNames[] = $tname;
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable $_) {
+                    // Swallow: matches Python's broad except.
+                }
+            }
+            // Node-level overrides (config layer beats the agent record).
+            // The editor saves the picked provider under `agent_provider`;
+            // legacy/realtime paths use `llm_provider` or `provider`.
+            $nodeProvider = (string) ($cfg['llm_provider'] ?? $cfg['provider'] ?? $cfg['agent_provider'] ?? '');
+            $nodeModel = (string) ($cfg['model'] ?? '');
+            if ($nodeProvider !== '') $agentProvider = $nodeProvider;
+            if ($nodeModel !== '') $agentModel = $nodeModel;
+            if ($agentProvider === '') $agentProvider = 'claude';
+            // Final resolution: if nothing set the model explicitly, use
+            // the provider's default from system_llm_settings — the same
+            // value the editor's form shows in the "Default: <name>"
+            // placeholder. This is the single source of truth for "what
+            // model does provider X use by default?".
+            if ($agentModel === '') {
+                $agentModel = $providerDefaults[strtolower($agentProvider)] ?? '';
+            }
+
+            // Skills are mandatory POST-agent steps (not prompt text, not an optional
+            // tool): the main agent runs, then each skill runs on its result and the last
+            // skill's produced deliverable becomes the node output. Surface the ordered
+            // skill bindings; skill_content is NO LONGER appended to the prompt. Mirrors ADK.
+            $skills = \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig($cfg);
+
+            // HTML-output nudge. Some agent/skill prompts (e.g. the GEO report
+            // consolidator) ask for a "production-quality HTML file". In the
+            // browser the html skill's create.py turns that into a file; the
+            // compiled path has no create.py wiring in the prompt, so the model
+            // tends to emit Markdown instead (saved as .md). The runner saves a
+            // node's FINAL message verbatim and auto-detects HTML by signature,
+            // so the reliable fix is to force the final message to be the raw
+            // HTML document itself — and because it's the plain final message
+            // (not a JSON tool argument) it also sidesteps the big-HTML escaping
+            // bugs. Detect a strong "produce HTML" intent and append an explicit
+            // output-format instruction.
+            $pl = strtolower($systemPrompt);
+            $wantsHtml = strpos($pl, 'output only the html') !== false
+                || strpos($pl, 'production-quality html') !== false
+                || strpos($pl, '<!doctype') !== false
+                || (strpos($pl, 'self-contained') !== false && strpos($pl, '<style') !== false);
+            // Only nudge the MAIN agent to emit HTML when the node has NO skill to render
+            // it. When a skill (e.g. html) is attached, that skill step produces the HTML
+            // deliverable, so the main agent should just write the report content.
+            if ($wantsHtml && empty($skills)) {
+                $systemPrompt = rtrim($systemPrompt)
+                    . "\n\n## Output format (CRITICAL — read carefully)\n"
+                    . "Your FINAL message MUST be the complete, self-contained HTML "
+                    . "document itself: start with `<!DOCTYPE html>` and end with "
+                    . "`</html>`. Output ONLY the raw HTML — no Markdown, no triple-backtick "
+                    . "code fences, no preamble, and no commentary before or after. Do NOT "
+                    . "narrate what you are about to do; produce the HTML directly as your "
+                    . "answer. The runtime saves your final message verbatim to an .html "
+                    . "file, so anything that is not HTML breaks the deliverable.";
+            }
+
+            // Dispatcher routing (twin of GraphWorkflowRunner): the dispatcher's
+            // prompt lists its menu and demands route_to; a routed-to child is
+            // told it was chosen so it handles the request instead of re-routing.
+            if ($systemPrompt === '') {
+                $systemPrompt = DispatchRouting::defaultInstructions(self::displayName($node), (string) ($cfg['description'] ?? ''), $wfName);
+            }
+            $dispatch = $dispatchTargets[$nid] ?? [];
+            if ($dispatch !== []) {
+                $systemPrompt = rtrim($systemPrompt) . "\n\n" . DispatchRouting::promptBlock($dispatch);
+            }
+            if (isset($routedBy[$nid])) {
+                $systemPrompt = rtrim($systemPrompt) . "\n\n" . DispatchRouting::routedPrompt(self::displayName($node), $routedBy[$nid], '');
+            }
+
+            // Per-agent sampling/limits saved by the editor under `settings`.
+            // Defaults mirror the editor form defaults so a regenerated
+            // script behaves the same as the PHP runner.
+            $cfgSettings = $cfg['settings'] ?? [];
+            if (!is_array($cfgSettings)) {
+                $cfgSettings = [];
+            }
+            $agentTemperature = (float) ($cfgSettings['temperature'] ?? 0.7);
+            // max_tokens comes from the agent form VERBATIM -- no substitution. If a node's
+            // output truncates (e.g. a full HTML report needs more than 4096), raise it in
+            // that node's form; the compiler never overrides a form-stated value.
+            $agentMaxTokens = (int) ($cfgSettings['max_tokens'] ?? 4096);
+
+            // Skill-bound agents must be GIVEN the run_skill_script tool so
+            // they can actually execute their folder-backed skill. The browser
+            // auto-provides it whenever a node has a skill; the compiler never
+            // did — so every skill agent had 0 tools and FABRICATED its output
+            // (e.g. "Missing /llms.txt" when the file exists). Detect via the
+            // assembled prompt, which carries the skill's "call run_skill_script
+            // with dir_name …" instructions. The tool itself is a LOCAL
+            // subprocess runner registered into the catalog (see toolBuilderBlock).
+            // NOTE: the main agent NEVER gets run_skill_script — skills run as separate
+            // mandatory steps after it (see the skill loop in the node function).
+
+            foreach ($toolNames as $tn) {
+                $allNeededTools[$tn] = true;
+            }
+            $agentData[$nid] = [
+                'display' => self::displayName($node),
+                'system_prompt' => $systemPrompt,
+                'tool_names' => $toolNames,
+                'provider' => strtolower($agentProvider),
+                'model' => $agentModel,
+                'temperature' => $agentTemperature,
+                'max_tokens' => $agentMaxTokens,
+                // Per-agent Thinking switch ('on'|'off'|null) — node form attribute.
+                'thinking' => (in_array($cfgSettings['thinking'] ?? null, ['on', 'off'], true)
+                                ? $cfgSettings['thinking'] : null),
+                'skills' => $skills,
+                'dispatch' => $dispatch,
+            ];
+        }
+
+        // Playbook nodes: bind the playbook's #Actions against the registry at
+        // generation time (same PlaybookAnalyzer the browser runner uses) and
+        // bake what the emitted playbook runtime needs.
+        $playbookData = [];
+        $playbookServerUrls = [];
+        foreach ($order as $nid) {
+            $node = $byId[$nid];
+            if (self::nodeType($node) !== 'playbook') {
+                continue;
+            }
+            $pd = $this->playbookData($node, $availableById, $providerDefaults, $userId);
+            $playbookData[$nid] = $pd;
+            foreach ($pd['actions'] as $a) {
+                if (($a['kind'] ?? '') === 'mcp') {
+                    $playbookServerUrls[$a['server_url']] = true;
+                }
+            }
+        }
+
+        // Filter catalog to only tools actually used by agents
+        $usedCatalog = [];
+        foreach ($toolCatalog as $k => $v) {
+            if (isset($allNeededTools[$k])) {
+                $usedCatalog[$k] = $v;
+            }
+        }
+        // Filter MCP_SERVERS the same way. It's a baked registry that's never
+        // read at runtime (tool calls take their URL from each TOOL_CATALOG
+        // entry's server_url), so emitting the FULL server inventory was just
+        // noise — and leaked every configured MCP server into the script. Keep
+        // only the servers whose tools are actually used.
+        $usedServers = [];
+        foreach ($usedCatalog as $entry) {
+            $surl = $entry['server_url'] ?? '';
+            if ($surl !== '' && isset($serverRegistry[$surl])) {
+                $usedServers[$surl] = $serverRegistry[$surl];
+            }
+        }
+        foreach (array_keys($playbookServerUrls) as $surl) {
+            if (isset($serverRegistry[$surl])) {
+                $usedServers[$surl] = $serverRegistry[$surl];
+            }
+        }
+        // Flag tools that agents need but aren't available as MCP.
+        // run_skill_script is a LOCAL (non-MCP) tool registered directly into
+        // the catalog at runtime, so it's not in $toolCatalog — exclude it from
+        // the "missing" warning (it IS available).
+        $missing = [];
+        foreach (array_keys($allNeededTools) as $tn) {
+            if ($tn === 'run_skill_script') {
+                continue;
+            }
+            if (!array_key_exists($tn, $toolCatalog)) {
+                $missing[] = $tn;
+            }
+        }
+        sort($missing, SORT_STRING);
+
+        $edgeList = [];
+        foreach ($edges as $e) {
+            $edgeList[] = [self::edgeFrom($e), self::edgeTo($e)];
+        }
+        return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
+            'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
+            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'usedCatalog', 'usedServers', 'missing', 'edgeList');
+    }
+
+    /** Kebab-case ASCII slug for file names (max 40 chars). */
+    private static function slug(string $name): string
+    {
+        $s = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name) ?: $name), '-'));
+        return substr($s !== '' ? $s : 'node', 0, 40);
+    }
+
+    /**
+     * File names, ports and kinds of the A2A agents, in ORDER: one per
+     * agent/playbook node. Port = A2A base (8701) + index; the emitted
+     * orchestrator lets the environment override both.
+     */
+    public static function a2aLayout(array $facts): array
+    {
+        $agents = [];
+        $i = 0;
+        foreach ($facts['order'] as $nid) {
+            if (isset($facts['agentData'][$nid])) {
+                $ad = $facts['agentData'][$nid];
+                $kind = !empty($ad['dispatch']) ? 'dispatcher' : 'agent';
+                $display = $ad['display'];
+            } elseif (isset($facts['playbookData'][$nid])) {
+                $kind = 'playbook';
+                $display = $facts['playbookData'][$nid]['display'];
+            } else {
+                continue;
+            }
+            $agents[$nid] = ['file' => "agents/{$nid}_" . self::slug($display) . '.py', 'slug' => self::slug($display),
+                'port' => 8701 + $i, 'display' => $display, 'kind' => $kind];
+            $i++;
+        }
+        return ['root' => $facts['safeName'] . '_a2a', 'agents' => $agents];
+    }
+
+    /** A2A manifest emitter — replaced in Task 4. */
+    private function generateA2A(array $facts): array
+    {
+        throw new RuntimeException('A2A emitter not wired yet');
     }
 
     /**
