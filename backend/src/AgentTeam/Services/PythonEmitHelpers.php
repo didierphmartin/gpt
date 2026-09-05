@@ -623,8 +623,11 @@ PY;
      * order, target data flow, how to run. Same sections for every target
      * and every workflow shape. Returned WITHOUT the surrounding quotes.
      *
-     * $doc keys: target, workflow{id,name}, nodes (docNodes), edges [[from,to]],
-     * layers [[ids]], data_flow (target text), run{deps[],usage,extra[]},
+     * $doc keys: target, workflow{id,name}, nodes (docNodes; an optional
+     * 'marker' key on one node is appended after its GRAPH NODES summary
+     * only -- GRAPH EDGES/EXECUTION ORDER use 'name' unmodified), edges
+     * [[from,to]], layers [[ids]], data_flow (target text),
+     * run{deps[],usage,extra[],env_path (default '../.env')},
      * storage{enabled,folder}.
      */
     public static function workflowDocBlock(array $doc): string
@@ -654,7 +657,8 @@ PY;
         $w = 0;
         foreach ($nodes as $n) $w = max($w, strlen("{$n['id']} ({$n['type']}):"));
         foreach ($nodes as $n) {
-            $L[] = '  ' . str_pad("{$n['id']} ({$n['type']}):", $w) . ' ' . $n['name'] . ' -- ' . self::nodeSummary($n + ['dispatch_supported' => $dispatchOk]);
+            $L[] = '  ' . str_pad("{$n['id']} ({$n['type']}):", $w) . ' ' . $n['name'] . ' -- ' . self::nodeSummary($n + ['dispatch_supported' => $dispatchOk])
+                . (($n['marker'] ?? '') !== '' ? '   ' . $n['marker'] : '');
         }
         $L[] = '';
         $L[] = 'GRAPH EDGES  (from -> to)';
@@ -695,8 +699,9 @@ PY;
             $k = self::providerKeyEnv($n['provider']);
             if ($k !== null) $keys[$k][] = strtolower($n['provider']);
         }
+        $envPath = ($doc['run']['env_path'] ?? '') !== '' ? $doc['run']['env_path'] : '../.env';
         if ($keys) {
-            $L[] = '  # API keys read from ../.env for the providers this workflow uses:';
+            $L[] = "  # API keys read from {$envPath} for the providers this workflow uses:";
             foreach ($keys as $k => $provs) $L[] = "  #   {$k} (" . implode(', ', array_unique($provs)) . ')';
         } else {
             $L[] = '  # No LLM provider is used by a runnable node of this workflow.';

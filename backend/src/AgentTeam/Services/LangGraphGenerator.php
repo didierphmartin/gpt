@@ -1225,6 +1225,17 @@ class LangGraphGenerator
     }
 
     /**
+     * The single WORKFLOW_VERSION literal baked into both the orchestrator
+     * and every agent file, so the supervisor's version check (see
+     * a2aOrchestratorBlock()) can never see them drift: both emitters call
+     * this helper instead of formatting the string themselves.
+     */
+    private static function a2aVersion(array $facts): string
+    {
+        return $facts['workflowId'] . '-' . date('Ymd');
+    }
+
+    /**
      * File names, ports and kinds of the A2A agents, in ORDER: one per
      * agent/playbook node. Port = A2A base (8701) + index; the emitted
      * orchestrator lets the environment override both.
@@ -1251,7 +1262,6 @@ class LangGraphGenerator
         return ['root' => $facts['safeName'] . '_a2a', 'agents' => $agents];
     }
 
-    /** A2A manifest emitter — replaced in Task 4. */
     /** A2A mode: orchestrator first, then one agent file per agent/playbook node (see a2aLayout). */
     private function generateA2A(array $facts): array
     {
@@ -1284,7 +1294,9 @@ class LangGraphGenerator
             'data_flow' => self::a2aOrchestratorDataFlowDoc(),
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
-                      'extra' => ['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.']],
+                      'extra' => ['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
+                      // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
+                      'env_path' => '../../.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
         ]);
         $body .= "\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n" . implode("\n", $endpoints)
@@ -1320,6 +1332,9 @@ class LangGraphGenerator
         $L[] = '';
         $L[] = 'WORKFLOW_ID = ' . (int) $facts['workflowId'];
         $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($facts['wfName']);
+        // Same literal every agent file bakes (see a2aVersion()) -- the supervisor
+        // rejects a port already serving a DIFFERENT version instead of adopting it.
+        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
         $L[] = 'OUTPUT_STORAGE_ENABLED = ' . ($facts['workflow']->isOutputStorageEnabled() ? 'True' : 'False');
         $L[] = 'OUTPUT_FOLDER = ' . (($facts['workflow']->getOutputFolder() ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $facts['workflow']->getOutputFolder()) : 'None');
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
@@ -1378,9 +1393,15 @@ TXT;
 # [<agent>] prefix, waits for the Agent Card, stops them at the end.
 # ==============================================================
 def agent_url(nid: str) -> str:
-    """The agent's base URL: env A2A_AGENT_<id>_URL wins, else local port A2A_BASE_PORT + index."""
+    """The agent's base URL: env A2A_AGENT_<id>_URL wins, else the baked port shifted
+    by A2A_BASE_PORT. AGENTS[nid]["port"] (8701 + index, baked at generation time) is
+    authoritative; A2A_BASE_PORT - 8701 is added so overriding the env var still moves
+    the WHOLE range together instead of only affecting agents with no baked port."""
     env = os.environ.get(f"A2A_AGENT_{nid}_URL", "").strip()
-    return env if env else f"http://127.0.0.1:{A2A_BASE_PORT + AGENTS[nid]['index']}/"
+    if env:
+        return env
+    port = AGENTS[nid]["port"] + (A2A_BASE_PORT - 8701)
+    return f"http://127.0.0.1:{port}/"
 
 
 def _is_local(url: str) -> bool:
@@ -1395,7 +1416,22 @@ class AgentSupervisor:
         self.procs: dict[str, subprocess.Popen] = {}
 
     def start(self) -> None:
-        """Spawn every local agent whose URL is ours to serve, then wait for all cards (60 s)."""
+        """Spawn every local agent whose URL is ours to serve, then wait for all cards (60 s).
+
+        Two checks guard against silently adopting an orphaned/stale process on
+        what should be OUR port:
+          1. proc.poll() is checked BEFORE trusting any 200 from the card
+             endpoint. If we spawned this agent and it has already exited, the
+             port was unusable (most likely already bound by something else)
+             -- raise immediately naming the agent, its exit code and the port,
+             instead of a 200 we did not send being mistaken for readiness.
+          2. When a card DOES answer 200, its "version" field is compared to
+             WORKFLOW_VERSION (the same literal every agent file bakes via
+             a2aVersion() -- see emitA2AAgentFile). A mismatch means the port
+             is already serving a different generation of this workflow (or a
+             leftover process from before a regenerate); raise instead of
+             running the graph against stale agent code.
+        """
         for nid, ad in AGENTS.items():
             url = agent_url(nid)
             if not (self.spawn and _is_local(url)):
@@ -1409,15 +1445,27 @@ class AgentSupervisor:
         deadline = time.monotonic() + 60
         for nid in AGENTS:
             url = agent_url(nid)
+            port = int(url.rstrip("/").rsplit(":", 1)[1])
             while True:
-                try:
-                    if httpx.get(url.rstrip("/") + "/.well-known/agent-card.json", timeout=2).status_code == 200:
-                        break
-                except Exception:
-                    pass
                 proc = self.procs.get(nid)
                 if proc is not None and proc.poll() is not None:
-                    raise RuntimeError(f"agent {AGENTS[nid]['display']!r} exited with code {proc.returncode} before serving {url}")
+                    # Checked BEFORE the http GET below: a spawned child that already
+                    # exited means the port was busy (or the agent crashed) -- a 200
+                    # from that port, if one ever came, would be someone else's server.
+                    raise RuntimeError(f"agent {AGENTS[nid]['display']!r} exited with code {proc.returncode} before serving {url} (port {port} may already be in use)")
+                status, card = None, None
+                try:
+                    resp = httpx.get(url.rstrip("/") + "/.well-known/agent-card.json", timeout=2)
+                    status = resp.status_code
+                    if status == 200:
+                        card = resp.json() or {}
+                except Exception:
+                    pass
+                if status == 200:
+                    served = card.get("version") if card else None
+                    if served != WORKFLOW_VERSION:
+                        raise RuntimeError(f"port {port} is already serving a different agent version ({served} != {WORKFLOW_VERSION}); stop the stale process")
+                    break
                 if time.monotonic() > deadline:
                     raise RuntimeError(f"agent {AGENTS[nid]['display']!r} did not serve its card at {url} within 60s")
                 time.sleep(0.3)
@@ -1762,6 +1810,10 @@ PY;
         $L[] = '';
         $L[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $L[] = '';
+        $L[] = '# This file is SELF-CONTAINED on purpose: the LLM factory, MCP client, tool';
+        $L[] = '# builder, skill and playbook blocks below are the same code the single-file';
+        $L[] = '# script carries, duplicated here so this agent can be copied to another host';
+        $L[] = '# alone.';
         $L[] = $sep; $L[] = '# LLM FACTORY'; $L[] = '# Provider/model -> LangChain chat model (same rules as the single-file script).'; $L[] = $sep;
         foreach (self::llmFactoryLines() as $l) $L[] = $l;
         $L[] = '';
@@ -1778,8 +1830,13 @@ PY;
         if ($isPlaybook) {
             $L[] = self::playbookRuntimeBlock();
         }
-        $L[] = 'NODE_DURATIONS = {}';
-        $L[] = 'def parents(_n): return []';
+        $L[] = 'NODE_DURATIONS = {}   # display name -> seconds (kept for the shared dispatcher block)';
+        $L[] = 'def parents(_n):';
+        $L[] = '    """Always []: this file has no graph, only one node. Exists so the reused';
+        $L[] = '    _run_dispatcher() (which looks up parent outputs via parents(n)) finds none';
+        $L[] = '    and falls back to state["user_prompt"] -- the orchestrator\'s framed input --';
+        $L[] = '    instead of raising on a missing function."""';
+        $L[] = '    return []';
         $L[] = '';
         // ---- node definition ----
         $L[] = $sep; $L[] = '# NODE DEFINITION -- frozen from the workflow editor'; $L[] = $sep;
@@ -1820,7 +1877,7 @@ PY;
         $L[] = self::a2aNodeLogicBlock();
         $L[] = self::a2aAgentServerBlock();
         $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
-        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr($facts['workflowId'] . '-' . date('Ymd'));
+        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
         $L[] = '# Default card (port from A2A_PORT or the layout); main() rebuilds it for the real host/port.';
         $L[] = 'AGENT_CARD = build_agent_card(f"http://127.0.0.1:{os.environ.get(\'A2A_PORT\', \'' . $entry['port'] . '\')}/")';
         $L[] = '';
@@ -1854,7 +1911,9 @@ PY;
     private function a2aDocBody(array $facts, array $layout, string $nid): string
     {
         $nodes = $this->a2aDocNodes($facts, $layout);
-        foreach ($nodes as &$n) { if ($n['id'] === $nid) $n['name'] .= '   <== this agent'; }
+        // 'marker' (not 'name') so the "<== this agent" tag appears only on the
+        // GRAPH NODES line -- GRAPH EDGES and EXECUTION ORDER read 'name' as-is.
+        foreach ($nodes as &$n) { if ($n['id'] === $nid) $n['marker'] = '<== this agent'; }
         $entry = $layout['agents'][$nid];
         $body = PythonEmitHelpers::workflowDocBlock([
             'target' => 'LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph',
@@ -1864,7 +1923,9 @@ PY;
             'data_flow' => self::a2aAgentDataFlowDoc(),
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
-                      'extra' => ['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /']],
+                      'extra' => ['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
+                      // This file lives 3 levels under the workflow root (agents/<file>.py).
+                      'env_path' => '../../../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
         ]);
         return $body . "\n\nA2A SERVING\n===========\n"
@@ -1872,8 +1933,11 @@ PY;
             . "  Task in:    one text part = the node input the orchestrator built (original prompt + parent outputs)\n"
             . "  Task out:   artifact 'result' = text part (node output) + data part {route, notes, status}\n"
             . "  Gates:      the task moves to input-required with data {gate, tool, args}; the orchestrator answers on\n"
-            . "              the same task with data {decision, comment, fields}; the run resumes in memory\n"
-            . "              (A2A_GATE_TIMEOUT_S, default 900 s, then the gate fails and the playbook continues).\n"
+            . "              the same task with data {decision, comment, fields}; the run resumes in memory.\n"
+            . "              After A2A_GATE_TIMEOUT_S (default 900 s) with no answer the node run continues with\n"
+            . "              timeout guidance, but its final artifact can no longer be delivered -- no A2A request\n"
+            . "              is in flight to carry it, so the task stays stuck in input-required. Re-sending on the\n"
+            . "              same task id to pick the result back up is not supported yet.\n"
             . "  One task at a time: runs are serialised with a lock; a second task waits for the first.";
     }
 
@@ -1922,6 +1986,7 @@ async def run_node(request_text: str, trace) -> dict:
     if kind == "playbook":
         return await _run_playbook_kind(request_text, trace)
     catalog = build_tools_from_catalog()
+    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL   # local (non-MCP) tool, same as the single-file script
     tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]
     msgs = [SystemMessage(content=inject_datetime(NODE["system_prompt"])), HumanMessage(content=request_text)]
     await trace(f"{NODE['display']!r} -- {len(tools)} tools (provider={NODE['provider']}, model={NODE['model']})")
@@ -2026,7 +2091,16 @@ class _NodeRun:
         self.loop = asyncio.get_event_loop()
 
     async def gate(self, kind: str, name: str, args: dict) -> dict:
-        """Raise a gate: publish input-required, wait for the answer, resume. Returns the single-file gate result shape."""
+        """Raise a gate: publish input-required, wait for the answer, resume. Returns the single-file gate result shape.
+
+        On a timeout (A2A_GATE_TIMEOUT_S with no answer) the node run itself
+        continues -- it gets the guidance below back from this call, same as
+        any other gate result -- but the run's FINAL artifact can no longer be
+        delivered: no A2A request is in flight to carry it (the client that
+        would have answered already gave up), so the task stays stuck in
+        input-required. Re-sending on the same task id to pick the result back
+        up is not supported yet; the caller must start a new task.
+        """
         self.answer = self.loop.create_future()
         question = args.get("question") or args.get("prompt") or args.get("reason") or name
         print(f"[gate] {kind}: {question}", flush=True)
@@ -2036,6 +2110,9 @@ class _NodeRun:
         try:
             ans = await asyncio.wait_for(self.answer, A2A_GATE_TIMEOUT_S)
         except asyncio.TimeoutError:
+            # The run continues below, but its eventual artifact has nowhere to
+            # go: the task is still parked in input-required and there is no
+            # supported way to resume it after this point (see the docstring).
             self.answer = None
             return {"ok": False, "timeout": True,
                     "guidance": "No answer arrived in time. Leave an internal note and resolve as uncompleted."}

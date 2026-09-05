@@ -35,16 +35,19 @@ class LangGraphA2AGeneratorTest extends TestCase
     /** Dispatcher-demo shape: start -> dispatcher -> {IT claims, Human resources -> playbook} -> output. */
     public static function graph(): array
     {
-        $agent = fn(string $name, string $type = 'standard', array $tools = []) => [
+        $agent = fn(string $name, string $type = 'standard', array $tools = [], array $extra = []) => [
             'type' => 'agent-template', 'agent_name' => $name, 'agent_type' => $type,
             'instructions' => "You are {$name}.", 'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-5',
             'tools' => $tools, 'settings' => ['temperature' => 0.7, 'max_tokens' => 4096],
-        ];
+        ] + $extra;
         return [
             'nodes' => [
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'I want to take some vacations']],
                 ['id' => '2', 'node_type' => '', 'config' => $agent('techBuddy', 'dispatcher')],
-                ['id' => '3', 'node_type' => '', 'config' => $agent('IT claims', 'standard', ['mcp_get_news'])],
+                // Skill-bound (html): run_skill_script must be baked into the tool
+                // catalog and "skills" onto NODE (see testAgentFileIsASelfContainedA2AServer).
+                ['id' => '3', 'node_type' => '', 'config' => $agent('IT claims', 'standard', ['mcp_get_news', 'run_skill_script'],
+                    ['bound_skill' => ['dir_name' => 'html']])],
                 ['id' => '4', 'node_type' => '', 'config' => $agent('Human resources')],
                 ['id' => '5', 'node_type' => 'playbook', 'config' => ['type' => 'playbook', 'name' => 'Playbook HR',
                     'playbook' => self::PLAYBOOK, 'agent_provider' => 'deepseek', 'model' => 'deepseek-v4-flash', 'writes_enabled' => true]],
@@ -113,10 +116,12 @@ class LangGraphA2AGeneratorTest extends TestCase
 
     private function assertCompiles(string $code, string $label): void
     {
-        $tmp = tempnam(sys_get_temp_dir(), 'a2a') . '.py';
+        $base = tempnam(sys_get_temp_dir(), 'a2a');
+        $tmp = $base . '.py';
         file_put_contents($tmp, $code);
         exec('python3 -m py_compile ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
         @unlink($tmp);
+        @unlink($base);
         $this->assertSame(0, $rc, "{$label}: " . implode("\n", $out));
     }
 
@@ -140,6 +145,11 @@ class LangGraphA2AGeneratorTest extends TestCase
         $this->assertStringNotContainsString('get_pto_balance', $code);
         // No playbook runtime in a plain agent file.
         $this->assertStringNotContainsString('def build_playbook_tools', $code);
+        // Skill-bound node: run_skill_script is registered into the catalog (the
+        // local, non-MCP tool build_tools_from_catalog() itself never produces)
+        // and the skill binding is baked onto NODE.
+        $this->assertStringContainsString('catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL', $code);
+        $this->assertStringContainsString('"skills": [{"dir":"html"}]', $code);
         $this->assertCompiles($code, 'agent 3');
     }
 
