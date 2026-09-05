@@ -2878,7 +2878,7 @@ class WorkflowEditor {
      * modal explaining the one-time setup command instead of silently
      * creating an empty folder the user can't run scripts from.
      */
-    async downloadGeneratedPython() {
+    async downloadGeneratedPython(opts = null) {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst'));
             return;
@@ -2902,38 +2902,45 @@ class WorkflowEditor {
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generating') || 'Generating LangGraph Python script…'
         );
+        const a2a = !!(opts ? opts.a2a : this._codegenOptions().a2a);
         try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) {
-                const err = await resp.text();
-                throw new Error(err || `HTTP ${resp.status}`);
+            if (a2a) {
+                const data = await this._writeManifest();
+                const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
+                generated = { path: `${rootName}/python/scripts/${data.root}/`, code: data.files };
+            } else {
+                const resp = await fetch(
+                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
+                    { headers: this.getAuthHeaders() }
+                );
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(err || `HTTP ${resp.status}`);
+                }
+                // Derive filename from Content-Disposition, fall back to workflow name
+                let filename = 'workflow.py';
+                const dispo = resp.headers.get('Content-Disposition') || '';
+                const m = dispo.match(/filename="([^"]+)"/);
+                if (m) filename = m[1];
+                const text = await resp.text();
+
+                // Make sure python/scripts/ exists, then write the .py file there.
+                const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
+                if (!scriptsDir) {
+                    throw new Error('Could not resolve synergyAI/python/scripts.');
+                }
+                const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(text);
+                await writable.close();
+
+                // Refresh python/.env with the current provider keys so the script can auth.
+                await this._syncRunnerEnv();
+
+                const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
+                console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
+                generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
             }
-            // Derive filename from Content-Disposition, fall back to workflow name
-            let filename = 'workflow.py';
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            if (m) filename = m[1];
-            const text = await resp.text();
-
-            // Make sure python/scripts/ exists, then write the .py file there.
-            const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
-            if (!scriptsDir) {
-                throw new Error('Could not resolve synergyAI/python/scripts.');
-            }
-            const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(text);
-            await writable.close();
-
-            // Refresh python/.env with the current provider keys so the script can auth.
-            await this._syncRunnerEnv();
-
-            const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
-            console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
-            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
         } catch (e) {
             console.error('[WorkflowEditor] generate-python failed:', e);
             alert(this.t('workflow.output.generateFailed') + ': ' + (e.message || e));
@@ -3221,9 +3228,11 @@ class WorkflowEditor {
             menu.remove();
             this._showRunnerSetupModal();
         });
-        menu.querySelector('[data-action="generate"]')?.addEventListener('click', () => {
+        menu.querySelector('[data-action="generate"]')?.addEventListener('click', async () => {
             menu.remove();
-            this.downloadGeneratedPython();
+            if (isIngestion) { this.downloadGeneratedPython(); return; }
+            const opts = await this._showCodegenOptionsModal();
+            if (opts) this.downloadGeneratedPython(opts);
         });
         menu.querySelector('[data-action="info"]')?.addEventListener('click', () => {
             menu.remove();
@@ -3243,8 +3252,16 @@ class WorkflowEditor {
                 this._runLangGraphScript();
             }
         });
-        menu.querySelector('[data-action="display-code"]')?.addEventListener('click', () => {
+        menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
+            if (!isIngestion && this._codegenOptions().a2a) {
+                try {
+                    const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
+                    const j = await resp.json();
+                    this._showLangGraphCodeModal('', j?.data?.files || [], '');
+                } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
+                return;
+            }
             this._showLangGraphCodeModal();
         });
 
@@ -4616,6 +4633,80 @@ class WorkflowEditor {
         this._showLangGraphCodeModal(savedPath, code, filename);
     }
 
+    /** Code-generation options remembered per workflow (browser-local). Shape: { a2a: boolean }. */
+    _codegenOptions() {
+        try {
+            const raw = localStorage.getItem(`wf:${this.currentWorkflowId}:codegen`);
+            const o = raw ? JSON.parse(raw) : {};
+            return { a2a: !!o.a2a };
+        } catch (_) { return { a2a: false }; }
+    }
+
+    _saveCodegenOptions(opts) {
+        try { localStorage.setItem(`wf:${this.currentWorkflowId}:codegen`, JSON.stringify({ a2a: !!opts.a2a })); } catch (_) { /* private mode */ }
+    }
+
+    /**
+     * "Code generation options" form shown by the LangGraph Generate item.
+     * Resolves with the chosen options, or null when cancelled.
+     */
+    _showCodegenOptionsModal() {
+        return new Promise((resolve) => {
+            const cur = this._codegenOptions();
+            const backdrop = document.createElement('div');
+            backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+            backdrop.innerHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md" role="dialog" aria-modal="true">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4">${this.escapeHtml(this.t('workflow.output.codegenTitle') || 'Code generation options')}</h3>
+                    <label class="flex items-start gap-3 cursor-pointer">
+                        <input type="checkbox" class="codegen-a2a mt-1 h-4 w-4" ${cur.a2a ? 'checked' : ''}>
+                        <span>
+                            <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(this.t('workflow.output.codegenA2A') || 'A2A')}</span>
+                            <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.output.codegenA2AHelp') || 'Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.')}</span>
+                        </span>
+                    </label>
+                    <div class="flex justify-end gap-2 mt-6">
+                        <button class="codegen-cancel px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.cancel') || 'Cancel')}</button>
+                        <button class="codegen-go px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.codegenGenerate') || 'Generate')}</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(backdrop);
+            const done = (val) => { backdrop.remove(); resolve(val); };
+            backdrop.querySelector('.codegen-cancel').addEventListener('click', () => done(null));
+            backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
+            backdrop.querySelector('.codegen-go').addEventListener('click', () => {
+                const opts = { a2a: backdrop.querySelector('.codegen-a2a').checked };
+                this._saveCodegenOptions(opts);
+                done(opts);
+            });
+        });
+    }
+
+    /**
+     * Fetch the A2A manifest and write it under python/scripts/<root>/ (orchestrator.py
+     * + agents/*.py) through the File System Access root. Returns { root, files } or null.
+     */
+    async _writeManifest() {
+        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
+        if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+        const j = await resp.json();
+        const data = j?.data;
+        if (!data?.root || !Array.isArray(data.files)) throw new Error('Unexpected manifest response');
+        for (const f of data.files) {
+            const rel = `python/scripts/${data.root}/${f.path}`;
+            const dirPath = rel.slice(0, rel.lastIndexOf('/'));
+            const dir = await window.localFs.resolvePath(dirPath, { create: true });
+            if (!dir) throw new Error(`Could not create ${dirPath}`);
+            const fh = await dir.getFileHandle(f.path.slice(f.path.lastIndexOf('/') + 1), { create: true });
+            const w = await fh.createWritable();
+            await w.write(f.code);
+            await w.close();
+        }
+        await this._syncRunnerEnv();
+        console.log(`[WorkflowEditor] Saved ${data.files.length} A2A files under python/scripts/${data.root}/`);
+        return data;
+    }
+
     /**
      * Display Code — fetch the generated Python from the backend and show
      * it in a scrollable code block with copy-to-clipboard. Read-only;
@@ -4629,8 +4720,11 @@ class WorkflowEditor {
             return;
         }
         // Ingestion passes the already-compiled code directly; the agent path
-        // fetches its LangGraph script from generate-python.
+        // fetches its LangGraph script from generate-python. A2A generation
+        // passes an array of { path, code } files instead of a single string.
         let code = providedCode;
+        const files = Array.isArray(providedCode) ? providedCode : null;
+        if (files) code = files[0]?.code || '';
         if (code === null) {
             try {
                 const resp = await fetch(
@@ -4660,6 +4754,11 @@ class WorkflowEditor {
                     <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
                     <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
+                ${files ? `<div class="flex items-center gap-2 mb-2">
+                    <label class="text-xs text-gray-500">File</label>
+                    <select class="code-file-select text-xs border border-gray-300 rounded px-2 py-1 font-mono">
+                        ${files.map((f, i) => `<option value="${i}">${this.escapeHtml(f.path)}</option>`).join('')}
+                    </select></div>` : ''}
                 ${isIngestion ? `
                 <div class="flex items-center gap-2 mb-2">
                     <label class="text-xs text-gray-500 whitespace-nowrap">Store location</label>
@@ -4675,30 +4774,36 @@ class WorkflowEditor {
             </div>
         `;
         document.body.appendChild(backdrop);
+        const preEl = backdrop.querySelector('pre');
+        /** Re-render `preEl` with a line-number gutter for the given text. */
+        const render = (text) => {
+            const codeLines = text.split('\n');
+            const gutterCh = String(codeLines.length).length + 1;
+            const lnStyle = document.createElement('style');
+            lnStyle.textContent = `
+                .code-with-lines .code-line { display: block; }
+                .code-with-lines .code-ln {
+                    display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
+                    text-align: right; color: #64748b; user-select: none;
+                    position: sticky; left: 0; background: #111827;
+                }
+                .code-with-lines .code-lc { white-space: pre; }
+            `;
+            backdrop.appendChild(lnStyle);
+            preEl.classList.add('code-with-lines');
+            preEl.innerHTML = codeLines.map((ln, i) =>
+                `<span class="code-line"><span class="code-ln">${i + 1}</span>`
+                + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
+            ).join('');
+        };
         // Render with a line-number gutter. Each line is a block row with a
         // sticky, non-selectable number column so numbers stay visible on
         // horizontal scroll and are excluded from manual text selection. The
         // Copy button copies the raw `code` variable, so numbers never leak
         // into copied text either.
-        const preEl = backdrop.querySelector('pre');
-        const codeLines = code.split('\n');
-        const gutterCh = String(codeLines.length).length + 1;
-        const lnStyle = document.createElement('style');
-        lnStyle.textContent = `
-            .code-with-lines .code-line { display: block; }
-            .code-with-lines .code-ln {
-                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
-                text-align: right; color: #64748b; user-select: none;
-                position: sticky; left: 0; background: #111827;
-            }
-            .code-with-lines .code-lc { white-space: pre; }
-        `;
-        backdrop.appendChild(lnStyle);
-        preEl.classList.add('code-with-lines');
-        preEl.innerHTML = codeLines.map((ln, i) =>
-            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
-            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
-        ).join('');
+        render(code);
+        const sel = backdrop.querySelector('.code-file-select');
+        if (sel) sel.addEventListener('change', () => { code = files[Number(sel.value)].code; render(code); });
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
@@ -4753,7 +4858,13 @@ class WorkflowEditor {
         // Regenerate FIRST (self-contained Run: always executes the CURRENT
         // workflow; the runner-down modal's command then points at fresh
         // code), THEN probe the runner.
-        const filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
+        let filename;
+        if (this._codegenOptions().a2a) {
+            try { const data = await this._writeManifest(); filename = `${data.root}/orchestrator.py`; }
+            catch (e) { alert(`Could not generate the A2A folder: ${e?.message || e}`); return; }
+        } else {
+            filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
+        }
         if (!filename) return;
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
