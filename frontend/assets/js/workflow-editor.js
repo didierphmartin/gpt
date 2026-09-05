@@ -3230,7 +3230,7 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="generate"]')?.addEventListener('click', async () => {
             menu.remove();
-            if (isIngestion) { this.downloadGeneratedPython(); return; }
+            if (isIngestion) { this.downloadGeneratedPython({ a2a: false }); return; }
             const opts = await this._showCodegenOptionsModal();
             if (opts) this.downloadGeneratedPython(opts);
         });
@@ -4692,6 +4692,10 @@ class WorkflowEditor {
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const j = await resp.json();
         if (j?.success === false) throw new Error(j.error || 'Manifest request failed');
+        // A backend without the A2A path (e.g. the TypeScript backend) ignores the
+        // ?a2a=1 flag and returns the single-file shape instead of erroring — catch
+        // that here rather than let a raw .py file confuse the manifest code below.
+        if (j?.data?.filename && !j?.data?.root) throw new Error('A2A generation is not available on this backend');
         const data = j?.data;
         if (!data?.root || !Array.isArray(data.files)) throw new Error('Unexpected manifest response');
         return data;
