@@ -13,7 +13,6 @@ import codecs
 import json
 import time
 import traceback
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -25,27 +24,13 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
 from app.services.debug_logger import DebugLogger
 from app.support.logger import error_log
 from app.support.phpcompat import php_bool, php_empty
 from app.support.phpjson import dumps
-
-
-@dataclass
-class _Totals:
-    """Carrier for the PHP `&$inputTokens, &$outputTokens, &$functionCallCount,
-    &$functionsCalled, &$mcpToolsCalled` reference parameters of
-    handleToolUseRecursive(). Python has no by-reference scalars, so the
-    accumulators travel in this mutable holder; the method still returns the
-    response array like PHP does.
-    """
-    inputTokens: int = 0
-    outputTokens: int = 0
-    functionCallCount: int = 0
-    functionsCalled: list = field(default_factory=list)
-    mcpToolsCalled: list = field(default_factory=list)
 
 
 def _gettype(v) -> str:
