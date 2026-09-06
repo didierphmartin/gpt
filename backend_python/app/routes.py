@@ -6,6 +6,7 @@ from app.controllers.context_controller import ContextController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
 from app.controllers.prompt_library_controller import PromptLibraryController
+from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
 from app.controllers.webauthn_controller import WebAuthnController
 
@@ -16,6 +17,7 @@ CONTROLLERS = {
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
     'PromptLibraryController': PromptLibraryController,
+    'ProviderController': ProviderController,
     'RootController': RootController,
     'WebAuthnController': WebAuthnController,
 }
@@ -33,6 +35,10 @@ ROUTES = [
     ('POST', '/api/v1/auth/upgrade-plan', ('AuthController', 'upgradePlan')),
     # CHAT ROUTES
     ('POST', '/api/v1/chat', ('ChatController', 'chat')),
+    # PROVIDER ROUTES
+    ('GET', '/api/v1/providers', ('ProviderController', 'list')),
+    ('POST', '/api/v1/providers', ('ProviderController', 'switch')),   # Legacy: switch via POST to same endpoint
+    ('POST', '/api/v1/providers/switch', ('ProviderController', 'switch')),
     # MODEL CATALOG (public)
     ('GET', '/api/v1/models/catalog', ('ModelCatalogController', 'get')),
     # PACKAGE ROUTES
