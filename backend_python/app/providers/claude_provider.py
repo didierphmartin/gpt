@@ -757,7 +757,7 @@ class ClaudeProvider(
                 currentBlockIndex = -1
                 inputJsonBuffer = ''
                 stopReason = None
-                decoder = codecs.getincrementaldecoder('utf-8')()
+                decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
                 # Read stream line by line
                 for chunkBytes in response.iter_bytes(1024):

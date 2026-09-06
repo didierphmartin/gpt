@@ -120,6 +120,16 @@ def test_server_error_is_api_error_with_status():
     assert str(ei.value).startswith('openai API error: ') and ei.value.getHttpStatusCode() == 503
 
 
+def test_api_error_message_carries_the_response_body():
+    # PHP:384 passes $e->getMessage(); Guzzle embeds the response-body summary,
+    # and ChatController::humanizeProviderError pattern-matches on it.
+    body = '{"error": {"message": "This model\'s maximum context length is 8192 tokens", "code": "context_length_exceeded"}}'
+    p = _provider(lambda r: httpx.Response(400, text=body))
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    assert 'context_length_exceeded' in str(ei.value) and ei.value.getHttpStatusCode() == 400
+
+
 def test_missing_key_is_authentication_failed_before_any_request():
     hits = []
     p = _provider(lambda r: hits.append(1) or httpx.Response(200, json={}), streaming=False, key='')

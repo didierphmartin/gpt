@@ -28,7 +28,7 @@ from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
 from app.services.debug_logger import DebugLogger
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty
+from app.support.phpcompat import php_bool, php_empty
 from app.support.phpjson import dumps
 
 
@@ -46,9 +46,6 @@ def _first_choice(response: dict) -> dict:
     """
     choices = response.get('choices') if isinstance(response, dict) and response.get('choices') is not None else []
     if isinstance(choices, list) and len(choices) > 0:
-        first = choices[0]
-        return first if isinstance(first, dict) else {}
-    if isinstance(choices, dict) and 0 in choices:
         first = choices[0]
         return first if isinstance(first, dict) else {}
     return {}
@@ -334,7 +331,7 @@ class OpenAIProvider(
                 'json_schema': {
                     'name': schema.get('name') if schema.get('name') is not None else 'output',
                     'description': schema.get('description') if schema.get('description') is not None else '',
-                    'strict': bool(schema.get('strict') if schema.get('strict') is not None else True),
+                    'strict': php_bool(schema.get('strict') if schema.get('strict') is not None else True),
                     'schema': schema.get('schema') if schema.get('schema') is not None else {},
                 },
             }
@@ -384,13 +381,22 @@ class OpenAIProvider(
         except httpx.HTTPStatusError as e:
             statusCode = e.response.status_code
 
+            # PHP passes $e->getMessage() (PHP:384); Guzzle's RequestException
+            # message embeds the response-body summary, and
+            # ChatController::humanizeProviderError pattern-matches on it
+            # (e.g. context_length_exceeded, no healthy upstream). httpx's
+            # str(e) carries only the status line, so append the body — the
+            # streaming branch above read() it for exactly this reason. Same
+            # shape as claude_provider.py's streaming handler.
+            errorDetails = str(e) + " | Response: " + e.response.text
+
             if statusCode == 429:
                 raise ProviderException.rateLimited('openai')
 
             if statusCode == 401:
                 raise ProviderException.authenticationFailed('openai')
 
-            raise ProviderException.apiError('openai', str(e), statusCode)
+            raise ProviderException.apiError('openai', errorDetails, statusCode)
         except httpx.RequestError as e:
             # Guzzle's ConnectException is a GuzzleException too; it carries no
             # HTTP status, so PHP's $e->getCode() would be 0.
@@ -412,7 +418,7 @@ class OpenAIProvider(
 
         hasToolCalls = False  # Track if we encounter tool calls
         done = False  # PHP `break 2` out of both loops
-        decoder = codecs.getincrementaldecoder('utf-8')()
+        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
 
         for chunkBytes in response.iter_bytes(1024):
             buffer += decoder.decode(chunkBytes)
