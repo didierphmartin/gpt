@@ -106,6 +106,17 @@ def test_http_errors_map_to_php_messages(status, factory):
     assert str(ei.value) == str(factory())
 
 
+def test_api_error_message_carries_the_response_body():
+    # PHP passes Guzzle's $e->getMessage(), which embeds a body excerpt; humanizeProviderError matches on it.
+    body = {'error': {'code': 404, 'message': 'models/gemini-nope is not found for API version v1beta', 'status': 'NOT_FOUND'}}
+    p = _provider(lambda r: httpx.Response(404, json=body))
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert msg.startswith('gemini API error: ') and ' | Response: ' in msg and 'gemini-nope is not found' in msg
+    assert ei.value.getHttpStatusCode() == 404
+
+
 def test_fix_schema_strips_unsupported_keywords():
     fixed = GeminiProvider.fixSchemaForGemini({'type': 'object', 'additionalProperties': False, 'properties': {'a': {'type': 'string', 'default': 'x'}}})
     assert 'additionalProperties' not in fixed and 'default' not in fixed['properties']['a']
