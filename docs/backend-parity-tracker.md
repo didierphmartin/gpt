@@ -55,7 +55,7 @@ Last updated: 2026-09-05
 | 30 | PY: SSE event payloads are clean JSON (`phpjson.dumps`: no `\/` escaping, unicode unescaped) | 🪞 | Decodes identically in the browser. |
 | 31 | PY: `SessionSearchService` connects to the contexts DB lazily on first use (PHP connects in the constructor) | 🪞 | A connection failure surfaces as `{'error': …}` from the tool instead of a constructor throw. |
 | 32 | PY: providers other than Claude return the PHP "Provider 'x' not found" error path | 🪞 | Until Phase 2b ports openai/gemini/kimi/grok/deepseek/mistral. |
-| 33 | PY: regular (non-streaming) chat runs the memory auto-updater via a post-response hook in `main.py` (`ctx['_after_response']`) after the JSON body is sent | 🪞 | PHP runs it before returning under mod_php (blocking the response ~3s). |
+| 33 | PY: regular (non-streaming) chat runs the memory auto-updater via a hook in `main.py` (`ctx['_after_response']`) after the body is rendered but BEFORE it is written to the client | 🪞 | Same latency as PHP under mod_php (no `fastcgi_finish_request`, ~3s when memory is on); the hook can never fail the response. |
 | 34 | PY: `AttachmentDispatcher` import is wrapped in the same `try` as PHP's attachment block | 🪞 | Until Phase 2d ports it, the `ImportError` is swallowed and attachments are ignored. |
 | 35 | PY: `_handleVerification` / `_handleComparison` raise `NotImplementedError` until Phase 2d | 🪞 | A verification/compare-enabled request emits a humanized `error` SSE event plus an `error` usage row after the main answer, rather than a PHP-style verification section. |
 | 36 | PY: `llm_function_usage_stats` is never created by the Python backend | 🪞 | `UsageTracker.trackFunctionCall` is ported but unused; PHP would `CREATE TABLE` on first call. |
