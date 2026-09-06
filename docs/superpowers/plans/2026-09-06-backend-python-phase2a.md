@@ -1579,7 +1579,7 @@ def test_client_tool_short_circuit_emits_event_and_pending():
     p = _provider(lambda r: httpx.Response(200, content=tool_sse)); rec = Rec(); p.setSSEClient(rec)
     out = p.streamChat('do', lambda t: None, [], {'user_id': 3, 'tools': [{'name': 'run_skill_script', 'description': 'd', 'input_schema': {'type': 'object', 'properties': {}}}]})
     assert out['pending_client_tool_call'] is True and out['pending_tool_calls'] == [{'id': 'toolu_1', 'name': 'run_skill_script', 'input': {'x': '1'}}]
-    assert out['functions_called'] == ['run_skill_script'] and out['text'] == '' and out['stop_reason'] == 'tool_use'
+    assert out['functions_called'] == ['run_skill_script'] and out['text'] == '' and out['stop_reason'] is None   # PHP makeStreamingRequest never returns stop_reason
     assert ('client_tool_call', {'assistant_text': '', 'tool_calls': [{'id': 'toolu_1', 'name': 'run_skill_script', 'input': {'x': '1'}}]}) in rec.events
 
 
