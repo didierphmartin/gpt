@@ -152,6 +152,9 @@ class ChatController:
         # segments, optionally slash-joined for group-folder skills.
         if len(dir_name) > 128:
             return None
+        # Deliberate deviation: PHP's preg_match('/^...$/') without the D modifier
+        # accepts a trailing "\n" (e.g. "route_to\n"); re.fullmatch is stricter and
+        # rejects it — kept as-is (stricter is safer for a name used to route tool calls).
         if not re.fullmatch(r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*', dir_name):
             return None
         if '..' in dir_name:
@@ -202,6 +205,9 @@ class ChatController:
             # chars. Length cap raised to 128 to accommodate group prefixes.
             if len(dir_name) > 128:
                 continue
+            # Deliberate deviation: PHP's preg_match('/^...$/') without the D modifier
+            # accepts a trailing "\n" (e.g. "route_to\n"); re.fullmatch is stricter and
+            # rejects it — kept as-is (stricter is safer for a name used to route tool calls).
             if not re.fullmatch(r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*', dir_name):
                 continue
             if '..' in dir_name:
@@ -257,13 +263,15 @@ class ChatController:
         messages.append({'role': 'user', 'content': message})
 
         system_prompt = str(options.get('system_prompt') or '')
+        # PHP strlen() counts BYTES, not characters — use UTF-8 byte length for all
+        # seven terms so non-ASCII system prompts/messages/content match PHP's count.
         chars = (
-            len(system_prompt) + len(message)
-            + sum(len(m['content']) for m in messages)
+            _blen(system_prompt) + _blen(message)
+            + sum(_blen(m['content']) for m in messages)
             # PHP: plain json_encode($serverTools) / json_encode($clientTools) — no flags,
             # so BOTH slashes and unicode are escaped here (unlike the message content above).
-            + len(_php_json_encode_default(serverTools)) + len(_php_json_encode_default(options.get('client_tools') or []))
-            + len(str(options.get('memory_context') or '')) + len(str(options.get('skill_content') or ''))
+            + _blen(_php_json_encode_default(serverTools)) + _blen(_php_json_encode_default(options.get('client_tools') or []))
+            + _blen(str(options.get('memory_context') or '')) + _blen(str(options.get('skill_content') or ''))
         )
         import math
         return {
@@ -301,14 +309,20 @@ class ChatController:
             if (not isinstance(name, str) or name == ''
                     # route_to: the workflow dispatcher's branch choice (browser run path);
                     # resolved client-side, so it rides the same per-request channel.
+                    # Deliberate deviation: PHP's preg_match('/^...$/') without the D
+                    # modifier accepts a trailing "\n"; re.fullmatch is stricter and rejects
+                    # it — kept as-is (stricter is safer for a name used to route tool calls).
                     or not re.fullmatch(r'webmcp_[a-zA-Z0-9_\-.]{1,120}|route_to|save_playbook_agent', name)):
                 error_log(f"[ChatController] client_tools[{i}] dropped: invalid name " + repr(name))
                 continue
             description = entry.get('description') if entry.get('description') is not None else ''
             if not isinstance(description, str):
                 description = ''
-            if len(description) > 2048:
-                description = description[:2048]
+            # PHP strlen()/substr() are BYTE-based, not character-based.
+            b = description.encode('utf-8')
+            if len(b) > 2048:
+                # PHP substr can split a multibyte char; we drop the partial char (recorded deviation).
+                description = b[:2048].decode('utf-8', errors='ignore')
             input_schema = entry.get('input_schema')
             if not isinstance(input_schema, (dict, list)):
                 error_log(f"[ChatController] client_tools[{i}] dropped: input_schema not an array")
@@ -728,7 +742,7 @@ class ChatController:
             return None  # fail open
 
     def _applyUserApiKeys(self, config: dict, userId: str, provider: str | None = None) -> dict:
-        if not userId or userId == 'demo-user':
+        if php_empty(userId) or userId == 'demo-user':
             return config
 
         config = copy.deepcopy(config)
@@ -781,7 +795,7 @@ class ChatController:
 
                 decrypted_key = self._decryptApiKey(encrypted_key, encryption_key)
 
-                if decrypted_key:
+                if not php_empty(decrypted_key):
                     user_owned_key_providers[key_provider] = True
                     if isinstance(config.get(key_provider), dict):
                         config[key_provider]['api_key'] = decrypted_key
@@ -828,7 +842,7 @@ class ChatController:
     def _checkFreeTrialQuota(self, userId: str) -> dict | None:
         """Check if a free trial user has exceeded their token quota.
         Returns an error response dict if quota exceeded, None if OK."""
-        if not userId or userId == 'demo-user':
+        if php_empty(userId) or userId == 'demo-user':
             return None
 
         try:
@@ -844,8 +858,12 @@ class ChatController:
             if (user.get('role') or '') == 'admin':
                 return None
 
-            # Paid plans have no quota
-            if (user.get('plan') or 'free') != 'free':
+            # Paid plans have no quota. PHP: ($user['plan'] ?? 'free') !== 'free' — null-
+            # coalescing only substitutes on a missing/null key, not on falsy values like
+            # '' (PHP treats an empty-string plan as non-null, i.e. NOT the free default).
+            plan = user.get('plan')
+            plan = plan if plan is not None else 'free'
+            if plan != 'free':
                 return None
 
             # Resolve the lifetime token cap from the user's role-based package.
@@ -920,6 +938,11 @@ class ChatController:
     # compareOnly, handleStreamingChat, handleVerification,
     # handleComparison, handleRegularChat) land in Task 9.
     # ------------------------------------------------------------------
+
+
+def _blen(s: str) -> int:
+    """PHP strlen() equivalent: byte length (UTF-8), not character count."""
+    return len(s.encode('utf-8'))
 
 
 def _php_json_encode_uu(v) -> str:

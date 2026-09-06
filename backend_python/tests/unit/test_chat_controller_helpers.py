@@ -122,3 +122,38 @@ def test_sse_client_classes_prefix_events():
     ev.clear(); c = ComparisonSseClient(lambda e, d: ev.append((e, d)))
     c.sendChunk('c'); c.sendCustomEvent('client_tool_call', {'x': 1}); c.sendCustomEvent('mcp_ui', {'y': 2})
     assert ev == [('compare_chunk', 'c'), ('compare_client_tool_call', {'x': 1}), ('mcp_ui', {'y': 2})] and c.getSessionId().startswith('compare_')
+
+
+def test_snapshot_estimated_tokens_counts_utf8_bytes_not_chars():
+    import math
+    system_prompt = 'héllo'
+    message = 'wörld'
+    snap = ChatController.buildLlmContextSnapshot('claude', None, {'system_prompt': system_prompt}, [], [], message)
+    # PHP strlen() is byte-based: system_prompt(6) + message(6) + the single message's
+    # content, which equals `message` (6) + '[]'-encoded server/client tool lists (2 + 2)
+    # + empty memory_context/skill_content (0 + 0).
+    expected_chars = len(system_prompt.encode('utf-8')) + len(message.encode('utf-8')) \
+        + len(message.encode('utf-8')) \
+        + len('[]'.encode('utf-8')) + len('[]'.encode('utf-8')) \
+        + 0 + 0
+    assert snap['estimated_tokens'] == math.ceil(expected_chars / 4)
+
+
+def test_sanitize_client_tools_truncates_description_by_utf8_bytes():
+    desc = 'é' * 1500  # 2 bytes/char in UTF-8 -> 3000 bytes, well over the 2048-byte cap
+    ct = ChatController.sanitizeClientTools([{'name': 'webmcp_x', 'description': desc, 'input_schema': {}}])
+    assert len(ct) == 1
+    kept_bytes = len(ct[0]['description'].encode('utf-8'))
+    assert 2046 <= kept_bytes <= 2048
+
+
+def test_apply_user_api_keys_zero_string_user_id_is_empty_like_php():
+    cfg = {'auth': {'jwt_secret': 'S'}, 'claude': {'api_key': 'old'}}
+    db = Db([])
+    out = ChatController(db, cfg)._applyUserApiKeys(cfg, '0')
+    assert out == cfg and db.calls == []
+
+
+def test_quota_check_treats_empty_string_plan_as_not_free():
+    q = ChatController(Db([{'plan': '', 'role': 'user'}]), {})._checkFreeTrialQuota('3')
+    assert q is None
