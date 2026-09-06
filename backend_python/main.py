@@ -6,6 +6,7 @@ import os
 import tempfile
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from starlette.responses import Response, StreamingResponse
@@ -31,7 +32,13 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
     dispatcher = Dispatcher(routes if routes is not None else ROUTES)
     processor = MiddlewareProcessor(config, lambda: open_primary(config))
     executor = ThreadPoolExecutor(max_workers=int(config.get('py_workers', 100)), thread_name_prefix='req')
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.executor = executor
 
     def handle_sync(request: Request, raw_body: bytes, sse: SseStream, files: dict, form_fields: dict) -> Response | None:
@@ -90,7 +97,8 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
                     result = fn(ctx)
                 if sse.started:
                     return None                     # streaming path: response already produced
-                return with_cors(render(result))
+                resp = render(result)
+                return with_cors(resp if resp is not None else Response(status_code=200))
             except Exception as e:  # noqa: BLE001
                 error_log(f'[Backend] Controller error: {e}\n{traceback.format_exc()}')
                 if sse.started:
@@ -108,6 +116,7 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
         sse = SseStream(loop)
         files: dict = {}
         form_fields: dict = {}
+        tmp_paths: list[str] = []
         raw = b''
         ctype = request.headers.get('content-type', '')
         if ctype.startswith('multipart/form-data'):
@@ -117,6 +126,7 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
                     data = await value.read()
                     tmp = tempfile.NamedTemporaryFile(delete=False, prefix='php_upload_')
                     tmp.write(data); tmp.close()
+                    tmp_paths.append(tmp.name)
                     files[key] = {'name': value.filename or '', 'type': value.content_type or '',
                                   'tmp_name': tmp.name, 'size': len(data), 'error': 0}
                 else:
@@ -127,9 +137,9 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
         work = loop.run_in_executor(executor, handle_sync, request, raw, sse, files, form_fields)
 
         def _cleanup(_):
-            for f in files.values():
+            for p in tmp_paths:
                 try:
-                    os.unlink(f['tmp_name'])
+                    os.unlink(p)
                 except OSError:
                     pass
             if not work.cancelled() and work.exception():
@@ -149,9 +159,20 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
                     if frame is None:
                         return
                     yield frame
-            except asyncio.CancelledError:
+            finally:
+                # Runs on a clean sentinel exit (harmless — the controller is past its
+                # last send) and on asyncio.CancelledError. It also runs on GeneratorExit:
+                # on spec_version >= 2.4, Starlette's StreamingResponse.stream_response()
+                # has no try/finally around `async for chunk in body_iterator`, so a
+                # disconnect surfaced as an OSError from send() (or a cancellation that
+                # lands inside send() rather than inside this generator's own await)
+                # simply abandons this generator mid-yield; only reclaimed later when
+                # asyncio's async-generator finalizer throws GeneratorExit into it. An
+                # `except asyncio.CancelledError` alone would miss that GeneratorExit and
+                # never mark the stream aborted, leaving the controller thread free to
+                # keep streaming into an unbounded queue. Either way this must run before
+                # the controller thread's next send() call.
                 sse.mark_aborted()
-                raise
 
         return StreamingResponse(gen(), status_code=200, media_type='text/event-stream',
                                  headers={**SSE_HEADERS, **cors_headers})

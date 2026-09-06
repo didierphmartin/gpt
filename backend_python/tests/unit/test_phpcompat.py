@@ -64,3 +64,9 @@ def test_php_uniqid_shapes():
 
 def test_php_crc32_matches_php():
     assert pc.php_crc32('demo-user') == 4190640275   # php -r 'echo abs(crc32("demo-user"));' (verified against live PHP CLI)
+
+
+def test_php_date_unsupported_format_raises():
+    import pytest
+    with pytest.raises(ValueError, match='unsupported php_date format'):
+        pc.php_date('D M j')

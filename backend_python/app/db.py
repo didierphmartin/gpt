@@ -34,6 +34,8 @@ def normalize_row(row: dict | None) -> dict | None:
 
 
 class Db:
+    _connect_kwargs = None   # None => directly constructed Db(conn); reconnect-on-gone-away is opt-in
+
     def __init__(self, conn: pymysql.connections.Connection):
         self._conn = conn
 
@@ -61,7 +63,7 @@ class Db:
                 return cur
             except pymysql.err.OperationalError as e:
                 cur.close()
-                if attempt == 1 and e.args and e.args[0] in self._GONE:
+                if attempt == 1 and self._connect_kwargs is not None and e.args and e.args[0] in self._GONE:
                     self.close()
                     self._conn = pymysql.connect(**self._connect_kwargs)
                     continue

@@ -1,4 +1,5 @@
 import pymysql
+import pytest
 from app.db import Db
 
 
@@ -40,3 +41,13 @@ def test_transaction_methods_delegate(monkeypatch):
     db = Db.connect({'host': 'h', 'database': 'd', 'username': 'u', 'password': 'p'})
     db.begin(); db.commit(); db.rollback()
     assert db._conn.began and db._conn.committed and db._conn.rolled
+
+
+def test_directly_constructed_db_reraises_gone_away_without_reconnecting():
+    FlakyConn.instances = 0
+    conn = FlakyConn()             # instances == 1, calls == 0: the next execute() will "go away"
+    db = Db(conn)
+    assert db._connect_kwargs is None
+    with pytest.raises(pymysql.err.OperationalError):
+        db.fetch_one('SELECT 1 AS n')
+    assert FlakyConn.instances == 1   # no reconnect attempt: no fresh connection was ever made
