@@ -133,25 +133,34 @@ class Configuration:
 
         Returns an empty dict when the key isn't present so callers can treat
         "no DB row + no file fallback" as "provider not configured" instead of
-        getting an undefined-index error.
+        getting an undefined-index error. Returns a deep copy so callers cannot
+        mutate the Configuration.
         """
-        return self.config.get('claude', {})
+        # PHP ?? operator: None or missing → {}
+        value = self.config.get('claude')
+        value = {} if value is None else value
+        return deepcopy(value)
 
     def getOpenAI(self) -> dict:
         """
         Get OpenAI-specific configuration.
 
-        Same fallback semantics as getClaude.
+        Same fallback semantics as getClaude. Returns a deep copy.
         """
-        return self.config.get('openai', {})
+        # PHP ?? operator: None or missing → {}
+        value = self.config.get('openai')
+        value = {} if value is None else value
+        return deepcopy(value)
 
     def getSearch(self) -> dict:
-        """Get search API configuration."""
-        return self.config.get('search', {})
+        """Get search API configuration. Returns a deep copy."""
+        value = self.config.get('search', {})
+        return deepcopy(value)
 
     def getFinancial(self) -> dict:
-        """Get financial API configuration."""
-        return self.config.get('financial', {})
+        """Get financial API configuration. Returns a deep copy."""
+        value = self.config.get('financial', {})
+        return deepcopy(value)
 
     def isProviderConfigured(self, provider: str) -> bool:
         """Check if a provider is configured with an API key."""
@@ -167,8 +176,8 @@ class Configuration:
         return bool(self.config.get('debug'))
 
     def toArray(self) -> dict:
-        """Get all configuration as array."""
-        return self.config
+        """Get all configuration as array. Returns a deep copy so callers cannot mutate."""
+        return deepcopy(self.config)
 
     def validateProvider(self, provider: str) -> None:
         """
@@ -185,6 +194,10 @@ class Configuration:
     @staticmethod
     def fromEnvironment():
         """Create configuration from environment variables."""
+        # PHP (bool) getenv('AI_DEBUG') semantics: "0" and "" are false, any other non-empty string is true
+        debug_value = os.environ.get('AI_DEBUG', '')
+        debug_enabled = not php_empty(debug_value)
+
         return Configuration({
             'claude': {
                 'api_key': os.getenv('CLAUDE_API_KEY') or '',
@@ -204,5 +217,5 @@ class Configuration:
             'storage': {
                 'default_provider': os.getenv('STORAGE_PROVIDER') or 'local',
             },
-            'debug': bool(os.getenv('AI_DEBUG')),
+            'debug': debug_enabled,
         })

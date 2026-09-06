@@ -42,9 +42,9 @@ class Message:
 
     @staticmethod
     def fromArray(data: dict) -> 'Message':
-        """Create from array."""
+        """Create from array. Mirrors PHP ?? operator (None is replaced by default)."""
         created_at = None
-        if 'created_at' in data:
+        if 'created_at' in data and data['created_at'] is not None:
             # Parse ISO format datetime
             created_at_str = data['created_at']
             if isinstance(created_at_str, str):
@@ -56,12 +56,25 @@ class Message:
             else:
                 created_at = created_at_str
 
+        # PHP ?? operator: substitute if key absent OR value is None
+        role = data.get('role')
+        role = Message.ROLE_USER if role is None else role
+
+        content = data.get('content')
+        content = '' if content is None else content
+
+        id_val = data.get('id')
+        id_val = None if id_val is None else id_val
+
+        metadata = data.get('metadata')
+        metadata = {} if metadata is None else metadata
+
         return Message(
-            data.get('role', Message.ROLE_USER),
-            data.get('content', ''),
-            data.get('id'),
+            role,
+            content,
+            id_val,
             created_at,
-            data.get('metadata', {}),
+            metadata,
         )
 
     def getRole(self) -> str:

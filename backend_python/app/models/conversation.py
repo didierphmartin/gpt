@@ -44,8 +44,13 @@ class Conversation:
         return [m.toArray() for m in self.messages]
 
     def getLastMessages(self, count: int) -> list:
-        """Get the last N messages."""
-        return self.messages[-count:] if count > 0 else []
+        """
+        Get the last N messages using PHP array_slice($messages, -$count) semantics:
+        - count 3 → last three
+        - count 0 → the whole list
+        - count -2 → everything from index 2
+        """
+        return self.messages[-count:] if count else self.messages
 
     def getLastMessage(self) -> Message | None:
         """Get the last message."""

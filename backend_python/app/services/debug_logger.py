@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from app.support.logger import error_log
+from app.support.phpcompat import php_date
 
 
 class DebugLogger:
@@ -170,8 +171,8 @@ class DebugLogger:
         parts = []
 
         if self.include_timestamp:
-            from datetime import datetime
-            parts.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+            # Use php_date to match PHP timezone (Europe/Berlin by default)
+            parts.append(f"[{php_date('Y-m-d H:i:s')}]")
 
         parts.append(f"[{level.upper()}]")
         parts.append("[AIPortfolioAssistant]")
