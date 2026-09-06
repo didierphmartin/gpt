@@ -10,7 +10,8 @@ REQUIRED = {
 
 
 def _env(monkeypatch, overrides=None):
-    for k in list(REQUIRED) + ['PORT', 'PHP_TIMEZONE', 'LOGIN_DB_NAME', 'FIREBASE_PROJECT_ID']:
+    for k in list(REQUIRED) + ['PORT', 'PHP_TIMEZONE', 'LOGIN_DB_NAME', 'LOGIN_DB_HOST', 'LOGIN_DB_USER',
+                               'LOGIN_DB_PASS', 'FIREBASE_PROJECT_ID', 'LOGIN_JWT_SECRET']:
         monkeypatch.delenv(k, raising=False)
     for k, v in {**REQUIRED, **(overrides or {})}.items():
         monkeypatch.setenv(k, v)
