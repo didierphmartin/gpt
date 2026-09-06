@@ -64,6 +64,8 @@ Last updated: 2026-09-05
 | 39 | PY: the 2048-byte client-tool description cap slices bytes and decodes with `errors='ignore'` | 🪞 deliberate deviation | PHP `substr` can emit a split multibyte char that `json_encode` then rejects. |
 | 40 | PY: streaming path returns `stop_reason` as `None` like PHP's `makeStreamingRequest` | 🪞 | The earlier plan test asserting `'tool_use'` was wrong. |
 | 41 | PY: `SseStream.end()` is called at the same point as PHP's `fastcgi_finish_request()` (inside the memory block, after usage logging) | 🪞 | When that block does not run, the stream is closed by `main.py`'s `finally`. |
+| 42 | PY: SSE headers (`text/event-stream`) are sent lazily on the first event; PHP sends them eagerly on entry to `handleStreamingChat` | 🪞 | Every 2a exit path emits at least one event, so the wire is identical; a future handler that returns before any `send()` would answer a bare 200 where PHP answers an empty event-stream. |
+| 43 | PY: the SSE bridge queue is unbounded (frames buffer in memory for a stalled client); PHP's `flush()` applies socket backpressure | 🪞 | Chat-sized payloads (tens of KB); revisit if an endpoint streams large bodies. |
 
 ## How items get verified
 Each fix is validated by **differential testing against the live PHP backend** (byte/semantic
