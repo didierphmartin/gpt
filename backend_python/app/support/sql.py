@@ -18,10 +18,7 @@ def _outside_quotes(sql: str, fn) -> str:
 def translate(sql: str, params=None):
     if params is None:
         return sql, None
-    sql = _outside_quotes(sql, lambda s: s.replace('%', '%%'))
-    # `%` inside quoted literals must be escaped too (PyMySQL formats the whole string).
-    sql = ''.join(p.replace('%', '%%') if i % 2 else p
-                  for i, p in enumerate(_SPLIT_QUOTES.split(sql)))
+    sql = sql.replace('%', '%%')
     if isinstance(params, Mapping):
         clean = {k.lstrip(':'): v for k, v in params.items()}
         return _outside_quotes(sql, lambda s: _NAMED.sub(r'%(\1)s', s)), clean
