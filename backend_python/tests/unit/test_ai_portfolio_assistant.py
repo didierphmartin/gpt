@@ -117,3 +117,24 @@ def test_close_closes_llm_manager_and_search_functions():
     assert claude.httpClient.is_closed is False and search_http.is_closed is False
     a.close()
     assert claude.httpClient.is_closed is True and search_http.is_closed is True
+
+
+def test_set_database_registers_portfolio_watchlist_analysis_functions_in_php_order():
+    class Db:
+        def fetch_all(self, *a): return []
+        def fetch_one(self, *a): return None
+        def fetch_column(self, *a): return []
+        def execute(self, *a): return 1
+        def insert(self, *a): return 1
+    a = AIPortfolioAssistant({'claude': {'api_key': 'K'}, 'tracking': {'enabled': False}})
+    try:
+        before = a.getToolsManager().getRegisteredFunctions()
+        a.setDatabase(Db())
+        after = a.getToolsManager().getRegisteredFunctions()
+        assert after[:len(before)] == before
+        assert after[len(before):] == ['get_portfolios', 'get_portfolio_assets_with_discovery', 'get_portfolio_diversification', 'get_all_transactions',
+                                       'get_user_watchlist', 'get_watchlist_with_market_data', 'add_to_watchlist', 'remove_from_watchlist',
+                                       'get_analyst_ratings', 'get_financial_ratios', 'get_price_targets', 'get_company_profile', 'get_asset_sentiment']
+    finally:
+        a.close()
+    assert a._analysisFunctions.httpClient.is_closed

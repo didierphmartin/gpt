@@ -11,7 +11,10 @@ provider classes plus CustomProvider are wired here (Phase 2b).
 from __future__ import annotations
 
 from app.config_.configuration import Configuration
+from app.functions.analysis_functions import AnalysisFunctions
+from app.functions.portfolio_functions import PortfolioFunctions
 from app.functions.search_functions import SearchFunctions
+from app.functions.watchlist_functions import WatchlistFunctions
 from app.models.conversation import Conversation
 from app.providers.claude_provider import ClaudeProvider
 from app.providers.custom_provider import CustomProvider
@@ -55,6 +58,7 @@ class AIPortfolioAssistant:
         self.logger: DebugLogger | None = None
         self.pdo = None
         self._searchFunctions: SearchFunctions | None = None
+        self._analysisFunctions: AnalysisFunctions | None = None
 
         if self.config.isDebugEnabled():
             self.logger = DebugLogger(True)
@@ -328,13 +332,18 @@ class AIPortfolioAssistant:
         """Python-only addition: PHP has no equivalent — Guzzle clients die
         with the request. Closes the LLM manager (which closes every
         registered provider's httpx.Client) and this instance's
-        SearchFunctions httpx.Client."""
+        SearchFunctions/AnalysisFunctions httpx.Client(s)."""
         self.llmManager.close()
         if self._searchFunctions is not None:
             try:
                 self._searchFunctions.close()
             except Exception as e:  # noqa: BLE001
                 error_log(f"[AIPortfolioAssistant] close() failed for SearchFunctions: {e}")
+        if self._analysisFunctions is not None:
+            try:
+                self._analysisFunctions.close()
+            except Exception as e:  # noqa: BLE001
+                error_log(f"[AIPortfolioAssistant] close() failed for AnalysisFunctions: {e}")
 
     def createConversation(self, userId: str | None = None, metadata: dict = None) -> Conversation:
         """Create a new conversation."""
@@ -391,13 +400,22 @@ class AIPortfolioAssistant:
         self._registerSearchFunctions()
 
     def _registerDatabaseFunctions(self) -> None:
-        """
-        Register database-dependent functions.
+        """Register database-dependent functions."""
+        if not self.pdo:
+            return
 
-        Phase 2a: PortfolioFunctions/WatchlistFunctions/AnalysisFunctions
-        land in 2c — nothing is registered here yet.
-        """
-        error_log("[AIPortfolioAssistant] database functions pending 2c")
+        # Portfolio functions
+        portfolioFunctions = PortfolioFunctions(self.pdo)
+        self.toolsManager.registerFunctions(portfolioFunctions.getAllFunctions())
+
+        # Watchlist functions
+        watchlistFunctions = WatchlistFunctions(self.pdo)
+        self.toolsManager.registerFunctions(watchlistFunctions.getAllFunctions())
+
+        # Analysis functions
+        analysisFunctions = AnalysisFunctions(self.config)
+        self._analysisFunctions = analysisFunctions  # kept for close() (Python-only addition)
+        self.toolsManager.registerFunctions(analysisFunctions.getAllFunctions())
 
     def _registerSearchFunctions(self) -> None:
         """Register search functions (no database needed)."""
