@@ -77,6 +77,7 @@ Keep PHP method names (camelCase); `private` PHP methods become `_name`; `protec
 
 **Interfaces:**
 - `app/providers/totals.py` exports `@dataclass class _Totals` with fields `inputTokens: int = 0`, `outputTokens: int = 0`, `functionCallCount: int = 0`, `functionsCalled: list`, `mcpToolsCalled: list` (default factories) — identical to the 2a dataclass in `claude_provider.py:37-49`. Tasks 2–6 import it.
+- Static builders return `{'url', 'headers', 'payload', 'provider'}` where `headers` is a LIST of `"Name: value"` strings (curl style, as `ClaudeProvider.buildHttpRequest` does) — not a dict.
 - `OpenAIProvider(config: Configuration)` implements `AIProviderInterface`, `HttpRequestBuilderInterface`, mixes in `ProviderRequestBuilderMixin`, `ClientSideToolsMixin`. Public: `close`, `setFunctionExecutor`, `setUsageTracker`, `setSSEClient`, `setLogger`, `getName()->'openai'`, `isAvailable`, `getModel`, `setModel`, `getSupportedModels`, `chat(message, conversationHistory=None, options=None)`, `streamChat(message, onChunk, conversationHistory=None, options=None)`, static `buildHttpRequest(model, messages, tools, config, maxTokens, temperature)`, `parseHttpResponse(decoded)`, `getApiFamily()->'openai'`. Private (PHP `private`): `_makeRequest`, `_handleStreamingResponse`, `_handleToolCallsRecursive`, `_executeFunction`, `_hasToolCalls`, `_extractTextResponse`, `_buildMessages`, `_extractTextFromContent`, `_convertToOpenAITools`, `_getTools`, `_getDefaultSystemPrompt`, `_sendProgress`, `_trackUsage`; `getContextWindow` (protected in PHP) stays public.
 - Constructor defaults (PHP `OpenAIProvider.php:64-83`): block `config.get('openai', {})`; `model` default `'gpt-4-turbo-preview'`; `max_tokens` 4096; `temperature` 0.7; `base_url` default `'https://api.openai.com'` (rstrip `/`); `maxRecursionDepth = config.get('max_recursion_depth', 10)`; `httpx.Client(base_url=self.baseUrl, timeout=600)`; `DebugLogger(True)` when `config.isDebugEnabled()`. `pendingOutputSchema = None`, `pendingStreaming = True` as PHP declares.
 
@@ -250,7 +251,7 @@ def test_missing_key_is_authentication_failed_before_any_request():
 
 def test_static_builder_and_parser():
     r = OpenAIProvider.buildHttpRequest('gpt-4o', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
-    assert r['url'].endswith('/v1/chat/completions') and r['headers']['Authorization'] == 'Bearer K' and r['payload']['model'] == 'gpt-4o' and r['payload']['max_tokens'] == 50
+    assert r['url'].endswith('/v1/chat/completions') and 'Authorization: Bearer K' in r['headers'] and r['payload']['model'] == 'gpt-4o' and r['payload']['max_tokens'] == 50
     parsed = OpenAIProvider.parseHttpResponse({'choices': [{'message': {'content': 'yo', 'tool_calls': []}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 2}})
     assert parsed['text'] == 'yo' and parsed['tool_calls'] == [] and parsed['usage']['prompt_tokens'] == 1
 ```
@@ -418,7 +419,7 @@ def test_http_errors_map_to_php_messages(status, factory):
 
 def test_static_builder_and_parser():
     r = GrokProvider.buildHttpRequest('grok-4-fast', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
-    assert r['url'] == 'https://api.x.ai/v1/chat/completions' and r['headers']['Authorization'] == 'Bearer K' and r['payload']['model'] == 'grok-4-fast'
+    assert r['url'] == 'https://api.x.ai/v1/chat/completions' and 'Authorization: Bearer K' in r['headers'] and r['payload']['model'] == 'grok-4-fast'
     parsed = GrokProvider.parseHttpResponse({'choices': [{'message': {'content': 'yo'}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 2}})
     assert parsed['text'] == 'yo' and parsed['tool_calls'] == []
 ```
