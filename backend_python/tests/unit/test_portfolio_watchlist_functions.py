@@ -1,6 +1,6 @@
 import pytest
 from app.functions.portfolio_functions import PortfolioFunctions
-from app.functions.watchlist_functions import WatchlistFunctions
+from app.functions.watchlist_functions import WatchlistFunctions, _php_ge, _php_le
 
 
 class Db:
@@ -53,6 +53,18 @@ def test_all_transactions_pagination_params():
     assert first_sql.startswith('SELECT') and 'FROM transactions t' in first_sql and 3 in first_params
 
 
+def test_all_transactions_defaults_sort_to_date_when_omitted():
+    # PHP:281 re-reads the undefined $params['sort'] in its true branch when sort is
+    # omitted -> null -> "ORDER BY t.  DESC" -> SQL error. Ruling (findings Important):
+    # that's an accidental PHP crash, not a designed default; this port keeps the
+    # clean 'date' default and must not crash.
+    db = Db([[], [0]])
+    out = PortfolioFunctions(db).getAllTransactions({}, 3)
+    assert out['success'] is True
+    first_sql, _ = db.calls[0]
+    assert 'ORDER BY t.date DESC' in first_sql
+
+
 def test_watchlist_registry_guards_and_get():
     wf = WatchlistFunctions()
     assert list(wf.getAllFunctions()) == ['get_user_watchlist', 'get_watchlist_with_market_data', 'add_to_watchlist', 'remove_from_watchlist']
@@ -95,3 +107,33 @@ def test_remove_from_watchlist_uses_delete_join_and_rowcount():
         'success': False,
         'message': 'AAPL was not found in your watchlist',
     }
+
+
+def test_php_loose_cmp_helper_matches_php8_rules():
+    # WatchlistFunctions.php:24/28 compare DB-sourced values (DECIMAL-as-string, or
+    # None on a LEFT JOIN miss) with PHP 8 loose `>=`/`<=` semantics.
+    assert _php_ge('10.50', '9.00') is True     # numeric string vs numeric string -> numeric compare
+    assert _php_le('10.50', '9.00') is False
+    assert _php_ge(None, '9.00') is False       # null -> '' ; '' >= '9.00' is false (lexical)
+    assert _php_le(None, '9.00') is True        # PHP quirk: '' <= '9.00' is TRUE
+    assert _php_ge('abc', '9.00') is True       # neither numeric -> lexical: 'a' (0x61) > '9' (0x39)
+    assert _php_le('abc', '9.00') is False
+
+
+def test_watchlist_market_data_alert_uses_php_loose_comparison():
+    # PHP 22-32 (php-watchlist-market-data.txt): alert_triggered/alert_type computed
+    # per-row from current_price vs alert_price_above/below with PHP loose comparison.
+    rows = [
+        {'symbol': 'AAA', 'current_price': '10.50', 'alert_price_above': '9.00', 'alert_price_below': None},
+        {'symbol': 'BBB', 'current_price': None, 'alert_price_above': None, 'alert_price_below': '9.00'},
+        {'symbol': 'CCC', 'current_price': None, 'alert_price_above': '9.00', 'alert_price_below': None},
+    ]
+    db = Db([rows])
+    out = WatchlistFunctions(db).getWatchlistWithMarketData({}, 3)
+    assert 'error' not in out
+    above, below_quirk, no_trigger = out['watchlist']
+    assert above['alert_triggered'] is True and above['alert_type'] == 'above'
+    # PHP quirk (reproduced, not "fixed"): current_price=None fires the "below" alert
+    # because null <= '9.00' is true under PHP loose comparison.
+    assert below_quirk['alert_triggered'] is True and below_quirk['alert_type'] == 'below'
+    assert no_trigger['alert_triggered'] is False and 'alert_type' not in no_trigger

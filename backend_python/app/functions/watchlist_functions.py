@@ -4,7 +4,43 @@ Watchlist-related LLM functions.
 """
 from __future__ import annotations
 
-from app.support.phpcompat import php_empty
+from app.support.phpcompat import is_numeric, php_empty
+
+
+def _php_loose_cmp(a, b) -> int:
+    """PHP 8 loose comparison of `a` vs `b`, restricted to the types that reach
+    the alert-price sites: None, int, float, Decimal-as-str, numeric strings,
+    and plain strings (WatchlistFunctions.php ~24/28: `$a >= $b` / `$a <= $b`
+    on DB-sourced DECIMAL/None values). Returns -1/0/1.
+
+    Rules (PHP 8 comparison table): bool operand -> compare as bool; None ->
+    treated as '' then falls through to the string rules; both operands numeric
+    (int/float/numeric-string) -> compare as float; otherwise -> lexical string
+    comparison (this reproduces PHP's `null <= '9.00'` => true quirk, since ''
+    sorts below any non-empty string).
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        ab, bb = bool(a), bool(b)
+        return (ab > bb) - (ab < bb)
+    if a is None:
+        a = ''
+    if b is None:
+        b = ''
+    a_numeric = isinstance(a, (int, float)) or (isinstance(a, str) and is_numeric(a))
+    b_numeric = isinstance(b, (int, float)) or (isinstance(b, str) and is_numeric(b))
+    if a_numeric and b_numeric:
+        af, bf = float(a), float(b)
+        return (af > bf) - (af < bf)
+    astr, bstr = str(a), str(b)
+    return (astr > bstr) - (astr < bstr)
+
+
+def _php_ge(a, b) -> bool:
+    return _php_loose_cmp(a, b) >= 0
+
+
+def _php_le(a, b) -> bool:
+    return _php_loose_cmp(a, b) <= 0
 
 
 class WatchlistFunctions:
@@ -129,13 +165,16 @@ class WatchlistFunctions:
                 [userId],
             )
 
-            # Calculate alert price status
+            # Calculate alert price status. Comparisons use PHP loose-comparison
+            # semantics (WatchlistFunctions.php:24/28) because current_price and
+            # the alert_price_* columns are DECIMAL-as-string or None here, not
+            # native Python numbers — see _php_loose_cmp above.
             for item in items:
                 item['alert_triggered'] = False
-                if item.get('alert_price_above') and item.get('current_price') >= item.get('alert_price_above'):
+                if not php_empty(item.get('alert_price_above')) and _php_ge(item.get('current_price'), item.get('alert_price_above')):
                     item['alert_triggered'] = True
                     item['alert_type'] = 'above'
-                if item.get('alert_price_below') and item.get('current_price') <= item.get('alert_price_below'):
+                if not php_empty(item.get('alert_price_below')) and _php_le(item.get('current_price'), item.get('alert_price_below')):
                     item['alert_triggered'] = True
                     item['alert_type'] = 'below'
 

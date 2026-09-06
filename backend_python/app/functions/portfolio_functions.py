@@ -120,7 +120,7 @@ class PortfolioFunctions:
             return {'error': 'Database connection or user ID not available'}
 
         try:
-            portfolioId = params.get('portfolio_id') if params.get('portfolio_id') is not None else None
+            portfolioId = params.get('portfolio_id')
 
             # Auto-discover default portfolio if not specified
             if not portfolioId:
@@ -190,12 +190,12 @@ class PortfolioFunctions:
             return {'error': 'Database connection or user ID not available'}
 
         try:
-            portfolioId = params.get('portfolio_id') if params.get('portfolio_id') is not None else None
+            portfolioId = params.get('portfolio_id')
 
             # Auto-discover if not provided
             if not portfolioId:
                 result = self.getPortfolioAssetsWithDiscovery({}, userId)
-                portfolioId = result.get('portfolio_id') if result.get('portfolio_id') is not None else None
+                portfolioId = result.get('portfolio_id')
 
             if not portfolioId:
                 return {'error': 'No portfolio found'}
@@ -241,6 +241,13 @@ class PortfolioFunctions:
             page = max(1, php_intval(params.get('page') if params.get('page') is not None else 1))
             limit = min(100, max(1, php_intval(params.get('limit') if params.get('limit') is not None else 50)))
             offset = (page - 1) * limit
+            # PHP:281 (`in_array($params['sort'] ?? 'date', [...]) ? $params['sort'] : 'date'`)
+            # re-reads the *undefined* `$params['sort']` key in its true branch when `sort`
+            # is omitted, instead of the coalesced 'date' default -> null -> "ORDER BY t.  DESC"
+            # -> SQL syntax error -> {'error': ...}. Ruling: that is an accidental PHP crash,
+            # not a designed default; this port keeps the clean 'date' default instead of
+            # reproducing the crash (see task-2-findings.md Important; tracker row added by
+            # the controller).
             sortCandidate = params.get('sort') if params.get('sort') is not None else 'date'
             sort = sortCandidate if sortCandidate in ['date', 'amount', 'type'] else 'date'
             order = 'ASC' if (params.get('order') if params.get('order') is not None else 'DESC').upper() == 'ASC' else 'DESC'
@@ -264,6 +271,7 @@ class PortfolioFunctions:
                 "                 WHERE p.user_id = ?",
                 [userId],
             )
+            # $stmt->fetchColumn() equivalent: first (only) column of the COUNT(*) row.
             totalCount = php_intval(countRow[next(iter(countRow))] if countRow else 0)
 
             return {
