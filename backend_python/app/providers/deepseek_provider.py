@@ -386,7 +386,16 @@ class DeepSeekProvider(
             if statusCode == 401:
                 raise ProviderException.authenticationFailed('deepseek')
 
-            raise ProviderException.apiError('deepseek', str(e), statusCode)
+            # PHP passes $e->getMessage() (PHP:383); Guzzle's RequestException
+            # message embeds the response-body summary, and
+            # ChatController::humanizeProviderError pattern-matches on it —
+            # DeepSeek's documented 400s ("Thinking mode does not support
+            # this tool_choice", "reasoning_content ... must be passed
+            # back") need to reach the user. httpx's str(e) carries only the
+            # status line, so append the body — same shape as
+            # openai_provider.py (Task 1 fix) and claude_provider.py:889-902.
+            errorDetails = str(e) + " | Response: " + errorBody
+            raise ProviderException.apiError('deepseek', errorDetails, statusCode)
 
         except httpx.RequestError as e:
             # Guzzle's ConnectException is a GuzzleException too; it carries

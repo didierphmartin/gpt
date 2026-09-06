@@ -138,6 +138,25 @@ def test_http_errors_map_to_php_messages(status, factory):
     assert str(ei.value) == str(factory())
 
 
+@pytest.mark.parametrize('streaming', [True, False])
+def test_api_error_message_carries_response_body(streaming):
+    # Regression: httpx.HTTPStatusError's str(e) has no response body (unlike
+    # PHP's Guzzle RequestException message), so DeepSeek's documented 400s
+    # ("Thinking mode does not support this tool_choice") must have the body
+    # appended or ChatController::humanizeProviderError can't surface them.
+    # Covers both the streaming path (body read()'d before re-raise) and the
+    # non-streaming path (httpx buffers the body already).
+    p = _provider(lambda r: httpx.Response(400, json={'error': {'message': 'Thinking mode does not support this tool_choice'}}), streaming=streaming)
+    p.setSSEClient(Rec())
+    with pytest.raises(ProviderException) as ei:
+        if streaming:
+            p.streamChat('x', lambda t: None, [], {'user_id': 3})
+        else:
+            p.chat('x', [], {'user_id': 3})
+    assert 'Thinking mode does not support this tool_choice' in str(ei.value)
+    assert ei.value.getHttpStatusCode() == 400
+
+
 def test_static_builder_and_parser():
     r = DeepSeekProvider.buildHttpRequest('deepseek-v4-flash', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
     assert r['url'] == 'https://api.deepseek.com/chat/completions' and r['payload']['thinking'] == {'type': 'enabled'}
