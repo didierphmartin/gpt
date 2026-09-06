@@ -45,7 +45,6 @@ class AuthMiddleware:
         self.public_routes = public_routes
         self.config = config
         self._db_factory = db_factory
-        self._db = None
 
     def handle(self, ctx):
         is_public = self._is_public_route(ctx['uri'], ctx['method'])
@@ -125,11 +124,15 @@ class AuthMiddleware:
             if secret == '':
                 error_log('[AuthMiddleware] app_key_secret is not configured — app keys disabled.')
                 return None
-            repo = AppKeyRepository(self._get_db(), secret)
-            row = repo.findByKey(key)
-            if row is not None:
-                repo.recordUse(int(row['id']))
-            return row
+            db = self._db_factory()
+            try:
+                repo = AppKeyRepository(db, secret)
+                row = repo.findByKey(key)
+                if row is not None:
+                    repo.recordUse(int(row['id']))
+                return row
+            finally:
+                db.close()
         except Exception as e:  # noqa: BLE001
             error_log(f'[AuthMiddleware] app key validation error: {e}')
             return None
@@ -137,16 +140,15 @@ class AuthMiddleware:
     def _validate_user_app_key(self, key: str) -> int | None:
         try:
             h = hash_user_app_key(key, user_app_key_pepper(self.config, self.jwt_secret))
-            row = self._get_db().fetch_one('SELECT id FROM users WHERE app_key_hash = ? LIMIT 1', [h])
-            return int(row['id']) if row else None
+            db = self._db_factory()
+            try:
+                row = db.fetch_one('SELECT id FROM users WHERE app_key_hash = ? LIMIT 1', [h])
+                return int(row['id']) if row else None
+            finally:
+                db.close()
         except Exception as e:  # noqa: BLE001
             error_log(f'[AuthMiddleware] user app key validation error: {e}')
             return None
-
-    def _get_db(self):
-        if self._db is None:
-            self._db = self._db_factory()
-        return self._db
 
     @staticmethod
     def _error(status: int, message: str) -> dict:

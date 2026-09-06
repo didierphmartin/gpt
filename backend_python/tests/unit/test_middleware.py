@@ -118,3 +118,34 @@ def test_processor_short_circuits_options_and_401():
 def test_processor_fails_closed_without_secret():
     with pytest.raises(RuntimeError, match='JWT secret is not configured'):
         MiddlewareProcessor({'auth': {'jwt_secret': ''}}, lambda: FakeDb())
+
+
+def test_uak_validation_opens_and_closes_a_fresh_connection_per_call():
+    """PHP opens/drops a DB connection per request; the middleware must not cache
+    one on the instance (that would survive across every request in the process)."""
+    class CountingFakeDb(FakeDb):
+        def __init__(self, rows=None):
+            super().__init__(rows)
+            self.closed = False
+        def close(self):
+            self.closed = True
+
+    made = []
+
+    def factory():
+        db = CountingFakeDb(rows=[{'id': 5}])
+        made.append(db)
+        return db
+
+    key = 'uak_' + 'ab' * 16
+    a = AuthMiddleware(SECRET, PUBLIC_ROUTES, CONFIG, factory)
+
+    a.handle(ctx(auth='Bearer ' + key))
+    a.handle(ctx(auth='Bearer ' + key))
+
+    assert len(made) == 2
+    assert all(db.closed for db in made)
+
+    # No Authorization header on a public route must not touch the DB at all.
+    a.handle(ctx('POST', '/api/v1/auth'))
+    assert len(made) == 2
