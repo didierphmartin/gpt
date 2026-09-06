@@ -1,0 +1,54 @@
+"""Small PHP built-in equivalents used by the ported controllers."""
+from __future__ import annotations
+
+import base64
+import os
+import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+    r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
+
+
+def php_tz() -> ZoneInfo:
+    return ZoneInfo(os.environ.get('PHP_TIMEZONE', 'Europe/Berlin'))
+
+
+def php_now() -> str:
+    """date('Y-m-d H:i:s') in PHP's configured timezone."""
+    return datetime.now(php_tz()).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def ucfirst(s: str) -> str:
+    return s[:1].upper() + s[1:] if s else s
+
+
+def is_numeric(v) -> bool:
+    """PHP is_numeric(): ints/floats (not bool), or numeric strings (leading whitespace allowed)."""
+    if isinstance(v, bool) or v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    if isinstance(v, str):
+        return re.fullmatch(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', v) is not None
+    return False
+
+
+def validate_email(s: str) -> bool:
+    """Approximation of filter_var($s, FILTER_VALIDATE_EMAIL) (see parity tracker)."""
+    return bool(s) and len(s) <= 254 and _EMAIL_RE.match(s) is not None
+
+
+def b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode('ascii').rstrip('=')
+
+
+def b64url_decode(data: str) -> bytes:
+    return base64.urlsafe_b64decode(data + '=' * (-len(data) % 4))
+
+
+def mb_substr(s: str, start: int, length: int | None = None) -> str:
+    return s[start:] if length is None else s[start:start + length]
