@@ -1635,10 +1635,6 @@ class ChatController:
 
             sendEvent('complete', {'status': 'done'})
 
-            # PHP's fastcgi_finish_request() equivalent: close the SSE body so
-            # the client is done before the usage/memory tail runs.
-            sse.end()
-
             # Log usage
             if usageLogger and response.get('usage') is not None:
                 usage = response['usage']
@@ -1669,6 +1665,11 @@ class ChatController:
             # post-response extraction (that extra Claude call blocked the
             # response ~3s under mod_php, where fastcgi_finish_request is absent).
             if includeMemory and is_numeric(userId) and not php_empty(response.get('text')):
+                # PHP's fastcgi_finish_request() equivalent, at the same spot:
+                # close the SSE body only once the usage row is written, so an
+                # exception in that block can still reach the client as an
+                # `error` event (the stream is not ended yet).
+                sse.end()
                 try:
                     # $config (local) is the DB-merged copy from
                     # applyDatabaseProviderSettings(). The Claude API key

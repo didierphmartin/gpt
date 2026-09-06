@@ -153,3 +153,33 @@ def test_client_abort_logs_aborted_transaction(monkeypatch):
     # fake DB has no system_llm_settings pricing row — assert the prefix.
     assert any(isinstance(p, dict) and p.get(':status') == 'aborted'
                and str(p.get(':error_message')).startswith('Cancelled by user') for _, p in db.calls)
+
+
+def test_usage_logging_failure_after_complete_still_reaches_client(monkeypatch):
+    # PHP ends the response (fastcgi_finish_request) only inside the memory
+    # block, AFTER usage logging; a throw in the usage tail therefore still
+    # produces an `error` SSE event. The port must not end the stream earlier.
+    calls = []
+    class BrokenLogger:
+        def __init__(self, *a, **k): pass
+        def logTransaction(self, data):
+            calls.append(data['status'])
+            if data['status'] == 'success':
+                raise RuntimeError('usage insert failed')
+            return 1
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
+    monkeypatch.setattr('app.controllers.chat_controller.UsageLogger', BrokenLogger)
+    async def run():
+        loop = asyncio.get_running_loop(); s = SseStream(loop)
+        await loop.run_in_executor(None, ChatController(Db(), CFG).chat, ctx({'message': 'hi', 'provider': 'claude', 'streaming': True, 'tools': [], 'memory': False}, sse=s))
+        delivered = []
+        while not s.queue.empty():
+            f = await s.queue.get()
+            if f is None:                     # end() sentinel: main.py's generator stops here
+                break
+            delivered.append(f)
+        return delivered
+    delivered = asyncio.run(run())
+    names = [f.split(b'\n', 1)[0] for f in delivered]
+    assert names[-2:] == [b'event: complete', b'event: error']
+    assert calls == ['success', 'error']
