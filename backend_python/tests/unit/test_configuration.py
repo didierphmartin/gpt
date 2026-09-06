@@ -90,3 +90,28 @@ def test_fromEnvironment_debug_flag_php_semantics():
     # Clean up
     if 'AI_DEBUG' in os.environ:
         del os.environ['AI_DEBUG']
+
+
+def test_fromFile_missing_path_raises():
+    import pytest
+    from app.exceptions import ConfigurationException
+    with pytest.raises(ConfigurationException, match="Configuration file not found: /no/such/path.json"):
+        Configuration.fromFile('/no/such/path.json')
+
+
+def test_fromFile_non_object_json_raises(tmp_path):
+    import json
+    import pytest
+    from app.exceptions import ConfigurationException
+    p = tmp_path / 'list.json'
+    p.write_text(json.dumps(['claude', 'openai']))
+    with pytest.raises(ConfigurationException, match="Configuration file must return an array"):
+        Configuration.fromFile(str(p))
+
+
+def test_fromFile_object_json_loads_config(tmp_path):
+    import json
+    p = tmp_path / 'config.json'
+    p.write_text(json.dumps({'claude': {'api_key': 'K'}}))
+    c = Configuration.fromFile(str(p))
+    assert c.get('claude.api_key') == 'K'

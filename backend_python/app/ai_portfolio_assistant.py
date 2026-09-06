@@ -60,6 +60,11 @@ class AIPortfolioAssistant:
         """Create instance from environment variables."""
         return AIPortfolioAssistant(Configuration.fromEnvironment())
 
+    @staticmethod
+    def fromConfigFile(path: str) -> 'AIPortfolioAssistant':
+        """Create instance from config file."""
+        return AIPortfolioAssistant(Configuration.fromFile(path))
+
     def setDatabase(self, pdo) -> 'AIPortfolioAssistant':
         """Set database connection for portfolio functions."""
         self.pdo = pdo

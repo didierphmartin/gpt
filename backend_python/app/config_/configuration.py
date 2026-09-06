@@ -1,6 +1,8 @@
 """Configuration manager for AI Portfolio Assistant."""
+import json
 import os
 from copy import deepcopy
+from pathlib import Path
 from app.exceptions import ConfigurationException
 from app.support.phpcompat import php_empty
 
@@ -190,6 +192,28 @@ class Configuration:
             raise ConfigurationException(
                 f"Provider '{provider}' is not configured. Please set the API key."
             )
+
+    @staticmethod
+    def fromFile(path: str) -> 'Configuration':
+        """
+        Create configuration from a config file.
+
+        PHP loads the file with `require $path` (a plain PHP script that
+        returns an array). Python has no equivalent for executing an
+        arbitrary file and capturing its return value, so this loads the
+        file as JSON instead — same "path -> associative structure"
+        contract, different file format.
+        """
+        if not Path(path).exists():
+            raise ConfigurationException(f"Configuration file not found: {path}")
+
+        with open(path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        if not isinstance(config, dict):
+            raise ConfigurationException("Configuration file must return an array")
+
+        return Configuration(config)
 
     @staticmethod
     def fromEnvironment():

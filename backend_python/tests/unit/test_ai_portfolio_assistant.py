@@ -69,3 +69,11 @@ def test_stream_chat_wires_sse_client_and_requires_provider():
     assert frames[0] == b'event: chunk\ndata: piece\n\n' and frames[1].startswith(b'event: response\ndata: {"text":"piece"') and frames[-1] == b'event: complete\ndata: {"status":"done"}\n\n'
     with pytest.raises(ValueError, match="AIPortfolioAssistant::streamChat requires \\$options\\['provider'\\]"):
         a.streamChat('hi', 's', 3, [], {})
+
+
+def test_from_config_file_loads_claude_provider(tmp_path):
+    import json
+    p = tmp_path / 'config.json'
+    p.write_text(json.dumps({'claude': {'api_key': 'K'}}))
+    a = AIPortfolioAssistant.fromConfigFile(str(p))
+    assert a.getLLMManager().getProvider('claude').isAvailable() is True
