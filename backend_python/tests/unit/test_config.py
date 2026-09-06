@@ -1,5 +1,6 @@
 import pytest
-from app.config import load_config, ConfigError
+from app.config import load_config, ConfigError, default_env_file
+import app.config
 
 REQUIRED = {
     'DB_HOST': 'h', 'DB_NAME': 'n', 'DB_USER': 'u', 'DB_PASS': 'p',
@@ -44,3 +45,48 @@ def test_missing_required_raises_php_message(monkeypatch):
         'Missing required env vars: DB_PASS, JWT_SECRET. '
         'Copy backend/.env.example to backend/.env and fill it in.'
     )
+
+
+def test_missing_vars_preserve_required_order(monkeypatch):
+    """Verify error message lists missing vars in REQUIRED declaration order, not sorted."""
+    _env(monkeypatch)
+    monkeypatch.delenv('APP_KEY_SECRET')
+    monkeypatch.delenv('DB_HOST')
+    with pytest.raises(ConfigError) as ei:
+        load_config(env_file=None)
+    # REQUIRED order: DB_HOST at position 0, APP_KEY_SECRET at position 9
+    assert str(ei.value) == (
+        'Missing required env vars: DB_HOST, APP_KEY_SECRET. '
+        'Copy backend/.env.example to backend/.env and fill it in.'
+    )
+
+
+def test_default_env_file_resolution(tmp_path, monkeypatch):
+    """Test default_env_file() resolution order: own .env → PHP .env → None."""
+    # Scenario (a): own .env exists
+    own_dir = tmp_path / 'own'
+    own_dir.mkdir()
+    own_env = own_dir / '.env'
+    own_env.write_text('TEST=1')
+    monkeypatch.setattr(app.config, 'ROOT', own_dir)
+    monkeypatch.setattr(app.config, 'PHP_BACKEND', tmp_path / 'nonexistent_php')
+    result = default_env_file()
+    assert result == str(own_env)
+
+    # Scenario (b): own .env doesn't exist, PHP .env does
+    php_dir = tmp_path / 'php_backend'
+    php_dir.mkdir()
+    php_env = php_dir / '.env'
+    php_env.write_text('TEST=2')
+    own_dir_no_env = tmp_path / 'own_no_env'
+    own_dir_no_env.mkdir()
+    monkeypatch.setattr(app.config, 'ROOT', own_dir_no_env)
+    monkeypatch.setattr(app.config, 'PHP_BACKEND', php_dir)
+    result = default_env_file()
+    assert result == str(php_env)
+
+    # Scenario (c): neither exist
+    monkeypatch.setattr(app.config, 'ROOT', tmp_path / 'nonexistent_own')
+    monkeypatch.setattr(app.config, 'PHP_BACKEND', tmp_path / 'nonexistent_php2')
+    result = default_env_file()
+    assert result is None

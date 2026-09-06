@@ -36,7 +36,7 @@ def load_env(env_file: str | None) -> None:
     missing = [k for k in REQUIRED if os.environ.get(k, '') == '']
     if missing:
         raise ConfigError(
-            'Missing required env vars: ' + ', '.join(sorted(missing))
+            'Missing required env vars: ' + ', '.join(missing)
             + '. Copy backend/.env.example to backend/.env and fill it in.'
         )
 
