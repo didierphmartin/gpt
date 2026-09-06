@@ -70,3 +70,16 @@ def test_php_date_unsupported_format_raises():
     import pytest
     with pytest.raises(ValueError, match='unsupported php_date format'):
         pc.php_date('D M j')
+
+
+def test_php_strval_matches_php_string_cast():
+    # php -r 'var_dump(strval(true), strval(false), strval(null), strval(1.0), strval(1/3), strval("x"), strval(7));'
+    assert pc.php_strval(True) == '1'
+    assert pc.php_strval(False) == ''
+    assert pc.php_strval(None) == ''
+    assert pc.php_strval(1.0) == '1'
+    assert pc.php_strval(1 / 3) == '0.33333333333333'
+    assert pc.php_strval(0.1) == '0.1'
+    assert pc.php_strval('x') == 'x'
+    assert pc.php_strval(7) == '7'
+    assert pc.php_strval([1, 2]) == 'Array'

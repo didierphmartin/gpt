@@ -102,6 +102,36 @@ def php_crc32(s: str) -> int:
     return zlib.crc32(s.encode('utf-8')) & 0xFFFFFFFF
 
 
+def php_strval(v) -> str:
+    """PHP strval() / (string) cast: None -> '', True -> '1', False -> '',
+    floats through the default precision=14 formatting (1.0 -> '1',
+    1/3 -> '0.33333333333333'), arrays -> 'Array'.
+
+    Bare str() differs on exactly the cases that matter for a JSON-decoded
+    payload (booleans and integral floats), which is why the ported
+    array_map('strval', ...) calls go through here.
+    """
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return '1' if v else ''
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if v != v:
+            return 'NAN'
+        if v == float('inf'):
+            return 'INF'
+        if v == float('-inf'):
+            return '-INF'
+        return '%.14G' % v
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, dict, tuple, set)):
+        return 'Array'
+    return str(v)
+
+
 def php_bool(v) -> bool:
     """PHP (bool) cast: '' , '0', 0, 0.0, None, False, and empty list/dict/tuple/set are falsy;
     everything else (including non-'0' strings like "0.0") is truthy."""
