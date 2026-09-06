@@ -111,7 +111,13 @@ class AuthMiddleware:
         if claims is None:
             error_log('[AuthMiddleware] JWT validation failed')
             return None
-        return int(claims['sub']) if 'sub' in claims else None
+        try:
+            return int(claims['sub'])
+        except (KeyError, TypeError, ValueError):
+            # PHP's (int)$decoded->sub never throws; mirror that by treating a
+            # missing/non-numeric sub as "no identity" rather than a 500.
+            error_log('[AuthMiddleware] JWT sub claim is missing or non-numeric')
+            return None
 
     def _validate_app_key(self, key: str) -> dict | None:
         try:

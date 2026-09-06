@@ -73,6 +73,13 @@ def test_public_route_passes_without_auth_and_marks_identity_when_present():
     assert a.handle(ctx('GET', '/api/v1/auth'))['status_code'] == 401
 
 
+def test_valid_jwt_with_non_numeric_sub_is_401_invalid_credential():
+    a = AuthMiddleware(SECRET, PUBLIC_ROUTES, CONFIG, lambda: FakeDb())
+    r = a.handle(ctx(auth='Bearer ' + token(sub='abc')))
+    assert r == {'error': True, 'status_code': 401,
+                'body': {'success': False, 'message': 'Invalid or expired credential'}}
+
+
 def test_uak_key_via_bearer_and_appkey_schemes():
     pepper = user_app_key_pepper(CONFIG, SECRET)
     assert pepper == hmac.new(SECRET.encode(), b'user_app_key.v1', hashlib.sha256).hexdigest()
