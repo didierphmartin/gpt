@@ -29,13 +29,41 @@ def test_filter_keeps_only_named_tools_from_both_sets():
 
 
 def test_constructor_registers_claude_and_search_tools():
-    a = AIPortfolioAssistant({'claude': {'api_key': 'K'}, 'providers': {'kimi': {'base_url': 'u'}}})
+    a = AIPortfolioAssistant({'claude': {'api_key': 'K'}, 'providers': {'kimi': {}}})
     assert a.getLLMManager().getProvider('claude') is a.getLLMManager().getProvider('anthropic')
-    assert a.getLLMManager().getProvider('kimi') is None                      # pending 2b
+    assert a.getLLMManager().getProvider('kimi') is None                      # not configured in this fixture
     assert 'serpapi_search' in a.getToolsManager().getRegisteredFunctions()
     assert a.getAllProviders()[0]['name'] == 'claude' and a.getCurrentProvider() == 'claude'
     with pytest.raises(ValueError, match="Provider 'kimi' is not available"):
         a.setProvider('kimi')
+
+
+def test_configured_providers_are_registered_with_dedicated_or_custom_classes():
+    from app.providers.kimi_provider import KimiProvider
+    from app.providers.gemini_provider import GeminiProvider
+    from app.providers.openai_provider import OpenAIProvider
+    from app.providers.custom_provider import CustomProvider
+    cfg = {'claude': {'api_key': 'K'}, 'openai': {'api_key': 'O'},
+           'providers': {'kimi': {'api_key': 'K1', 'base_url': 'https://api.moonshot.ai'},
+                         'gemini': {'api_key': 'G', 'base_url': 'https://generativelanguage.googleapis.com/v1beta'},
+                         'glm': {'api_key': 'Z', 'base_url': 'https://api.z.ai/api/paas/v4', 'model': 'glm-5.2'},
+                         'nobase': {'api_key': 'X'}}}
+    a = AIPortfolioAssistant(cfg)
+    lm = a.getLLMManager()
+    try:
+        assert isinstance(lm.getProvider('openai'), OpenAIProvider)
+        assert isinstance(lm.getProvider('kimi'), KimiProvider)
+        assert isinstance(lm.getProvider('gemini'), GeminiProvider)
+        glm = lm.getProvider('glm'); assert isinstance(glm, CustomProvider) and glm.getName() == 'glm' and glm.getModel() == 'glm-5.2'
+        assert lm.getProvider('nobase') is None                             # empty base_url → skipped, like PHP
+        assert lm.getProvider('anthropic') is lm.getProvider('claude')
+        for name in ('openai', 'kimi', 'gemini', 'glm'):
+            assert lm.getProvider(name).functionExecutor is a.getToolsManager()
+        assert lm.fallbackOrder == ['claude', 'openai', 'kimi', 'gemini', 'glm', 'nobase']
+    finally:
+        a.close()
+    for name in ('openai', 'kimi', 'gemini', 'glm'):
+        assert lm.getProvider(name).httpClient.is_closed
 
 
 def test_stream_chat_wires_sse_client_and_requires_provider():

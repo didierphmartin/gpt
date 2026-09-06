@@ -265,3 +265,32 @@ def test_usage_logging_failure_after_complete_still_reaches_client(monkeypatch):
     names = [f.split(b'\n', 1)[0] for f in delivered]
     assert names[-2:] == [b'event: complete', b'event: error']
     assert calls == ['success', 'error']
+
+
+def test_tools_filter_executor_is_attached_to_every_enabled_provider(monkeypatch):
+    attached = {}
+    class P:
+        def __init__(self, name): self.name = name
+        def setFunctionExecutor(self, ex): attached[self.name] = ex
+    providers = {'claude': P('claude'), 'kimi': P('kimi')}
+    class Assistant(FakeAssistant):
+        def __init__(self, config):
+            super().__init__(config)
+            self.llm = type('L', (), {'getProvider': lambda s, n: providers.get(n)})()
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', Assistant)
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr(ChatController, '_getEnabledProviderKeys', lambda self: ['claude', 'kimi', 'gemini'])
+    c = ChatController(Db(), CFG)
+    r = c.chat(ctx({'message': 'hi', 'provider': 'claude', 'tools': ['get_trending_assets'], 'memory': False}))
+    assert r['success'] is True
+    from app.services.filtered_tools_executor import FilteredToolsExecutor
+    assert set(attached) == {'claude', 'kimi'} and all(isinstance(e, FilteredToolsExecutor) for e in attached.values())
+    assert attached['claude'] is attached['kimi']
+
+
+def test_non_claude_provider_request_reaches_assistant_with_provider_option(monkeypatch):
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    c = ChatController(Db(), CFG)
+    r = c.chat(ctx({'message': 'hi', 'provider': 'kimi', 'tools': [], 'memory': False}))
+    assert r['success'] is True and FakeAssistant.last[3]['provider'] == 'kimi'

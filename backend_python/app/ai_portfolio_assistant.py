@@ -5,10 +5,8 @@ AI Portfolio Assistant - Main entry point.
 A reusable orchestrator for AI-powered portfolio analysis with Claude
 integration, streaming support, and extensible functions.
 
-Line-for-line port; PHP private methods become `_name`. Only ClaudeProvider is
-registered in Phase 2a — the other five DEDICATED_PROVIDERS names
-(deepseek/gemini/grok/kimi/openai) resolve to None until Phase 2b lands their
-provider classes, and CustomProvider (Phase 2b) is not ported yet either.
+Line-for-line port; PHP private methods become `_name`. All six dedicated
+provider classes plus CustomProvider are wired here (Phase 2b).
 """
 from __future__ import annotations
 
@@ -16,6 +14,12 @@ from app.config_.configuration import Configuration
 from app.functions.search_functions import SearchFunctions
 from app.models.conversation import Conversation
 from app.providers.claude_provider import ClaudeProvider
+from app.providers.custom_provider import CustomProvider
+from app.providers.deepseek_provider import DeepSeekProvider
+from app.providers.gemini_provider import GeminiProvider
+from app.providers.grok_provider import GrokProvider
+from app.providers.kimi_provider import KimiProvider
+from app.providers.openai_provider import OpenAIProvider
 from app.services.debug_logger import DebugLogger
 from app.services.llm_manager import LLMManager
 from app.services.sse_hub_client import SSEHubClient
@@ -30,16 +34,17 @@ class AIPortfolioAssistant:
 
     # Providers with a dedicated handler class. Any other provider that
     # appears in config['providers'] with a base_url is OpenAI-compatible
-    # and would be served by the generic CustomProvider — that class and the
-    # other four dedicated providers land in Phase 2b. Keep this map in sync
-    # with the PHP ProviderRequestFactory::$providerClasses names.
+    # and is served by the generic CustomProvider (glm, gamma4, future
+    # providers added through system_llm_settings). Keep this map in sync
+    # with ProviderRequestFactory's provider classes (and PHP
+    # AIPortfolioAssistant::DEDICATED_PROVIDERS, same order).
     DEDICATED_PROVIDERS = {
         'claude': ClaudeProvider,
-        'deepseek': None,
-        'gemini': None,
-        'grok': None,
-        'kimi': None,
-        'openai': None,
+        'deepseek': DeepSeekProvider,
+        'gemini': GeminiProvider,
+        'grok': GrokProvider,
+        'kimi': KimiProvider,
+        'openai': OpenAIProvider,
     }
 
     def __init__(self, config: dict | Configuration = {}):
@@ -341,16 +346,9 @@ class AIPortfolioAssistant:
         """
         Instantiate a provider (dedicated class when one exists, generic
         CustomProvider otherwise) and wire the shared collaborators.
-
-        Phase 2a: only 'claude' has a ported provider class. Every other
-        name (dedicated or not — CustomProvider doesn't exist yet either)
-        returns None until Phase 2b.
         """
         cls = self.DEDICATED_PROVIDERS.get(name)
-        if cls is None:
-            error_log(f"[AIPortfolioAssistant] provider '{name}' not available until Phase 2b")
-            return None
-        provider = cls(self.config)
+        provider = cls(self.config) if cls is not None else CustomProvider(self.config, name)
         provider.setFunctionExecutor(self.toolsManager)
         if self.logger:
             provider.setLogger(self.logger)
@@ -369,27 +367,19 @@ class AIPortfolioAssistant:
         self.llmManager.registerProvider('anthropic', claude)
 
         # OpenAI when configured (its config lives outside config['providers']).
-        # Phase 2a: OpenAIProvider isn't ported yet — _makeProvider('openai')
-        # returns None and is skipped, matching the "pending 2b" ruling.
         if self.config.isProviderConfigured('openai'):
-            openaiProvider = self._makeProvider('openai')
-            if openaiProvider is not None:
-                self.llmManager.registerProvider('openai', openaiProvider)
+            self.llmManager.registerProvider('openai', self._makeProvider('openai'))
 
         # Everything declared in config['providers'] (DB-driven via
         # system_llm_settings): deepseek/gemini/grok/kimi resolve to their
         # dedicated classes through the map; the rest get CustomProvider.
-        # Phase 2a: none of these are ported — _makeProvider returns None
-        # and the name is skipped.
         customProviders = self.config.get('providers', {})
         if not isinstance(customProviders, dict):
             customProviders = {}
         for name, providerConfig in customProviders.items():
             if not isinstance(providerConfig, dict) or php_empty(providerConfig.get('base_url')):
                 continue
-            customProvider = self._makeProvider(name)
-            if customProvider is not None:
-                self.llmManager.registerProvider(name, customProvider)
+            self.llmManager.registerProvider(name, self._makeProvider(name))
 
         # Update fallback order to include custom providers
         fallbackOrder = ['claude', 'openai']
