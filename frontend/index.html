@@ -49,7 +49,7 @@
         }
     </script>
     <!-- Backend base URL single source of truth — must load before any module that calls the API. -->
-    <script src="assets/js/api-config.js?v=20260706-backendswitch"></script>
+    <script src="assets/js/api-config.js?v=20260905-python"></script>
     <!-- Install prompt overlay. Self-contained — captures beforeinstallprompt
          and surfaces a styled dialog a few seconds in. -->
     <script src="assets/js/pwa-install-prompt.js?v=20260504-outputs" defer></script>
@@ -3086,6 +3086,10 @@
                                         class="backend-kind-btn flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition flex items-center justify-center gap-1.5">
                                     <span>🟢</span><span>Node.js</span>
                                 </button>
+                                <button type="button" data-backend-kind="python"
+                                        class="backend-kind-btn flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition flex items-center justify-center gap-1.5">
+                                    <span>🐍</span><span>Python</span>
+                                </button>
                             </div>
                             <p id="backend-connection-current" class="text-[11px] text-gray-400 mt-2"></p>
                         </div>
@@ -4162,7 +4166,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260504-outputs"></script>
-    <script src="assets/js/settings-panel.js?v=20260709-glm"></script>
+    <script src="assets/js/settings-panel.js?v=20260905-python"></script>
     <script src="assets/js/agent-teams-panel.js?v=20260903-playbook-agent"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>

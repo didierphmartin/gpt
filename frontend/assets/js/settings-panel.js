@@ -1516,10 +1516,10 @@ class SettingsPanel {
         // renderBackendConnection). Clicking a flavour persists it + reloads the app.
         document.querySelectorAll('#backend-connection-section .backend-kind-btn').forEach((btn) => {
             btn.addEventListener('click', () => {
-                const kind = btn.dataset.backendKind === 'node' ? 'node' : 'php';
+                const kind = ['node', 'python'].includes(btn.dataset.backendKind) ? btn.dataset.backendKind : 'php';
                 const current = (window.APP_CONFIG && window.APP_CONFIG.BACKEND_KIND) || 'php';
                 if (kind === current) return;
-                const label = kind === 'node' ? 'Node.js' : 'PHP';
+                const label = { php: 'PHP', node: 'Node.js', python: 'Python' }[kind];
                 if (confirm(`Switch the frontend to the ${label} backend? The app will reload.`)) {
                     if (typeof window.setBackendKind === 'function') window.setBackendKind(kind);
                 }
@@ -1611,7 +1611,7 @@ class SettingsPanel {
         section.classList.toggle('hidden', !isAdmin);
         if (!isAdmin) return;
         const cfg = window.APP_CONFIG || {};
-        const kind = cfg.BACKEND_KIND === 'node' ? 'node' : 'php';
+        const kind = ['node', 'python'].includes(cfg.BACKEND_KIND) ? cfg.BACKEND_KIND : 'php';
         const urls = cfg.BACKEND_URLS || {};
         section.querySelectorAll('.backend-kind-btn').forEach((btn) => {
             const active = btn.dataset.backendKind === kind;
@@ -1624,7 +1624,7 @@ class SettingsPanel {
             btn.classList.toggle('hover:bg-gray-50', !active);
         });
         const cur = document.getElementById('backend-connection-current');
-        if (cur) cur.textContent = 'Active: ' + (kind === 'node' ? 'Node.js' : 'PHP') + ' → ' + (urls[kind] || cfg.API_BASE_URL || '');
+        if (cur) cur.textContent = 'Active: ' + ({ php: 'PHP', node: 'Node.js', python: 'Python' }[kind]) + ' → ' + (urls[kind] || cfg.API_BASE_URL || '');
     }
 
     /**

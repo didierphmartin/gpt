@@ -25,6 +25,13 @@
     '127.0.0.1': 'http://localhost:3001/api/v1',
     'synergyaichat.com': '/gpt/backend-node/api/v1', // prod Node URL (update when deployed)
   };
+  var PYTHON_BY_HOST = {
+    'localhost': 'http://localhost:3002/api/v1',
+    '127.0.0.1': 'http://localhost:3002/api/v1',
+    'synergyaichat.com': '/gpt/backend-python/api/v1', // prod Python URL (update when deployed)
+  };
+  var KINDS = { php: PHP_BY_HOST, node: NODE_BY_HOST, python: PYTHON_BY_HOST };
+  function normalizeKind(k) { return KINDS[k] ? k : 'php'; }
 
   // Non-browser (Node test) context: expose pure helpers and stop.
   if (typeof window === 'undefined') {
@@ -34,29 +41,29 @@
 
   var override = null, kind = 'php';
   try { override = localStorage.getItem('API_BASE_URL'); } catch (e) { override = null; }
-  try { kind = (localStorage.getItem('BACKEND_KIND') || 'php').toLowerCase(); } catch (e) { kind = 'php'; }
-  if (kind !== 'node') kind = 'php';
+  try { kind = normalizeKind((localStorage.getItem('BACKEND_KIND') || 'php').toLowerCase()); } catch (e) { kind = 'php'; }
 
   var base = resolveApiBase({
     override: override,                                  // explicit manual override wins (testing)
     hostname: location.hostname,
-    byHost: kind === 'node' ? NODE_BY_HOST : PHP_BY_HOST,  // else the admin-chosen flavour
+    byHost: KINDS[kind],                                  // else the admin-chosen flavour
     fallback: FALLBACK,
   });
 
   window.APP_CONFIG = window.APP_CONFIG || {};
   window.APP_CONFIG.API_BASE_URL = base;
-  window.APP_CONFIG.BACKEND_KIND = kind;                 // 'php' | 'node' — read by Settings UI
+  window.APP_CONFIG.BACKEND_KIND = kind;                 // 'php' | 'node' | 'python' — read by Settings UI
   window.APP_CONFIG.BACKEND_URLS = {                     // so the UI can show each target
     php: PHP_BY_HOST[location.hostname] || FALLBACK,
     node: NODE_BY_HOST[location.hostname] || FALLBACK,
+    python: PYTHON_BY_HOST[location.hostname] || FALLBACK,
   };
   window.apiUrl = makeApiUrl(base);
 
   // Admin backend switcher (Settings → Account). Persists the choice and reloads so the whole
   // app re-resolves against the selected backend.
   window.setBackendKind = function (k) {
-    k = (k === 'node') ? 'node' : 'php';
+    k = normalizeKind(k);
     try { localStorage.setItem('BACKEND_KIND', k); } catch (e) {}
     location.reload();
   };
