@@ -44,62 +44,68 @@ class MemoryAutoUpdater:
         currentUser = current[UserMemoryRepository.SCOPE_USER]
 
         extractor = MemoryExtractor(self.apiKey)
-        result = extractor.extract(
-            settings['model'],
-            currentMemory,
-            currentUser,
-            lastUserMsg,
-            lastAssistantMsg,
-        )
-
-        if result is None:
-            return None
-
-        written: list = []
-
-        # Second-stage guard: filter paraphrased/implied duplicates against current content.
-        # Only runs when there are candidates, so no overhead on the common empty case.
-        memoryAdditions = (
-            extractor.filterDuplicates(settings['model'], currentMemory, result['memory_additions'])
-            if not php_empty(result['memory_additions'])
-            else []
-        )
-        userAdditions = (
-            extractor.filterDuplicates(settings['model'], currentUser, result['user_additions'])
-            if not php_empty(result['user_additions'])
-            else []
-        )
-
-        if not php_empty(memoryAdditions):
-            self._applyScope(
-                userId,
-                UserMemoryRepository.SCOPE_MEMORY,
+        try:
+            result = extractor.extract(
+                settings['model'],
                 currentMemory,
-                memoryAdditions,
-                result['reason'],
-                sessionId,
-                settings['model'],
-                extractor,
-                written,
-            )
-
-        if not php_empty(userAdditions):
-            self._applyScope(
-                userId,
-                UserMemoryRepository.SCOPE_USER,
                 currentUser,
-                userAdditions,
-                result['reason'],
-                sessionId,
-                settings['model'],
-                extractor,
-                written,
+                lastUserMsg,
+                lastAssistantMsg,
             )
 
-        return {
-            'reason': result['reason'],
-            'written': written,
-        }
+            if result is None:
+                return None
+
+            written: list = []
+
+            # Second-stage guard: filter paraphrased/implied duplicates against current content.
+            # Only runs when there are candidates, so no overhead on the common empty case.
+            memoryAdditions = (
+                extractor.filterDuplicates(settings['model'], currentMemory, result['memory_additions'])
+                if not php_empty(result['memory_additions'])
+                else []
+            )
+            userAdditions = (
+                extractor.filterDuplicates(settings['model'], currentUser, result['user_additions'])
+                if not php_empty(result['user_additions'])
+                else []
+            )
+
+            if not php_empty(memoryAdditions):
+                self._applyScope(
+                    userId,
+                    UserMemoryRepository.SCOPE_MEMORY,
+                    currentMemory,
+                    memoryAdditions,
+                    result['reason'],
+                    sessionId,
+                    settings['model'],
+                    extractor,
+                    written,
+                )
+
+            if not php_empty(userAdditions):
+                self._applyScope(
+                    userId,
+                    UserMemoryRepository.SCOPE_USER,
+                    currentUser,
+                    userAdditions,
+                    result['reason'],
+                    sessionId,
+                    settings['model'],
+                    extractor,
+                    written,
+                )
+
+            return {
+                'reason': result['reason'],
+                'written': written,
+            }
+        finally:
+            # Python-only addition: PHP has no equivalent — Guzzle clients
+            # die with the request. Release the extractor's httpx client
+            # regardless of how run() exits (early return, exception).
+            extractor.close()
 
     def _applyScope(
         self,

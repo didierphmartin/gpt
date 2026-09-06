@@ -124,6 +124,11 @@ class ClaudeProvider(
 
         self._init_client_side_tools()
 
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Releases this provider's httpx connection pool."""
+        self.httpClient.close()
+
     def setFunctionExecutor(self, executor: FunctionExecutorInterface) -> 'ClaudeProvider':
         """Set the function executor for tool calling."""
         self.functionExecutor = executor

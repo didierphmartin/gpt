@@ -95,6 +95,11 @@ class MemoryExtractor:
         self.apiKey = apiKey
         self.http = httpx.Client(timeout=30)
 
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Releases this extractor's httpx connection pool."""
+        self.http.close()
+
     def extract(
         self,
         model: str,

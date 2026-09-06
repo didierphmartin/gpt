@@ -367,3 +367,22 @@ class LLMManager:
     def getConfig(self) -> Configuration:
         """Get configuration."""
         return self.config
+
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Closes every registered provider that has a
+        `close()` (e.g. ClaudeProvider's httpx.Client). Providers may be
+        registered under multiple names for the same instance (e.g. 'claude'
+        and 'anthropic' alias the same ClaudeProvider) — dedupe by identity
+        so each underlying connection pool is closed once."""
+        seen: set[int] = set()
+        for provider in self.providers.values():
+            if provider is None or id(provider) in seen:
+                continue
+            seen.add(id(provider))
+            close = getattr(provider, 'close', None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as e:  # noqa: BLE001
+                    error_log(f"[LLMManager] close() failed for provider: {e}")

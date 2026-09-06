@@ -77,3 +77,15 @@ def test_from_config_file_loads_claude_provider(tmp_path):
     p.write_text(json.dumps({'claude': {'api_key': 'K'}}))
     a = AIPortfolioAssistant.fromConfigFile(str(p))
     assert a.getLLMManager().getProvider('claude').isAvailable() is True
+
+
+def test_close_closes_llm_manager_and_search_functions():
+    """Important #2: AIPortfolioAssistant.close() aggregates the LLM manager
+    (closes every registered provider's httpx.Client) and this instance's
+    SearchFunctions httpx.Client."""
+    a = AIPortfolioAssistant({'claude': {'api_key': 'K'}})
+    claude = a.getLLMManager().getProvider('claude')
+    search_http = a._searchFunctions.httpClient
+    assert claude.httpClient.is_closed is False and search_http.is_closed is False
+    a.close()
+    assert claude.httpClient.is_closed is True and search_http.is_closed is True

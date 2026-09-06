@@ -79,3 +79,10 @@ def test_execute_tool_top_level_list_response():
     # yields the list itself when there's no 'result' key -- must not AttributeError.
     ld = _loader_with_transport(lambda r: httpx.Response(200, json=[{'a': 1}]))
     assert ld.executeTool('lookup', {}) == {'result': '[{"a":1}]'}
+
+
+def test_close_closes_http_client():
+    ld = MCPToolsLoader(Db([ROW]))
+    assert ld._http.is_closed is False
+    ld.close()
+    assert ld._http.is_closed is True

@@ -15,6 +15,7 @@ Placement of each provider matches what
 """
 from __future__ import annotations
 
+import copy
 import json
 
 from app.support.logger import error_log
@@ -37,7 +38,15 @@ class LLMProviderResolver:
         Failures (table missing, permission denied) log and return the input
         unchanged so the caller doesn't crash on an environment that hasn't
         been seeded yet.
+
+        PHP's signature is `applyDbSettings(PDO $db, array $config): array` —
+        arrays are copy-on-write in PHP, so `$config` is never mutated by the
+        caller's perspective. Python dicts are reference types, so we must
+        deepcopy explicitly; without this, writes below land directly on the
+        caller's dict (in production, `ChatController`'s shared, process-wide
+        `self.config`, reused by every request across every worker thread).
         """
+        config = copy.deepcopy(config)
         try:
             rows = db.fetch_all("SHOW TABLES LIKE 'system_llm_settings'")
             if len(rows) == 0:

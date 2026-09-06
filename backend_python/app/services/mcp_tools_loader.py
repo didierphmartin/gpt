@@ -24,6 +24,11 @@ class MCPToolsLoader:
         self.serverUrls: dict = {}
         self._http = httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0))
 
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Releases this loader's httpx connection pool."""
+        self._http.close()
+
     def loadToolsForUser(self, userId=None, allowedServerNames: list | None = None) -> dict:
         """Load enabled MCP tools: all global servers plus the caller's user-scoped servers.
 

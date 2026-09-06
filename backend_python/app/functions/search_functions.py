@@ -17,6 +17,11 @@ class SearchFunctions:
         self.config = config
         self.httpClient = httpx.Client(timeout=30)
 
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Releases this instance's httpx connection pool."""
+        self.httpClient.close()
+
     def getAllFunctions(self) -> dict:
         """Get all functions with their handlers and schemas."""
         return {

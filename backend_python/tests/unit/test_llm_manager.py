@@ -59,3 +59,26 @@ def test_chat_and_stream_require_provider_and_availability():
     assert m.getAvailableProviders() == ['claude'] and m.getDefaultProvider().getName() == 'claude'
     assert m.getProviderInfo('dead') == {'name': 'dead', 'model': 'm', 'available': False, 'supported_models': ['m']}
     assert m.getProviderInfo('zz') == {'error': "Provider 'zz' not found"}
+
+
+def test_close_closes_registered_providers_once_each_and_tolerates_no_close():
+    """Important #2: LLMManager.close() closes every registered provider that
+    has a close(); providers registered under multiple names for the SAME
+    instance (e.g. 'claude'/'anthropic' alias) must only be closed once, and
+    a provider without close() must not raise."""
+    class Closeable(Prov):
+        def __init__(self, name):
+            super().__init__(name)
+            self.close_calls = 0
+        def close(self):
+            self.close_calls += 1
+
+    m = LLMManager(Configuration({}))
+    shared = Closeable('claude')
+    m.registerProvider('claude', shared)
+    m.registerProvider('anthropic', shared)         # same instance, second name
+    m.registerProvider('bare', Prov('bare'))          # no close() at all
+
+    m.close()
+
+    assert shared.close_calls == 1

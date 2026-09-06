@@ -145,3 +145,10 @@ def test_output_schema_forces_tool_and_extracts_json():
     p = _provider(handler, streaming=False)
     out = p.chat('m', [], {'output_schema': {'name': 'answer', 'schema': {'type': 'object', 'properties': {'k': {'type': 'string'}}}}})
     assert out['text'] == '{"k":"v/é"}' and out['usage']['function_calls'] == 0
+
+
+def test_close_closes_http_client():
+    p = _provider(lambda r: httpx.Response(200, json={}))
+    assert p.httpClient.is_closed is False
+    p.close()
+    assert p.httpClient.is_closed is True

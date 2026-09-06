@@ -40,3 +40,10 @@ def test_malformed_json_body_treated_like_http_error():
     assert _malformed_body().extract('m', '', '', 'a long enough user message', 'reply') is None
     assert _malformed_body().filterDuplicates('m', 'existing', ['a']) == ['a']
     assert _malformed_body().compact('m', 'content', 20) is None
+
+
+def test_close_closes_http_client():
+    e = MemoryExtractor('K')
+    assert e.http.is_closed is False
+    e.close()
+    assert e.http.is_closed is True

@@ -1323,8 +1323,11 @@ class ChatController:
         sse = request['sse']
         # ContextVar set INSIDE the request thread — run_in_executor does not
         # propagate the caller's context, so SSEHubClient (used by the provider)
-        # would otherwise see no stream.
-        SSEHubClient.current_stream.set(sse)
+        # would otherwise see no stream. The ThreadPoolExecutor reuses worker
+        # threads across requests, so the set must be undone in `finally`
+        # (token + reset) or a later request on the same thread would inherit
+        # this request's (already-ended) stream.
+        sseToken = SSEHubClient.current_stream.set(sse)
 
         # SSE event sender - detects client disconnect and throws to abort upstream LLM call
         sendEvent = sse.send
@@ -1735,6 +1738,22 @@ class ChatController:
             except RuntimeError as abort:      # the client vanished mid-error
                 if str(abort) != 'CLIENT_ABORTED':
                     raise
+        finally:
+            # Python-only cleanup (PHP has no equivalent — Guzzle clients and
+            # ContextVars don't exist there). Runs on every exit path: success,
+            # the `error` event above, and client abort (whose early `return`
+            # inside the `except` block still passes through here first).
+            # Does NOT touch SSE event order or the sse.end() position above.
+            SSEHubClient.current_stream.reset(sseToken)
+            try:
+                assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[ChatController] assistant.close() failed: {closeErr}")
+            if mcpToolsLoader is not None:
+                try:
+                    mcpToolsLoader.close()
+                except Exception as closeErr:  # noqa: BLE001
+                    error_log(f"[ChatController] mcpToolsLoader.close() failed: {closeErr}")
 
         # Return special marker indicating streaming was handled
         return {
@@ -2070,6 +2089,19 @@ class ChatController:
                 'error': self.humanizeProviderError(str(e)),
                 'status_code': statusCode,
             }
+        finally:
+            # Python-only cleanup (PHP has no equivalent — Guzzle clients die
+            # with the request). Runs on every exit path: the success
+            # `return payload` above and the exception `return` just above.
+            try:
+                assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[ChatController] assistant.close() failed: {closeErr}")
+            if mcpToolsLoader is not None:
+                try:
+                    mcpToolsLoader.close()
+                except Exception as closeErr:  # noqa: BLE001
+                    error_log(f"[ChatController] mcpToolsLoader.close() failed: {closeErr}")
 
 
 def _php_gettype(v) -> str:

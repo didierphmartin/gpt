@@ -49,6 +49,7 @@ class AIPortfolioAssistant:
         self.usageTracker: UsageTracker | None = None
         self.logger: DebugLogger | None = None
         self.pdo = None
+        self._searchFunctions: SearchFunctions | None = None
 
         if self.config.isDebugEnabled():
             self.logger = DebugLogger(True)
@@ -318,6 +319,18 @@ class AIPortfolioAssistant:
 
         return providers
 
+    def close(self) -> None:
+        """Python-only addition: PHP has no equivalent — Guzzle clients die
+        with the request. Closes the LLM manager (which closes every
+        registered provider's httpx.Client) and this instance's
+        SearchFunctions httpx.Client."""
+        self.llmManager.close()
+        if self._searchFunctions is not None:
+            try:
+                self._searchFunctions.close()
+            except Exception as e:  # noqa: BLE001
+                error_log(f"[AIPortfolioAssistant] close() failed for SearchFunctions: {e}")
+
     def createConversation(self, userId: str | None = None, metadata: dict = None) -> Conversation:
         """Create a new conversation."""
         if metadata is None:
@@ -399,6 +412,7 @@ class AIPortfolioAssistant:
     def _registerSearchFunctions(self) -> None:
         """Register search functions (no database needed)."""
         searchFunctions = SearchFunctions(self.config)
+        self._searchFunctions = searchFunctions  # kept for close() (Python-only addition)
         self.toolsManager.registerFunctions(searchFunctions.getAllFunctions())
 
         # PubMed functions disabled - using MCP server instead (pubmed_search, pubmed_build_query, pubmed_mesh_suggestions)

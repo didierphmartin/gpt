@@ -1,7 +1,9 @@
 import asyncio
+import threading
 import pytest
 from starlette.datastructures import Headers
 from app.controllers.chat_controller import ChatController
+from app.services.sse_hub_client import SSEHubClient
 from app.support.http import Ctx
 from app.support.sse import SseStream
 
@@ -33,9 +35,17 @@ def test_validation_paths():
 
 
 class FakeAssistant:
-    def __init__(self, config): self.config = config; self.tm = __import__('app.services.tools_manager', fromlist=['ToolsManager']).ToolsManager(); self.llm = type('L', (), {'getProvider': lambda s, n: None})()
+    instances: list = []
+
+    def __init__(self, config):
+        self.config = config
+        self.tm = __import__('app.services.tools_manager', fromlist=['ToolsManager']).ToolsManager()
+        self.llm = type('L', (), {'getProvider': lambda s, n: None})()
+        self.closed = False
+        FakeAssistant.instances.append(self)
     def getToolsManager(self): return self.tm
     def getLLMManager(self): return self.llm
+    def close(self): self.closed = True
     def chat(self, message, userId, history, options):
         FakeAssistant.last = (message, userId, history, options); return {'text': 'reply', 'usage': {'input_tokens': 1, 'output_tokens': 2, 'total_tokens': 3, 'function_calls': 0}, 'model': 'm', 'provider': 'claude', 'provider_used': 'claude', 'functions_called': [], 'mcp_tools_called': [], 'mcp_calls_count': 0}
     def streamChat(self, message, sessionId, userId, history, options):
@@ -153,6 +163,78 @@ def test_client_abort_logs_aborted_transaction(monkeypatch):
     # fake DB has no system_llm_settings pricing row — assert the prefix.
     assert any(isinstance(p, dict) and p.get(':status') == 'aborted'
                and str(p.get(':error_message')).startswith('Cancelled by user') for _, p in db.calls)
+
+
+def test_regular_chat_closes_assistant_on_success(monkeypatch):
+    """Important #2: the four per-request httpx.Client holders must be closed
+    on every exit path. AIPortfolioAssistant.close() is the aggregation point;
+    assert the controller calls it after a successful regular-chat turn."""
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    FakeAssistant.instances.clear()
+    c = ChatController(Db(), CFG)
+    r = c.chat(ctx({'message': 'hi', 'provider': 'claude', 'tools': [], 'memory': False}))
+    assert r['success'] is True
+    assert len(FakeAssistant.instances) == 1 and FakeAssistant.instances[-1].closed is True
+
+
+def test_streaming_chat_closes_assistant_on_success(monkeypatch):
+    """Important #2, streaming twin: close() must run without disturbing the
+    SSE event sequence or the position of sse.end()."""
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    FakeAssistant.instances.clear()
+    async def run():
+        loop = asyncio.get_running_loop(); s = SseStream(loop)
+        c = ChatController(Db(), CFG)
+        out = await loop.run_in_executor(None, c.chat, ctx({'message': 'hi', 'provider': 'claude', 'streaming': True, 'tools': [], 'memory': False}, sse=s))
+        return out
+    out = asyncio.run(run())
+    assert out == {'streaming_handled': True, 'status_code': 200}
+    assert len(FakeAssistant.instances) == 1 and FakeAssistant.instances[-1].closed is True
+
+
+def test_streaming_error_still_closes_assistant(monkeypatch):
+    """close() must also run on the error exit path (finally covers try/except)."""
+    class Boom(FakeAssistant):
+        def streamChat(self, *a):
+            from app.services.sse_hub_client import SSEHubClient
+            SSEHubClient.current_stream.get().send('error', '{"error":true,"message":"boom","code":500}')
+            raise RuntimeError('boom')
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', Boom)
+    FakeAssistant.instances.clear()
+    async def run():
+        loop = asyncio.get_running_loop(); s = SseStream(loop)
+        await loop.run_in_executor(None, ChatController(Db(), CFG).chat, ctx({'message': 'hi', 'provider': 'claude', 'streaming': True, 'tools': [], 'memory': False}, sse=s))
+    asyncio.run(run())
+    assert len(FakeAssistant.instances) == 1 and FakeAssistant.instances[-1].closed is True
+
+
+def test_streaming_chat_resets_contextvar_after_request(monkeypatch):
+    """Important #3: SSEHubClient.current_stream is set in the request thread
+    (loop.run_in_executor does not copy the caller's context). A ThreadPoolExecutor
+    reuses worker threads across requests, so a stream left set on the thread's own
+    Context would stay reachable from that thread until a later request overwrites
+    it. Verify the ContextVar is reset to its prior value once the handler returns,
+    checked from the SAME thread that ran the request (a plain threading.Thread,
+    not asyncio.run_in_executor, so nothing else could reset it)."""
+    monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+
+    loop = asyncio.new_event_loop()
+    s = SseStream(loop)
+    result = {}
+
+    def target():
+        c = ChatController(Db(), CFG)
+        c.chat(ctx({'message': 'hi', 'provider': 'claude', 'streaming': True, 'tools': [], 'memory': False}, sse=s))
+        result['after'] = SSEHubClient.current_stream.get(None)
+
+    t = threading.Thread(target=target)
+    t.start()
+    t.join()
+    loop.close()
+    assert result['after'] is None
 
 
 def test_usage_logging_failure_after_complete_still_reaches_client(monkeypatch):

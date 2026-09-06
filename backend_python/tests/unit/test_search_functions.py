@@ -47,3 +47,10 @@ def test_http_errors_are_caught_not_raised():
     sf3 = SearchFunctions(Configuration({}))
     sf3.httpClient = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(500, text='boom')))
     assert sf3._resolveToCik('aapl') is None
+
+
+def test_close_closes_http_client():
+    sf = SearchFunctions(Configuration({}))
+    assert sf.httpClient.is_closed is False
+    sf.close()
+    assert sf.httpClient.is_closed is True
