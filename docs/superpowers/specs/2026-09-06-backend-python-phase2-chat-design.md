@@ -17,10 +17,10 @@
 
 | # | Scope |
 |---|-------|
-| 2a | Streaming bridge (`SseStream`, `main.py` race), `Db` reconnect + transactions, worker-pool config, contracts + exceptions, `Configuration`, `LLMProviderResolver`, `ToolsManager`, `PricingResolver`, `UsageLogger`, `UsageTracker`, `DebugLogger`, `SSEHubClient`, traits as mixins, `ClaudeProvider`, `LLMManager`, `AIPortfolioAssistant`, `ChatController` (`chat` + `handleStreamingChat` + `handleRegularChat` + config appliers + quota + sanitizers, Claude only), SSE differential comparator |
+| 2a | Streaming bridge (`SseStream`, `main.py` race), `Db` reconnect + transactions, worker-pool config, contracts + exceptions, `Configuration`, models, `LLMProviderResolver`, `ToolsManager`, `PricingResolver`, `UsageLogger`, `UsageTracker`, `DebugLogger`, `SSEHubClient`, traits as mixins, `SearchFunctions`, `SessionSearchService`, `MCPToolsLoader`, `CombinedToolsExecutor`, `FilteredToolsExecutor`, memory (`UserMemoryRepository`, events + settings repos, `MemoryExtractor`, `MemoryAutoUpdater`), `ClaudeProvider`, `LLMManager`, `AIPortfolioAssistant`, `ChatController` (`chat` + `handleStreamingChat` + `handleRegularChat` + config appliers + quota + sanitizers + skill tool builders, Claude only), SSE differential comparator |
 | 2b | `OpenAIProvider`, `GrokProvider`, `KimiProvider`, `DeepSeekProvider`, `GeminiProvider`, `CustomProvider`, `ProviderRequestFactory` |
-| 2c | `MCPToolsLoader`, `CombinedToolsExecutor`, `FilteredToolsExecutor`, `Functions/*`, `SessionSearchService`, `AgentDelegationFunctions` (names), `ProviderController` |
-| 2d | Skill tool builders + client tools + `SkillToolBridge`/`SkillToolChoice`, `ChatAttachmentController` + `AttachmentDispatcher`, memory (`UserMemoryRepository`, events repo, `MemoryAutoUpdater`, `MemoryExtractor`), `verify` / `compareOnly` / `handleVerification` / `handleComparison`, `agent`, `TracesController` + `ExecutionTraceStore`, `UrlFetchController` |
+| 2c | `Functions/{Analysis, Portfolio, Watchlist, MetalsNews}Functions`, `AgentDelegationFunctions` (names), `ProviderController` |
+| 2d | Client tools + `SkillToolBridge`/`SkillToolChoice`, `ChatAttachmentController` + `AttachmentDispatcher`, `verify` / `compareOnly` / `handleVerification` / `handleComparison`, `agent`, `TracesController` + `ExecutionTraceStore`, `UrlFetchController` |
 
 ## 3. Streaming architecture (decision: thread-to-queue bridge)
 
