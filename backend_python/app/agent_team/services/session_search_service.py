@@ -85,6 +85,11 @@ class SessionSearchService:
                     'hit_count': len(hits),
                     'hits': hits,
                 }
+            except Exception as e:
+                # PHP never surfaces a DB connection failure to the LLM here —
+                # the lazy per-call connect (unlike PHP's request-scoped PDO)
+                # can fail at call time, so guard it the same way.
+                return {'error': f'session search unavailable: {e}'}
             finally:
                 if db is not None:
                     db.close()

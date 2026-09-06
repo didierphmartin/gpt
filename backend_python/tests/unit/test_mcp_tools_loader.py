@@ -72,3 +72,10 @@ def test_execute_tool_ui_metadata():
     ui = out['_mcp_ui']
     assert ui['has_ui'] is True and ui['tool_name'] == 'lookup' and ui['resource_uri'] == 'ui://x' and ui['arguments'] == {'a': 1}
     assert ui['tool_result'] == {'content': [{'type': 'text', 'text': 'T'}]} and ui['has_error'] is False
+
+
+def test_execute_tool_top_level_list_response():
+    # PHP isset($parsed['error']) on a list is false, and $parsed['result'] ?? $parsed
+    # yields the list itself when there's no 'result' key -- must not AttributeError.
+    ld = _loader_with_transport(lambda r: httpx.Response(200, json=[{'a': 1}]))
+    assert ld.executeTool('lookup', {}) == {'result': '[{"a":1}]'}

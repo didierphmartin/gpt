@@ -196,6 +196,7 @@ class SearchFunctions:
                 'location': location,
                 'engine': 'google',
             })
+            response.raise_for_status()
 
             data = response.json()
 
@@ -234,6 +235,7 @@ class SearchFunctions:
                 'q': query,
                 'count': count,
             })
+            response.raise_for_status()
 
             data = response.json()
 
@@ -320,6 +322,7 @@ class SearchFunctions:
                 'User-Agent': 'GPT Chatbot admin@company.com',  # Required by SEC
                 'Accept': 'application/json',
             }, timeout=30)
+            response.raise_for_status()
 
             data = response.json()
 
@@ -354,6 +357,7 @@ class SearchFunctions:
             response = self.httpClient.get(docUrl, headers={
                 'User-Agent': 'GPT Chatbot admin@company.com',  # Required by SEC
             }, timeout=30)
+            response.raise_for_status()
 
             content = response.text
 
@@ -390,6 +394,7 @@ class SearchFunctions:
             response = self.httpClient.get('https://www.sec.gov/files/company_tickers.json', headers={
                 'User-Agent': 'GPT Chatbot admin@company.com',
             }, timeout=10)
+            response.raise_for_status()
 
             tickers = response.json()
             symbolUpper = symbolOrCik.upper()

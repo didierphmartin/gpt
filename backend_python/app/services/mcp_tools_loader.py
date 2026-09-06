@@ -172,8 +172,8 @@ class MCPToolsLoader:
             serverUrl,
             originalName,
             arguments,
-            tool.get('server_headers') or [],
-            tool.get('server_transport') or 'http',
+            tool.get('server_headers') if tool.get('server_headers') is not None else [],
+            tool.get('server_transport') if tool.get('server_transport') is not None else 'http',
         )
         result = callResult['formatted']
         rawResult = callResult['raw']
@@ -203,7 +203,9 @@ class MCPToolsLoader:
                 'has_error': result.get('error') is True,
             }
 
-            error_log(f"🖼️ [MCP] Tool has UI: {originalName}, viewUUID: {(meta.get('viewUUID') if isinstance(meta, dict) else None) or 'none'}")
+            viewUuidForLog = meta.get('viewUUID') if isinstance(meta, dict) else None
+            viewUuidForLog = viewUuidForLog if viewUuidForLog is not None else 'none'
+            error_log(f"🖼️ [MCP] Tool has UI: {originalName}, viewUUID: {viewUuidForLog}")
             error_log(f"🖼️ [MCP] Arguments passed: {json_encode(arguments)}")
             error_log(f"🖼️ [MCP] Tool result (raw): {json_encode(rawResult)[:500]}")
         else:
@@ -284,7 +286,7 @@ class MCPToolsLoader:
                 'raw': None,
             }
 
-        if parsed.get('error') is not None:
+        if isinstance(parsed, dict) and parsed.get('error') is not None:
             errorField = parsed.get('error')
             message = errorField.get('message') if isinstance(errorField, dict) and errorField.get('message') is not None else 'MCP tool execution failed'
             return {
@@ -295,7 +297,7 @@ class MCPToolsLoader:
                 'raw': None,
             }
 
-        result = parsed.get('result') if parsed.get('result') is not None else parsed
+        result = parsed.get('result') if isinstance(parsed, dict) and parsed.get('result') is not None else parsed
 
         return {
             'formatted': self._formatToolResult(result),
@@ -315,7 +317,7 @@ class MCPToolsLoader:
             line = line.strip()
             if line.startswith('data:'):
                 data = line[5:].strip()
-                if data:
+                if not php_empty(data):
                     try:
                         parsed = json.loads(data)
                     except (ValueError, TypeError):
