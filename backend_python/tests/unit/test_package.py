@@ -37,6 +37,21 @@ def test_load_package_defaults_and_cache():
     assert r2.allowedMcpServers(None) == ['a']
 
 
+def test_load_package_capabilities_array_shapes():
+    # invalid JSON in the capabilities cell -> PHP is_array(null) is false -> [] (JSON [])
+    r_bad = PackageResolver(FakeDb(one=[{'capabilities': '{not json', 'updated_at': None}]))
+    assert r_bad.loadPackage('user')['capabilities'] == []
+
+    # capabilities cell is a JSON array -> PHP is_array($decoded) is true -> kept as-is
+    r_list = PackageResolver(FakeDb(one=[{'capabilities': '["x"]', 'updated_at': None}]))
+    assert r_list.loadPackage('user')['capabilities'] == ['x']
+
+    # mcp_servers stored as a JSON object -> PHP array_filter(...) iterates its VALUES
+    r_dict_mcp = PackageResolver(FakeDb(one=[{'capabilities': '{"mcp_servers":{"a":"x","b":3,"c":"y"}}',
+                                              'updated_at': None}]))
+    assert r_dict_mcp.allowedMcpServers(None) == ['x', 'y']
+
+
 def test_me_and_admin_gates():
     db = FakeDb(one=[{'role': 'user'}, None])
     r = PackageController(db, {}).me(ctx())

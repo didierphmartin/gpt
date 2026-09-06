@@ -37,7 +37,7 @@ class PackageResolver:
                 decoded = json.loads(str(row['capabilities']))
             except ValueError:
                 decoded = None
-            capabilities = decoded if isinstance(decoded, dict) else {}
+            capabilities = decoded if isinstance(decoded, (dict, list)) else []
             updated_at = row['updated_at']
         package = {'role': role, 'capabilities': capabilities, 'updated_at': updated_at}
         self._cache[role] = package
@@ -48,9 +48,12 @@ class PackageResolver:
         return list(VALID_ROLES)
 
     def allowedMcpServers(self, user_id: int | None) -> list[str] | None:
-        lst = (self.resolveForUser(user_id).get('capabilities') or {}).get('mcp_servers')
+        capabilities = self.resolveForUser(user_id).get('capabilities') or {}
+        lst = capabilities.get('mcp_servers') if isinstance(capabilities, dict) else None
         if lst is None:
             return None
-        if not isinstance(lst, list):
-            return []
-        return [s for s in lst if isinstance(s, str)]
+        if isinstance(lst, dict):
+            return [s for s in lst.values() if isinstance(s, str)]
+        if isinstance(lst, list):
+            return [s for s in lst if isinstance(s, str)]
+        return []
