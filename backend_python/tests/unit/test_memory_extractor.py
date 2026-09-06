@@ -28,3 +28,15 @@ def test_filter_duplicates_and_compact():
     assert _ex('garbage').filterDuplicates('m', 'x', ['a']) == ['a']
     c = _ex('x' * 50)
     assert c.compact('m', 'content', 20, ['keep']) == 'x' * 20 and c.compact('m', '', 20) is None
+
+
+def _malformed_body():
+    def handler(req):
+        return httpx.Response(200, content=b'<html>oops</html>', headers={'content-type': 'text/html'})
+    e = MemoryExtractor('K'); e.http = httpx.Client(transport=httpx.MockTransport(handler)); return e
+
+
+def test_malformed_json_body_treated_like_http_error():
+    assert _malformed_body().extract('m', '', '', 'a long enough user message', 'reply') is None
+    assert _malformed_body().filterDuplicates('m', 'existing', ['a']) == ['a']
+    assert _malformed_body().compact('m', 'content', 20) is None

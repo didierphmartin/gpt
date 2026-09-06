@@ -125,11 +125,11 @@ class MemoryExtractor:
                 },
             )
             response.raise_for_status()
-        except httpx.HTTPError as e:
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as e:
             error_log(f'[MemoryExtractor] API call failed: {e}')
             return None
 
-        body = response.json()
         text = _first_text(body)
         if text == '':
             return None
@@ -175,11 +175,11 @@ class MemoryExtractor:
                 },
             )
             response.raise_for_status()
-        except httpx.HTTPError as e:
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as e:
             error_log(f'[MemoryExtractor] filterDuplicates call failed: {e}')
             return additions
 
-        body = response.json()
         text = _first_text(body).strip()
         if text == '':
             return additions
@@ -242,11 +242,11 @@ class MemoryExtractor:
                 },
             )
             response.raise_for_status()
-        except httpx.HTTPError as e:
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as e:
             error_log(f'[MemoryExtractor] compact call failed: {e}')
             return None
 
-        body = response.json()
         text = _first_text(body).strip()
         if text == '':
             return None
