@@ -11,20 +11,20 @@ are written as `.sql` for the owner to run (migrations are applied manually).
 internet). This lowers the priority of anti-abuse hardening (e.g. login rate-limiting) but NOT of
 correctness or authentication-integrity items (e.g. #1 token verification still matters).
 
-Last updated: 2026-06-30
+Last updated: 2026-09-05
 
 ## A. Fixes (correct in BOTH backends)
 
-| # | Item | PHP | TS | Tested | Notes |
-|---|------|-----|----|--------|-------|
-| 1 | `firebaseAuth` verifies the Firebase ID token server-side (RS256 vs Google certs, aud/iss bound to projectId; identity from verified claims) | ✅ | ✅ | 🧪 | Reject-parity tested (empty→400, garbage/forged/old-attack→401). Happy path needs real social-login check. New dep: reach `googleapis.com` for certs (cached 1h). |
-| 2 | JWT secret fails closed (no weak `your-secret-key…` / empty fallback) | ✅ | ✅ | 🧪 | PHP: throw if `JWT_SECRET` empty in `AuthController`, `WebAuthnController`, `MiddlewareProcessor`. TS: already fails closed via `required('JWT_SECRET')`. Verified normal boot/auth unaffected. |
-| 4 | Public `/api/v1/auth` dispatcher gates protected actions centrally | ✅ | ✅ | 🧪 | `handleAction` rejects link/unlink_phone, upgrade_plan, *_app_key with 401 when unauthenticated (defense-in-depth; methods already self-checked, so responses unchanged). Parity confirmed byte-identical. |
-| 3 | Login rate-limiting / lockout | 🚫 | 🚫 | — | **Won't do for now (2026-06-30).** Target is internal corporate access behind authentication, so brute-force exposure is low. Revisit if the backend is exposed to the public internet. |
-| 7 | Remove runtime DDL from `AuthController` (`ensureUserSubscriptionColumns`) | ✅ | ➖ | 🧪 | Columns confirmed present in live DB → method + constructor call deleted; no migration needed. TS never did this. Live auth smoke OK. |
-| 7b | Same runtime-DDL pattern in 11 other PHP files (MCP, memory repos, traces, file storage, admin, settings, heal) | ⬜ | ➖ | — | NOT yet ported to TS. Handle per-file when porting: if the table/columns are already in `schema/chatbot.sql` → delete the runtime DDL; if the runtime `CREATE TABLE IF NOT EXISTS` is the ONLY creator → add it to the schema (migration) first, then delete. Do NOT blind-delete. |
-| 8 | `prompt_library.user_id` `varchar(255)` → integer to match JWT id | ✅ | ✅ | 🧪 | Migration `schema/migrations/2026-06-30_prompt_library_user_id_to_int.sql` **applied** (column now `int NOT NULL`). PHP already bound the int natively (no change). TS: typed `user_id` as `number`, dropped `String()` casts. getTree parity re-confirmed. FK still optional (1 orphan row to resolve first). |
-| 5 | Pre-prod hardening: CORS `*`, shared JWT secret, browser-shipped voice keys | ⬜ | ⬜ | — | Already on the separate pre-prod hardening checklist; cross-listed here. |
+| # | Item | PHP | TS | PY | Tested | Notes |
+|---|------|-----|----|----|--------|-------|
+| 1 | `firebaseAuth` verifies the Firebase ID token server-side (RS256 vs Google certs, aud/iss bound to projectId; identity from verified claims) | ✅ | ✅ | ✅ | 🧪 | Reject-parity tested (empty→400, garbage/forged/old-attack→401). Happy path needs real social-login check. New dep: reach `googleapis.com` for certs (cached 1h). |
+| 2 | JWT secret fails closed (no weak `your-secret-key…` / empty fallback) | ✅ | ✅ | ✅ | 🧪 | PHP: throw if `JWT_SECRET` empty in `AuthController`, `WebAuthnController`, `MiddlewareProcessor`. TS: already fails closed via `required('JWT_SECRET')`. Verified normal boot/auth unaffected. |
+| 4 | Public `/api/v1/auth` dispatcher gates protected actions centrally | ✅ | ✅ | ✅ | 🧪 | `handleAction` rejects link/unlink_phone, upgrade_plan, *_app_key with 401 when unauthenticated (defense-in-depth; methods already self-checked, so responses unchanged). Parity confirmed byte-identical. |
+| 3 | Login rate-limiting / lockout | 🚫 | 🚫 | 🚫 | — | **Won't do for now (2026-06-30).** Target is internal corporate access behind authentication, so brute-force exposure is low. Revisit if the backend is exposed to the public internet. |
+| 7 | Remove runtime DDL from `AuthController` (`ensureUserSubscriptionColumns`) | ✅ | ➖ | ➖ | 🧪 | Columns confirmed present in live DB → method + constructor call deleted; no migration needed. TS never did this. Live auth smoke OK. |
+| 7b | Same runtime-DDL pattern in 11 other PHP files (MCP, memory repos, traces, file storage, admin, settings, heal) | ⬜ | ➖ | ⬜ | — | NOT yet ported to TS. Handle per-file when porting: if the table/columns are already in `schema/chatbot.sql` → delete the runtime DDL; if the runtime `CREATE TABLE IF NOT EXISTS` is the ONLY creator → add it to the schema (migration) first, then delete. Do NOT blind-delete. |
+| 8 | `prompt_library.user_id` `varchar(255)` → integer to match JWT id | ✅ | ✅ | ✅ | 🧪 | Migration `schema/migrations/2026-06-30_prompt_library_user_id_to_int.sql` **applied** (column now `int NOT NULL`). PHP already bound the int natively (no change). TS: typed `user_id` as `number`, dropped `String()` casts. getTree parity re-confirmed. FK still optional (1 orphan row to resolve first). |
+| 5 | Pre-prod hardening: CORS `*`, shared JWT secret, browser-shipped voice keys | ⬜ | ⬜ | ⬜ | — | Already on the separate pre-prod hardening checklist; cross-listed here. |
 
 ## B. Mirror as-is (replicate PHP — no fix intended unless re-prioritized)
 
@@ -41,6 +41,17 @@ Last updated: 2026-06-30
 | 16 | `firebaseAuth` synthesizes `<phone>@phone.auth` emails | 🪞 | Mirrored (now from the verified phone claim). |
 | 17 | Controller "response" array mixes transport keys with body | 🪞 | TS `handle()` replicates the convention. |
 | 18 | `json_encode` full-precision floats + slash/unicode escaping | 🪞 | Cosmetic; JSON parsers (incl. the frontend) normalize. TS emits clean values. |
+| 19 | PY: `password_hash` emits `$2b$` (PHP `$2y$`); both verify each other's hashes | 🪞 | Cross-backend login test in `tests/differential/test_auth.py`. |
+| 20 | PY: `filter_var(FILTER_VALIDATE_EMAIL)` approximated by RFC-5322-ish regex | 🪞 | Edge cases (quoted local parts, IP literals) may differ; frontend validates first. |
+| 21 | PY: `PromptLibraryController::create` returns `data.id` as string (PDO `lastInsertId`) | 🪞 | Mirrored; contexts return int. |
+| 22 | PY: `debugAuth.php_version` is a mirrored constant (`8.2.4`) | 🪞 | Update when XAMPP PHP changes. |
+| 23 | PY: stored JSON (`context_data`, `packages.capabilities`) written without `\/` escaping | 🪞 | Decodes identically; PHP reads it fine. |
+| 24 | PY: WebAuthn assertions are not cryptographically verified (same as PHP) | 🪞 | Pre-existing PHP gap; listed for visibility. |
+| 25 | PY: `date('Y-m-d H:i:s')` uses `PHP_TIMEZONE` env (default Europe/Berlin) | 🪞 | Must match php.ini `date.timezone`. |
+| 26 | PY: login for a social-only user (`users.password` NULL) returns 401 'Invalid email or password'; PHP throws a TypeError → 500 | 🪞 deliberate deviation | PHP behavior is an uncaught crash, not design; frontend only reads `success:false`. |
+| 27 | PY: JWT decode disables PyJWT's `verify_sub` (PyJWT ≥2.10 rejects non-string `sub`); PHP tokens carry an integer `sub` | 🪞 | Required for cross-backend token interop; signature/exp/iat/nbf still verified. |
+| 28 | PY: `php_empty()` helper mirrors PHP `empty()` (incl. the string "0") wherever PHP uses `empty()` on request input; `??` is ported as `v if v is not None else default`, never `.get(k, default)` | 🪞 | Convention for all future ports. |
+| 29 | PY: `client_flag FOUND_ROWS` NOT set — live PHP returns 404 on a same-title context rename, so PyMySQL's default affected-rows count already matches | 🪞 | Verified live 2026-09-05. |
 
 ## How items get verified
 Each fix is validated by **differential testing against the live PHP backend** (byte/semantic
