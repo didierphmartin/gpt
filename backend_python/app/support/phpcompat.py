@@ -100,3 +100,9 @@ def php_uniqid(prefix: str = '', more_entropy: bool = False) -> str:
 
 def php_crc32(s: str) -> int:
     return zlib.crc32(s.encode('utf-8')) & 0xFFFFFFFF
+
+
+def php_bool(v) -> bool:
+    """PHP (bool) cast: '' , '0', 0, 0.0, None, False, and empty list/dict/tuple/set are falsy;
+    everything else (including non-'0' strings like "0.0") is truthy."""
+    return not php_empty(v)
