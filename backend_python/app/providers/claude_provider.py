@@ -163,7 +163,7 @@ class ClaudeProvider(
 
     def getSupportedModels(self) -> list:
         """Get supported models."""
-        return self.SUPPORTED_MODELS
+        return list(self.SUPPORTED_MODELS)  # PHP returns a value copy
 
     def chat(self, message: str, conversationHistory: list | None = None, options: dict | None = None) -> dict:
         """Send a chat message and get a response."""
@@ -766,11 +766,6 @@ class ClaudeProvider(
                 hasToolUse = False
                 currentBlockIndex = -1
                 inputJsonBuffer = ''
-                # Not in PHP: the streamed response never carried the API's
-                # stop_reason, so the client-tool short-circuit always
-                # reported stop_reason=null on the streaming path (see the
-                # comment in handleToolUseRecursive, which wants it as the
-                # truncation signal). Captured here so the marker is useful.
                 stopReason = None
                 decoder = codecs.getincrementaldecoder('utf-8')()
 
@@ -895,7 +890,6 @@ class ClaudeProvider(
                 response = {
                     'content': contentBlocks if hasToolUse else [{'type': 'text', 'text': fullText}],
                     'usage': usage,
-                    'stop_reason': stopReason,
                 }
 
                 return response
