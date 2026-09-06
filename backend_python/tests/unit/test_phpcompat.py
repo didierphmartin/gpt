@@ -46,3 +46,21 @@ def test_php_empty():
     assert pc.php_empty('0') and pc.php_empty(0) and pc.php_empty('') and pc.php_empty(None)
     assert pc.php_empty(False) and pc.php_empty([]) and pc.php_empty({})
     assert not pc.php_empty('a') and not pc.php_empty(1) and not pc.php_empty('00') and not pc.php_empty(True)
+
+
+def test_php_date_formats(monkeypatch):
+    import re
+    monkeypatch.setenv('PHP_TIMEZONE', 'Europe/Berlin')
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2}', pc.php_date('Y-m-d'))
+    assert pc.php_date('l') in ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+    assert re.fullmatch(r'\d{4}-\d{2}', pc.php_date('Y-m'))
+
+
+def test_php_uniqid_shapes():
+    import re
+    assert re.fullmatch(r'chat_[0-9a-f]{13}', pc.php_uniqid('chat_'))
+    assert re.fullmatch(r'chat_[0-9a-f]{13}\.\d{8}', pc.php_uniqid('chat_', True))
+
+
+def test_php_crc32_matches_php():
+    assert pc.php_crc32('demo-user') == 4190640275   # php -r 'echo abs(crc32("demo-user"));' (verified against live PHP CLI)

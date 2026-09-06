@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import base64
 import os
+import random
 import re
+import time
+import zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -75,3 +78,23 @@ def php_empty(v) -> bool:
     if isinstance(v, (list, dict, tuple, set)):
         return len(v) == 0
     return False
+
+
+def php_date(fmt: str) -> str:
+    """Subset of PHP date(): Y-m-d, l, Y-m, Y-m-d H:i:s, in PHP's timezone."""
+    now = datetime.now(php_tz())
+    table = {'Y-m-d': '%Y-%m-%d', 'l': '%A', 'Y-m': '%Y-%m', 'Y-m-d H:i:s': '%Y-%m-%d %H:%M:%S'}
+    return now.strftime(table[fmt])
+
+
+def php_uniqid(prefix: str = '', more_entropy: bool = False) -> str:
+    t = time.time()
+    sec, usec = int(t), int((t - int(t)) * 1_000_000)
+    out = f'{prefix}{sec:08x}{usec:05x}'
+    if more_entropy:
+        out += f'.{random.randint(0, 99999999):08d}'
+    return out
+
+
+def php_crc32(s: str) -> int:
+    return zlib.crc32(s.encode('utf-8')) & 0xFFFFFFFF

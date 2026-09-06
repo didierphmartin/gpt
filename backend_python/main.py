@@ -1,16 +1,14 @@
-"""Entry point — the Python twin of backend/index.php.
-
-One catch-all route. Per request: build Ctx → MiddlewareProcessor (CORS, auth) →
-Dispatcher → controller(db, config).method(ctx, *params) → render(). Controllers are
-synchronous (PyMySQL), so the whole pipeline runs in Starlette's threadpool.
-"""
+"""Entry point — the Python twin of backend/index.php, plus the streaming bridge (spec §3)."""
 from __future__ import annotations
 
+import asyncio
+import os
+import tempfile
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, Request
-from starlette.concurrency import run_in_threadpool
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from app.config import load_config
 from app.db import open_primary
@@ -20,22 +18,31 @@ from app.support.http import build_ctx, json_response, render
 from app.support.logger import error_log, get_logger
 from app.support.phpcompat import is_numeric, php_intval
 from app.support.router import Dispatcher
+from app.support.sse import SseStream
 
 METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
+SSE_HEADERS = {'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'}
 
 
-def create_app(config: dict | None = None) -> FastAPI:
+def create_app(config: dict | None = None, *, controllers: dict | None = None, routes: list | None = None) -> FastAPI:
     config = config or load_config()
     get_logger()
-    dispatcher = Dispatcher(ROUTES)
+    registry = controllers if controllers is not None else CONTROLLERS
+    dispatcher = Dispatcher(routes if routes is not None else ROUTES)
     processor = MiddlewareProcessor(config, lambda: open_primary(config))
+    executor = ThreadPoolExecutor(max_workers=int(config.get('py_workers', 100)), thread_name_prefix='req')
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.executor = executor
 
-    def handle_sync(request: Request, raw_body: bytes) -> Response:
+    def handle_sync(request: Request, raw_body: bytes, sse: SseStream, files: dict, form_fields: dict) -> Response | None:
         ctx = build_ctx(request, raw_body)
+        ctx['sse'] = sse
+        ctx['files'] = files
+        if form_fields:
+            ctx['body'] = dict(form_fields)
         cors_headers = processor.cors.headers(request.headers.get('origin', ''))
 
-        def with_cors(resp: Response | None) -> Response | None:
+        def with_cors(resp):
             if resp is not None:
                 for k, v in cors_headers.items():
                     resp.headers[k] = v
@@ -65,10 +72,9 @@ def create_app(config: dict | None = None) -> FastAPI:
             if route.status == 'NOT_FOUND':
                 return with_cors(json_response(404, {'success': False, 'error': 'Endpoint not found', 'uri': ctx['uri']}))
             if route.status == 'METHOD_NOT_ALLOWED':
-                return with_cors(json_response(405, {'success': False, 'error': 'Method not allowed',
-                                                     'allowed_methods': route.allowed}))
+                return with_cors(json_response(405, {'success': False, 'error': 'Method not allowed', 'allowed_methods': route.allowed}))
             controller_name, method_name = route.handler
-            cls = CONTROLLERS.get(controller_name)
+            cls = registry.get(controller_name)
             if cls is None:
                 return with_cors(json_response(500, {'success': False, 'error': f'Controller not found: {controller_name}'}))
             try:
@@ -82,22 +88,73 @@ def create_app(config: dict | None = None) -> FastAPI:
                     result = fn(ctx, *params)
                 else:
                     result = fn(ctx)
-                resp = render(result)
-                if resp is None:
-                    # streaming_handled: the controller returned its own Response via ctx['_response']
-                    resp = ctx.get('_response') or Response(status_code=200)
-                return with_cors(resp)
+                if sse.started:
+                    return None                     # streaming path: response already produced
+                return with_cors(render(result))
             except Exception as e:  # noqa: BLE001
                 error_log(f'[Backend] Controller error: {e}\n{traceback.format_exc()}')
+                if sse.started:
+                    return None
                 return with_cors(json_response(500, {'success': False, 'error': str(e)}))
         finally:
+            if sse.started and not sse.ended:
+                sse.end()
             db.close()
 
     @app.api_route('/{path:path}', methods=METHODS, include_in_schema=False)
     @app.api_route('/', methods=METHODS, include_in_schema=False)
     async def catch_all(request: Request):
-        raw = await request.body()
-        return await run_in_threadpool(handle_sync, request, raw)
+        loop = asyncio.get_running_loop()
+        sse = SseStream(loop)
+        files: dict = {}
+        form_fields: dict = {}
+        raw = b''
+        ctype = request.headers.get('content-type', '')
+        if ctype.startswith('multipart/form-data'):
+            form = await request.form()
+            for key, value in form.multi_items():
+                if hasattr(value, 'filename'):
+                    data = await value.read()
+                    tmp = tempfile.NamedTemporaryFile(delete=False, prefix='php_upload_')
+                    tmp.write(data); tmp.close()
+                    files[key] = {'name': value.filename or '', 'type': value.content_type or '',
+                                  'tmp_name': tmp.name, 'size': len(data), 'error': 0}
+                else:
+                    form_fields[key] = value
+        else:
+            raw = await request.body()
+
+        work = loop.run_in_executor(executor, handle_sync, request, raw, sse, files, form_fields)
+
+        def _cleanup(_):
+            for f in files.values():
+                try:
+                    os.unlink(f['tmp_name'])
+                except OSError:
+                    pass
+            if not work.cancelled() and work.exception():
+                error_log(f'[Backend] request thread error: {work.exception()}')
+        work.add_done_callback(_cleanup)
+
+        done, _ = await asyncio.wait({work, sse.started_future}, return_when=asyncio.FIRST_COMPLETED)
+        if work in done and not sse.started:
+            return work.result()
+
+        cors_headers = processor.cors.headers(request.headers.get('origin', ''))
+
+        async def gen():
+            try:
+                while True:
+                    frame = await sse.queue.get()
+                    if frame is None:
+                        return
+                    yield frame
+            except asyncio.CancelledError:
+                sse.mark_aborted()
+                raise
+
+        return StreamingResponse(gen(), status_code=200, media_type='text/event-stream',
+                                 headers={**SSE_HEADERS, **cors_headers})
 
     return app
 

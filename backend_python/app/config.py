@@ -110,5 +110,6 @@ def load_config(env_file: str | None = '__default__') -> dict:
         'storage': {'default_provider': 's3'},
         # Python-only additions (not in ai_config.php):
         'port': int(_e('PORT', '3002')),
+        'py_workers': int(_e('PY_WORKERS', '100')),
         'firebase': {'project_id': _e('FIREBASE_PROJECT_ID', 'transledgersite')},
     }

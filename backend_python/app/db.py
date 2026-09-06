@@ -39,23 +39,40 @@ class Db:
 
     @classmethod
     def connect(cls, cfg: dict, timeout: int = 10) -> 'Db':
-        conn = pymysql.connect(
+        kwargs = dict(
             host=cfg['host'], user=cfg['username'], password=cfg['password'],
             database=cfg['database'], charset=cfg.get('charset', 'utf8mb4'),
             port=int(cfg.get('port', 3306)), connect_timeout=timeout,
             cursorclass=pymysql.cursors.DictCursor, autocommit=True,
         )
-        return cls(conn)
+        conn = pymysql.connect(**kwargs)
+        instance = cls(conn)
+        instance._connect_kwargs = kwargs
+        return instance
+
+    _GONE = (2006, 2013)
 
     def _run(self, sql, params):
         sql, params = translate(sql, params)
-        cur = self._conn.cursor()
-        try:
-            cur.execute(sql, params)
-        except Exception:
-            cur.close()
-            raise
-        return cur
+        for attempt in (1, 2):
+            cur = self._conn.cursor()
+            try:
+                cur.execute(sql, params)
+                return cur
+            except pymysql.err.OperationalError as e:
+                cur.close()
+                if attempt == 1 and e.args and e.args[0] in self._GONE:
+                    self.close()
+                    self._conn = pymysql.connect(**self._connect_kwargs)
+                    continue
+                raise
+            except Exception:
+                cur.close()
+                raise
+
+    def begin(self): self._conn.begin()
+    def commit(self): self._conn.commit()
+    def rollback(self): self._conn.rollback()
 
     def fetch_one(self, sql: str, params=None) -> dict | None:
         with self._run(sql, params) as cur:
