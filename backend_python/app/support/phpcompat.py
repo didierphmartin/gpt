@@ -52,3 +52,16 @@ def b64url_decode(data: str) -> bytes:
 
 def mb_substr(s: str, start: int, length: int | None = None) -> str:
     return s[start:] if length is None else s[start:start + length]
+
+
+def php_empty(v) -> bool:
+    """PHP empty(): None, '', '0', 0, 0.0, False, and empty list/dict are empty."""
+    if v is None or v is False:
+        return True
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v == 0
+    if isinstance(v, str):
+        return v == '' or v == '0'
+    if isinstance(v, (list, dict, tuple, set)):
+        return len(v) == 0
+    return False

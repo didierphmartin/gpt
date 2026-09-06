@@ -40,6 +40,18 @@ def test_prompt_create_validation_and_string_id():
                  'data': {'id': '55', 'type': 'folder', 'name': 'F', 'parent_id': None, 'content': None}, 'status_code': 200}
 
 
+def test_prompt_create_null_sort_order_defaults_to_zero():
+    db = FakeDb(insert_id=1)
+    PromptLibraryController(db, {}).create(ctx({'type': 'folder', 'name': 'n', 'sort_order': None}))
+    sql, params = db.calls[-1]
+    assert params[-1] == 0
+
+
+def test_prompt_create_name_zero_string_is_required_error():
+    c = PromptLibraryController(FakeDb(), {})
+    assert c.create(ctx({'type': 'folder', 'name': '0'}))['message'] == 'Name is required'
+
+
 def test_prompt_update_builds_dynamic_set():
     db = FakeDb(one=[{'id': 5, 'type': 'prompt'}])
     r = PromptLibraryController(db, {}).update(ctx({'name': ' N ', 'sort_order': 2}), 5)
@@ -63,6 +75,20 @@ def test_context_create_derives_title_provider_count_and_int_id():
     assert ContextController(FakeDb(), {}).create(ctx({'messages': []}))['message'] == 'Messages array is required'
     r2 = ContextController(FakeDb(), {}).create(ctx({'id': 4, 'messages': [{'role': 'assistant', 'content': 'x'}]}))
     assert r2['message'] == 'Context updated successfully' and r2['data'] == {'id': 4}
+
+
+def test_context_create_null_metadata_defaults_to_empty_list():
+    db = FakeDb(insert_id=1)
+    ContextController(db, {}).create(ctx({'messages': [{'role': 'user', 'content': 'hi'}], 'metadata': None}))
+    sql, params = db.calls[-1]
+    assert json.loads(params[2])['metadata'] == []
+
+
+def test_context_create_title_zero_string_becomes_untitled():
+    db = FakeDb(insert_id=1)
+    ContextController(db, {}).create(ctx({'messages': [{'role': 'user', 'content': '0'}]}))
+    sql, params = db.calls[-1]
+    assert params[1] == 'Untitled Conversation'
 
 
 def test_context_get_decodes_json_and_update_delete_404_on_zero_rows():

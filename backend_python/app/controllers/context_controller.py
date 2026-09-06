@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from app.support.phpcompat import mb_substr
+from app.support.phpcompat import mb_substr, php_empty
 
 
 class ContextController:
@@ -36,13 +36,15 @@ class ContextController:
         if not messages or not isinstance(messages, list):
             return {'success': False, 'message': 'Messages array is required', 'status_code': 400}
         context_id = inp.get('id')
-        metadata = inp.get('metadata', [])
+        metadata = inp.get('metadata')
+        if metadata is None:
+            metadata = []
         title = ''
         for msg in messages:
             if msg.get('role') == 'user':
                 title = mb_substr(str(msg.get('content', '')), 0, 100)
                 break
-        if not title:
+        if php_empty(title):
             title = 'Untitled Conversation'
         provider = 'unknown'
         for msg in reversed(messages):
@@ -52,7 +54,7 @@ class ContextController:
         message_count = len(messages)
         context_data = json.dumps({'messages': messages, 'metadata': metadata}, ensure_ascii=False,
                                   separators=(',', ':'))
-        if context_id:
+        if not php_empty(context_id):
             self.db.execute(
                 'UPDATE conversation_contexts SET title = ?, context_data = ?, provider = ?, message_count = ?,'
                 ' updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?',

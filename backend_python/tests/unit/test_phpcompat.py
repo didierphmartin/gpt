@@ -32,3 +32,9 @@ def test_b64url_roundtrip():
 
 def test_mb_substr():
     assert pc.mb_substr('héllo wörld', 0, 5) == 'héllo'
+
+
+def test_php_empty():
+    assert pc.php_empty('0') and pc.php_empty(0) and pc.php_empty('') and pc.php_empty(None)
+    assert pc.php_empty(False) and pc.php_empty([]) and pc.php_empty({})
+    assert not pc.php_empty('a') and not pc.php_empty(1) and not pc.php_empty('00') and not pc.php_empty(True)

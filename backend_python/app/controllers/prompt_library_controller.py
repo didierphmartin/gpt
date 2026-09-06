@@ -1,7 +1,7 @@
 """Port of Controllers/PromptLibraryController.php."""
 from __future__ import annotations
 
-from app.support.phpcompat import ucfirst
+from app.support.phpcompat import php_empty, ucfirst
 
 _SELECT = ('SELECT id, parent_id, type, name, content, sort_order, created_at, updated_at'
            ' FROM prompt_library')
@@ -50,13 +50,15 @@ class PromptLibraryController:
         inp = request['body']
         if not inp.get('type') or inp['type'] not in ('folder', 'prompt'):
             return {'success': False, 'message': 'Valid type (folder or prompt) is required', 'status_code': 400}
-        if not inp.get('name'):
+        if php_empty(inp.get('name')):
             return {'success': False, 'message': 'Name is required', 'status_code': 400}
         type_ = inp['type']
         name = str(inp['name']).strip()
         parent_id = inp.get('parent_id')
         content = inp['content'] if (type_ == 'prompt' and 'content' in inp) else None
-        sort_order = inp.get('sort_order', 0)
+        sort_order = inp.get('sort_order')
+        if sort_order is None:
+            sort_order = 0
         if parent_id is not None:
             if not self.db.fetch_one('SELECT id FROM prompt_library WHERE id = ? AND user_id = ?', [parent_id, user_id]):
                 return {'success': False, 'message': 'Parent folder not found', 'status_code': 400}
