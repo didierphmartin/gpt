@@ -33,6 +33,7 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
@@ -145,6 +146,9 @@ class GeminiProvider(
         # key rides in the query string (PHP:324).
         self.httpClient = httpx.Client(
             timeout=600,  # 10 minutes for large responses
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():
@@ -432,7 +436,7 @@ class GeminiProvider(
             # ChatController::humanizeProviderError pattern-matches on it.
             # httpx's str(e) carries only the status line, so append the body —
             # same shape as openai_provider.py.
-            message = str(e) + " | Response: " + e.response.text
+            message = str(e) + " | Response: " + guzzle_body_summary(e.response.text)
 
             # Log the full error for debugging
             error_log(f"[Gemini] API error (code {statusCode}): {message}")
@@ -893,18 +897,21 @@ class GeminiProvider(
 
         return [{'functionDeclarations': functions}]
 
-    @staticmethod
-    def fixSchemaForGemini(schema) -> dict:
+    @classmethod
+    def fixSchemaForGemini(cls, schema) -> dict:
         """Fix schema to be valid for Gemini API
         - Removes unsupported fields ($schema, additionalProperties, etc.)
         - Ensures all properties have a type
         - Converts empty schemas to string type
 
-        Note: This method is static to allow use from both instance and static
-        contexts. ProviderRequestBuilderMixin also has this method, but the
-        class method takes precedence (PHP: class methods win over trait
-        methods). Both bodies are identical — PHP:993-1066 vs the trait's
-        259-327 — so the override is behaviour-preserving either way.
+        Note: This method is a classmethod to allow use from both instance and
+        static contexts, and so that the `cls.` recursion below reproduces
+        PHP's `self::` late binding — the trait's copy dispatches back here
+        when it is entered through GeminiProvider. ProviderRequestBuilderMixin
+        also has this method, but the class method takes precedence (PHP:
+        class methods win over trait methods). Both bodies are identical —
+        PHP:993-1066 vs the trait's 259-327 — so the override is
+        behaviour-preserving either way.
         """
         # Empty or non-array schema defaults to string. (PHP also accepts list
         # arrays here; a JSON-Schema node is always an object in practice.)
@@ -946,7 +953,7 @@ class GeminiProvider(
                 propItems = props.items() if isinstance(props, dict) else enumerate(props)
                 for propName, propSchema in propItems:
                     # Recursively fix each property schema
-                    fixedProps[propName] = GeminiProvider.fixSchemaForGemini(propSchema)
+                    fixedProps[propName] = cls.fixSchemaForGemini(propSchema)
                 schema['properties'] = fixedProps
             else:
                 # Empty properties
@@ -956,7 +963,7 @@ class GeminiProvider(
 
         # Fix items for array type
         if schema.get('items') is not None:
-            schema['items'] = GeminiProvider.fixSchemaForGemini(schema['items'])
+            schema['items'] = cls.fixSchemaForGemini(schema['items'])
         elif schema['type'] == 'array':
             schema['items'] = {'type': 'string'}
 

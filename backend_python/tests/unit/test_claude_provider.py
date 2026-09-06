@@ -118,6 +118,17 @@ def test_error_mapping():
         _provider(lambda r: None, key='').chat('m')
 
 
+def test_streaming_response_body_is_truncated_like_guzzle_body_summary():
+    # Only makeStreamingRequest appends ' | Response: '; Guzzle's
+    # Message::bodySummary caps that body at 120 chars + ' (truncated...)'.
+    body = 'X' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(400, text=body)); p.setSSEClient(Rec())
+    with pytest.raises(ProviderException) as ei:
+        p.streamChat('x', lambda t: None, [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_build_messages_and_helpers():
     p = _provider(lambda r: None)
     hist = [{'role': 'tool', 'tool_call_id': 'c1', 'content': {'a': 1}},

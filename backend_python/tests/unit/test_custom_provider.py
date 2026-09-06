@@ -133,6 +133,16 @@ def test_api_error_message_carries_the_response_body():
     assert 'context_length_exceeded' in str(ei.value) and ei.value.getHttpStatusCode() == 400
 
 
+def test_response_body_is_truncated_like_guzzle_body_summary():
+    # Guzzle Message::bodySummary: 120 chars + ' (truncated...)'.
+    body = 'X' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(400, text=body))
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_static_builder_uses_config_base_url_and_endpoint():
     r = CustomProvider.buildHttpRequest('m', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K', 'base_url': 'https://h.example/v1', 'chat_endpoint': '/completions'}, 50, 0.1)
     assert r['url'] == 'https://h.example/v1/completions' and r['payload']['model'] == 'm'

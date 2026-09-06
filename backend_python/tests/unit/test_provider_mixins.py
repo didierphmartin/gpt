@@ -38,6 +38,9 @@ def test_static_converters():
     assert g == {'type': 'object', 'properties': {'x': {'type': 'string', 'description': 'Allowed values: a, b'}}}
     assert M.fixSchemaForGemini({}) == {'type': 'string'} and M.fixSchemaForGemini({'type': 'array'}) == {'type': 'array', 'items': {'type': 'string'}}
     assert M.convertToolsToGeminiFormat([{'name': 'a', 'input_schema': {}}]) == [{'functionDeclarations': [{'name': 'a', 'description': '', 'parameters': {'type': 'string'}}]}]
+    # PHP array_map('strval', ...) semantics: True -> '1', 1.0 -> '1' (not 'True'/'1.0')
+    b = M.fixSchemaForGemini({'type': 'string', 'enum': [True, 1.0, 'x']})
+    assert b == {'type': 'string', 'description': "Allowed values: 1, 1, x"}
 
 
 def test_client_side_tools():
@@ -48,3 +51,49 @@ def test_client_side_tools():
     marker = p.emitClientToolCallEvent([{'id': '1', 'name': 'Task', 'input': {}}], 'txt', {'assistant_reasoning': 'r'})
     assert p.sseClient.events[-1] == ('client_tool_call', {'assistant_reasoning': 'r', 'assistant_text': 'txt', 'tool_calls': [{'id': '1', 'name': 'Task', 'input': {}}]})
     assert marker == {'_pending_client_tool_call': True, '_pending_tool_calls': [{'id': '1', 'name': 'Task', 'input': {}}], '_pending_assistant_text': 'txt', '_pending_assistant_reasoning': 'r'}
+
+
+def test_gemini_override_wins_over_the_trait_when_called_through_the_class():
+    """PHP: `self::fixSchemaForGemini` inside a trait resolves to the using
+    class, so GeminiProvider's override runs. Both must be classmethods
+    recursing through `cls.` for that late binding to survive the port."""
+    from app.providers.gemini_provider import GeminiProvider
+
+    seen = []
+
+    def marker(cls, schema):
+        seen.append(schema)
+        return {'type': 'MARKER'}
+
+    orig = GeminiProvider.__dict__['fixSchemaForGemini']
+    GeminiProvider.fixSchemaForGemini = classmethod(marker)
+    try:
+        out = GeminiProvider.convertToolsToGeminiFormat([{'name': 'a', 'input_schema': {'type': 'object'}}])
+    finally:
+        GeminiProvider.fixSchemaForGemini = orig
+    assert out == [{'functionDeclarations': [{'name': 'a', 'description': '', 'parameters': {'type': 'MARKER'}}]}]
+    assert seen == [{'type': 'object'}]
+
+
+def test_gemini_build_http_request_routes_nested_enums_through_the_override():
+    from app.providers.gemini_provider import GeminiProvider
+
+    seen = []
+    real = GeminiProvider.__dict__['fixSchemaForGemini'].__func__
+
+    def spy(cls, schema):
+        seen.append(cls)
+        return real(cls, schema)
+
+    orig = GeminiProvider.__dict__['fixSchemaForGemini']
+    GeminiProvider.fixSchemaForGemini = classmethod(spy)
+    try:
+        r = GeminiProvider.buildHttpRequest(
+            'gemini-2.5-flash', [{'role': 'user', 'content': 'hi'}],
+            [{'name': 't', 'input_schema': {'type': 'object', 'properties': {'x': {'type': 'string', 'enum': [True, 1.0]}}}}],
+            {'api_key': 'K'}, 50, 0.1)
+    finally:
+        GeminiProvider.fixSchemaForGemini = orig
+    assert seen and all(c is GeminiProvider for c in seen)      # late binding: never the mixin
+    props = r['payload']['tools'][0]['functionDeclarations'][0]['parameters']['properties']
+    assert props['x']['description'] == 'Allowed values: 1, 1'

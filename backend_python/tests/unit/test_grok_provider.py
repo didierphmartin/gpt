@@ -120,3 +120,11 @@ def test_static_builder_and_parser():
     assert r['url'] == 'https://api.x.ai/v1/chat/completions' and 'Authorization: Bearer K' in r['headers'] and r['payload']['model'] == 'grok-4-fast'
     parsed = GrokProvider.parseHttpResponse({'choices': [{'message': {'content': 'yo'}}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 2}})
     assert parsed['text'] == 'yo' and parsed['tool_calls'] == []
+
+
+def test_string_enum_values_use_php_strval_on_the_wire():
+    """PHP GrokProvider uses array_map('strval', ...): True -> '1', None -> '',
+    1.0 -> '1'. Bare str() would put 'True'/'None'/'1.0' on the xAI wire."""
+    from app.providers.grok_provider import _xai_tool_parameters
+    params = _xai_tool_parameters({'name': 't', 'input_schema': {'type': 'object', 'properties': {'x': {'type': 'string', 'enum': [True, None, 1.0]}}}})
+    assert params['properties']['x']['enum'] == ['1', '', '1']

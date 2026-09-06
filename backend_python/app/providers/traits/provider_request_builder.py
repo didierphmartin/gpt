@@ -9,7 +9,7 @@ Instances using this mixin must expose `sseClient`, `model`, `maxTokens`,
 """
 from __future__ import annotations
 
-from app.support.phpcompat import php_date, php_empty
+from app.support.phpcompat import php_date, php_empty, php_strval
 
 
 class ProviderRequestBuilderMixin:
@@ -187,13 +187,19 @@ class ProviderRequestBuilderMixin:
             })
         return openAITools
 
-    @staticmethod
-    def convertToolsToGeminiFormat(claudeTools: list) -> list:
-        """Convert tools from Claude format to Gemini format (functionDeclarations)."""
+    @classmethod
+    def convertToolsToGeminiFormat(cls, claudeTools: list) -> list:
+        """Convert tools from Claude format to Gemini format (functionDeclarations).
+
+        A classmethod (PHP: a plain static on the trait) so that the
+        `cls.fixSchemaForGemini` call below reproduces PHP's `self::` inside a
+        trait, which resolves to the USING class — GeminiProvider's override,
+        not this mixin's copy.
+        """
         functions = []
         for tool in claudeTools:
             inputSchema = tool.get('input_schema') if tool.get('input_schema') is not None else {'type': 'object', 'properties': {}}
-            inputSchema = ProviderRequestBuilderMixin.fixSchemaForGemini(inputSchema)
+            inputSchema = cls.fixSchemaForGemini(inputSchema)
 
             functions.append({
                 'name': tool['name'],
@@ -203,9 +209,14 @@ class ProviderRequestBuilderMixin:
 
         return [{'functionDeclarations': functions}]
 
-    @staticmethod
-    def fixSchemaForGemini(schema) -> dict:
-        """Fix schema to be valid for Gemini API."""
+    @classmethod
+    def fixSchemaForGemini(cls, schema) -> dict:
+        """Fix schema to be valid for Gemini API.
+
+        A classmethod for the same late-binding reason as
+        `convertToolsToGeminiFormat`: PHP's `self::fixSchemaForGemini`
+        recursion inside a trait resolves to the using class.
+        """
         if not isinstance(schema, dict) or len(schema) == 0:
             return {'type': 'string'}
 
@@ -228,7 +239,7 @@ class ProviderRequestBuilderMixin:
 
         # Convert enum to description
         if isinstance(schema.get('enum'), list):
-            enumValues = ', '.join(str(v) for v in schema['enum'])
+            enumValues = ', '.join(php_strval(v) for v in schema['enum'])   # PHP array_map('strval', ...)
             desc = schema.get('description') if schema.get('description') is not None else ''
             schema['description'] = (desc + f" Allowed values: {enumValues}").strip()
             del schema['enum']
@@ -239,7 +250,7 @@ class ProviderRequestBuilderMixin:
             if isinstance(props, dict) and len(props) > 0:
                 fixedProps = {}
                 for propName, propSchema in props.items():
-                    fixedProps[propName] = ProviderRequestBuilderMixin.fixSchemaForGemini(propSchema)
+                    fixedProps[propName] = cls.fixSchemaForGemini(propSchema)
                 schema['properties'] = fixedProps
             else:
                 schema['properties'] = {}
@@ -248,7 +259,7 @@ class ProviderRequestBuilderMixin:
 
         # Fix items for array type
         if 'items' in schema:
-            schema['items'] = ProviderRequestBuilderMixin.fixSchemaForGemini(schema['items'])
+            schema['items'] = cls.fixSchemaForGemini(schema['items'])
         elif schema.get('type') == 'array':
             schema['items'] = {'type': 'string'}
 

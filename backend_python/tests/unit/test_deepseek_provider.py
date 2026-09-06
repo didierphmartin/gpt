@@ -157,6 +157,21 @@ def test_api_error_message_carries_response_body(streaming):
     assert ei.value.getHttpStatusCode() == 400
 
 
+@pytest.mark.parametrize('streaming', [True, False])
+def test_response_body_is_truncated_like_guzzle_body_summary(streaming):
+    # Guzzle Message::bodySummary: 120 chars + ' (truncated...)'.
+    body = 'X' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(400, text=body), streaming=streaming)
+    p.setSSEClient(Rec())
+    with pytest.raises(ProviderException) as ei:
+        if streaming:
+            p.streamChat('x', lambda t: None, [], {'user_id': 3})
+        else:
+            p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_static_builder_and_parser():
     r = DeepSeekProvider.buildHttpRequest('deepseek-v4-flash', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
     assert r['url'] == 'https://api.deepseek.com/chat/completions' and r['payload']['thinking'] == {'type': 'enabled'}

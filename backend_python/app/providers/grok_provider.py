@@ -32,12 +32,13 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
 from app.services.debug_logger import DebugLogger
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_empty, php_intval
+from app.support.phpcompat import is_numeric, php_empty, php_intval, php_strval
 from app.support.phpjson import dumps
 
 
@@ -89,7 +90,7 @@ def _xai_tool_parameters(tool: dict) -> dict:
                     properties[propName].pop('items', None)
 
                 if propSchema.get('enum') is not None and propSchema.get('type') == 'string':
-                    properties[propName]['enum'] = [str(v) for v in propSchema['enum']]
+                    properties[propName]['enum'] = [php_strval(v) for v in propSchema['enum']]
                 if propSchema.get('enum') is not None and propSchema.get('type') in ('integer', 'number'):
                     properties[propName]['enum'] = [php_intval(v) if is_numeric(v) else v for v in propSchema['enum']]
 
@@ -144,6 +145,9 @@ class GrokProvider(
         self.httpClient = httpx.Client(
             base_url=self.BASE_URL,
             timeout=600,
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():

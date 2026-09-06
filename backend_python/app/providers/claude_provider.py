@@ -24,6 +24,7 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
@@ -102,6 +103,9 @@ class ClaudeProvider(
         self.httpClient = httpx.Client(
             base_url=self.baseUrl,
             timeout=600,  # 10 minutes for large responses
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():
@@ -891,7 +895,7 @@ class ClaudeProvider(
             errorDetails = str(e)
             responseBody = e.response.text
             error_log("❌ [ClaudeProvider] API Error Response: " + responseBody)
-            errorDetails += " | Response: " + responseBody
+            errorDetails += " | Response: " + guzzle_body_summary(responseBody)
 
             if statusCode == 429:
                 raise ProviderException.rateLimited('claude')

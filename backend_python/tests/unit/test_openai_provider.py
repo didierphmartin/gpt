@@ -130,6 +130,19 @@ def test_api_error_message_carries_the_response_body():
     assert 'context_length_exceeded' in str(ei.value) and ei.value.getHttpStatusCode() == 400
 
 
+def test_response_body_is_truncated_like_guzzle_body_summary():
+    # Guzzle's RequestException embeds Message::bodySummary($response), which
+    # reads at most 120 bytes and appends ' (truncated...)'. Unbounded
+    # appends change the user-visible text, the humanizer's regex surface and
+    # the error_message column width.
+    body = 'X' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(400, text=body))
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_missing_key_is_authentication_failed_before_any_request():
     hits = []
     p = _provider(lambda r: hits.append(1) or httpx.Response(200, json={}), streaming=False, key='')

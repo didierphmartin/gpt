@@ -109,6 +109,28 @@ def test_server_error_detail_message_carries_status_and_body():
     assert str(ei.value).startswith('kimi API error: ') and 'kaput' in str(ei.value) and ei.value.getHttpStatusCode() == 500
 
 
+def test_non_json_error_body_is_appended_to_the_detail_message():
+    # PHP's detailMsg starts at Guzzle's $e->getMessage(), which embeds a
+    # body summary; when the body is not JSON-shaped (an HTML gateway page)
+    # the error.message/message override never fires, so the body has to be
+    # appended explicitly or the text reaching humanizeProviderError is just
+    # the status line.
+    p = _provider(lambda r: httpx.Response(502, text='<html><body>Bad Gateway from nginx</body></html>',
+                                           headers={'content-type': 'text/html'}), streaming=False)
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    assert 'Bad Gateway from nginx' in str(ei.value) and ei.value.getHttpStatusCode() == 502
+
+
+def test_non_json_error_body_is_truncated_like_guzzle():
+    body = 'B' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(502, text=body, headers={'content-type': 'text/html'}), streaming=False)
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'B' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_static_builder_and_parser():
     r = KimiProvider.buildHttpRequest('kimi-k2.6', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
     assert r['url'] == 'https://api.moonshot.ai/v1/chat/completions' and r['payload']['thinking'] == {'type': 'disabled'}

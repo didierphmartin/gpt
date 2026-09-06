@@ -50,5 +50,14 @@ def test_streaming_chat_parity_live(php, py, token, config):
 
 
 def test_streaming_error_parity_bad_key(php, py, token):
-    """Both backends: a user API key row for claude with an invalid decryptable key → provider 401 → error events."""
-    pytest.skip('requires a throwaway user with an invalid stored key; covered by unit tests in 2a, enabled in 2b')
+    """Provider-error parity needs a provider that FAILS on both backends, and
+    the chat request body has no lever to force one: PHP's ChatController::chat
+    / handleStreamingChat never read `$input['model']` (only `agent()` does, at
+    ChatController.php:947), and neither does the Python port. Enabling this
+    would take a throwaway `system_llm_settings` row — an unroutable `base_url`
+    for a CustomProvider name, or an invalid `api_key` — created and torn down
+    around the test, which writes to the shared CONTEXTS DB the live backends
+    read. Not done: error-text parity is covered instead by the unit matrix in
+    tests/unit/test_humanize_provider_error_matrix.py plus the per-provider
+    error tests. See docs/backend-parity-tracker.md row 59."""
+    pytest.skip('needs a throwaway system_llm_settings row pointing at an unroutable host; see tracker row 59')

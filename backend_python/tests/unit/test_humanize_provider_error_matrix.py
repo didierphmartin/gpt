@@ -26,5 +26,13 @@ def test_every_provider_lands_in_the_intended_humanized_branch(provider):
     assert h(str(ProviderException.apiError(provider, 'This model\'s maximum context length is 8192 tokens', 400))).startswith('📏')
     assert h(str(ProviderException.apiError(provider, 'insufficient_quota: billing hard limit reached', 402))).startswith('💳')
     assert h(str(ProviderException.apiError(provider, 'Connection refused', 0))).startswith('🌐')
+    # DNS failures: Guzzle says 'Could not resolve host'; httpx/getaddrinfo
+    # phrases it differently on macOS/Linux/Windows. Behavioural parity
+    # (same humanized line) beats regex-text parity.
+    for dns in ('[Errno 8] nodename nor servname provided, or not known',
+                'Name or service not known',
+                '[Errno 11001] getaddrinfo failed',
+                'Could not resolve host: api.example.com'):
+        assert h(str(ProviderException.apiError(provider, dns, 0))).startswith('🌐'), dns
     generic = h(str(ProviderException.apiError(provider, 'something odd happened', 500)))
     assert generic == f'{provider} API error: something odd happened'

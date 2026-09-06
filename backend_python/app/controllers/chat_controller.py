@@ -117,7 +117,17 @@ class ChatController:
         if re.search(r'quota|billing|credit balance|insufficient.?credit|payment.?required', msg, re.I):
             return "💳 The provider rejected the request for billing reasons (quota or credits). Check your provider account, then retry."
         # Network / timeout / connection.
-        if re.search(r'connection.?refused|connection.?reset|timed.?out|timeout|network.?unreachable|could not resolve', msg, re.I):
+        # DNS: PHP/curl phrases a resolution failure as "Could not resolve host",
+        # which the tail of this alternation matches. httpx surfaces the OS
+        # getaddrinfo text instead ("[Errno 8] nodename nor servname provided,
+        # or not known" on macOS, "Name or service not known" on Linux,
+        # "getaddrinfo failed" on Windows), so those phrasings are matched too —
+        # behavioural parity (same humanized line) over regex-text parity.
+        if re.search(
+            r'connection.?refused|connection.?reset|timed.?out|timeout|network.?unreachable|'
+            r'could not resolve|nodename|servname|name or service not known|getaddrinfo',
+            msg, re.I,
+        ):
             return "🌐 Couldn't reach the provider. Check your network and try again, or switch providers."
 
         # Default fallback: cap length so the chat bubble doesn't render

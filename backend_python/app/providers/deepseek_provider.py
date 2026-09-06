@@ -40,6 +40,7 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
@@ -110,6 +111,9 @@ class DeepSeekProvider(
         self.httpClient = httpx.Client(
             base_url=self.BASE_URL,
             timeout=600,
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():
@@ -394,7 +398,7 @@ class DeepSeekProvider(
             # back") need to reach the user. httpx's str(e) carries only the
             # status line, so append the body — same shape as
             # openai_provider.py (Task 1 fix) and claude_provider.py:889-902.
-            errorDetails = str(e) + " | Response: " + errorBody
+            errorDetails = str(e) + " | Response: " + guzzle_body_summary(errorBody)
             raise ProviderException.apiError('deepseek', errorDetails, statusCode)
 
         except httpx.RequestError as e:

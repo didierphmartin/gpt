@@ -23,6 +23,7 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
@@ -102,6 +103,9 @@ class OpenAIProvider(
         self.httpClient = httpx.Client(
             base_url=self.baseUrl,
             timeout=600,  # 10 minutes for large responses
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():
@@ -388,7 +392,7 @@ class OpenAIProvider(
             # str(e) carries only the status line, so append the body — the
             # streaming branch above read() it for exactly this reason. Same
             # shape as claude_provider.py's streaming handler.
-            errorDetails = str(e) + " | Response: " + e.response.text
+            errorDetails = str(e) + " | Response: " + guzzle_body_summary(e.response.text)
 
             if statusCode == 429:
                 raise ProviderException.rateLimited('openai')

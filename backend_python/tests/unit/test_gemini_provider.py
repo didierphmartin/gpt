@@ -117,6 +117,16 @@ def test_api_error_message_carries_the_response_body():
     assert ei.value.getHttpStatusCode() == 404
 
 
+def test_response_body_is_truncated_like_guzzle_body_summary():
+    # Guzzle Message::bodySummary: 120 chars + ' (truncated...)'.
+    body = 'X' * 500 + 'TAIL'
+    p = _provider(lambda r: httpx.Response(400, text=body))
+    with pytest.raises(ProviderException) as ei:
+        p.chat('x', [], {'user_id': 3})
+    msg = str(ei.value)
+    assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
+
+
 def test_fix_schema_strips_unsupported_keywords():
     fixed = GeminiProvider.fixSchemaForGemini({'type': 'object', 'additionalProperties': False, 'properties': {'a': {'type': 'string', 'default': 'x'}}})
     assert 'additionalProperties' not in fixed and 'default' not in fixed['properties']['a']

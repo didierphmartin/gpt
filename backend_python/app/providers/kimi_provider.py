@@ -41,6 +41,7 @@ from app.contracts.http_request_builder import HttpRequestBuilderInterface
 from app.contracts.streaming_client import StreamingClientInterface
 from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import ProviderException
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
 from app.providers.totals import _Totals
 from app.providers.traits.client_side_tools import ClientSideToolsMixin
 from app.providers.traits.provider_request_builder import ProviderRequestBuilderMixin
@@ -107,6 +108,9 @@ class KimiProvider(
         self.httpClient = httpx.Client(
             base_url=self.BASE_URL,
             timeout=600,
+            # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
+            # per Client, and every enabled provider is constructed per chat request.
+            verify=SHARED_SSL_CONTEXT,
         )
 
         if config.isDebugEnabled():
@@ -363,7 +367,13 @@ class KimiProvider(
             if statusCode == 401:
                 raise ProviderException.authenticationFailed('kimi')
 
-            detailMsg = str(e)
+            # PHP starts from Guzzle's $e->getMessage(), which already embeds a
+            # 120-char body summary; the JSON override below then replaces it
+            # when the body is API-shaped. httpx's str(e) is the status line
+            # only, so append the (truncated) body here — otherwise a non-JSON
+            # body (an HTML gateway page, say) reaches humanizeProviderError
+            # stripped of the only diagnostic it carries.
+            detailMsg = str(e) + " | Response: " + guzzle_body_summary(errorBody)
             if errorBody:
                 errorJson = _json_decode(errorBody)
                 if isinstance(errorJson, dict) and isinstance(errorJson.get('error'), dict) and errorJson['error'].get('message') is not None:
