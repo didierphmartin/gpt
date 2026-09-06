@@ -42,6 +42,26 @@ def test_model_catalog_public(client):
     assert r.status_code == 200 and r.json()['success'] is True and isinstance(r.json()['providers'], dict | list)
 
 
+def test_middleware_exception_becomes_500_envelope_with_cors(monkeypatch):
+    """An exception escaping MiddlewareProcessor.process() must not fall through to
+    Starlette's bare 500 (no CORS headers) — it should get the same envelope/CORS
+    treatment as a controller-error."""
+    from fastapi.testclient import TestClient
+    from app.config import load_config
+    from app.middleware.processor import MiddlewareProcessor
+    from main import create_app
+
+    def boom(self, ctx):
+        raise RuntimeError('middleware kaboom')
+
+    monkeypatch.setattr(MiddlewareProcessor, 'process', boom)
+    test_client = TestClient(create_app(load_config()))
+    r = test_client.get('/api/v1/prompts')
+    assert r.status_code == 500
+    assert r.json() == {'success': False, 'error': 'middleware kaboom'}
+    assert r.headers['access-control-allow-origin'] == '*'
+
+
 def _auth(client):
     from app.config import load_config
     secret = load_config()['auth']['jwt_secret']

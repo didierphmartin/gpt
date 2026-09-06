@@ -57,6 +57,17 @@ def test_bad_or_expired_jwt_is_401_invalid_credential():
     assert r2['status_code'] == 401
 
 
+def test_valid_jwt_with_aud_claim_is_still_accepted():
+    """firebase/php-jwt (and PHP's decode) ignore an `aud` claim entirely; PyJWT
+    rejects any token carrying one unless verify_aud is disabled."""
+    now = int(time.time())
+    tok = jwt.encode({'iss': 'gpt-chat', 'iat': now, 'exp': now + 3600, 'sub': 3, 'type': 'access',
+                      'aud': 'someapp'}, SECRET, algorithm='HS256')
+    a = AuthMiddleware(SECRET, PUBLIC_ROUTES, CONFIG, lambda: FakeDb())
+    r = a.handle(ctx(auth='Bearer ' + tok))
+    assert r['user_id'] == 3 and r['auth_type'] == 'jwt' and r['authenticated'] is True
+
+
 def test_valid_jwt_sets_identity():
     a = AuthMiddleware(SECRET, PUBLIC_ROUTES, CONFIG, lambda: FakeDb())
     r = a.handle(ctx(auth='Bearer ' + token(sub=3)))
@@ -71,6 +82,18 @@ def test_public_route_passes_without_auth_and_marks_identity_when_present():
     assert r2['user_id'] == 9 and r2['authenticated'] is True
     # method matters: GET /api/v1/auth is NOT public
     assert a.handle(ctx('GET', '/api/v1/auth'))['status_code'] == 401
+
+
+def test_jwt_validation_failure_is_logged_with_reason(monkeypatch):
+    """error_log must carry the underlying jwt error message, not just a generic
+    'JWT validation failed' with no detail."""
+    import app.middleware.auth as auth_mod
+    logged = []
+    monkeypatch.setattr(auth_mod, 'error_log', logged.append)
+    a = AuthMiddleware(SECRET, PUBLIC_ROUTES, CONFIG, lambda: FakeDb())
+    a.handle(ctx(auth='Bearer ' + token(exp_delta=-10)))
+    assert any(m.startswith('[AuthMiddleware] JWT validation failed: ') and len(m) > len('[AuthMiddleware] JWT validation failed: ')
+              for m in logged)
 
 
 def test_valid_jwt_with_non_numeric_sub_is_401_invalid_credential():

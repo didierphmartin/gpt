@@ -18,7 +18,7 @@ from app.middleware.processor import MiddlewareProcessor
 from app.routes import CONTROLLERS, ROUTES
 from app.support.http import build_ctx, json_response, render
 from app.support.logger import error_log, get_logger
-from app.support.phpcompat import is_numeric
+from app.support.phpcompat import is_numeric, php_intval
 from app.support.router import Dispatcher
 
 METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
@@ -41,7 +41,11 @@ def create_app(config: dict | None = None) -> FastAPI:
                     resp.headers[k] = v
             return resp
 
-        mw = processor.process(ctx)
+        try:
+            mw = processor.process(ctx)
+        except Exception as e:  # noqa: BLE001
+            error_log(f'[Backend] Middleware error: {e}\n{traceback.format_exc()}')
+            return with_cors(json_response(500, {'success': False, 'error': str(e)}))
         if mw['handled']:
             r = mw['response']
             body = r.get('body')
@@ -73,7 +77,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 if fn is None:
                     return with_cors(json_response(500, {'success': False, 'error': f'Method not found: {method_name}'}))
                 if route.params:
-                    params = [int(v) if is_numeric(v) else v for v in route.params.values()]
+                    params = [php_intval(v) if is_numeric(v) else v for v in route.params.values()]
                     ctx['params'] = dict(route.params)
                     result = fn(ctx, *params)
                 else:

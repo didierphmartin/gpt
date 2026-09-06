@@ -54,6 +54,16 @@ def mb_substr(s: str, start: int, length: int | None = None) -> str:
     return s[start:] if length is None else s[start:start + length]
 
 
+def php_intval(v) -> int:
+    """PHP (int) cast: numeric string -> truncated int (e.g. "12.5" -> 12, "1e3" -> 1000),
+    non-numeric string -> 0, int/float/bool -> int(v)."""
+    if isinstance(v, str):
+        return int(float(v)) if is_numeric(v) else 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    return 0
+
+
 def php_empty(v) -> bool:
     """PHP empty(): None, '', '0', 0, 0.0, False, and empty list/dict are empty."""
     if v is None or v is False:

@@ -50,7 +50,11 @@ class Db:
     def _run(self, sql, params):
         sql, params = translate(sql, params)
         cur = self._conn.cursor()
-        cur.execute(sql, params)
+        try:
+            cur.execute(sql, params)
+        except Exception:
+            cur.close()
+            raise
         return cur
 
     def fetch_one(self, sql: str, params=None) -> dict | None:

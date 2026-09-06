@@ -10,6 +10,7 @@ pytestmark = pytest.mark.differential
 def test_login_validation_and_bad_credentials(both):
     same(*both('POST', '/api/v1/auth/login', json={'email': '', 'password': ''}, auth=False))
     same(*both('POST', '/api/v1/auth/login', json={'email': 'nobody@example.invalid', 'password': 'x'}, auth=False))
+    same(*both('POST', '/api/v1/auth/login', json={'email': '0', 'password': 'x'}, auth=False))
 
 
 def test_register_validation_matrix(both):
@@ -24,6 +25,13 @@ def test_legacy_action_dispatcher(both):
     same(*both('POST', '/api/v1/auth', json={'action': 'upgrade_plan', 'plan': 'premium'}, auth=False))
     same(*both('POST', '/api/v1/auth', json={'action': 'upgrade_plan', 'plan': 'gold'}))   # authed, invalid plan
     same(*both('POST', '/api/v1/auth', json={'action': 'link_phone', 'phone_number': ''}))
+
+
+def test_legacy_action_dispatcher_non_scalar_action(both):
+    """action as a list/dict must fall through to 'Invalid action' (400) on both
+    sides, not a 500 (PHP `match` default arm vs a Python dict.get TypeError)."""
+    same(*both('POST', '/api/v1/auth', json={'action': []}, auth=False))
+    same(*both('POST', '/api/v1/auth', json={'action': {'a': 1}}, auth=False))
 
 
 def test_verify_and_logout(both, token):
@@ -62,6 +70,7 @@ def test_register_on_python_login_on_php_and_vice_versa(php, py, config):
 
 def test_firebase_reject_parity(both):
     same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': ''}, auth=False))
+    same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': '0'}, auth=False))
     same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': 'garbage'}, auth=False))
     forged = ('eyJhbGciOiJSUzI1NiIsImtpZCI6Im5vcGUifQ.'
               'eyJhdWQiOiJ0cmFuc2xlZGdlcnNpdGUiLCJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vdHJhbnNsZWRnZXJzaXRlIiwic3ViIjoieCJ9.'

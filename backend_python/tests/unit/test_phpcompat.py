@@ -34,6 +34,14 @@ def test_mb_substr():
     assert pc.mb_substr('héllo wörld', 0, 5) == 'héllo'
 
 
+def test_php_intval():
+    assert pc.php_intval('12.5') == 12
+    assert pc.php_intval('1e3') == 1000
+    assert pc.php_intval(' 7') == 7
+    assert pc.php_intval('abc') == 0
+    assert pc.php_intval(3.9) == 3
+
+
 def test_php_empty():
     assert pc.php_empty('0') and pc.php_empty(0) and pc.php_empty('') and pc.php_empty(None)
     assert pc.php_empty(False) and pc.php_empty([]) and pc.php_empty({})

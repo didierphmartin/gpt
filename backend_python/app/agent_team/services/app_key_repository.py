@@ -71,7 +71,7 @@ class AppKeyRepository:
         if user_id is not None:
             sql += " AND user_id = :user_id"; params[':user_id'] = user_id
         sql += " ORDER BY created_at DESC"
-        rows = self.db.fetch_all(sql, params) if params else self.db.fetch_all(sql, {})
+        rows = self.db.fetch_all(sql, params)
         for r in rows:
             r['id'] = int(r['id']); r['user_id'] = int(r['user_id']); r['scopes'] = self._decode_scopes(r['scopes'])
         return rows
@@ -89,11 +89,14 @@ class AppKeyRepository:
         return hmac.new(self.server_secret.encode(), full_key.encode(), hashlib.sha256).hexdigest()
 
     @staticmethod
-    def _decode_scopes(raw) -> list:
-        if isinstance(raw, list):
+    def _decode_scopes(raw):
+        """PHP: json_decode($raw, true); is_array($decoded) ? $decoded : []. With
+        assoc=true, both JSON arrays and JSON objects decode to a PHP array, so a
+        decoded dict is returned as-is (not coerced to a list)."""
+        if isinstance(raw, (list, dict)):
             return raw
         try:
             decoded = json.loads(str(raw))
         except ValueError:
             return []
-        return decoded if isinstance(decoded, list) else []
+        return decoded if isinstance(decoded, (list, dict)) else []

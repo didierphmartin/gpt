@@ -14,15 +14,10 @@ from app.db import Db
 from app.middleware.auth import decode_hs256, hash_user_app_key, user_app_key_pepper
 from app.services.firebase_tokens import verify_firebase_id_token
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_now, validate_email
+from app.support.phpcompat import php_empty, php_intval, php_now, validate_email
 
 FREE_TRIAL_TOKEN_QUOTA = 50000
 PHP_VERSION = '8.2.4'   # debugAuth reports PHP_VERSION; mirrored constant (XAMPP's PHP)
-
-
-def _to_int(v) -> int:
-    """PHP (int) cast semantics: numeric -> int(v), everything else -> 0."""
-    return int(v) if is_numeric(v) else 0
 
 
 def normalize_plan(plan) -> str:
@@ -130,7 +125,7 @@ class AuthController:
             'admin_generate_app_key': self.adminGenerateAppKeyForUser,
             'admin_revoke_app_key': self.adminRevokeAppKeyForUser,
         }
-        fn = table.get(action)
+        fn = table.get(action) if isinstance(action, str) else None
         if fn is None:
             return {'success': False, 'message': 'Invalid action', 'status_code': 400}
         return fn(request)
@@ -139,7 +134,7 @@ class AuthController:
     def login(self, request) -> dict:
         email = request['body'].get('email', '') or ''
         password = request['body'].get('password', '') or ''
-        if not email or not password:
+        if php_empty(email) or php_empty(password):
             return {'success': False, 'message': 'Email and password are required', 'status_code': 400}
         user = self.db.fetch_one("SELECT * FROM users WHERE email = ?", [str(email).strip().lower()])
         if not user or not password_verify(str(password), user.get('password')):
@@ -206,11 +201,11 @@ class AuthController:
         last_name = str(b.get('last_name', '') or '').strip()
         ledger_user_id = str(b.get('ledger_user_id', '') or '').strip()
         plan = str(b.get('plan', 'free') or 'free').strip()
-        if not email or not password:
+        if php_empty(email) or php_empty(password):
             return {'success': False, 'message': 'Email and password are required', 'status_code': 400}
         if not validate_email(email):
             return {'success': False, 'message': 'Invalid email format', 'status_code': 400}
-        if not ledger_user_id:
+        if php_empty(ledger_user_id):
             return {'success': False,
                     'message': 'Registration requires a valid subscription. Please register through synergyaichat.com',
                     'code': 'LEDGER_ACCOUNT_REQUIRED', 'status_code': 400}
@@ -240,7 +235,7 @@ class AuthController:
         provider = b.get('provider', '') or ''
         id_token = b.get('idToken', '') or ''
         user_data = b.get('userData') or {}
-        if not id_token:
+        if php_empty(id_token):
             return {'success': False, 'message': 'Invalid authentication data', 'status_code': 400}
         claims = verify_firebase_id_token(str(id_token), self._firebase_project_id())
         if claims is None:
@@ -306,7 +301,7 @@ class AuthController:
         phone_number = request['body'].get('phone_number', '') or ''
         if not user_id:
             return self._auth_required()
-        if not phone_number:
+        if php_empty(phone_number):
             return {'success': False, 'message': 'Phone number is required', 'status_code': 400}
         if self.db.fetch_one("SELECT id FROM users WHERE phone = ? AND id != ?", [phone_number, user_id]):
             return {'success': False, 'message': 'Phone number is already linked to another account', 'status_code': 409}
@@ -373,7 +368,7 @@ class AuthController:
         err = self._require_admin_caller(request)
         if err:
             return err
-        target = _to_int(request['body'].get('user_id'))
+        target = php_intval(request['body'].get('user_id'))
         if target <= 0:
             return {'success': False, 'message': 'user_id is required', 'status_code': 400}
         if not self.db.fetch_one("SELECT id FROM users WHERE id = ?", [target]):
@@ -390,7 +385,7 @@ class AuthController:
         err = self._require_admin_caller(request)
         if err:
             return err
-        target = _to_int(request['body'].get('user_id'))
+        target = php_intval(request['body'].get('user_id'))
         if target <= 0:
             return {'success': False, 'message': 'user_id is required', 'status_code': 400}
         self.db.execute("UPDATE users SET app_key_hash = NULL, app_key_prefix = NULL, app_key_created_at = NULL, updated_at = NOW() WHERE id = ?",

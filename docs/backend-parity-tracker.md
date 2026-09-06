@@ -50,7 +50,7 @@ Last updated: 2026-09-05
 | 25 | PY: `date('Y-m-d H:i:s')` uses `PHP_TIMEZONE` env (default Europe/Berlin) | 🪞 | Must match php.ini `date.timezone`. |
 | 26 | PY: login for a social-only user (`users.password` NULL) returns 401 'Invalid email or password'; PHP throws a TypeError → 500 | 🪞 deliberate deviation | PHP behavior is an uncaught crash, not design; frontend only reads `success:false`. |
 | 27 | PY: JWT decode disables PyJWT's `verify_sub` (PyJWT ≥2.10 rejects non-string `sub`); PHP tokens carry an integer `sub` | 🪞 | Required for cross-backend token interop; signature/exp/iat/nbf still verified. |
-| 28 | PY: `php_empty()` helper mirrors PHP `empty()` (incl. the string "0") wherever PHP uses `empty()` on request input; `??` is ported as `v if v is not None else default`, never `.get(k, default)` | 🪞 | Convention for all future ports. |
+| 28 | PY: `php_empty()` helper mirrors PHP `empty()` (incl. the string "0") wherever PHP uses `empty()` on request input; `??` is ported as `v if v is not None else default`, never `.get(k, default)` | 🪞 | Applied throughout `AuthController` (login/register/firebaseAuth/linkPhone, fixed 2026-09-05 — those five sites previously used plain truthiness, diverging on `"0"`). Convention for all future ports. |
 | 29 | PY: `client_flag FOUND_ROWS` NOT set — live PHP returns 404 on a same-title context rename, so PyMySQL's default affected-rows count already matches | 🪞 | Verified live 2026-09-05. |
 
 ## How items get verified

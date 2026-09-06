@@ -32,3 +32,10 @@ def test_find_by_key_success_strips_hash_and_decodes_scopes():
     row = AppKeyRepository(db, 's').findByKey(full)
     assert row['id'] == 1 and row['user_id'] == 2 and row['scopes'] == ['a', 'b'] and 'key_hash' not in row
     assert db.calls[0][1] == {':prefix': full[:12]}
+
+
+def test_decode_scopes_returns_object_as_is_like_php_is_array():
+    """PHP: json_decode($raw, true) turns a JSON object into an associative array,
+    and is_array() is true for it too — so it comes back as-is, not coerced to a list."""
+    assert AppKeyRepository._decode_scopes('{"a":"x"}') == {'a': 'x'}
+    assert AppKeyRepository._decode_scopes({'a': 'x'}) == {'a': 'x'}

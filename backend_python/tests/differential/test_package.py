@@ -11,4 +11,7 @@ def test_me_and_admin_reads(both):
     same(*both('GET', '/api/v1/admin/packages/user'))
     same(*both('GET', '/api/v1/admin/packages/bogus'))            # 404 route (regex [a-z]+ matches; 400 invalid role)
     same(*both('PUT', '/api/v1/admin/packages/user', json={}))
-    same(*both('PUT', '/api/v1/admin/packages/user', json={'capabilities': {'providers': {}}}))
+    # A string can never satisfy "capabilities object is required" — unlike the old
+    # {'providers': {}} payload (which happened to fail only because 'sidebar' was
+    # missing), this stays non-destructive even if the validation rules change later.
+    same(*both('PUT', '/api/v1/admin/packages/user', json={'capabilities': 'x'}))

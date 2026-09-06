@@ -27,14 +27,22 @@ def hash_user_app_key(key: str, pepper: str) -> str:
     return hmac.new(pepper.encode(), key.encode(), hashlib.sha256).hexdigest()
 
 
+def decode_hs256_or_raise(token: str, secret: str) -> dict:
+    """Like decode_hs256, but raises the underlying jwt.PyJWTError instead of
+    swallowing it, so callers that need to log the specific failure reason can."""
+    # verify_sub disabled: gpt-chat's `sub` claim is a numeric user id (int), not the
+    # RFC 7519 string PyJWT expects by default. verify_aud disabled: firebase/php-jwt
+    # ignores an `aud` claim entirely; PyJWT otherwise rejects any token carrying one
+    # without a matching `audience=` argument.
+    return jwt.decode(token, secret, algorithms=['HS256'],
+                       options={'require': [], 'verify_sub': False, 'verify_aud': False})
+
+
 def decode_hs256(token: str, secret: str) -> dict | None:
     """firebase/php-jwt JWT::decode(token, Key(secret,'HS256')) equivalent: verifies
     signature + exp/nbf/iat; returns claims or None."""
     try:
-        # verify_sub disabled: gpt-chat's `sub` claim is a numeric user id (int),
-        # not the RFC 7519 string PyJWT expects by default.
-        return jwt.decode(token, secret, algorithms=['HS256'],
-                           options={'require': [], 'verify_sub': False})
+        return decode_hs256_or_raise(token, secret)
     except jwt.PyJWTError:
         return None
 
@@ -106,9 +114,10 @@ class AuthMiddleware:
         return None
 
     def _validate_token(self, token: str) -> int | None:
-        claims = decode_hs256(token, self.jwt_secret)
-        if claims is None:
-            error_log('[AuthMiddleware] JWT validation failed')
+        try:
+            claims = decode_hs256_or_raise(token, self.jwt_secret)
+        except jwt.PyJWTError as e:
+            error_log(f'[AuthMiddleware] JWT validation failed: {e}')
             return None
         try:
             return int(claims['sub'])

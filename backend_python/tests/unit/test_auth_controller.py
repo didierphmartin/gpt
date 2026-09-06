@@ -122,6 +122,33 @@ def test_handle_action_gate_and_dispatch():
     assert c.handleAction(ctx({'action': 'logout'})) == {'success': True, 'message': 'Logout successful', 'status_code': 200}
 
 
+def test_handle_action_unhashable_action_is_invalid_action_not_500():
+    """PHP's `match` falls to its default arm for a non-scalar $action; table.get() on
+    a dict/list would raise TypeError: unhashable type if not guarded."""
+    c = AuthController(FakeDb(), CONFIG)
+    assert c.handleAction(ctx({'action': []})) == {'success': False, 'message': 'Invalid action', 'status_code': 400}
+    assert c.handleAction(ctx({'action': {'a': 1}})) == {'success': False, 'message': 'Invalid action', 'status_code': 400}
+
+
+def test_php_empty_semantics_on_string_zero():
+    """PHP empty("0") is true; a plain truthiness check would wrongly accept "0"."""
+    c = AuthController(FakeDb(), CONFIG)
+    assert c.login(ctx({'email': '0', 'password': 'x'})) == {
+        'success': False, 'message': 'Email and password are required', 'status_code': 400}
+    assert c.login(ctx({'email': 'a@b.com', 'password': '0'})) == {
+        'success': False, 'message': 'Email and password are required', 'status_code': 400}
+
+    db = FakeDb()
+    r = AuthController(db, CONFIG).register(ctx({'email': 'z@y.com', 'password': 'p', 'ledger_user_id': '0'}))
+    assert r == {'success': False,
+                 'message': 'Registration requires a valid subscription. Please register through synergyaichat.com',
+                 'code': 'LEDGER_ACCOUNT_REQUIRED', 'status_code': 400}
+    assert not any(s.strip().startswith('INSERT') for s, _ in db.calls)
+
+    assert AuthController(FakeDb(), CONFIG).firebaseAuth(ctx({'provider': 'google', 'idToken': '0'})) == {
+        'success': False, 'message': 'Invalid authentication data', 'status_code': 400}
+
+
 def test_upgrade_plan_and_link_phone():
     db = FakeDb()
     c = AuthController(db, CONFIG)
