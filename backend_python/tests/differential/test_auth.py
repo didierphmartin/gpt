@@ -58,3 +58,12 @@ def test_register_on_python_login_on_php_and_vice_versa(php, py, config):
         db = open_primary(config)
         db.execute('DELETE FROM users WHERE email IN (?, ?)', [email_a, email_b])
         db.close()
+
+
+def test_firebase_reject_parity(both):
+    same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': ''}, auth=False))
+    same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': 'garbage'}, auth=False))
+    forged = ('eyJhbGciOiJSUzI1NiIsImtpZCI6Im5vcGUifQ.'
+              'eyJhdWQiOiJ0cmFuc2xlZGdlcnNpdGUiLCJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vdHJhbnNsZWRnZXJzaXRlIiwic3ViIjoieCJ9.'
+              'c2ln')
+    same(*both('POST', '/api/v1/auth/firebase', json={'provider': 'google', 'idToken': forged}, auth=False))
