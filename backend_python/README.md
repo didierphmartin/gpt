@@ -36,3 +36,10 @@ providers (openai, gemini, kimi, grok, deepseek, mistral) are pending Phase 2b; 
 Functions are pending Phase 2c; verify/compare, attachments, and the client-tool bridge are pending
 Phase 2d. SSE frames are byte-identical to PHP's, and the stream is closed at the same point PHP
 closes it via `fastcgi_finish_request`.
+
+Phase 2b (2026-09): all seven chat providers — Claude, OpenAI, Grok, Kimi, DeepSeek, Gemini, and the
+generic OpenAI-compatible `CustomProvider` for `system_llm_settings` rows without a dedicated class
+(gamma4, glm) — plus `ProviderRequestFactory`. Every configured provider is differential-tested
+against live PHP (event skeleton, `response`/`complete` payloads, error messages). Gemini does not
+stream (single `chunk`), exactly like PHP. `/api/v1/providers` and the built-in Functions remain
+pending Phase 2c.

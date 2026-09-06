@@ -11,7 +11,7 @@ are written as `.sql` for the owner to run (migrations are applied manually).
 internet). This lowers the priority of anti-abuse hardening (e.g. login rate-limiting) but NOT of
 correctness or authentication-integrity items (e.g. #1 token verification still matters).
 
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
 ## A. Fixes (correct in BOTH backends)
 
@@ -66,6 +66,17 @@ Last updated: 2026-09-05
 | 41 | PY: `SseStream.end()` is called at the same point as PHP's `fastcgi_finish_request()` (inside the memory block, after usage logging) | 🪞 | When that block does not run, the stream is closed by `main.py`'s `finally`. |
 | 42 | PY: SSE headers (`text/event-stream`) are sent lazily on the first event; PHP sends them eagerly on entry to `handleStreamingChat` | 🪞 | Every 2a exit path emits at least one event, so the wire is identical; a future handler that returns before any `send()` would answer a bare 200 where PHP answers an empty event-stream. |
 | 43 | PY: the SSE bridge queue is unbounded (frames buffer in memory for a stalled client); PHP's `flush()` applies socket backpressure | 🪞 | Chat-sized payloads (tens of KB); revisit if an endpoint streams large bodies. |
+| 44 | PY: Grok/Kimi/DeepSeek ignore `base_url` from `system_llm_settings` (class constants, like PHP) | 🪞 | Mirrors PHP; the TS port diverged here. |
+| 45 | PY: `CustomProvider` request timeout `providers.<name>.timeout` ?? `{'gamma4': 90}` ?? 600 s, connect 15 s, via `httpx.Timeout` | 🪞 | Same values as PHP's Guzzle options. |
+| 46 | PY: Gemini `streamChat` = `chat()` + one `onChunk(text)`; no true streaming | 🪞 | Spec §4; identical event skeleton to PHP. |
+| 47 | PY: provider HTTP errors map 429/401/other from `httpx.HTTPStatusError`; network errors (`httpx.RequestError`) become `apiError(provider, str(e), 0)` | 🪞 | Wire message text matches PHP's Guzzle path for status errors; network-error wording differs (log-visible via `humanizeProviderError` 🌐 branch either way). |
+| 48 | PY: `ProviderRequestFactory` interface check is `issubclass(cls, HttpRequestBuilderInterface)` (PHP `class_implements`) | 🪞 | Same fallbacks. |
+| 49 | PY: OpenAI streaming is decided by `options['stream'] ?? true`; the `openai.streaming` config key is never read | 🪞 | PHP parity. |
+| 50 | PY: every provider's `apiError` message appends ` \| Response: <body>` because Guzzle's exception message embeds a body excerpt and httpx's does not | 🪞 | `humanizeProviderError` depends on it. |
+| 51 | PY: `getDefaultSystemPrompt` is public on every provider (PHP private) | 🪞 | The shared mixin calls it. |
+| 52 | PY: DeepSeek `disableThinkingForThisCall` also triggers on a forced `tool_choice` (PHP 166-177) | 🪞 | Mirrored. |
+| 53 | PY: Gemini `parseHttpResponse` returns OpenAI-shaped `tool_calls` (`{id, type, function{name, arguments}}`, PHP 1273-1280) | 🪞 | Mirrored. |
+| 54 | PY: `php_strval` helper mirrors PHP `strval` for enum coercion in tool schemas (bool → "1"/"", float 1.0 → "1") | 🪞 | Used wherever a tool schema enum value needs PHP-style stringification. |
 
 ## How items get verified
 Each fix is validated by **differential testing against the live PHP backend** (byte/semantic
