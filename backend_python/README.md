@@ -28,3 +28,11 @@ Phase 1 (2026-09): pipeline, auth (all actions, Firebase verify, SSO, app keys),
 prompts, contexts, packages, WebAuthn — differential-tested against live PHP. `ProviderController`
 is deferred to Phase 2 (see the phase table in the spec). The differential suite runs against
 user 3 by default (`DIFF_USER_ID`). Everything else: see the phase table in the spec.
+
+Phase 2a (2026-09): the Claude chat path — streaming and regular `POST /api/v1/chat`, MCP tools,
+search tools, session search, memory, usage logging — differential-tested against live PHP. Other
+providers (openai, gemini, kimi, grok, deepseek, mistral) are pending Phase 2b; a non-Claude
+`provider` currently yields the PHP "Provider 'x' not found" error path. `/api/v1/providers` and
+Functions are pending Phase 2c; verify/compare, attachments, and the client-tool bridge are pending
+Phase 2d. SSE frames are byte-identical to PHP's, and the stream is closed at the same point PHP
+closes it via `fastcgi_finish_request`.

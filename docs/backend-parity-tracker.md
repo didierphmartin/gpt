@@ -52,6 +52,18 @@ Last updated: 2026-09-05
 | 27 | PY: JWT decode disables PyJWT's `verify_sub` (PyJWT ≥2.10 rejects non-string `sub`); PHP tokens carry an integer `sub` | 🪞 | Required for cross-backend token interop; signature/exp/iat/nbf still verified. |
 | 28 | PY: `php_empty()` helper mirrors PHP `empty()` (incl. the string "0") wherever PHP uses `empty()` on request input; `??` is ported as `v if v is not None else default`, never `.get(k, default)` | 🪞 | Applied throughout `AuthController` (login/register/firebaseAuth/linkPhone, fixed 2026-09-05 — those five sites previously used plain truthiness, diverging on `"0"`). Convention for all future ports. |
 | 29 | PY: `client_flag FOUND_ROWS` NOT set — live PHP returns 404 on a same-title context rename, so PyMySQL's default affected-rows count already matches | 🪞 | Verified live 2026-09-05. |
+| 30 | PY: SSE event payloads are clean JSON (`phpjson.dumps`: no `\/` escaping, unicode unescaped) | 🪞 | Decodes identically in the browser. |
+| 31 | PY: `SessionSearchService` connects to the contexts DB lazily on first use (PHP connects in the constructor) | 🪞 | A connection failure surfaces as `{'error': …}` from the tool instead of a constructor throw. |
+| 32 | PY: providers other than Claude return the PHP "Provider 'x' not found" error path | 🪞 | Until Phase 2b ports openai/gemini/kimi/grok/deepseek/mistral. |
+| 33 | PY: regular (non-streaming) chat runs the memory auto-updater via a post-response hook in `main.py` (`ctx['_after_response']`) after the JSON body is sent | 🪞 | PHP runs it before returning under mod_php (blocking the response ~3s). |
+| 34 | PY: `AttachmentDispatcher` import is wrapped in the same `try` as PHP's attachment block | 🪞 | Until Phase 2d ports it, the `ImportError` is swallowed and attachments are ignored. |
+| 35 | PY: `_handleVerification` / `_handleComparison` raise `NotImplementedError` until Phase 2d | 🪞 | A verification/compare-enabled request emits a humanized `error` SSE event plus an `error` usage row after the main answer, rather than a PHP-style verification section. |
+| 36 | PY: `llm_function_usage_stats` is never created by the Python backend | 🪞 | `UsageTracker.trackFunctionCall` is ported but unused; PHP would `CREATE TABLE` on first call. |
+| 37 | PY: `markHeadersInitialized` is declared on `StreamingClientInterface` | 🪞 | PHP declares it only on the concrete `SSEHubClient`. |
+| 38 | PY: client-tool name validation is stricter — Python's `$` does not match before a trailing `\n` | 🪞 deliberate deviation | A tool name like `"route_to\n"` is rejected where PHP's `preg_match` would pass it to the provider. |
+| 39 | PY: the 2048-byte client-tool description cap slices bytes and decodes with `errors='ignore'` | 🪞 deliberate deviation | PHP `substr` can emit a split multibyte char that `json_encode` then rejects. |
+| 40 | PY: streaming path returns `stop_reason` as `None` like PHP's `makeStreamingRequest` | 🪞 | The earlier plan test asserting `'tool_use'` was wrong. |
+| 41 | PY: `SseStream.end()` is called at the same point as PHP's `fastcgi_finish_request()` (inside the memory block, after usage logging) | 🪞 | When that block does not run, the stream is closed by `main.py`'s `finally`. |
 
 ## How items get verified
 Each fix is validated by **differential testing against the live PHP backend** (byte/semantic
