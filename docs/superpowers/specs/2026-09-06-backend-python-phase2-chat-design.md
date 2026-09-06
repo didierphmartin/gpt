@@ -19,7 +19,7 @@
 |---|-------|
 | 2a | Streaming bridge (`SseStream`, `main.py` race), `Db` reconnect + transactions, worker-pool config, contracts + exceptions, `Configuration`, models, `LLMProviderResolver`, `ToolsManager`, `PricingResolver`, `UsageLogger`, `UsageTracker`, `DebugLogger`, `SSEHubClient`, traits as mixins, `SearchFunctions`, `SessionSearchService`, `MCPToolsLoader`, `CombinedToolsExecutor`, `FilteredToolsExecutor`, memory (`UserMemoryRepository`, events + settings repos, `MemoryExtractor`, `MemoryAutoUpdater`), `ClaudeProvider`, `LLMManager`, `AIPortfolioAssistant`, `ChatController` (`chat` + `handleStreamingChat` + `handleRegularChat` + config appliers + quota + sanitizers + skill tool builders, Claude only), SSE differential comparator |
 | 2b | `OpenAIProvider`, `GrokProvider`, `KimiProvider`, `DeepSeekProvider`, `GeminiProvider`, `CustomProvider`, `ProviderRequestFactory` |
-| 2c | `Functions/{Analysis, Portfolio, Watchlist, MetalsNews}Functions`, `AgentDelegationFunctions` (names), `ProviderController` |
+| 2c | `Functions/{Analysis, Portfolio, Watchlist}Functions` (`MetalsNewsFunctions` deleted 2026-09-06: it was commented out in PHP in favour of the Metals News MCP server), `AgentDelegationFunctions` (names), `ProviderController` |
 | 2d | Client tools + `SkillToolBridge`/`SkillToolChoice`, `ChatAttachmentController` + `AttachmentDispatcher`, `verify` / `compareOnly` / `handleVerification` / `handleComparison`, `agent`, `TracesController` + `ExecutionTraceStore`, `UrlFetchController` |
 
 ## 3. Streaming architecture (decision: thread-to-queue bridge)

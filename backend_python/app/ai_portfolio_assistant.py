@@ -414,13 +414,3 @@ class AIPortfolioAssistant:
         searchFunctions = SearchFunctions(self.config)
         self._searchFunctions = searchFunctions  # kept for close() (Python-only addition)
         self.toolsManager.registerFunctions(searchFunctions.getAllFunctions())
-
-        # PubMed functions disabled - using MCP server instead (pubmed_search, pubmed_build_query, pubmed_mesh_suggestions)
-
-        # Battery news functions disabled - using MCP server instead (battery_news_get_all, battery_news_search)
-
-        # Metals News functions disabled - using MCP server instead (get_all_metals_news, search_metals_news)
-
-        # Crypto News functions disabled - using MCP server instead (llm_get_crypto_news, llm_list_crypto_sources, llm_get_news_by_source, llm_get_priority_crypto_news)
-
-        # Financial News functions disabled - using MCP server instead (get_financial_news, list_financial_news_sources)

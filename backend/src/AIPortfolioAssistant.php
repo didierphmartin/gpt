@@ -10,7 +10,6 @@ use Quantis\AIPortfolioAssistant\Contracts\AIProviderInterface;
 use Quantis\AIPortfolioAssistant\Contracts\StreamingClientInterface;
 use Quantis\AIPortfolioAssistant\Functions\AnalysisFunctions;
 use Quantis\AIPortfolioAssistant\Functions\PortfolioFunctions;
-use Quantis\AIPortfolioAssistant\Functions\MetalsNewsFunctions;
 use Quantis\AIPortfolioAssistant\Functions\SearchFunctions;
 use Quantis\AIPortfolioAssistant\Functions\WatchlistFunctions;
 use Quantis\AIPortfolioAssistant\Models\Conversation;
@@ -528,17 +527,5 @@ class AIPortfolioAssistant
     {
         $searchFunctions = new SearchFunctions($this->config);
         $this->toolsManager->registerFunctions($searchFunctions->getAllFunctions());
-
-        // PubMed functions disabled - using MCP server instead (pubmed_search, pubmed_build_query, pubmed_mesh_suggestions)
-
-        // Battery news functions disabled - using MCP server instead (battery_news_get_all, battery_news_search)
-
-        // Metals News functions disabled - using MCP server instead (get_all_metals_news, search_metals_news)
-        // $metalsNewsFunctions = new MetalsNewsFunctions($this->config);
-        // $this->toolsManager->registerFunctions($metalsNewsFunctions->getAllFunctions());
-
-        // Crypto News functions disabled - using MCP server instead (llm_get_crypto_news, llm_list_crypto_sources, llm_get_news_by_source, llm_get_priority_crypto_news)
-
-        // Financial News functions disabled - using MCP server instead (get_financial_news, list_financial_news_sources)
     }
 }

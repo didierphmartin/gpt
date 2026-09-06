@@ -43,11 +43,6 @@ return [
     // these services are now provided by external MCP servers (/pubmed, /battery,
     // /cryptos, /finance in xampp/htdocs).
 
-    // Metals News Service Configuration
-    'metals_news' => [
-        'service_url' => 'http://localhost/metals/public',
-    ],
-
 
     // Financial Data APIs
     'financial' => [

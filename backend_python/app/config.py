@@ -67,7 +67,6 @@ def load_config(env_file: str | None = '__default__') -> dict:
             'brave': {'api_key': _e('BRAVE_KEY'), 'base_url': 'https://api.search.brave.com/res/v1',
                       'max_results': 20},
         },
-        'metals_news': {'service_url': 'http://localhost/metals/public'},
         'financial': {'fmp': {'api_key': _e('FMP_KEY'),
                               'base_url': 'https://financialmodelingprep.com/api/v3'}},
         'sse': {'enabled': True, 'hub_url': None},
