@@ -1,22 +1,35 @@
 """Port of Controllers/ChatController.php.
 
-This module (Task 8 of Phase 2a) carries the constructor, helpers, config
-appliers, quota check, and the LLM-facing tool builders (lines 36-686 and
-2711-3102 of the PHP source). The public flow methods (`chat`, `agent`,
-`verify`, `compareOnly`, `handleStreamingChat`, `handleVerification`,
-`handleComparison`, `handleRegularChat`) are added by Task 9 — see the
-section marker near the bottom of this file.
+Task 8 of Phase 2a brought the constructor, helpers, config appliers, quota
+check, and the LLM-facing tool builders (lines 36-686 and 2711-3102 of the PHP
+source). Task 9 adds the request flows — `chat` (PHP 686-942),
+`_handleStreamingChat` (PHP 1499-2091) and `_handleRegularChat` (PHP
+2360-2711). `agent`, `verify`, `compareOnly`, `_handleVerification` and
+`_handleComparison` land in Phase 2d.
 """
 from __future__ import annotations
 
 import copy
+import os
 import re
+import time
 
+from app.ai_portfolio_assistant import AIPortfolioAssistant
+from app.agent_team.services.memory_auto_updater import MemoryAutoUpdater
+from app.agent_team.services.session_search_service import SessionSearchService
+from app.agent_team.services.user_memory_repository import UserMemoryRepository
+from app.exceptions import ProviderException
+from app.services.combined_tools_executor import CombinedToolsExecutor
+from app.services.filtered_tools_executor import FilteredToolsExecutor
+from app.services.mcp_tools_loader import MCPToolsLoader
 from app.services.package_resolver import PackageResolver
 from app.services.llm_provider_resolver import LLMProviderResolver
+from app.services.sse_hub_client import SSEHubClient
+from app.services.usage_logger import UsageLogger
 from app.support.crypto import aes256cbc_decrypt
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_crc32, php_empty, php_intval
+from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_empty, php_intval, php_uniqid
+from app.support.phpjson import dumps
 
 import base64
 import hashlib
@@ -934,10 +947,1197 @@ class ChatController:
         return LLMProviderResolver.applyDbSettings(self.db, config)
 
     # ------------------------------------------------------------------
-    # Section marker: public flow methods (chat, agent, verify,
-    # compareOnly, handleStreamingChat, handleVerification,
-    # handleComparison, handleRegularChat) land in Task 9.
+    # Request flows — chat() and its two handlers.
+    # `agent()`, `verify()` and `compareOnly()` land in Phase 2d.
     # ------------------------------------------------------------------
+
+    def chat(self, request: dict) -> dict:
+        input_ = request['body']
+
+        # App-key auth is scope-gated: an `ak_` key must explicitly carry the
+        # `chat` scope to use this endpoint. JWT users and per-user `uak_` keys
+        # (auth_type !== 'app_key') are unrestricted and skip this check.
+        if request.get('auth_type') == 'app_key':
+            scopes = request.get('app_key_scopes')
+            if scopes is None:
+                scopes = []
+            if 'chat' not in _arr_values(scopes):
+                return {
+                    'success': False,
+                    'error': 'App key not authorized for chat (missing scope "chat")',
+                    'status_code': 403,
+                }
+
+        message = input_.get('message') if input_.get('message') is not None else ''
+        conversationHistory = self.stripVisualNoiseFromHistory(
+            input_.get('conversation_history') if input_.get('conversation_history') is not None else []
+        )
+        # Streaming is opt-in. The caller decides per request whether
+        # it wants progressive UI; if it doesn't ask, it doesn't get a
+        # stream. Default `false` enforces the rule that streaming is a
+        # UX feature owned by the call site, not a transport-layer
+        # default the backend silently provides. Skill / tool-arg /
+        # structured-output turns must NOT pass `streaming: true` —
+        # they have nothing to render progressively.
+        streaming = input_.get('streaming') if input_.get('streaming') is not None else False
+        skillContent = input_['skill_content'].strip() if isinstance(input_.get('skill_content'), str) else ''
+
+        # skill_metadata is sent by the frontend when a folder-backed skill
+        # with executable Python scripts is EXPLICITLY ACTIVE (chip override).
+        # Shape: { dir_name: 'html', scripts: ['scripts/create.py', ...] }.
+        # When present we force tool_choice → run_skill_script so the model
+        # commits to using that one skill.
+        skillMetadata = self.sanitizeSkillMetadata(input_.get('skill_metadata'))
+
+        # available_skills is sent on every turn when the user has any
+        # folder-backed local skills installed. The model is shown each
+        # skill's description and picks one based on intent (matching how
+        # MCP tools are routed). No tool_choice forcing — the model can
+        # also choose NOT to call run_skill_script if the request doesn't
+        # map to a skill.
+        #
+        # Shape: [{dir_name, description, scripts}, ...].
+        # If skill_metadata is also set (chip override), it wins and the
+        # multi-skill auto-routing path is skipped for this turn.
+        availableSkills = self.sanitizeAvailableSkills(input_.get('available_skills'))
+
+        # Per-request client-side tools (e.g. webMCP tools from the active
+        # browser tab). The frontend sends these so the LLM can call them.
+        # The backend declares them to the LLM alongside built-in + MCP tools
+        # and short-circuits dispatch via the existing client_tool_call SSE
+        # event when one is picked.
+        clientTools = self.sanitizeClientTools(input_.get('client_tools'))
+        clientToolNames = [t['name'] for t in clientTools]
+        error_log("[ChatController] client_tools count: " + str(len(clientTools))
+                  + ((' [' + ','.join(clientToolNames) + ']') if clientToolNames else ''))
+
+        # DIAGNOSTIC: log what the frontend actually sent for skill routing.
+        # When the auto-routing path silently disappears (controller logs
+        # "No skill_metadata or available_skills" despite skills being
+        # enabled in Settings), this tells us WHICH layer is at fault:
+        #   - rawAvailableSkills empty → frontend never sent it
+        #   - rawAvailableSkills populated, sanitized empty → sanitizer rejecting it
+        #   - both populated → bug is downstream
+        rawAvail = input_.get('available_skills')
+        error_log("[ChatController] skill routing input — "
+                  + "skill_metadata: " + ('null' if php_empty(input_.get('skill_metadata')) else 'present')
+                  + " | available_skills raw: " + (f"array({len(rawAvail)})" if isinstance(rawAvail, (dict, list)) else _php_gettype(rawAvail))
+                  + " | available_skills sanitized: " + str(len(availableSkills))
+                  + ((" [" + ','.join(s['dir_name'] for s in availableSkills) + "]") if len(availableSkills) > 0 else '')
+                  + ((" | RAW SAMPLE: " + dumps(_idx0(rawAvail))[:200])
+                     if isinstance(rawAvail, (dict, list)) and not php_empty(rawAvail) and len(availableSkills) == 0 else ''))
+
+        # Debug: Log conversation history received from frontend (post-strip,
+        # so SVG blobs don't bloat the log).
+        error_log("[ChatController] Received conversation_history count: " + str(len(conversationHistory)))
+        if not php_empty(conversationHistory):
+            error_log("[ChatController] First history entry: " + dumps(
+                conversationHistory[0] if len(conversationHistory) > 0 else 'none'))
+            # PHP: end($conversationHistory) ?: 'none' — a falsy last entry becomes 'none'.
+            last_entry = conversationHistory[len(conversationHistory) - 1]
+            error_log("[ChatController] Last history entry: " + dumps(
+                last_entry if not php_empty(last_entry) else 'none'))
+
+        userId = str(input_.get('user_id') if input_.get('user_id') is not None
+                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+        provider = input_.get('provider')
+
+        # Debug: Log the provider being requested
+        error_log("[ChatController] Provider from request: " + (str(provider) if provider is not None else 'null (will use default)'))
+
+        # Verification parameters
+        verificationEnabled = input_.get('verification_enabled') if input_.get('verification_enabled') is not None else False
+        verifierProvider = input_.get('verifier_provider')
+
+        # Compare parameters
+        compareEnabled = input_.get('compare_enabled') if input_.get('compare_enabled') is not None else False
+        compareProvider = input_.get('compare_provider')
+
+        # Optional custom system prompt override. API-driven frontends (e.g. the
+        # AI-Dialog app, where two models converse with each other) can supply
+        # their own system prompt to replace the default portfolio-assistant
+        # persona. When absent, providers fall back to the default prompt — so
+        # this is fully backward-compatible with the main app, which never sends it.
+        systemPromptOverride = input_['system_prompt'].strip() if isinstance(input_.get('system_prompt'), str) else None
+        if systemPromptOverride == '':
+            systemPromptOverride = None
+
+        # Optional 'memory' flag. Defaults to true → the user's frozen memory
+        # (Hermes Layer 1) is injected into the system prompt as it is today.
+        # API-driven callers (e.g. AI-Dialog) can send memory:false so the two
+        # models converse without the user's personal memory leaking in. Absent
+        # → true, so the main app is unaffected.
+        includeMemory = php_bool(input_['memory']) if 'memory' in input_ else True
+
+        # Tool filtering: optional array of tool names to use (null = all tools)
+        toolsFilter = input_.get('tools')
+        if toolsFilter is not None and not isinstance(toolsFilter, (dict, list)):
+            return {
+                'success': False,
+                'error': 'tools must be an array of tool names',
+                'status_code': 400,
+            }
+
+        # Per-node overrides from the workflow agent form. When present they WIN over
+        # the provider-config defaults (system_llm_settings). Null = use provider default.
+        maxTokensOverride = php_intval(input_['max_tokens']) if is_numeric(input_.get('max_tokens')) else None
+        temperatureOverride = float(input_['temperature']) if is_numeric(input_.get('temperature')) else None
+
+        # Attachment ids uploaded earlier via /chat/upload. Loaded here, text
+        # is extracted (PDF via smalot/pdfparser, plain text read verbatim) and
+        # prepended to the user message so every provider receives the document
+        # content as part of the prompt. Native per-provider PDF/image dispatch
+        # is a follow-up phase; this is the universal fallback that ships value
+        # on day one.
+        attachmentIds = input_.get('attachment_ids') if input_.get('attachment_ids') is not None else []
+        if not isinstance(attachmentIds, (dict, list)):
+            attachmentIds = []
+        imageAttachments = []
+        pdfAttachments = []
+        if not php_empty(attachmentIds) and is_numeric(userId):
+            try:
+                # Phase 2a: AttachmentDispatcher lands in 2d. The import sits inside
+                # the try so its ImportError is swallowed exactly like PHP swallows a
+                # dispatcher failure in its own `catch (Exception $e)`.
+                from app.services.attachment_dispatcher import AttachmentDispatcher
+                dispatcher = AttachmentDispatcher(self.db)
+                # Pass the active provider so the dispatcher can route PDFs to
+                # native dispatch on Claude/Gemini and fall back to text
+                # extraction elsewhere.
+                #
+                # skillModeActive: when a folder-backed skill is in play
+                # (chip-dragged → skill_metadata; or auto-routing →
+                # non-empty available_skills), the script reads the file
+                # from /scratch/ directly. We tell the dispatcher to emit a
+                # short reference instead of inlining the full text, saving
+                # tens of thousands of input tokens per turn and giving the
+                # model a clean signal to call the skill rather than to
+                # respond inline against the duplicated source material.
+                skillModeActive = (skillMetadata is not None) or not php_empty(availableSkills)
+                built = dispatcher.buildPrefix(attachmentIds, php_intval(userId), provider, skillModeActive)
+                if built['prefix'] != '':
+                    message = built['prefix'] + message
+                if not php_empty(built.get('image_attachments')):
+                    imageAttachments = built['image_attachments']
+                if not php_empty(built.get('pdf_attachments')):
+                    pdfAttachments = built['pdf_attachments']
+                if not php_empty(built.get('notes')):
+                    error_log('[ChatController] Attachment notes: ' + ' | '.join(built['notes']))
+            except Exception as e:  # noqa: BLE001
+                error_log('[ChatController] Attachment dispatch failed: ' + str(e))
+
+        # Empty message is allowed for B3 client-tool continuations: the
+        # frontend re-issues /chat with `message: ''` and the tool_result
+        # already at the tail of conversation_history. Anything else with
+        # an empty message is a client bug and we still 400.
+        isToolResultContinuation = (
+            message == ''
+            and not php_empty(conversationHistory)
+            and _arr_get(conversationHistory[len(conversationHistory) - 1], 'role', '') == 'tool'
+        )
+        if php_empty(message) and not isToolResultContinuation:
+            return {
+                'success': False,
+                'error': 'Message is required',
+                'status_code': 400,
+            }
+
+        # Check free trial quota
+        quotaCheck = self._checkFreeTrialQuota(userId)
+        if quotaCheck is not None:
+            return quotaCheck
+
+        # For streaming responses, we handle output directly
+        if streaming:
+            return self._handleStreamingChat(
+                request,
+                message,
+                conversationHistory,
+                userId,
+                provider,
+                verificationEnabled,
+                verifierProvider,
+                compareEnabled,
+                compareProvider,
+                toolsFilter,
+                imageAttachments,
+                pdfAttachments,
+                skillContent,
+                skillMetadata,
+                availableSkills,
+                clientTools,
+                clientToolNames,
+                systemPromptOverride,
+                includeMemory,
+                not php_empty(input_.get('return_context')),
+            )
+
+        # Non-streaming response
+        return self._handleRegularChat(
+            request,
+            message,
+            conversationHistory,
+            userId,
+            provider,
+            toolsFilter,
+            imageAttachments,
+            pdfAttachments,
+            skillContent,
+            skillMetadata,
+            availableSkills,
+            clientTools,
+            clientToolNames,
+            systemPromptOverride,
+            includeMemory,
+            maxTokensOverride,
+            temperatureOverride,
+            not php_empty(input_.get('return_context')),
+        )
+
+    # ------------------------------------------------------------------
+    # Streaming chat (PHP handleStreamingChat, lines 1499-2091)
+    # ------------------------------------------------------------------
+
+    def _handleStreamingChat(
+        self,
+        request: dict,                       # deviation: PHP reads $sendEvent from globals; we take the request for its SSE stream
+        message: str,
+        conversationHistory: list,
+        userId: str,
+        provider: str | None,
+        verificationEnabled: bool,
+        verifierProvider: str | None,
+        compareEnabled: bool,
+        compareProvider: str | None,
+        toolsFilter: list | None = None,
+        imageAttachments: list | None = None,
+        pdfAttachments: list | None = None,
+        skillContent: str = '',
+        skillMetadata: dict | None = None,
+        availableSkills: list | None = None,
+        clientTools: list | None = None,
+        clientToolNames: list | None = None,
+        systemPromptOverride: str | None = None,
+        includeMemory: bool = True,
+        returnContext: bool = False,
+    ) -> dict:
+        imageAttachments = imageAttachments if imageAttachments is not None else []
+        pdfAttachments = pdfAttachments if pdfAttachments is not None else []
+        availableSkills = availableSkills if availableSkills is not None else []
+        clientTools = clientTools if clientTools is not None else []
+        clientToolNames = clientToolNames if clientToolNames is not None else []
+
+        # PHP: set_time_limit(600) — no equivalent (no per-request CPU limit here).
+
+        # Debug: Log provider being used for streaming
+        error_log("[ChatController] handleStreamingChat provider: " + (str(provider) if provider is not None else 'null'))
+
+        # Apply database provider settings first (overrides hardcoded config)
+        config = self._applyDatabaseProviderSettings(self.config)
+
+        # Then the user's role-based package (sits below user overrides)
+        config = self._applyPackageDefaults(config, userId)
+
+        # Then apply user's custom API keys (user keys override everything)
+        config = self._applyUserApiKeys(config, userId, provider)
+        assistant = AIPortfolioAssistant(config)
+
+        # Initialize usage logger
+        usageLogger = None
+        try:
+            usageLogger = UsageLogger(self.db, True, config.get('contexts_database') if config.get('contexts_database') is not None else config.get('database'))
+        except Exception as e:  # noqa: BLE001
+            error_log("[ChatController] Usage logger unavailable: " + str(e))
+
+        # Register session_search (Hermes Layer 3) on the chat's ToolsManager.
+        # Scoped to the current user via a closure capture; idempotent if the
+        # request handler runs multiple executor setups. Fails silently when
+        # the contexts_database isn't reachable — chat continues without the tool.
+        if is_numeric(userId):
+            SessionSearchService.registerAsTool(
+                assistant.getToolsManager(),
+                php_intval(userId),
+                config,
+            )
+
+        # Load MCP tools. A workflow node's selection is an exact allow-list:
+        # when it names no mcp_* tool, skip the (remote-DB) MCP load entirely —
+        # the definitions would be filtered out anyway.
+        mcpToolsLoader = None
+        snapshotExecutor = assistant.getToolsManager()  # what the Context view reports as offered tools
+        wantsMcp = toolsFilter is None or [t for t in _arr_values(toolsFilter) if str(t).startswith('mcp_')] != []
+        try:
+            if wantsMcp:
+                error_log(f"[ChatController] Loading MCP tools for user: {userId}")
+                mcpToolsLoader = MCPToolsLoader(self.db)
+                mcpToolsLoader.loadToolsForUser(userId)
+                error_log("[ChatController] MCP hasTools: " + ('yes' if mcpToolsLoader.hasTools() else 'no'))
+            else:
+                error_log("[MCP] Skipped MCP load: node selected no MCP tools")
+
+            # NB: the filter must still be applied when MCP is skipped —
+            # otherwise the providers keep their default executor and every
+            # basic function is offered (seen in the Context tab, 2026-09-02).
+            if mcpToolsLoader and mcpToolsLoader.hasTools():
+                mcpTools = mcpToolsLoader.getTools()
+                error_log("[MCP] Loaded " + str(len(mcpTools)) + f" MCP tools for user: {userId}")
+
+                # Create combined executor with base tools + MCP tools
+                baseToolsManager = assistant.getToolsManager()
+                combinedExecutor = CombinedToolsExecutor(baseToolsManager, mcpToolsLoader)
+
+                # Wrap with FilteredToolsExecutor if tools filter is specified
+                executor = combinedExecutor
+                if toolsFilter is not None:
+                    filteredExecutor = FilteredToolsExecutor(combinedExecutor)
+                    filteredExecutor.setAllowedTools(toolsFilter)
+                    executor = filteredExecutor
+                    error_log("[ChatController] Tool filter applied: " + ', '.join(str(t) for t in _arr_values(toolsFilter)))
+
+                # Set executor on all providers
+                llmManager = assistant.getLLMManager()
+                for providerName in self._getEnabledProviderKeys():
+                    providerInstance = llmManager.getProvider(providerName)
+                    if providerInstance and hasattr(providerInstance, 'setFunctionExecutor'):
+                        providerInstance.setFunctionExecutor(executor)
+            elif toolsFilter is not None:
+                # No MCP tools but filter is specified - filter base tools only
+                baseToolsManager = assistant.getToolsManager()
+                filteredExecutor = FilteredToolsExecutor(baseToolsManager)
+                filteredExecutor.setAllowedTools(toolsFilter)
+                error_log("[ChatController] Tool filter applied (base tools only): " + ', '.join(str(t) for t in _arr_values(toolsFilter)))
+
+                llmManager = assistant.getLLMManager()
+                for providerName in self._getEnabledProviderKeys():
+                    providerInstance = llmManager.getProvider(providerName)
+                    if providerInstance and hasattr(providerInstance, 'setFunctionExecutor'):
+                        providerInstance.setFunctionExecutor(filteredExecutor)
+        except Exception as e:  # noqa: BLE001
+            error_log("[MCP] Failed to load MCP tools: " + str(e))
+
+        # Track request start time
+        startTime = time.time()
+
+        # SSE headers / output buffering / ignore_user_abort are handled by
+        # main.py's StreamingResponse bridge (spec §3).
+        sse = request['sse']
+        # ContextVar set INSIDE the request thread — run_in_executor does not
+        # propagate the caller's context, so SSEHubClient (used by the provider)
+        # would otherwise see no stream.
+        SSEHubClient.current_stream.set(sse)
+
+        # SSE event sender - detects client disconnect and throws to abort upstream LLM call
+        sendEvent = sse.send
+
+        try:
+            # Generate session ID
+            sessionId = php_uniqid('chat_', True)
+
+            # Make streaming chat request
+            options = {'provider': provider} if provider else {}
+
+            # Debug: Log final options being sent
+            error_log("[ChatController] streamChat options: " + dumps(options))
+
+            # Tool selection. The base case is "all available tools" —
+            # MCP servers + run_skill_script when a skill is active. But
+            # for B3 skill turns (folder-backed skill + scripts) we
+            # suppress the MCP tools entirely: the user's intent is
+            # self-contained ("transform this with skill X"), MCP tools
+            # are noise, and 30+ tool definitions add ~6-12K input
+            # tokens that the model has to read on every shot. Cutting
+            # them roughly halves the per-turn latency for big-input
+            # skill flows.
+            if skillMetadata is not None:
+                skillTool = self.buildRunSkillScriptTool(skillMetadata)
+                taskTool = self.buildTaskTool()
+                options['tools'] = [skillTool, taskTool]
+                options['skill_metadata'] = skillMetadata
+
+                # Force tool use when this is unambiguously a skill turn:
+                # a folder-backed skill is active AND no run_skill_script
+                # result has happened yet in this conversation. Some
+                # models (notably DeepSeek-v4) hallucinate "tool not
+                # available" and bail to manual transformation; forcing
+                # tool_choice eliminates that escape hatch. Once a
+                # run_skill_script result exists in history (i.e. we're
+                # on the third shot, summarizing the actual file the
+                # script wrote), we revert to 'auto' so the model can
+                # write text.
+                #
+                # discover_skill rounds DO NOT count as a prior tool
+                # round here. discover_skill is just SKILL.md retrieval —
+                # the real work hasn't happened yet, and turn 2 (after
+                # discover) is precisely when we MUST force the
+                # run_skill_script call. Counting it would break
+                # auto-routing's chip-equivalence by reverting to 'auto'
+                # exactly when the LLM most needs to be pinned down.
+                hasPriorRunSkillScript = False
+                for h in conversationHistory:
+                    if _arr_get(h, 'role', '') == 'tool' and _arr_get(h, 'name', '') == 'run_skill_script':
+                        hasPriorRunSkillScript = True
+                        break
+                    if _arr_get(h, 'role', '') == 'assistant' and not php_empty(_arr_get(h, 'tool_calls', None)):
+                        for tc in h['tool_calls']:
+                            tcName = _arr_get(_arr_get(tc, 'function', {}) or {}, 'name', None)
+                            if tcName is None:
+                                tcName = _arr_get(tc, 'name', '')
+                            if tcName == 'run_skill_script':
+                                hasPriorRunSkillScript = True
+                                break                 # PHP: break 2
+                        if hasPriorRunSkillScript:
+                            break
+
+                if not hasPriorRunSkillScript:
+                    # Tool_choice forcing form depends on the provider's
+                    # behaviour in OpenAI-compatible API land:
+                    #
+                    #   - Specific-function form ({type:'function',
+                    #     function:{name}}): strictest, picks THIS tool.
+                    #     Honored by Claude, OpenAI, Gemini.
+                    #   - Bare string 'required': forces SOME tool call
+                    #     but lets the model pick. Some OpenAI-compatible
+                    #     providers (Grok, DeepSeek) honor 'required'
+                    #     reliably while silently ignoring the specific-
+                    #     function form — empirical observation, the
+                    #     model just bails to text.
+                    #
+                    # In single-skill mode there's exactly ONE tool
+                    # declared (run_skill_script with skill-specific
+                    # schema), so 'required' is functionally equivalent
+                    # to the specific-function form: the model has only
+                    # one tool to pick. Using 'required' for the known-
+                    # problematic providers gets us through their broken
+                    # forcing logic while losing nothing.
+                    providerName = str(options.get('provider') if options.get('provider') is not None
+                                       else (provider if provider is not None else '')).lower()
+                    useRequiredForm = providerName in ('grok', 'deepseek')
+                    if useRequiredForm:
+                        options['tool_choice'] = 'required'
+                    else:
+                        options['tool_choice'] = {
+                            'type': 'function',
+                            'function': {'name': 'run_skill_script'},
+                        }
+
+                error_log("🔧 [ChatController] Skill turn — only run_skill_script declared (MCP suppressed). Skill: "
+                          + skillMetadata['dir_name']
+                          + " | tool_choice: " + dumps(options.get('tool_choice') if options.get('tool_choice') is not None else 'auto')
+                          + " | hasPriorRunSkillScript: " + ('1' if hasPriorRunSkillScript else '0'))
+            elif not php_empty(availableSkills):
+                # Phase 6 multi-skill auto-routing: the model sees a pair
+                # of skill tools (discover_skill + run_skill_script) plus
+                # the catalog of frontmatter descriptions in run_skill_script's
+                # description. Progressive disclosure: the model picks a
+                # dir_name from the catalog, calls discover_skill to load
+                # the full SKILL.md body for that skill, then calls
+                # run_skill_script with the correct shape derived from the
+                # body. Without discover_skill the model has only the
+                # frontmatter description and has to guess the input shape
+                # — which fails for skills with non-standard contracts
+                # (e.g. html/create.py expects a complete HTML document
+                # inline, not the JSON spec convention used by other
+                # create-style scripts).
+                #
+                # MCP tools coexist — the user might ask "search the web
+                # AND make me a doc" and the model uses both.
+                skillTool = self.buildMultiSkillTool(availableSkills)
+                discoverTool = self.buildDiscoverSkillTool(availableSkills)
+                tools = [discoverTool, skillTool]
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    tools = tools + mcpToolsLoader.getToolDefinitions()
+                options['tools'] = tools
+                options['available_skills'] = availableSkills
+
+                # Narrow tool_choice forcing for the multi-skill path:
+                # ONLY force run_skill_script when (a) this turn isn't a
+                # tool-result continuation, (b) the user actually attached
+                # a document on this turn, and (c) the prompt contains a
+                # deliverable verb. The double-gate keeps casual chat,
+                # analysis-of-attachments, and MCP-tool flows untouched
+                # while still closing the "Claude inlines HTML when asked
+                # to fix/edit/replace something in an attached doc"
+                # failure mode that motivated the heuristic.
+                isContinuation = False
+                if not php_empty(conversationHistory):
+                    last = conversationHistory[len(conversationHistory) - 1]
+                    if isinstance(last, (dict, list)) and _arr_get(last, 'role', '') == 'tool':
+                        isContinuation = True
+                # Attachment marker is the prefix the frontend's Phase 3
+                # converter prepends to outgoingMessage before send.
+                hasAttachment = '[The user attached the following document(s)' in message
+                promptTail = mb_substr(message, max(0, len(message) - 600))
+                deliverableSignal = bool(re.search(
+                    r'\b(create|generate|make|build|produce|edit|update|replace|fix|correct|swap|change|modify|revise)\b'
+                    r'|in the (document|file)\b|attached (html|document|file)',
+                    promptTail, re.I,
+                ))
+                # Auto-routing: when conditions warrant a skill invocation,
+                # force the FIRST tool call to be discover_skill rather than
+                # run_skill_script. The flow is then guaranteed:
+                #   1. Claude calls discover_skill(dir_name)
+                #   2. Frontend returns SKILL.md body + promotes the skill
+                #      to chip-equivalent in the follow-up request body
+                #      (skill_content + skill_metadata)
+                #   3. Backend's $skillMetadata branch fires on turn 2,
+                #      forcing tool_choice to run_skill_script with the
+                #      single-skill schema — identical to drag-and-drop
+                #   4. Claude calls run_skill_script per the now-binding
+                #      SKILL.md contract in the system prompt
+                #
+                # Forcing discover_skill (not run_skill_script) on turn 1
+                # is what makes the auto-routing path produce the same
+                # file as the chip-dragged path: it eliminates the
+                # failure mode where Claude jumps straight to
+                # run_skill_script with a guessed input shape.
+                if not isContinuation and hasAttachment and deliverableSignal:
+                    options['tool_choice'] = {
+                        'type': 'function',
+                        'function': {'name': 'discover_skill'},
+                    }
+
+                error_log("🔧 [ChatController] Multi-skill auto-routing — "
+                          + str(len(availableSkills)) + " skill(s) declared alongside MCP tools. Skills: "
+                          + ', '.join(s['dir_name'] for s in availableSkills)
+                          + " | tool_choice: " + dumps(options.get('tool_choice') if options.get('tool_choice') is not None else 'auto')
+                          + " | hasAttachment: " + ('1' if hasAttachment else '0')
+                          + " | deliverableSignal: " + ('1' if deliverableSignal else '0')
+                          + " | isContinuation: " + ('1' if isContinuation else '0'))
+            else:
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    options['tools'] = mcpToolsLoader.getToolDefinitions()
+                error_log("🔧 [ChatController] No skill_metadata or available_skills — not declaring run_skill_script.")
+
+            # Append user's frozen memory (Hermes Layer 1) to the system prompt.
+            # Providers read options['memory_context'] and append it after their
+            # default or custom system prompt. Skipped when the caller sends
+            # memory:false (e.g. AI-Dialog, so personal memory doesn't leak in).
+            if includeMemory and is_numeric(userId):
+                memBlock = UserMemoryRepository.buildMemoryBlock(self.db, php_intval(userId))
+                if memBlock != '':
+                    options['memory_context'] = memBlock
+
+            # Active Skill from the Skills Library (dragged onto prompt input)
+            if skillContent != '':
+                options['skill_content'] = skillContent
+
+            # Custom system prompt override (API-driven callers, e.g. AI-Dialog).
+            # Replaces the default persona; providers read options['system_prompt'].
+            if systemPromptOverride is not None:
+                options['system_prompt'] = systemPromptOverride
+
+            # Image attachments (base64 + mime). Providers embed in native shape.
+            if not php_empty(imageAttachments):
+                options['image_attachments'] = imageAttachments
+
+            # PDF attachments — only populated when the active provider can
+            # ingest PDFs natively (Claude, Gemini). Other providers received
+            # the document as text in the message prefix already.
+            if not php_empty(pdfAttachments):
+                options['pdf_attachments'] = pdfAttachments
+
+            # Client-side tools from the active browser tab (webMCP). Providers
+            # (modified in Tasks 4-9) read these keys and call
+            # setPerRequestClientSideToolNames() on themselves before the LLM call.
+            options['client_tools'] = clientTools
+            options['client_tool_names'] = clientToolNames
+            # Workflow nodes: exact allow-list enforced at the assistant's tool merge.
+            if toolsFilter is not None:
+                options['tools_filter'] = toolsFilter
+
+            response = assistant.streamChat(message, sessionId, userId, conversationHistory, options)
+
+            # Calculate response time
+            responseTimeMs = int((time.time() - startTime) * 1000)
+
+            # Send main response
+            responseData = {
+                'success': True,
+                'text': response['text'],
+                'usage': response.get('usage') if response.get('usage') is not None else [],
+                'provider': response.get('provider_used') if response.get('provider_used') is not None else 'claude',
+            }
+
+            # B3: when the LLM invoked a client-side tool, the provider
+            # already emitted a `client_tool_call` SSE event from inside
+            # its tool-use handler and short-circuited. Forward the flag
+            # here so the frontend dispatcher knows to run the tool and
+            # re-issue /chat with the tool_result prepended, rather than
+            # closing out the assistant turn.
+            if not php_empty(response.get('pending_client_tool_call')):
+                responseData['pending_client_tool_call'] = True
+                responseData['pending_tool_calls'] = response.get('pending_tool_calls') if response.get('pending_tool_calls') is not None else []
+
+            # Conversations' View Context asks for what was actually sent
+            # (system prompt, memory, skill, tools, messages) — same snapshot
+            # the workflow node modal's Context tab uses.
+            if returnContext:
+                pKey = str(provider if provider is not None
+                           else (responseData.get('provider') if responseData.get('provider') is not None else 'claude'))
+                pCfg = _first_array(config.get(pKey), (config.get('providers') or {}).get(pKey) if isinstance(config.get('providers'), dict) else None, {})
+                effectiveSystemPrompt = options.get('system_prompt') if options.get('system_prompt') is not None else str(pCfg.get('system_prompt') if pCfg.get('system_prompt') is not None else '')
+                responseData['context'] = self.buildLlmContextSnapshot(
+                    pKey,
+                    str(pCfg['model']) if pCfg.get('model') is not None and pCfg['model'] != '' else None,
+                    # PHP array union: leftmost key wins.
+                    {**{'max_tokens': pCfg.get('max_tokens'), 'temperature': pCfg.get('temperature')},
+                     **options, 'system_prompt': effectiveSystemPrompt},
+                    options['tools'] if options.get('tools') is not None else (snapshotExecutor.getToolDefinitions() if snapshotExecutor else []),
+                    conversationHistory,
+                    message,
+                )
+
+            sendEvent('response', responseData)
+
+            # B3: when the LLM short-circuited with a client-side tool call,
+            # the assistant turn isn't actually finished — the frontend
+            # will dispatch the tool and re-issue /chat. Verifier and
+            # compare are turn-level concerns, so they run on the *real*
+            # continuation, not on the empty placeholder text we just
+            # emitted. Skip them and skip the 'complete' marker too —
+            # the second-shot will emit its own.
+            isPendingClientTool = not php_empty(response.get('pending_client_tool_call'))
+
+            # Phase 2: Verification
+            if not isPendingClientTool and verificationEnabled and verifierProvider and verifierProvider != provider:
+                self._handleVerification(
+                    assistant,
+                    sendEvent,
+                    message,
+                    response['text'],
+                    verifierProvider,
+                    mcpToolsLoader,
+                    usageLogger,
+                    userId,
+                    startTime,
+                    responseTimeMs,
+                )
+
+            # Phase 3: Compare
+            if not isPendingClientTool and compareEnabled and compareProvider and compareProvider != provider:
+                self._handleComparison(
+                    assistant,
+                    sendEvent,
+                    message,
+                    conversationHistory,
+                    compareProvider,
+                    mcpToolsLoader,
+                    usageLogger,
+                    userId,
+                    startTime,
+                    responseTimeMs,
+                    skillMetadata,
+                    availableSkills,
+                    skillContent,
+                    imageAttachments,
+                    pdfAttachments,
+                )
+
+            sendEvent('complete', {'status': 'done'})
+
+            # PHP's fastcgi_finish_request() equivalent: close the SSE body so
+            # the client is done before the usage/memory tail runs.
+            sse.end()
+
+            # Log usage
+            if usageLogger and response.get('usage') is not None:
+                usage = response['usage']
+
+                # Debug: Log exactly what tool calls are being recorded
+                funcCalled = response.get('functions_called') if response.get('functions_called') is not None else []
+                mcpCalled = response.get('mcp_tools_called') if response.get('mcp_tools_called') is not None else []
+                error_log("📋 [ChatController] About to log - functions_called: " + dumps(funcCalled) + ", mcp_tools_called: " + dumps(mcpCalled))
+
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId) if is_numeric(userId) else None,
+                    'session_id': sessionId,
+                    'provider': response.get('provider_used') if response.get('provider_used') is not None else 'claude',
+                    'model': response.get('model') if response.get('model') is not None else 'unknown',
+                    'prompt_tokens': _coalesce(_arr_get(usage, 'input_tokens'), _arr_get(usage, 'prompt_tokens'), 0),
+                    'completion_tokens': _coalesce(_arr_get(usage, 'output_tokens'), _arr_get(usage, 'completion_tokens'), 0),
+                    'response_time_ms': responseTimeMs,
+                    'status': 'success',
+                    'function_calls_count': _coalesce(_arr_get(usage, 'function_calls'), response.get('function_calls_count'), 0),
+                    'functions_called': response.get('functions_called'),
+                    'mcp_calls_count': response.get('mcp_calls_count') if response.get('mcp_calls_count') is not None else 0,
+                    'mcp_tools_called': response.get('mcp_tools_called'),
+                })
+
+            # Post-response tail: run the memory auto-updater after the client
+            # has received everything. Failures here must never affect the user.
+            # Workflow nodes send memory=false: no memory injection AND no
+            # post-response extraction (that extra Claude call blocked the
+            # response ~3s under mod_php, where fastcgi_finish_request is absent).
+            if includeMemory and is_numeric(userId) and not php_empty(response.get('text')):
+                try:
+                    # $config (local) is the DB-merged copy from
+                    # applyDatabaseProviderSettings(). The Claude API key
+                    # moved to system_llm_settings, so $this->config no
+                    # longer has it — reading from $this->config here
+                    # gave an empty key and silently disabled memory
+                    # auto-extraction. Use the merged $config instead.
+                    apiKey = _claude_api_key(config)
+                    if apiKey != '':
+                        updater = MemoryAutoUpdater(self.db, apiKey)
+                        updater.run(php_intval(userId), sessionId, str(message), str(response['text']))
+                    else:
+                        error_log('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env')
+                except Exception as e:  # noqa: BLE001
+                    error_log('[ChatController] MemoryAutoUpdater failed: ' + str(e))
+
+        except Exception as e:  # noqa: BLE001
+            # Client disconnected - silently cancel. No error event (client is gone anyway),
+            # no error log spam. The upstream LLM connection closes automatically.
+            #
+            # Deviation: PHP has two catch blocks — `catch (\RuntimeException)` which
+            # rethrows anything that isn't CLIENT_ABORTED, then `catch (Exception)`.
+            # A rethrown RuntimeException escapes to index.php AFTER the SSE headers
+            # were sent, i.e. it produces no usable output. Python's ProviderException
+            # hierarchy plus the RuntimeError used for aborts makes the single block
+            # the faithful-in-effect form: CLIENT_ABORTED first, everything else
+            # through the generic handler.
+            if isinstance(e, RuntimeError) and str(e) == 'CLIENT_ABORTED':
+                error_log("[ChatController] Client aborted, upstream LLM call cancelled")
+                if usageLogger and is_numeric(userId):
+                    responseTimeMs = int((time.time() - startTime) * 1000)
+                    usageLogger.logTransaction({
+                        'user_id': php_intval(userId),
+                        'provider': provider if provider is not None else 'claude',
+                        'model': 'unknown',
+                        'prompt_tokens': 0,
+                        'completion_tokens': 0,
+                        'response_time_ms': responseTimeMs,
+                        'status': 'aborted',
+                        'error_message': 'Cancelled by user',
+                    })
+                return {
+                    'streaming_handled': True,
+                    'status_code': 200,
+                }
+
+            responseTimeMs = int((time.time() - startTime) * 1000)
+
+            if usageLogger and is_numeric(userId):
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId),
+                    'provider': provider if provider is not None else 'claude',
+                    'model': 'unknown',
+                    'prompt_tokens': 0,
+                    'completion_tokens': 0,
+                    'response_time_ms': responseTimeMs,
+                    'status': 'error',
+                    'error_message': str(e),
+                })
+
+            try:
+                sendEvent('error', {'message': self.humanizeProviderError(str(e))})
+            except RuntimeError as abort:      # the client vanished mid-error
+                if str(abort) != 'CLIENT_ABORTED':
+                    raise
+
+        # Return special marker indicating streaming was handled
+        return {
+            'streaming_handled': True,
+            'status_code': 200,
+        }
+
+    def _handleVerification(self, *args, **kwargs):
+        """PHP handleVerification — pending Phase 2d. Only reachable when a request
+        enables verification (`verification_enabled` + a different verifier provider)."""
+        raise NotImplementedError('pending 2d')
+
+    def _handleComparison(self, *args, **kwargs):
+        """PHP handleComparison — pending Phase 2d. Only reachable when a request
+        enables compare (`compare_enabled` + a different compare provider)."""
+        raise NotImplementedError('pending 2d')
+
+    # ------------------------------------------------------------------
+    # Regular (non-streaming) chat (PHP handleRegularChat, lines 2360-2711)
+    # ------------------------------------------------------------------
+
+    def _handleRegularChat(
+        self,
+        request: dict,                       # deviation: carries the `_after_response` hook (PHP: register_shutdown_function)
+        message: str,
+        conversationHistory: list,
+        userId: str,
+        provider: str | None,
+        toolsFilter: list | None = None,
+        imageAttachments: list | None = None,
+        pdfAttachments: list | None = None,
+        skillContent: str = '',
+        skillMetadata: dict | None = None,
+        availableSkills: list | None = None,
+        clientTools: list | None = None,
+        clientToolNames: list | None = None,
+        systemPromptOverride: str | None = None,
+        includeMemory: bool = True,
+        maxTokensOverride: int | None = None,
+        temperatureOverride: float | None = None,
+        returnContext: bool = False,
+    ) -> dict:
+        imageAttachments = imageAttachments if imageAttachments is not None else []
+        pdfAttachments = pdfAttachments if pdfAttachments is not None else []
+        availableSkills = availableSkills if availableSkills is not None else []
+        clientTools = clientTools if clientTools is not None else []
+        clientToolNames = clientToolNames if clientToolNames is not None else []
+
+        # Apply database provider settings first (overrides hardcoded config)
+        config = self._applyDatabaseProviderSettings(self.config)
+
+        # Then the user's role-based package (sits below user overrides)
+        config = self._applyPackageDefaults(config, userId)
+
+        # Then apply user's custom API keys (user keys override everything)
+        config = self._applyUserApiKeys(config, userId, provider)
+
+        # Per-node overrides from the workflow agent form win over the provider-config
+        # defaults. Write into the provider's config block at its actual location — root
+        # ($config[$provider]) for claude/openai, nested ($config['providers'][$provider])
+        # for the rest — matching LLMProviderResolver so the provider ctor reads them.
+        if (maxTokensOverride is not None or temperatureOverride is not None) and provider:
+            if isinstance(config.get(provider), (dict, list)):
+                if maxTokensOverride is not None:
+                    config[provider]['max_tokens'] = maxTokensOverride
+                if temperatureOverride is not None:
+                    config[provider]['temperature'] = temperatureOverride
+            elif isinstance(config.get('providers'), dict) and isinstance(config['providers'].get(provider), (dict, list)):
+                if maxTokensOverride is not None:
+                    config['providers'][provider]['max_tokens'] = maxTokensOverride
+                if temperatureOverride is not None:
+                    config['providers'][provider]['temperature'] = temperatureOverride
+
+        assistant = AIPortfolioAssistant(config)
+
+        # Initialize usage logger
+        usageLogger = None
+        try:
+            usageLogger = UsageLogger(self.db, True, config.get('contexts_database') if config.get('contexts_database') is not None else config.get('database'))
+        except Exception as e:  # noqa: BLE001
+            error_log("[ChatController] Usage logger unavailable: " + str(e))
+
+        # Register session_search (Hermes Layer 3) on this request's ToolsManager.
+        if is_numeric(userId):
+            SessionSearchService.registerAsTool(
+                assistant.getToolsManager(),
+                php_intval(userId),
+                config,
+            )
+
+        # Load MCP tools. A workflow node's selection is an exact allow-list:
+        # when it names no mcp_* tool, skip the (remote-DB) MCP load entirely.
+        mcpToolsLoader = None
+        snapshotExecutor = assistant.getToolsManager()  # what the Context tab reports as offered tools
+        wantsMcp = toolsFilter is None or [t for t in _arr_values(toolsFilter) if str(t).startswith('mcp_')] != []
+        try:
+            if wantsMcp:
+                mcpToolsLoader = MCPToolsLoader(self.db)
+                mcpToolsLoader.loadToolsForUser(userId)
+            else:
+                error_log("[MCP] Skipped MCP load: node selected no MCP tools")
+
+            # The filter must still be applied when MCP is skipped (see the
+            # streaming twin above).
+            if mcpToolsLoader and mcpToolsLoader.hasTools():
+                baseToolsManager = assistant.getToolsManager()
+                combinedExecutor = CombinedToolsExecutor(baseToolsManager, mcpToolsLoader)
+
+                # Wrap with FilteredToolsExecutor if tools filter is specified
+                executor = combinedExecutor
+                if toolsFilter is not None:
+                    filteredExecutor = FilteredToolsExecutor(combinedExecutor)
+                    filteredExecutor.setAllowedTools(toolsFilter)
+                    executor = filteredExecutor
+                    error_log("[ChatController] Tool filter applied: " + ', '.join(str(t) for t in _arr_values(toolsFilter)))
+                snapshotExecutor = executor
+
+                llmManager = assistant.getLLMManager()
+                for providerName in self._getEnabledProviderKeys():
+                    providerInstance = llmManager.getProvider(providerName)
+                    if providerInstance and hasattr(providerInstance, 'setFunctionExecutor'):
+                        providerInstance.setFunctionExecutor(executor)
+            elif toolsFilter is not None:
+                # No MCP tools but filter is specified - filter base tools only
+                baseToolsManager = assistant.getToolsManager()
+                filteredExecutor = FilteredToolsExecutor(baseToolsManager)
+                filteredExecutor.setAllowedTools(toolsFilter)
+                snapshotExecutor = filteredExecutor
+
+                llmManager = assistant.getLLMManager()
+                for providerName in self._getEnabledProviderKeys():
+                    providerInstance = llmManager.getProvider(providerName)
+                    if providerInstance and hasattr(providerInstance, 'setFunctionExecutor'):
+                        providerInstance.setFunctionExecutor(filteredExecutor)
+        except Exception as e:  # noqa: BLE001
+            error_log("[MCP] Failed to load MCP tools: " + str(e))
+
+        startTime = time.time()
+
+        try:
+            options = {'provider': provider} if provider else {}
+
+            # Tool selection — same policy as the streaming path. For
+            # B3 skill turns we suppress MCP tools to keep the input
+            # small and the model's decision space narrow, and force
+            # tool_choice when no tool round has run yet.
+            if skillMetadata is not None:
+                skillTool = self.buildRunSkillScriptTool(skillMetadata)
+                taskTool = self.buildTaskTool()
+                options['tools'] = [skillTool, taskTool]
+                options['skill_metadata'] = skillMetadata
+
+                hasPriorToolRound = False
+                for h in conversationHistory:
+                    if _arr_get(h, 'role', '') == 'tool':
+                        hasPriorToolRound = True
+                        break
+                    if _arr_get(h, 'role', '') == 'assistant' and not php_empty(_arr_get(h, 'tool_calls', None)):
+                        hasPriorToolRound = True
+                        break
+                if not hasPriorToolRound:
+                    options['tool_choice'] = {
+                        'type': 'function',
+                        'function': {'name': 'run_skill_script'},
+                    }
+            elif not php_empty(availableSkills):
+                skillTool = self.buildMultiSkillTool(availableSkills)
+                tools = [skillTool]
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    tools = tools + mcpToolsLoader.getToolDefinitions()
+                options['tools'] = tools
+                options['available_skills'] = availableSkills
+            else:
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    options['tools'] = mcpToolsLoader.getToolDefinitions()
+
+            # Append user's frozen memory (Hermes Layer 1) to the system prompt.
+            # Skipped when the caller sends memory:false (e.g. AI-Dialog).
+            if includeMemory and is_numeric(userId):
+                memBlock = UserMemoryRepository.buildMemoryBlock(self.db, php_intval(userId))
+                if memBlock != '':
+                    options['memory_context'] = memBlock
+
+            # Active Skill from the Skills Library (dragged onto prompt input)
+            if skillContent != '':
+                options['skill_content'] = skillContent
+
+            # Custom system prompt override (API-driven callers, e.g. AI-Dialog).
+            # Replaces the default persona; providers read options['system_prompt'].
+            if systemPromptOverride is not None:
+                options['system_prompt'] = systemPromptOverride
+
+            # Image attachments (base64 + mime). Providers embed in native shape.
+            if not php_empty(imageAttachments):
+                options['image_attachments'] = imageAttachments
+
+            # PDF attachments — only populated when the active provider can
+            # ingest PDFs natively (Claude, Gemini). Other providers received
+            # the document as text in the message prefix already.
+            if not php_empty(pdfAttachments):
+                options['pdf_attachments'] = pdfAttachments
+
+            # Client-side tools from the active browser tab (webMCP). Providers
+            # (modified in Tasks 4-9) read these keys and call
+            # setPerRequestClientSideToolNames() on themselves before the LLM call.
+            options['client_tools'] = clientTools
+            options['client_tool_names'] = clientToolNames
+            # Workflow nodes: exact allow-list enforced at the assistant's tool merge.
+            if toolsFilter is not None:
+                options['tools_filter'] = toolsFilter
+
+            response = assistant.chat(message, userId, conversationHistory, options)
+
+            responseTimeMs = int((time.time() - startTime) * 1000)
+
+            # Log usage
+            if usageLogger and response.get('usage') is not None:
+                usage = response['usage']
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId) if is_numeric(userId) else None,
+                    'provider': response.get('provider_used') if response.get('provider_used') is not None else 'claude',
+                    'model': response.get('model') if response.get('model') is not None else 'unknown',
+                    'prompt_tokens': _coalesce(_arr_get(usage, 'input_tokens'), _arr_get(usage, 'prompt_tokens'), 0),
+                    'completion_tokens': _coalesce(_arr_get(usage, 'output_tokens'), _arr_get(usage, 'completion_tokens'), 0),
+                    'response_time_ms': responseTimeMs,
+                    'status': 'success',
+                    'function_calls_count': _coalesce(_arr_get(usage, 'function_calls'), response.get('function_calls_count'), 0),
+                    'functions_called': response.get('functions_called'),
+                    'mcp_calls_count': response.get('mcp_calls_count') if response.get('mcp_calls_count') is not None else 0,
+                    'mcp_tools_called': response.get('mcp_tools_called'),
+                })
+
+            # Register the memory auto-updater on shutdown so it runs after PHP
+            # has written the response body. Failures must never affect the user.
+            # Workflow nodes send memory=false: no memory injection AND no
+            # post-response extraction (that extra Claude call blocked the
+            # response ~3s under mod_php, where fastcgi_finish_request is absent).
+            #
+            # Deviation (recorded): there is no register_shutdown_function here.
+            # The callable is handed to main.py via request['_after_response'],
+            # which runs it right BEFORE the response is written — the client
+            # pays the extra latency PHP avoids with fastcgi_finish_request.
+            if includeMemory and is_numeric(userId) and not php_empty(response.get('text')):
+                dbRef = self.db
+                # Capture the DB-merged config (local $config), NOT
+                # $this->config — the Claude API key now lives in
+                # system_llm_settings and is only present after
+                # applyDatabaseProviderSettings(). See the matching note
+                # in the non-streaming path.
+                configRef = config
+                msgRef = str(message)
+                uidRef = php_intval(userId)
+                sidRef = php_uniqid('chat_', True)   # PHP: $sessionId ?? uniqid(...) — $sessionId is never set here
+                textRef = str(response['text'])
+
+                def _after_response() -> None:
+                    try:
+                        apiKey = _claude_api_key(configRef)
+                        if apiKey != '':
+                            updater = MemoryAutoUpdater(dbRef, apiKey)
+                            updater.run(uidRef, sidRef, msgRef, textRef)
+                        else:
+                            error_log('[ChatController] MemoryAutoUpdater skipped (streaming): no Claude API key in merged config or ANTHROPIC_API_KEY env')
+                    except Exception as e:  # noqa: BLE001
+                        error_log('[ChatController] MemoryAutoUpdater failed: ' + str(e))
+
+                request['_after_response'] = _after_response
+
+            payload = {
+                'success': True,
+                'text': response['text'],
+                'usage': response.get('usage') if response.get('usage') is not None else [],
+                'provider': _coalesce(response.get('provider'), response.get('provider_used'), 'claude'),
+                'status_code': 200,
+            }
+
+            # Surface client-side tool dispatch flags so the frontend
+            # dispatcher can run pyodide and re-issue /chat with the
+            # tool result. Same shape the streaming path emits in its
+            # `response` SSE event — keeps frontend dispatch logic
+            # identical regardless of streaming mode.
+            if not php_empty(response.get('pending_client_tool_call')):
+                payload['pending_client_tool_call'] = True
+                payload['pending_tool_calls'] = response.get('pending_tool_calls') if response.get('pending_tool_calls') is not None else []
+                if response.get('assistant_text') is not None and response['assistant_text'] != '':
+                    payload['assistant_text'] = response['assistant_text']
+                if not php_empty(response.get('assistant_reasoning')):
+                    payload['assistant_reasoning'] = response['assistant_reasoning']
+
+            # Workflow nodes ask for the context they sent (Context tab).
+            if returnContext:
+                pKey = str(provider if provider is not None
+                           else (payload.get('provider') if payload.get('provider') is not None else 'claude'))
+                pCfg = _first_array(config.get(pKey), (config.get('providers') or {}).get(pKey) if isinstance(config.get('providers'), dict) else None, {})
+                # No override → the provider uses its configured persona; report that, not ''.
+                effectiveSystemPrompt = options.get('system_prompt') if options.get('system_prompt') is not None else str(pCfg.get('system_prompt') if pCfg.get('system_prompt') is not None else '')
+                payload['context'] = self.buildLlmContextSnapshot(
+                    pKey,
+                    str(pCfg['model']) if pCfg.get('model') is not None and pCfg['model'] != '' else None,
+                    # PHP array union: leftmost key wins.
+                    {**{'max_tokens': pCfg.get('max_tokens'), 'temperature': pCfg.get('temperature')},
+                     **options, 'system_prompt': effectiveSystemPrompt},
+                    options['tools'] if options.get('tools') is not None else (snapshotExecutor.getToolDefinitions() if snapshotExecutor else []),
+                    conversationHistory,
+                    message,
+                )
+
+            return payload
+
+        except Exception as e:  # noqa: BLE001
+            responseTimeMs = int((time.time() - startTime) * 1000)
+
+            if usageLogger and is_numeric(userId):
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId),
+                    'provider': provider if provider is not None else 'claude',
+                    'model': 'unknown',
+                    'prompt_tokens': 0,
+                    'completion_tokens': 0,
+                    'response_time_ms': responseTimeMs,
+                    'status': 'error',
+                    'error_message': str(e),
+                })
+
+            # Surface the REAL cause, not a blanket 500. ProviderException already
+            # carries the true HTTP status (429 rate limit, 401 auth, 400 billing,
+            # 5xx overload); use it so the client can distinguish "retry", "fix key",
+            # "top up credits", etc. humanizeProviderError turns the raw provider text
+            # into a categorized, user-readable message (and redacts any leaked keys).
+            statusCode = e.getHttpStatusCode() if (isinstance(e, ProviderException) and e.getHttpStatusCode()) else 500
+            return {
+                'success': False,
+                'error': self.humanizeProviderError(str(e)),
+                'status_code': statusCode,
+            }
+
+
+def _php_gettype(v) -> str:
+    """PHP gettype() for the values the skill-routing diagnostic can see."""
+    if v is None:
+        return 'NULL'
+    if isinstance(v, bool):
+        return 'boolean'
+    if isinstance(v, int):
+        return 'integer'
+    if isinstance(v, float):
+        return 'double'
+    if isinstance(v, str):
+        return 'string'
+    if isinstance(v, (dict, list)):
+        return 'array'
+    return 'object'
+
+
+def _arr_get(container, key: str, default=None):
+    """PHP `$x['k'] ?? d` on a value that may not be an array at all."""
+    if isinstance(container, dict):
+        v = container.get(key)
+        return v if v is not None else default
+    return default
+
+
+def _idx0(v):
+    """PHP `$a[0] ?? null` — a JSON object decoded to a dict has no key 0."""
+    if isinstance(v, list):
+        return v[0] if len(v) > 0 else None
+    if isinstance(v, dict):
+        return v.get(0)
+    return None
+
+
+def _arr_values(v):
+    """PHP arrays iterate values whether they are lists or maps."""
+    if isinstance(v, dict):
+        return list(v.values())
+    if isinstance(v, list):
+        return v
+    return []
+
+
+def _coalesce(*values):
+    """PHP `$a ?? $b ?? $c` — the first non-null value."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
+def _first_array(*candidates):
+    """PHP `$a['x'] ?? $a['y']['x'] ?? []` where each candidate is an array or missing."""
+    for c in candidates:
+        if c is not None:
+            return c if isinstance(c, dict) else {}
+    return {}
+
+
+def _claude_api_key(config: dict) -> str:
+    """PHP: (string) ($config['claude']['api_key'] ?? getenv('ANTHROPIC_API_KEY') ?: '')
+    — `??` binds tighter than `?:`, so a falsy resolved value collapses to ''."""
+    claude = config.get('claude')
+    key = claude.get('api_key') if isinstance(claude, dict) else None
+    if key is None:
+        key = os.environ.get('ANTHROPIC_API_KEY')
+    return '' if php_empty(key) else str(key)
 
 
 def _blen(s: str) -> int:

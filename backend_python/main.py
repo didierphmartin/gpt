@@ -98,6 +98,16 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
                 if sse.started:
                     return None                     # streaming path: response already produced
                 resp = render(result)
+                # PHP's register_shutdown_function + fastcgi_finish_request tail
+                # (ChatController's memory auto-updater). mod_php has no way to
+                # flush first here, so the callable runs BEFORE the response is
+                # written — the client pays the extra latency. Never fatal.
+                after = ctx.get('_after_response')
+                if callable(after):
+                    try:
+                        after()
+                    except Exception as e:  # noqa: BLE001
+                        error_log(f'[Backend] after-response hook failed: {e}')
                 return with_cors(resp if resp is not None else Response(status_code=200))
             except Exception as e:  # noqa: BLE001
                 error_log(f'[Backend] Controller error: {e}\n{traceback.format_exc()}')

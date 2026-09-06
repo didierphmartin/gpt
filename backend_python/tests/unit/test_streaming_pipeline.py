@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 ABORT_ERRORS = []
+AFTER_RESPONSE = []
 
 
 class StreamCtl:
@@ -32,6 +33,14 @@ class StreamCtl:
         # streaming_handled but the controller never called sse.send()/end() — the
         # non-streaming fallback path in main.py must still render a real response.
         return {'streaming_handled': True}
+    def after(self, request):
+        # PHP: register_shutdown_function(...) — the port hands main.py a callable.
+        request['_after_response'] = lambda: AFTER_RESPONSE.append(1)
+        return {'success': True, 'status_code': 200}
+    def after_boom(self, request):
+        def boom(): raise RuntimeError('tail exploded')
+        request['_after_response'] = boom
+        return {'success': True, 'status_code': 200}
     def slow(self, request):
         sse = request['sse']
         sse.send('progress', 'first')
@@ -46,7 +55,8 @@ class StreamCtl:
 
 ROUTES = [('POST', '/t/stream', ('StreamCtl', 'go')), ('POST', '/t/boom', ('StreamCtl', 'boom')),
           ('POST', '/t/upload', ('StreamCtl', 'upload')), ('POST', '/t/no-send', ('StreamCtl', 'no_send')),
-          ('POST', '/t/slow', ('StreamCtl', 'slow'))]
+          ('POST', '/t/slow', ('StreamCtl', 'slow')), ('POST', '/t/after', ('StreamCtl', 'after')),
+          ('POST', '/t/after-boom', ('StreamCtl', 'after_boom'))]
 
 
 @pytest.fixture(scope='module')
@@ -99,6 +109,18 @@ def test_multipart_repeated_field_cleans_up_all_temp_files(app_client, config):
     assert r.status_code == 200
     after = set(glob.glob(os.path.join(tmp_dir, 'php_upload_*')))
     assert after - before == set()   # both temp files removed, including the one the dict-collision orphaned
+
+
+def test_after_response_hook_runs_for_non_streaming_requests(app_client, config):
+    AFTER_RESPONSE.clear()
+    r = app_client.post('/t/after', json={}, headers=_auth(config))
+    assert r.status_code == 200 and r.json() == {'success': True}
+    assert AFTER_RESPONSE == [1]
+
+
+def test_after_response_hook_failure_never_breaks_the_response(app_client, config):
+    r = app_client.post('/t/after-boom', json={}, headers=_auth(config))
+    assert r.status_code == 200 and r.json() == {'success': True}
 
 
 def test_non_stream_route_unaffected(client):
