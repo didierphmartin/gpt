@@ -65,6 +65,7 @@ class ProviderController:
                 # Load MCP tools and merge with built-in functions.
                 # The package-based allowlist limits tools to servers the caller's
                 # role is permitted to see.
+                mcpLoader = None
                 try:
                     mcpLoader = MCPToolsLoader(self.db)
                     mcpAllowlist = PackageResolver(self.db).allowedMcpServers(
@@ -78,6 +79,16 @@ class ProviderController:
                 except Exception as e:  # noqa: BLE001
                     # Log but don't fail if MCP loading fails
                     error_log("ProviderController: Failed to load MCP tools: " + str(e))
+                finally:
+                    # Python-only: PHP has no equivalent — Guzzle clients die
+                    # with the request. Guarded on construction: the
+                    # MCPToolsLoader(...) call itself can be what raised.
+                    # Same idiom as chat_controller.py:1764/2112.
+                    if mcpLoader is not None:
+                        try:
+                            mcpLoader.close()
+                        except Exception as closeErr:  # noqa: BLE001
+                            error_log("ProviderController: mcpLoader.close() failed: " + str(closeErr))
 
                 # Add delegation tools (for agent teams feature)
                 delegationTools = AgentDelegationFunctions.getToolNames()

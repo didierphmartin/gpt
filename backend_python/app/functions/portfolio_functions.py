@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from app.support.phpcompat import php_intval
+from app.support.phpcompat import php_empty, php_intval, php_strval
 
 
 class PortfolioFunctions:
@@ -96,7 +96,7 @@ class PortfolioFunctions:
 
     def getPortfolios(self, params: dict, userId) -> dict:
         """Get all portfolios for a user."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -116,7 +116,7 @@ class PortfolioFunctions:
 
     def getPortfolioAssetsWithDiscovery(self, params: dict, userId) -> dict:
         """Get portfolio assets with auto-discovery of default portfolio."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -186,7 +186,7 @@ class PortfolioFunctions:
 
     def getPortfolioDiversification(self, params: dict, userId) -> dict:
         """Get portfolio diversification analysis."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -234,7 +234,7 @@ class PortfolioFunctions:
 
     def getAllTransactions(self, params: dict, userId) -> dict:
         """Get all transactions with pagination."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -250,7 +250,7 @@ class PortfolioFunctions:
             # the controller).
             sortCandidate = params.get('sort') if params.get('sort') is not None else 'date'
             sort = sortCandidate if sortCandidate in ['date', 'amount', 'type'] else 'date'
-            order = 'ASC' if (params.get('order') if params.get('order') is not None else 'DESC').upper() == 'ASC' else 'DESC'
+            order = 'ASC' if php_strval(params.get('order') if params.get('order') is not None else 'DESC').upper() == 'ASC' else 'DESC'
 
             # Get transactions
             transactions = self.pdo.fetch_all(

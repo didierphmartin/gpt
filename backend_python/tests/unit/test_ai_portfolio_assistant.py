@@ -138,3 +138,28 @@ def test_set_database_registers_portfolio_watchlist_analysis_functions_in_php_or
     finally:
         a.close()
     assert a._analysisFunctions.httpClient.is_closed
+
+
+def test_repeated_set_database_closes_previous_analysis_functions():
+    # Minor #5 (final review): setDatabase() -> _registerDatabaseFunctions()
+    # builds a fresh AnalysisFunctions (and its httpx.Client) every call;
+    # calling setDatabase() twice must close the FIRST one instead of just
+    # overwriting self._analysisFunctions and leaking its connection pool.
+    class Db:
+        def fetch_all(self, *a): return []
+        def fetch_one(self, *a): return None
+        def fetch_column(self, *a): return []
+        def execute(self, *a): return 1
+        def insert(self, *a): return 1
+    a = AIPortfolioAssistant({'claude': {'api_key': 'K'}, 'tracking': {'enabled': False}})
+    try:
+        a.setDatabase(Db())
+        first = a._analysisFunctions
+        assert first.httpClient.is_closed is False
+        a.setDatabase(Db())
+        second = a._analysisFunctions
+        assert second is not first
+        assert first.httpClient.is_closed is True          # the leaked one is now closed
+        assert second.httpClient.is_closed is False         # the current one stays open
+    finally:
+        a.close()

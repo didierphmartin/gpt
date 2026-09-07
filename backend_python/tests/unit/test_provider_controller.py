@@ -45,10 +45,12 @@ def quiet(monkeypatch):
         def allowedMcpServers(self, uid): return None
     monkeypatch.setattr('app.controllers.provider_controller.PackageResolver', PR)
     class ML:
+        closed = []
         def __init__(self, db): pass
         def loadToolsForUser(self, uid, allow): return {}
         def hasTools(self): return False
         def getTools(self): return {}
+        def close(self): ML.closed.append(True)
     monkeypatch.setattr('app.controllers.provider_controller.MCPToolsLoader', ML)
 
 
@@ -71,8 +73,9 @@ def test_list_shape_types_and_key_order(quiet):
 def test_list_without_user_keys_and_without_user(quiet):
     r = ProviderController(Db(keys=()), CFG).list(ctx())
     assert r['user_has_custom_keys'] is False and r['user_enabled_providers'] == [] and all(p['user_has_key'] is False for p in r['providers'])
-    r2 = ProviderController(Db(), CFG).list(ctx(user_id=None))
-    assert r2['user_has_custom_keys'] is False and 'FROM user_api_keys' not in ' '.join(s for s, _ in Db().calls)
+    db2 = Db()
+    r2 = ProviderController(db2, CFG).list(ctx(user_id=None))
+    assert r2['user_has_custom_keys'] is False and 'FROM user_api_keys' not in ' '.join(s for s, _ in db2.calls)
 
 
 def test_package_allowlist_filters_and_mcp_tools_are_appended(quiet, monkeypatch):
@@ -82,15 +85,18 @@ def test_package_allowlist_filters_and_mcp_tools_are_appended(quiet, monkeypatch
         def allowedMcpServers(self, uid): return ['S']
     monkeypatch.setattr('app.controllers.provider_controller.PackageResolver', PR)
     class ML:
+        closed = []
         def __init__(self, db): self.seen = None
         def loadToolsForUser(self, uid, allow): ML.seen = (uid, allow); return {}
         def hasTools(self): return True
         def getTools(self): return {'mcp_a': {}, 'mcp_b': {}}
+        def close(self): ML.closed.append(True)
     monkeypatch.setattr('app.controllers.provider_controller.MCPToolsLoader', ML)
     r = ProviderController(Db(), CFG).list(ctx())
     assert [p['name'] for p in r['providers']] == ['kimi']
     assert ML.seen == (None, ['S'])
     assert r['functions'][-5:] == ['mcp_a', 'mcp_b', 'delegate_to_agent', 'list_available_agents', 'run_agents_parallel']
+    assert ML.closed == [True]                                        # Minor #3: mcpLoader.close() was called
 
 
 def test_list_falls_back_to_assistant_providers_when_table_empty(quiet):
@@ -106,6 +112,23 @@ def test_mcp_failure_is_logged_not_fatal(quiet, monkeypatch):
     monkeypatch.setattr('app.controllers.provider_controller.MCPToolsLoader', Boom)
     r = ProviderController(Db(), CFG).list(ctx())
     assert r['success'] is True and r['functions'][-3:] == ['delegate_to_agent', 'list_available_agents', 'run_agents_parallel']
+
+
+def test_mcp_loader_closed_even_when_load_raises_after_construction(quiet, monkeypatch):
+    # Minor #3 (final review): MCPToolsLoader is constructed inside the try
+    # block; loadToolsForUser() can raise after that succeeds, and close()
+    # must still run (finally), not just on the happy path.
+    closed = []
+    class ML:
+        def __init__(self, db): pass
+        def loadToolsForUser(self, uid, allow): raise RuntimeError('boom mid-load')
+        def hasTools(self): return False
+        def getTools(self): return {}
+        def close(self): closed.append(True)
+    monkeypatch.setattr('app.controllers.provider_controller.MCPToolsLoader', ML)
+    r = ProviderController(Db(), CFG).list(ctx())
+    assert r['success'] is True
+    assert closed == [True]
 
 
 def test_switch_paths(quiet):

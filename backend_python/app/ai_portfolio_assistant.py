@@ -413,6 +413,15 @@ class AIPortfolioAssistant:
         self.toolsManager.registerFunctions(watchlistFunctions.getAllFunctions())
 
         # Analysis functions
+        # Python-only: a repeated setDatabase() call reaches this every time
+        # and would otherwise overwrite self._analysisFunctions, leaking the
+        # previous instance's httpx.Client (PHP has no equivalent — Guzzle
+        # clients die with the request).
+        if self._analysisFunctions is not None:
+            try:
+                self._analysisFunctions.close()
+            except Exception as e:  # noqa: BLE001
+                error_log(f"[AIPortfolioAssistant] close() failed for previous AnalysisFunctions: {e}")
         analysisFunctions = AnalysisFunctions(self.config)
         self._analysisFunctions = analysisFunctions  # kept for close() (Python-only addition)
         self.toolsManager.registerFunctions(analysisFunctions.getAllFunctions())

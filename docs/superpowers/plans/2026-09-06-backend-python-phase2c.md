@@ -34,8 +34,8 @@ Same table as the Phase 2b plan (`docs/superpowers/plans/2026-09-06-backend-pyth
 | PHP | Python |
 |---|---|
 | `strtoupper($s)` | `s.upper()` |
-| `array_slice($a, 0, 10)` | `a[:10]` (guard: `a if isinstance(a, list) else []` where PHP would warn on a non-array) |
-| `$data[0] ?? []` | `data[0] if isinstance(data, list) and data else {}` |
+| `array_slice($a, 0, 10)` | list → `a[:10]`; dict (string-keyed array) → first 10 items preserving keys, `dict(list(a.items())[:10])`; anything else (e.g. `None` from invalid JSON) → `[]` |
+| `$data[0] ?? []` | `data[0] if isinstance(data, list) and data else []` (PHP's `[]` always JSON-encodes as `[]`, never `{}`) |
 | `(int)($params['limit'] ?? 50)` | `php_intval(params.get('limit') if params.get('limit') is not None else 50)` |
 | `in_array($x, $list)` (loose) / `in_array($x, $list, true)` | `x in list` (both — values here are strings) |
 | `array_values(array_filter($rows, fn))` | `[r for r in rows if fn(r)]` |

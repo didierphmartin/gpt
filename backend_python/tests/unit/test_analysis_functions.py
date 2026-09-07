@@ -64,9 +64,56 @@ def test_financial_ratios_price_targets_profile_shapes():
     assert ratios['success'] is True and ratios['symbol'] == 'AAPL'
     assert targets['success'] is True and targets['symbol'] == 'AAPL'
     assert profile['success'] is True and profile['symbol'] == 'AAPL' and profile['profile'] == {'companyName': 'Apple Inc.'}
+    # Important #1 (final review): pin the actual values, not just success/symbol.
+    assert ratios['ratios'] == {'peRatio': 30.1}
+    assert targets['price_targets'] == [{'priceTarget': 200}, {'priceTarget': 210}]
     assert any('apikey=FMP&limit=1' in u or 'limit=1&apikey=FMP' in u for u in seen)          # ratios query: apikey + limit=1
     assert any('symbol=AAPL' in u for u in seen)                                              # price targets pass symbol as a query param
 
 
 def test_asset_sentiment_is_static():
     assert _af(lambda r: None).getAssetSentiment({'symbol': 'tsla'}, 3) == {'success': True, 'symbol': 'TSLA', 'message': 'Sentiment analysis requires integration with news/social APIs'}
+
+
+def test_asset_sentiment_coerces_non_string_symbol_like_strtoupper():
+    # Minor #6 (final review): PHP `strtoupper()` coerces a non-string via
+    # (string) cast instead of raising; getAssetSentiment has no try/except
+    # so a bare `.upper()` on an int would escape as an uncaught exception.
+    assert _af(lambda r: None).getAssetSentiment({'symbol': 700}, 3) == {
+        'success': True,
+        'symbol': '700',
+        'message': 'Sentiment analysis requires integration with news/social APIs',
+    }
+
+
+def test_fmp_response_shapes_data_0_or_empty_list():
+    # Important #1 (final review): PHP `$data[0] ?? []` always encodes as `[]`
+    # (never `{}`) regardless of why the index is missing — empty list, an
+    # FMP error-object response, or invalid JSON (`data = None`).
+    for bad in ([], {'Error Message': 'Limit Reach'}, None):
+        af = _af(lambda r, bad=bad: httpx.Response(200, json=bad) if bad is not None else httpx.Response(200, text='not json'))
+        ratios = af.getFinancialRatios({'symbol': 'AAPL'}, 3)
+        assert ratios['ratios'] == [], f'ratios for data={bad!r}'
+        profile = af.getCompanyProfile({'symbol': 'AAPL'}, 3)
+        assert profile['profile'] == [], f'profile for data={bad!r}'
+
+
+def test_fmp_response_shapes_array_slice_preserves_dict_keys():
+    # Important #1 (final review): PHP `array_slice($data, 0, 10)` on a
+    # string-keyed array (FMP error-object response) preserves the keys
+    # instead of collapsing to `[]`; only a genuinely non-array/non-list
+    # decode (invalid JSON -> None) collapses to `[]`.
+    error_obj = {'Error Message': 'Limit Reach'}
+    af = _af(lambda r: httpx.Response(200, json=error_obj))
+    ratings = af.getAnalystRatings({'symbol': 'AAPL'}, 3)
+    assert ratings['ratings'] == error_obj
+    targets = af.getPriceTargets({'symbol': 'AAPL'}, 3)
+    assert targets['price_targets'] == error_obj
+
+    af2 = _af(lambda r: httpx.Response(200, text='not json'))
+    assert af2.getAnalystRatings({'symbol': 'AAPL'}, 3)['ratings'] == []
+    assert af2.getPriceTargets({'symbol': 'AAPL'}, 3)['price_targets'] == []
+
+    af3 = _af(lambda r: httpx.Response(200, json=[]))
+    assert af3.getAnalystRatings({'symbol': 'AAPL'}, 3)['ratings'] == []
+    assert af3.getPriceTargets({'symbol': 'AAPL'}, 3)['price_targets'] == []

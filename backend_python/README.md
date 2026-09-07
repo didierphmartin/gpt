@@ -51,7 +51,7 @@ does not stream (single `chunk`), exactly like PHP. `/api/v1/providers` and the 
 remain pending Phase 2c.
 
 Phase 2c (2026-09): `GET /api/v1/providers` (+ `POST /api/v1/providers`, `POST /api/v1/providers/switch`) with a
-byte-equal body to PHP (exact-JSON differential, user 3), so the frontend provider picker works on Python;
+JSON-equal body to PHP (exact-JSON differential, user 3), so the frontend provider picker works on Python;
 built-in `AnalysisFunctions` (FMP), `PortfolioFunctions` and `WatchlistFunctions` (registered by `setDatabase`,
 used by the agent-team paths in Phase 5), and the delegation tool names (`AgentDelegationFunctions.getToolNames`;
 handlers land in Phase 5). Verify/compare, attachments and the client-tool bridge remain pending Phase 2d.

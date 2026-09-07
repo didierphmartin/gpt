@@ -65,6 +65,28 @@ def test_all_transactions_defaults_sort_to_date_when_omitted():
     assert 'ORDER BY t.date DESC' in first_sql
 
 
+def test_userid_string_zero_is_treated_as_missing_like_php_empty():
+    # Important #2 (final review): userId reaches handlers as a client-supplied
+    # STRING. PHP `!'0'` is true (empty()), so PHP returns the guard error for
+    # userId='0'; a bare Python `not '0'` is False and would run the query with
+    # user_id '0' instead. All eight (PortfolioFunctions x4, WatchlistFunctions x4)
+    # guard sites must use php_empty(userId).
+    db = Db()
+    expected = {'error': 'Database connection or user ID not available'}
+    pf = PortfolioFunctions(db)
+    assert pf.getPortfolios({}, '0') == expected
+    assert pf.getPortfolioAssetsWithDiscovery({}, '0') == expected
+    assert pf.getPortfolioDiversification({}, '0') == expected
+    assert pf.getAllTransactions({}, '0') == expected
+    assert db.calls == []                                             # no SQL was issued
+    wf = WatchlistFunctions(db)
+    assert wf.getUserWatchlist({}, '0') == expected
+    assert wf.getWatchlistWithMarketData({}, '0') == expected
+    assert wf.addToWatchlist({'symbol': 'AAPL', 'name': 'Apple', 'type': 'stock'}, '0') == expected
+    assert wf.removeFromWatchlist({'symbol': 'AAPL'}, '0') == expected
+    assert db.calls == []
+
+
 def test_watchlist_registry_guards_and_get():
     wf = WatchlistFunctions()
     assert list(wf.getAllFunctions()) == ['get_user_watchlist', 'get_watchlist_with_market_data', 'add_to_watchlist', 'remove_from_watchlist']

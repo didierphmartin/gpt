@@ -4,7 +4,7 @@ Watchlist-related LLM functions.
 """
 from __future__ import annotations
 
-from app.support.phpcompat import is_numeric, php_empty
+from app.support.phpcompat import is_numeric, php_empty, php_strval
 
 
 def _php_loose_cmp(a, b) -> int:
@@ -126,7 +126,7 @@ class WatchlistFunctions:
 
     def getUserWatchlist(self, params: dict, userId) -> dict:
         """Get user watchlist."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -149,7 +149,7 @@ class WatchlistFunctions:
 
     def getWatchlistWithMarketData(self, params: dict, userId) -> dict:
         """Get watchlist with current market data."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
@@ -188,11 +188,11 @@ class WatchlistFunctions:
 
     def addToWatchlist(self, params: dict, userId) -> dict:
         """Add asset to watchlist."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
             name = params.get('name') if params.get('name') is not None else symbol
             type_ = params.get('type') if params.get('type') is not None else 'stock'
             exchange = params.get('exchange') if params.get('exchange') is not None else None
@@ -241,11 +241,11 @@ class WatchlistFunctions:
 
     def removeFromWatchlist(self, params: dict, userId) -> dict:
         """Remove asset from watchlist."""
-        if not self.pdo or not userId:
+        if not self.pdo or php_empty(userId):
             return {'error': 'Database connection or user ID not available'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
 
             if php_empty(symbol):
                 return {'error': 'Symbol is required'}

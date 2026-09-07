@@ -89,6 +89,7 @@ Last updated: 2026-09-06
 | 64 | PHP+PY: `MetalsNewsFunctions` deleted (it was commented out in PHP; Metals News is an MCP server) | ✅ | Owner rule 2026-09-06: commented-out functions are deleted in every implementation. |
 | 65 | PY: `get_all_transactions` defaults `sort` to `date` when omitted; PHP re-reads the undefined key (`PortfolioFunctions.php:281`) → `ORDER BY t.  DESC` → SQL error → `{"error": …}` | 🪞 deliberate deviation | PHP behavior is an accidental crash, not design (same precedent as row 26). PHP fix is the owner's call. |
 | 66 | PY: watchlist alert comparisons (`get_watchlist_with_market_data`) use a PHP-8 loose-comparison helper: numeric strings compare numerically, `NULL` prices compare as `''` (so `NULL <= alert` is true, `NULL >= alert` is false) | 🪞 | DECIMAL columns arrive as strings from PyMySQL; mirrors PHP's `>=`/`<=` on the same values. |
+| 67 | PY: `add_to_watchlist` returns `watchlist_id` as an int (`db.insert()`); PHP's `lastInsertId()` returns a string | 🪞 deliberate deviation | Owner-sanctioned (2026-09-06 final review): the plan's `lastInsertId()` → `db.insert(...)` porting rule types the return as an int; not worth widening every insert-id call site to `strval()` for this one JSON field. |
 
 ## How items get verified
 Each fix is validated by **differential testing against the live PHP backend** (byte/semantic

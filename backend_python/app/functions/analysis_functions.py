@@ -7,7 +7,29 @@ from __future__ import annotations
 import httpx
 
 from app.config_.configuration import Configuration
-from app.support.phpcompat import php_empty
+from app.providers._http import SHARED_SSL_CONTEXT
+from app.support.phpcompat import php_empty, php_strval
+
+
+def _php_first_or_empty(data):
+    """PHP `$data[0] ?? []`: a non-empty list yields its first element;
+    anything else — empty list, a decoded JSON object (e.g. FMP's
+    `{"Error Message": ...}`), or `None` from invalid JSON — yields `[]`.
+    PHP's `[]` always JSON-encodes as `[]`, never `{}`, regardless of why
+    the index was missing."""
+    return data[0] if isinstance(data, list) and data else []
+
+
+def _php_array_slice_10(data):
+    """PHP `array_slice($data, 0, 10)`: a list keeps its first 10 elements;
+    a string-keyed array (dict) keeps its first 10 items with keys intact
+    (PHP `array_slice` preserves string keys); anything else — `None` from
+    invalid JSON — collapses to `[]`."""
+    if isinstance(data, list):
+        return data[:10]
+    if isinstance(data, dict):
+        return dict(list(data.items())[:10])
+    return []
 
 
 class AnalysisFunctions:
@@ -15,7 +37,7 @@ class AnalysisFunctions:
 
     def __init__(self, config: Configuration):
         self.config = config
-        self.httpClient = httpx.Client(timeout=30)
+        self.httpClient = httpx.Client(timeout=30, verify=SHARED_SSL_CONTEXT)
 
     def close(self) -> None:
         """Python-only addition: PHP has no equivalent — Guzzle clients die
@@ -114,7 +136,7 @@ class AnalysisFunctions:
             return {'error': 'FMP API key not configured'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
             if php_empty(symbol):
                 return {'error': 'Symbol is required'}
 
@@ -132,7 +154,7 @@ class AnalysisFunctions:
             return {
                 'success': True,
                 'symbol': symbol,
-                'ratings': (data if isinstance(data, list) else [])[:10],  # Last 10 ratings
+                'ratings': _php_array_slice_10(data),  # Last 10 ratings
             }
         except Exception as e:
             return {'error': f'Failed to fetch analyst ratings: {e}'}
@@ -144,7 +166,7 @@ class AnalysisFunctions:
             return {'error': 'FMP API key not configured'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
             if php_empty(symbol):
                 return {'error': 'Symbol is required'}
 
@@ -162,7 +184,7 @@ class AnalysisFunctions:
             return {
                 'success': True,
                 'symbol': symbol,
-                'ratios': data[0] if isinstance(data, list) and data else {},
+                'ratios': _php_first_or_empty(data),
             }
         except Exception as e:
             return {'error': f'Failed to fetch financial ratios: {e}'}
@@ -174,7 +196,7 @@ class AnalysisFunctions:
             return {'error': 'FMP API key not configured'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
             if php_empty(symbol):
                 return {'error': 'Symbol is required'}
 
@@ -192,7 +214,7 @@ class AnalysisFunctions:
             return {
                 'success': True,
                 'symbol': symbol,
-                'price_targets': (data if isinstance(data, list) else [])[:10],
+                'price_targets': _php_array_slice_10(data),
             }
         except Exception as e:
             return {'error': f'Failed to fetch price targets: {e}'}
@@ -204,7 +226,7 @@ class AnalysisFunctions:
             return {'error': 'FMP API key not configured'}
 
         try:
-            symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+            symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
             if php_empty(symbol):
                 return {'error': 'Symbol is required'}
 
@@ -222,14 +244,14 @@ class AnalysisFunctions:
             return {
                 'success': True,
                 'symbol': symbol,
-                'profile': data[0] if isinstance(data, list) and data else {},
+                'profile': _php_first_or_empty(data),
             }
         except Exception as e:
             return {'error': f'Failed to fetch company profile: {e}'}
 
     def getAssetSentiment(self, params: dict, userId) -> dict:
         """Get asset sentiment (placeholder - would integrate with sentiment API)."""
-        symbol = (params.get('symbol') if params.get('symbol') is not None else '').upper()
+        symbol = php_strval(params.get('symbol') if params.get('symbol') is not None else '').upper()
 
         return {
             'success': True,

@@ -10,6 +10,7 @@ import time
 
 import httpx
 
+from app.providers._http import SHARED_SSL_CONTEXT
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval
 from app.support.phpjson import dumps as json_encode
@@ -22,7 +23,7 @@ class MCPToolsLoader:
         self.db = db
         self.tools: dict = {}
         self.serverUrls: dict = {}
-        self._http = httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0))
+        self._http = httpx.Client(timeout=httpx.Timeout(180.0, connect=15.0), verify=SHARED_SSL_CONTEXT)
 
     def close(self) -> None:
         """Python-only addition: PHP has no equivalent — Guzzle clients die

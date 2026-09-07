@@ -7,6 +7,7 @@ from __future__ import annotations
 import httpx
 
 from app.config_.configuration import Configuration
+from app.providers._http import SHARED_SSL_CONTEXT
 from app.support.phpcompat import is_numeric, php_empty, php_intval
 
 
@@ -15,7 +16,7 @@ class SearchFunctions:
 
     def __init__(self, config: Configuration):
         self.config = config
-        self.httpClient = httpx.Client(timeout=30)
+        self.httpClient = httpx.Client(timeout=30, verify=SHARED_SSL_CONTEXT)
 
     def close(self) -> None:
         """Python-only addition: PHP has no equivalent — Guzzle clients die
