@@ -8,6 +8,7 @@ from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
 from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.controllers.workflow_schema_controller import WorkflowSchemaController
+from app.controllers.admin_controller import AdminController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
@@ -46,6 +47,7 @@ CONTROLLERS = {
     'AgentTeam:UserMemoryController': UserMemoryController,
     'AgentTeam:WorkflowController': WorkflowController,
     'AgentTeam:WorkflowSchemaController': WorkflowSchemaController,
+    'AdminController': AdminController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
@@ -192,6 +194,24 @@ ROUTES = [
     ('POST', '/api/v1/prompts', ('PromptLibraryController', 'create')),
     ('PUT', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'update')),
     ('DELETE', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'delete')),
+    # ADMIN — USERS / PROVIDERS / KEYS (routes.php 175-189; Task 3 appends
+    # usage/MCP-admin/costs/exchange-rate rows for the same controller after
+    # this block, mirroring routes.php 192-196, 228-246)
+    ('GET', '/api/v1/admin/users', ('AdminController', 'listUsers')),
+    ('GET', '/api/v1/admin/users/{id:\\d+}', ('AdminController', 'getUser')),
+    ('GET', '/api/v1/admin/users/{id:\\d+}/account', ('AdminController', 'getUserAccount')),
+    ('POST', '/api/v1/admin/users', ('AdminController', 'createUser')),
+    ('POST', '/api/v1/admin/users/update', ('AdminController', 'updateUser')),
+    ('DELETE', '/api/v1/admin/users/{id:\\d+}', ('AdminController', 'deleteUser')),
+    ('GET', '/api/v1/admin/users/{id:\\d+}/providers', ('AdminController', 'getProviderSettings')),
+    ('POST', '/api/v1/admin/providers', ('AdminController', 'saveProvider')),
+    ('POST', '/api/v1/admin/providers/toggle', ('AdminController', 'toggleProviderEnabled')),
+    ('POST', '/api/v1/admin/providers/category-toggle', ('AdminController', 'toggleCategoryEnabled')),
+    ('DELETE', '/api/v1/admin/providers', ('AdminController', 'deleteProvider')),
+    ('GET', '/api/v1/admin/users/{id:\\d+}/costs', ('AdminController', 'getUserCosts')),
+    ('GET', '/api/v1/admin/users/{id:\\d+}/keys', ('AdminController', 'getApiKeys')),
+    ('POST', '/api/v1/admin/keys', ('AdminController', 'saveApiKeys')),
+    ('POST', '/api/v1/admin/keys/delete', ('AdminController', 'deleteApiKey')),
     # WEBAUTHN
     ('POST', '/api/v1/webauthn/challenge', ('WebAuthnController', 'challenge')),
     ('POST', '/api/v1/webauthn/register', ('WebAuthnController', 'register')),
