@@ -11,6 +11,7 @@ from app.controllers.package_controller import PackageController
 from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
+from app.controllers.settings_controller import SettingsController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
 from app.controllers.usage_controller import UsageController
@@ -31,6 +32,7 @@ CONTROLLERS = {
     'PromptLibraryController': PromptLibraryController,
     'ProviderController': ProviderController,
     'RootController': RootController,
+    'SettingsController': SettingsController,
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
     'UsageController': UsageController,
@@ -82,6 +84,25 @@ ROUTES = [
     ('GET', '/api/v1/usage/balance', ('UsageController', 'getBalance')),
     ('GET', '/api/v1/usage/transactions', ('UsageController', 'getTransactions')),
     ('GET', '/api/v1/usage/stats', ('UsageController', 'getStats')),
+    # SETTINGS ROUTES (routes.php:114-134)
+    ('GET', '/api/v1/settings/usage', ('SettingsController', 'getUsage')),
+    ('GET', '/api/v1/settings/keys', ('SettingsController', 'getKeys')),
+    ('POST', '/api/v1/settings/keys', ('SettingsController', 'saveKeys')),
+    ('DELETE', '/api/v1/settings/keys', ('SettingsController', 'clearKeys')),
+    ('GET', '/api/v1/settings/providers', ('SettingsController', 'getProviderSettings')),
+    ('POST', '/api/v1/settings/provider', ('SettingsController', 'saveProvider')),
+    ('POST', '/api/v1/settings/provider/active', ('SettingsController', 'setActiveProvider')),
+    ('DELETE', '/api/v1/settings/provider', ('SettingsController', 'deleteProvider')),
+    ('GET', '/api/v1/settings/phone', ('SettingsController', 'getPhoneStatus')),
+    # Storage settings
+    ('GET', '/api/v1/settings/storage', ('SettingsController', 'getStorageSettings')),
+    ('POST', '/api/v1/settings/storage', ('SettingsController', 'saveStorageSettings')),
+    # Auto-heal settings (self-healing mode + cost guards)
+    ('GET', '/api/v1/settings/heal', ('SettingsController', 'getHealSettings')),
+    ('POST', '/api/v1/settings/heal', ('SettingsController', 'saveHealSettings')),
+    # Skill-genesis settings (promotion mode + cost guards)
+    ('GET', '/api/v1/settings/genesis', ('SettingsController', 'getGenesisSettings')),
+    ('POST', '/api/v1/settings/genesis', ('SettingsController', 'saveGenesisSettings')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
