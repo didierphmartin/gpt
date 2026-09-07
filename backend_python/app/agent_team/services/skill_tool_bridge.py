@@ -47,7 +47,7 @@ class SkillToolBridge:
         while time.time() < deadline:
             if os.path.isfile(path):
                 try:
-                    raw = Path(path).read_text()
+                    raw = Path(path).read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     raw = None
                 try:
@@ -88,7 +88,7 @@ class SkillToolBridge:
         path = self._resultPath(toolCallId)
         tmp = f'{path}.{secrets.token_hex(4)}'
         try:
-            Path(tmp).write_text(phpjson.dumps(result))
+            Path(tmp).write_text(phpjson.dumps(result), encoding="utf-8", errors="replace")
         except OSError:
             pass
         try:
