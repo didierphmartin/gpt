@@ -100,4 +100,27 @@ ported anyway for fidelity. Full unit suite: 1817 passing. Phase 5 differential 
 (validation-parity plus one live LLM/agent/workflow/playbook run each, run once to avoid repeat spend).
 One known defect carried forward: `GraphWorkflowRunner._createExecution` encodes an empty `input_variables`
 body as JSON `"{}"` where PHP's untyped empty array encodes `"[]"`; fix pending in the Phase 5 final wave.
+
+Phase 8 (2026-09): scheduled workflows — `ScheduledWorkflowService` (create/update/delete/pause/resume,
+`getDueSchedules`, `markRunning`/`markCompleted`/`markFailed`, and a `calculateNextRun` that reproduces PHP's
+`DateInterval` field arithmetic byte-for-byte, including month-end overflow and Europe/Berlin DST-gap
+re-localization), plus `ScheduledWorkflowController` and `SchedulerController` wired into `app/routes.py`:
+nine schedules routes (`index`, `create`, `show`, `update`, `destroy`, `pause`, `resume`, `stats`,
+`byWorkflow`) and two scheduler routes (`run`, `status`). `POST /api/v1/scheduler/run` is public, gated by
+either an authenticated user or the internal `X-Scheduler-Token` header/body token checked against
+`config['scheduler']['token']` (`SCHEDULER_TOKEN` env var). The cron entry point,
+`backend_python/scheduler/run_scheduled_workflows.py`, ports only the CLI branch of
+`backend/scheduler/run-scheduled-workflows.php` (the HTTP branch is superseded by `SchedulerController::run`)
+and is meant to be invoked as:
+
+    * * * * * cd /path/to/backend_python && .venv/bin/python \
+        -m scheduler.run_scheduled_workflows >> /var/log/workflow-scheduler.log 2>&1
+
+Four standalone operational scripts were also ported: `scripts/firebase_auth_export.py` (read-only Firebase
+export, `--write`/`--out`/`--help`), `scripts/migrate_skills_to_fs.py` (legacy `skills` table → folder-backed
+skills), and `scripts/register_mock_okta.py` / `scripts/register_mock_stack.py` (idempotent mock-MCP-server
+registration for the New Hire Provisioning playbook demo). Four PHP files were deliberately not ported —
+`backend/scripts/test-ingestion-{compiler,loader,splitter}.php` and `test-vector-mcp-store.php` are plain-
+assert CLI test harnesses, not application code; their coverage lives in the Phase 6 unit suite instead.
+
 Phase 6 (generate-python/adk/maf/nooa code-gen routes, ingestion) is next.
