@@ -188,6 +188,34 @@ def test_input_schema_field_mapping(monkeypatch):
     assert json.loads(insert_calls[0][2]['sc']) == {'type': 'object', 'properties': {}}
 
 
+def test_find_after_upsert_missing_row_uses_server_id_zero_and_continues(monkeypatch, capsys):
+    """PHP: `(int)$findId->fetch()['id']` — a missing row makes `fetch()`
+    return `false`; `false['id']` is a PHP warning (not fatal), evaluating
+    to null, so `(int)` of that is 0 and the loop continues to the next
+    server rather than raising. Here: the find query for the first server
+    (Okta) returns None; the rest resolve normally."""
+    # fetch_one call order per server: [find]. Okta's find -> None; the
+    # remaining 8 servers' finds -> real ids.
+    db = FakeDb(one=[None] + [{'id': i} for i in range(2, 10)])
+    _patch_db(monkeypatch, db)
+    client = _client(lambda r: httpx.Response(200, json=_tools_response(1)))
+
+    code = rms.main(['5'], http_client=client)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Okta              server id=0 — 1 tools" in out
+    # Remaining servers still ran (loop wasn't aborted by the None row).
+    assert "Google Workspace  server id=2 — 1 tools" in out
+    assert out.rstrip().endswith('Done.')
+
+    # server_id=0 was used for Okta's DELETE + INSERT calls too.
+    delete_calls = [c for c in db.calls if c[0] == 'execute' and 'DELETE FROM mcp_server_tools' in c[1]]
+    assert delete_calls[0][2] == {'s': 0}
+    insert_calls = [c for c in db.calls if c[0] == 'execute' and 'INSERT INTO mcp_server_tools' in c[1]]
+    assert insert_calls[0][2]['s'] == 0
+
+
 def test_db_closed_after_run(monkeypatch):
     db = FakeDb(one=[{'id': i} for i in range(1, 10)])
     _patch_db(monkeypatch, db)

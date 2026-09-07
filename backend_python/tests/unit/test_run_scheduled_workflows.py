@@ -79,6 +79,8 @@ class FakeAgentRepository:
 
 
 class FakeAssistant:
+    close_calls: list = []   # class-level: one _run() call creates exactly one instance
+
     def __init__(self, config):
         pass
 
@@ -90,6 +92,9 @@ class FakeAssistant:
 
     def getToolsManager(self):
         return object()
+
+    def close(self):
+        FakeAssistant.close_calls.append(True)
 
 
 class FakeMCPToolsLoader:
@@ -153,6 +158,7 @@ def _patch_dependencies(monkeypatch):
     FakeGraphWorkflowRunner.calls = []
     FakeWorkflowRunner.results = []
     FakeWorkflowRunner.calls = []
+    FakeAssistant.close_calls = []
     yield
 
 
@@ -304,6 +310,57 @@ def test_multiple_schedules_mixed_outcomes():
 
     code = rsw._run(FakeDb(), {})
     assert code == 0
+
+
+# ---------------------------------------------------------------------------
+# assistant.close(): Python-only cleanup (PHP's CLI process just exits) —
+# must fire after a normal pass AND after an exception raised inside the
+# due-schedules loop, matching SchedulerController.run's finally block.
+# ---------------------------------------------------------------------------
+
+def test_assistant_closed_after_normal_pass():
+    FakeScheduledWorkflowService.due = [_schedule(id=1, workflow_id=10)]
+    FakeWorkflowRepository.workflows = {10: FakeWorkflow(enabled=True)}
+    FakeGraphRepository.nodes_by_workflow = {10: [{'id': 'start'}]}
+    FakeGraphWorkflowRunner.results = [{'success': True}]
+
+    code = rsw._run(FakeDb(), {})
+
+    assert code == 0
+    assert FakeAssistant.close_calls == [True]
+
+
+def test_assistant_closed_after_exception_in_loop():
+    """A malformed schedule row (missing 'id') raises KeyError before the
+    per-schedule try/except even starts, so it propagates out of `_run()`
+    entirely — the outer `finally` must still close the assistant."""
+    FakeScheduledWorkflowService.due = [{'workflow_id': 10, 'user_id': 5,
+                                          'input_prompt': None, 'workflow_name': 'WF'}]
+
+    with pytest.raises(KeyError):
+        rsw._run(FakeDb(), {})
+
+    assert FakeAssistant.close_calls == [True]
+
+
+def test_assistant_close_failure_is_logged_and_swallowed(monkeypatch):
+    """PHP has no equivalent (Guzzle clients die with the request); this
+    module's `finally` must log-and-swallow a `close()` failure the same
+    way `SchedulerController.run` does, not let it mask the real result."""
+    def _raise_close(self):
+        raise RuntimeError('close boom')
+
+    monkeypatch.setattr(FakeAssistant, 'close', _raise_close)
+    logged = []
+    monkeypatch.setattr(rsw, 'error_log', lambda msg: logged.append(msg))
+
+    FakeScheduledWorkflowService.due = []
+
+    code = rsw._run(FakeDb(), {})
+
+    assert code == 0
+    assert len(logged) == 1
+    assert 'close boom' in logged[0]
 
 
 # ---------------------------------------------------------------------------

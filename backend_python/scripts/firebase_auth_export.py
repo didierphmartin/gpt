@@ -77,6 +77,9 @@ def _to_ms(s) -> int:
     if not s:
         return int(time.time() * 1000)
     try:
+        # Deliberate narrowing of PHP's general-purpose `strtotime()` to the
+        # single MySQL DATETIME shape this DB layer ever hands back
+        # ('%Y-%m-%d %H:%M:%S') — not a full strtotime() reimplementation.
         dt = datetime.strptime(str(s), '%Y-%m-%d %H:%M:%S').replace(tzinfo=php_tz())
         return int(dt.timestamp() * 1000)
     except (ValueError, TypeError):

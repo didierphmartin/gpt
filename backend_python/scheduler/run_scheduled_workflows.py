@@ -125,93 +125,102 @@ def _run(db, config: dict) -> int:
     # LLMProviderResolver::applyDbSettings (unlike WorkflowController /
     # AgentController), so this doesn't either; ported literally.
     assistant = AIPortfolioAssistant(config)
-    assistant.setDatabase(db)
-    mcp_tools_loader = MCPToolsLoader(db)
+    try:
+        assistant.setDatabase(db)
+        mcp_tools_loader = MCPToolsLoader(db)
 
-    agent_runner = AgentRunner(
-        assistant.getLLMManager(),
-        assistant.getToolsManager(),
-        mcp_tools_loader,
-        db,
-        config,
-    )
+        agent_runner = AgentRunner(
+            assistant.getLLMManager(),
+            assistant.getToolsManager(),
+            mcp_tools_loader,
+            db,
+            config,
+        )
 
-    graph_workflow_runner = GraphWorkflowRunner(
-        db, agent_repository, agent_runner, graph_repository, config,
-    )
-    workflow_runner = WorkflowRunner(db, agent_repository, agent_runner, config)
+        graph_workflow_runner = GraphWorkflowRunner(
+            db, agent_repository, agent_runner, graph_repository, config,
+        )
+        workflow_runner = WorkflowRunner(db, agent_repository, agent_runner, config)
 
-    due_schedules = schedule_service.getDueSchedules()
+        due_schedules = schedule_service.getDueSchedules()
 
-    executed: list[dict] = []
-    failed: list[dict] = []
+        executed: list[dict] = []
+        failed: list[dict] = []
 
-    print(f"[{php_now()}] Found {len(due_schedules)} due schedule(s)")
+        print(f"[{php_now()}] Found {len(due_schedules)} due schedule(s)")
 
-    for schedule in due_schedules:
-        schedule_id = php_intval(schedule['id'])
-        workflow_id = php_intval(schedule['workflow_id'])
-        user_id = php_intval(schedule['user_id'])
-        input_prompt = schedule['input_prompt']
+        for schedule in due_schedules:
+            schedule_id = php_intval(schedule['id'])
+            workflow_id = php_intval(schedule['workflow_id'])
+            user_id = php_intval(schedule['user_id'])
+            input_prompt = schedule['input_prompt']
 
-        print(f"[{php_now()}] Executing schedule #{schedule_id} (workflow #{workflow_id})")
+            print(f"[{php_now()}] Executing schedule #{schedule_id} (workflow #{workflow_id})")
 
-        try:
-            schedule_service.markRunning(schedule_id)
+            try:
+                schedule_service.markRunning(schedule_id)
 
-            workflow = workflow_repository.findById(workflow_id)
+                workflow = workflow_repository.findById(workflow_id)
 
-            if not workflow:
-                raise Exception(f"Workflow #{workflow_id} not found")
+                if not workflow:
+                    raise Exception(f"Workflow #{workflow_id} not found")
 
-            if not workflow.isEnabled():
-                raise Exception(f"Workflow #{workflow_id} is disabled")
+                if not workflow.isEnabled():
+                    raise Exception(f"Workflow #{workflow_id} is disabled")
 
-            input_variables: dict = {}
-            if input_prompt:
-                input_variables['user_prompt'] = input_prompt
-                input_variables['prompt'] = input_prompt
+                input_variables: dict = {}
+                if input_prompt:
+                    input_variables['user_prompt'] = input_prompt
+                    input_variables['prompt'] = input_prompt
 
-            has_graph_nodes = graph_repository.getNodes(workflow_id)
-            is_graph_workflow = not php_empty(has_graph_nodes)
+                has_graph_nodes = graph_repository.getNodes(workflow_id)
+                is_graph_workflow = not php_empty(has_graph_nodes)
 
-            if is_graph_workflow:
-                result = graph_workflow_runner.run(workflow, user_id, input_variables)
-            else:
-                result = workflow_runner.run(workflow, user_id, input_variables)
+                if is_graph_workflow:
+                    result = graph_workflow_runner.run(workflow, user_id, input_variables)
+                else:
+                    result = workflow_runner.run(workflow, user_id, input_variables)
 
-            if result.get('success'):
-                schedule_service.markCompleted(schedule_id)
-                executed.append({
+                if result.get('success'):
+                    schedule_service.markCompleted(schedule_id)
+                    executed.append({
+                        'schedule_id': schedule_id,
+                        'workflow_id': workflow_id,
+                        'workflow_name': schedule['workflow_name'],
+                        'execution_id': result.get('execution_id'),
+                    })
+
+                    print(f"[{php_now()}] ✓ Schedule #{schedule_id} completed successfully")
+                else:
+                    raise Exception(php_coalesce(result.get('error'), 'Workflow execution failed'))
+
+            except Exception as e:  # noqa: BLE001 — PHP: catch (Exception $e)
+                error_message = str(e)
+                schedule_service.markFailed(schedule_id, error_message)
+
+                failed.append({
                     'schedule_id': schedule_id,
                     'workflow_id': workflow_id,
-                    'workflow_name': schedule['workflow_name'],
-                    'execution_id': result.get('execution_id'),
+                    'workflow_name': php_coalesce(schedule.get('workflow_name'), 'Unknown'),
+                    'error': error_message,
                 })
 
-                print(f"[{php_now()}] ✓ Schedule #{schedule_id} completed successfully")
-            else:
-                raise Exception(php_coalesce(result.get('error'), 'Workflow execution failed'))
+                print(f"[{php_now()}] ✗ Schedule #{schedule_id} failed: {error_message}")
 
-        except Exception as e:  # noqa: BLE001 — PHP: catch (Exception $e)
-            error_message = str(e)
-            schedule_service.markFailed(schedule_id, error_message)
+                error_log(f"Scheduled workflow failed: Schedule #{schedule_id}, "
+                          f"Workflow #{workflow_id}: {error_message}")
 
-            failed.append({
-                'schedule_id': schedule_id,
-                'workflow_id': workflow_id,
-                'workflow_name': php_coalesce(schedule.get('workflow_name'), 'Unknown'),
-                'error': error_message,
-            })
+        print(f"[{php_now()}] Completed: {len(executed)} succeeded, {len(failed)} failed")
 
-            print(f"[{php_now()}] ✗ Schedule #{schedule_id} failed: {error_message}")
-
-            error_log(f"Scheduled workflow failed: Schedule #{schedule_id}, "
-                      f"Workflow #{workflow_id}: {error_message}")
-
-    print(f"[{php_now()}] Completed: {len(executed)} succeeded, {len(failed)} failed")
-
-    return 0
+        return 0
+    finally:
+        # Python-only cleanup (PHP's CLI process just exits; here the
+        # assistant's provider httpx.Client(s) are closed explicitly) —
+        # same pattern as SchedulerController.run's finally block.
+        try:
+            assistant.close()
+        except Exception as closeErr:  # noqa: BLE001
+            error_log(f'[run_scheduled_workflows] assistant.close() failed: {closeErr}')
 
 
 if __name__ == '__main__':

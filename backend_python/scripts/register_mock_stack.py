@@ -138,7 +138,12 @@ def _run(db, argv: list[str], http_client: httpx.Client | None) -> int:
             "SELECT id FROM mcp_servers WHERE user_id = :u AND name = :n",
             {'u': user_id, 'n': srv['name']},
         )
-        server_id = php_intval(server_row['id'])
+        # PHP: `(int)$findId->fetch()['id']` — a missing row makes `fetch()`
+        # return `false`, and `false['id']` is a PHP warning (not a fatal),
+        # evaluating to null, so `(int)` of that is 0 and execution
+        # continues with serverId=0. Mirrored here rather than raising on
+        # `server_row['id']` for a `None` row.
+        server_id = php_intval(server_row['id']) if server_row else 0
         db.execute("DELETE FROM mcp_server_tools WHERE server_id = :s", {'s': server_id})
 
         for t in tools:
