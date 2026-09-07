@@ -54,6 +54,40 @@ TERMINAL_FAMILIES = (
 )
 
 
+def parse_data_only(text: str) -> list:
+    """Parse a stream of BARE `data:` frames -- no `event:` line
+    (format_sse_data_frame()'s wire format, e.g. AgentController.php:486,
+    :507 / agent_controller.py's chat()). parse_sse() above can't see these:
+    it only appends a block when it finds a leading `event:` line, so an
+    event-less block is silently dropped. Each block becomes either the
+    decoded JSON payload (object/array/scalar) or, if it isn't valid JSON
+    (e.g. the literal `[DONE]` sentinel), the raw joined string -- in
+    stream order."""
+    out = []
+    for block in text.split('\n\n'):
+        if not block.strip():
+            continue
+        lines = [l[5:].lstrip(' ') for l in block.split('\n') if l.startswith('data:')]
+        if not lines:
+            continue
+        raw = '\n'.join(lines)
+        try:
+            out.append(json.loads(raw))
+        except ValueError:
+            out.append(raw)
+    return out
+
+
+def same_data_stream(a_text: str, b_text: str):
+    """Compare two bare-`data:`-frame streams by exact decoded payload
+    sequence. Unlike same_stream() (which compares by `event:` name and
+    tolerates payload differences like token counts), this format carries no
+    event name to group/skip by, so parity here means the two payload
+    sequences are identical."""
+    a, b = parse_data_only(a_text), parse_data_only(b_text)
+    assert a == b, (a, b)
+
+
 def same_stream(a_text: str, b_text: str, *, ignore_response_keys=('text',)):
     a, b = parse_sse(a_text), parse_sse(b_text)
     assert skeleton(a) == skeleton(b), (skeleton(a), skeleton(b))

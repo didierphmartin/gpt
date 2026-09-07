@@ -821,9 +821,13 @@ class FakeRunner:
 class FakeSse:
     def __init__(self):
         self.sent = []
+        self.sent_data = []
 
     def send(self, event, data):
         self.sent.append((event, data))
+
+    def send_data(self, data):
+        self.sent_data.append(data)
 
 
 def test_run_not_found_returns_404(monkeypatch):
@@ -962,9 +966,47 @@ def test_chat_success_streams_events_and_sets_stream_context(monkeypatch):
     assert called_input == 'hi'
     assert called_user == 3
     assert called_context == {'tools_filter': ['a']}
-    # The one event the FakeRunner emitted through on_chunk went out over
-    # SSE named by its own `type` field (see chat()'s DEVIATION docstring).
-    assert fake_sse.sent == [('agent_start', {'type': 'agent_start', 'agent_id': 5})]
+    # Bare `data:` frames, no `event:` line (PHP AgentController.php:486) --
+    # the one event the FakeRunner emitted through on_chunk, followed by the
+    # literal '[DONE]' sentinel PHP echoes after streamRun returns (:507).
+    assert fake_sse.sent == []
+    assert fake_sse.sent_data == [{'type': 'agent_start', 'agent_id': 5}, '[DONE]']
+
+
+def test_chat_success_frame_bytes_end_to_end_with_real_sse_stream(monkeypatch):
+    """Exact wire-byte proof against the real SseStream/format_sse_data_frame
+    (not FakeSse): no `event:` line anywhere, and the stream's last frame is
+    literally `data: [DONE]\n\n` (PHP AgentController.php:486, :507)."""
+    import asyncio
+
+    from app.support.sse import SseStream
+
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_runner = FakeRunner()
+    c.runner = fake_runner
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        sse = SseStream(loop)
+        request = ctx(body={'message': 'hi'})
+        request['sse'] = sse
+        await loop.run_in_executor(None, c.chat, request, 5)
+        await loop.run_in_executor(None, sse.end)
+        frames = []
+        while True:
+            frame = await sse.queue.get()
+            if frame is None:
+                break
+            frames.append(frame)
+        return frames
+
+    frames = asyncio.run(run())
+    assert frames == [
+        b'data: {"type":"agent_start","agent_id":5}\n\n',
+        b'data: [DONE]\n\n',
+    ]
 
 
 # ============================================================================

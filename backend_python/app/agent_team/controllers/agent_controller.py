@@ -663,27 +663,19 @@ class AgentController:
 
     def chat(self, request, id: int = 0):
         """PHP 436-509. Streams through the shared 2a SSE bridge
-        (`request['sse']` / `SseStream` — see app/support/sse.py and
-        app/controllers/chat_controller.py's established `sse.send(event,
-        data)` pattern, e.g. its `verify`/`compare`/streaming-chat handlers).
-
-        DEVIATION (bridge-forced, not a Task 2 choice): PHP's callback here
-        is `echo "data: " . json_encode($event) . "\n\n"` — a bare `data:`
-        line with NO `event:` line, unlike every OTHER PHP streaming
-        endpoint in this codebase (ChatController's `$sendEvent($event,
-        $data)` always writes `event: {$event}\n` first). The shared Python
-        SSE bridge (`app/support/sse.py::format_sse_frame`, already built in
-        Phase 2a and used by every other ported streaming controller method)
-        always frames `event: <name>\n` ahead of `data: ...\n\n` and offers
-        no raw-frame escape hatch, so this port sends each StreamContext
-        event as `sse.send(event['type'], event)` — the event's own `type`
-        field becomes the SSE `event:` name, and the full event dict (same
-        shape/keys as PHP) is still delivered as the JSON `data:` payload.
-        PHP's trailing `echo "data: [DONE]\n\n"` likewise has no literal
-        counterpart; the stream simply ends via `sse.end()`
-        (main.py's finally block), exactly like every other ported streaming
-        controller method (e.g. chat_controller.py never sends a synthetic
-        DONE frame either — it relies on stream closure).
+        (`request['sse']` / `SseStream` — see app/support/sse.py), using
+        `SseStream.send_data()` / `format_sse_data_frame()` rather than the
+        named-event `send()`/`format_sse_frame()` every OTHER ported
+        streaming controller method uses (e.g. chat_controller.py's
+        `sendEvent(event, data)` pattern). PHP's own callback here is a bare
+        `echo "data: " . json_encode($event) . "\n\n"` (AgentController.php:
+        486) — NO `event:` line, unlike ChatController's `$sendEvent`
+        helper (`ChatController.php:1055-1056`, `event: {$event}\n` first)
+        — so this port matches that literal wire format byte-for-byte
+        instead of reusing the named-event framing. PHP's trailing
+        `echo "data: [DONE]\n\n"` (AgentController.php:507) is reproduced by
+        an explicit `sse.send_data('[DONE]')` call after `streamRun`
+        returns, below.
 
         Routed at `POST /api/v1/agents/{id:\\d+}/chat` in app/routes.py, at
         PHP's position (routes.php:420).
@@ -726,12 +718,11 @@ class AgentController:
         # failure above return a plain JSON error response.
         sse = request['sse']
 
-        # Create SSE callback for streaming events — see the DEVIATION note
-        # above for why this frames a named `event:` line PHP's raw echo
-        # callback didn't.
+        # Create SSE callback for streaming events — bare `data:` frame, no
+        # `event:` line (PHP AgentController.php:485-490's raw echo, see
+        # docstring above).
         def sseCallback(event) -> None:
-            eventType = event.get('type') if isinstance(event, dict) and event.get('type') is not None else 'message'
-            sse.send(eventType, event)
+            sse.send_data(event)
 
         # Create stream context for agent activity events
         streamContext = StreamContext(sseCallback, userId)
@@ -746,6 +737,9 @@ class AgentController:
             sseCallback,
             {'tools_filter': toolsFilter},
         )
+
+        # PHP AgentController.php:507: echo "data: [DONE]\n\n"; flush();
+        sse.send_data('[DONE]')
 
         return None
 
