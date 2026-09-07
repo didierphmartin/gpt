@@ -4,6 +4,7 @@ from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.app_key_controller import AppKeyController
 from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
+from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.controllers.workflow_schema_controller import WorkflowSchemaController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
@@ -37,6 +38,7 @@ CONTROLLERS = {
     'AgentTeam:AppKeyController': AppKeyController,
     'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
+    'AgentTeam:WorkflowController': WorkflowController,
     'AgentTeam:WorkflowSchemaController': WorkflowSchemaController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
@@ -200,6 +202,29 @@ ROUTES = [
     ('PUT', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'update')),
     ('DELETE', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'destroy')),
     ('GET', '/api/v1/teams/{id:\\d+}/agents', ('AgentTeam:TeamController', 'agents')),
+    # WORKFLOWS (data/outputs/node-documents only — routes.php:348-350,
+    # 374-375, 381-384, 391-392, 402-405. generate-python/adk/maf/nooa
+    # (351-354) and run/run-stream/tool-result/playbook-node (376-380) are
+    # Phase 5/6 and NOT routed here.)
+    ('GET', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'index')),
+    ('POST', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'create')),
+    ('GET', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'show')),
+    ('PUT', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'update')),
+    ('DELETE', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'destroy')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
+    ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/duplicate', ('AgentTeam:WorkflowController', 'duplicate')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/outputs', ('AgentTeam:WorkflowController', 'listOutputs')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/outputs/{filename}', ('AgentTeam:WorkflowController', 'getOutput')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents',
+     ('AgentTeam:WorkflowController', 'uploadNodeDocument')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents/metadata',
+     ('AgentTeam:WorkflowController', 'saveDocumentMetadata')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents',
+     ('AgentTeam:WorkflowController', 'listNodeDocuments')),
+    ('DELETE', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents/{docId}',
+     ('AgentTeam:WorkflowController', 'deleteNodeDocument')),
     # WORKFLOW SCHEMAS (routes.php:395-399)
     ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
     ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),
