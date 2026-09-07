@@ -513,3 +513,41 @@ def test_provider_config_db_error_falls_back_to_config_file():
     cfg = exec_._getProviderConfigForParallel('claude')
 
     assert cfg == {'api_key': 'file-key'}
+
+
+# ---------------------------------------------------------------------------
+# Extra: close() — owned vs. injected httpx client (fix round 1).
+# ---------------------------------------------------------------------------
+
+def test_close_closes_the_owned_client():
+    """No http_client injected -> the executor created its own -> close()
+    releases it."""
+    runner = FakeAgentRunner()
+    exec_ = ParallelAgentExecutor(runner, FakeDb(), {}, False)
+
+    assert exec_._httpClient.is_closed is False
+    exec_.close()
+    assert exec_._httpClient.is_closed is True
+
+
+def test_close_does_not_close_an_injected_client():
+    """An injected http_client belongs to its caller — close() must leave it
+    open so the caller can keep using/closing it themselves."""
+    injected = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    runner = FakeAgentRunner()
+    exec_ = ParallelAgentExecutor(runner, FakeDb(), {}, False, http_client=injected)
+
+    exec_.close()
+
+    assert injected.is_closed is False
+    injected.close()  # cleanup
+
+
+def test_close_is_idempotent():
+    runner = FakeAgentRunner()
+    exec_ = ParallelAgentExecutor(runner, FakeDb(), {}, False)
+
+    exec_.close()
+    exec_.close()  # must not raise
+
+    assert exec_._httpClient.is_closed is True

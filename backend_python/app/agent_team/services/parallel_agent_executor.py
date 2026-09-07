@@ -115,9 +115,21 @@ class ParallelAgentExecutor:
         # context (see app.providers._http); tests inject a MockTransport
         # client to intercept dispatchChunk's real HTTP calls without
         # overriding dispatchChunk itself.
+        self._ownsHttpClient = http_client is None
         self._httpClient = http_client if http_client is not None else httpx.Client(
             timeout=300, verify=SHARED_SSL_CONTEXT,
         )
+
+    def close(self) -> None:
+        """Python-only addition (no PHP equivalent — curl_multi opens no
+        persistent client, so there is nothing for PHP to release). Mirrors
+        ClaudeProvider.close()/OpenAIProvider.close(): releases the httpx
+        connection pool this executor created for dispatchChunk — but ONLY
+        when it created it. An injected `http_client` belongs to its caller,
+        who owns closing it. Idempotent (httpx.Client.close() is itself
+        idempotent), safe to call more than once."""
+        if self._ownsHttpClient:
+            self._httpClient.close()
 
     def run(self, states: list, max_rounds: int = 10) -> dict:
         """@param states list of dicts with keys 'key','agent','input',
