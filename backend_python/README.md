@@ -49,3 +49,9 @@ whenever a live provider happens to be rate limited or offline, and the humanize
 coverage lives in `tests/unit/test_humanize_provider_error_matrix.py` (tracker rows 59-60). Gemini
 does not stream (single `chunk`), exactly like PHP. `/api/v1/providers` and the built-in Functions
 remain pending Phase 2c.
+
+Phase 2c (2026-09): `GET /api/v1/providers` (+ `POST /api/v1/providers`, `POST /api/v1/providers/switch`) with a
+byte-equal body to PHP (exact-JSON differential, user 3), so the frontend provider picker works on Python;
+built-in `AnalysisFunctions` (FMP), `PortfolioFunctions` and `WatchlistFunctions` (registered by `setDatabase`,
+used by the agent-team paths in Phase 5), and the delegation tool names (`AgentDelegationFunctions.getToolNames`;
+handlers land in Phase 5). Verify/compare, attachments and the client-tool bridge remain pending Phase 2d.
