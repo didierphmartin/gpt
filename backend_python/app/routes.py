@@ -1,6 +1,7 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
 from app.agent_team.controllers.agent_controller import AgentController
+from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
 from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
@@ -36,6 +37,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
     'AgentTeam:AgentController': AgentController,
+    'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
     'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
@@ -204,15 +206,19 @@ ROUTES = [
     ('PUT', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'update')),
     ('DELETE', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'destroy')),
     ('GET', '/api/v1/teams/{id:\\d+}/agents', ('AgentTeam:TeamController', 'agents')),
-    # WORKFLOWS (data/outputs/node-documents only — routes.php:348-350,
-    # 374-375, 381-384, 391-392, 402-405. generate-python/adk/maf/nooa
-    # (351-354) and run/run-stream/tool-result/playbook-node (376-380) are
-    # Phase 5/6 and NOT routed here.)
+    # WORKFLOWS (routes.php:348-350, 374-384, 391-392, 402-405.
+    # generate-python/adk/maf/nooa (351-354) are Phase 6 and NOT routed
+    # here.)
     ('GET', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'index')),
     ('POST', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'create')),
     ('GET', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'show')),
     ('PUT', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'update')),
     ('DELETE', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'destroy')),
+    ('POST', '/api/v1/workflows/run', ('AgentTeam:WorkflowController', 'runByName')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/run', ('AgentTeam:WorkflowController', 'run')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/run-stream', ('AgentTeam:WorkflowController', 'runStream')),
+    ('POST', '/api/v1/workflows/tool-result', ('AgentTeam:WorkflowController', 'toolResult')),
+    ('POST', '/api/v1/workflows/playbook-node/run', ('AgentTeam:WorkflowController', 'runPlaybookNode')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
@@ -255,6 +261,8 @@ ROUTES = [
     ('POST', '/api/v1/agents/{id:\\d+}/duplicate', ('AgentTeam:AgentController', 'duplicate')),
     ('POST', '/api/v1/agents/{id:\\d+}/move-up', ('AgentTeam:AgentController', 'moveUp')),
     ('POST', '/api/v1/agents/{id:\\d+}/move-down', ('AgentTeam:AgentController', 'moveDown')),
+    # MCP JSON-RPC endpoint for AI client integration (routes.php:427)
+    ('POST', '/api/v1/mcp/agents', ('AgentTeam:AgentMCPController', 'handle')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),

@@ -23,7 +23,16 @@ class FakeDb:
     """Records every statement so tests can assert SQL/params. Queued return
     values are consumed in call order per method (mirrors the FakeDb used in
     tests/unit/test_team_schema_controllers.py and
-    tests/unit/test_agent_team_repositories.py)."""
+    tests/unit/test_agent_team_repositories.py).
+
+    Phase 5, Task 6: WorkflowController's constructor now builds an
+    AIPortfolioAssistant/AgentRunner stack (identical to AgentController's),
+    which fires a `SHOW TABLES LIKE 'system_llm_settings'` probe
+    (LLMProviderResolver.applyDbSettings) on every construction. That probe
+    is answered here directly -- bypassing `all_queue` entirely -- so it
+    never eats the first element a test queued for its own query under test
+    (the same reasoning as test_agent_controller.py's FakeDb, which special-
+    cases its `agent_executions` query for the identical reason)."""
 
     def __init__(self, one=None, all_=None, insert_id=1, insert_ids=None, rowcount=1):
         self.one_queue = list(one) if one else []
@@ -41,6 +50,8 @@ class FakeDb:
         return self.one_queue.pop(0) if self.one_queue else None
 
     def fetch_all(self, sql, params=None):
+        if 'system_llm_settings' in sql:
+            return []          # constructor-time probe -- not logged, doesn't touch the queue
         self.calls.append(('fetch_all', sql, params))
         return self.all_queue.pop(0) if self.all_queue else []
 
@@ -212,8 +223,9 @@ def test_create_db_error_returns_500():
 
 
 # ============================================================================
-# generatePython/Adk/Maf/Nooa, run, runByName, runStream, runPlaybookNode,
-# toolResult -- Phase 5/6, not routed
+# generatePython/Adk/Maf/Nooa -- Phase 6, not routed. `run`/`runByName`/
+# `runStream`/`runPlaybookNode`/`toolResult` were ported in Phase 5, Task 6
+# -- see tests/unit/test_workflow_run_routes.py.
 # ============================================================================
 
 @pytest.mark.parametrize('method,args', [
@@ -221,11 +233,6 @@ def test_create_db_error_returns_500():
     ('generateAdk', (ctx(), 1)),
     ('generateMaf', (ctx(), 1)),
     ('generateNooa', (ctx(), 1)),
-    ('run', (ctx(), 1)),
-    ('runByName', (ctx(),)),
-    ('runStream', (ctx(), 1)),
-    ('runPlaybookNode', (ctx(),)),
-    ('toolResult', (ctx(),)),
 ])
 def test_unrouted_methods_raise_not_implemented(method, args):
     with pytest.raises(NotImplementedError, match='Phase 5/6'):

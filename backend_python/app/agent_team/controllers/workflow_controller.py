@@ -1,24 +1,28 @@
 """Port of backend/src/AgentTeam/Controllers/WorkflowController.php (1957 lines).
 
-Workflow Controller — data/CRUD paths only (Phase 4, Task 6). The following
-PHP methods raise `NotImplementedError('Phase 5/6')` below and are NOT wired
-into app/routes.py: `generatePython`, `generateAdk`, `generateMaf`,
-`generateNooa` (code generators — separate compiler classes, out of scope),
-`run`, `runByName`, `runStream`, `runPlaybookNode` (workflow execution —
-depend on AgentRunner/GraphWorkflowRunner/PlaybookNodeRunner, none ported
-yet), `toolResult` (depends on SkillToolBridge, execution-only).
+Workflow Controller. The following PHP methods raise `NotImplementedError
+('Phase 5/6')` below and are NOT wired into app/routes.py: `generatePython`,
+`generateAdk`, `generateMaf`, `generateNooa` (code generators — separate
+compiler classes, Phase 6 scope).
 
-Ported: `index`, `create`, `show`, `update`, `destroy`, `executions`,
-`runEvents`, `toggle`, `duplicate`, `listOutputs`, `getOutput`,
-`uploadNodeDocument`, `saveDocumentMetadata`, `listNodeDocuments`,
-`deleteNodeDocument`, and the private helpers `getUniversalFSAdapter` (->
-None, universalFS is PHP-only, not ported — same ruling as
-WorkflowOutputStorage.getUniversalFSClient), `getUserStorageProvider`,
+Ported: `index`, `create`, `show`, `update`, `destroy`, `run`, `runByName`,
+`runStream`, `runPlaybookNode`, `toolResult` (Phase 5, Task 6 — execution
+paths, PHP 719-1094), `executions`, `runEvents`, `toggle`, `duplicate`,
+`listOutputs`, `getOutput`, `uploadNodeDocument`, `saveDocumentMetadata`,
+`listNodeDocuments`, `deleteNodeDocument`, and the private helpers
+`getUniversalFSAdapter` (-> None, universalFS is PHP-only, not ported — same
+ruling as WorkflowOutputStorage.getUniversalFSClient), `getUserStorageProvider`,
 `getUserStorageFolder`, `getLocalStoragePath` (PHP 1843-1847 — dead code:
 grep confirms no other WorkflowController method calls it; ported anyway
 per the task brief's explicit method list), `detectMimeType`,
 `guessMimeTypeFromExtension`, `isAllowedMimeType`, `sanitizeFilename`,
 `getUploadErrorMessage`.
+
+The constructor (PHP 36-70) now builds the same AIPortfolioAssistant/
+AgentRunner/WorkflowRunner/GraphWorkflowRunner stack AgentController.php
+40-67 builds for its own AgentRunner — identical DB-overlay-first sequence
+(`LLMProviderResolver.applyDbSettings` before `AIPortfolioAssistant`
+construction) per agent_controller.py's own `__init__`.
 
 `executions` (PHP 1095-1144) calls `$this->workflowRunner->getExecutionHistory()`
 (WorkflowRunner.php 403-413), a pure `SELECT ... LIMIT ? OFFSET ?` with no
@@ -38,11 +42,22 @@ import os
 import re
 
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.agent_repository import AgentRepository
+from app.agent_team.services.agent_runner import AgentRunner
+from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
+from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
+from app.agent_team.services.skill_tool_bridge import SkillToolBridge
+from app.agent_team.services.stream_context import StreamContext
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
+from app.agent_team.services.workflow_runner import WorkflowRunner
+from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.config import PHP_BACKEND
 from app.controllers.chat_attachment_controller import ChatAttachmentController as _ChatAttachmentController
+from app.services.llm_provider_resolver import LLMProviderResolver
+from app.services.mcp_tools_loader import MCPToolsLoader
+from app.support import phpjson
 from app.support.logger import error_log
 from app.support.phpcompat import (
     is_php_array,
@@ -124,10 +139,40 @@ class WorkflowController:
     })
 
     def __init__(self, db, config):
+        """PHP 36-70."""
         self.db = db
         self.config = config
         self.workflowRepository = WorkflowRepository(db)
+
+        agentRepository = AgentRepository(db)
+
+        # DB-overlay first so the assistant registers all providers from
+        # system_llm_settings (post-cutover the file no longer has
+        # providers) — same sequence as AgentController.__init__.
+        config = LLMProviderResolver.applyDbSettings(db, config)
+        self.config = config
+        assistant = AIPortfolioAssistant(config)
+        assistant.setDatabase(db)
+
+        mcpToolsLoader = MCPToolsLoader(db)
+
+        agentRunner = AgentRunner(
+            assistant.getLLMManager(),
+            assistant.getToolsManager(),
+            mcpToolsLoader,
+            db,
+            config,
+        )
+
+        self.workflowRunner = WorkflowRunner(db, agentRepository, agentRunner, config)
         self.graphRepository = self.workflowRepository.getGraphRepository()
+        self.graphWorkflowRunner = GraphWorkflowRunner(
+            db,
+            agentRepository,
+            agentRunner,
+            self.graphRepository,
+            config,
+        )
 
     # ========================================================================
     # GET /api/v1/workflows
@@ -410,23 +455,265 @@ class WorkflowController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     # ========================================================================
-    # Execution endpoints (Phase 5/6, not routed) — PHP 719-1090
+    # POST /api/v1/workflows/{id}/run — Phase 5, Task 6 — PHP 719-807
     # ========================================================================
 
     def run(self, request, id: int = 0) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 719-807. `@set_time_limit(600)` is a no-op here (uvicorn has
+        no per-request PHP-style time limit — see constraints.md's porting
+        table)."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        body = request['body'] if request.get('body') is not None else {}
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+
+        if not workflowId:
+            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
+
+        # App-key auth is scope-gated (PHP 745-757) — same pattern as
+        # AgentController.run's own app-key check (agent_controller.py:614-623).
+        if request.get('auth_type') == 'app_key':
+            scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
+            scopeAllowed = ('workflows:run' in scopes
+                             or f'workflows:run:{workflowId}' in scopes)
+            if not scopeAllowed:
+                return {
+                    'success': False,
+                    'error': 'App key not authorized for this workflow (missing scope workflows:run)',
+                    'status_code': 403,
+                }
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+
+            workflow = self.workflowRepository.findById(workflowId)
+
+            if not workflow:
+                return {'success': False, 'error': 'Workflow not found', 'status_code': 404}
+
+            if not workflow.isEnabled():
+                return {'success': False, 'error': 'Workflow is disabled', 'status_code': 400}
+
+            inputVariables = body.get('variables') if body.get('variables') is not None else (
+                body.get('inputs') if body.get('inputs') is not None else {})
+
+            hasGraphNodes = self.graphRepository.getNodes(workflowId)
+            isGraphWorkflow = not php_empty(hasGraphNodes)
+
+            if isGraphWorkflow:
+                result = self.graphWorkflowRunner.run(workflow, userId, inputVariables)
+            else:
+                result = self.workflowRunner.run(workflow, userId, inputVariables)
+
+            result = dict(result)
+            result['status_code'] = 200 if result.get('success') else 500
+
+            return result
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
+            return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # POST /api/v1/workflows/run — PHP 813-849
+    # ========================================================================
 
     def runByName(self, request) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 813-849. Resolves `(user_id, name)` (unique) to a workflow id
+        and delegates to `run()` — identical scope/ownership/enabled/run
+        path. `run()` reads the workflow id from its positional `id`
+        parameter (this file's convention for every route-param method, e.g.
+        `show`/`update`/`toggle`), not from `request['params']['id']` like
+        PHP mutates — so the resolved id is simply passed straight through
+        as the second positional argument instead."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        body = request['body'] if request.get('body') is not None else {}
+        name = php_trim(php_strval(body.get('workflow') if body.get('workflow') is not None else ''))
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+
+        if name == '':
+            return {'success': False, 'error': 'A "workflow" name is required', 'status_code': 400}
+
+        row = self.db.fetch_one(
+            "SELECT id FROM agent_workflows WHERE user_id = ? AND name = ? LIMIT 1",
+            [userId, name],
+        )
+
+        if row is None:
+            return {
+                'success': False,
+                'error': f'No workflow named "{name}" found for this account',
+                'status_code': 404,
+            }
+
+        workflowId = php_intval(row['id'])
+        return self.run(request, workflowId)
+
+    # ========================================================================
+    # POST /api/v1/workflows/{id}/run-stream — PHP 855-970
+    # ========================================================================
 
     def runStream(self, request, id: int = 0) -> None:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 855-970. SSE headers/output-buffering/flush are handled by
+        the shared bridge (`request['sse']` — see app/support/sse.py and
+        main.py's StreamingResponse generator, spec §3); every PHP
+        `$sseCallback(...)` call below becomes `sse.send_data(event)` (bare
+        `data:` frame, no `event:` line — PHP 887-893), matching
+        agent_controller.py's `chat()` pattern. Unlike `chat()`, EVERY
+        validation branch here streams its error through the SSE callback
+        (PHP sets headers unconditionally as the very first statements of
+        this method, before any validation) rather than returning a plain
+        JSON error dict."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        body = request['body'] if request.get('body') is not None else {}
+
+        sse = request['sse']
+
+        def sseCallback(event) -> None:
+            sse.send_data(event)
+
+        if not userId:
+            sseCallback({'type': 'error', 'error': 'Authentication required'})
+            sse.send_data('[DONE]')
+            return None
+
+        if not workflowId:
+            sseCallback({'type': 'error', 'error': 'Workflow ID is required'})
+            sse.send_data('[DONE]')
+            return None
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                sseCallback({'type': 'error', 'error': 'Workflow not found or access denied'})
+                sse.send_data('[DONE]')
+                return None
+
+            workflow = self.workflowRepository.findById(workflowId)
+
+            if not workflow:
+                sseCallback({'type': 'error', 'error': 'Workflow not found'})
+                sse.send_data('[DONE]')
+                return None
+
+            if not workflow.isEnabled():
+                sseCallback({'type': 'error', 'error': 'Workflow is disabled'})
+                sse.send_data('[DONE]')
+                return None
+
+            inputVariables = body.get('variables') if body.get('variables') is not None else (
+                body.get('inputs') if body.get('inputs') is not None else {})
+
+            # Inline folder-backed skill bundle / local-doc content / scratch
+            # metadata from the browser dispatcher — see PHP's own comments
+            # at 878-897 (workflow-editor.js::_collectClientSkillsForRun /
+            # _collectInlineDocumentsForRun).
+            clientSkills = body.get('client_skills') if isinstance(body.get('client_skills'), dict) else {}
+            inlineDocuments = body.get('inline_documents') if isinstance(body.get('inline_documents'), dict) else {}
+            scratchFiles = body.get('scratch_files') if isinstance(body.get('scratch_files'), list) else []
+
+            error_log(
+                '[WorkflowController] runStream: inline_documents keys='
+                + phpjson.php_json_encode(list(inlineDocuments.keys()))
+                + ', scratch_files=' + phpjson.php_json_encode(
+                    [sf.get('path') for sf in scratchFiles if isinstance(sf, dict) and 'path' in sf])
+                + ', client_skills keys=' + phpjson.php_json_encode(list(clientSkills.keys()))
+            )
+
+            hasGraphNodes = self.graphRepository.getNodes(workflowId)
+            isGraphWorkflow = not php_empty(hasGraphNodes)
+
+            if isGraphWorkflow:
+                validationErrors = self.graphRepository.validateGraph(workflowId)
+                if not php_empty(validationErrors):
+                    sseCallback({'type': 'error', 'error': 'Invalid workflow: ' + ', '.join(validationErrors)})
+                    sse.send_data('[DONE]')
+                    return None
+
+                streamContext = StreamContext(sseCallback, userId)
+                self.graphWorkflowRunner.setStreamContext(streamContext)
+
+                self.graphWorkflowRunner.run(
+                    workflow, userId, inputVariables, clientSkills, inlineDocuments, scratchFiles)
+            else:
+                sseCallback({'type': 'info', 'message': 'Step-based workflow - running without streaming'})
+                result = self.workflowRunner.run(workflow, userId, inputVariables)
+                sseCallback({
+                    'type': 'workflow_complete',
+                    'success': result.get('success') if result.get('success') is not None else False,
+                    'output': result.get('output'),
+                    'node_outputs': result.get('node_outputs') if result.get('node_outputs') is not None else {},
+                })
+
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
+            sseCallback({'type': 'error', 'error': str(e)})
+
+        sse.send_data('[DONE]')
+        return None
+
+    # ========================================================================
+    # POST /api/v1/workflows/playbook-node/run — PHP 976-1029
+    # ========================================================================
 
     def runPlaybookNode(self, request) -> None:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 976-1029. `@set_time_limit(0)` is a no-op (see `run()`'s
+        docstring). Unlike `runStream`, there is no trailing `[DONE]`
+        sentinel anywhere in the PHP source — the terminal frame is a named
+        `event: done`/`event: error` (`sse.send(...)`, matching
+        `format_sse_frame`), not the bare `data:` frame `sseCallback` itself
+        uses for the node runner's own round/tool/message events."""
+        userId = php_intval(request['user_id'] if request.get('user_id') is not None else 0)
+        body = request['body'] if request.get('body') is not None else {}
+
+        sse = request['sse']
+
+        if not userId:
+            sse.send('error', {'error': 'Authentication required'})
+            return None
+
+        nodeConfig = body.get('node_config') if isinstance(body.get('node_config'), dict) else {}
+        prompt = php_strval(body.get('prompt') if body.get('prompt') is not None else '')
+
+        def sseCallback(event: dict) -> None:
+            sse.send_data(event)
+
+        try:
+            runner = PlaybookNodeRunner(self.config)
+            result = runner.run(userId, nodeConfig, prompt, sseCallback)
+
+            sse.send('done', result)
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
+            sse.send('error', {'error': str(e)})
+
+        return None
+
+    # ========================================================================
+    # POST /api/v1/workflows/tool-result — PHP 1035-1054
+    # ========================================================================
 
     def toolResult(self, request) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 1035-1054. PHP's `http_response_code(401)`/`http_response_code
+        (400)` calls here are dead code for the exact reason documented on
+        `runEvents()` above: `backend/index.php:149` always derives the
+        final HTTP status from `$result['status_code'] ?? 200`, and neither
+        of this method's early-return arrays carries a `status_code` key —
+        so every branch of this endpoint answers 200 on live PHP, error body
+        included. No `status_code` key here either, for the same reason."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        if not userId:
+            return {'error': 'Authentication required'}
+
+        body = request['body'] if request.get('body') is not None else {}
+        toolCallId = php_strval(body['tool_call_id']) if body.get('tool_call_id') is not None else ''
+        if toolCallId == '' or not _RUN_ID_RE.match(toolCallId):
+            return {'error': 'Invalid tool_call_id'}
+
+        bridge = SkillToolBridge()
+        bridge.writeResult(toolCallId, body)
+        return {'success': True}
 
     # ========================================================================
     # GET /api/v1/workflows/{id}/executions
