@@ -61,7 +61,7 @@ verification/comparison phases), `/chat/upload` + document text extraction (pypd
 python-pptx) feeding the chat prefix, `/traces` + `GET /traces/diagnosis`, `POST /fetch-url`, and the file-based
 `SkillToolBridge`/`SkillToolChoice` the workflow runner (Phase 5) uses. Live differential vs PHP: agent, verify,
 compare, upload, traces diagnosis, fetch-url. Uploads land in the same `backend/storage/chat-uploads` tree PHP
-uses. Phases 3–8 (user surface, agent-team data, engines, generators, back office, schedules) follow.
+uses. Phases 3–8 follow (see below).
 
 Phase 3 (2026-09): the user surface — settings (keys, providers, usage, phone, storage, heal, genesis), usage,
 user memories, app keys, heal, genesis, tools, MCP servers + per-user overrides, MCP proxy/app, local file

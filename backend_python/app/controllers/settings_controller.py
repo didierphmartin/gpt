@@ -18,6 +18,7 @@ from pathlib import Path
 from app.config import PHP_BACKEND
 from app.services.package_resolver import PackageResolver
 from app.support.crypto import aes256cbc_decrypt, aes256cbc_encrypt
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import (
     is_numeric,
@@ -27,19 +28,11 @@ from app.support.phpcompat import (
     php_empty,
     php_floatval,
     php_intval,
+    php_items,
     php_strval,
     php_trim,
 )
 from app.support.phpjson import php_json_encode
-
-
-def php_items(v):
-    """foreach ($arr as $k => $v) for a JSON-decoded PHP array (object or list)."""
-    if isinstance(v, dict):
-        return list(v.items())
-    if isinstance(v, list):
-        return list(enumerate(v))
-    return []
 
 
 class SettingsController:
@@ -64,37 +57,7 @@ class SettingsController:
         auth = config.get('auth') or {}
         self.encryptionKey = auth['jwt_secret'] if auth.get('jwt_secret') is not None \
             else 'default-encryption-key-change-this'
-        self._presence: dict[str, bool] = {}
-
-    # ─── no-runtime-DDL presence checks (spec §3) ──────────────────────────
-
-    def _tableExists(self, table: str) -> bool:
-        cache_key = 't:' + table
-        if cache_key not in self._presence:
-            self._presence[cache_key] = len(self.db.fetch_all(f"SHOW TABLES LIKE '{table}'")) > 0
-        return self._presence[cache_key]
-
-    def _columnExists(self, table: str, column: str) -> bool:
-        cache_key = f'c:{table}.{column}'
-        if cache_key not in self._presence:
-            try:
-                rows = self.db.fetch_all(f"SHOW COLUMNS FROM `{table}` LIKE '{column}'")
-            except Exception:  # noqa: BLE001 — missing table => missing column
-                rows = []
-            self._presence[cache_key] = len(rows) > 0
-        return self._presence[cache_key]
-
-    def _requireTable(self, table: str) -> bool:
-        if self._tableExists(table):
-            return True
-        error_log(f'[SettingsController] {table} missing — PHP creates it on demand')
-        return False
-
-    def _requireColumn(self, table: str, column: str) -> bool:
-        if self._columnExists(table, column):
-            return True
-        error_log(f'[SettingsController] {table}.{column} missing — PHP creates it on demand')
-        return False
+        self._presence = DbPresence(db, 'SettingsController')
 
     # ─── endpoints ─────────────────────────────────────────────────────────
 
@@ -220,7 +183,7 @@ class SettingsController:
         self.ensureApiKeysTableExists()
         self.ensureUserModelsTableExists()
 
-        if self._columnExists('user_api_keys', 'system_prompt'):
+        if self._presence.column('user_api_keys', 'system_prompt'):
             sql = ("SELECT provider, api_key, system_prompt, created_at, updated_at"
                    " FROM user_api_keys"
                    " WHERE user_id = :user_id")
@@ -450,7 +413,7 @@ class SettingsController:
             categoryEnabled[row['category']] = php_bool(row['enabled'])
 
         # Get provider-level settings
-        if self._columnExists('user_provider_settings', 'enabled'):
+        if self._presence.column('user_provider_settings', 'enabled'):
             sql = ("SELECT category, provider, api_key, settings, is_active, enabled"
                    " FROM user_provider_settings"
                    " WHERE user_id = :user_id")
@@ -703,33 +666,33 @@ class SettingsController:
     def ensureApiKeysTableExists(self) -> None:
         """PHP CREATEs `user_api_keys` (+ the idempotent system_prompt ALTER) on demand;
         the Python port never issues DDL — it only reports what is missing."""
-        if self._requireTable('user_api_keys'):
-            self._requireColumn('user_api_keys', 'system_prompt')
+        if self._presence.table('user_api_keys'):
+            self._presence.column('user_api_keys', 'system_prompt')
 
     def ensureUserModelsTableExists(self) -> None:
-        self._requireTable('user_model_selections')
+        self._presence.table('user_model_selections')
 
     def ensureProviderSettingsTableExists(self) -> None:
-        if self._requireTable('user_provider_settings'):
-            self._requireColumn('user_provider_settings', 'enabled')
+        if self._presence.table('user_provider_settings'):
+            self._presence.column('user_provider_settings', 'enabled')
 
     def ensureCategorySettingsTableExists(self) -> None:
-        self._requireTable('user_category_settings')
+        self._presence.table('user_category_settings')
 
     def ensureStorageColumnsExist(self) -> None:
         for column in ('storage_provider', 'storage_folder', 'universalfs_api_key'):
-            self._requireColumn('users', column)
+            self._presence.column('users', column)
 
     def ensureHealColumnsExist(self) -> None:
         for column in ('heal_mode', 'heal_daily_budget_usd', 'heal_per_heal_ceiling_usd',
                        'heal_eval_provider', 'heal_proposer_provider', 'heal_judge_provider',
                        'heal_max_iterations', 'heal_runs_per_query'):
-            self._requireColumn('users', column)
+            self._presence.column('users', column)
 
     def ensureGenesisColumnsExist(self) -> None:
         for column in ('genesis_mode', 'genesis_daily_budget_usd', 'genesis_per_skill_ceiling_usd',
                        'genesis_max_skills_per_week', 'genesis_reflection_provider'):
-            self._requireColumn('users', column)
+            self._presence.column('users', column)
 
     # ─── crypto ────────────────────────────────────────────────────────────
 
@@ -1076,7 +1039,7 @@ class SettingsController:
                 # on today's schema this SELECT raises for PHP too; read it
                 # only when the column is actually there (spec §3) and mirror
                 # PHP's PDOException otherwise.
-                if not self._requireColumn('users', 'universalfs_api_key'):
+                if not self._presence.column('users', 'universalfs_api_key'):
                     raise RuntimeError(
                         "SQLSTATE[42S22]: Column not found: 1054 Unknown column "
                         "'universalfs_api_key' in 'field list'")

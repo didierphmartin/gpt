@@ -15,26 +15,11 @@ import httpx
 
 from app.controllers.mcp_server_controller import MCPServerController
 from app.providers._http import SHARED_SSL_CONTEXT
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import php_array, php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import php_empty, php_intval, php_items, php_strval, php_trim
+from app.support.phpjson import php_json_arrays as _php_json_arrays
 from app.support.phpjson import php_json_encode
-
-
-def _php_json_arrays(value):
-    """Mirrors `json_decode($s, true)` handed straight to another `json_encode()`
-    call. PHP's assoc-mode decode makes an EMPTY JSON object indistinguishable
-    from an empty JSON array — both come back as `[]` — so php_array() must be
-    applied at every depth or a round-tripped empty object silently becomes
-    `[]` on the way back out. Same shape as mcp_server_controller.py's private
-    `_php_arrays` (kept as its own copy here — see this controller's own
-    `sendToMCPServer`/`parseSSEResponse`, which PHP does not share with
-    MCPServerController or MCPToolsLoader either).
-    """
-    if isinstance(value, dict):
-        return php_array({k: _php_json_arrays(v) for k, v in value.items()})
-    if isinstance(value, list):
-        return [_php_json_arrays(v) for v in value]
-    return value
 
 
 def _isset_error(value) -> bool:
@@ -48,7 +33,7 @@ class MCPProxyController:
         self.db = db
         self.config = config
         self.lastError: str | None = None
-        self._presence: dict[str, bool] = {}
+        self._presence = DbPresence(db, 'MCPProxyController')
         self.ensureTablesExist()
 
     # ─── forward() — single public entry point (PHP 32-70) ─────────────────
@@ -486,9 +471,8 @@ class MCPProxyController:
         """
         if not isinstance(headers, (dict, list)) or not headers:
             return []
-        items = headers.items() if isinstance(headers, dict) else enumerate(headers)
         out = []
-        for name, value in items:
+        for name, value in php_items(headers):
             if not isinstance(name, str) or name == '':
                 continue
             if isinstance(value, (dict, list)) or value is None:
@@ -558,19 +542,7 @@ class MCPProxyController:
 
     # ─── ensureTablesExist (PHP 582-613; no-DDL per constraints.md §3) ─────
 
-    def _tableExists(self, table: str) -> bool:
-        cache_key = 't:' + table
-        if cache_key not in self._presence:
-            self._presence[cache_key] = len(self.db.fetch_all(f"SHOW TABLES LIKE '{table}'")) > 0
-        return self._presence[cache_key]
-
-    def _requireTable(self, table: str) -> bool:
-        if self._tableExists(table):
-            return True
-        error_log(f'[MCPProxyController] {table} missing — PHP creates it on demand')
-        return False
-
     def ensureTablesExist(self) -> None:
         """PHP `CREATE TABLE IF NOT EXISTS mcp_servers / mcp_server_tools`."""
-        self._requireTable('mcp_servers')
-        self._requireTable('mcp_server_tools')
+        self._presence.table('mcp_servers')
+        self._presence.table('mcp_server_tools')

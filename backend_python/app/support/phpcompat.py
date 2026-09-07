@@ -168,6 +168,17 @@ def php_values(v) -> list:
     return []
 
 
+def php_items(v) -> list:
+    """`foreach ($v as $k => $v)` over a JSON-decoded PHP array — a JSON
+    object yields its (key, value) pairs, a JSON list yields (index, value)
+    pairs, anything else yields nothing."""
+    if isinstance(v, dict):
+        return list(v.items())
+    if isinstance(v, list):
+        return list(enumerate(v))
+    return []
+
+
 _FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
 
 

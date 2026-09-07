@@ -193,6 +193,27 @@ def test_create_success_returns_full_key_and_201():
     assert insert_call[':scopes'] == '["agents:run:1","x"]'
 
 
+def test_create_nbsp_padded_scope_survives_trim():
+    # PHP trim() strips only its own byte charlist — NBSP (\xa0) is left alone,
+    # unlike Python str.strip() which treats it as whitespace and would eat it.
+    db = FakeDb(one=[ADMIN_ROW, {'id': 999}], insert_id=42)
+    r = controller(db).create(
+        ctx(body={'user_id': 999, 'application_id': 'app1', 'name': 'k',
+                   'scopes': [' agents:run:1 ']}))
+    assert r['success'] is True
+    assert r['data']['scopes'] == [' agents:run:1 ']
+
+
+def test_create_all_nbsp_scope_is_not_treated_as_empty():
+    # mirrors PHP: trim("\xc2\xa0") !== '' — an all-NBSP scope is a non-empty
+    # string to PHP's trim(), so it must pass validation, not be rejected.
+    db = FakeDb(one=[ADMIN_ROW, {'id': 999}], insert_id=42)
+    r = controller(db).create(
+        ctx(body={'user_id': 999, 'application_id': 'app1', 'name': 'k', 'scopes': ['  ']}))
+    assert r['success'] is True
+    assert r['data']['scopes'] == ['  ']
+
+
 # --- index shape -------------------------------------------------------------
 
 def test_index_returns_repo_list_all():

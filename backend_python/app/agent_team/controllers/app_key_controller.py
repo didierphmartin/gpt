@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 
 from app.agent_team.services.app_key_repository import AppKeyRepository
-from app.support.phpcompat import php_intval, php_strval
+from app.support.phpcompat import php_intval, php_strval, php_trim
 
 
 class AppKeyController:
@@ -37,8 +37,8 @@ class AppKeyController:
 
         body = request.get('body') or {}
         userId = php_intval(body['user_id']) if body.get('user_id') is not None else 0
-        applicationId = php_strval(body.get('application_id')).strip()
-        name = php_strval(body.get('name')).strip()
+        applicationId = php_trim(body.get('application_id'))
+        name = php_trim(body.get('name'))
         scopes = body.get('scopes')
 
         if userId <= 0:
@@ -51,7 +51,7 @@ class AppKeyController:
             return self._err('scopes must be a non-empty array of strings', 400)
         scope_values = list(scopes.values()) if isinstance(scopes, dict) else scopes
         for s in scope_values:
-            if not isinstance(s, str) or s.strip() == '':
+            if not isinstance(s, str) or php_trim(s) == '':
                 return self._err('every scope must be a non-empty string', 400)
 
         # The user the key acts for must exist.
@@ -59,7 +59,7 @@ class AppKeyController:
         if not row:
             return self._err(f'user_id {userId} does not exist', 400)
 
-        created = self.repo.create(userId, applicationId, name, [s.strip() for s in scope_values])
+        created = self.repo.create(userId, applicationId, name, [php_trim(s) for s in scope_values])
 
         return {
             'success': True,

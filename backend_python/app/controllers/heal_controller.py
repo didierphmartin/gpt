@@ -20,6 +20,7 @@ kind). Ported as a presence check only (§3 tracker below).
 """
 from __future__ import annotations
 
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import php_empty, php_floatval
 
@@ -28,33 +29,16 @@ class HealController:
     def __init__(self, db, config: dict | None = None):
         self.db = db
         self._spendTableEnsured = False
-        self._presence: dict[str, bool] = {}
+        self._presence = DbPresence(db, 'HealController')
 
     # ─── no-runtime-DDL presence checks (spec §3) ──────────────────────────
     # Tracker: heal_spend table + heal_spend.kind column — both present on the
     # live DB (verified via SHOW COLUMNS FROM heal_spend, 2026-09-07).
 
-    def _tableExists(self, table: str) -> bool:
-        cache_key = 't:' + table
-        if cache_key not in self._presence:
-            self._presence[cache_key] = len(self.db.fetch_all(f"SHOW TABLES LIKE '{table}'")) > 0
-        return self._presence[cache_key]
-
-    def _columnExists(self, table: str, column: str) -> bool:
-        cache_key = f'c:{table}.{column}'
-        if cache_key not in self._presence:
-            try:
-                rows = self.db.fetch_all(f"SHOW COLUMNS FROM `{table}` LIKE '{column}'")
-            except Exception:  # noqa: BLE001 — missing table => missing column
-                rows = []
-            self._presence[cache_key] = len(rows) > 0
-        return self._presence[cache_key]
-
     def _ensureSpendTable(self) -> None:
         if self._spendTableEnsured:
             return
-        if not self._tableExists('heal_spend'):
-            error_log('[HealController] heal_spend missing — PHP creates it on demand')
+        self._presence.table('heal_spend')
         self._spendTableEnsured = True
 
     # ─── endpoints ──────────────────────────────────────────────────────────
@@ -115,7 +99,7 @@ class HealController:
             # as a presence check per spec §3 rather than PHP's PDOException
             # probe-and-fallback — same net behaviour, testable without faking
             # a DB error.)
-            if self._columnExists('heal_spend', 'kind'):
+            if self._presence.column('heal_spend', 'kind'):
                 self.db.execute(
                     "INSERT INTO heal_spend (user_id, day, kind, spent_usd) VALUES (:u, CURDATE(), 'heal', :s)"
                     " ON DUPLICATE KEY UPDATE spent_usd = spent_usd + :s2",
@@ -173,7 +157,7 @@ class HealController:
     def _spentToday(self, userId) -> float:
         self._ensureSpendTable()
         try:
-            if self._columnExists('heal_spend', 'kind'):
+            if self._presence.column('heal_spend', 'kind'):
                 vals = self.db.fetch_column(
                     "SELECT spent_usd FROM heal_spend WHERE user_id = ? AND day = CURDATE() AND kind = 'heal'",
                     [userId],

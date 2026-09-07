@@ -14,7 +14,7 @@ from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.services.package_resolver import PackageResolver
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_empty, php_intval
+from app.support.phpcompat import is_numeric, php_empty, php_intval, php_items
 
 
 class ProviderController:
@@ -188,8 +188,7 @@ class ProviderController:
                 return None
 
             allowed = []
-            items = providers.items() if isinstance(providers, dict) else enumerate(providers)
-            for name, cfg in items:
+            for name, cfg in php_items(providers):
                 if isinstance(cfg, (dict, list)) and not php_empty(
                         cfg.get('enabled') if isinstance(cfg, dict) else None):
                     allowed.append(name)

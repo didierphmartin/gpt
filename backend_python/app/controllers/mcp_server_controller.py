@@ -8,15 +8,15 @@ Server management is done via AdminController.
 from __future__ import annotations
 
 import ipaddress
-import json
 import re
 
 import pymysql
 
 from app.services.package_resolver import PackageResolver
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_array, php_bool, php_empty, php_intval, php_strval, php_trim
-from app.support.phpjson import php_json_encode
+from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval, php_strval, php_trim
+from app.support.phpjson import php_json_decode, php_json_encode
 
 # ─── filter_var($url, FILTER_VALIDATE_URL) ─────────────────────────────────
 # ext/filter: php_filter_url() first strips every byte outside RFC 1738 §5 and
@@ -88,23 +88,9 @@ class MCPServerController:
     def __init__(self, db, config: dict):
         self.db = db
         self.config = config
-        self._presence: dict[str, bool] = {}
+        self._presence = DbPresence(db, 'MCPServerController')
         self.ensureTablesExist()
         self.ensureMcpSettingsTableExists()
-
-    # ─── no-DDL presence checks (constraints.md §3) ────────────────────────
-
-    def _tableExists(self, table: str) -> bool:
-        cache_key = 't:' + table
-        if cache_key not in self._presence:
-            self._presence[cache_key] = len(self.db.fetch_all(f"SHOW TABLES LIKE '{table}'")) > 0
-        return self._presence[cache_key]
-
-    def _requireTable(self, table: str) -> bool:
-        if self._tableExists(table):
-            return True
-        error_log(f'[MCPServerController] {table} missing — PHP creates it on demand')
-        return False
 
     # ─── statics ───────────────────────────────────────────────────────────
 
@@ -651,12 +637,12 @@ class MCPServerController:
 
     def ensureTablesExist(self) -> None:
         """PHP `CREATE TABLE IF NOT EXISTS mcp_servers / mcp_server_tools`."""
-        self._requireTable('mcp_servers')
-        self._requireTable('mcp_server_tools')
+        self._presence.table('mcp_servers')
+        self._presence.table('mcp_server_tools')
 
     def ensureMcpSettingsTableExists(self) -> None:
         """Idempotently create user_mcp_settings (per-user MCP master switch)."""
-        self._requireTable('user_mcp_settings')
+        self._presence.table('user_mcp_settings')
 
     # ─── helpers ───────────────────────────────────────────────────────────
 
@@ -666,19 +652,8 @@ class MCPServerController:
 
         The `true` flag makes PHP build *arrays*, so an empty JSON object comes
         back as `[]` and json_encode() re-emits it as `[]`, not `{}` — hence
-        php_array() at every depth. (MCPToolsLoader.php:151 decodes WITHOUT the
-        flag and keeps stdClass objects, which is why /tools is unaffected.)
+        php_array() at every depth (app.support.phpjson.php_json_decode).
+        (MCPToolsLoader.php:151 decodes WITHOUT the flag and keeps stdClass
+        objects, which is why /tools is unaffected.)
         """
-        try:
-            return _php_arrays(json.loads(raw))
-        except (ValueError, TypeError):
-            return None
-
-
-def _php_arrays(value):
-    """Apply php_array() to every map in a decoded JSON value."""
-    if isinstance(value, dict):
-        return php_array({k: _php_arrays(v) for k, v in value.items()})
-    if isinstance(value, list):
-        return [_php_arrays(v) for v in value]
-    return value
+        return php_json_decode(raw)

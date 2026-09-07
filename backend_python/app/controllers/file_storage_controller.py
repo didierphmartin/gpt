@@ -41,6 +41,7 @@ import os
 from datetime import datetime
 
 from app.controllers.settings_controller import SettingsController
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import php_empty, php_tz, php_trim
 
@@ -101,7 +102,7 @@ class FileStorageController:
     def __init__(self, db, config: dict | None = None):
         self.db = db
         self.config = config if config is not None else {}
-        self._presence: dict[str, bool] = {}
+        self._presence = DbPresence(db, 'FileStorageController')
 
     # ─── buildFullPath (PHP 35-48) ──────────────────────────────────────────
 
@@ -116,25 +117,9 @@ class FileStorageController:
 
     # ─── ensureStorageColumnsExist (PHP 53-66; no-DDL per constraints.md) ──
 
-    def _columnExists(self, table: str, column: str) -> bool:
-        cache_key = f'c:{table}.{column}'
-        if cache_key not in self._presence:
-            try:
-                rows = self.db.fetch_all(f"SHOW COLUMNS FROM `{table}` LIKE '{column}'")
-            except Exception:  # noqa: BLE001 — missing table => missing column
-                rows = []
-            self._presence[cache_key] = len(rows) > 0
-        return self._presence[cache_key]
-
-    def _requireColumn(self, table: str, column: str) -> bool:
-        if self._columnExists(table, column):
-            return True
-        error_log(f'[FileStorageController] {table}.{column} missing — PHP creates it on demand')
-        return False
-
     def ensureStorageColumnsExist(self) -> None:
         for column in ('storage_provider', 'storage_folder'):
-            self._requireColumn('users', column)
+            self._presence.column('users', column)
 
     # ─── getUserStorageConfig (PHP 71-85) ───────────────────────────────────
 

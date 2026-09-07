@@ -11,22 +11,9 @@ import json
 import httpx
 
 from app.providers._http import SHARED_SSL_CONTEXT
-from app.support.phpcompat import php_array, php_empty, php_floatval, php_trim
+from app.support.phpcompat import php_empty, php_floatval, php_trim
+from app.support.phpjson import php_json_arrays as _php_json_arrays
 from app.support.phpjson import php_json_encode
-
-
-def _php_json_arrays(value):
-    """Same ruling as mcp_proxy_controller.py's private helper of the same
-    shape: `json_decode($s, true)` collapses an empty JSON object into `[]`,
-    and that corruption must be reproduced at every depth or a round-tripped
-    empty object would come back out as `{}` instead. Kept as its own copy —
-    PHP's MCPAppController does not share `sendMCPRequest` with MCPProxyController.
-    """
-    if isinstance(value, dict):
-        return php_array({k: _php_json_arrays(v) for k, v in value.items()})
-    if isinstance(value, list):
-        return [_php_json_arrays(v) for v in value]
-    return value
 
 
 class MCPAppController:

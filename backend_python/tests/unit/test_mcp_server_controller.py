@@ -156,7 +156,7 @@ def test_filter_validate_url_matches_php(url, expected):
 
 def test_ensure_tables_exist_logs_missing_and_issues_no_ddl(monkeypatch):
     msgs = []
-    monkeypatch.setattr('app.controllers.mcp_server_controller.error_log', msgs.append)
+    monkeypatch.setattr('app.support.db_presence.error_log', msgs.append)
     db = FakeDb(tables=())
     c(db)
     assert msgs == ['[MCPServerController] mcp_servers missing — PHP creates it on demand',
@@ -167,7 +167,7 @@ def test_ensure_tables_exist_logs_missing_and_issues_no_ddl(monkeypatch):
 
 def test_ensure_tables_exist_is_silent_and_ddl_free_when_present(monkeypatch):
     msgs = []
-    monkeypatch.setattr('app.controllers.mcp_server_controller.error_log', msgs.append)
+    monkeypatch.setattr('app.support.db_presence.error_log', msgs.append)
     db = FakeDb()
     c(db)
     assert msgs == []

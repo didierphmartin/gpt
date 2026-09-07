@@ -142,3 +142,13 @@ def test_php_values():
     assert pc.php_values([]) == []
     assert pc.php_values(None) == []
     assert pc.php_values('not an array') == []
+
+
+def test_php_items_foreach_k_v_over_dict_or_list():
+    # foreach ($arr as $k => $v) for a JSON-decoded PHP array (object or list).
+    assert pc.php_items({'a': 1, 'b': 2}) == [('a', 1), ('b', 2)]
+    assert pc.php_items(['x', 'y']) == [(0, 'x'), (1, 'y')]
+    assert pc.php_items({}) == []
+    assert pc.php_items([]) == []
+    assert pc.php_items(None) == []
+    assert pc.php_items('not an array') == []

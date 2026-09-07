@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 
+from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import is_php_array, mb_substr, php_array, php_empty, php_floatval, php_intval, php_trim
 from app.support.phpjson import php_json_encode
@@ -31,7 +32,7 @@ class GenesisController:
         self.db = db
         self.config = config or {}
         self._tablesEnsured = False
-        self._presence: dict[str, bool] = {}
+        self._presence = DbPresence(db, 'GenesisController')
 
     # ─── pure decision (precedent: HealController.decide) ──────────────────
 
@@ -59,31 +60,12 @@ class GenesisController:
 
     # ─── no-runtime-DDL presence checks (spec §3) ──────────────────────────
 
-    def _tableExists(self, table: str) -> bool:
-        cache_key = 't:' + table
-        if cache_key not in self._presence:
-            self._presence[cache_key] = len(self.db.fetch_all(f"SHOW TABLES LIKE '{table}'")) > 0
-        return self._presence[cache_key]
-
-    def _columnExists(self, table: str, column: str) -> bool:
-        cache_key = f'c:{table}.{column}'
-        if cache_key not in self._presence:
-            try:
-                rows = self.db.fetch_all(f"SHOW COLUMNS FROM `{table}` LIKE '{column}'")
-            except Exception:  # noqa: BLE001 — missing table => missing column
-                rows = []
-            self._presence[cache_key] = len(rows) > 0
-        return self._presence[cache_key]
-
     def ensureTables(self) -> None:
         if self._tablesEnsured or self.db is None:
             return
-        if not self._tableExists('skill_promotions'):
-            error_log('[GenesisController] skill_promotions missing — PHP creates it on demand')
-        if not self._tableExists('heal_spend'):
-            error_log('[GenesisController] heal_spend missing — PHP creates it on demand')
-        elif not self._columnExists('heal_spend', 'kind'):
-            error_log('[GenesisController] heal_spend.kind missing — PHP creates it on demand')
+        self._presence.table('skill_promotions')
+        if self._presence.table('heal_spend'):
+            self._presence.column('heal_spend', 'kind')
         self._tablesEnsured = True
 
     # ─── endpoints ───────────────────────────────────────────────────────────
