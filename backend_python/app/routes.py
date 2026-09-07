@@ -17,9 +17,11 @@ from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
 from app.controllers.drive_controller import DriveController
+from app.controllers.evi_webhook_controller import EVIWebhookController
 from app.controllers.file_storage_controller import FileStorageController
 from app.controllers.genesis_controller import GenesisController
 from app.controllers.heal_controller import HealController
+from app.controllers.hume_tool_controller import HumeToolController
 from app.controllers.login_admin_controller import LoginAdminController
 from app.controllers.mcp_app_controller import MCPAppController
 from app.controllers.mcp_proxy_controller import MCPProxyController
@@ -60,9 +62,11 @@ CONTROLLERS = {
     'ChatController': ChatController,
     'ContextController': ContextController,
     'DriveController': DriveController,
+    'EVIWebhookController': EVIWebhookController,
     'FileStorageController': FileStorageController,
     'GenesisController': GenesisController,
     'HealController': HealController,
+    'HumeToolController': HumeToolController,
     'LoginAdminController': LoginAdminController,
     'MCPAppController': MCPAppController,
     'MCPProxyController': MCPProxyController,
@@ -207,6 +211,18 @@ ROUTES = [
     # MCP APP (Public - serves HTML; routes.php:283-287)
     ('GET', '/api/v1/mcp/app', ('MCPAppController', 'getResource')),
     ('GET', '/api/mcp-app.php', ('MCPAppController', 'getResource')),  # Legacy path
+    # HUME TOOLS (routes.php:290-297. Commented "(Public)" there, but NOT in
+    # MiddlewareProcessor::PUBLIC_ROUTES -- these require a normal JWT/app-key
+    # like any other route; only the EVI webhook below is actually public.)
+    ('POST', '/api/v1/hume/tools/execute', ('HumeToolController', 'execute')),
+    ('GET', '/api/v1/hume/tools/list', ('HumeToolController', 'list')),
+    ('POST', '/api/v1/hume/tools/sync', ('HumeToolController', 'sync')),
+    ('GET', '/api/v1/hume/tools/status', ('HumeToolController', 'getStatus')),
+    ('GET', '/api/v1/hume/tools/test-connection', ('HumeToolController', 'testConnection')),
+    ('GET', '/api/v1/hume/config', ('HumeToolController', 'getConfig')),
+    # EVI WEBHOOK (public; routes.php:299-302. See
+    # app/middleware/processor.py PUBLIC_ROUTES -- already carries this row.)
+    ('POST', '/api/v1/evi/webhook', ('EVIWebhookController', 'handleWebhook')),
     # FILE STORAGE (universalFS; routes.php:151-153)
     ('GET', '/api/v1/storage/providers', ('FileStorageController', 'getProviders')),
     ('GET', '/api/v1/storage/list', ('FileStorageController', 'listFiles')),
@@ -278,9 +294,9 @@ ROUTES = [
     ('PUT', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'update')),
     ('DELETE', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'destroy')),
     ('GET', '/api/v1/teams/{id:\\d+}/agents', ('AgentTeam:TeamController', 'agents')),
-    # WORKFLOWS (routes.php:348-350, 374-384, 391-392, 402-405.
-    # generate-python/adk/maf/nooa (351-354) are Phase 6 and NOT routed
-    # here.)
+    # WORKFLOWS (routes.php:348-350, 374-384, 391-392, 402-405. generate-python
+    # /adk/maf/nooa (routes.php 351-354) are appended below, after the
+    # ingestion rows, per the slot that Task 6 reserved for them.)
     ('GET', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'index')),
     ('POST', '/api/v1/workflows', ('AgentTeam:WorkflowController', 'create')),
     ('GET', '/api/v1/workflows/{id:\\d+}', ('AgentTeam:WorkflowController', 'show')),
@@ -313,6 +329,13 @@ ROUTES = [
     # cursor; K concurrent run-worker SSE streams pull files work-stealing.
     ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/run-start', ('AgentTeam:IngestionController', 'runStart')),
     ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/run-worker', ('AgentTeam:IngestionController', 'runWorker')),
+    # Code generators (routes.php 351-354). Standalone LangGraph/ADK/MAF/NOOA
+    # Python script generation from the workflow graph — pure compilation,
+    # no LLM calls, no agent execution.
+    ('GET', '/api/v1/workflows/{id:\\d+}/generate-python', ('AgentTeam:WorkflowController', 'generatePython')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/generate-adk', ('AgentTeam:WorkflowController', 'generateAdk')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/generate-maf', ('AgentTeam:WorkflowController', 'generateMaf')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/generate-nooa', ('AgentTeam:WorkflowController', 'generateNooa')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
