@@ -10,13 +10,7 @@ from app.playbook.playbook_document import PlaybookDocument
 
 _PHP_INT_MAX = 2 ** 63 - 1
 
-# PHP: '/#[A-Z][\w\'’]*(?: [A-Z][\w\'’]*){0,5}(?: \([A-Za-z ]+\))?/u'
-# (PlaybookAnalyzer.php:58) -- the `/u` modifier makes PCRE treat the
-# subject/pattern as UTF-8, but does NOT make `\w` unicode-aware (that needs
-# PCRE_UCP, which this pattern doesn't set), so PHP's `\w` here still means
-# ASCII `[A-Za-z0-9_]` only (D2). Python's bare `\w` is unicode-aware by
-# default, so it's spelled out explicitly instead.
-_ACTION_RE = re.compile(r"#[A-Z][A-Za-z0-9_'’]*(?: [A-Z][A-Za-z0-9_'’]*){0,5}(?: \([A-Za-z ]+\))?", re.UNICODE)
+_ACTION_RE = re.compile(r"#[A-Z][\w'’]*(?: [A-Z][\w'’]*){0,5}(?: \([A-Za-z ]+\))?", re.UNICODE)
 _STEP_RE = re.compile(r'^\s*(\d+(?:\.\d+)*)[.)]?\s')
 _NUMBERED_RE = re.compile(r'^\d+(?:\.\d+)*[.)]?\s')
 _LEADING_DIGIT_RE = re.compile(r'^\d')

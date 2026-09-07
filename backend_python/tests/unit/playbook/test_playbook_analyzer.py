@@ -28,15 +28,19 @@ def _doc(over=None):
 
 
 # ---------------------------------------------------------------------------
-# _ACTION_RE -- D2 (Phase 5 final-review wave). PHP's `\w` inside the `/u`
-# modifier is still ASCII-only (PlaybookAnalyzer.php:58); a non-ASCII letter
-# right after the `#Name` must NOT extend the match.
+# _ACTION_RE -- Phase 5 final-review wave, round 2. D2's original rationale
+# was wrong and has been reverted: real PHP 8.2 / PCRE 10.40 DOES match
+# Unicode letters with `\w` under the `/u` modifier --
+#   php -r 'var_dump(preg_match("/#[A-Z][\w\x27\x{2019}]*(?: [A-Z][\w\x27\x{2019}]*){0,5}(?: \([A-Za-z ]+\))?/u", "#Résumé the case", $m)); var_dump($m[0]);'
+#   -> int(1), string(9) "#Résumé"
+# so Python's original bare `\w` (unicode-aware under `re.UNICODE`, which is
+# also the default for `str` patterns) was already correct and matches PHP.
 # ---------------------------------------------------------------------------
 
-def test_action_re_non_ascii_letter_does_not_extend_the_match():
+def test_action_re_unicode_letter_extends_the_match_like_php():
     m = _ACTION_RE.search('#Résumé the case')
     assert m is not None
-    assert m.group(0) == '#R'  # 'é' is not ASCII \w -- match stops right after 'R'
+    assert m.group(0) == '#Résumé'
 
 
 def test_action_re_ascii_word_chars_extend_the_match():

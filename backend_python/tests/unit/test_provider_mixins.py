@@ -33,6 +33,14 @@ def test_static_converters():
     assert M.normalizeUsage({'promptTokenCount': 1, 'candidatesTokenCount': 2, 'totalTokenCount': 3}, 'gemini') == {'prompt_tokens': 1, 'completion_tokens': 2, 'total_tokens': 3}
     assert M.normalizeUsage({'prompt_tokens': 1, 'completion_tokens': 2}, 'kimi') == {'prompt_tokens': 1, 'completion_tokens': 2, 'total_tokens': 3}
     assert M.normalizeUsage(None, 'x') is None
+    assert M.convertToolsToOpenAIFormat([{'name': 'a', 'input_schema': {'type': 'object'}}]) == [{'type': 'function', 'function': {'name': 'a', 'description': '', 'parameters': {'type': 'object'}}}]
+    g = M.fixSchemaForGemini({'type': 'object', 'properties': {'x': {'type': 'string', 'enum': ['a', 'b'], 'format': 'x'}}, 'required': [], 'additionalProperties': False})
+    assert g == {'type': 'object', 'properties': {'x': {'type': 'string', 'description': 'Allowed values: a, b'}}}
+    assert M.fixSchemaForGemini({}) == {'type': 'string'} and M.fixSchemaForGemini({'type': 'array'}) == {'type': 'array', 'items': {'type': 'string'}}
+    assert M.convertToolsToGeminiFormat([{'name': 'a', 'input_schema': {}}]) == [{'functionDeclarations': [{'name': 'a', 'description': '', 'parameters': {'type': 'string'}}]}]
+    # PHP array_map('strval', ...) semantics: True -> '1', 1.0 -> '1' (not 'True'/'1.0')
+    b = M.fixSchemaForGemini({'type': 'string', 'enum': [True, 1.0, 'x']})
+    assert b == {'type': 'string', 'description': "Allowed values: 1, 1, x"}
 
 
 def test_normalize_usage_list_shaped_behaves_like_empty_dict():
@@ -46,14 +54,6 @@ def test_normalize_usage_list_shaped_behaves_like_empty_dict():
     assert M.normalizeUsage([], 'google') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
     assert M.normalizeUsage([], 'openai') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
     assert M.normalizeUsage([], 'kimi') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
-    assert M.convertToolsToOpenAIFormat([{'name': 'a', 'input_schema': {'type': 'object'}}]) == [{'type': 'function', 'function': {'name': 'a', 'description': '', 'parameters': {'type': 'object'}}}]
-    g = M.fixSchemaForGemini({'type': 'object', 'properties': {'x': {'type': 'string', 'enum': ['a', 'b'], 'format': 'x'}}, 'required': [], 'additionalProperties': False})
-    assert g == {'type': 'object', 'properties': {'x': {'type': 'string', 'description': 'Allowed values: a, b'}}}
-    assert M.fixSchemaForGemini({}) == {'type': 'string'} and M.fixSchemaForGemini({'type': 'array'}) == {'type': 'array', 'items': {'type': 'string'}}
-    assert M.convertToolsToGeminiFormat([{'name': 'a', 'input_schema': {}}]) == [{'functionDeclarations': [{'name': 'a', 'description': '', 'parameters': {'type': 'string'}}]}]
-    # PHP array_map('strval', ...) semantics: True -> '1', 1.0 -> '1' (not 'True'/'1.0')
-    b = M.fixSchemaForGemini({'type': 'string', 'enum': [True, 1.0, 'x']})
-    assert b == {'type': 'string', 'description': "Allowed values: 1, 1, x"}
 
 
 def test_client_side_tools():
