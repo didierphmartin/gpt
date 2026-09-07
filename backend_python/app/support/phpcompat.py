@@ -138,3 +138,10 @@ def php_bool(v) -> bool:
     """PHP (bool) cast: '' , '0', 0, 0.0, None, False, and empty list/dict/tuple/set are falsy;
     everything else (including non-'0' strings like "0.0") is truthy."""
     return not php_empty(v)
+
+
+def php_array(d):
+    """PHP arrays are ordered maps: a string-keyed one json_encodes as an object,
+    but an EMPTY one encodes as `[]`, not `{}`. Apply wherever PHP hands such a
+    map straight to json_encode so the wire shape matches on both backends."""
+    return d if d else []

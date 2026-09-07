@@ -44,11 +44,8 @@ def php_json_encode(value) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(',', ':')).replace('/', '\\/')
 
 
-def php_array(d):
-    """PHP arrays are ordered maps: a string-keyed one json_encodes as an object,
-    but an EMPTY one encodes as `[]`, not `{}`. Applied wherever PHP hands such a
-    map straight to json_encode so the wire shape matches on both backends."""
-    return d if d else []
+# php_array lives in app.support.phpcompat (global rule: empty string-keyed array → []); re-exported here.
+from app.support.phpcompat import php_array  # noqa: E402,F401
 
 
 def php_items(v):
