@@ -25,21 +25,16 @@ from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.services.package_resolver import PackageResolver
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_array, php_empty, php_intval, php_strval, php_trim
-
-
-def _is_php_array(v) -> bool:
-    return isinstance(v, (list, dict))
-
-
-def _php_values(v) -> list:
-    """foreach ($v as $item) over a decoded JSON value that may be a PHP
-    list-array or an associative array — both iterate values only."""
-    if isinstance(v, dict):
-        return list(v.values())
-    if isinstance(v, list):
-        return v
-    return []
+from app.support.phpcompat import (
+    is_numeric,
+    is_php_array,
+    php_array,
+    php_empty,
+    php_intval,
+    php_strval,
+    php_trim,
+    php_values,
+)
 
 
 class ToolsController:
@@ -254,12 +249,12 @@ class ToolsController:
         tools = body.get('tools') if body.get('tools') is not None else []
         userId = request.get('user_id') if request.get('user_id') is not None else 'demo-user'
 
-        if transcript == '' or not _is_php_array(tools) or len(tools) == 0:
+        if transcript == '' or not is_php_array(tools) or len(tools) == 0:
             return {'success': True, 'tool': None, 'status_code': 200}
 
         # Build a compact description of each tool the agent had available.
         toolLines = []
-        for t in _php_values(tools):
+        for t in php_values(tools):
             name = t.get('name') if isinstance(t, dict) and t.get('name') is not None else '?'
             desc = t.get('description') if isinstance(t, dict) and t.get('description') is not None else ''
             enum = None
@@ -321,12 +316,24 @@ class ToolsController:
                     parsed = json.loads(m.group(0))
                 except (ValueError, TypeError):
                     parsed = None
-                if _is_php_array(parsed):
+                if is_php_array(parsed):
                     tool = parsed.get('tool') if isinstance(parsed, dict) else None
-                    args = parsed.get('args') if isinstance(parsed, dict) and parsed.get('args') is not None else {}
+                    # PHP: `$parsed['args'] ?? new \stdClass()`. Only an
+                    # ACTUALLY-DECODED args value goes through php_array()
+                    # (an empty decoded PHP array -> `[]`, since PHP's
+                    # json_decode(..., true) can't tell an empty JSON object
+                    # from an empty JSON array); the default for a
+                    # missing/null key is a real stdClass, which always
+                    # serializes as `{}` — never route the default through
+                    # php_array(), or an absent `args` key would wrongly
+                    # come out as `[]` on the wire.
+                    if isinstance(parsed, dict) and parsed.get('args') is not None:
+                        args = php_array(parsed.get('args'))
+                    else:
+                        args = {}
                     # Validate tool exists in the provided list.
                     valid = False
-                    for t in _php_values(tools):
+                    for t in php_values(tools):
                         tName = t.get('name') if isinstance(t, dict) else None
                         if tName == tool:
                             valid = True
@@ -335,7 +342,7 @@ class ToolsController:
                         return {
                             'success': True,
                             'tool': tool,
-                            'args': php_array(args),
+                            'args': args,
                             'status_code': 200,
                         }
                     return {'success': True, 'tool': None, 'status_code': 200}

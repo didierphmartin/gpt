@@ -147,6 +147,27 @@ def php_array(d):
     return d if d else []
 
 
+def is_php_array(v) -> bool:
+    """PHP is_array(): true for anything that came out of json_decode(..., true)
+    as an array — which covers BOTH a JSON list and a JSON object, since PHP's
+    assoc-mode decode does not distinguish them. Only apply php_array() to a
+    value that actually went through this decode step; a value you are
+    DEFAULTING in (key absent/null) is not a decoded PHP array and must not
+    be routed through php_array() — see tools_controller.classifyIntent's
+    `args` default (`?? new \\stdClass()` -> `{}`, never `[]`)."""
+    return isinstance(v, (list, dict))
+
+
+def php_values(v) -> list:
+    """`foreach ($v as $item)` over a JSON-decoded PHP array — iterates VALUES
+    only (ignoring string/int keys), for both a JSON list and a JSON object."""
+    if isinstance(v, dict):
+        return list(v.values())
+    if isinstance(v, list):
+        return v
+    return []
+
+
 _FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
 
 

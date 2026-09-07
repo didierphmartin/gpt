@@ -119,3 +119,26 @@ def test_php_floatval_matches_php_float_cast():
     assert pc.php_floatval(True) == 1.0
     assert pc.php_floatval('1e3') == 1000.0
     assert pc.php_floatval('  4.25  ') == 4.25
+
+
+def test_is_php_array():
+    # PHP is_array(): true for anything json_decode(..., true) can produce as
+    # an array — a JSON list AND a JSON object both decode to a PHP array.
+    assert pc.is_php_array([])
+    assert pc.is_php_array([1, 2, 3])
+    assert pc.is_php_array({})
+    assert pc.is_php_array({'a': 1})
+    assert not pc.is_php_array(None)
+    assert not pc.is_php_array('array')
+    assert not pc.is_php_array(0)
+    assert not pc.is_php_array(False)
+
+
+def test_php_values():
+    # foreach ($v as $item) — values only, insertion order, for both shapes.
+    assert pc.php_values([1, 2, 3]) == [1, 2, 3]
+    assert pc.php_values({'a': 1, 'b': 2}) == [1, 2]
+    assert pc.php_values({}) == []
+    assert pc.php_values([]) == []
+    assert pc.php_values(None) == []
+    assert pc.php_values('not an array') == []

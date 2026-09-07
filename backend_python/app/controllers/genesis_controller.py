@@ -22,12 +22,8 @@ import json
 import re
 
 from app.support.logger import error_log
-from app.support.phpcompat import mb_substr, php_array, php_empty, php_floatval, php_intval, php_trim
+from app.support.phpcompat import is_php_array, mb_substr, php_array, php_empty, php_floatval, php_intval, php_trim
 from app.support.phpjson import php_json_encode
-
-
-def _is_php_array(v) -> bool:
-    return isinstance(v, (list, dict))
 
 
 class GenesisController:
@@ -258,7 +254,7 @@ class GenesisController:
                 decoded = None
             data = decoded if decoded else {}
             msgsField = data.get('messages') if isinstance(data, dict) else None
-            messages = msgsField if _is_php_array(msgsField) else (data if _is_php_array(data) else [])
+            messages = msgsField if is_php_array(msgsField) else (data if is_php_array(data) else [])
             if php_empty(messages):
                 return {'success': False, 'error': 'Context has no messages', 'status_code': 400}
             from app.services.genesis_proposer import GenesisProposer

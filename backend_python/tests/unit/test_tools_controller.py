@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 
 from app.controllers.tools_controller import ToolsController
 from app.support.http import Ctx
+from app.support.phpjson import dumps as php_dumps
 
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
 
@@ -333,6 +334,8 @@ def test_classify_intent_fake_llm_valid_tool_and_args(monkeypatch):
     r = ToolsController(Db(), CFG).classifyIntent(ctx(method='POST', body=body))
     assert r == {'success': True, 'tool': 'handoff_to', 'args': {'target': 'billing'}, 'status_code': 200}
     assert closed == [True]
+    # Pinned at the JSON-bytes level (what actually goes out over the wire).
+    assert '"args":{"target":"billing"}' in php_dumps(r)
 
 
 def test_classify_intent_fake_llm_empty_args_object_encodes_as_php_array(monkeypatch):
@@ -344,8 +347,55 @@ def test_classify_intent_fake_llm_empty_args_object_encodes_as_php_array(monkeyp
 
     body = {'transcript': 'all set', 'tools': [{'name': 'done'}]}
     r = ToolsController(Db(), CFG).classifyIntent(ctx(method='POST', body=body))
-    # php_array(): an empty PHP associative array json-encodes as [] not {}
+    # php_array(): an ACTUALLY-DECODED empty PHP associative array (the LLM
+    # sent "args": {}, which PHP's json_decode(..., true) cannot distinguish
+    # from an empty JSON array) json-encodes as [] not {}.
     assert r == {'success': True, 'tool': 'done', 'args': [], 'status_code': 200}
+    assert '"args":[]' in php_dumps(r)
+
+
+def test_classify_intent_fake_llm_missing_args_key_defaults_to_empty_object(monkeypatch):
+    def chat_fn(message, history, options):
+        return {'text': '{"tool": "done"}'}
+    llm = FakeLLMManager(chat_fn)
+    assistant_cls = make_fake_assistant_class(llm_manager=llm)
+    patch_common(monkeypatch, assistant_class=assistant_cls)
+
+    body = {'transcript': 'all set', 'tools': [{'name': 'done'}]}
+    r = ToolsController(Db(), CFG).classifyIntent(ctx(method='POST', body=body))
+    # PHP: `$parsed['args'] ?? new \stdClass()` — the DEFAULT for a missing
+    # key is a real stdClass, which always serializes as {} — never [].
+    # This must NOT be routed through php_array() like a decoded value is.
+    assert r == {'success': True, 'tool': 'done', 'args': {}, 'status_code': 200}
+    assert '"args":{}' in php_dumps(r)
+
+
+def test_classify_intent_fake_llm_null_args_key_defaults_to_empty_object(monkeypatch):
+    def chat_fn(message, history, options):
+        return {'text': '{"tool": "done", "args": null}'}
+    llm = FakeLLMManager(chat_fn)
+    assistant_cls = make_fake_assistant_class(llm_manager=llm)
+    patch_common(monkeypatch, assistant_class=assistant_cls)
+
+    body = {'transcript': 'all set', 'tools': [{'name': 'done'}]}
+    r = ToolsController(Db(), CFG).classifyIntent(ctx(method='POST', body=body))
+    # `null ?? new \stdClass()` also takes the default branch in PHP (??
+    # triggers on both "key absent" and "value is null").
+    assert r == {'success': True, 'tool': 'done', 'args': {}, 'status_code': 200}
+    assert '"args":{}' in php_dumps(r)
+
+
+def test_classify_intent_fake_llm_non_empty_args_stays_object(monkeypatch):
+    def chat_fn(message, history, options):
+        return {'text': '{"tool": "done", "args": {"q": 1}}'}
+    llm = FakeLLMManager(chat_fn)
+    assistant_cls = make_fake_assistant_class(llm_manager=llm)
+    patch_common(monkeypatch, assistant_class=assistant_cls)
+
+    body = {'transcript': 'all set', 'tools': [{'name': 'done'}]}
+    r = ToolsController(Db(), CFG).classifyIntent(ctx(method='POST', body=body))
+    assert r == {'success': True, 'tool': 'done', 'args': {'q': 1}, 'status_code': 200}
+    assert '"args":{"q":1}' in php_dumps(r)
 
 
 def test_classify_intent_fake_llm_tool_not_in_provided_list_is_rejected(monkeypatch):
