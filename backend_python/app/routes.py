@@ -8,6 +8,8 @@ from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
 from app.controllers.genesis_controller import GenesisController
 from app.controllers.heal_controller import HealController
+from app.controllers.mcp_app_controller import MCPAppController
+from app.controllers.mcp_proxy_controller import MCPProxyController
 from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
@@ -33,6 +35,8 @@ CONTROLLERS = {
     'ContextController': ContextController,
     'GenesisController': GenesisController,
     'HealController': HealController,
+    'MCPAppController': MCPAppController,
+    'MCPProxyController': MCPProxyController,
     'MCPServerController': MCPServerController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
@@ -137,6 +141,11 @@ ROUTES = [
     ('GET', '/api/v1/me/mcp-servers', ('MCPServerController', 'listMine')),
     ('PUT', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'setMyOverride')),
     ('DELETE', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'clearMyOverride')),
+    # MCP PROXY (routes.php:279-281)
+    ('POST', '/api/v1/mcp/proxy', ('MCPProxyController', 'forward')),
+    # MCP APP (Public - serves HTML; routes.php:283-287)
+    ('GET', '/api/v1/mcp/app', ('MCPAppController', 'getResource')),
+    ('GET', '/api/mcp-app.php', ('MCPAppController', 'getResource')),  # Legacy path
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
