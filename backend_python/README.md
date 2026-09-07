@@ -82,3 +82,22 @@ agents (14 routes), workflows (15 routes — data, outputs, node documents only)
 tool auto-derivation. One live-DB gap surfaced (not a port defect): `POST /workflow-schemas` 500s on both
 backends because the live `workflow_schemas` table lacks the `strict` column `WorkflowSchemaRepository::create`
 writes unconditionally.
+
+Phase 5 (2026-09): the agent-team engines — `AgentRunner` + `AgentDelegationFunctions` + `AgentToolsExecutor`
+(delegation, worker fan-out, tool routing), `WorkflowRunner` (step-based workflows), `ParallelAgentExecutor`
+(thread-pool fan-out, `ThreadPoolExecutor` in place of PHP's `curl_multi`), `GraphWorkflowRunner` (sequential
+and parallel node execution, the client-tool bridge that blocks the request thread on `run_skill_script` the
+way PHP blocks Apache, and node-document upload/list/delete), the Playbook interpreter package (analyzer, gate
+manager, action space, transcript, adapters) plus `PlaybookNodeRunner`, `PromptTemplateProcessor`, and
+`DispatchRouting`. Nine new routes, each differential-tested against live PHP for user 3: `agents/{id}/run`,
+`agents/{id}/chat`, `workflows/run`, `workflows/{id}/run`, `workflows/{id}/run-stream`,
+`workflows/tool-result`, `workflows/playbook-node/run`, `playbooks/validate`, and `mcp/agents`
+(full JSON-RPC surface: `agents/*`, `tools/*`, `initialize`). `chat()` and `run-stream` frame SSE as bare
+`data: {json}\n\n` (no `event:` line), matching PHP's raw callback on those two endpoints specifically, while
+`run-stream`'s and `playbook-node/run`'s own `if (!$userId)` branches are dead code on live PHP — the shared
+auth middleware already rejects unauthenticated requests before either controller method runs — and are
+ported anyway for fidelity. Full unit suite: 1817 passing. Phase 5 differential suite green against live PHP
+(validation-parity plus one live LLM/agent/workflow/playbook run each, run once to avoid repeat spend).
+One known defect carried forward: `GraphWorkflowRunner._createExecution` encodes an empty `input_variables`
+body as JSON `"{}"` where PHP's untyped empty array encodes `"[]"`; fix pending in the Phase 5 final wave.
+Phase 6 (generate-python/adk/maf/nooa code-gen routes, ingestion) is next.
