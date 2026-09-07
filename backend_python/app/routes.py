@@ -9,6 +9,7 @@ from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
 from app.controllers.traces_controller import TracesController
+from app.controllers.url_fetch_controller import UrlFetchController
 from app.controllers.webauthn_controller import WebAuthnController
 
 CONTROLLERS = {
@@ -21,6 +22,7 @@ CONTROLLERS = {
     'ProviderController': ProviderController,
     'RootController': RootController,
     'TracesController': TracesController,
+    'UrlFetchController': UrlFetchController,
     'WebAuthnController': WebAuthnController,
 }
 
@@ -44,6 +46,8 @@ ROUTES = [
     # TRACES
     ('POST', '/api/v1/traces', ('TracesController', 'create')),
     ('GET', '/api/v1/traces/diagnosis', ('TracesController', 'diagnose')),
+    # URL FETCH
+    ('POST', '/api/v1/fetch-url', ('UrlFetchController', 'fetch')),
     # MODEL CATALOG (public)
     ('GET', '/api/v1/models/catalog', ('ModelCatalogController', 'get')),
     # PACKAGE ROUTES
