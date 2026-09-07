@@ -8,6 +8,7 @@ from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
 from app.controllers.genesis_controller import GenesisController
 from app.controllers.heal_controller import HealController
+from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
 from app.controllers.prompt_library_controller import PromptLibraryController
@@ -32,6 +33,7 @@ CONTROLLERS = {
     'ContextController': ContextController,
     'GenesisController': GenesisController,
     'HealController': HealController,
+    'MCPServerController': MCPServerController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
     'PromptLibraryController': PromptLibraryController,
@@ -123,6 +125,18 @@ ROUTES = [
     ('GET', '/api/v1/tools', ('ToolsController', 'list')),
     ('POST', '/api/v1/tools/execute', ('ToolsController', 'execute')),
     ('POST', '/api/v1/tools/classify-intent', ('ToolsController', 'classifyIntent')),
+    # MCP SERVER ROUTES (per-user CRUD; admin endpoints live under /admin/mcp — routes.php:266-276)
+    ('GET', '/api/v1/mcp/servers', ('MCPServerController', 'list')),
+    ('GET', '/api/v1/mcp/servers/tools', ('MCPServerController', 'getTools')),
+    ('GET', '/api/v1/mcp/servers/all-tools', ('MCPServerController', 'getAllTools')),
+    ('POST', '/api/v1/mcp/servers', ('MCPServerController', 'create')),
+    ('POST', '/api/v1/mcp/servers/update', ('MCPServerController', 'update')),
+    ('POST', '/api/v1/mcp/servers/toggle', ('MCPServerController', 'toggle')),
+    ('DELETE', '/api/v1/mcp/servers', ('MCPServerController', 'delete')),
+    ('PUT', '/api/v1/me/mcp-settings', ('MCPServerController', 'setMasterSetting')),
+    ('GET', '/api/v1/me/mcp-servers', ('MCPServerController', 'listMine')),
+    ('PUT', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'setMyOverride')),
+    ('DELETE', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'clearMyOverride')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
