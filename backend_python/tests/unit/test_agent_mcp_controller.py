@@ -559,3 +559,40 @@ def test_tools_call_error_result_sets_isError(monkeypatch):
     runner.tools_manager.functions['fail'] = lambda args, ctx: {'error': 'nope'}
     r = c.handle(rpc('tools/call', {'name': 'fail'}))
     assert r['result']['isError'] is True
+
+
+# ============================================================================
+# self.assistant.close() -- Phase 5 final-review wave (A1)
+# ============================================================================
+
+class FakeAssistant:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_handle_closes_assistant_on_success(monkeypatch):
+    c, _, _ = controller(monkeypatch)
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    r = c.handle(rpc('ping'))
+    assert r['result'] == {'pong': True}
+    assert fake_assistant.close_calls == 1
+
+
+def test_handle_closes_assistant_on_exception(monkeypatch):
+    c, repo, runner = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+
+    def boom(*a, **kw):
+        raise RuntimeError('boom')
+
+    runner.run = boom
+    r = c.handle(rpc('agents/run', {'agent_id': 5, 'input': 'hi'}))
+    assert r['error']['code'] == -32603
+    assert fake_assistant.close_calls == 1

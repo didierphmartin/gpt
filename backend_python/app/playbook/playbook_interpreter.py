@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from app.support.phpcompat import php_uniqid
+from app.support.phpcompat import php_array_cast, php_uniqid
 from app.support.phpjson import dumps as _json_dumps
 
 _SYSTEM_PROMPT_TEMPLATE = """You are a playbook interpreter for {domain}. Execute the PLAYBOOK below
@@ -77,7 +77,8 @@ class PlaybookInterpreter:
             terminal = False
             for toolCall in toolCalls:
                 name = str(toolCall['name'])
-                args = toolCall.get('arguments') if isinstance(toolCall.get('arguments'), dict) else {}
+                # PHP: `(array)($toolCall['arguments'] ?? [])` (PlaybookInterpreter.php:88).
+                args = php_array_cast(toolCall.get('arguments'))
 
                 self.transcript.append(runId, {
                     'type': 'tool_call', 'leg': leg, 'round': round_, 'name': name, 'args': args,

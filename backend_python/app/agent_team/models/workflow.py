@@ -32,9 +32,13 @@ def _iter_indexed(steps):
     return enumerate(steps)
 
 
-def _step_dict(step) -> dict:
+def step_dict(step) -> dict:
     """A step that isn't itself an array/object behaves like PHP accessing an
-    offset on a non-array (undefined -> null for every key)."""
+    offset on a non-array (undefined -> null for every key).
+
+    C5 (Phase 5 final-review wave): made public so
+    `workflow_runner.py`'s identical local `_step_dict` duplicate can import
+    this one instead of redefining it."""
     return step if isinstance(step, dict) else {}
 
 
@@ -164,7 +168,7 @@ class Workflow:
             return errors
 
         for index, step in _iter_indexed(self.steps):
-            step = _step_dict(step)
+            step = step_dict(step)
             if php_empty(step.get('id')):
                 errors.append(f"Step {index}: missing 'id'")
             if php_empty(step.get('type')):
@@ -178,7 +182,7 @@ class Workflow:
 
     def getStep(self, step_id: str) -> dict | None:
         for _, step in _iter_indexed(self.steps):
-            sid = _step_dict(step).get('id')
+            sid = step_dict(step).get('id')
             sid = sid if sid is not None else ''
             if sid == step_id:
                 return step
@@ -187,7 +191,7 @@ class Workflow:
     def getDependentSteps(self, step_id: str) -> list:
         dependents = []
         for _, step in _iter_indexed(self.steps):
-            depends_on = _step_dict(step).get('depends_on')
+            depends_on = step_dict(step).get('depends_on')
             depends_on = depends_on if depends_on is not None else []
             if step_id in depends_on:
                 dependents.append(step)
@@ -196,7 +200,7 @@ class Workflow:
     def getEntrySteps(self) -> list:
         entry_steps = []
         for _, step in _iter_indexed(self.steps):
-            if php_empty(_step_dict(step).get('depends_on')):
+            if php_empty(step_dict(step).get('depends_on')):
                 entry_steps.append(step)
         return entry_steps
 

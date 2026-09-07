@@ -58,7 +58,10 @@ class FakeAgentRunner:
         self.run_calls: list = []
         self.stream_context = None
         self.available_workers: list = []
-        self.parallel_executor = None
+        # Real AgentRunner.createParallelExecutor() never returns None (PHP
+        # has no nullable variant either) -- default to a real fake here so
+        # tests that don't override it still exercise `executor.close()`.
+        self.parallel_executor = FakeParallelExecutor()
         self.parallel_executor_calls: list = []
 
     def getFreshRepository(self):
@@ -86,6 +89,7 @@ class FakeParallelExecutor:
         self.run_result = run_result if run_result is not None else {}
         self.build_tools_calls: list = []
         self.run_calls: list = []
+        self.close_calls = 0
 
     def buildToolsFor(self, agent, tools_filter):
         self.build_tools_calls.append((agent, tools_filter))
@@ -94,6 +98,9 @@ class FakeParallelExecutor:
     def run(self, states):
         self.run_calls.append(states)
         return self.run_result
+
+    def close(self):
+        self.close_calls += 1
 
 
 def _worker(id=5, name='Researcher', provider='claude', tools=None, enabled=True):
@@ -416,6 +423,16 @@ def test_run_agents_parallel_requires_array():
     assert 'No delegations' in result['error']
 
 
+def test_run_agents_parallel_dict_shaped_delegations_is_an_error():
+    # D5 -- `delegations` is always a JSON *array* argument in a real tool
+    # call; a dict (JSON object) shape is rejected with the same validation
+    # error, not silently accepted as a keyed collection.
+    fns, _, _ = _fns()
+    result = fns.runAgentsParallel({'delegations': {'a': {'agent_name': 'Test', 'task': 'x'}}}, {'user_id': 1})
+    assert result['success'] is False
+    assert 'No delegations' in result['error']
+
+
 def test_run_agents_parallel_handles_missing_fields():
     repo = FakeAgentRepository()
     runner = FakeAgentRunner(repo)
@@ -478,6 +495,52 @@ def test_runs_batch_through_executor_and_maps_results():
     assert out['results'][1]['agent'] == 'Writer'
     assert out['results'][1]['execution_id'] == 102
     assert runner.parallel_executor_calls == [True]  # createParallelExecutor(True)
+
+
+def test_runs_batch_closes_executor_on_success():
+    """A2 -- ParallelAgentExecutor owns an httpx.Client; runAgentsParallel
+    must release it in `finally` (mirrors GraphWorkflowRunner.run())."""
+    worker1 = Agent({'id': 5, 'name': 'Researcher', 'agent_type': 'worker', 'provider': 'claude'})
+    repo = FakeAgentRepository()
+    repo.by_name['Researcher'] = worker1
+    executor = FakeParallelExecutor(run_result={
+        0: {'agent_id': 5, 'agent_name': 'Researcher', 'output': 'R', 'success': True, 'usage': None, 'execution_id': 101},
+    })
+    runner = FakeAgentRunner(repo)
+    runner.parallel_executor = executor
+    fns, _, _ = _fns(repo, runner)
+
+    fns.runAgentsParallel({
+        'delegations': [{'agent_name': 'Researcher', 'task': 'find X'}],
+    }, {'user_id': 1})
+
+    assert executor.close_calls == 1
+
+
+def test_runs_batch_closes_executor_on_exception():
+    worker1 = Agent({'id': 5, 'name': 'Researcher', 'agent_type': 'worker', 'provider': 'claude'})
+    repo = FakeAgentRepository()
+    repo.by_name['Researcher'] = worker1
+
+    class BoomExecutor(FakeParallelExecutor):
+        def run(self, states):
+            raise RuntimeError('boom')
+
+    executor = BoomExecutor()
+    runner = FakeAgentRunner(repo)
+    runner.parallel_executor = executor
+    fns, _, _ = _fns(repo, runner)
+
+    try:
+        fns.runAgentsParallel({
+            'delegations': [{'agent_name': 'Researcher', 'task': 'find X'}],
+        }, {'user_id': 1})
+        raised = False
+    except RuntimeError:
+        raised = True
+
+    assert raised is True
+    assert executor.close_calls == 1
 
 
 def test_empty_delegations_is_an_error():

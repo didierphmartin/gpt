@@ -33,6 +33,19 @@ def test_static_converters():
     assert M.normalizeUsage({'promptTokenCount': 1, 'candidatesTokenCount': 2, 'totalTokenCount': 3}, 'gemini') == {'prompt_tokens': 1, 'completion_tokens': 2, 'total_tokens': 3}
     assert M.normalizeUsage({'prompt_tokens': 1, 'completion_tokens': 2}, 'kimi') == {'prompt_tokens': 1, 'completion_tokens': 2, 'total_tokens': 3}
     assert M.normalizeUsage(None, 'x') is None
+
+
+def test_normalize_usage_list_shaped_behaves_like_empty_dict():
+    """B2 -- a PHP-array decode of `{}` comes back `[]` (phpjson.php_array);
+    normalizeUsage must treat that the same as an empty dict (PHP `?? 0`
+    yields 0), not raise on `.get()`, for every provider branch."""
+    M = ProviderRequestBuilderMixin
+    assert M.normalizeUsage([], 'claude') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    assert M.normalizeUsage([], 'anthropic') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    assert M.normalizeUsage([], 'gemini') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    assert M.normalizeUsage([], 'google') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    assert M.normalizeUsage([], 'openai') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    assert M.normalizeUsage([], 'kimi') == {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
     assert M.convertToolsToOpenAIFormat([{'name': 'a', 'input_schema': {'type': 'object'}}]) == [{'type': 'function', 'function': {'name': 'a', 'description': '', 'parameters': {'type': 'object'}}}]
     g = M.fixSchemaForGemini({'type': 'object', 'properties': {'x': {'type': 'string', 'enum': ['a', 'b'], 'format': 'x'}}, 'required': [], 'additionalProperties': False})
     assert g == {'type': 'object', 'properties': {'x': {'type': 'string', 'description': 'Allowed values: a, b'}}}

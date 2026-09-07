@@ -207,23 +207,15 @@ def test_workflow_run_live_parity(both, config):
             assert rows['php'][k] == rows['py'][k], (k, rows['php'][k], rows['py'][k])
         assert rows['php']['status'] == 'completed'
 
-        # input_variables: PHP's own empty-array/empty-object JSON ambiguity
-        # (phpjson.php_array's docstring) -- GraphWorkflowRunner._createExecution
-        # (graph_workflow_runner.py:1516-1522, ported from PHP 1658-1671) calls
-        # `php_json_encode(inputVariables)` directly, without the `php_array()`
-        # wrap, so an empty dict `{}` (this endpoint's own default when the
-        # request body carries neither `variables` nor `inputs`, matching PHP's
-        # `$body['variables'] ?? $body['inputs'] ?? []`) round-trips as the
-        # JSON object `"{}"` on Python vs PHP's `"[]"` for its empty array.
-        # Pre-existing in a file Task 5b owns concurrently (constraints.md:
-        # "Touch no other files") -- normalized here rather than fixed, and
-        # flagged in task-6-report.md.
-        import json as _json
-        va = _json.loads(rows['php']['input_variables'])
-        vb = _json.loads(rows['py']['input_variables'])
-        va = {} if va == [] else va
-        vb = {} if vb == [] else vb
-        assert va == vb
+        # input_variables: GraphWorkflowRunner._createExecution
+        # (graph_workflow_runner.py:1516-1525, ported from PHP 1658-1671) now
+        # wraps `inputVariables` in `php_array()` before encoding, so an
+        # empty dict (this endpoint's own default when the request body
+        # carries neither `variables` nor `inputs`, matching PHP's
+        # `$body['variables'] ?? $body['inputs'] ?? []`) serialises as the
+        # JSON array `"[]"` on both backends -- fixed in the Phase 5 final
+        # wave (see docs/backend-parity-tracker.md row 121).
+        assert rows['php']['input_variables'] == rows['py']['input_variables']
     finally:
         db.execute('DELETE FROM agent_workflow_executions WHERE id IN (?, ?)',
                    [ja['execution_id'], jb['execution_id']])

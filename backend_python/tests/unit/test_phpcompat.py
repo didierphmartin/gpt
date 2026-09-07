@@ -172,6 +172,87 @@ def test_is_php_array():
     assert not pc.is_php_array(False)
 
 
+def test_php_coalesce():
+    # C1 (Phase 5 final-review wave) -- consolidates the `_coalesce`
+    # duplicated in parallel_agent_executor.py/graph_workflow_runner.py/
+    # playbook_node_runner.py.
+    assert pc.php_coalesce(None, None, 3) == 3
+    assert pc.php_coalesce(1, 2) == 1
+    assert pc.php_coalesce(None, None) is None
+    assert pc.php_coalesce() is None
+    # Never a truthiness check -- 0/''/[]/False all pass straight through.
+    assert pc.php_coalesce(0, 5) == 0
+    assert pc.php_coalesce('', 'x') == ''
+    assert pc.php_coalesce([], [1]) == []
+    assert pc.php_coalesce(False, True) is False
+
+
+def test_php_loose_eq():
+    # C2 (Phase 5 final-review wave) -- moved here from
+    # WorkflowRunner._php_loose_eq (WorkflowRunner.php 278-291's rules,
+    # verified against `php -r` — see test_workflow_runner.py's
+    # test_evaluate_condition_* for the original indirect coverage, still
+    # exercised through the moved-and-aliased `_php_loose_eq` there).
+    assert pc.php_loose_eq(True, '1') is True
+    assert pc.php_loose_eq(True, '0') is False
+    assert pc.php_loose_eq(None, None) is True
+    assert pc.php_loose_eq(None, 0) is True
+    assert pc.php_loose_eq(None, '') is True
+    assert pc.php_loose_eq(None, 'x') is False
+    assert pc.php_loose_eq(None, []) is True
+    assert pc.php_loose_eq([], {}) is True
+    assert pc.php_loose_eq({'a': 1}, {'a': 1}) is True
+    assert pc.php_loose_eq({'a': 1}, {'a': 2}) is False
+    assert pc.php_loose_eq([1, 2], 'x') is False
+    assert pc.php_loose_eq('5', 5) is True
+    assert pc.php_loose_eq('abc', 'abc') is True
+    assert pc.php_loose_eq('abc', 'xyz') is False
+
+
+def test_php_loose_cmp():
+    # C2 (Phase 5 final-review wave) -- moved here from
+    # watchlist_functions._php_loose_cmp (WatchlistFunctions.php ~24/28's
+    # rules; original indirect coverage stays in
+    # test_portfolio_watchlist_functions.py via the moved-and-aliased
+    # `_php_loose_cmp` there).
+    assert pc.php_loose_cmp('10.50', '9.00') > 0
+    assert pc.php_loose_cmp('9.00', '10.50') < 0
+    assert pc.php_loose_cmp('10.50', '10.50') == 0
+    assert pc.php_loose_cmp(None, '9.00') < 0        # '' < '9.00' lexically
+    assert pc.php_loose_cmp('abc', '9.00') > 0        # neither numeric -> lexical
+    assert pc.php_loose_cmp(True, False) > 0
+
+
+def test_str_word_count():
+    # C4 (Phase 5 final-review wave) -- moved here from
+    # agent_delegation_functions._str_word_count (documented as an
+    # approximation of PHP's locale-dependent str_word_count(), used only
+    # for the diagnostic `result_word_count` field, AgentDelegationFunctions.
+    # php:354). Indirect coverage stays in test_agent_delegation_functions.py.
+    assert pc.str_word_count('hello world') == 2
+    assert pc.str_word_count("it's a well-known fact") == 4
+    assert pc.str_word_count('') == 0
+    assert pc.str_word_count('123 456') == 0
+    assert pc.str_word_count('one, two; three!') == 3
+
+
+def test_php_array_cast():
+    # PHP `(array)$v` -- B3 (Phase 5 final-review wave). Already-array
+    # (dict or list, per json_decode(..., true)'s no list/assoc distinction)
+    # passes through unchanged; null -> []; any scalar -> a single-element
+    # array (PHP wraps a lone scalar at integer key 0).
+    d = {'a': 1}
+    assert pc.php_array_cast(d) is d
+    li = [1, 2]
+    assert pc.php_array_cast(li) is li
+    assert pc.php_array_cast(None) == []
+    assert pc.php_array_cast('x') == ['x']
+    assert pc.php_array_cast(5) == [5]
+    assert pc.php_array_cast(5.5) == [5.5]
+    assert pc.php_array_cast(True) == [True]
+    assert pc.php_array_cast(False) == [False]
+
+
 def test_php_values():
     # foreach ($v as $item) — values only, insertion order, for both shapes.
     assert pc.php_values([1, 2, 3]) == [1, 2, 3]

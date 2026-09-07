@@ -56,10 +56,10 @@ from typing import Any
 import httpx
 
 from app.agent_team.services.skill_tool_choice import SkillToolChoice
-from app.providers._http import SHARED_SSL_CONTEXT
+from app.providers._http import SHARED_SSL_CONTEXT, headers_list_to_dict as _headers_list_to_dict
 from app.providers.provider_request_factory import ProviderRequestFactory
 from app.support.logger import error_log
-from app.support.phpcompat import php_bool, php_empty, php_floatval, php_intval
+from app.support.phpcompat import php_bool, php_coalesce as _coalesce, php_empty, php_floatval, php_intval
 from app.support.phpjson import dumps, php_json_decode, php_json_encode
 
 _PROVIDER_ALIASES = {'anthropic': 'claude', 'google': 'gemini'}
@@ -70,28 +70,11 @@ def _idx(d, key):
     return d.get(key) if isinstance(d, dict) else None
 
 
-def _coalesce(value, default):
-    """`$value ?? $default` — isset-based (None only), never a truthiness check."""
-    return value if value is not None else default
-
-
 def _array_chunk_preserve_keys(d: dict, size: int) -> list:
     """`array_chunk($d, $size, true)` — split an (insertion-ordered, str/int
     keyed) dict into chunks of at most `size` entries, preserving keys."""
     items = list(d.items())
     return [dict(items[i:i + size]) for i in range(0, len(items), size)]
-
-
-def _headers_list_to_dict(headers: list) -> dict:
-    """PHP's CURLOPT_HTTPHEADER list (['Name: value', ...], the shape
-    ProviderRequestFactory::buildRequest()['headers'] returns) -> a header
-    dict for httpx."""
-    out = {}
-    for h in headers:
-        if ':' in h:
-            k, v = h.split(':', 1)
-            out[k.strip()] = v.strip()
-    return out
 
 
 class ParallelAgentExecutor:

@@ -1010,6 +1010,78 @@ def test_chat_success_frame_bytes_end_to_end_with_real_sse_stream(monkeypatch):
 
 
 # ============================================================================
+# self.assistant.close() — Phase 5 final-review wave (A1)
+# ============================================================================
+
+class FakeAssistant:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_run_closes_assistant_on_success(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    c.runner = FakeRunner()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    c.run(ctx(body={'message': 'hi'}), 5)
+    assert fake_assistant.close_calls == 1
+
+
+def test_run_closes_assistant_on_exception(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+
+    class BoomRunner(FakeRunner):
+        def run(self, *a, **kw):
+            raise RuntimeError('boom')
+
+    c.runner = BoomRunner()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    with pytest.raises(RuntimeError):
+        c.run(ctx(body={'message': 'hi'}), 5)
+    assert fake_assistant.close_calls == 1
+
+
+def test_chat_closes_assistant_on_success(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    c.runner = FakeRunner()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    request = ctx(body={'message': 'hi'})
+    request['sse'] = FakeSse()
+    c.chat(request, 5)
+    assert fake_assistant.close_calls == 1
+
+
+def test_chat_closes_assistant_on_exception(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+
+    class BoomRunner(FakeRunner):
+        def streamRun(self, *a, **kw):
+            raise RuntimeError('boom')
+
+    c.runner = BoomRunner()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    request = ctx(body={'message': 'hi'})
+    request['sse'] = FakeSse()
+    with pytest.raises(RuntimeError):
+        c.chat(request, 5)
+    assert fake_assistant.close_calls == 1
+
+
+# ============================================================================
 # error() helper
 # ============================================================================
 

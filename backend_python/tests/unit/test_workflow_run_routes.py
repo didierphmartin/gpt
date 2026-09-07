@@ -277,6 +277,38 @@ def test_run_exception_returns_500():
     assert r == {'success': False, 'error': 'db down', 'status_code': 500}
 
 
+class FakeAssistant:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_run_closes_assistant_on_success():
+    c = controller(nodes=[])
+    c.workflowRunner = FakeWorkflowRunner({'success': True, 'output': 'hi', 'node_outputs': {}})
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    c.run(ctx(), 1)
+    assert fake_assistant.close_calls == 1
+
+
+def test_run_closes_assistant_on_exception():
+    c = controller()
+
+    def boom(uid, wid):
+        raise RuntimeError('db down')
+
+    c.workflowRepository.canUserAccess = boom
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    # `run()` catches this internally (its own inner try/except) and returns
+    # a 500 dict rather than propagating -- the outer `finally` still fires.
+    c.run(ctx(), 1)
+    assert fake_assistant.close_calls == 1
+
+
 # ============================================================================
 # runByName
 # ============================================================================
@@ -453,6 +485,37 @@ def test_runStream_exception_streams_error_and_done():
         {'type': 'error', 'error': 'kaboom'},
         '[DONE]',
     ]
+
+
+def test_runStream_closes_assistant_on_success():
+    c = controller(nodes=[])
+    c.workflowRunner = FakeWorkflowRunner({'success': True, 'output': 'hi', 'node_outputs': {}})
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    sse = FakeSse()
+    request = ctx()
+    request['sse'] = sse
+    c.runStream(request, 1)
+    assert fake_assistant.close_calls == 1
+
+
+def test_runStream_closes_assistant_on_exception():
+    c = controller(nodes=[])
+
+    class Boom(FakeWorkflowRunner):
+        def run(self, wf, user_id, input_variables=None):
+            raise RuntimeError('kaboom')
+
+    c.workflowRunner = Boom()
+    fake_assistant = FakeAssistant()
+    c.assistant = fake_assistant
+    sse = FakeSse()
+    request = ctx()
+    request['sse'] = sse
+    # runStream's own try/except streams the error frame rather than
+    # propagating -- the outer `finally` around it still fires.
+    c.runStream(request, 1)
+    assert fake_assistant.close_calls == 1
 
 
 def test_runStream_frame_bytes_end_to_end_with_real_sse_stream():

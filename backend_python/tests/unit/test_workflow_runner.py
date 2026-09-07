@@ -88,6 +88,38 @@ def _runner(agents=None, responses=None, db=None):
 
 
 # ---------------------------------------------------------------------------
+# _createExecution / _completeExecution -- B1 (Phase 5 final-review wave):
+# empty input_variables/outputs must serialise as PHP's `[]`, not `{}`.
+# ---------------------------------------------------------------------------
+
+def test_create_execution_empty_input_variables_serialises_as_php_array():
+    runner, db, _ = _runner()
+    workflow = Workflow()
+    workflow.setId(1)
+    runner._createExecution(workflow, 7, {})
+    sql, params = db.inserts[0]
+    assert "agent_workflow_executions" in sql
+    assert params[-1] == '[]'
+
+
+def test_create_execution_nonempty_input_variables_serialises_as_object():
+    runner, db, _ = _runner()
+    workflow = Workflow()
+    workflow.setId(1)
+    runner._createExecution(workflow, 7, {'a': 1})
+    _, params = db.inserts[0]
+    assert params[-1] == '{"a":1}'
+
+
+def test_complete_execution_empty_outputs_serialises_as_php_array():
+    runner, db, _ = _runner()
+    runner._completeExecution(100, {}, 0.0)
+    sql, params = db.executes[0]
+    assert "status = 'completed'" in sql
+    assert params[0] == '[]'
+
+
+# ---------------------------------------------------------------------------
 # evaluateCondition matrix (WorkflowRunner.php 266-295) — all operators.
 # PHP 8 loose-equality behaviour cross-checked with `php -r`:
 #   var_dump(true == "1")   -> true
@@ -275,6 +307,27 @@ def test_extract_field_isset_semantics_null_value_is_missing():
     """isset($current['x']) is false when the value is explicitly null."""
     runner, _, _ = _runner()
     assert runner._extractField({'a': None}, 'a') is None
+
+
+def test_extract_field_string_offset_within_length_returns_char():
+    """D3 -- extractField only checks `is_array($data)` once before the loop,
+    so `$current` can become a plain string partway through a dotted path;
+    PHP's `isset($current[$n])` on a string is still valid (a character
+    offset), not always False."""
+    runner, _, _ = _runner()
+    assert runner._extractField({'a': 'hello'}, 'a.0') == 'h'
+    assert runner._extractField({'a': 'hello'}, 'a.4') == 'o'
+
+
+def test_extract_field_string_offset_negative_counts_from_end():
+    runner, _, _ = _runner()
+    assert runner._extractField({'a': 'hello'}, 'a.-1') == 'o'
+
+
+def test_extract_field_string_offset_out_of_range_or_non_numeric_is_missing():
+    runner, _, _ = _runner()
+    assert runner._extractField({'a': 'hello'}, 'a.5') is None
+    assert runner._extractField({'a': 'hello'}, 'a.x') is None
 
 
 def test_summarize_outputs_empty_when_no_keys_present():

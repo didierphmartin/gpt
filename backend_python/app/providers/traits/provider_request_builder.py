@@ -144,6 +144,12 @@ class ProviderRequestBuilderMixin:
         if usage is None:
             return None
 
+        # A PHP-array decode of `{}` comes back `[]` (phpjson.php_array) --
+        # an empty list must behave like an empty dict here (every `?? 0`
+        # below yields 0), not raise on `.get()`.
+        if isinstance(usage, list):
+            usage = {}
+
         if provider in ('claude', 'anthropic'):
             inputTokens = usage.get('input_tokens') if usage.get('input_tokens') is not None else 0
             outputTokens = usage.get('output_tokens') if usage.get('output_tokens') is not None else 0

@@ -29,6 +29,38 @@ def _last_gate_id(pb_db, runId):
     return pb_db.fetch_column('SELECT MAX(id) FROM playbook_run_gates WHERE run_id = ?', [runId])[0]
 
 
+# ---------------------------------------------------------------------------
+# redactSensitiveFields -- B3 (Phase 5 final-review wave). PHP:
+# `(array)($args['fields'] ?? [])` (GateManager.php:152).
+# ---------------------------------------------------------------------------
+
+def test_redact_sensitive_fields_dict_args_redacts_matching_keys():
+    decision = {'ssn': '123-45-6789', 'ok': True}
+    args = {'fields': [{'name': 'ssn', 'sensitive': True}]}
+    out = GateManager.redactSensitiveFields(args, decision)
+    assert out == {'ssn': GateManager.REDACTED, 'ok': True}
+    assert decision == {'ssn': '123-45-6789', 'ok': True}  # caller's copy untouched
+
+
+def test_redact_sensitive_fields_none_fields_is_a_no_op():
+    decision = {'a': 1}
+    assert GateManager.redactSensitiveFields({}, decision) == decision
+
+
+def test_redact_sensitive_fields_scalar_fields_casts_to_single_element_list_and_is_a_no_op():
+    # (array)"oops" -> ["oops"]; not a dict, so the sensitive-field scan finds
+    # nothing -- must not raise iterating characters of the string.
+    decision = {'a': 1}
+    assert GateManager.redactSensitiveFields({'fields': 'oops'}, decision) == decision
+
+
+def test_redact_sensitive_fields_list_fields_passes_through_unchanged():
+    decision = {'a': 1, 'b': 2}
+    args = {'fields': [{'name': 'a', 'sensitive': True}, {'name': 'b', 'sensitive': False}]}
+    out = GateManager.redactSensitiveFields(args, decision)
+    assert out == {'a': GateManager.REDACTED, 'b': 2}
+
+
 def test_approval_approved_transitions_status_and_closes_gate_with_actor(pb_state, pb_db):
     id_ = pb_state.createRun(1, _doc(), {'id': 'req1'}, {})
     answer = {'decision': 'approved', 'comment': 'looks fine', 'actor': 'mgr@example.com'}

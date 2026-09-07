@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from app.playbook.gate_bridge_interface import GateBridgeInterface
 from app.playbook.playbook_run_state import PlaybookRunState
+from app.support.phpcompat import php_array_cast
 
 
 class GateManager:
@@ -144,8 +145,11 @@ class GateManager:
         decision with the redaction marker. Used both for what GateManager
         stores and for what PlaybookActionSpace ledgers — the caller always
         still gets `decision` verbatim. PHP 149-168."""
+        # PHP: `(array)($args['fields'] ?? [])` (GateManager.php:152) -- a
+        # scalar `fields` value casts to a single-element array, not the
+        # PHP-`empty()`-style `or []` fallback this used to reproduce.
         sensitiveNames = []
-        for field in (args.get('fields') or []):
+        for field in php_array_cast(args.get('fields')):
             if isinstance(field, dict) and field.get('sensitive'):
                 sensitiveNames.append(field.get('name') if field.get('name') is not None else '')
         if not sensitiveNames:

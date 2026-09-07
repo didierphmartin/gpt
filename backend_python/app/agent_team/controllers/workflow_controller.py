@@ -151,14 +151,19 @@ class WorkflowController:
         # providers) — same sequence as AgentController.__init__.
         config = LLMProviderResolver.applyDbSettings(db, config)
         self.config = config
-        assistant = AIPortfolioAssistant(config)
-        assistant.setDatabase(db)
+        # Python-only: kept as an attribute (rather than a dropped local) so
+        # `run`/`runStream` (the entry points that actually drive the
+        # runner stack built from it) can close its provider httpx.Client(s)
+        # in `finally` — PHP has no equivalent since Guzzle clients die with
+        # the request.
+        self.assistant = AIPortfolioAssistant(config)
+        self.assistant.setDatabase(db)
 
         mcpToolsLoader = MCPToolsLoader(db)
 
         agentRunner = AgentRunner(
-            assistant.getLLMManager(),
-            assistant.getToolsManager(),
+            self.assistant.getLLMManager(),
+            self.assistant.getToolsManager(),
             mcpToolsLoader,
             db,
             config,
@@ -466,54 +471,61 @@ class WorkflowController:
         workflowId = php_intval(id)
         body = request['body'] if request.get('body') is not None else {}
 
-        if not userId:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-
-        if not workflowId:
-            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
-
-        # App-key auth is scope-gated (PHP 745-757) — same pattern as
-        # AgentController.run's own app-key check (agent_controller.py:614-623).
-        if request.get('auth_type') == 'app_key':
-            scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
-            scopeAllowed = ('workflows:run' in scopes
-                             or f'workflows:run:{workflowId}' in scopes)
-            if not scopeAllowed:
-                return {
-                    'success': False,
-                    'error': 'App key not authorized for this workflow (missing scope workflows:run)',
-                    'status_code': 403,
-                }
-
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
-                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+            if not userId:
+                return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
-            workflow = self.workflowRepository.findById(workflowId)
+            if not workflowId:
+                return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
-            if not workflow:
-                return {'success': False, 'error': 'Workflow not found', 'status_code': 404}
+            # App-key auth is scope-gated (PHP 745-757) — same pattern as
+            # AgentController.run's own app-key check (agent_controller.py:614-623).
+            if request.get('auth_type') == 'app_key':
+                scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
+                scopeAllowed = ('workflows:run' in scopes
+                                 or f'workflows:run:{workflowId}' in scopes)
+                if not scopeAllowed:
+                    return {
+                        'success': False,
+                        'error': 'App key not authorized for this workflow (missing scope workflows:run)',
+                        'status_code': 403,
+                    }
 
-            if not workflow.isEnabled():
-                return {'success': False, 'error': 'Workflow is disabled', 'status_code': 400}
+            try:
+                if not self.workflowRepository.canUserAccess(userId, workflowId):
+                    return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
-            inputVariables = body.get('variables') if body.get('variables') is not None else (
-                body.get('inputs') if body.get('inputs') is not None else {})
+                workflow = self.workflowRepository.findById(workflowId)
 
-            hasGraphNodes = self.graphRepository.getNodes(workflowId)
-            isGraphWorkflow = not php_empty(hasGraphNodes)
+                if not workflow:
+                    return {'success': False, 'error': 'Workflow not found', 'status_code': 404}
 
-            if isGraphWorkflow:
-                result = self.graphWorkflowRunner.run(workflow, userId, inputVariables)
-            else:
-                result = self.workflowRunner.run(workflow, userId, inputVariables)
+                if not workflow.isEnabled():
+                    return {'success': False, 'error': 'Workflow is disabled', 'status_code': 400}
 
-            result = dict(result)
-            result['status_code'] = 200 if result.get('success') else 500
+                inputVariables = body.get('variables') if body.get('variables') is not None else (
+                    body.get('inputs') if body.get('inputs') is not None else {})
 
-            return result
-        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
-            return {'success': False, 'error': str(e), 'status_code': 500}
+                hasGraphNodes = self.graphRepository.getNodes(workflowId)
+                isGraphWorkflow = not php_empty(hasGraphNodes)
+
+                if isGraphWorkflow:
+                    result = self.graphWorkflowRunner.run(workflow, userId, inputVariables)
+                else:
+                    result = self.workflowRunner.run(workflow, userId, inputVariables)
+
+                result = dict(result)
+                result['status_code'] = 200 if result.get('success') else 500
+
+                return result
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
+                return {'success': False, 'error': str(e), 'status_code': 500}
+        finally:
+            # Python-only cleanup — see __init__'s comment on self.assistant.
+            try:
+                self.assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[WorkflowController] assistant.close() failed: {closeErr}")
 
     # ========================================================================
     # POST /api/v1/workflows/run — PHP 813-849
@@ -576,6 +588,19 @@ class WorkflowController:
         def sseCallback(event) -> None:
             sse.send_data(event)
 
+        try:
+            return self._runStreamInner(userId, workflowId, body, sse, sseCallback)
+        finally:
+            # Python-only cleanup — see __init__'s comment on self.assistant.
+            try:
+                self.assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[WorkflowController] assistant.close() failed: {closeErr}")
+
+    def _runStreamInner(self, userId, workflowId, body, sse, sseCallback) -> None:
+        """Python-only split so `runStream`'s outer `finally`
+        (`self.assistant.close()`) wraps every return path of the ported
+        PHP 855-970 body below without re-indenting it."""
         if not userId:
             sseCallback({'type': 'error', 'error': 'Authentication required'})
             sse.send_data('[DONE]')

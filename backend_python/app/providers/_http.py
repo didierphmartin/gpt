@@ -45,3 +45,16 @@ def guzzle_body_summary(text: str, truncateAt: int = GUZZLE_BODY_SUMMARY_LIMIT) 
     if len(text) > truncateAt:
         return text[:truncateAt] + ' (truncated...)'
     return text
+
+
+def headers_list_to_dict(headers: list) -> dict:
+    """PHP's CURLOPT_HTTPHEADER list (['Name: value', ...], the shape
+    ProviderRequestFactory::buildRequest()['headers'] returns) -> a header
+    dict for httpx. Shared by parallel_agent_executor.py and
+    graph_workflow_runner.py (Phase 5 final wave -- was duplicated in both)."""
+    out = {}
+    for h in headers:
+        if ':' in h:
+            k, v = h.split(':', 1)
+            out[k.strip()] = v.strip()
+    return out

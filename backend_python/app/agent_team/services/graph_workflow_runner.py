@@ -88,14 +88,16 @@ from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.agent_team.services.workflow_schema_repository import WorkflowSchemaRepository
 from app.config import PHP_BACKEND
 from app.exceptions import PricingUnavailableException
-from app.providers._http import SHARED_SSL_CONTEXT
+from app.providers._http import SHARED_SSL_CONTEXT, headers_list_to_dict as _headers_list_to_dict
 from app.services.pricing_resolver import PricingResolver
 from app.support.logger import error_log
 from app.support.phpcompat import (
     PHP_TRIM_CHARS,
     is_php_array,
     mb_substr,
+    php_array,
     php_bool,
+    php_coalesce as _coalesce,
     php_date,
     php_empty,
     php_floatval,
@@ -107,6 +109,13 @@ from app.support.phpjson import dumps_pretty, php_json_decode, php_json_encode
 
 # Mirrors ClientSideToolsTrait::getClientSideToolNames() (PHP 2173-2176).
 _CLIENT_SIDE_TOOL_NAMES = ('run_skill_script', 'discover_skill', 'Task')
+
+# D4 (Phase 5 final-review wave): module-level seam for the Start-node
+# "active glow" delay below (PHP `usleep(300000)`, GraphWorkflowRunner.php:
+# 328) -- tests monkeypatch this attribute (`graph_workflow_runner._sleep`)
+# to a no-op so `run()` doesn't actually block for 300ms on every test;
+# production leaves it as the real `time.sleep`, unchanged behaviour.
+_sleep = time.sleep
 
 # basicPdfTextExtract's regex scan (PHP 3034-3060), on raw PDF bytes.
 _PDF_STREAM_RE = re.compile(rb'stream\s*(.*?)\s*endstream', re.S)
@@ -121,25 +130,6 @@ def _pc(providerConfig, key: str):
     return providerConfig.get(key) if isinstance(providerConfig, dict) else None
 
 
-def _headers_list_to_dict(headers: list) -> dict:
-    """PHP's CURLOPT_HTTPHEADER list (['Name: value', ...]) -> a header dict
-    for httpx. Same shape/consumer as parallel_agent_executor.py's identical
-    helper; duplicated locally rather than importing another module's
-    underscore-prefixed internal."""
-    out = {}
-    for h in headers:
-        if ':' in h:
-            k, v = h.split(':', 1)
-            out[k.strip()] = v.strip()
-    return out
-
-
-def _coalesce(*vals):
-    """PHP `??` chain: the first non-None value, else None."""
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 def _json_encode_unescaped_unicode(value) -> str:
@@ -423,7 +413,7 @@ class GraphWorkflowRunner:
             })
 
             self._emitNodeEvent('node_start', startNode, {'input': userPrompt})
-            time.sleep(0.3)  # 300ms delay so the active glow is visible before completion
+            _sleep(0.3)  # 300ms delay so the active glow is visible before completion
             self._emitNodeEvent('node_complete', startNode, {'success': True})
 
             executedNodes = [startNode['id']]
@@ -1514,21 +1504,26 @@ class GraphWorkflowRunner:
     # ─── Execution record persistence ────────────────────────────────────────
 
     def _createExecution(self, workflow: Workflow, userId: int, inputVariables: dict) -> int:
-        """Create workflow execution record (PHP 1658-1671)."""
+        """Create workflow execution record (PHP 1658-1671). PHP's
+        `json_encode($inputVariables)` encodes a possibly-empty PHP `array`
+        param — an empty one must serialise as `[]`, not `{}` — so this
+        wraps it in `php_array()` before encoding (PHP 1666)."""
         return self.db.insert(
             "INSERT INTO agent_workflow_executions (workflow_id, user_id, input_variables, status, started_at)\n"
             "             VALUES (?, ?, ?, 'running', NOW())",
-            [workflow.getId(), userId, php_json_encode(inputVariables)],
+            [workflow.getId(), userId, php_json_encode(php_array(inputVariables))],
         )
 
     def _completeExecution(self, executionId: int, outputs: dict, responseTime: float) -> None:
-        """Complete workflow execution (PHP 1676-1689)."""
+        """Complete workflow execution (PHP 1676-1689). `$outputs` is a typed
+        PHP `array` param — an empty one must serialise as `[]`, not `{}`
+        (PHP 1683)."""
         self._ensureDbConnection()
         self.db.execute(
             "UPDATE agent_workflow_executions\n"
             "             SET status = 'completed', output = ?, response_time_ms = ?, completed_at = NOW()\n"
             "             WHERE id = ?",
-            [php_json_encode(outputs), php_intval(responseTime), executionId],
+            [php_json_encode(php_array(outputs)), php_intval(responseTime), executionId],
         )
 
     def _failExecution(self, executionId: int, error: str) -> None:

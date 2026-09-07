@@ -31,7 +31,7 @@ from app.playbook.playbook_interpreter import PlaybookInterpreter
 from app.playbook.playbook_native_tools import PlaybookNativeTools
 from app.playbook.playbook_run_state import PlaybookRunState
 from app.playbook.playbook_transcript import PlaybookTranscript
-from app.support.phpcompat import php_empty, php_strval, php_trim, ucfirst
+from app.support.phpcompat import php_coalesce as _coalesce, php_empty, php_strval, php_trim, ucfirst
 
 _GATE_TITLES = {
     'approval': 'Approval requested', 'form': 'Form request', 'handoff': 'Handed off to a human',
@@ -47,11 +47,6 @@ def _str(v) -> str:
     return json.dumps(v, ensure_ascii=False, separators=(',', ':')).replace('/', '\\/')
 
 
-def _coalesce(*vals):
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 class PlaybookNodeRunner:
@@ -193,7 +188,9 @@ class PlaybookNodeRunner:
                     p.get('question'),
                     p.get('prompt'),
                     _str(p.get('team_or_person') if p.get('team_or_person') is not None else '')
-                    + (' — ' + _str(p.get('reason')) if 'reason' in p else ''),
+                    # PHP `isset($p['reason'])` -- False for an explicit
+                    # JSON null, same as Python `is not None` (D1).
+                    + (' — ' + _str(p.get('reason')) if p.get('reason') is not None else ''),
                 ))
                 lines.append('- ✋ ' + _GATE_TITLES.get(kind, ucfirst(kind)) + (f': {what}' if what != '' else ''))
 

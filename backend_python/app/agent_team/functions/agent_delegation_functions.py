@@ -23,7 +23,6 @@ at runtime because `_extractStreamContext` needs a real `isinstance` check.
 """
 from __future__ import annotations
 
-import re
 import time
 from typing import TYPE_CHECKING
 
@@ -31,26 +30,13 @@ import pymysql.err
 
 from app.agent_team.services.stream_context import StreamContext
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_intval, php_trim
+from app.support.phpcompat import php_empty, php_intval, php_trim, str_word_count as _str_word_count
 from app.support.phpjson import php_json_encode
 
 if TYPE_CHECKING:
     from app.agent_team.models.agent import Agent
     from app.agent_team.services.agent_repository import AgentRepository
     from app.agent_team.services.agent_runner import AgentRunner
-
-
-# Local approximation of PHP's str_word_count() default mode (word count
-# only) -- used solely for the diagnostic `result_word_count` field
-# (AgentDelegationFunctions.php:354), not asserted by any oracle test, so an
-# exact locale-dependent reproduction of PHP's C implementation isn't
-# required. app.support.phpcompat has no str_word_count helper (checked);
-# this is a small local addition, not a re-implementation of an existing one.
-_WORD_RE = re.compile(r"[A-Za-z]+(?:['-][A-Za-z]+)*")
-
-
-def _str_word_count(s: str) -> int:
-    return len(_WORD_RE.findall(s))
 
 
 def _safe_json_log(value) -> str:
@@ -432,13 +418,17 @@ class AgentDelegationFunctions:
     def runAgentsParallel(self, params: dict, context=None) -> dict:
         """Run multiple agents in parallel (PHP 439-554)."""
         delegations = params.get('delegations') if params.get('delegations') is not None else []
-        if php_empty(delegations) or not isinstance(delegations, (list, dict)):
+        # PHP `!is_array($delegations)` accepts either shape a JSON value can
+        # decode to, but `delegations` is always a JSON *array* argument in
+        # a real tool call (never a JSON object) -- D5 drops the dict branch
+        # this used to also accept as dead code, keeping the same validation
+        # error string for anything that isn't a (possibly empty) list.
+        if php_empty(delegations) or not isinstance(delegations, list):
             return {'success': False, 'error': 'No delegations provided'}
 
         # PHP `foreach ($delegations as $index => $d)` walks a list keyed
-        # 0..n-1 in the normal (array) case; JSON always decodes an array
-        # payload to a Python list, so enumerate() mirrors that.
-        delegationItems = list(enumerate(delegations)) if isinstance(delegations, list) else list(delegations.items())
+        # 0..n-1.
+        delegationItems = list(enumerate(delegations))
 
         userId = self._extractUserId(context)
         currentAgentId = self._extractCurrentAgentId(context)
@@ -455,67 +445,75 @@ class AgentDelegationFunctions:
 
         repo = self.runner.getFreshRepository()
         executor = self.runner.createParallelExecutor(True)  # record executions; no observer/bridge
-        manager = repo.findById(currentAgentId) if currentAgentId else None
+        try:
+            manager = repo.findById(currentAgentId) if currentAgentId else None
 
-        # Build one state per valid delegation; collect index errors separately.
-        states: list = []
-        indexByKey: dict = {}
-        errors: dict = {}
-        for index, d in delegationItems:
-            if not isinstance(d, dict):
-                d = {}
-            agentName = d.get('agent_name')
-            task = d.get('task')
-            if not agentName or not task:
-                errors[index] = {
-                    'index': index, 'agent': agentName if agentName is not None else 'unknown',
-                    'task': d.get('task'), 'success': False, 'result': None,
-                    'error': 'Missing agent_name or task', 'execution_id': None,
-                }
-                continue
-            agent = repo.findByName(agentName, userId)
-            if not agent or not agent.isEnabled():
-                errors[index] = {
-                    'index': index, 'agent': agentName,
-                    'task': d.get('task'), 'success': False, 'result': None,
-                    'error': f'Agent not found or disabled: {agentName}', 'execution_id': None,
-                }
-                continue
-            if agent.isManager():
-                errors[index] = {
-                    'index': index, 'agent': agentName,
-                    'task': d.get('task'), 'success': False, 'result': None,
-                    'error': 'Cannot run a manager agent in a parallel batch', 'execution_id': None,
-                }
-                continue
-            if manager and not manager.canDelegateToAgent(agent.getId()):
-                errors[index] = {
-                    'index': index, 'agent': agentName,
-                    'task': d.get('task'), 'success': False, 'result': None,
-                    'error': f"Manager cannot delegate to '{agentName}'", 'execution_id': None,
-                }
-                continue
+            # Build one state per valid delegation; collect index errors separately.
+            states: list = []
+            indexByKey: dict = {}
+            errors: dict = {}
+            for index, d in delegationItems:
+                if not isinstance(d, dict):
+                    d = {}
+                agentName = d.get('agent_name')
+                task = d.get('task')
+                if not agentName or not task:
+                    errors[index] = {
+                        'index': index, 'agent': agentName if agentName is not None else 'unknown',
+                        'task': d.get('task'), 'success': False, 'result': None,
+                        'error': 'Missing agent_name or task', 'execution_id': None,
+                    }
+                    continue
+                agent = repo.findByName(agentName, userId)
+                if not agent or not agent.isEnabled():
+                    errors[index] = {
+                        'index': index, 'agent': agentName,
+                        'task': d.get('task'), 'success': False, 'result': None,
+                        'error': f'Agent not found or disabled: {agentName}', 'execution_id': None,
+                    }
+                    continue
+                if agent.isManager():
+                    errors[index] = {
+                        'index': index, 'agent': agentName,
+                        'task': d.get('task'), 'success': False, 'result': None,
+                        'error': 'Cannot run a manager agent in a parallel batch', 'execution_id': None,
+                    }
+                    continue
+                if manager and not manager.canDelegateToAgent(agent.getId()):
+                    errors[index] = {
+                        'index': index, 'agent': agentName,
+                        'task': d.get('task'), 'success': False, 'result': None,
+                        'error': f"Manager cannot delegate to '{agentName}'", 'execution_id': None,
+                    }
+                    continue
 
-            input_ = task
-            ctx = php_trim(d.get('context') if d.get('context') is not None else '')
-            if ctx != '':
-                input_ = f"## Context from Previous Analysis\n{ctx}\n\n## Your Task\n{task}"
+                input_ = task
+                ctx = php_trim(d.get('context') if d.get('context') is not None else '')
+                if ctx != '':
+                    input_ = f"## Context from Previous Analysis\n{ctx}\n\n## Your Task\n{task}"
 
-            states.append({
-                'key': index,
-                'agent': agent,
-                'input': input_,
-                'user_id': userId,
-                'messages': [
-                    {'role': 'system', 'content': agent.buildSystemPrompt()},
-                    {'role': 'user', 'content': input_},
-                ],
-                'tools': executor.buildToolsFor(agent, agent.getTools() if agent.getTools() else None),
-                'tools_filter': agent.getTools() if agent.getTools() else None,
-            })
-            indexByKey[index] = task
+                states.append({
+                    'key': index,
+                    'agent': agent,
+                    'input': input_,
+                    'user_id': userId,
+                    'messages': [
+                        {'role': 'system', 'content': agent.buildSystemPrompt()},
+                        {'role': 'user', 'content': input_},
+                    ],
+                    'tools': executor.buildToolsFor(agent, agent.getTools() if agent.getTools() else None),
+                    'tools_filter': agent.getTools() if agent.getTools() else None,
+                })
+                indexByKey[index] = task
 
-        execResults = executor.run(states) if states else {}
+            execResults = executor.run(states) if states else {}
+        finally:
+            # Python-only addition (no PHP counterpart — see
+            # GraphWorkflowRunner.run()'s `finally` for the same pattern):
+            # `createParallelExecutor(True)` owns an httpx.Client; release
+            # its connection pool once this batch is done rather than
+            # leaking it across calls in a long-lived worker process.
+            executor.close()
 
         # Merge executor results with pre-flight errors, preserving delegation order.
         results: list = []

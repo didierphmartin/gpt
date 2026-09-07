@@ -30,6 +30,7 @@ from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.support import phpjson
+from app.support.logger import error_log
 from app.support.phpcompat import php_array, php_bool, php_empty, php_intval, php_strval, php_trim
 
 
@@ -54,14 +55,19 @@ class AgentMCPController:
         # sequence as AgentController.__init__ / WorkflowController.__init__.
         config = LLMProviderResolver.applyDbSettings(db, config)
         self.config = config
-        assistant = AIPortfolioAssistant(config)
-        assistant.setDatabase(db)
+        # Python-only: kept as an attribute (rather than a dropped local) so
+        # `handle()` — the sole HTTP entry point — can close its provider
+        # httpx.Client(s) in `finally` once the runner stack is done with
+        # it — PHP has no equivalent since Guzzle clients die with the
+        # request.
+        self.assistant = AIPortfolioAssistant(config)
+        self.assistant.setDatabase(db)
 
         mcpToolsLoader = MCPToolsLoader(db)
 
         self.runner = AgentRunner(
-            assistant.getLLMManager(),
-            assistant.getToolsManager(),
+            self.assistant.getLLMManager(),
+            self.assistant.getToolsManager(),
             mcpToolsLoader,
             db,
             config,
@@ -87,35 +93,42 @@ class AgentMCPController:
         id_ = body.get('id')
 
         try:
-            if method == 'initialize':
-                result = self._initialize(params)
-            elif method == 'agents/list':
-                result = self._listAgents(userId, params)
-            elif method == 'agents/get':
-                result = self._getAgent(userId, params)
-            elif method == 'agents/create':
-                result = self._createAgent(userId, params)
-            elif method == 'agents/update':
-                result = self._updateAgent(userId, params)
-            elif method == 'agents/delete':
-                result = self._deleteAgent(userId, params)
-            elif method == 'agents/run':
-                result = self._runAgent(userId, params)
-            elif method == 'tools/list':
-                result = self._listTools(userId)
-            elif method == 'tools/call':
-                result = self._callTool(userId, params)
-            elif method == 'ping':
-                result = {'pong': True}
-            else:
-                raise _InvalidArgument(f'Method not found: {method}')
+            try:
+                if method == 'initialize':
+                    result = self._initialize(params)
+                elif method == 'agents/list':
+                    result = self._listAgents(userId, params)
+                elif method == 'agents/get':
+                    result = self._getAgent(userId, params)
+                elif method == 'agents/create':
+                    result = self._createAgent(userId, params)
+                elif method == 'agents/update':
+                    result = self._updateAgent(userId, params)
+                elif method == 'agents/delete':
+                    result = self._deleteAgent(userId, params)
+                elif method == 'agents/run':
+                    result = self._runAgent(userId, params)
+                elif method == 'tools/list':
+                    result = self._listTools(userId)
+                elif method == 'tools/call':
+                    result = self._callTool(userId, params)
+                elif method == 'ping':
+                    result = {'pong': True}
+                else:
+                    raise _InvalidArgument(f'Method not found: {method}')
 
-            return self._jsonRpcSuccess(id_, result)
+                return self._jsonRpcSuccess(id_, result)
 
-        except _InvalidArgument as e:
-            return self._jsonRpcError(id_, -32601, str(e))
-        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
-            return self._jsonRpcError(id_, -32603, str(e))
+            except _InvalidArgument as e:
+                return self._jsonRpcError(id_, -32601, str(e))
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
+                return self._jsonRpcError(id_, -32603, str(e))
+        finally:
+            # Python-only cleanup — see __init__'s comment on self.assistant.
+            try:
+                self.assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[AgentMCPController] assistant.close() failed: {closeErr}")
 
     # ========================================================================
     # initialize — MCP handshake — PHP 124-143

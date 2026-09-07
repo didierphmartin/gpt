@@ -58,16 +58,20 @@ class AgentController:
         # system_llm_settings (the file no longer carries provider blocks).
         config = LLMProviderResolver.applyDbSettings(db, config)
         self.config = config
-        assistant = AIPortfolioAssistant(config)
-        assistant.setDatabase(db)
+        # Python-only: kept as an attribute (rather than a dropped local)
+        # so `run`/`chat` can close its provider httpx.Client(s) in
+        # `finally` once the runner stack is done with it — PHP has no
+        # equivalent since Guzzle clients die with the request.
+        self.assistant = AIPortfolioAssistant(config)
+        self.assistant.setDatabase(db)
 
         # Create MCPToolsLoader
         mcpToolsLoader = MCPToolsLoader(db)
 
         # Create AgentRunner with all dependencies
         self.runner = AgentRunner(
-            assistant.getLLMManager(),
-            assistant.getToolsManager(),
+            self.assistant.getLLMManager(),
+            self.assistant.getToolsManager(),
             mcpToolsLoader,
             db,
             config,
@@ -611,51 +615,58 @@ class AgentController:
         agentId = php_intval(id)
         data = request.get('body') if request.get('body') is not None else {}
 
-        # App-key auth is scope-gated. A JWT-authed user reaches the
-        # ownership check below unrestricted; an app key must explicitly
-        # carry `agents:run` or `agents:run:<id>` in its scopes. ($userId is
-        # already the app key's bound user — set by the middleware — so the
-        # canUserAccess() ownership check still holds.)
-        if request.get('auth_type') == 'app_key':
-            scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
-            scopeAllowed = 'agents:run' in scopes or f'agents:run:{agentId}' in scopes
-            if not scopeAllowed:
-                return self.error('App key not authorized for this agent (missing scope agents:run)', 403)
+        try:
+            # App-key auth is scope-gated. A JWT-authed user reaches the
+            # ownership check below unrestricted; an app key must explicitly
+            # carry `agents:run` or `agents:run:<id>` in its scopes. ($userId is
+            # already the app key's bound user — set by the middleware — so the
+            # canUserAccess() ownership check still holds.)
+            if request.get('auth_type') == 'app_key':
+                scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
+                scopeAllowed = 'agents:run' in scopes or f'agents:run:{agentId}' in scopes
+                if not scopeAllowed:
+                    return self.error('App key not authorized for this agent (missing scope agents:run)', 403)
 
-        # Check access
-        if not self.repository.canUserAccess(userId, agentId):
-            return self.error('Agent not found', 404)
+            # Check access
+            if not self.repository.canUserAccess(userId, agentId):
+                return self.error('Agent not found', 404)
 
-        agent = self.repository.findById(agentId)
+            agent = self.repository.findById(agentId)
 
-        # Check if agent is enabled
-        if not agent.isEnabled():
-            return self.error('Agent is disabled', 400)
+            # Check if agent is enabled
+            if not agent.isEnabled():
+                return self.error('Agent is disabled', 400)
 
-        # Get input
-        input_ = data.get('input') if data.get('input') is not None else (
-            data.get('message') if data.get('message') is not None else '')
-        if php_empty(php_trim(php_strval(input_))):
-            return self.error('Input message is required', 400)
+            # Get input
+            input_ = data.get('input') if data.get('input') is not None else (
+                data.get('message') if data.get('message') is not None else '')
+            if php_empty(php_trim(php_strval(input_))):
+                return self.error('Input message is required', 400)
 
-        # Get conversation history
-        conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
+            # Get conversation history
+            conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
 
-        # Get optional tools filter
-        toolsFilter = data.get('tools')
-        if toolsFilter is not None and not is_php_array(toolsFilter):
-            return self.error('tools must be an array of tool names', 400)
+            # Get optional tools filter
+            toolsFilter = data.get('tools')
+            if toolsFilter is not None and not is_php_array(toolsFilter):
+                return self.error('tools must be an array of tool names', 400)
 
-        # Execute agent with optional tools filter
-        response = self.runner.run(
-            agent,
-            input_,
-            conversationHistory,
-            userId,
-            {'tools_filter': toolsFilter},
-        )
+            # Execute agent with optional tools filter
+            response = self.runner.run(
+                agent,
+                input_,
+                conversationHistory,
+                userId,
+                {'tools_filter': toolsFilter},
+            )
 
-        return response
+            return response
+        finally:
+            # Python-only cleanup — see __init__'s comment on self.assistant.
+            try:
+                self.assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[AgentController] assistant.close() failed: {closeErr}")
 
     # ========================================================================
     # POST /api/v1/agents/{id}/chat — Execute an agent with streaming (SSE)
@@ -684,64 +695,71 @@ class AgentController:
         agentId = php_intval(id)
         data = request.get('body') if request.get('body') is not None else {}
 
-        # Check access
-        if not self.repository.canUserAccess(userId, agentId):
-            return self.error('Agent not found', 404)
+        try:
+            # Check access
+            if not self.repository.canUserAccess(userId, agentId):
+                return self.error('Agent not found', 404)
 
-        agent = self.repository.findById(agentId)
+            agent = self.repository.findById(agentId)
 
-        # Check if enabled
-        if not agent.isEnabled():
-            return self.error('Agent is disabled', 400)
+            # Check if enabled
+            if not agent.isEnabled():
+                return self.error('Agent is disabled', 400)
 
-        # Get input
-        input_ = data.get('input') if data.get('input') is not None else (
-            data.get('message') if data.get('message') is not None else '')
-        if php_empty(php_trim(php_strval(input_))):
-            return self.error('Input message is required', 400)
+            # Get input
+            input_ = data.get('input') if data.get('input') is not None else (
+                data.get('message') if data.get('message') is not None else '')
+            if php_empty(php_trim(php_strval(input_))):
+                return self.error('Input message is required', 400)
 
-        # Get conversation history
-        conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
+            # Get conversation history
+            conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
 
-        # Get optional tools filter
-        toolsFilter = data.get('tools')
-        if toolsFilter is not None and not is_php_array(toolsFilter):
-            return self.error('tools must be an array of tool names', 400)
+            # Get optional tools filter
+            toolsFilter = data.get('tools')
+            if toolsFilter is not None and not is_php_array(toolsFilter):
+                return self.error('tools must be an array of tool names', 400)
 
-        # SSE headers / output buffering / connection-abort handling are
-        # done by main.py's StreamingResponse bridge (spec §3) — PHP's
-        # explicit header()/ob_end_clean() calls (which PHP fires earlier,
-        # right after the input check) have no Python counterpart: this
-        # bridge doesn't send anything until `sse.send()` is first called,
-        # so grabbing the object here (after validation, instead of before
-        # it like PHP) is behaviorally identical and lets every validation
-        # failure above return a plain JSON error response.
-        sse = request['sse']
+            # SSE headers / output buffering / connection-abort handling are
+            # done by main.py's StreamingResponse bridge (spec §3) — PHP's
+            # explicit header()/ob_end_clean() calls (which PHP fires earlier,
+            # right after the input check) have no Python counterpart: this
+            # bridge doesn't send anything until `sse.send()` is first called,
+            # so grabbing the object here (after validation, instead of before
+            # it like PHP) is behaviorally identical and lets every validation
+            # failure above return a plain JSON error response.
+            sse = request['sse']
 
-        # Create SSE callback for streaming events — bare `data:` frame, no
-        # `event:` line (PHP AgentController.php:485-490's raw echo, see
-        # docstring above).
-        def sseCallback(event) -> None:
-            sse.send_data(event)
+            # Create SSE callback for streaming events — bare `data:` frame, no
+            # `event:` line (PHP AgentController.php:485-490's raw echo, see
+            # docstring above).
+            def sseCallback(event) -> None:
+                sse.send_data(event)
 
-        # Create stream context for agent activity events
-        streamContext = StreamContext(sseCallback, userId)
-        self.runner.setStreamContext(streamContext)
+            # Create stream context for agent activity events
+            streamContext = StreamContext(sseCallback, userId)
+            self.runner.setStreamContext(streamContext)
 
-        # Execute with streaming (pass tools filter via context)
-        self.runner.streamRun(
-            agent,
-            input_,
-            conversationHistory,
-            userId,
-            sseCallback,
-            {'tools_filter': toolsFilter},
-        )
+            # Execute with streaming (pass tools filter via context)
+            self.runner.streamRun(
+                agent,
+                input_,
+                conversationHistory,
+                userId,
+                sseCallback,
+                {'tools_filter': toolsFilter},
+            )
 
-        # PHP AgentController.php:507: echo "data: [DONE]\n\n"; flush();
-        sse.send_data('[DONE]')
+            # PHP AgentController.php:507: echo "data: [DONE]\n\n"; flush();
+            sse.send_data('[DONE]')
 
-        return None
+            return None
+        finally:
+            # Python-only cleanup — see __init__'s comment on self.assistant.
+            try:
+                self.assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[AgentController] assistant.close() failed: {closeErr}")
 
     # ========================================================================
     # Helper Methods

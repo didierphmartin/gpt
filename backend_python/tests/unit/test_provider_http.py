@@ -14,7 +14,7 @@ import time
 import pytest
 
 from app.config_.configuration import Configuration
-from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary
+from app.providers._http import SHARED_SSL_CONTEXT, guzzle_body_summary, headers_list_to_dict
 from app.providers.claude_provider import ClaudeProvider
 from app.providers.custom_provider import CustomProvider
 from app.providers.deepseek_provider import DeepSeekProvider
@@ -66,3 +66,24 @@ def test_guzzle_body_summary_truncates_at_120_chars():
     long = 'A' * 200 + 'TAIL'
     out = guzzle_body_summary(long)
     assert out == 'A' * 120 + ' (truncated...)' and 'TAIL' not in out
+
+
+# ---------------------------------------------------------------------------
+# headers_list_to_dict (C3, Phase 5 final-review wave -- previously
+# duplicated verbatim in parallel_agent_executor.py and
+# graph_workflow_runner.py; now the single shared home for both.)
+# ---------------------------------------------------------------------------
+
+def test_headers_list_to_dict_parses_and_trims():
+    assert headers_list_to_dict(['Content-Type: application/json', 'X-Foo:  bar  ']) == {
+        'Content-Type': 'application/json',
+        'X-Foo': 'bar',
+    }
+
+
+def test_headers_list_to_dict_skips_entries_without_a_colon():
+    assert headers_list_to_dict(['no-colon-here', 'A: b']) == {'A': 'b'}
+
+
+def test_headers_list_to_dict_empty_list():
+    assert headers_list_to_dict([]) == {}

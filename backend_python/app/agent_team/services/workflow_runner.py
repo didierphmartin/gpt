@@ -19,13 +19,13 @@ import time
 from typing import Any
 
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.models.workflow import step_dict as _step_dict
 from app.support.phpcompat import (
-    is_numeric,
-    php_bool,
+    php_array,
     php_empty,
-    php_floatval,
     php_intval,
     php_items,
+    php_loose_eq as _php_loose_eq,
     php_strval,
     php_trim,
     php_values,
@@ -63,17 +63,19 @@ def _php_array_merge(a, b):
     return result
 
 
-def _step_dict(step) -> dict:
-    """A step that isn't itself an array/object behaves like PHP accessing
-    an offset on a non-array value (undefined -> null for every key)."""
-    return step if isinstance(step, dict) else {}
 
 
 def _isset_index(current, part: str):
     """`isset($current[$part])` for one level of WorkflowRunner::extractField's
     dotted-path walk (PHP 314-331): PHP arrays let a numeric-string key like
     '0' address a list element (int keys and their string forms are the same
-    key), so a list is also tried by int(part). Returns (found, value)."""
+    key), so a list is also tried by int(part). `extractField` only checks
+    `is_array($data)` once, before the loop, so `$current` can become a
+    plain string partway through the walk (a nested value that isn't itself
+    an array) — PHP's `isset($string[$n])` is still valid syntax there: a
+    (possibly negative, from-the-end) integer offset within the string's
+    length returns True with that single character; any non-numeric key is
+    False (D3). Returns (found, value)."""
     if isinstance(current, dict):
         if part in current and current[part] is not None:
             return True, current[part]
@@ -84,53 +86,14 @@ def _isset_index(current, part: str):
             if 0 <= i < len(current) and current[i] is not None:
                 return True, current[i]
         return False, None
+    if isinstance(current, str):
+        if _NUMERIC_STR_RE.match(part):
+            i = int(part)
+            idx = i if i >= 0 else len(current) + i
+            if 0 <= idx < len(current):
+                return True, current[idx]
+        return False, None
     return False, None
-
-
-def _php_loose_eq(a, b) -> bool:
-    """PHP 8 `==` for the value shapes that can appear in evaluateCondition
-    (WorkflowRunner.php 278-291): JSON-decoded scalars/None/list/dict pulled
-    from workflow variables, or a raw condition-string literal. Not a full
-    PHP comparison-table implementation (object/resource comparisons don't
-    apply here) but covers bool/null/numeric-string/array comparisons per
-    the PHP 8 rules:
-      - either operand bool -> compare bool(a) == bool(b)
-      - either operand null -> convert null to the other operand's "zero
-        value" (0, '', [], or bool false) and compare
-      - both arrays -> same key set, each value loosely equal (recursive)
-      - one array, one scalar -> never equal
-      - both numeric (int/float/numeric-string) -> compare as numbers
-      - otherwise -> string comparison
-    """
-    if isinstance(a, bool) or isinstance(b, bool):
-        return php_bool(a) == php_bool(b)
-    if a is None or b is None:
-        if a is None and b is None:
-            return True
-        other = b if a is None else a
-        if isinstance(other, (int, float)):
-            return php_floatval(other) == 0.0
-        if isinstance(other, str):
-            return other == ''
-        if isinstance(other, (list, dict)):
-            return _php_loose_eq([], other)
-        return False
-    a_arr = isinstance(a, (list, dict))
-    b_arr = isinstance(b, (list, dict))
-    if a_arr or b_arr:
-        if not (a_arr and b_arr):
-            return False
-        da = a if isinstance(a, dict) else dict(enumerate(a))
-        db = b if isinstance(b, dict) else dict(enumerate(b))
-        if len(da) != len(db):
-            return False
-        for k, v in da.items():
-            if k not in db or not _php_loose_eq(v, db[k]):
-                return False
-        return True
-    if is_numeric(a) and is_numeric(b):
-        return php_floatval(a) == php_floatval(b)
-    return php_strval(a) == php_strval(b)
 
 
 class WorkflowRunner:
@@ -431,20 +394,22 @@ class WorkflowRunner:
         return "\n\n".join(summaries)
 
     def _createExecution(self, workflow: Workflow, user_id: int, input_variables: dict) -> int:
-        """WorkflowRunner.php 355-368."""
+        """WorkflowRunner.php 355-368. `$inputVariables` is a typed PHP
+        `array` param — an empty one must serialise as `[]`, not `{}`."""
         return self.db.insert(
             "INSERT INTO agent_workflow_executions (workflow_id, user_id, input_variables, status, started_at)\n"
             "             VALUES (?, ?, ?, 'running', NOW())",
-            [workflow.getId(), user_id, php_json_encode(input_variables)],
+            [workflow.getId(), user_id, php_json_encode(php_array(input_variables))],
         )
 
     def _completeExecution(self, execution_id: int, outputs: dict, response_time: float) -> None:
-        """WorkflowRunner.php 373-385."""
+        """WorkflowRunner.php 373-385. `$outputs` is a typed PHP `array`
+        param — an empty one must serialise as `[]`, not `{}`."""
         self.db.execute(
             "UPDATE agent_workflow_executions\n"
             "             SET status = 'completed', output = ?, response_time_ms = ?, completed_at = NOW()\n"
             "             WHERE id = ?",
-            [php_json_encode(outputs), php_intval(response_time), execution_id],
+            [php_json_encode(php_array(outputs)), php_intval(response_time), execution_id],
         )
 
     def _failExecution(self, execution_id: int, error: str) -> None:

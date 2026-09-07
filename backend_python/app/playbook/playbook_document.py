@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.support.phpcompat import php_bool, php_strval, php_trim
+from app.support.phpcompat import php_array_cast, php_bool, php_strval, php_trim
 
 
 @dataclass(frozen=True)
@@ -46,8 +46,12 @@ class PlaybookDocument:
         trigger = a.get('trigger') if a.get('trigger') is not None else {}
         if not isinstance(trigger, dict):
             trigger = {}
-        tools_used = a.get('tools_used') if a.get('tools_used') is not None else []
-        actions_used = a.get('actions_used') if a.get('actions_used') is not None else []
+        # PHP: `(array)($a['tools_used'] ?? [])` / `(array)($a['actions_used']
+        # ?? [])` (PlaybookDocument.php:37-38) -- a scalar value here (e.g. a
+        # bare string) casts to a single-element array, not an iterable of
+        # its characters.
+        tools_used = php_array_cast(a.get('tools_used') if a.get('tools_used') is not None else [])
+        actions_used = php_array_cast(a.get('actions_used') if a.get('actions_used') is not None else [])
         bindings = a.get('bindings') if a.get('bindings') is not None else {}
         policy_in = a.get('policy') if isinstance(a.get('policy'), dict) else {}
         approvers = a.get('approvers') if a.get('approvers') is not None else {}

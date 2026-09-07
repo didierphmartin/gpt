@@ -228,3 +228,52 @@ def test_second_round_messages_include_first_round_tool_result(pb_state, pb_dir)
     decoded = json.loads(toolMessages[0]['content'])
     assert isinstance(decoded, dict)
     assert toolMessages[0]['name'] == 'okta__search_users'
+
+
+# ---------------------------------------------------------------------------
+# runLeg's `args = php_array_cast(toolCall.get('arguments'))` -- B3 (Phase 5
+# final-review wave). PHP: `(array)($toolCall['arguments'] ?? [])`
+# (PlaybookInterpreter.php:88). A `FakeSpace` (rather than the real
+# PlaybookActionSpace/PlaybookNativeTools) records the exact `args` value
+# `execute()` receives, sidestepping native-tool handlers that assume a
+# dict shape downstream of this cast.
+# ---------------------------------------------------------------------------
+
+class _RecordingSpace:
+    def __init__(self):
+        self.calls = []
+
+    def toolDefinitions(self):
+        return []
+
+    def execute(self, runId, leg, name, args):
+        self.calls.append(args)
+        return {'terminal': True}
+
+
+def _run_one_call(pb_state, pb_dir, arguments):
+    space = _RecordingSpace()
+    doc = _doc()
+    id_ = pb_state.createRun(1, doc, {'id': 'req1'}, {})
+    rounds = [[{'name': 'anything', 'arguments': arguments}]]
+    llm, _ = _scripted_llm(rounds)
+    transcript = PlaybookTranscript(pb_dir)
+    interpreter = PlaybookInterpreter(space, pb_state, transcript, llm, 40, None)
+    interpreter.runLeg(id_, 0, doc, {}, {'id': 'req1'}, 'hi')
+    return space.calls[0]
+
+
+def test_run_leg_arguments_dict_passes_through_unchanged(pb_state, pb_dir):
+    assert _run_one_call(pb_state, pb_dir, {'a': 1}) == {'a': 1}
+
+
+def test_run_leg_arguments_none_casts_to_empty_list(pb_state, pb_dir):
+    assert _run_one_call(pb_state, pb_dir, None) == []
+
+
+def test_run_leg_arguments_scalar_casts_to_single_element_list(pb_state, pb_dir):
+    assert _run_one_call(pb_state, pb_dir, 'oops') == ['oops']
+
+
+def test_run_leg_arguments_list_passes_through_unchanged(pb_state, pb_dir):
+    assert _run_one_call(pb_state, pb_dir, ['x', 'y']) == ['x', 'y']

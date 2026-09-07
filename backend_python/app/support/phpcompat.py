@@ -280,6 +280,33 @@ def php_array(d):
     return d if d else []
 
 
+def php_coalesce(*values):
+    """PHP `??` chain: the first argument that `is not None`, else `None`
+    (never a truthiness check — `0`/`''`/`[]`/`False` all pass through)."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
+def php_array_cast(v):
+    """PHP `(array)$v` cast. PHP semantics (this port never receives PHP
+    *objects* here — every input already came through json_decode(..., true)
+    or plain Python values — so the object-to-property-array branch of the
+    real cast doesn't apply):
+      - already a PHP array (dict OR list, since json_decode(..., true)
+        makes no list/assoc distinction) -> itself, unchanged
+      - null -> [] (an empty array)
+      - any scalar (str/int/float/bool) -> a single-element array [v] (PHP
+        wraps a lone scalar at integer key 0)
+    """
+    if isinstance(v, (dict, list)):
+        return v
+    if v is None:
+        return []
+    return [v]
+
+
 def is_php_array(v) -> bool:
     """PHP is_array(): true for anything that came out of json_decode(..., true)
     as an array — which covers BOTH a JSON list and a JSON object, since PHP's
@@ -344,3 +371,104 @@ def php_trim(v, chars: str = PHP_TRIM_CHARS) -> str:
     if isinstance(v, (list, dict, tuple, set)):
         raise TypeError('trim(): Argument #1 ($string) must be of type string, array given')
     return php_strval(v).strip(chars)
+
+
+def php_loose_eq(a, b) -> bool:
+    """PHP 8 `==` for the value shapes that reach WorkflowRunner::
+    evaluateCondition (WorkflowRunner.php 278-291): JSON-decoded scalars/
+    None/list/dict pulled from workflow variables, or a raw condition-string
+    literal. Not a full PHP comparison-table implementation (object/resource
+    comparisons don't apply here) but covers bool/null/numeric-string/array
+    comparisons per the PHP 8 rules:
+      - either operand bool -> compare bool(a) == bool(b)
+      - either operand null -> convert null to the other operand's "zero
+        value" (0, '', [], or bool false) and compare
+      - both arrays -> same key set, each value loosely equal (recursive)
+      - one array, one scalar -> never equal
+      - both numeric (int/float/numeric-string) -> compare as numbers
+      - otherwise -> string comparison
+
+    C2 (Phase 5 final-review wave): moved here from
+    `WorkflowRunner._php_loose_eq` (a private module function there) so
+    other callers can share it.
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        return php_bool(a) == php_bool(b)
+    if a is None or b is None:
+        if a is None and b is None:
+            return True
+        other = b if a is None else a
+        if isinstance(other, (int, float)):
+            return php_floatval(other) == 0.0
+        if isinstance(other, str):
+            return other == ''
+        if isinstance(other, (list, dict)):
+            return php_loose_eq([], other)
+        return False
+    a_arr = isinstance(a, (list, dict))
+    b_arr = isinstance(b, (list, dict))
+    if a_arr or b_arr:
+        if not (a_arr and b_arr):
+            return False
+        da = a if isinstance(a, dict) else dict(enumerate(a))
+        db = b if isinstance(b, dict) else dict(enumerate(b))
+        if len(da) != len(db):
+            return False
+        for k, v in da.items():
+            if k not in db or not php_loose_eq(v, db[k]):
+                return False
+        return True
+    if is_numeric(a) and is_numeric(b):
+        return php_floatval(a) == php_floatval(b)
+    return php_strval(a) == php_strval(b)
+
+
+def php_loose_cmp(a, b) -> int:
+    """PHP 8 loose comparison of `a` vs `b`, restricted to the types that
+    reach the alert-price sites: None, int, float, Decimal-as-str, numeric
+    strings, and plain strings (WatchlistFunctions.php ~24/28: `$a >= $b` /
+    `$a <= $b` on DB-sourced DECIMAL/None values). Returns -1/0/1.
+
+    Rules (PHP 8 comparison table): bool operand -> compare as bool; None ->
+    treated as '' then falls through to the string rules; both operands
+    numeric (int/float/numeric-string) -> compare as float; otherwise ->
+    lexical string comparison (this reproduces PHP's `null <= '9.00'` =>
+    true quirk, since '' sorts below any non-empty string).
+
+    C2 (Phase 5 final-review wave): moved here from
+    `watchlist_functions._php_loose_cmp` (a private module function there)
+    so other callers can share it.
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        ab, bb = bool(a), bool(b)
+        return (ab > bb) - (ab < bb)
+    if a is None:
+        a = ''
+    if b is None:
+        b = ''
+    a_numeric = isinstance(a, (int, float)) or (isinstance(a, str) and is_numeric(a))
+    b_numeric = isinstance(b, (int, float)) or (isinstance(b, str) and is_numeric(b))
+    if a_numeric and b_numeric:
+        af, bf = float(a), float(b)
+        return (af > bf) - (af < bf)
+    astr, bstr = str(a), str(b)
+    return (astr > bstr) - (astr < bstr)
+
+
+_STR_WORD_COUNT_RE = re.compile(r"[A-Za-z]+(?:['-][A-Za-z]+)*")
+
+
+def str_word_count(s: str) -> int:
+    """Approximation of PHP's str_word_count() default mode (word count
+    only). PHP's own implementation is a locale-dependent C routine; this
+    is a documented approximation (ASCII letters, with an internal
+    apostrophe/hyphen allowed), not an exact reproduction — good enough for
+    diagnostic-only counts (e.g. AgentDelegationFunctions.php:354's
+    `result_word_count` field), not for anything asserted byte-for-byte
+    against PHP.
+
+    C4 (Phase 5 final-review wave): moved here from
+    `agent_delegation_functions._str_word_count` (a private module function
+    there) so other callers can share it.
+    """
+    return len(_STR_WORD_COUNT_RE.findall(s))

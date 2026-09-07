@@ -107,3 +107,26 @@ def test_gate_request_emitted_and_approved_then_resolves():
     assert len(gateEvents) == 1
     assert gateEvents[0]['kind'] == 'approval'
     assert gateEvents[0]['run_id'] == result['run_id']
+
+
+# ---------------------------------------------------------------------------
+# renderTranscript's gate_request 'reason' -- D1 (Phase 5 final-review wave).
+# PHP `isset($p['reason'])`: False for an explicit JSON null, not just a
+# missing key.
+# ---------------------------------------------------------------------------
+
+def _gate_request_event(payload):
+    return {'type': 'gate_request', 'kind': 'approval', 'payload': payload}
+
+
+def test_render_transcript_gate_reason_none_omits_the_dash_reason_suffix():
+    out = PlaybookNodeRunner.renderTranscript(
+        'T', [_gate_request_event({'team_or_person': 'Alice', 'reason': None})], '', 1, 'resolved')
+    gate_line = next(line for line in out.splitlines() if line.startswith('- ✋'))
+    assert gate_line == '- ✋ Approval requested: Alice'
+
+
+def test_render_transcript_gate_reason_present_appends_the_dash_reason_suffix():
+    out = PlaybookNodeRunner.renderTranscript(
+        'T', [_gate_request_event({'team_or_person': 'Alice', 'reason': 'needs sign-off'})], '', 1, 'resolved')
+    assert 'Alice — needs sign-off' in out

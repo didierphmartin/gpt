@@ -1,7 +1,7 @@
 """Port of backend/tests/Unit/Playbook/PlaybookAnalyzerTest.php (172 lines, 9 cases)."""
 from __future__ import annotations
 
-from app.playbook.playbook_analyzer import PlaybookAnalyzer
+from app.playbook.playbook_analyzer import _ACTION_RE, PlaybookAnalyzer
 from app.playbook.playbook_document import PlaybookDocument
 
 
@@ -25,6 +25,24 @@ def _doc(over=None):
     if over:
         base.update(over)
     return PlaybookDocument.fromArray(base)
+
+
+# ---------------------------------------------------------------------------
+# _ACTION_RE -- D2 (Phase 5 final-review wave). PHP's `\w` inside the `/u`
+# modifier is still ASCII-only (PlaybookAnalyzer.php:58); a non-ASCII letter
+# right after the `#Name` must NOT extend the match.
+# ---------------------------------------------------------------------------
+
+def test_action_re_non_ascii_letter_does_not_extend_the_match():
+    m = _ACTION_RE.search('#Résumé the case')
+    assert m is not None
+    assert m.group(0) == '#R'  # 'é' is not ASCII \w -- match stops right after 'R'
+
+
+def test_action_re_ascii_word_chars_extend_the_match():
+    m = _ACTION_RE.search('#Reset Password (Okta)')
+    assert m is not None
+    assert m.group(0) == '#Reset Password (Okta)'
 
 
 def test_classification():

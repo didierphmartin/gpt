@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
+from app.support.phpcompat import php_array_cast
 
 
 class WorkflowLlmClient:
@@ -143,7 +144,11 @@ class WorkflowLlmClient:
                 except (ValueError, TypeError):
                     args = {}
             else:
-                args = rawArgs if isinstance(rawArgs, dict) else {}
+                # PHP: `(array)$rawArgs` when it isn't a JSON string
+                # (WorkflowLlmClient.php:142) -- a scalar `rawArgs` casts to
+                # a single-element array, not the empty-dict fallback this
+                # used to reproduce.
+                args = php_array_cast(rawArgs)
 
             normalized.append({
                 'id': tc.get('id') if tc.get('id') is not None else SkillToolBridge.generateToolCallId(),

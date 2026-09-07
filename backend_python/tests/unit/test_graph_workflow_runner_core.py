@@ -32,9 +32,21 @@ test_graph_workflow_runner_parallel.py / test_graph_workflow_runner_documents.py
 """
 from __future__ import annotations
 
+import pytest
+
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services import graph_workflow_runner as _gwr_module
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner, NodeLogFormat
+
+
+@pytest.fixture(autouse=True)
+def _no_glow_delay(monkeypatch):
+    """D4 (Phase 5 final-review wave): `run()`'s Start-node "active glow"
+    delay (PHP `usleep(300000)`) is a real 300ms `time.sleep()` in
+    production; patch the module-level `_sleep` seam to a no-op so every
+    `run()` call in this file doesn't actually block."""
+    monkeypatch.setattr(_gwr_module, '_sleep', lambda seconds: None)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +187,23 @@ def _wf(workflow_id=1, name='WF'):
 
 
 # ---------------------------------------------------------------------------
+# _sleep seam -- D4 (Phase 5 final-review wave).
+# ---------------------------------------------------------------------------
+
+def test_run_calls_the_module_level_sleep_seam_with_300ms(monkeypatch):
+    """Confirms `run()` actually calls the patchable `_sleep` (not a direct
+    `time.sleep`) with PHP's `usleep(300000)` == 0.3s, and that the
+    autouse fixture above is what keeps every OTHER test in this file fast."""
+    calls = []
+    monkeypatch.setattr(_gwr_module, '_sleep', lambda seconds: calls.append(seconds))
+    nodes = [_node(1, 'start'), _node(2, 'output')]
+    edges = [_edge(1, 2)]
+    runner, _, _ = _make_runner(nodes, edges)
+    runner.run(_wf(), userId=1)
+    assert calls == [0.3]
+
+
+# ---------------------------------------------------------------------------
 # run(): 3-node linear graph (Start -> Agent -> Output) — event sequence,
 # execution rows, final output.
 # ---------------------------------------------------------------------------
@@ -226,6 +255,34 @@ def test_run_three_node_linear_graph_success():
     execution_inserts = [c for c in db.inserts if "INSERT INTO agent_workflow_executions" in c[0]]
     assert len(execution_inserts) == 1
     assert any("status = 'completed'" in sql for sql, _ in db.executes)
+
+
+# ---------------------------------------------------------------------------
+# _createExecution / _completeExecution -- B1 (Phase 5 final-review wave):
+# empty input_variables/outputs must serialise as PHP's `[]`, not `{}`.
+# ---------------------------------------------------------------------------
+
+def test_create_execution_empty_input_variables_serialises_as_php_array():
+    runner, db, _ = _make_runner([], [])
+    runner._createExecution(_wf(), 7, {})
+    sql, params = db.inserts[0]
+    assert "agent_workflow_executions" in sql
+    assert params[-1] == '[]'
+
+
+def test_create_execution_nonempty_input_variables_serialises_as_object():
+    runner, db, _ = _make_runner([], [])
+    runner._createExecution(_wf(), 7, {'a': 1})
+    _, params = db.inserts[0]
+    assert params[-1] == '{"a":1}'
+
+
+def test_complete_execution_empty_outputs_serialises_as_php_array():
+    runner, db, _ = _make_runner([], [])
+    runner._completeExecution(100, {}, 0.0)
+    sql, params = db.executes[0]
+    assert "status = 'completed'" in sql
+    assert params[0] == '[]'
 
 
 def test_run_failure_path_fails_execution_and_emits_workflow_error():
