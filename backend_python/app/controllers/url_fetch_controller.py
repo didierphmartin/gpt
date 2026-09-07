@@ -181,7 +181,7 @@ class UrlFetchController:
             follow_redirects=True,
             max_redirects=self.MAX_REDIRECTS,
             timeout=httpx.Timeout(self.TIMEOUT_SECONDS, connect=self.CONNECT_TIMEOUT_SECONDS),
-            verify=SHARED_SSL_CONTEXT,
+            verify=False,  # PHP: CURLOPT_SSL_VERIFYPEER=false (UrlFetchController.php:103) — parity ruling, tracker row,
             headers=self.REQUEST_HEADERS,
         )
 
