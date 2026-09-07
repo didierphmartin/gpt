@@ -23,7 +23,7 @@ tables, 2026-09-07.
 import pytest
 
 from app.db import open_primary
-from tests.differential.conftest import same
+from tests.differential.conftest import DIFF_USER_ID, same
 from tests.differential.sse import parse_data_only, same_data_stream
 
 pytestmark = pytest.mark.differential
@@ -39,6 +39,55 @@ def test_run_validation_parity(both):
     same(*both('POST', '/api/v1/workflows/999999999/run', json={}))
     same(*both('POST', '/api/v1/workflows/0/run', json={}))
     same(*both('POST', '/api/v1/workflows/1/run', json={}, auth=False))
+
+
+def test_run_app_key_missing_scope_403_parity(php, py, token, config):
+    """App-key scope gate (constraints.md's Global Constraints, "Validation
+    cases exact-compare (auth, missing id, app-key scope 403 text)"). Creates
+    a `differential-tmp-` app key for user 3 with a scope that does NOT
+    grant `workflows:run`/`workflows:run:{WORKFLOW_ID}` (same create/delete
+    route pair test_app_keys.py's own round-trip test uses), calls
+    `POST /workflows/{WORKFLOW_ID}/run` with it via the `AppKey <key>` auth
+    scheme (AuthMiddleware.php:22 / auth.py's `_APPKEY` regex -- NOT
+    `Bearer`, which would fail JWT decode and 401 before the controller's
+    own scope check ever runs), asserts the exact 403 body, then hard-deletes
+    the created row by id on the SAME backend that created it (PHP-first,
+    self-cleaning -- `DELETE /app-keys/{id}` is a soft delete per
+    test_app_keys.py's own round-trip test, so the row is also purged via
+    direct SQL, same precedent). No LLM cost: the scope check 403s before
+    canUserAccess/run ever fire."""
+    h = {'Authorization': f'Bearer {token}'}
+    body = {'user_id': DIFF_USER_ID, 'application_id': 'differential', 'name': 'differential-tmp-scope-403',
+            'scopes': ['agents:run:1']}   # deliberately no workflows:run scope
+    db = open_primary(config)
+    created_ids = []
+    try:
+        for c in (php, py):   # PHP first, so PHP's on-demand state lands before Python touches the same rows
+            created = c.post('/api/v1/app-keys', json=body, headers=h)
+            assert created.status_code == 201, created.text
+            full_key = created.json()['data']['full_key']
+            key_id = created.json()['data']['id']
+            created_ids.append(key_id)
+
+            r = c.post(f'/api/v1/workflows/{WORKFLOW_ID}/run', json={},
+                       headers={'Authorization': f'AppKey {full_key}'})
+            assert r.status_code == 403, r.text
+            # `status_code` is an internal routing key -- index.php's
+            # generic dispatch (and main.py's render()) both strip it from
+            # the wire body before echoing, so it's not expected here (only
+            # the HTTP status line carries it, asserted above).
+            assert r.json() == {
+                'success': False,
+                'error': 'App key not authorized for this workflow (missing scope workflows:run)',
+            }
+
+            deleted = c.delete(f'/api/v1/app-keys/{key_id}', headers=h)
+            assert deleted.status_code == 200, deleted.text
+    finally:
+        if created_ids:
+            placeholders = ','.join(['?'] * len(created_ids))
+            db.execute(f'DELETE FROM app_keys WHERE id IN ({placeholders})', created_ids)
+        db.close()
 
 
 def test_run_by_name_validation_parity(both):
@@ -115,16 +164,17 @@ def test_mcp_agents_initialize_parity(both):
 
 
 def test_mcp_agents_tools_list_parity(both):
+    """Full JSON equality -- live-verified 2026-09-07 (fix round 1): once
+    `_listTools`'s `input_schema` fallback and the `list_available_agents`
+    literal are wrapped in `php_array()` (empty PHP array -> `[]`, not
+    `{}`), the entire 24-tool response (builtin + MCP + delegation tools)
+    is byte-for-byte identical between backends -- no field needed
+    normalizing."""
     a, b = both('POST', '/api/v1/mcp/agents',
                 json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {}})
     assert a.status_code == b.status_code == 200
     ja, jb = a.json(), b.json()
-    assert ja['jsonrpc'] == jb['jsonrpc'] == '2.0'
-    assert ja['id'] == jb['id'] == 1
-    ra, rb = ja['result'], jb['result']
-    assert ra['count'] == rb['count']
-    na, nb = [t['name'] for t in ra['tools']], [t['name'] for t in rb['tools']]
-    assert na == nb
+    assert ja == jb
 
 
 # ============================================================================

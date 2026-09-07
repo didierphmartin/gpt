@@ -507,7 +507,12 @@ def test_tools_list_combines_builtin_mcp_and_delegation(monkeypatch):
         'name': 'search', 'description': 'Search the web', 'inputSchema': {'type': 'object'}, 'type': 'builtin',
     }
     mcp_tool = r['result']['tools'][1]
-    assert mcp_tool == {'name': 'mcp_tool', 'description': '', 'inputSchema': {}, 'type': 'mcp'}
+    # Missing input_schema -> PHP's `?? []`, which json_encodes as `[]`, not
+    # `{}` -- php_array() reproduces that (PHP-truth pinned live, see
+    # test_mcp_agents_tools_list_parity in the differential suite).
+    assert mcp_tool == {'name': 'mcp_tool', 'description': '', 'inputSchema': [], 'type': 'mcp'}
+    list_agents_tool = next(t for t in r['result']['tools'] if t['name'] == 'list_available_agents')
+    assert list_agents_tool['inputSchema'] == {'type': 'object', 'properties': []}
 
 
 def test_tools_list_no_mcp_loader_skips_mcp_tools(monkeypatch):

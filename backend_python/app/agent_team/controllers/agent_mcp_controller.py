@@ -30,7 +30,7 @@ from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.support import phpjson
-from app.support.phpcompat import php_bool, php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import php_array, php_bool, php_empty, php_intval, php_strval, php_trim
 
 
 class _InvalidArgument(Exception):
@@ -320,6 +320,12 @@ class AgentMCPController:
     # ========================================================================
 
     def _listTools(self, userId: int) -> dict:
+        """PHP 328-379. `$tool['input_schema'] ?? []` and the
+        `list_available_agents` tool's literal `'properties' => []` are both
+        PHP arrays that `json_encode` to `[]`, not `{}` -- `php_array()`
+        (phpcompat's established empty-array/empty-object disambiguator,
+        e.g. agent.py's `toArray()`) reproduces that for both the fallback
+        and the always-empty literal alike."""
         toolsManager = self.runner.getToolsManager()
         mcpLoader = self.runner.getMCPToolsLoader()
 
@@ -329,7 +335,7 @@ class AgentMCPController:
             tools.append({
                 'name': tool['name'],
                 'description': tool.get('description') if tool.get('description') is not None else '',
-                'inputSchema': tool.get('input_schema') if tool.get('input_schema') is not None else {},
+                'inputSchema': php_array(tool.get('input_schema') if tool.get('input_schema') is not None else {}),
                 'type': 'builtin',
             })
 
@@ -338,7 +344,8 @@ class AgentMCPController:
                 tools.append({
                     'name': tool['name'],
                     'description': tool.get('description') if tool.get('description') is not None else '',
-                    'inputSchema': tool.get('input_schema') if tool.get('input_schema') is not None else {},
+                    'inputSchema': php_array(
+                        tool.get('input_schema') if tool.get('input_schema') is not None else {}),
                     'type': 'mcp',
                 })
 
@@ -360,7 +367,7 @@ class AgentMCPController:
             {
                 'name': 'list_available_agents',
                 'description': 'List agents available for delegation',
-                'inputSchema': {'type': 'object', 'properties': {}},
+                'inputSchema': {'type': 'object', 'properties': php_array({})},
                 'type': 'delegation',
             },
             {
