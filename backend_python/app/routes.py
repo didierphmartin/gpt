@@ -11,6 +11,7 @@ from app.agent_team.controllers.user_memory_controller import UserMemoryControll
 from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.controllers.workflow_schema_controller import WorkflowSchemaController
 from app.controllers.admin_controller import AdminController
+from app.controllers.affiliate_controller import AffiliateController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
@@ -19,6 +20,7 @@ from app.controllers.drive_controller import DriveController
 from app.controllers.file_storage_controller import FileStorageController
 from app.controllers.genesis_controller import GenesisController
 from app.controllers.heal_controller import HealController
+from app.controllers.login_admin_controller import LoginAdminController
 from app.controllers.mcp_app_controller import MCPAppController
 from app.controllers.mcp_proxy_controller import MCPProxyController
 from app.controllers.mcp_server_controller import MCPServerController
@@ -52,6 +54,7 @@ CONTROLLERS = {
     'AgentTeam:WorkflowController': WorkflowController,
     'AgentTeam:WorkflowSchemaController': WorkflowSchemaController,
     'AdminController': AdminController,
+    'AffiliateController': AffiliateController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
@@ -60,6 +63,7 @@ CONTROLLERS = {
     'FileStorageController': FileStorageController,
     'GenesisController': GenesisController,
     'HealController': HealController,
+    'LoginAdminController': LoginAdminController,
     'MCPAppController': MCPAppController,
     'MCPProxyController': MCPProxyController,
     'MCPServerController': MCPServerController,
@@ -113,6 +117,28 @@ ROUTES = [
     ('GET', '/api/v1/admin/packages', ('PackageController', 'adminList')),
     ('GET', '/api/v1/admin/packages/{role:[a-z]+}', ('PackageController', 'adminGet')),
     ('PUT', '/api/v1/admin/packages/{role:[a-z]+}', ('PackageController', 'adminUpdate')),
+    # AFFILIATES (routes.php:73-93)
+    # Admin (existing admin JWT / role=admin enforced in controller)
+    ('GET', '/api/v1/admin/affiliates', ('AffiliateController', 'adminList')),
+    ('POST', '/api/v1/admin/affiliates', ('AffiliateController', 'adminCreate')),
+    ('GET', '/api/v1/admin/affiliates/{id:\\d+}', ('AffiliateController', 'adminGet')),
+    ('DELETE', '/api/v1/admin/affiliates/{id:\\d+}', ('AffiliateController', 'adminDelete')),
+    ('GET', '/api/v1/admin/affiliates/{id:\\d+}/transactions', ('AffiliateController', 'adminTransactions')),
+    ('POST', '/api/v1/admin/affiliates/{id:\\d+}/accounts', ('AffiliateController', 'adminAddAccount')),
+    ('PUT', '/api/v1/admin/affiliates/{id:\\d+}/accounts/{productId:\\d+}', ('AffiliateController', 'adminUpdateAccount')),
+    ('DELETE', '/api/v1/admin/affiliates/{id:\\d+}/accounts/{productId:\\d+}', ('AffiliateController', 'adminDeleteAccount')),
+    ('POST', '/api/v1/admin/affiliates/{id:\\d+}/transactions/{saleId:\\d+}/mark-paid', ('AffiliateController', 'adminMarkPaid')),
+    ('GET', '/api/v1/admin/affiliate-products', ('AffiliateController', 'adminListProducts')),
+    ('POST', '/api/v1/admin/affiliate-products', ('AffiliateController', 'adminCreateProduct')),
+    ('PUT', '/api/v1/admin/affiliate-products/{id:\\d+}', ('AffiliateController', 'adminUpdateProduct')),
+    ('DELETE', '/api/v1/admin/affiliate-products/{id:\\d+}', ('AffiliateController', 'adminDeleteProduct')),
+    # Affiliate self-scope (role=affiliate enforced in controller)
+    ('GET', '/api/v1/affiliate/me', ('AffiliateController', 'me')),
+    ('GET', '/api/v1/affiliate/me/transactions', ('AffiliateController', 'myTransactions')),
+    # Conversion endpoint — selling apps report a sale. NOT in PUBLIC_ROUTES on
+    # either backend (see app/middleware/processor.py): any authenticated
+    # caller, gated by recordConversion()'s own user_id check, not by role.
+    ('POST', '/api/v1/affiliate/conversions', ('AffiliateController', 'recordConversion')),
     # CONTEXT ROUTES
     ('GET', '/api/v1/contexts', ('ContextController', 'list')),
     ('GET', '/api/v1/contexts/{id:\\d+}', ('ContextController', 'get')),
@@ -216,6 +242,17 @@ ROUTES = [
     ('GET', '/api/v1/admin/users/{id:\\d+}/keys', ('AdminController', 'getApiKeys')),
     ('POST', '/api/v1/admin/keys', ('AdminController', 'saveApiKeys')),
     ('POST', '/api/v1/admin/keys/delete', ('AdminController', 'deleteApiKey')),
+    # ADMIN — LOGIN (login microservice admin: users, apps, passkeys, appkeys
+    # — routes.php:217-225)
+    ('GET', '/api/v1/admin/login/stats', ('LoginAdminController', 'getStats')),
+    ('GET', '/api/v1/admin/login/users', ('LoginAdminController', 'getUsers')),
+    ('POST', '/api/v1/admin/login/users', ('LoginAdminController', 'createUser')),
+    ('POST', '/api/v1/admin/login/users/update', ('LoginAdminController', 'updateUser')),
+    ('POST', '/api/v1/admin/login/users/delete', ('LoginAdminController', 'deleteUser')),
+    ('GET', '/api/v1/admin/login/apps', ('LoginAdminController', 'getApps')),
+    ('GET', '/api/v1/admin/login/app-users', ('LoginAdminController', 'getAppUsers')),
+    ('POST', '/api/v1/admin/login/app-users/role', ('LoginAdminController', 'setAppUserRole')),
+    ('POST', '/api/v1/admin/login/app-users/add', ('LoginAdminController', 'addAppMember')),
     # WEBAUTHN
     ('POST', '/api/v1/webauthn/challenge', ('WebAuthnController', 'challenge')),
     ('POST', '/api/v1/webauthn/register', ('WebAuthnController', 'register')),
