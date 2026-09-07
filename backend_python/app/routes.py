@@ -26,6 +26,7 @@ from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
+from app.controllers.system_settings_controller import SystemSettingsController
 from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
@@ -63,6 +64,7 @@ CONTROLLERS = {
     'ProviderController': ProviderController,
     'RootController': RootController,
     'SettingsController': SettingsController,
+    'SystemSettingsController': SystemSettingsController,
     'ToolsController': ToolsController,
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
@@ -135,6 +137,13 @@ ROUTES = [
     # Skill-genesis settings (promotion mode + cost guards)
     ('GET', '/api/v1/settings/genesis', ('SettingsController', 'getGenesisSettings')),
     ('POST', '/api/v1/settings/genesis', ('SettingsController', 'saveGenesisSettings')),
+    # ADMIN — SYSTEM LLM SETTINGS (routes.php:249-254)
+    ('GET', '/api/v1/admin/llm-settings', ('SystemSettingsController', 'getLLMProviders')),
+    ('GET', '/api/v1/admin/llm-settings/{key}', ('SystemSettingsController', 'getLLMProvider')),
+    ('POST', '/api/v1/admin/llm-settings', ('SystemSettingsController', 'saveLLMProvider')),
+    ('DELETE', '/api/v1/admin/llm-settings/{key}', ('SystemSettingsController', 'deleteLLMProvider')),
+    ('POST', '/api/v1/admin/llm-settings/toggle', ('SystemSettingsController', 'toggleProvider')),
+    ('POST', '/api/v1/admin/llm-settings/seed', ('SystemSettingsController', 'seedFromConfig')),
     # HEAL (self-healing enforcement gate: mode/budget/ceiling — routes.php:137-139)
     ('POST', '/api/v1/heal/authorize', ('HealController', 'authorize')),
     ('POST', '/api/v1/heal/record', ('HealController', 'record')),
