@@ -19,6 +19,7 @@ from app.controllers.mcp_proxy_controller import MCPProxyController
 from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
+from app.controllers.playbook_controller import PlaybookController
 from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
@@ -53,6 +54,7 @@ CONTROLLERS = {
     'MCPServerController': MCPServerController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
+    'PlaybookController': PlaybookController,
     'PromptLibraryController': PromptLibraryController,
     'ProviderController': ProviderController,
     'RootController': RootController,
@@ -225,6 +227,10 @@ ROUTES = [
      ('AgentTeam:WorkflowController', 'listNodeDocuments')),
     ('DELETE', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents/{docId}',
      ('AgentTeam:WorkflowController', 'deleteNodeDocument')),
+    # Playbook registration-time validation (spec T4): parse + resolve
+    # bindings against the caller's MCP tools/agents, no run created.
+    # routes.php:386-388.
+    ('POST', '/api/v1/playbooks/validate', ('PlaybookController', 'validate')),
     # WORKFLOW SCHEMAS (routes.php:395-399)
     ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
     ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),
