@@ -62,3 +62,11 @@ python-pptx) feeding the chat prefix, `/traces` + `GET /traces/diagnosis`, `POST
 `SkillToolBridge`/`SkillToolChoice` the workflow runner (Phase 5) uses. Live differential vs PHP: agent, verify,
 compare, upload, traces diagnosis, fetch-url. Uploads land in the same `backend/storage/chat-uploads` tree PHP
 uses. Phases 3–8 (user surface, agent-team data, engines, generators, back office, schedules) follow.
+
+Phase 3 (2026-09): the user surface — settings (keys, providers, usage, phone, storage, heal, genesis), usage,
+user memories, app keys, heal, genesis, tools, MCP servers + per-user overrides, MCP proxy/app, local file
+storage, voice, Drive: 13 controllers, 62 routes, each differential-tested against live PHP for user 3 with
+self-cleaning round-trips (keys saved by one backend decrypt on the other). Non-local storage providers depend
+on the PHP-only universalFS package and answer with PHP's "adapter unavailable" path; the voice ephemeral-token
+live case is gated behind `DIFF_VOICE_TOKEN=1`. Phases 4–8 (agent-team data, engines, generators, back office,
+schedules) follow.
