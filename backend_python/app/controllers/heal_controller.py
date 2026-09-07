@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_floatval
+from app.support.phpcompat import php_empty, php_floatval, php_round
 
 
 class HealController:
@@ -60,10 +60,10 @@ class HealController:
             'success': True,
             'mode': cfg['mode'],
             'skill_dir': skillDir,
-            'estimate_usd': round(estimate, 4),
-            'spent_today_usd': round(spent, 4),
+            'estimate_usd': php_round(estimate, 4),
+            'spent_today_usd': php_round(spent, 4),
             'budget_usd': cfg['budget'],
-            'remaining_usd': round(remaining, 4),
+            'remaining_usd': php_round(remaining, 4),
             'ceiling_usd': cfg['ceiling'],
         }
         return {**base, **self.decide(cfg['mode'], estimate, remaining, cfg['ceiling']), 'status_code': 200}
@@ -114,7 +114,7 @@ class HealController:
         except Exception as e:  # noqa: BLE001
             error_log('[HealController] record failed: ' + str(e))
             return {'success': False, 'error': 'record failed', 'status_code': 500}
-        return {'success': True, 'spent_today_usd': round(self._spentToday(userId), 4), 'status_code': 200}
+        return {'success': True, 'spent_today_usd': php_round(self._spentToday(userId), 4), 'status_code': 200}
 
     def status(self, request) -> dict:
         """Current mode + today's spend, for the UI."""
@@ -128,8 +128,8 @@ class HealController:
             'mode': cfg['mode'],
             'budget_usd': cfg['budget'],
             'ceiling_usd': cfg['ceiling'],
-            'spent_today_usd': round(spent, 4),
-            'remaining_usd': round(max(0.0, cfg['budget'] - spent), 4),
+            'spent_today_usd': php_round(spent, 4),
+            'remaining_usd': php_round(max(0.0, cfg['budget'] - spent), 4),
             'status_code': 200,
         }
 

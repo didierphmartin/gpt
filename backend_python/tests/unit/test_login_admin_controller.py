@@ -9,6 +9,7 @@ login-microservice connection PHP opens lazily via `login()`. Tests bypass
 directly (mirrors PHP's `static $pdo` cache slot) except for the dedicated
 `_login()` connect-path tests at the bottom, which patch `Db.connect`.
 """
+import pytest
 from starlette.datastructures import Headers
 
 from app.controllers import login_admin_controller as lac_module
@@ -77,6 +78,9 @@ class FakeLoginDb:
 
     def rollback(self):
         self.rolledback += 1
+
+    def close(self):
+        self.closed = getattr(self, 'closed', 0) + 1
 
 
 def ctx(body=None, query=None, user_id=3):
@@ -228,9 +232,14 @@ def test_getUsers_query_failure():
 # ─── createUser ─────────────────────────────────────────────────────────────
 
 def test_createUser_invalid_email():
-    ctrl = admin_ctrl(l_db=FakeLoginDb())
+    l = FakeLoginDb()
+    ctrl = admin_ctrl(l_db=l)
     assert ctrl.createUser(ctx(body={'email': 'not-an-email'})) == {
         'success': False, 'message': 'A valid email is required'}
+    # Phase 7 final-review wave (A1): @_cleanup closes + clears _login_cache
+    # after every route call (mirrors one real HTTP request), so a second
+    # call on the same controller instance needs the cache re-seeded.
+    ctrl._login_cache = l
     assert ctrl.createUser(ctx(body={})) == {'success': False, 'message': 'A valid email is required'}
 
 
@@ -264,8 +273,12 @@ def test_createUser_duplicate_vs_generic_failure():
 # ─── updateUser ─────────────────────────────────────────────────────────────
 
 def test_updateUser_id_required():
-    ctrl = admin_ctrl(l_db=FakeLoginDb())
+    l = FakeLoginDb()
+    ctrl = admin_ctrl(l_db=l)
     assert ctrl.updateUser(ctx(body={})) == {'success': False, 'message': 'id is required'}
+    # Phase 7 final-review wave (A1): @_cleanup closes + clears _login_cache
+    # after every route call — re-seed for the second call on this instance.
+    ctrl._login_cache = l
     assert ctrl.updateUser(ctx(body={'id': 0})) == {'success': False, 'message': 'id is required'}
 
 
@@ -547,6 +560,38 @@ def test_login_returns_none_and_logs_on_connect_failure(monkeypatch):
     ctrl = LoginAdminController(FakeDb(), {'login_database': {
         'host': 'h', 'database': 'd', 'username': 'u', 'password': 'p', 'charset': 'utf8mb4'}})
     assert ctrl._login() is None
+
+
+# ─── @_cleanup closes the secondary connection (Phase 7 final-review wave, A1) ──
+
+def test_cleanup_closes_connection_on_success():
+    l = FakeLoginDb(all_=[[]])
+    ctrl = admin_ctrl(l_db=l)
+    ctrl.getUsers(ctx())
+    assert l.closed == 1
+    assert ctrl._login_cache is False   # cleared after close, mirrors VideoEditorController
+
+
+def test_cleanup_closes_connection_on_exception():
+    l = FakeLoginDb()
+    ctrl = admin_ctrl(l_db=l)
+    closed_calls = []
+    real_close = ctrl._close_connections
+
+    def spy():
+        closed_calls.append(1)
+        real_close()
+
+    ctrl._close_connections = spy
+
+    def boom(request):
+        raise RuntimeError('boom')
+
+    ctrl._requireAdmin = boom
+    with pytest.raises(RuntimeError):
+        ctrl.getUsers(ctx())
+    assert closed_calls == [1]
+    assert l.closed == 1
 
 
 def test_login_caches_successful_connection(monkeypatch):

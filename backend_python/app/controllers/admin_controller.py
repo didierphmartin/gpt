@@ -16,10 +16,8 @@ PHP file. Ported verbatim: this class adds none either.
 """
 from __future__ import annotations
 
-import ipaddress
 import re
 from datetime import datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
 from functools import cmp_to_key
 from pathlib import Path
 
@@ -31,6 +29,7 @@ from app.services.package_resolver import PackageResolver
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import (
+    filter_validate_url as _filter_validate_url,
     php_array,
     php_bool,
     php_coalesce,
@@ -39,6 +38,7 @@ from app.support.phpcompat import (
     php_intval,
     php_items,
     php_now,
+    php_round,
     php_strval,
     php_trim,
     php_tz,
@@ -50,65 +50,11 @@ VALID_ROLES = ['guest', 'prospect', 'user', 'admin']
 VALID_CATEGORIES = ('avatar', 'voice')
 VALID_KEY_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi']
 
-# ─── filter_var($url, FILTER_VALIDATE_URL) — AdminController::createMCPServer
-# (2158) needs the same check MCPServerController::create ported already.
-# Duplicated verbatim from app/controllers/mcp_server_controller.py's
-# module-private `_filter_validate_url`/`_is_ascii_alnum` (that file's own
-# comment, "no other ported controller validates URLs", is now stale — this
-# is a second copy, not a shared helper, because Task 3 may only touch
-# admin_controller.py/routes.py/its own tests; a follow-up should extract
-# both copies into one shared module). See that file for the full derivation
-# comment (probed against the live PHP 8 build).
-_URL_ALLOWED = set(
-    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    '$-_.+!*\'(),{}|\\^~[]`<>#%";/?:@&='
-)
-_URL_SCHEME = re.compile(r'^([A-Za-z0-9+.\-]*):')
-_URL_HOSTLESS_SCHEMES = ('mailto', 'news', 'file')
-
-
-def _is_ascii_alnum(ch: str) -> bool:
-    return ('0' <= ch <= '9') or ('a' <= ch <= 'z') or ('A' <= ch <= 'Z')
-
-
-def _filter_validate_url(value) -> bool:
-    if not isinstance(value, str):
-        return False
-    for ch in value:
-        if ch not in _URL_ALLOWED:
-            return False
-    m = _URL_SCHEME.match(value)
-    if m is None or m.group(1) == '':
-        return False
-    scheme = m.group(1)
-    rest = value[m.end():]
-    if rest.startswith('//'):
-        authority = rest[2:].split('/', 1)[0].split('?', 1)[0].split('#', 1)[0]
-        host = authority.rsplit('@', 1)[-1]
-        if host.startswith('[') and ']' in host:
-            host = host[:host.index(']') + 1]
-        else:
-            host = host.split(':', 1)[0]
-    else:
-        host = ''
-    if scheme.lower() in ('http', 'https'):
-        if host == '':
-            return False
-        if host.startswith('[') and host.endswith(']'):
-            try:
-                ipaddress.IPv6Address(host[1:-1])
-            except ValueError:
-                return False
-            return True
-        if not _is_ascii_alnum(host[0]):
-            return False
-        for ch in host:
-            if not _is_ascii_alnum(ch) and ch not in '-.':
-                return False
-        return True
-    if host == '' and scheme not in _URL_HOSTLESS_SCHEMES:
-        return False
-    return True
+# `_filter_validate_url` (filter_var($url, FILTER_VALIDATE_URL) — needed by
+# createMCPServer, MCPServerController::create) now lives in
+# app.support.phpcompat.filter_validate_url (Phase 7 final-review wave, B2);
+# imported above under its old module-private name so existing call sites and
+# tests keep working unchanged.
 
 
 def _strip_tags(html: str) -> str:
@@ -123,28 +69,12 @@ def _strip_tags(html: str) -> str:
     return re.sub(r'<[^>]*>', '', html)
 
 
-def _php_round(value, precision: int = 0):
-    """PHP round(): half away from zero, applied to the shortest decimal
-    string that reproduces `value` (matching PHP's internal correction for
-    binary floating-point representation error) instead of Python round()'s
-    round-half-to-even on the raw double.
-
-    Concretely: 21790 * 15 / 1_000_000 is the double
-    0.32684999999999997388... — Python's round(x, 4) reads that literal
-    value and rounds DOWN to 0.3268; PHP's round(x, 4)
-    (AdminController.php:2981/2985, live-verified against real
-    llm_usage_transactions data) rounds UP to 0.3269, the answer a human
-    reading "0.32685" would expect. Used only for the cost arithmetic in
-    _getUsageCostsBreakdown — every other PHP round() call ported elsewhere
-    in this codebase operates on values that don't hit this floating-point
-    edge case in practice (see the codebase's plain-round() precedent in
-    genesis_controller.py / heal_controller.py / voice_controller.py /
-    usage_logger.py).
-    """
-    if value is None:
-        return None
-    quant = Decimal('1').scaleb(-precision) if precision > 0 else Decimal('1')
-    return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+# `_php_round` (PHP round(): half away from zero, pre-rounded off the shortest
+# decimal string that reproduces the double — see phpcompat.php_round's
+# docstring for the 21790*15/1_000_000 -> 0.3269 derivation,
+# AdminController.php:2981/2985, live-verified against real
+# llm_usage_transactions data) now lives in app.support.phpcompat.php_round
+# (Phase 7 final-review wave, B1); every call site below uses that name.
 
 
 class AdminController:
@@ -635,10 +565,10 @@ class AdminController:
                 'tokens': php_intval(p['total_tokens']),
                 'priceIn': p['resolved_price_in'],
                 'priceOut': p['resolved_price_out'],
-                'costIn': _php_round(costIn, 4) if costIn is not None else None,
-                'costOut': _php_round(costOut, 4) if costOut is not None else None,
-                'cost': _php_round(total, 4),
-                'storedCost': _php_round(php_floatval(p['stored_cost_total']), 4),
+                'costIn': php_round(costIn, 4) if costIn is not None else None,
+                'costOut': php_round(costOut, 4) if costOut is not None else None,
+                'cost': php_round(total, 4),
+                'storedCost': php_round(php_floatval(p['stored_cost_total']), 4),
                 'lastUsed': p['last_used'],
             })
 
@@ -647,8 +577,8 @@ class AdminController:
             voiceByProvider.append({
                 'provider': p['provider'],
                 'requests': php_intval(p['total_requests']),
-                'seconds': _php_round(php_floatval(p['total_seconds']), 2),
-                'cost': _php_round(php_floatval(p['total_cost']), 4),
+                'seconds': php_round(php_floatval(p['total_seconds']), 2),
+                'cost': php_round(php_floatval(p['total_cost']), 4),
                 'lastUsed': p['last_used'],
             })
 
@@ -656,19 +586,19 @@ class AdminController:
             'llm': {
                 'byProvider': llmByProvider,
                 'totals': {
-                    'today': _php_round(_t('cost_today'), 4),
-                    'week': _php_round(_t('cost_week'), 4),
-                    'month': _php_round(_t('cost_month'), 4),
-                    'total': _php_round(_t('cost_total'), 4),
+                    'today': php_round(_t('cost_today'), 4),
+                    'week': php_round(_t('cost_week'), 4),
+                    'month': php_round(_t('cost_month'), 4),
+                    'total': php_round(_t('cost_total'), 4),
                 },
             },
             'voice': {
                 'byProvider': voiceByProvider,
                 'totals': {
-                    'today': _php_round(_t('voice_cost_today'), 4),
-                    'week': _php_round(_t('voice_cost_week'), 4),
-                    'month': _php_round(_t('voice_cost_month'), 4),
-                    'total': _php_round(_t('voice_cost_total'), 4),
+                    'today': php_round(_t('voice_cost_today'), 4),
+                    'week': php_round(_t('voice_cost_week'), 4),
+                    'month': php_round(_t('voice_cost_month'), 4),
+                    'total': php_round(_t('voice_cost_total'), 4),
                 },
             },
             'avatar': {
@@ -967,14 +897,14 @@ class AdminController:
                     'total_tokens': php_intval(overall.get('total_tokens')),
                     'prompt_tokens': php_intval(overall.get('total_prompt_tokens')),
                     'completion_tokens': php_intval(overall.get('total_completion_tokens')),
-                    'total_cost': _php_round(php_floatval(overall.get('total_cost')), 4),
-                    'avg_response_time_ms': _php_round(php_floatval(overall.get('avg_response_time'))),
+                    'total_cost': php_round(php_floatval(overall.get('total_cost')), 4),
+                    'avg_response_time_ms': php_round(php_floatval(overall.get('avg_response_time'))),
                     'unique_users': php_intval(overall.get('unique_users')),
                     'voice_requests': php_intval(
                         overall['total_voice_requests'] if overall.get('total_voice_requests') is not None else 0),
-                    'audio_seconds': _php_round(php_floatval(
+                    'audio_seconds': php_round(php_floatval(
                         overall['total_audio_seconds'] if overall.get('total_audio_seconds') is not None else 0), 2),
-                    'voice_cost': _php_round(php_floatval(
+                    'voice_cost': php_round(php_floatval(
                         overall['total_voice_cost'] if overall.get('total_voice_cost') is not None else 0), 4),
                     'total_function_calls': php_intval(
                         overall['total_function_calls'] if overall.get('total_function_calls') is not None else 0),
@@ -986,12 +916,12 @@ class AdminController:
                         'provider': p['provider'],
                         'requests': php_intval(p['requests']),
                         'tokens': php_intval(p['tokens']),
-                        'cost': _php_round(php_floatval(p['cost']), 4),
-                        'avg_response_time_ms': _php_round(php_floatval(p['avg_response_time'])),
+                        'cost': php_round(php_floatval(p['cost']), 4),
+                        'avg_response_time_ms': php_round(php_floatval(p['avg_response_time'])),
                         'voice_requests': php_intval(p['voice_requests'] if p.get('voice_requests') is not None else 0),
-                        'audio_seconds': _php_round(
+                        'audio_seconds': php_round(
                             php_floatval(p['audio_seconds'] if p.get('audio_seconds') is not None else 0), 2),
-                        'voice_cost': _php_round(
+                        'voice_cost': php_round(
                             php_floatval(p['voice_cost'] if p.get('voice_cost') is not None else 0), 4),
                         'function_calls': php_intval(p['function_calls'] if p.get('function_calls') is not None else 0),
                         'mcp_calls': php_intval(p['mcp_calls'] if p.get('mcp_calls') is not None else 0),
@@ -1002,7 +932,7 @@ class AdminController:
                     {
                         'date': d['date'],
                         'requests': php_intval(d['requests']),
-                        'cost': _php_round(php_floatval(d['cost']), 4),
+                        'cost': php_round(php_floatval(d['cost']), 4),
                         'tokens': php_intval(d['tokens']),
                     }
                     for d in dailyTrend
@@ -1063,13 +993,13 @@ class AdminController:
                     'name': name,
                     'requests': php_intval(u['total_requests']),
                     'tokens': php_intval(u['total_tokens']),
-                    'cost': _php_round(php_floatval(u['total_cost']), 4),
-                    'avg_response_time_ms': _php_round(php_floatval(u['avg_response_time'])),
+                    'cost': php_round(php_floatval(u['total_cost']), 4),
+                    'avg_response_time_ms': php_round(php_floatval(u['avg_response_time'])),
                     'last_activity': u['last_activity'],
                     'voice_requests': php_intval(u['voice_requests'] if u.get('voice_requests') is not None else 0),
-                    'audio_seconds': _php_round(
+                    'audio_seconds': php_round(
                         php_floatval(u['audio_seconds'] if u.get('audio_seconds') is not None else 0), 2),
-                    'voice_cost': _php_round(php_floatval(u['voice_cost'] if u.get('voice_cost') is not None else 0), 4),
+                    'voice_cost': php_round(php_floatval(u['voice_cost'] if u.get('voice_cost') is not None else 0), 4),
                     'function_calls': php_intval(u['function_calls'] if u.get('function_calls') is not None else 0),
                     'mcp_calls': php_intval(u['mcp_calls'] if u.get('mcp_calls') is not None else 0),
                 }
@@ -1145,9 +1075,9 @@ class AdminController:
                     'provider': p['provider'],
                     'requests': php_intval(p['requests']),
                     'tokens': php_intval(p['tokens']),
-                    'cost': _php_round(php_floatval(p['cost']), 4),
+                    'cost': php_round(php_floatval(p['cost']), 4),
                     'voice_requests': php_intval(p['voice_requests'] if p.get('voice_requests') is not None else 0),
-                    'audio_seconds': _php_round(
+                    'audio_seconds': php_round(
                         php_floatval(p['audio_seconds'] if p.get('audio_seconds') is not None else 0), 2),
                     'function_calls': php_intval(p['function_calls'] if p.get('function_calls') is not None else 0),
                     'mcp_calls': php_intval(p['mcp_calls'] if p.get('mcp_calls') is not None else 0),
@@ -1163,7 +1093,7 @@ class AdminController:
                     'prompt_tokens': php_intval(t['prompt_tokens']),
                     'completion_tokens': php_intval(t['completion_tokens']),
                     'total_tokens': php_intval(t['total_tokens']),
-                    'cost': _php_round(php_floatval(t['cost_usd']), 6),
+                    'cost': php_round(php_floatval(t['cost_usd']), 6),
                     'response_time_ms': php_intval(t['response_time_ms']),
                     'status': t['status'],
                     'function_calls': php_intval(t['function_calls_count']),
@@ -1172,7 +1102,7 @@ class AdminController:
                     'mcp_tools_called': php_json_decode(mcpToolsCalled) if php_bool(mcpToolsCalled) else [],
                     'created_at': t['created_at'],
                     'is_voice': php_bool(t['is_voice_request'] if t.get('is_voice_request') is not None else 0),
-                    'audio_seconds': _php_round(
+                    'audio_seconds': php_round(
                         php_floatval(t['audio_duration_seconds'] if t.get('audio_duration_seconds') is not None else 0), 2),
                 }
 
@@ -1189,12 +1119,12 @@ class AdminController:
                     'total_requests': php_intval(stats.get('total_requests')),
                     'successful_requests': php_intval(stats.get('successful_requests')),
                     'total_tokens': php_intval(stats.get('total_tokens')),
-                    'total_cost': _php_round(php_floatval(stats.get('total_cost')), 4),
-                    'avg_response_time_ms': _php_round(php_floatval(stats.get('avg_response_time'))),
+                    'total_cost': php_round(php_floatval(stats.get('total_cost')), 4),
+                    'avg_response_time_ms': php_round(php_floatval(stats.get('avg_response_time'))),
                     'voice_requests': php_intval(stats['voice_requests'] if stats.get('voice_requests') is not None else 0),
-                    'audio_seconds': _php_round(
+                    'audio_seconds': php_round(
                         php_floatval(stats['audio_seconds'] if stats.get('audio_seconds') is not None else 0), 2),
-                    'voice_cost': _php_round(
+                    'voice_cost': php_round(
                         php_floatval(stats['voice_cost'] if stats.get('voice_cost') is not None else 0), 4),
                     'function_calls': php_intval(stats['function_calls'] if stats.get('function_calls') is not None else 0),
                     'mcp_calls': php_intval(stats['mcp_calls'] if stats.get('mcp_calls') is not None else 0),
@@ -1278,7 +1208,7 @@ class AdminController:
                     'prompt_tokens': php_intval(t['prompt_tokens']),
                     'completion_tokens': php_intval(t['completion_tokens']),
                     'total_tokens': php_intval(t['total_tokens']),
-                    'cost': _php_round(php_floatval(t['cost_usd']), 6),
+                    'cost': php_round(php_floatval(t['cost_usd']), 6),
                     'response_time_ms': php_intval(t['response_time_ms']),
                     'status': t['status'],
                     'error_message': t['error_message'],
@@ -1288,11 +1218,11 @@ class AdminController:
                     'mcp_tools_called': php_json_decode(mcpToolsCalled) if php_bool(mcpToolsCalled) else [],
                     'created_at': t['created_at'],
                     'is_voice': php_bool(t['is_voice_request'] if t.get('is_voice_request') is not None else 0),
-                    'audio_seconds': _php_round(
+                    'audio_seconds': php_round(
                         php_floatval(t['audio_duration_seconds'] if t.get('audio_duration_seconds') is not None else 0), 2),
-                    'audio_input_seconds': _php_round(
+                    'audio_input_seconds': php_round(
                         php_floatval(t['audio_input_seconds'] if t.get('audio_input_seconds') is not None else 0), 2),
-                    'audio_output_seconds': _php_round(
+                    'audio_output_seconds': php_round(
                         php_floatval(t['audio_output_seconds'] if t.get('audio_output_seconds') is not None else 0), 2),
                 }
 
@@ -1428,7 +1358,7 @@ class AdminController:
 
             totalRequests = php_intval(overall.get('total_requests'))
             requestsWithTools = php_intval(overall.get('requests_with_tools'))
-            toolUsageRate = _php_round((requestsWithTools / totalRequests) * 100, 1) if totalRequests > 0 else 0
+            toolUsageRate = php_round((requestsWithTools / totalRequests) * 100, 1) if totalRequests > 0 else 0
 
             regularToolsUsed = [t for t in detailedTools if not t['is_mcp']]
             mcpToolsUsed = [t for t in detailedTools if t['is_mcp']]
@@ -1495,16 +1425,17 @@ class AdminController:
         return None
 
     def loadAllAvailableRegularTools(self, usageStats: dict) -> list:
-        """AdminController.php:1824-1867. `claude_tools.json` has no
-        backend_python/resources/ copy (unlike model_catalog.json/prompts) —
-        Task 3 may only touch admin_controller.py/routes.py/its own tests, so
-        this reads the PHP repo's copy directly (`../backend/resources/...`
-        from this file) rather than adding a new resource file; a follow-up
-        should mirror it into backend_python/resources/ for consistency."""
+        """AdminController.php:1824-1867. `claude_tools.json` is mirrored
+        byte-for-byte into backend_python/resources/ (Phase 7 final-review
+        wave, B7 — previously read straight from the PHP repo's copy at
+        `../backend/resources/...`, with no local copy at all; see
+        test_admin_controller_part2.py's test_claude_tools_json_matches_php_source
+        for the drift check). Falls back to the PHP tree's copy only if the
+        local mirror is ever deleted."""
         tools = []
-        toolsJsonPath = Path(__file__).resolve().parents[3] / 'backend' / 'resources' / 'claude_tools.json'
+        toolsJsonPath = Path(__file__).resolve().parents[2] / 'resources' / 'claude_tools.json'
         if not toolsJsonPath.exists():
-            toolsJsonPath = Path(__file__).resolve().parents[2] / 'resources' / 'claude_tools.json'
+            toolsJsonPath = Path(__file__).resolve().parents[3] / 'backend' / 'resources' / 'claude_tools.json'
 
         if toolsJsonPath.exists():
             content = toolsJsonPath.read_text(encoding='utf-8')
@@ -2013,7 +1944,7 @@ class AdminController:
         for h in extraHeaders:
             if ':' in h:
                 k, v = h.split(':', 1)
-                headers[k.strip()] = v.strip()
+                headers[php_trim(k)] = php_trim(v)
         if sessionRef.get('id'):
             headers['Mcp-Session-Id'] = sessionRef['id']
 
@@ -2027,7 +1958,7 @@ class AdminController:
 
         sid = resp.headers.get('mcp-session-id')
         if sid:
-            sessionRef['id'] = sid.strip()
+            sessionRef['id'] = php_trim(sid)
 
         if resp.status_code >= 400:
             body = resp.text or ''
@@ -2043,9 +1974,9 @@ class AdminController:
 
         sseData = None
         for line in body.split('\n'):
-            line = line.strip()
+            line = php_trim(line)
             if line.startswith('data:'):
-                d = line[5:].strip()
+                d = php_trim(line[5:])
                 if d != '':
                     parsed = php_json_decode(d)
                     if isinstance(parsed, (dict, list)):

@@ -3,6 +3,8 @@ Controllers/VideoEditorController.php). Uses a FakeDb for both the primary
 (admin-role-check) connection and the two secondary connections
 (video_editor_database / login_database), the latter reached through
 Db.connect() monkeypatched per test."""
+import pytest
+
 from app.controllers.video_editor_controller import VideoEditorController
 from app.db import Db
 from app.support.http import Ctx
@@ -158,10 +160,40 @@ def test_get_usage_stats_sql_and_native_typing(monkeypatch):
     assert ve.closed is True   # _cleanup closes the connection this call opened
 
 
-def test_get_usage_stats_days_clamped():
-    # max(1, min(365, ...)) — no DB call needed since 've' unreachable short-circuits first,
-    # so exercise clamping through _range directly via a reachable ve.
-    pass
+def test_get_usage_stats_days_clamped(monkeypatch):
+    ve = FakeDb(one=[{'generations': 0, 'cost': '0', 'tokens_in': 0, 'tokens_out': 0, 'users': 0}], all=[[], []])
+    patch_connect(monkeypatch, ve=ve)
+    c, _ = controller()
+    # max(1, min(365, ...)) — PHP AdminController-style clamp (VideoEditorController.php _range).
+    r_low = c.getUsageStats(ctx(query={'days': '0'}))
+    assert r_low['days'] == 1
+    ve2 = FakeDb(one=[{'generations': 0, 'cost': '0', 'tokens_in': 0, 'tokens_out': 0, 'users': 0}], all=[[], []])
+    patch_connect(monkeypatch, ve=ve2)
+    c2, _ = controller()
+    r_high = c2.getUsageStats(ctx(query={'days': '9999'}))
+    assert r_high['days'] == 365
+
+
+# ─── @_cleanup closes secondary connections (Phase 7 final-review wave, A1) ──
+
+def test_cleanup_closes_connection_on_exception():
+    c, _ = controller()
+    closed_calls = []
+    real_close = c._close_connections
+
+    def spy():
+        closed_calls.append(1)
+        real_close()
+
+    c._close_connections = spy
+
+    def boom(request):
+        raise RuntimeError('boom')
+
+    c._require_admin = boom
+    with pytest.raises(RuntimeError):
+        c.getTransactions(ctx())
+    assert closed_calls == [1]   # _cleanup's finally runs even when the route raises
 
 
 def test_get_usage_stats_query_failure(monkeypatch):

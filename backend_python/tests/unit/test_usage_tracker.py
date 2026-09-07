@@ -18,6 +18,16 @@ def test_calculate_cost_throws_when_unconfigured():
         UsageTracker(Db(None), True).calculateCost('gemini', 'x', 1000, 1000)
 
 
+def test_calculate_cost_rounds_half_away_from_zero():
+    # php_round regression (Phase 7 final-review wave, B1): 1 token at
+    # $0.5/1M is exactly 0.0000005 -> `php -r 'echo round(0.0000005, 6);'`
+    # rounds UP to 1.0E-6; Python's builtin round(0.0000005, 6) rounds DOWN
+    # to 0.0 (round-half-to-even on the raw double).
+    cost = UsageTracker(Db({'price_input_per_1m': '0.5', 'price_output_per_1m': '0'}), True) \
+        .calculateCost('grok', 'grok-4-fast', 1, 0)
+    assert cost == 1e-06
+
+
 def test_track_request_inserts_with_request_metadata():
     db = Db({'price_input_per_1m': '1', 'price_output_per_1m': '1'})
     UsageTracker(db, True).trackRequest({'user_id': 3, 'provider': 'claude', 'model': 'm', 'input_tokens': 10, 'output_tokens': 5, 'request_type': 'chat'})

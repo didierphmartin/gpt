@@ -13,6 +13,7 @@ from starlette.datastructures import Headers
 from app.controllers.drive_controller import DriveController
 from app.controllers.voice_controller import VoiceController
 from app.support.http import Ctx
+from app.support.phpcompat import php_round
 
 
 class FakeDb:
@@ -111,7 +112,7 @@ def test_log_usage_success_logs_transaction_and_computes_cost():
     assert result['audio_input_seconds'] == 10.0
     assert result['audio_output_seconds'] == 5.0
     assert result['audio_duration_seconds'] == 15.0
-    assert result['cost_usd'] == round(10 * 0.0004 + 5 * 0.0008, 6)
+    assert result['cost_usd'] == php_round(10 * 0.0004 + 5 * 0.0008, 6)
     assert result['status_code'] == 200
 
     inserts = [c for c in db.calls if c[0] == 'insert']
@@ -153,16 +154,18 @@ def test_get_stats_default_period_month_sql_and_shape():
 
     assert result['success'] is True
     assert result['period'] == 'month'
-    # round(0.0012345, 6): Python's float round() (usage_logger.py's own
-    # round(cost, 6) precedent — not number_format, so no Decimal/half-up
-    # treatment) lands on 0.001234 here due to IEEE-754 representation.
+    # php_round(0.0012345, 6) -> 0.001235 (Phase 7 final-review wave, B1: PHP's
+    # round() half-away-from-zero, pre-rounded off the shortest decimal string
+    # that reproduces the double — verified with
+    # `php -r 'echo round(0.0012345, 6);'` -> 0.001235; Python's builtin
+    # round(), used here before B1, landed on 0.001234 instead).
     assert result['stats'] == {
         'total_voice_requests': 5, 'total_audio_seconds': 12.35, 'total_input_seconds': 8.1,
-        'total_output_seconds': 4.25, 'total_cost': 0.001234, 'avg_session_seconds': 2.47,
+        'total_output_seconds': 4.25, 'total_cost': 0.001235, 'avg_session_seconds': 2.47,
     }
     assert result['by_provider'] == [
         {'provider': 'grok', 'requests': 3, 'audio_seconds': 9.0, 'cost': 0.0008},
-        {'provider': 'gemini', 'requests': 2, 'audio_seconds': 3.35, 'cost': 0.000434},
+        {'provider': 'gemini', 'requests': 2, 'audio_seconds': 3.35, 'cost': 0.000435},
     ]
     assert result['status_code'] == 200
 

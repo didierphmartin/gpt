@@ -14,7 +14,7 @@ import httpx
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.usage_logger import UsageLogger
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_floatval, php_intval, php_strval, php_values
+from app.support.phpcompat import php_empty, php_floatval, php_intval, php_round, php_strval, php_values
 from app.support.phpjson import php_json_encode
 
 
@@ -163,18 +163,18 @@ class VoiceController:
                 'period': period,
                 'stats': {
                     'total_voice_requests': php_intval(stats['total_voice_requests'] if stats.get('total_voice_requests') is not None else 0),
-                    'total_audio_seconds': round(php_floatval(stats['total_audio_seconds'] if stats.get('total_audio_seconds') is not None else 0), 2),
-                    'total_input_seconds': round(php_floatval(stats['total_input_seconds'] if stats.get('total_input_seconds') is not None else 0), 2),
-                    'total_output_seconds': round(php_floatval(stats['total_output_seconds'] if stats.get('total_output_seconds') is not None else 0), 2),
-                    'total_cost': round(php_floatval(stats['total_cost'] if stats.get('total_cost') is not None else 0), 6),
-                    'avg_session_seconds': round(php_floatval(stats['avg_session_seconds'] if stats.get('avg_session_seconds') is not None else 0), 2),
+                    'total_audio_seconds': php_round(php_floatval(stats['total_audio_seconds'] if stats.get('total_audio_seconds') is not None else 0), 2),
+                    'total_input_seconds': php_round(php_floatval(stats['total_input_seconds'] if stats.get('total_input_seconds') is not None else 0), 2),
+                    'total_output_seconds': php_round(php_floatval(stats['total_output_seconds'] if stats.get('total_output_seconds') is not None else 0), 2),
+                    'total_cost': php_round(php_floatval(stats['total_cost'] if stats.get('total_cost') is not None else 0), 6),
+                    'avg_session_seconds': php_round(php_floatval(stats['avg_session_seconds'] if stats.get('avg_session_seconds') is not None else 0), 2),
                 },
                 'by_provider': [
                     {
                         'provider': p['provider'],
                         'requests': php_intval(p['requests']),
-                        'audio_seconds': round(php_floatval(p['audio_seconds']), 2),
-                        'cost': round(php_floatval(p['cost']), 6),
+                        'audio_seconds': php_round(php_floatval(p['audio_seconds']), 2),
+                        'cost': php_round(php_floatval(p['cost']), 6),
                     }
                     for p in byProvider
                 ],

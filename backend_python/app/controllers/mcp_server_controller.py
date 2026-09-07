@@ -7,78 +7,27 @@ Server management is done via AdminController.
 """
 from __future__ import annotations
 
-import ipaddress
-import re
-
 import pymysql
 
 from app.services.package_resolver import PackageResolver
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import (
+    filter_validate_url as _filter_validate_url,
+    is_numeric,
+    php_bool,
+    php_empty,
+    php_intval,
+    php_strval,
+    php_trim,
+)
 from app.support.phpjson import php_json_decode, php_json_encode
 
-# ─── filter_var($url, FILTER_VALIDATE_URL) ─────────────────────────────────
-# ext/filter: php_filter_url() first strips every byte outside RFC 1738 §5 and
-# fails when that changed the length; php_url_parse_ex() must then yield a
-# scheme, and http/https additionally require a host whose bytes are
-# `isalnum() || '-' || '.'` with an alphanumeric first byte (or a bracketed
-# IPv6 literal). Probed against the live PHP 8 build — `_`/`~` in a host and a
-# schemeless "example.com" are rejected, a trailing dot and a userinfo prefix
-# are accepted. Kept module-private: no other ported controller validates URLs.
-_URL_ALLOWED = set(
-    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    '$-_.+!*\'(),{}|\\^~[]`<>#%";/?:@&='
-)
-_URL_SCHEME = re.compile(r'^([A-Za-z0-9+.\-]*):')
-# php_filter_validate_url() only exempts these three from the host requirement,
-# and does so with strcmp() — i.e. case-sensitively, unlike the http/https test.
-_URL_HOSTLESS_SCHEMES = ('mailto', 'news', 'file')
-
-
-def _is_ascii_alnum(ch: str) -> bool:
-    """C isalnum() in the "C" locale."""
-    return ('0' <= ch <= '9') or ('a' <= ch <= 'z') or ('A' <= ch <= 'Z')
-
-
-def _filter_validate_url(value) -> bool:
-    if not isinstance(value, str):
-        return False
-    for ch in value:
-        if ch not in _URL_ALLOWED:
-            return False                       # php_filter_url() stripped a byte
-    m = _URL_SCHEME.match(value)
-    if m is None or m.group(1) == '':
-        return False                           # no scheme => php_url_parse_ex() leaves it NULL
-    scheme = m.group(1)
-    rest = value[m.end():]
-    if rest.startswith('//'):
-        authority = rest[2:].split('/', 1)[0].split('?', 1)[0].split('#', 1)[0]
-        host = authority.rsplit('@', 1)[-1]
-        if host.startswith('[') and ']' in host:
-            host = host[:host.index(']') + 1]
-        else:
-            host = host.split(':', 1)[0]
-    else:
-        host = ''
-    if scheme.lower() in ('http', 'https'):
-        if host == '':
-            return False
-        if host.startswith('[') and host.endswith(']'):
-            try:
-                ipaddress.IPv6Address(host[1:-1])
-            except ValueError:
-                return False
-            return True
-        if not _is_ascii_alnum(host[0]):
-            return False
-        for ch in host:
-            if not _is_ascii_alnum(ch) and ch not in '-.':
-                return False
-        return True
-    if host == '' and scheme not in _URL_HOSTLESS_SCHEMES:
-        return False
-    return True
+# `_filter_validate_url` (filter_var($url, FILTER_VALIDATE_URL)) now lives in
+# app.support.phpcompat.filter_validate_url (Phase 7 final-review wave, B2 —
+# it was previously duplicated verbatim here and in admin_controller.py);
+# imported above under its old module-private name so existing call sites and
+# tests keep working unchanged.
 
 
 class MCPServerController:

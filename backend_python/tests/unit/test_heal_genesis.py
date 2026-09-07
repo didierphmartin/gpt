@@ -188,6 +188,33 @@ def test_heal_status_requires_auth():
     assert c.status(ctx(user_id=0)) == {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
 
+# ─── php_round regression (Phase 7 final-review wave, B1) — half away from
+# zero, not Python's round-half-to-even. `php -r 'echo round(2.67895, 4);'`
+# -> 2.679; Python's builtin round(2.67895, 4) -> 2.6789.
+
+def test_heal_authorize_rounding_half_away_from_zero():
+    db = FakeDb(one=[{'heal_mode': 'ask', 'heal_daily_budget_usd': '5.00', 'heal_per_heal_ceiling_usd': '1.00'}],
+                column=[['0.0000']])
+    c = HealController(db, {})
+    r = c.authorize(ctx({'estimate_usd': 2.67895, 'skill_dir': 'foo'}))
+    assert r['estimate_usd'] == 2.679
+
+
+def test_heal_record_rounding_half_away_from_zero():
+    db = FakeDb(column=[['2.67895']])
+    c = HealController(db, {})
+    r = c.record(ctx({'actual_usd': 0.1}))
+    assert r['spent_today_usd'] == 2.679
+
+
+def test_heal_status_rounding_half_away_from_zero():
+    db = FakeDb(one=[{'heal_mode': 'auto', 'heal_daily_budget_usd': '5.00', 'heal_per_heal_ceiling_usd': '1.00'}],
+                column=[['2.67895']])
+    c = HealController(db, {})
+    r = c.status(ctx(user_id=3))
+    assert r['spent_today_usd'] == 2.679
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # GenesisController.decide() — ported verbatim from GenesisDecideTest.php
 # ══════════════════════════════════════════════════════════════════════════
@@ -383,6 +410,28 @@ def test_genesis_record_non_born_outcome_nulls_skill_dir_and_defaults_invalid_ou
     _, params = db.calls[1]
     assert params[':st'] == 'failed'
     assert params[':dir'] is None
+
+
+def test_genesis_authorize_rounding_half_away_from_zero():
+    # php_round regression (Phase 7 final-review wave, B1) — half away from
+    # zero: `php -r 'echo round(2.67895, 4);'` -> 2.679; Python's builtin
+    # round(2.67895, 4) -> 2.6789.
+    db = FakeDb(
+        one=[{'x': 1}, {'genesis_mode': 'off', 'genesis_daily_budget_usd': '3.00',
+                         'genesis_per_skill_ceiling_usd': '1.50', 'genesis_max_skills_per_week': 2,
+                         'genesis_reflection_provider': 'kimi'}],
+        column=[['proposed'], ['0.0000'], ['0']],
+    )
+    c = GenesisController(db, {})
+    r = c.authorize(ctx({'promotion_id': 7, 'estimate_usd': 2.67895}))
+    assert r['estimate_usd'] == 2.679
+
+
+def test_genesis_record_rounding_half_away_from_zero():
+    db = FakeDb(one=[{'x': 1}], column=[['2.67895']])
+    c = GenesisController(db, {})
+    r = c.record(ctx({'promotion_id': 9, 'actual_usd': 0.1}))
+    assert r['spent_today_usd'] == 2.679
 
 
 def test_genesis_record_failure_rolls_back():

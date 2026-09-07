@@ -12,7 +12,7 @@ from app.db import Db
 from app.exceptions import PricingUnavailableException
 from app.services.pricing_resolver import PricingResolver
 from app.support.logger import error_log
-from app.support.phpcompat import php_date
+from app.support.phpcompat import php_date, php_round
 from app.support.phpjson import dumps
 
 # Voice pricing per second (input/output) in USD. Rates as of March 2026.
@@ -340,7 +340,7 @@ class UsageLogger:
             self._pricingResolver = PricingResolver(self.pdo)
         inPer1M, outPer1M = self._pricingResolver.resolve(provider)
         cost = (promptTokens / 1_000_000) * inPer1M + (completionTokens / 1_000_000) * outPer1M
-        return round(cost, 6)
+        return php_round(cost, 6)
 
     def calculateVoiceCost(self, provider: str, inputSeconds: float, outputSeconds: float) -> float:
         """Calculate cost in USD for voice/audio usage.
@@ -353,7 +353,7 @@ class UsageLogger:
         inputCost = inputSeconds * pricing['input']
         outputCost = outputSeconds * pricing['output']
 
-        return round(inputCost + outputCost, 6)
+        return php_round(inputCost + outputCost, 6)
 
     def getBalance(self, userId, provider: str | None = None) -> list | dict:
         """Get usage balance for a user."""

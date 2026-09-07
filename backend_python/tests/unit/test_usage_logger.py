@@ -55,3 +55,21 @@ def test_log_transaction_without_user_returns_none():
 def test_voice_cost_table():
     assert UsageLogger(Db(), True).calculateVoiceCost('grok', 10, 10) == 0.012
     assert UsageLogger(Db(), True).calculateVoiceCost('unknown', 10, 10) == 0.0075
+
+
+def test_calculate_cost_rounds_half_away_from_zero():
+    # php_round regression (Phase 7 final-review wave, B1): 1 token at
+    # $0.5/1M is exactly 0.0000005 -> `php -r 'echo round(0.0000005, 6);'`
+    # rounds UP to 1.0E-6; Python's builtin round(0.0000005, 6) rounds DOWN
+    # to 0.0 (round-half-to-even on the raw double).
+    cost = UsageLogger(Db({'price_input_per_1m': '0.5', 'price_output_per_1m': '0'}), True) \
+        .calculateCost('openai', 'gpt-4o', 1, 0)
+    assert cost == 1e-06
+
+
+def test_calculate_voice_cost_rounds_half_away_from_zero():
+    # Same php_round edge case as above, through calculateVoiceCost's own
+    # round() call: 0.002s at gemini's $0.00025/s input rate is exactly
+    # 0.0000005 -> php_round rounds UP to 1.0E-6 (Python round() -> 0.0).
+    cost = UsageLogger(Db(), True).calculateVoiceCost('gemini', 0.002, 0)
+    assert cost == 1e-06

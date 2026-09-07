@@ -41,10 +41,10 @@ output difference.
 """
 from __future__ import annotations
 
-import functools
 import re
 
 from app.db import Db
+from app.support.db_cleanup import close_db, close_secondary_connections as _cleanup
 from app.support.logger import error_log
 from app.support.phpcompat import (
     is_numeric,
@@ -65,17 +65,9 @@ from app.support.phpjson import php_json_decode, php_json_encode
 _NOTSET = object()
 _MONTH_RE = re.compile(r'\d{4}-\d{2}')
 
-
-def _cleanup(fn):
-    """Close any secondary connections (video_editor_database / login_database) this call
-    opened once the endpoint method returns, success or error — see module docstring."""
-    @functools.wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        try:
-            return fn(self, *args, **kwargs)
-        finally:
-            self._close_connections()
-    return wrapper
+# `_cleanup` (close-any-secondary-connections-on-return decorator) is the shared
+# app.support.db_cleanup.close_secondary_connections — see LoginAdminController
+# for the sibling usage; both close via _close_connections() below / there.
 
 
 class VideoEditorController:
@@ -125,8 +117,7 @@ class VideoEditorController:
 
     def _close_connections(self) -> None:
         for conn in self._cache.values():
-            if conn is not None:
-                conn.close()
+            close_db(conn, log_prefix='video-editor')
         self._cache = {}
 
     def _ve_app_id(self) -> int | None:

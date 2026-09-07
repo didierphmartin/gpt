@@ -23,7 +23,16 @@ import re
 
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import is_php_array, mb_substr, php_array, php_empty, php_floatval, php_intval, php_trim
+from app.support.phpcompat import (
+    is_php_array,
+    mb_substr,
+    php_array,
+    php_empty,
+    php_floatval,
+    php_intval,
+    php_round,
+    php_trim,
+)
 from app.support.phpjson import php_json_encode
 
 
@@ -136,10 +145,10 @@ class GenesisController:
         return {
             'success': True,
             'mode': cfg['mode'],
-            'estimate_usd': round(estimate, 4),
-            'spent_today_usd': round(spent, 4),
+            'estimate_usd': php_round(estimate, 4),
+            'spent_today_usd': php_round(spent, 4),
             'budget_usd': cfg['budget'],
-            'remaining_usd': round(remaining, 4),
+            'remaining_usd': php_round(remaining, 4),
             'ceiling_usd': cfg['ceiling'],
             'born_this_week': born,
             'weekly_max': cfg['weekly_max'],
@@ -184,7 +193,7 @@ class GenesisController:
                 pass
             error_log('[GenesisController] record failed: ' + str(e))
             return {'success': False, 'error': 'record failed', 'status_code': 500}
-        return {'success': True, 'spent_today_usd': round(self._spentToday(userId), 4), 'status_code': 200}
+        return {'success': True, 'spent_today_usd': php_round(self._spentToday(userId), 4), 'status_code': 200}
 
     def dismiss(self, request, id: int) -> dict:
         """POST /api/v1/genesis/promotions/{id}/dismiss"""

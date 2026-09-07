@@ -8,7 +8,7 @@ from app.contracts.usage_tracker import UsageTrackerInterface
 from app.exceptions import PricingUnavailableException
 from app.services.pricing_resolver import PricingResolver
 from app.support.logger import error_log
-from app.support.phpcompat import php_date
+from app.support.phpcompat import php_date, php_round
 from app.support.phpjson import dumps
 
 
@@ -181,7 +181,7 @@ class UsageTracker(UsageTrackerInterface):
         inPer1M, outPer1M = self._pricingResolver.resolve(provider)
         inputCost = (input_tokens / 1_000_000) * inPer1M
         outputCost = (output_tokens / 1_000_000) * outPer1M
-        return round(inputCost + outputCost, 6)
+        return php_round(inputCost + outputCost, 6)
 
     def _getDateCondition(self, period: str) -> str:
         """Get date condition for SQL queries."""

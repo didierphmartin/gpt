@@ -829,3 +829,18 @@ def test_mcp_http_call_extra_headers_applied(monkeypatch):
     sessionRef = {'id': None}
     c().mcpHttpCall('https://mcp.example/', {'a': 1}, ['Authorization: Bearer tok'], sessionRef)
     assert seen['auth'] == 'Bearer tok'
+
+
+# ─── claude_tools.json mirror (Phase 7 final-review wave, B7) ──────────────
+
+def test_claude_tools_json_matches_php_source():
+    """backend_python/resources/claude_tools.json (read by
+    loadAllAvailableRegularTools) must stay byte-identical to the PHP tree's
+    backend/resources/claude_tools.json — this catches silent drift between
+    the two copies."""
+    from pathlib import Path
+    py_path = Path(admin_mod.__file__).resolve().parents[2] / 'resources' / 'claude_tools.json'
+    php_path = Path(admin_mod.__file__).resolve().parents[3] / 'backend' / 'resources' / 'claude_tools.json'
+    assert py_path.exists(), f'missing mirror: {py_path}'
+    assert php_path.exists(), f'missing PHP source: {php_path}'
+    assert py_path.read_bytes() == php_path.read_bytes()

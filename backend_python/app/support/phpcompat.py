@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import base64
 import calendar
+import ipaddress
 import os
 import random
 import re
 import time
 import zlib
 from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 _EMAIL_RE = re.compile(
@@ -355,6 +357,26 @@ def php_floatval(v) -> float:
     return 0.0
 
 
+def php_round(value, precision: int = 0):
+    """PHP 8 round(): half away from zero, applied to the shortest decimal
+    string that reproduces `value` (matching PHP's internal pre-rounding
+    correction for binary floating-point representation error) instead of
+    Python round()'s round-half-to-even on the raw double.
+
+    Concretely: 21790 * 15 / 1_000_000 is the double
+    0.32684999999999997388... — Python's round(x, 4) reads that literal
+    value and rounds DOWN to 0.3268; PHP's round(x, 4) rounds UP to 0.3269,
+    the answer a human reading "0.32685" would expect (verified with
+    `php -r 'echo round(21790*15/1000000, 4);'` -> 0.3269). Also:
+    round(2.5) -> 3, round(-2.5) -> -3 (half AWAY FROM ZERO, not banker's
+    rounding), round(1.005, 2) -> 1.01.
+    """
+    if value is None:
+        return None
+    quant = Decimal('1').scaleb(-precision) if precision > 0 else Decimal('1')
+    return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+
+
 PHP_TRIM_CHARS = ' \t\n\r\x00\x0b'
 
 
@@ -472,3 +494,71 @@ def str_word_count(s: str) -> int:
     there) so other callers can share it.
     """
     return len(_STR_WORD_COUNT_RE.findall(s))
+
+
+# ─── filter_var($url, FILTER_VALIDATE_URL) ─────────────────────────────────
+# ext/filter: php_filter_url() first strips every byte outside RFC 1738 §5 and
+# fails when that changed the length; php_url_parse_ex() must then yield a
+# scheme, and http/https additionally require a host whose bytes are
+# `isalnum() || '-' || '.'` with an alphanumeric first byte (or a bracketed
+# IPv6 literal). Probed against the live PHP 8 build — `_`/`~` in a host and a
+# schemeless "example.com" are rejected, a trailing dot and a userinfo prefix
+# are accepted.
+#
+# Phase 7 final-review wave (B2): moved here from admin_controller.py's and
+# mcp_server_controller.py's identical module-private `_filter_validate_url`/
+# `_is_ascii_alnum` copies (each controller re-exports `_filter_validate_url`
+# as an alias so existing tests/imports keep working unchanged).
+_URL_ALLOWED = frozenset(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    '$-_.+!*\'(),{}|\\^~[]`<>#%";/?:@&='
+)
+_URL_SCHEME_RE = re.compile(r'^([A-Za-z0-9+.\-]*):')
+# php_filter_validate_url() only exempts these three from the host requirement,
+# and does so with strcmp() — i.e. case-sensitively, unlike the http/https test.
+_URL_HOSTLESS_SCHEMES = ('mailto', 'news', 'file')
+
+
+def _is_ascii_alnum(ch: str) -> bool:
+    """C isalnum() in the "C" locale."""
+    return ('0' <= ch <= '9') or ('a' <= ch <= 'z') or ('A' <= ch <= 'Z')
+
+
+def filter_validate_url(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    for ch in value:
+        if ch not in _URL_ALLOWED:
+            return False                       # php_filter_url() stripped a byte
+    m = _URL_SCHEME_RE.match(value)
+    if m is None or m.group(1) == '':
+        return False                           # no scheme => php_url_parse_ex() leaves it NULL
+    scheme = m.group(1)
+    rest = value[m.end():]
+    if rest.startswith('//'):
+        authority = rest[2:].split('/', 1)[0].split('?', 1)[0].split('#', 1)[0]
+        host = authority.rsplit('@', 1)[-1]
+        if host.startswith('[') and ']' in host:
+            host = host[:host.index(']') + 1]
+        else:
+            host = host.split(':', 1)[0]
+    else:
+        host = ''
+    if scheme.lower() in ('http', 'https'):
+        if host == '':
+            return False
+        if host.startswith('[') and host.endswith(']'):
+            try:
+                ipaddress.IPv6Address(host[1:-1])
+            except ValueError:
+                return False
+            return True
+        if not _is_ascii_alnum(host[0]):
+            return False
+        for ch in host:
+            if not _is_ascii_alnum(ch) and ch not in '-.':
+                return False
+        return True
+    if host == '' and scheme not in _URL_HOSTLESS_SCHEMES:
+        return False
+    return True

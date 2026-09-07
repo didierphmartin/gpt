@@ -113,6 +113,13 @@ def test_support_generate_key_shape():
     assert all(c in _AffiliateSupport.ALPHABET for c in key)
 
 
+def test_support_generate_key_uniqueness():
+    # Port of AffiliateSupportTest::testKeysAreUnique (backend/tests/Unit/AffiliateSupportTest.php).
+    a = _AffiliateSupport.generateKey()
+    b = _AffiliateSupport.generateKey()
+    assert a != b
+
+
 def test_support_build_link_question_mark_vs_ampersand():
     assert _AffiliateSupport.buildLink('https://x.com/sale', 'AB12') == 'https://x.com/sale?ref=AB12'
     assert _AffiliateSupport.buildLink('https://x.com/sale?a=1', 'AB12') == 'https://x.com/sale?a=1&ref=AB12'

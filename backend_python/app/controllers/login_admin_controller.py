@@ -13,6 +13,7 @@ Phase 1: Overview stats + Users CRUD.
 from __future__ import annotations
 
 from app.db import Db
+from app.support.db_cleanup import close_db, close_secondary_connections as _cleanup
 from app.support.logger import error_log
 from app.support.phpcompat import (
     is_numeric,
@@ -67,6 +68,15 @@ class LoginAdminController:
             self._login_cache = None
         return self._login_cache
 
+    def _close_connections(self) -> None:
+        """Close the secondary login-DB connection (if one was opened) once the
+        route method returns, success or error — mirrors VideoEditorController's
+        `_close_connections` (see app.support.db_cleanup)."""
+        conn = self._login_cache
+        if conn is not False and conn is not None:
+            close_db(conn, log_prefix='login-admin')
+        self._login_cache = False
+
     def _loginUserById(self, l: Db, id_: int) -> dict | None:
         return l.fetch_one('SELECT id, email FROM users WHERE id = ? LIMIT 1', [id_])
 
@@ -77,6 +87,7 @@ class LoginAdminController:
 
     # ─── GET /api/v1/admin/login/stats ─────────────────────────────────────
 
+    @_cleanup
     def getStats(self, request) -> dict:
         err = self._requireAdmin(request)
         if err:
@@ -104,6 +115,7 @@ class LoginAdminController:
 
     # ─── GET /api/v1/admin/login/users?q&provider ──────────────────────────
 
+    @_cleanup
     def getUsers(self, request) -> dict:
         err = self._requireAdmin(request)
         if err:
@@ -139,6 +151,7 @@ class LoginAdminController:
 
     # ─── POST /api/v1/admin/login/users ────────────────────────────────────
 
+    @_cleanup
     def createUser(self, request) -> dict:
         """Create a user (no password; provider=email)."""
         err = self._requireAdmin(request)
@@ -166,6 +179,7 @@ class LoginAdminController:
 
     # ─── POST /api/v1/admin/login/users/update ─────────────────────────────
 
+    @_cleanup
     def updateUser(self, request) -> dict:
         """Edit account fields (profile / verification). Roles are per-app
         (app_user_roles), not editable here."""
@@ -203,6 +217,7 @@ class LoginAdminController:
 
     # ─── POST /api/v1/admin/login/users/delete ─────────────────────────────
 
+    @_cleanup
     def deleteUser(self, request) -> dict:
         """Delete a user + their passkeys. An admin cannot delete their own account."""
         err = self._requireAdmin(request)
@@ -245,6 +260,7 @@ class LoginAdminController:
 
     # ─── GET /api/v1/admin/login/apps ──────────────────────────────────────
 
+    @_cleanup
     def getApps(self, request) -> dict:
         """Registered applications + their user counts."""
         err = self._requireAdmin(request)
@@ -271,6 +287,7 @@ class LoginAdminController:
 
     # ─── GET /api/v1/admin/login/app-users?app=<slug>&q= ───────────────────
 
+    @_cleanup
     def getAppUsers(self, request) -> dict:
         """Users + their role for one app."""
         err = self._requireAdmin(request)
@@ -305,6 +322,7 @@ class LoginAdminController:
 
     # ─── POST /api/v1/admin/login/app-users/role ───────────────────────────
 
+    @_cleanup
     def setAppUserRole(self, request) -> dict:
         """Set/clear a user's role for one app. Body: { app, user_id, role }.
         Empty/"none" role revokes access."""
@@ -342,6 +360,7 @@ class LoginAdminController:
 
     # ─── POST /api/v1/admin/login/app-users/add ────────────────────────────
 
+    @_cleanup
     def addAppMember(self, request) -> dict:
         """Add a member to an app, creating the account first if the email is
         new. Writes both `users` (auth-only, no password — completed via

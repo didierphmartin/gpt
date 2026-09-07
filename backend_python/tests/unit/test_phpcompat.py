@@ -271,3 +271,44 @@ def test_php_items_foreach_k_v_over_dict_or_list():
     assert pc.php_items([]) == []
     assert pc.php_items(None) == []
     assert pc.php_items('not an array') == []
+
+
+def test_php_round():
+    # Phase 7 final-review wave (B1): PHP 8 round() — half away from zero,
+    # pre-rounded off the shortest decimal string that reproduces the double.
+    # Every value below verified against the real PHP 8 build:
+    #   php -r 'echo round(0.32685, 2);'   -> 0.33
+    #   php -r 'echo round(2.5, 0);'       -> 3
+    #   php -r 'echo round(-2.5, 0);'      -> -3
+    #   php -r 'echo round(1.005, 2);'     -> 1.01
+    #   php -r 'echo round(21790*15/1000000, 2);' -> 0.33
+    #   php -r 'echo round(21790*15/1000000, 4);' -> 0.3269
+    assert pc.php_round(0.32685, 2) == 0.33
+    assert pc.php_round(2.5, 0) == 3.0
+    assert pc.php_round(-2.5, 0) == -3.0
+    assert pc.php_round(1.005, 2) == 1.01
+    assert pc.php_round(21790 * 15 / 1_000_000, 2) == 0.33
+    assert pc.php_round(21790 * 15 / 1_000_000, 4) == 0.3269
+    # Python round-half-to-even would give 2.67/1.0/0.0/0.123456 for these —
+    # PHP (and php_round) round away from zero instead:
+    #   php -r 'echo round(2.675, 2);'      -> 2.68
+    #   php -r 'echo round(0.0000005, 6);'  -> 1.0E-6
+    #   php -r 'echo round(0.1234565, 6);'  -> 0.123457
+    assert pc.php_round(2.675, 2) == 2.68
+    assert pc.php_round(0.0000005, 6) == 1e-6
+    assert pc.php_round(0.1234565, 6) == 0.123457
+    assert pc.php_round(None) is None
+    assert pc.php_round(4) == 4.0  # precision=0 default
+
+
+def test_filter_validate_url():
+    # Phase 7 final-review wave (B2): filter_var($v, FILTER_VALIDATE_URL) —
+    # verified against the real PHP 8 build:
+    #   php -r 'var_dump(filter_var("https://example.com/path", FILTER_VALIDATE_URL));' -> string (truthy)
+    #   php -r 'var_dump(filter_var("http://ex_ample.com", FILTER_VALIDATE_URL));'       -> false ('_' not allowed in host)
+    #   php -r 'var_dump(filter_var("mailto:foo@bar.com", FILTER_VALIDATE_URL));'        -> string (truthy, hostless scheme)
+    #   php -r 'var_dump(filter_var("not a url", FILTER_VALIDATE_URL));'                 -> false
+    assert pc.filter_validate_url('https://example.com/path') is True
+    assert pc.filter_validate_url('http://ex_ample.com') is False
+    assert pc.filter_validate_url('mailto:foo@bar.com') is True
+    assert pc.filter_validate_url('not a url') is False
