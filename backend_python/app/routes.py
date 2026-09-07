@@ -1,5 +1,6 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
+from app.agent_team.controllers.user_memory_controller import UserMemoryController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
@@ -11,9 +12,14 @@ from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
+from app.controllers.usage_controller import UsageController
 from app.controllers.webauthn_controller import WebAuthnController
 
+# AgentTeam-namespaced controllers (backend/src/AgentTeam/Controllers/*) use the
+# PHP-prefixed key 'AgentTeam:<ClassName>' so the registry mirrors routes.php's
+# ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
+    'AgentTeam:UserMemoryController': UserMemoryController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
@@ -25,6 +31,7 @@ CONTROLLERS = {
     'RootController': RootController,
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
+    'UsageController': UsageController,
     'WebAuthnController': WebAuthnController,
 }
 
@@ -68,6 +75,11 @@ ROUTES = [
     ('POST', '/api/v1/contexts', ('ContextController', 'create')),
     ('PUT', '/api/v1/contexts/{id:\\d+}', ('ContextController', 'update')),
     ('DELETE', '/api/v1/contexts/{id:\\d+}', ('ContextController', 'delete')),
+    # USAGE ROUTES
+    ('GET', '/api/v1/usage', ('UsageController', 'getBalance')),
+    ('GET', '/api/v1/usage/balance', ('UsageController', 'getBalance')),
+    ('GET', '/api/v1/usage/transactions', ('UsageController', 'getTransactions')),
+    ('GET', '/api/v1/usage/stats', ('UsageController', 'getStats')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
@@ -79,6 +91,11 @@ ROUTES = [
     ('POST', '/api/v1/webauthn/register', ('WebAuthnController', 'register')),
     ('POST', '/api/v1/webauthn/authenticate', ('WebAuthnController', 'authenticate')),
     ('DELETE', '/api/v1/webauthn/register', ('WebAuthnController', 'delete')),
+    # USER MEMORIES (Hermes-style frozen memory — always injected into system prompt)
+    ('GET', '/api/v1/user-memories', ('AgentTeam:UserMemoryController', 'show')),
+    ('PUT', '/api/v1/user-memories', ('AgentTeam:UserMemoryController', 'update')),
+    ('GET', '/api/v1/user-memories/events', ('AgentTeam:UserMemoryController', 'listEvents')),
+    ('DELETE', '/api/v1/user-memories/events/{id:\\d+}', ('AgentTeam:UserMemoryController', 'deleteEvent')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),
