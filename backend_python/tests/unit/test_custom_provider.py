@@ -124,7 +124,7 @@ def test_http_errors_use_provider_name(status, factory):
 
 
 def test_api_error_message_carries_the_response_body():
-    # MANDATORY error-text rule: apiError message = str(e) + " | Response: " + e.response.text
+    # MANDATORY error-text rule: apiError message = str(e) + " | Response: " + guzzle_body_summary(e.response.text)
     # so ChatController::humanizeProviderError's pattern-match on the body still fires.
     body = '{"error": {"message": "This model\'s maximum context length is 8192 tokens", "code": "context_length_exceeded"}}'
     p = _provider(lambda r: httpx.Response(400, text=body))

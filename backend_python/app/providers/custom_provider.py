@@ -15,7 +15,7 @@ None else d` for `??`, dict-or-list for `is_array()`, `ucfirst` for
 Deviation from PHP: the non-2xx error path (`except httpx.HTTPStatusError`)
 does NOT reproduce PHP's `$e->getMessage()` verbatim — Guzzle's message
 already embeds a response-body excerpt that httpx's str(e) does not, so the
-body is appended explicitly (`str(e) + " | Response: " + e.response.text`)
+body is appended explicitly (`str(e) + " | Response: " + guzzle_body_summary(e.response.text)`)
 to keep ChatController::humanizeProviderError's body pattern-matching
 working over the wire. Same fix as openai_provider.py/claude_provider.py.
 """
