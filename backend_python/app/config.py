@@ -108,6 +108,9 @@ def load_config(env_file: str | None = '__default__') -> dict:
         'scheduler': {'token': _e('SCHEDULER_TOKEN'), 'max_concurrent': 5, 'timeout_minutes': 30},
         'storage': {'default_provider': 's3'},
         # Python-only additions (not in ai_config.php):
+        # ChatAttachmentController.php resolves this from __DIR__; the default
+        # below is the same physical directory the PHP backend writes to.
+        'chat_upload_root': _e('CHAT_UPLOAD_ROOT') or str(PHP_BACKEND / 'storage' / 'chat-uploads'),
         'port': int(_e('PORT', '3002')),
         'py_workers': int(_e('PY_WORKERS', '100')),
         'firebase': {'project_id': _e('FIREBASE_PROJECT_ID', 'transledgersite')},

@@ -1,6 +1,7 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
 from app.controllers.auth_controller import AuthController
+from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
 from app.controllers.model_catalog_controller import ModelCatalogController
@@ -14,6 +15,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 
 CONTROLLERS = {
     'AuthController': AuthController,
+    'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
     'ContextController': ContextController,
     'ModelCatalogController': ModelCatalogController,
@@ -48,6 +50,8 @@ ROUTES = [
     ('GET', '/api/v1/traces/diagnosis', ('TracesController', 'diagnose')),
     # URL FETCH
     ('POST', '/api/v1/fetch-url', ('UrlFetchController', 'fetch')),
+    # ATTACHMENTS
+    ('POST', '/api/v1/chat/upload', ('ChatAttachmentController', 'upload')),
     # MODEL CATALOG (public)
     ('GET', '/api/v1/models/catalog', ('ModelCatalogController', 'get')),
     # PACKAGE ROUTES

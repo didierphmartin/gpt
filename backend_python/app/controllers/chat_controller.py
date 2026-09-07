@@ -1106,9 +1106,6 @@ class ChatController:
         pdfAttachments = []
         if not php_empty(attachmentIds) and is_numeric(userId):
             try:
-                # Phase 2a: AttachmentDispatcher lands in 2d. The import sits inside
-                # the try so its ImportError is swallowed exactly like PHP swallows a
-                # dispatcher failure in its own `catch (Exception $e)`.
                 from app.services.attachment_dispatcher import AttachmentDispatcher
                 dispatcher = AttachmentDispatcher(self.db)
                 # Pass the active provider so the dispatcher can route PDFs to
