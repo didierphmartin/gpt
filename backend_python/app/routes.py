@@ -4,6 +4,8 @@ from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
 from app.agent_team.controllers.ingestion_controller import IngestionController
+from app.agent_team.controllers.scheduled_workflow_controller import ScheduledWorkflowController
+from app.agent_team.controllers.scheduler_controller import SchedulerController
 from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
 from app.agent_team.controllers.workflow_controller import WorkflowController
@@ -43,6 +45,8 @@ CONTROLLERS = {
     'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
     'AgentTeam:IngestionController': IngestionController,
+    'AgentTeam:ScheduledWorkflowController': ScheduledWorkflowController,
+    'AgentTeam:SchedulerController': SchedulerController,
     'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
     'AgentTeam:WorkflowController': WorkflowController,
@@ -316,6 +320,21 @@ ROUTES = [
     ('POST', '/api/v1/agents/{id:\\d+}/move-down', ('AgentTeam:AgentController', 'moveDown')),
     # MCP JSON-RPC endpoint for AI client integration (routes.php:427)
     ('POST', '/api/v1/mcp/agents', ('AgentTeam:AgentMCPController', 'handle')),
+    # SCHEDULES (routes.php:451-459. `stats` is registered before `{id}` —
+    # same first-match-wins ordering as PHP's FastRoute table.)
+    ('GET', '/api/v1/schedules', ('AgentTeam:ScheduledWorkflowController', 'index')),
+    ('POST', '/api/v1/schedules', ('AgentTeam:ScheduledWorkflowController', 'create')),
+    ('GET', '/api/v1/schedules/stats', ('AgentTeam:ScheduledWorkflowController', 'stats')),
+    ('GET', '/api/v1/schedules/{id:\\d+}', ('AgentTeam:ScheduledWorkflowController', 'show')),
+    ('PUT', '/api/v1/schedules/{id:\\d+}', ('AgentTeam:ScheduledWorkflowController', 'update')),
+    ('DELETE', '/api/v1/schedules/{id:\\d+}', ('AgentTeam:ScheduledWorkflowController', 'destroy')),
+    ('POST', '/api/v1/schedules/{id:\\d+}/pause', ('AgentTeam:ScheduledWorkflowController', 'pause')),
+    ('POST', '/api/v1/schedules/{id:\\d+}/resume', ('AgentTeam:ScheduledWorkflowController', 'resume')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/schedules', ('AgentTeam:ScheduledWorkflowController', 'byWorkflow')),
+    # SCHEDULER (routes.php:464-465. `/scheduler/run` is public — see
+    # app/middleware/processor.py PUBLIC_ROUTES.)
+    ('POST', '/api/v1/scheduler/run', ('AgentTeam:SchedulerController', 'run')),
+    ('GET', '/api/v1/scheduler/status', ('AgentTeam:SchedulerController', 'status')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),
