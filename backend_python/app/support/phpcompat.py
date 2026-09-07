@@ -145,3 +145,37 @@ def php_array(d):
     but an EMPTY one encodes as `[]`, not `{}`. Apply wherever PHP hands such a
     map straight to json_encode so the wire shape matches on both backends."""
     return d if d else []
+
+
+_FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
+
+
+def php_floatval(v) -> float:
+    """PHP (float) cast: numeric string -> float, leading-numeric prefix -> that prefix
+    ("12abc" -> 12.0), anything else -> 0.0."""
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        m = _FLOAT_PREFIX.match(v)
+        return float(m.group(0)) if m else 0.0
+    return 0.0
+
+
+PHP_TRIM_CHARS = ' \t\n\r\x00\x0b'
+
+
+def php_trim(v, chars: str = PHP_TRIM_CHARS) -> str:
+    """PHP trim(): coerces its argument like a string cast (None -> '', True -> '1',
+    False -> '', numbers via php_strval) and strips ONLY PHP's default charlist
+    " \\t\\n\\r\\0\\x0B" — never Python's much wider Unicode whitespace set, so
+    e.g. a NBSP-padded value survives here exactly as it does in PHP.
+
+    PHP 8 raises `TypeError: trim(): Argument #1 ($string) must be of type string,
+    array given` for array arguments; so does this, and index.php's `catch (Throwable)`
+    and main.py's `except Exception` both turn that into the same 500.
+    """
+    if isinstance(v, (list, dict, tuple, set)):
+        raise TypeError('trim(): Argument #1 ($string) must be of type string, array given')
+    return php_strval(v).strip(chars)

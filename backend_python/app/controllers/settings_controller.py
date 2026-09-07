@@ -13,39 +13,24 @@ import base64
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 
 from app.config import PHP_BACKEND
 from app.services.package_resolver import PackageResolver
 from app.support.crypto import aes256cbc_decrypt, aes256cbc_encrypt
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_bool, php_date, php_empty, php_intval
-
-_FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
-
-
-def php_floatval(v) -> float:
-    """PHP (float) cast: numeric string -> float, leading-numeric prefix -> that prefix,
-    anything else -> 0.0."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        m = _FLOAT_PREFIX.match(v)
-        return float(m.group(0)) if m else 0.0
-    return 0.0
-
-
-def php_json_encode(value) -> str:
-    """json_encode() with PHP's defaults (escaped slashes + \\uXXXX non-ASCII).
-    Used for blobs written to the DB so the stored bytes match PHP's."""
-    return json.dumps(value, ensure_ascii=True, separators=(',', ':')).replace('/', '\\/')
-
-
-# php_array lives in app.support.phpcompat (global rule: empty string-keyed array → []); re-exported here.
-from app.support.phpcompat import php_array  # noqa: E402,F401
+from app.support.phpcompat import (
+    is_numeric,
+    php_array,
+    php_bool,
+    php_date,
+    php_empty,
+    php_floatval,
+    php_intval,
+    php_strval,
+    php_trim,
+)
+from app.support.phpjson import php_json_encode
 
 
 def php_items(v):
@@ -235,9 +220,16 @@ class SettingsController:
         self.ensureApiKeysTableExists()
         self.ensureUserModelsTableExists()
 
-        sql = ("SELECT provider, api_key, system_prompt, created_at, updated_at"
-               " FROM user_api_keys"
-               " WHERE user_id = :user_id")
+        if self._columnExists('user_api_keys', 'system_prompt'):
+            sql = ("SELECT provider, api_key, system_prompt, created_at, updated_at"
+                   " FROM user_api_keys"
+                   " WHERE user_id = :user_id")
+        else:
+            # ensureApiKeysTableExists() ALTERs the column in for PHP before this
+            # SELECT runs, so PHP reads NULL for every row; drop it and do the same.
+            sql = ("SELECT provider, api_key, created_at, updated_at"
+                   " FROM user_api_keys"
+                   " WHERE user_id = :user_id")
 
         keys = self.db.fetch_all(sql, {':user_id': userId})
 
@@ -287,7 +279,7 @@ class SettingsController:
                     if not isinstance(providerCfg, (dict, list)) or php_empty(
                             providerCfg.get('enabled') if isinstance(providerCfg, dict) else None):
                         continue
-                    defaultModel = providerCfg['default_model'].strip() \
+                    defaultModel = php_trim(providerCfg['default_model']) \
                         if isinstance(providerCfg.get('default_model'), str) else ''
                     if defaultModel != '':
                         packageModels[providerKey] = defaultModel
@@ -336,11 +328,11 @@ class SettingsController:
             if provider not in validProviders:
                 continue
 
-            if php_empty(str(apiKey).strip()):
+            if php_empty(php_trim(apiKey)):
                 continue
 
             # Encrypt the API key
-            encryptedKey = self.encryptApiKey(str(apiKey).strip())
+            encryptedKey = self.encryptApiKey(php_trim(apiKey))
 
             # Upsert the key. VALUES(api_key) references the would-be-inserted
             # row so we can bind :api_key only once — PDO with emulated prepares
@@ -365,7 +357,7 @@ class SettingsController:
             if provider not in validProviders:
                 continue
 
-            if php_empty(str(model).strip()):
+            if php_empty(php_trim(model)):
                 continue
 
             sql = ("INSERT INTO user_model_selections (user_id, provider, model, updated_at)"
@@ -377,7 +369,7 @@ class SettingsController:
             self.db.execute(sql, {
                 ':user_id': userId,
                 ':provider': provider,
-                ':model': str(model).strip(),
+                ':model': php_trim(model),
             })
 
             modelCount += 1
@@ -393,7 +385,7 @@ class SettingsController:
             if not isinstance(prompt, str):
                 continue
 
-            value = prompt.strip()
+            value = php_trim(prompt)
             stored = None if value == '' else value
 
             # Upsert. Insert path needs an api_key column (NOT NULL); use
@@ -458,9 +450,17 @@ class SettingsController:
             categoryEnabled[row['category']] = php_bool(row['enabled'])
 
         # Get provider-level settings
-        sql = ("SELECT category, provider, api_key, settings, is_active, enabled"
-               " FROM user_provider_settings"
-               " WHERE user_id = :user_id")
+        if self._columnExists('user_provider_settings', 'enabled'):
+            sql = ("SELECT category, provider, api_key, settings, is_active, enabled"
+                   " FROM user_provider_settings"
+                   " WHERE user_id = :user_id")
+        else:
+            # ensureProviderSettingsTableExists() ALTERs `enabled TINYINT(1) NOT NULL
+            # DEFAULT 1` in for PHP first, so every row reads back enabled=1; drop the
+            # column and let the isset() branch below yield the same `true`.
+            sql = ("SELECT category, provider, api_key, settings, is_active"
+                   " FROM user_provider_settings"
+                   " WHERE user_id = :user_id")
 
         rows = self.db.fetch_all(sql, {':user_id': userId})
 
@@ -533,8 +533,8 @@ class SettingsController:
 
         # Encrypt API key if provided
         encryptedKey = None
-        if not php_empty(apiKey) and str(apiKey).strip() != '':
-            encryptedKey = self.encryptApiKey(str(apiKey).strip())
+        if not php_empty(apiKey) and php_trim(apiKey) != '':
+            encryptedKey = self.encryptApiKey(php_trim(apiKey))
 
         # Parse settings if string
         if isinstance(settings, str):
@@ -990,7 +990,7 @@ class SettingsController:
 
         provider = body['provider'] if body.get('provider') is not None else 'local'
         folder = (body['folder'] if body.get('folder') is not None else '')
-        folder = str(folder).strip()
+        folder = php_trim(folder)
 
         # Validate provider
         validProviders = ['local', 's3', 'gdrive', 'onedrive']
@@ -1122,12 +1122,12 @@ class SettingsController:
     def _coerceLike(default, value):
         """is_int($def) ? (int)$v : (is_float($def) ? (float)$v : (string)$v)."""
         if isinstance(default, bool):
-            return str(value)
+            return php_strval(value)
         if isinstance(default, int):
             return php_intval(value)
         if isinstance(default, float):
             return php_floatval(value)
-        return str(value)
+        return php_strval(value)
 
     @staticmethod
     def _jsonDecode(raw):

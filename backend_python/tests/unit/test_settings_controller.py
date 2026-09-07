@@ -7,13 +7,10 @@ import base64
 import pytest
 from starlette.datastructures import Headers
 
-from app.controllers.settings_controller import (
-    SettingsController,
-    php_array,
-    php_floatval,
-    php_json_encode,
-)
+from app.controllers.settings_controller import SettingsController
 from app.support.http import Ctx
+from app.support.phpcompat import php_array, php_floatval
+from app.support.phpjson import php_json_encode
 
 CONFIG = {'auth': {'jwt_secret': 'test-jwt-secret'}}
 
@@ -205,6 +202,28 @@ def test_get_keys_masks_and_collects_prompts():
     ]
 
 
+def test_get_keys_drops_system_prompt_when_column_absent():
+    """PHP ALTERs the column in first and then reads NULL for every row; with no
+    runtime DDL the port omits it from the SELECT and yields the same payload."""
+    db = _keys_db([{'provider': 'kimi', 'api_key': '', 'created_at': None, 'updated_at': None}])
+    db.columns = False
+    r = SettingsController(db, CONFIG).getKeys(ctx())
+    assert sqls(db)[0] == ("SELECT provider, api_key, created_at, updated_at"
+                           " FROM user_api_keys WHERE user_id = :user_id")
+    assert r['system_prompts'] == []
+
+
+def test_get_provider_settings_drops_enabled_when_column_absent():
+    """PHP's ALTER adds `enabled TINYINT(1) NOT NULL DEFAULT 1`, so every row reads
+    back enabled -> true; the port drops the column and reports the same."""
+    db = FakeDb(all_=[[], [{'category': 'voice', 'provider': 'grok', 'api_key': None,
+                            'settings': None, 'is_active': 0}]], columns=False)
+    r = c(db).getProviderSettings(ctx())
+    assert sqls(db)[1] == ("SELECT category, provider, api_key, settings, is_active"
+                           " FROM user_provider_settings WHERE user_id = :user_id")
+    assert r['voice']['providers']['grok']['enabled'] is True
+
+
 def test_get_keys_package_models_and_locks():
     ctl = c()
     db = _keys_db(
@@ -237,6 +256,31 @@ def test_save_keys_empty_payload_error_string():
         'success': False, 'error': 'No keys, models, or system_prompts provided', 'status_code': 400}
     assert c().saveKeys(ctx({'keys': {}, 'models': {}, 'system_prompts': {}}))['error'] == \
         'No keys, models, or system_prompts provided'
+
+
+def test_save_keys_null_key_is_trimmed_away_not_stringified():
+    """PHP trim(null) === '' -> the provider is skipped. Python's str(None) would
+    have stored the literal 'None' as the user's API key."""
+    db = FakeDb()
+    r = c(db).saveKeys(ctx({'keys': {'openai': None}}))
+    assert r['saved_count'] == 0 and db.calls == []
+    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s)'
+
+
+def test_save_keys_bool_model_follows_php_string_cast():
+    """PHP trim(true) === '1' (stored) and trim(false) === '' (skipped)."""
+    db = FakeDb()
+    r = c(db).saveKeys(ctx({'models': {'openai': True, 'kimi': False}}))
+    assert r['model_count'] == 1
+    assert db.calls[0][1] == {':user_id': 3, ':provider': 'openai', ':model': '1'}
+
+
+def test_save_keys_keeps_php_trim_charlist():
+    """PHP trims only " \t\n\r\0\x0B" — a NBSP-wrapped key stays wrapped."""
+    db = FakeDb()
+    ctl = c(db)
+    ctl.saveKeys(ctx({'keys': {'kimi': '\u00a0sk-live\u00a0'}}))
+    assert ctl.decryptApiKey(db.calls[0][1][':api_key']) == '\u00a0sk-live\u00a0'
 
 
 def test_save_keys_skips_unknown_provider_and_blank_key():

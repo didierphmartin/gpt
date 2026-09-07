@@ -83,3 +83,39 @@ def test_php_strval_matches_php_string_cast():
     assert pc.php_strval('x') == 'x'
     assert pc.php_strval(7) == '7'
     assert pc.php_strval([1, 2]) == 'Array'
+
+
+def test_php_trim_coerces_like_php_and_uses_phps_charlist():
+    # php -r 'var_dump(trim(null), trim(true), trim(false), trim(7), trim(3.5),
+    #                  trim("  x  "), trim("\xc2\xa0x\xc2\xa0"), trim("\0\x0Bx\t\n\r "));'
+    assert pc.php_trim(None) == ''            # deprecated in PHP 8 but still ''
+    assert pc.php_trim(True) == '1'
+    assert pc.php_trim(False) == ''
+    assert pc.php_trim(7) == '7'
+    assert pc.php_trim(3.5) == '3.5'
+    assert pc.php_trim('  x  ') == 'x'
+    assert pc.php_trim('\0\x0bx\t\n\r ') == 'x'
+    # PHP strips its own byte charlist only — NBSP and the other Unicode spaces
+    # Python's str.strip() would eat are left alone.
+    assert pc.php_trim(' x ') == ' x '
+    assert pc.php_trim(' x') == ' x'
+    assert pc.php_trim('--x--', '-') == 'x'
+
+
+def test_php_trim_rejects_arrays_like_php8():
+    import pytest
+    with pytest.raises(TypeError, match='must be of type string, array given'):
+        pc.php_trim(['a'])
+    with pytest.raises(TypeError):
+        pc.php_trim({'a': 1})
+
+
+def test_php_floatval_matches_php_float_cast():
+    # php -r 'var_dump((float)"7.5", (float)"12abc", (float)"abc", (float)null, (float)true, (float)"1e3");'
+    assert pc.php_floatval('7.5') == 7.5
+    assert pc.php_floatval('12abc') == 12.0
+    assert pc.php_floatval('abc') == 0.0
+    assert pc.php_floatval(None) == 0.0
+    assert pc.php_floatval(True) == 1.0
+    assert pc.php_floatval('1e3') == 1000.0
+    assert pc.php_floatval('  4.25  ') == 4.25
