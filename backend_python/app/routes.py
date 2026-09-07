@@ -1,5 +1,6 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
+from app.agent_team.controllers.app_key_controller import AppKeyController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
@@ -19,6 +20,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 # PHP-prefixed key 'AgentTeam:<ClassName>' so the registry mirrors routes.php's
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
+    'AgentTeam:AppKeyController': AppKeyController,
     'AgentTeam:UserMemoryController': UserMemoryController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
@@ -96,6 +98,14 @@ ROUTES = [
     ('PUT', '/api/v1/user-memories', ('AgentTeam:UserMemoryController', 'update')),
     ('GET', '/api/v1/user-memories/events', ('AgentTeam:UserMemoryController', 'listEvents')),
     ('DELETE', '/api/v1/user-memories/events/{id:\\d+}', ('AgentTeam:UserMemoryController', 'deleteEvent')),
+    # APP KEYS — scoped credentials for client code (CRUD is admin-only;
+    # whoami is app-key-authed so client code can introspect its key).
+    ('POST', '/api/v1/app-keys', ('AgentTeam:AppKeyController', 'create')),
+    ('GET', '/api/v1/app-keys', ('AgentTeam:AppKeyController', 'index')),
+    ('GET', '/api/v1/app-keys/whoami', ('AgentTeam:AppKeyController', 'whoami')),
+    ('GET', '/api/v1/app-keys/workflows', ('AgentTeam:AppKeyController', 'listUserWorkflows')),
+    ('GET', '/api/v1/app-keys/agents', ('AgentTeam:AppKeyController', 'listUserAgents')),
+    ('DELETE', '/api/v1/app-keys/{id:\\d+}', ('AgentTeam:AppKeyController', 'destroy')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),
