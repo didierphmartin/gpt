@@ -17,6 +17,30 @@ def php_json_encode(value) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(',', ':')).replace('/', '\\/')
 
 
+def dumps_pretty(obj, unescaped: bool = True, unescape_slashes: bool | None = None) -> str:
+    """json_encode($v, JSON_PRETTY_PRINT [| flags]) — PHP's pretty-print
+    (4-space indent; Python's `json.dumps(..., indent=4)` matches PHP's
+    separator/newline placement byte-for-byte, verified against `php -r`
+    2026-09-07 for nested arrays/objects, empty arrays/objects, unicode and
+    slash-bearing strings, and floats).
+
+    `unescaped=True` (default) mirrors `JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+    | JSON_UNESCAPED_SLASHES` — literal non-ASCII, literal '/'.
+    `unescaped=False` mirrors plain `JSON_PRETTY_PRINT` — `\\uXXXX`-escaped
+    non-ASCII and `\\/`-escaped slashes.
+
+    `unescape_slashes` overrides slash handling independently of `unescaped`,
+    for PHP call sites that pass `JSON_UNESCAPED_UNICODE` WITHOUT
+    `JSON_UNESCAPED_SLASHES` — e.g. `WorkflowOutputStorage.php:85` and
+    `GraphWorkflowRunner.php:1600`, which both unescape unicode but still
+    escape slashes. Without this override those two callers could not reuse
+    this helper without changing their on-disk output bytes.
+    """
+    slashesUnescaped = unescaped if unescape_slashes is None else unescape_slashes
+    s = json.dumps(obj, indent=4, ensure_ascii=not unescaped)
+    return s if slashesUnescaped else s.replace('/', '\\/')
+
+
 def php_json_arrays(value):
     """Apply php_array() to every map in an already-decoded JSON value.
 

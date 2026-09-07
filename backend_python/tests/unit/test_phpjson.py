@@ -1,9 +1,90 @@
-from app.support.phpjson import dumps, php_json_arrays, php_json_decode
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from app.support.phpjson import dumps, dumps_pretty, php_json_arrays, php_json_decode
 
 
 def test_clean_json_and_key_order():
     assert dumps({'b': 1, 'a': 'é/x'}) == '{"b":1,"a":"é/x"}'
     assert dumps([1, 2.5, None, True]) == '[1,2.5,null,true]'
+
+
+# ─── dumps_pretty ────────────────────────────────────────────────────────────
+# json_encode($v, JSON_PRETTY_PRINT [| flags]) — PHP's 4-space-indented pretty
+# print. `unescaped=True` mirrors JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+# `unescaped=False` mirrors plain JSON_PRETTY_PRINT (both escaped). The
+# `unescape_slashes` override serves callers (WorkflowOutputStorage.php:85,
+# GraphWorkflowRunner.php:1600) that set JSON_UNESCAPED_UNICODE WITHOUT
+# JSON_UNESCAPED_SLASHES.
+
+_NESTED = {
+    'emptyArr': [],
+    'emptyObj': {},
+    'text': 'héllo/wörld',
+    'num': 1.5,
+    'nested': {'a': {'b': []}},
+}
+
+
+def test_dumps_pretty_unescaped_default():
+    assert dumps_pretty(_NESTED) == (
+        '{\n'
+        '    "emptyArr": [],\n'
+        '    "emptyObj": {},\n'
+        '    "text": "héllo/wörld",\n'
+        '    "num": 1.5,\n'
+        '    "nested": {\n'
+        '        "a": {\n'
+        '            "b": []\n'
+        '        }\n'
+        '    }\n'
+        '}'
+    )
+
+
+def test_dumps_pretty_escaped():
+    assert dumps_pretty(_NESTED, unescaped=False) == (
+        '{\n'
+        '    "emptyArr": [],\n'
+        '    "emptyObj": {},\n'
+        '    "text": "h\\u00e9llo\\/w\\u00f6rld",\n'
+        '    "num": 1.5,\n'
+        '    "nested": {\n'
+        '        "a": {\n'
+        '            "b": []\n'
+        '        }\n'
+        '    }\n'
+        '}'
+    )
+
+
+def test_dumps_pretty_unicode_unescaped_slashes_still_escaped():
+    """WorkflowOutputStorage.php:85 / GraphWorkflowRunner.php:1600 shape:
+    JSON_UNESCAPED_UNICODE without JSON_UNESCAPED_SLASHES."""
+    out = dumps_pretty(_NESTED, unescape_slashes=False)
+    assert '"text": "héllo\\/wörld"' in out
+
+
+_PHP_BIN = shutil.which('php') or '/Applications/XAMPP/xamppfiles/bin/php'
+
+
+@pytest.mark.skipif(not os.path.exists(_PHP_BIN), reason='php CLI not found')
+def test_dumps_pretty_matches_real_php_byte_for_byte():
+    php_script = (
+        '$data = ["emptyArr" => [], "emptyObj" => new stdClass(), '
+        '"text" => "héllo/wörld", "num" => 1.5, "nested" => ["a" => ["b" => []]]];'
+        'echo json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);'
+        'echo "\\x00";'
+        'echo json_encode($data, JSON_PRETTY_PRINT);'
+    )
+    result = subprocess.run([_PHP_BIN, '-r', php_script], capture_output=True, text=True, check=True)
+    php_unescaped, php_escaped = result.stdout.split('\x00')
+
+    assert dumps_pretty(_NESTED) == php_unescaped
+    assert dumps_pretty(_NESTED, unescaped=False) == php_escaped
 
 
 # ─── php_json_arrays / php_json_decode ─────────────────────────────────────

@@ -648,6 +648,21 @@ def test_upload_success_path_ends_in_503_adapter_unavailable(tmp_path):
     assert r == {'success': False, 'error': 'Storage system (UniversalFS) not available', 'status_code': 503}
 
 
+def test_upload_truthy_adapter_raises_not_implemented(tmp_path, monkeypatch):
+    """getUniversalFSAdapter always returns None in this port (PHP 1484-1522
+    -- mkdir/writeStream via universalFS -- is not ported). If it ever starts
+    returning something truthy, uploadNodeDocument must fail loudly instead
+    of silently falling through and returning None."""
+    p = tmp_path / 'note.txt'
+    p.write_bytes(b'hello world')
+    db = FakeDb(one=[WORKFLOW_ROW, NODE_ROW, {'storage_folder': 'user_3'}])
+    files = {'file': {'error': 0, 'name': 'note.txt', 'size': 11, 'tmp_name': str(p)}}
+    controller = wc(db)
+    monkeypatch.setattr(controller, 'getUniversalFSAdapter', lambda userId: object())
+    with pytest.raises(NotImplementedError):
+        controller.uploadNodeDocument(ctx(files=files), 1, 5)
+
+
 # ============================================================================
 # saveDocumentMetadata
 # ============================================================================

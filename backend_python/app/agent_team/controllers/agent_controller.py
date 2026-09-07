@@ -600,13 +600,15 @@ class AgentController:
         PlaybookAgentTools.php:42-53) — "never throws, returns [] on any
         failure" when the playbook registry/analyzer is unavailable.
 
-        DEVIATION: The Playbook interpreter (PlaybookAnalyzer / PlaybookDocument
-        / LoaderMcpExecutor) has not been ported to Python — it lives on the
-        separate, unmerged feat/playbook-interpreter branch, out of scope for
-        this Phase 4 (agent-team data) task. So this always takes PHP's own
-        "any failure" fallback path (PlaybookAgentTools.php:49-52: catch
-        \\Throwable -> error_log + return []) rather than attempting analysis.
-        When the interpreter is ported, replace this with the real call.
+        DEVIATION: PHP's Playbook package (backend/src/Playbook/ on this
+        branch — PlaybookAnalyzer / PlaybookDocument / LoaderMcpExecutor) has
+        not been ported to Python yet; that port is Phase 5, Task 4
+        (`PlaybookAgentTools` itself) with Task 2 wiring this helper up to
+        the real analyzer. Out of scope for this Phase 4 (agent-team data)
+        task, so this always takes PHP's own "any failure" fallback path
+        (PlaybookAgentTools.php:49-52: catch \\Throwable -> error_log +
+        return []) rather than attempting analysis. When Phase 5 lands,
+        replace this with the real call.
         """
         error_log(
             '[PlaybookAgentTools] registry unavailable: PlaybookAnalyzer not yet '

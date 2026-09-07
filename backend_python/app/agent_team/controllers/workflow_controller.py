@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
 
 from app.agent_team.models.workflow import Workflow
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
@@ -48,26 +47,15 @@ from app.support.logger import error_log
 from app.support.phpcompat import (
     is_php_array,
     php_bool,
+    php_date,
     php_empty,
     php_intval,
     php_strval,
     php_trim,
-    php_tz,
     php_uniqid,
 )
 
 _RUN_ID_RE = re.compile(r'^[a-f0-9]{32}$')
-
-
-def _php_date_c() -> str:
-    """date('c') in PHP's configured timezone: ISO 8601 with a colon-separated
-    UTC offset and no microseconds — e.g. '2026-09-07T10:30:00+02:00'. Not in
-    php_date()'s subset table (app/support/phpcompat.py); computed locally
-    here, same precedent as workflow_output_storage.py's
-    `_generate_timestamp`/`_format_mtime` module-level helpers."""
-    now = datetime.now(php_tz())
-    offset = now.strftime('%z')  # '+0200'
-    return now.strftime('%Y-%m-%dT%H:%M:%S') + offset[:3] + ':' + offset[3:]
 
 
 def _nested_get(d, *keys):
@@ -717,7 +705,16 @@ class WorkflowController:
 
             # PHP 1484-1522 (mkdir + writeStream via universalFS, then node
             # config update) is unreachable below this point — adapter is
-            # always None here — and is therefore not implemented.
+            # always None here — and is therefore not implemented. Fail loudly
+            # instead of falling through and returning None if that ever
+            # changes (getUniversalFSAdapter starts returning something truthy)
+            # rather than silently mis-behaving.
+            raise NotImplementedError(
+                'universalFS adapter write path is not ported (Phase 3/4 ruling: '
+                'non-local providers are unavailable)'
+            )
+        except NotImplementedError:
+            raise  # fail loudly rather than being swallowed into a 500 dict below
         except Exception as e:  # noqa: BLE001
             error_log(f'[WorkflowController] uploadNodeDocument error: {e}')
             return {'success': False, 'error': f'Failed to upload document: {e}', 'status_code': 500}
@@ -756,7 +753,7 @@ class WorkflowController:
                 'mimeType': docData['mimeType'] if docData.get('mimeType') is not None else 'application/octet-stream',
                 'size': docData['size'] if docData.get('size') is not None else 0,
                 'storage': 'local',
-                'addedAt': docData['addedAt'] if docData.get('addedAt') is not None else _php_date_c(),
+                'addedAt': docData['addedAt'] if docData.get('addedAt') is not None else php_date('c'),
             }
 
             config = _node_config(node)

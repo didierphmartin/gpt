@@ -436,7 +436,7 @@ def test_schema_update_success_partial_fields():
     assert r['data']['name'] == 'out'   # untouched
 
 
-def test_schema_update_null_name_is_not_applied():
+def test_schema_update_null_name_casts_to_empty_and_fails_validation():
     # array_key_exists is true for an explicit JSON null, unlike Team's isset check --
     # WorkflowSchemaController casts with (string), so null becomes ''.
     db = FakeDb(one=[SCHEMA_ROW])

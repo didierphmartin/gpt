@@ -39,14 +39,14 @@ tree.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import datetime
 
 from app.config import PHP_BACKEND
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_trim, php_tz
+from app.support.phpcompat import php_date, php_empty, php_trim, php_tz
+from app.support.phpjson import dumps_pretty
 
 _DEFAULT_BASE_PATH = str(PHP_BACKEND.parent / 'storage' / 'workflow_outputs')
 
@@ -55,31 +55,15 @@ _MULTI_UNDERSCORE_RE = re.compile(r'_+')
 
 
 def _generate_timestamp() -> str:
-    """date('Y-m-d_H-i-s') in PHP's configured timezone (PHP 251). This
-    format isn't in php_date()'s subset table (app/support/phpcompat.py),
-    so it's computed locally here — same precedent as
-    file_storage_controller.py's `_php_date_ts` helper. A module-level
-    function (not inlined) so tests can monkeypatch it to freeze time."""
-    return datetime.now(php_tz()).strftime('%Y-%m-%d_%H-%M-%S')
+    """date('Y-m-d_H-i-s') in PHP's configured timezone (PHP 251). A
+    module-level function (not inlined) so tests can monkeypatch it to
+    freeze time."""
+    return php_date('Y-m-d_H-i-s', tz=php_tz())
 
 
 def _format_mtime(ts: float) -> str:
     """date('Y-m-d H:i:s', $timestamp) in PHP's configured timezone (PHP 452)."""
-    return datetime.fromtimestamp(ts, php_tz()).strftime('%Y-%m-%d %H:%M:%S')
-
-
-def _json_pretty_unescaped_unicode(value) -> str:
-    """json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) (PHP 85):
-    4-space-indented pretty print, literal (non-escaped) unicode, but
-    forward slashes STILL escaped as \\/ (JSON_UNESCAPED_SLASHES is not
-    set). Verified byte-for-byte against `php -r 'echo json_encode(...,
-    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);'` 2026-09-07 for nested
-    arrays/objects, empty arrays/objects, unicode and slash-bearing
-    strings. Kept local (not promoted to app/support/phpjson.py) to avoid
-    touching a shared support module a concurrent fix wave may also be
-    editing; `GraphWorkflowRunner.php:1600` uses the same flag pair and
-    can adopt an equivalent helper when that class is ported."""
-    return json.dumps(value, indent=4, ensure_ascii=False).replace('/', '\\/')
+    return php_date('Y-m-d H:i:s', dt=datetime.fromtimestamp(ts, php_tz()))
 
 
 class WorkflowOutputStorage:
@@ -119,7 +103,9 @@ class WorkflowOutputStorage:
 
             filename = self.generateFilename(workflow['name'])
             fullPath = self.buildFullPath(storageConfig['folder'], filename)
-            content = _json_pretty_unescaped_unicode(output)
+            # PHP 85: JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE (no
+            # JSON_UNESCAPED_SLASHES) -- unicode literal, slashes still \/-escaped.
+            content = dumps_pretty(output, unescape_slashes=False)
 
             result = self.saveToStorage(storageConfig['provider'], fullPath, content, userId)
 
