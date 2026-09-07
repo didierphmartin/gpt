@@ -44,7 +44,7 @@ def test_auth_required(both):
     same(*both('GET', f'{BASE}/transactions', auth=False))
 
 
-def test_save_price_roundtrip_noop(php, py, token):
+def test_save_price_roundtrip_noop(php, py, token, both):
     """Read one existing price row via PHP, POST it back byte-for-byte (no delete
     route exists for video_edit_prices), assert both backends still list it
     identically before and after — self-cleaning since nothing actually changes."""
@@ -58,7 +58,7 @@ def test_save_price_roundtrip_noop(php, py, token):
     same(*both('GET', f'{BASE}/prices'))
 
 
-def test_save_model_roundtrip_noop(php, py, token):
+def test_save_model_roundtrip_noop(php, py, token, both):
     before = php.get(f'{BASE}/models', headers={'Authorization': f'Bearer {token}'}).json()
     assert before['success'] is True and before['models'], 'no model rows to round-trip against'
     row = before['models'][0]
@@ -70,7 +70,7 @@ def test_save_model_roundtrip_noop(php, py, token):
     same(*both('GET', f'{BASE}/models'))
 
 
-def test_save_provider_roundtrip_noop(php, py, token):
+def test_save_provider_roundtrip_noop(php, py, token, both):
     """Echo back label/api_base/enabled for an existing provider, omitting api_key and
     models entirely so both stay untouched (PHP: blank api_key keeps the stored key,
     omitted 'models' keeps the existing catalog) — a true no-op save."""
@@ -84,7 +84,7 @@ def test_save_provider_roundtrip_noop(php, py, token):
     same(*both('GET', f'{BASE}/providers'))
 
 
-def test_save_package_roundtrip_noop(php, py, token):
+def test_save_package_roundtrip_noop(php, py, token, both):
     """'guest' carries no secrets (unlike 'admin', whose capabilities.provider_keys holds
     real API keys) — safe role to exercise the upsert with."""
     before = php.get(f'{BASE}/packages', headers={'Authorization': f'Bearer {token}'}).json()
@@ -97,7 +97,7 @@ def test_save_package_roundtrip_noop(php, py, token):
     same(*both('GET', f'{BASE}/packages'))
 
 
-def test_save_user_override_roundtrip_noop(php, py, token):
+def test_save_user_override_roundtrip_noop(php, py, token, both):
     """user 3's pre-state capabilities is null (verified live) — omitting 'capabilities'
     from the body makes PHP write null again (array_key_exists check, not isset), a true
     no-op; omitting 'byo_keys' leaves the existing BYO map untouched (merge, not replace)."""
@@ -110,11 +110,11 @@ def test_save_user_override_roundtrip_noop(php, py, token):
     same(*both('GET', f'{BASE}/user-override?user_id=3'))
 
 
-def test_set_user_role_roundtrip_restore(php, py, token):
+def test_set_user_role_roundtrip_restore(php, py, token, both):
     """Restore user 3's own video-edit role after a temporary change — verified live
     pre-state: 'admin' (login.app_user_roles via registered_apps 'video-edit')."""
     before = php.get(f'{BASE}/users?q=', headers={'Authorization': f'Bearer {token}'}).json()
-    me = next((u for u in before['users'] if u['id'] == '3'), None)
+    me = next((u for u in before['users'] if u['id'] == 3), None)
     assert me is not None, 'user 3 not present in the video-edit users list'
     original_role = me['ve_role']
 
@@ -131,6 +131,6 @@ def test_set_user_role_roundtrip_restore(php, py, token):
         assert r.status_code == 200 and r.json()['success'] is True
 
     after = php.get(f'{BASE}/users?q=', headers={'Authorization': f'Bearer {token}'}).json()
-    me_after = next((u for u in after['users'] if u['id'] == '3'), None)
+    me_after = next((u for u in after['users'] if u['id'] == 3), None)
     assert me_after is not None and me_after['ve_role'] == original_role
     same(*both('GET', f'{BASE}/users?q='))

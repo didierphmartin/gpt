@@ -38,6 +38,7 @@ from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
 from app.controllers.usage_controller import UsageController
+from app.controllers.video_editor_controller import VideoEditorController
 from app.controllers.voice_controller import VoiceController
 from app.controllers.webauthn_controller import WebAuthnController
 
@@ -83,6 +84,7 @@ CONTROLLERS = {
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
     'UsageController': UsageController,
+    'VideoEditorController': VideoEditorController,
     'VoiceController': VoiceController,
     'WebAuthnController': WebAuthnController,
 }
@@ -258,6 +260,48 @@ ROUTES = [
     ('GET', '/api/v1/admin/users/{id:\\d+}/keys', ('AdminController', 'getApiKeys')),
     ('POST', '/api/v1/admin/keys', ('AdminController', 'saveApiKeys')),
     ('POST', '/api/v1/admin/keys/delete', ('AdminController', 'deleteApiKey')),
+    # ADMIN — USAGE (routes.php 192-196)
+    ('GET', '/api/v1/admin/usage/stats', ('AdminController', 'getUsageStats')),
+    ('GET', '/api/v1/admin/usage/by-user', ('AdminController', 'getUsageByUser')),
+    ('GET', '/api/v1/admin/usage/users/{id:\\d+}', ('AdminController', 'getUserUsageDetail')),
+    ('GET', '/api/v1/admin/usage/transactions', ('AdminController', 'getUsageTransactions')),
+    ('GET', '/api/v1/admin/usage/tools', ('AdminController', 'getToolStats')),
+    # ADMIN — VIDEO EDITOR (routes.php 199-214)
+    ('GET', '/api/v1/admin/video-editor/usage/stats', ('VideoEditorController', 'getUsageStats')),
+    ('GET', '/api/v1/admin/video-editor/usage/summary', ('VideoEditorController', 'getUsageSummary')),
+    ('GET', '/api/v1/admin/video-editor/usage/by-user', ('VideoEditorController', 'getUsageByUser')),
+    ('GET', '/api/v1/admin/video-editor/transactions', ('VideoEditorController', 'getTransactions')),
+    ('GET', '/api/v1/admin/video-editor/prices', ('VideoEditorController', 'getPrices')),
+    ('POST', '/api/v1/admin/video-editor/prices', ('VideoEditorController', 'savePrice')),
+    ('GET', '/api/v1/admin/video-editor/providers', ('VideoEditorController', 'getProviders')),
+    ('POST', '/api/v1/admin/video-editor/providers', ('VideoEditorController', 'saveProvider')),
+    ('GET', '/api/v1/admin/video-editor/models', ('VideoEditorController', 'getModels')),
+    ('POST', '/api/v1/admin/video-editor/models', ('VideoEditorController', 'saveModel')),
+    ('GET', '/api/v1/admin/video-editor/users', ('VideoEditorController', 'getUsers')),
+    ('POST', '/api/v1/admin/video-editor/users/role', ('VideoEditorController', 'setUserRole')),
+    ('GET', '/api/v1/admin/video-editor/packages', ('VideoEditorController', 'getPackages')),
+    ('POST', '/api/v1/admin/video-editor/packages', ('VideoEditorController', 'savePackage')),
+    ('GET', '/api/v1/admin/video-editor/user-override', ('VideoEditorController', 'getUserOverride')),
+    ('POST', '/api/v1/admin/video-editor/user-override', ('VideoEditorController', 'saveUserOverride')),
+    # ADMIN — MCP SERVERS (routes.php 228-233)
+    ('GET', '/api/v1/admin/mcp/servers', ('AdminController', 'listMCPServers')),
+    ('POST', '/api/v1/admin/mcp/servers', ('AdminController', 'createMCPServer')),
+    ('POST', '/api/v1/admin/mcp/servers/update', ('AdminController', 'updateMCPServer')),
+    ('POST', '/api/v1/admin/mcp/servers/toggle', ('AdminController', 'toggleMCPServer')),
+    ('POST', '/api/v1/admin/mcp/servers/refresh', ('AdminController', 'refreshMCPServerTools')),
+    ('DELETE', '/api/v1/admin/mcp/servers/{id:\\d+}', ('AdminController', 'deleteMCPServer')),
+    # ADMIN — USER MCP OVERRIDES (routes.php 235-238)
+    ('GET', '/api/v1/admin/users/{id:\\d+}/mcp-servers', ('AdminController', 'getUserMCPServers')),
+    ('PUT', '/api/v1/admin/users/{id:\\d+}/mcp-servers/{serverId:\\d+}/override',
+     ('AdminController', 'setUserMCPOverride')),
+    ('DELETE', '/api/v1/admin/users/{id:\\d+}/mcp-servers/{serverId:\\d+}/override',
+     ('AdminController', 'clearUserMCPOverride')),
+    # ADMIN — COSTS / EXCHANGE RATES (routes.php 240-246)
+    ('GET', '/api/v1/admin/costs', ('AdminController', 'getCosts')),
+    ('POST', '/api/v1/admin/costs/refresh', ('AdminController', 'refreshAllCosts')),
+    ('POST', '/api/v1/admin/costs/refresh-provider', ('AdminController', 'refreshProviderCosts')),
+    ('GET', '/api/v1/admin/exchange-rates', ('AdminController', 'getExchangeRates')),
+    ('POST', '/api/v1/admin/exchange-rates/refresh', ('AdminController', 'refreshExchangeRates')),
     # ADMIN — LOGIN (login microservice admin: users, apps, passkeys, appkeys
     # — routes.php:217-225)
     ('GET', '/api/v1/admin/login/stats', ('LoginAdminController', 'getStats')),
