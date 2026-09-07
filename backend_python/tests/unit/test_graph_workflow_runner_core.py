@@ -20,10 +20,17 @@ ExecutionTraceStore (already delivered + tested elsewhere,
 tests/unit/test_execution_trace_store.py); this file only covers the
 runner-facing surface (GraphWorkflowRunner._getProviderPricing /
 _computeNodeCost), per the Task 5a brief ("the runner-facing parts").
+
+Task 5b touch-up (one test only): `test_build_documents_context_reads_a_real_attached_document`
+replaces this file's original Task-5a placeholder
+(`test_build_documents_context_defers_to_task_5b_stub_when_documents_present`)
+and the two `test_task_5b_*_stubs_raise_not_implemented` spot-checks, all of
+which asserted the Task-5b-scoped methods raised `NotImplementedError` --
+no longer true once Task 5b ports them for real. Full coverage of the
+now-real parallel-execution and document-leaf methods lives in
+test_graph_workflow_runner_parallel.py / test_graph_workflow_runner_documents.py.
 """
 from __future__ import annotations
-
-import pytest
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
@@ -593,45 +600,24 @@ def test_build_documents_context_empty_when_no_documents():
     assert runner._buildDocumentsContext(_node(1, 'start', config={'documents': []})) == ''
 
 
-def test_build_documents_context_defers_to_task_5b_stub_when_documents_present():
-    runner, _, _ = _make_runner([], [])
-    node = _node(1, 'agent', config={'documents': [{'name': 'a.txt', 'mimeType': 'text/plain'}]})
-    try:
-        runner._buildDocumentsContext(node)
-        assert False, 'expected the isImageFile Task 5b stub to raise'
-    except NotImplementedError as e:
-        assert str(e) == 'Task 5b'
+def test_build_documents_context_reads_a_real_attached_document(tmp_path):
+    """Task 5b superseded the Task-5a placeholder here (previously this
+    asserted the leaf stubs raised NotImplementedError('Task 5b')): with the
+    document leaves now ported (test_graph_workflow_runner_documents.py has
+    the full suite), buildDocumentsContext's PHP 2828-2860 body runs
+    end-to-end for a node with an attached remote-storage text document."""
+    runner, _, _ = _make_runner([], [], config={'storage_path': str(tmp_path)})
+    (tmp_path / 'docs').mkdir()
+    (tmp_path / 'docs' / 'a.txt').write_text('hello from disk', encoding='utf-8')
 
+    node = _node(1, 'agent', config={'documents': [
+        {'name': 'a.txt', 'mimeType': 'text/plain', 'storage': 'remote', 'path': 'docs/a.txt'},
+    ]})
+    result = runner._buildDocumentsContext(node)
 
-# ---------------------------------------------------------------------------
-# Task 5b stubs — spot-check a representative few raise with PHP's signature
-# shape honored (params accepted, NotImplementedError('Task 5b') raised).
-# ---------------------------------------------------------------------------
-
-def test_task_5b_parallel_stubs_raise_not_implemented():
-    runner, _, _ = _make_runner([], [])
-
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._executeAgentsInParallel([], 1, 'x', [], [])
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._getParallelExecutor()
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._isClientSideToolName('run_skill_script')
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._buildAgentLLMRequest(Agent({'name': 'x'}), 'task')
-
-
-def test_task_5b_document_leaf_stubs_raise_not_implemented():
-    runner, _, _ = _make_runner([], [])
-
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._isImageFile('image/png')
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._readDocumentContent({'name': 'a.txt'})
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._getUserStorageProvider(1)
-    with pytest.raises(NotImplementedError, match='Task 5b'):
-        runner._getDocumentLocalPath('foo')
+    assert '## Attached Documents' in result
+    assert '### a.txt' in result
+    assert 'hello from disk' in result
 
 
 # ---------------------------------------------------------------------------

@@ -3,51 +3,78 @@
 Executes workflows defined as a graph (nodes + edges) from the visual editor.
 Traverses from Start node through agent nodes to Output node.
 
-Task 5a scope (this file): the sequential-run spine — `run()`, node
-traversal/routing, agent-node execution (single-agent, non-parallel path),
-output-node aggregation, merge strategies, execution/trace persistence, and
-the conversation_contexts archive. PHP `private`/`protected` methods -> `_name`
+Task 5a scope: the sequential-run spine — `run()`, node traversal/routing,
+agent-node execution (single-agent, non-parallel path), output-node
+aggregation, merge strategies, execution/trace persistence, and the
+conversation_contexts archive. PHP `private`/`protected` methods -> `_name`
 (matches the established convention, e.g. `workflow_runner.py`,
 `execution_trace_store.py`'s `_pricing`/`_verdict`/`_query`).
 
-Task 5b scope (NOT this file): true parallel fan-out (`executeAgentsInParallel`
-and its whole family), and the document-reading leaves (`readDocumentContent`,
-`isImageFile`, PDF extraction, storage adapters). Each such method below is a
-literal `raise NotImplementedError('Task 5b')` stub with PHP's signature, per
-the Task 5a brief/constraints ("Interfaces you consume").
+Task 5b scope (this pass): true parallel fan-out (`executeAgentsInParallel`
+and its whole family: `finalizeParallelNode`, `getParallelExecutor`,
+`isClientSideToolName`, `emitClientToolCallInParallel`,
+`awaitClientToolResultInParallel`, `executeToolForParallel`,
+`buildToolsForParallelAgent`, the deprecated curl_multi twin
+`executeAgentsInParallelNoTools` and its `buildAgentLLMRequest`/
+`parseAgentLLMResponse` collaborators), and the document-reading leaves
+(`getDocumentImages`, `readDocumentContent`, `readFileRaw`, `extractPdfText`,
+`basicPdfTextExtract`, `isImageFile`, `getDocumentStorageAdapter`,
+`getUserStorageProvider`, `getDocumentLocalPath`).
 
-Two methods on that same "5b stub" list are instead ported for REAL here, with
-justification (PHP wins over the brief — constraints.md):
+**Parallel-round ordering/interleaving rule** (PHP 1811-2157,
+`executeAgentsInParallel`): agents are initialized into `agentStates` (dict,
+insertion-ordered by `agentNodes`); each round calls
+`getParallelExecutor().runConcurrentRound(pendingAgents)`
+(`ParallelAgentExecutor.dispatchChunk` — real `ThreadPoolExecutor` fan-out,
+chunked to `maxConcurrency`), whose contract (see
+`parallel_agent_executor.py`'s module docstring) returns results keyed in the
+**chunk's original submission order**, not completion order — every request
+in a chunk genuinely races (proven via overlapping-interval MockTransport
+tests), but the caller-visible dict order is deterministic. Within one round,
+`executeAgentsInParallel` then iterates `responses` in that same order:
+non-tool-call agents are finalized immediately (`finalizeParallelNode` — one
+`node_complete`/`node_trace` event pair per agent, emitted as soon as that
+agent's turn in the response dict is processed, NOT batched at the end of
+the round); tool-call agents append an assistant+pending-tool message and,
+for CLIENT-side tools (`run_skill_script`/`discover_skill`/`Task`), EMIT the
+`client_tool_call` event immediately but defer the blocking
+`SkillToolBridge.awaitResult()` wait to a second pass (`pendingClientAwaits`)
+run only after every agent in the round has had its response processed — so
+every skill in a round is dispatched to the browser before any is awaited,
+letting the browser's own worker pool run them concurrently (`~max(skill)`
+wall time, not `sum(skill)`). Any agent still incomplete after `maxRounds`
+(10) is force-finalized as a failure in a final sweep, in `agentStates`
+insertion order. `finalizeParallelNode` is idempotent per node id
+(`self.parallelEmitted`) so the round loop's immediate finalize and the
+end-of-function sweep never double-emit for the same agent.
 
-  * `buildDocumentsContext` (PHP 2828-2860) — called UNCONDITIONALLY by both
-    `run()` (for the Start node, PHP 299) and `executeAgentNode` (PHP 898),
-    both of which are squarely Task 5a scope. Its PHP body early-returns ''
-    when a node has no `config.documents` (PHP 2830-2833) *before* touching
-    `isImageFile`/`readDocumentContent` — the actual document-reading leaves,
-    which stay literal 5b stubs below. A node with no attached documents (the
-    case every 5a acceptance test uses) is therefore fully functional; a node
-    WITH attached documents correctly defers to Task 5b.
-  * `runAgentWithClientToolBridge` (PHP 1231-1373) — called unconditionally
-    by `executeAgentNode` (PHP 986), which is explicitly 5a scope. Its only
-    non-trivial dependency is `SkillToolBridge`, already delivered (Task 2d,
-    `app/agent_team/services/skill_tool_bridge.py`) — there is no unshipped
-    collaborator left to stub out. Making this a hard stub would make the
-    brief's own required test ("run over a 3-node linear graph ... event
-    sequence exact, execution rows, final output") impossible to satisfy.
+`runAgentWithClientToolBridge` (PHP 1231-1373) and `buildDocumentsContext`
+(PHP 2828-2860) were ported for real in Task 5a (not stubs) — see that task's
+report for the justification (both are called unconditionally from
+Task-5a-scoped code with no unshipped collaborator to stub out).
 
 `AgentRunner` (Task 2) does not exist yet in this port; accepted via
 constructor injection typed loosely (`Any`), exactly like `workflow_runner.py`
-already does. `ParallelAgentExecutor` (Task 3, already on disk) is
-deliberately NOT imported — `getParallelExecutor` is one of the literal 5b
-stubs above, so nothing here ever needs to construct it.
+already does — its `createParallelExecutor(False)` and `getToolsManager()`
+surfaces are called lazily inside the methods below, never imported.
+`ParallelAgentExecutor` (Task 3, already on disk) is likewise never
+constructed directly here — only via `agentRunner.createParallelExecutor()` —
+matching PHP's own `getParallelExecutor()`.
 """
 from __future__ import annotations
 
+import base64
+import io
 import json
+import os
 import re
 import secrets
 import time
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+import httpx
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
@@ -59,7 +86,9 @@ from app.agent_team.services.skill_tool_bridge import SkillToolBridge
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.agent_team.services.workflow_schema_repository import WorkflowSchemaRepository
+from app.config import PHP_BACKEND
 from app.exceptions import PricingUnavailableException
+from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.pricing_resolver import PricingResolver
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -69,11 +98,40 @@ from app.support.phpcompat import (
     php_bool,
     php_date,
     php_empty,
+    php_floatval,
     php_intval,
     php_strval,
     php_trim,
 )
 from app.support.phpjson import dumps_pretty, php_json_decode, php_json_encode
+
+# Mirrors ClientSideToolsTrait::getClientSideToolNames() (PHP 2173-2176).
+_CLIENT_SIDE_TOOL_NAMES = ('run_skill_script', 'discover_skill', 'Task')
+
+# basicPdfTextExtract's regex scan (PHP 3034-3060), on raw PDF bytes.
+_PDF_STREAM_RE = re.compile(rb'stream\s*(.*?)\s*endstream', re.S)
+_PDF_TEXT_PAREN_RE = re.compile(rb'\((.*?)\)')
+
+
+def _pc(providerConfig, key: str):
+    """`$providerConfig['key'] ?? null` where $providerConfig may itself be
+    null (PHP array-offset-on-null is a warning, not a crash, and `??`
+    resolves it to null) -- guards every `getProviderConfig(...)[...]` read
+    in `buildAgentLLMRequest`."""
+    return providerConfig.get(key) if isinstance(providerConfig, dict) else None
+
+
+def _headers_list_to_dict(headers: list) -> dict:
+    """PHP's CURLOPT_HTTPHEADER list (['Name: value', ...]) -> a header dict
+    for httpx. Same shape/consumer as parallel_agent_executor.py's identical
+    helper; duplicated locally rather than importing another module's
+    underscore-prefixed internal."""
+    out = {}
+    for h in headers:
+        if ':' in h:
+            k, v = h.split(':', 1)
+            out[k.strip()] = v.strip()
+    return out
 
 
 def _coalesce(*vals):
@@ -626,6 +684,20 @@ class GraphWorkflowRunner:
                 'workflow': {'id': workflow.getId(), 'name': workflow.getName()},
                 'partial_outputs': self.nodeOutputs,
             }
+
+        finally:
+            # Python-only addition (no PHP counterpart -- curl_multi opens no
+            # persistent client, so PHP has nothing to release at the end of
+            # a run). `_getParallelExecutor()` lazily builds and caches a
+            # `ParallelAgentExecutor` that owns an httpx.Client for the
+            # lifetime of this run; release its connection pool once
+            # traversal is over rather than leaking it across runs in a
+            # long-lived worker process. `close()` is idempotent and a no-op
+            # when an httpx client was injected by the caller (see
+            # ParallelAgentExecutor.close()'s docstring), and this method is
+            # never called at all when no parallel round ever ran.
+            if self.parallelExecutor is not None:
+                self.parallelExecutor.close()
 
     # ─── Graph traversal helpers ─────────────────────────────────────────────
 
@@ -1498,55 +1570,824 @@ class GraphWorkflowRunner:
                 agentNodes.append(node)
         return agentNodes
 
-    # ─── Task 5b stubs: parallel execution / client-tool bridge (parallel) ──
+    # ─── Parallel execution / client-tool bridge (parallel) ─────────────────
 
     def _finalizeParallelNode(self, nodeId: int, state: dict, results: dict) -> None:
-        """PHP 1760-1805."""
-        raise NotImplementedError('Task 5b')
+        """Finalize one agent's parallel-round result: idempotent per node id
+        (`self.parallelEmitted`), tallies usage, emits `node_complete` +
+        records the execution trace (PHP 1760-1805). `results` is mutated in
+        place, mirroring PHP's `array &$results`."""
+        if not php_empty(self.parallelEmitted.get(nodeId)):
+            return
+        self.parallelEmitted[nodeId] = True
+
+        agent = state['agent']
+        rawUsage = state.get('usage')
+        usage = rawUsage if isinstance(rawUsage, dict) else {}
+        inputTokens = _coalesce(usage.get('input_tokens'), usage.get('prompt_tokens'), 0)
+        outputTokens = _coalesce(usage.get('output_tokens'), usage.get('completion_tokens'), 0)
+        self.totalInputTokens += inputTokens
+        self.totalOutputTokens += outputTokens
+
+        success = bool(_coalesce(state.get('success'), False))
+        output = state.get('output')
+        cost = self._computeNodeCost(agent.getProvider(), inputTokens, outputTokens)
+
+        results[nodeId] = {
+            'type': 'agent',
+            'agent_id': agent.getId(),
+            'agent_name': agent.getName(),
+            'input': _coalesce(state.get('input'), ''),
+            'output': output,
+            'success': success,
+            'usage': rawUsage,
+        }
+
+        if success:
+            self._nodeLog(state['node'], 'info', 'done', NodeLogFormat.completed(inputTokens + outputTokens, cost))
+
+        self._emitNodeEvent('node_complete', state['node'], {
+            'agent_name': agent.getName(),
+            'success': success,
+            'output': output,
+            'input_tokens': inputTokens,
+            'output_tokens': outputTokens,
+            'cost_usd': cost,
+        })
+
+        self._recordExecutionTrace(
+            state['node'], agent.getProvider(), agent.getModel() if hasattr(agent, 'getModel') else None,
+            success, output, inputTokens, outputTokens,
+        )
 
     def _executeAgentsInParallel(
         self, agentNodes: list, userId: int, userPrompt: str, edges: list, executedNodes: list
     ) -> dict:
-        """PHP 1811-2159."""
-        raise NotImplementedError('Task 5b')
+        """Execute multiple agent nodes in TRUE parallel with tool support
+        (PHP 1811-2157). See module docstring for the full ordering/
+        interleaving rule."""
+        error_log(f"[GraphWorkflowRunner] Executing {len(agentNodes)} agents in TRUE parallel with tool support")
+
+        inputNodeIds = [n['id'] for n in agentNodes]
+        error_log("[GraphWorkflowRunner] Input agent node IDs: " + ','.join(str(i) for i in inputNodeIds))
+
+        results: dict = {}
+        agentStates: dict = {}
+        maxRounds = 10
+
+        initializedNodes: list = []
+        for node in agentNodes:
+            if node['id'] in initializedNodes:
+                error_log(f"[GraphWorkflowRunner] Skipping duplicate agent node: {node['id']}")
+                continue
+            initializedNodes.append(node['id'])
+            nodeId = php_intval(node['id'])
+
+            agentId = node.get('agent_id')
+            config = node.get('config')
+            config = config if isinstance(config, dict) else {}
+
+            # Disabled node: debugging no-op — sentinel completion, no LLM call.
+            if not php_empty(config.get('disabled')):
+                label = _coalesce(config.get('agent_name'), config.get('name'), 'Disabled')
+                self._emitNodeEvent('node_start', node, {'input': ''})
+                self._nodeLog(node, 'info', 'done', 'disabled node — skipped')
+                results[nodeId] = {
+                    'type': 'agent', 'agent_id': agentId, 'agent_name': label,
+                    'input': '', 'output': 'disabled node', 'success': True, 'usage': None,
+                }
+                self._emitNodeEvent('node_complete', node, {
+                    'agent_name': label, 'success': True, 'output': 'disabled node',
+                    'input_tokens': 0, 'output_tokens': 0, 'cost_usd': None,
+                })
+                self.parallelEmitted[nodeId] = True
+                continue
+
+            mergeStrategy = _coalesce(config.get('merge_strategy'), 'labeled')
+            context = self._buildContextForNode(nodeId, edges, executedNodes, mergeStrategy)
+            task = f"Do your job on the following input:\n\n{context}" if not php_empty(context) else userPrompt
+
+            self._emitNodeEvent('node_start', node, {'input': task})
+
+            agentContext = {
+                'agent_name': _coalesce(config.get('agent_name'), config.get('name'), ''),
+                'node_id': node.get('id'),
+                'node_name': _coalesce(config.get('name'), f"Node {node.get('id')}"),
+            }
+
+            agent = None
+            if agentId:
+                agentRow = self.agentRepository.findById(agentId)
+                if agentRow:
+                    agentContext['agent_name'] = agentRow.getName()
+                    processedInstructions = self._processPromptTemplate(agentRow.getInstructions(), agentContext)
+                    processedDescription = self._processPromptTemplate(agentRow.getDescription(), agentContext)
+                    agent = Agent({
+                        'id': agentRow.getId(), 'user_id': agentRow.getUserId(), 'name': agentRow.getName(),
+                        'description': processedDescription, 'agent_type': agentRow.getAgentType(),
+                        'provider': agentRow.getProvider(), 'model': agentRow.getModel(),
+                        'instructions': processedInstructions, 'tools': agentRow.getTools(),
+                        'settings': agentRow.getSettings(),
+                    })
+            elif not php_empty(config.get('agent_name')) or not php_empty(config.get('instructions')):
+                agentName = _coalesce(config.get('agent_name'), config.get('name'), 'Inline Agent')
+                agentContext['agent_name'] = agentName
+                processedInstructions = self._processPromptTemplate(_coalesce(config.get('instructions'), ''), agentContext)
+                processedDescription = self._processPromptTemplate(_coalesce(config.get('description'), ''), agentContext)
+                agent = Agent({
+                    'id': None, 'user_id': userId, 'name': agentName, 'description': processedDescription,
+                    'agent_type': _coalesce(config.get('agent_type'), 'worker'),
+                    'provider': _coalesce(config.get('agent_provider'), config.get('provider'), 'openai'),
+                    'model': config.get('model'), 'instructions': processedInstructions,
+                    'tools': _coalesce(config.get('tools'), []), 'settings': _coalesce(config.get('settings'), []),
+                })
+
+            if not agent:
+                results[nodeId] = {
+                    'type': 'agent', 'agent_id': None, 'agent_name': 'Unknown',
+                    'output': 'Error: No agent configuration', 'success': False,
+                }
+                self._emitNodeEvent('node_complete', node, {
+                    'success': False, 'output': 'Error: No agent configuration',
+                    'input_tokens': 0, 'output_tokens': 0,
+                })
+                continue
+
+            toolsFilter = config['tools'] if not php_empty(config.get('tools')) else _coalesce(agent.getTools(), [])
+            tools = self._buildToolsForParallelAgent(agent, toolsFilter)
+
+            forceSkillFirstRound = False
+            skillScripts = self._getBoundSkillScripts(config)
+            boundSkill = config.get('bound_skill')
+            skillDirName = boundSkill.get('dir_name') if isinstance(boundSkill, dict) else None
+            if not php_empty(skillScripts) and isinstance(skillDirName, str) and skillDirName != '':
+                tools = tools + [self._buildRunSkillScriptTool({'dir_name': skillDirName, 'scripts': skillScripts})]
+                forceSkillFirstRound = True
+
+            toolNames = [t.get('name') for t in tools]
+            error_log(
+                f"[GraphWorkflowRunner] Agent {agent.getName()} setup: provider={agent.getProvider()}, "
+                f"model={agent.getModel()}, tools=[{','.join(str(n) for n in toolNames)}], "
+                f"toolsFilter=[{','.join(str(t) for t in (toolsFilter or []))}]"
+            )
+
+            agentStates[nodeId] = {
+                'node': node,
+                'agent': agent,
+                'input': task,
+                'messages': [
+                    {'role': 'system', 'content': agent.buildSystemPrompt()},
+                    {'role': 'user', 'content': task},
+                ],
+                'tools': tools,
+                'tools_filter': toolsFilter,
+                'force_skill': forceSkillFirstRound,
+                'completed': False,
+                'output': '',
+                'start_time': time.time(),
+            }
+
+        for round_ in range(maxRounds):
+            pendingAgents = {k: v for k, v in agentStates.items() if not v['completed']}
+            if not pendingAgents:
+                break
+
+            error_log(f"[GraphWorkflowRunner] Parallel round {round_}: {len(pendingAgents)} agents pending")
+
+            responses = self._getParallelExecutor().runConcurrentRound(pendingAgents)
+
+            pendingClientAwaits: list = []
+            for nodeId, response in responses.items():
+                state = agentStates[nodeId]
+                agent = state['agent']
+
+                if not response.get('success'):
+                    state['completed'] = True
+                    state['output'] = 'Error: ' + _coalesce(response.get('error'), 'Unknown error')
+                    state['success'] = False
+                    self._nodeLog(state['node'], 'error', 'error', _coalesce(response.get('error'), 'Unknown error'))
+                    self._finalizeParallelNode(php_intval(nodeId), state, results)
+                    continue
+
+                parsed = response['parsed']
+
+                if not php_empty(parsed.get('tool_calls')):
+                    error_log(
+                        f"[GraphWorkflowRunner] Agent {agent.getName()} requested "
+                        f"{len(parsed['tool_calls'])} tool calls"
+                    )
+                    firstTc = parsed['tool_calls'][0]
+                    firstFn = firstTc.get('function') if isinstance(firstTc.get('function'), dict) else None
+                    self._nodeLog(
+                        state['node'], 'info', 'llm',
+                        NodeLogFormat.modelRequestedTool(
+                            _coalesce(firstFn.get('name') if firstFn else None, firstTc.get('name'), 'a tool')
+                        ),
+                    )
+
+                    # Client-side tools get a bridge-compatible id assigned;
+                    # server tools keep their provider-supplied id.
+                    toolCalls = list(parsed['tool_calls'])
+                    for i, tc in enumerate(toolCalls):
+                        function = tc.get('function') if isinstance(tc.get('function'), dict) else None
+                        fn = _coalesce(function.get('name') if function else None, tc.get('name'), '')
+                        if self._isClientSideToolName(fn):
+                            toolCalls[i] = {**tc, 'id': SkillToolBridge.generateToolCallId()}
+
+                    state['messages'].append({
+                        'role': 'assistant', 'content': parsed.get('text'), 'tool_calls': toolCalls,
+                    })
+
+                    # Client (skill) tools are EMITTED here but AWAITED after
+                    # this loop so the browser worker pool runs every agent's
+                    # skill in this round concurrently. Server tools run inline.
+                    for toolCall in toolCalls:
+                        function = toolCall.get('function') if isinstance(toolCall.get('function'), dict) else None
+                        functionName = _coalesce(function.get('name') if function else None, toolCall.get('name'), 'function')
+                        if self._isClientSideToolName(functionName):
+                            if not php_empty(state.get('skill_ran')):
+                                # Run-once: nudge the model to summarize instead
+                                # of re-calling run_skill_script.
+                                state['messages'].append({
+                                    'role': 'tool', 'tool_call_id': toolCall.get('id'), 'name': functionName,
+                                    'content': php_json_encode({
+                                        'note': 'You have already run this skill — its output is in the previous '
+                                                'tool result. Do NOT call run_skill_script again. Write your final '
+                                                'analysis now using that output.',
+                                    }),
+                                })
+                            else:
+                                self._emitClientToolCallInParallel(toolCall, state['node'], _coalesce(parsed.get('text'), ''))
+                                state['skill_ran'] = True
+                                state['messages'].append({
+                                    'role': 'tool', 'tool_call_id': toolCall.get('id'), 'name': functionName,
+                                    'content': '',  # filled by the await pass below
+                                })
+                                pendingClientAwaits.append({
+                                    'nodeId': nodeId, 'toolCall': toolCall, 'node': state['node'],
+                                    'msgIndex': len(state['messages']) - 1,
+                                })
+                        else:
+                            toolResult = self._executeToolForParallel(toolCall, state['tools_filter'])
+                            state['messages'].append({
+                                'role': 'tool', 'tool_call_id': toolCall.get('id'), 'name': functionName,
+                                'content': toolResult if isinstance(toolResult, str) else php_json_encode(toolResult),
+                            })
+                    # Agent needs another round.
+                else:
+                    state['completed'] = True
+                    state['output'] = _coalesce(parsed.get('text'), '')
+                    state['success'] = True
+                    state['usage'] = parsed.get('usage')
+                    self._nodeLog(state['node'], 'info', 'llm', NodeLogFormat.modelRespondedText())
+
+                    responseTime = (time.time() - state['start_time']) * 1000
+                    error_log(f"[GraphWorkflowRunner] Agent {agent.getName()} completed in {responseTime}ms")
+                    self._finalizeParallelNode(php_intval(nodeId), state, results)
+
+            # Concurrent await pass: every skill in this round was already
+            # emitted above; awaiting sequentially here still completes in
+            # ~max(skill), not sum(skill).
+            if pendingClientAwaits:
+                error_log(f"[GraphWorkflowRunner] Awaiting {len(pendingClientAwaits)} parallel skill results concurrently")
+                for pend in pendingClientAwaits:
+                    result = self._awaitClientToolResultInParallel(pend['toolCall'], pend['node'])
+                    st = agentStates.get(pend['nodeId'])
+                    if st is not None and 0 <= pend['msgIndex'] < len(st['messages']):
+                        st['messages'][pend['msgIndex']]['content'] = result if isinstance(result, str) else php_json_encode(result)
+
+        error_log("[GraphWorkflowRunner] Final agentStates keys: " + ','.join(str(k) for k in agentStates.keys()))
+        for nodeId, finalState in agentStates.items():
+            if not php_empty(self.parallelEmitted.get(nodeId)):
+                continue
+            # Never completed: surface the last assistant text (or an
+            # explicit message) instead of an empty result, and mark failed.
+            if php_empty(finalState.get('completed')):
+                lastText = ''
+                for m in reversed(finalState.get('messages') or []):
+                    if (_coalesce(m.get('role'), '') == 'assistant'
+                            and isinstance(m.get('content'), str) and m.get('content') != ''):
+                        lastText = m['content']
+                        break
+                finalState['output'] = (
+                    lastText if lastText != ''
+                    else 'Agent did not finish within the tool-round limit (likely stuck calling its skill).'
+                )
+                finalState['success'] = False
+                self._nodeLog(finalState['node'], 'error', 'error', 'did not finish within the tool-round limit')
+            self._finalizeParallelNode(php_intval(nodeId), finalState, results)
+
+        error_log(f"[GraphWorkflowRunner] Parallel execution complete. Results for {len(results)} agents")
+        return results
 
     def _getParallelExecutor(self):
-        """PHP 2160-2172 (`protected function getParallelExecutor(): ParallelAgentExecutor`)."""
-        raise NotImplementedError('Task 5b')
+        """Shared concurrency-capped LLM-round engine, lazily constructed and
+        cached for the run's lifetime (PHP 2160-2166; `protected` in PHP so
+        tests can inject a fake — tests here just set
+        `runner.parallelExecutor` directly). `run()` closes it in a `finally`
+        block once traversal completes."""
+        if self.parallelExecutor is None:
+            self.parallelExecutor = self.agentRunner.createParallelExecutor(False)
+        return self.parallelExecutor
 
     def _isClientSideToolName(self, name: str) -> bool:
-        """PHP 2173-2195."""
-        raise NotImplementedError('Task 5b')
+        """Whether a tool name is a client-side tool that must execute in the
+        browser (Pyodide) rather than on the server (PHP 2173-2176)."""
+        return name in _CLIENT_SIDE_TOOL_NAMES
 
     def _emitClientToolCallInParallel(self, toolCall: dict, node: dict, assistantText: str) -> None:
-        """PHP 2196-2230."""
-        raise NotImplementedError('Task 5b')
+        """Emit a parallel client-tool call WITHOUT waiting (PHP 2196-2220) —
+        see module docstring for why emit/await are split."""
+        toolCallId = toolCall['id']  # already a bridge-compatible hex
+        function = toolCall.get('function') if isinstance(toolCall.get('function'), dict) else None
+        name = _coalesce(function.get('name') if function else None, toolCall.get('name'), 'run_skill_script')
+        args = _coalesce(function.get('arguments') if function else None, toolCall.get('input'), [])
+        if isinstance(args, str):
+            decoded = php_json_decode(args)
+            args = decoded if decoded else []
+        config = node.get('config')
+        config = config if isinstance(config, dict) else {}
+        boundSkill = config.get('bound_skill')
+        dirName = boundSkill.get('dir_name') if isinstance(boundSkill, dict) else None
+
+        self._nodeLog(node, 'info', 'skill', NodeLogFormat.runningSkill(_coalesce(dirName, 'skill')), {'dir_name': dirName})
+        self._emitNodeEvent('client_tool_call', node, {
+            'tool_call_id': toolCallId,
+            'tool_calls': [{'id': toolCallId, 'name': name, 'input': args}],
+            'assistant_text': assistantText,
+            'dir_name': dirName,
+        })
 
     def _awaitClientToolResultInParallel(self, toolCall: dict, node: dict) -> str:
-        """PHP 2231-2261."""
-        raise NotImplementedError('Task 5b')
+        """Block until a previously-emitted parallel client-tool call returns
+        (or times out) (PHP 2231-2257). 120s default (vs the sequential
+        bridge's 60s) — a concurrent batch means one slow skill no longer
+        blocks the others, so there's more room for a worker cold start."""
+        bridge = SkillToolBridge()
+        toolCallId = toolCall['id']
+        function = toolCall.get('function') if isinstance(toolCall.get('function'), dict) else None
+        args = _coalesce(function.get('arguments') if function else None, toolCall.get('input'), [])
+        if isinstance(args, str):
+            decoded = php_json_decode(args)
+            args = decoded if decoded else []
+        args = args if isinstance(args, dict) else {}
+        timeoutMs = php_intval(_coalesce(self.config.get('parallel_skill_timeout_ms'), 120000))
+        bridgeResult = bridge.awaitResult(toolCallId, timeoutMs)
+        if bridgeResult is None:
+            timeoutSec = round(timeoutMs / 1000)
+            error_log(
+                f"[GraphWorkflowRunner] parallel client-tool bridge timed out ({timeoutSec}s) for "
+                f"tool_call_id={toolCallId}"
+            )
+            self._nodeLog(node, 'error', 'skill', NodeLogFormat.skillTimedOut(timeoutSec))
+            return json.dumps(
+                {'error': f"Skill did not return within {timeoutSec}s — check the editor console for a worker/Pyodide error."},
+                ensure_ascii=True, separators=(',', ':'),
+            )
+        outputBlock = bridgeResult.get('output') if isinstance(bridgeResult, dict) else None
+        outputBlock = outputBlock if isinstance(outputBlock, dict) else {}
+        stdout = outputBlock.get('stdout')
+        stdoutBytes = len((stdout if isinstance(stdout, str) else '').encode('utf-8'))
+        self._nodeLog(node, 'info', 'skill', NodeLogFormat.skillFinished(outputBlock.get('exit_code'), stdoutBytes))
+        # Phase 0: stash the skill stdout/script/argv for the execution trace.
+        self.skillResultByNode[php_intval(node.get('id', 0))] = {
+            'output': outputBlock,
+            'script': args.get('script'),
+            'argv': _coalesce(args.get('argv'), []),
+        }
+        # json_encode($bridgeResult, JSON_UNESCAPED_SLASHES): unicode escaped
+        # (\uXXXX), '/' literal -- Python's json.dumps never escapes '/' on
+        # its own, so ensure_ascii=True alone reproduces this flag combo
+        # (same reasoning as _runAgentWithClientToolBridge's identical call).
+        return json.dumps(bridgeResult, ensure_ascii=True, separators=(',', ':'))
 
     def _executeToolForParallel(self, toolCall: dict, toolsFilter: list | None) -> str:
-        """PHP 2262-2281."""
-        raise NotImplementedError('Task 5b')
+        """Execute a server-side tool call for parallel execution (PHP 2262-2277)."""
+        function = toolCall.get('function') if isinstance(toolCall.get('function'), dict) else {}
+        functionName = _coalesce(function.get('name'), '')
+        arguments = php_json_decode(_coalesce(function.get('arguments'), '{}'))
+        arguments = arguments if arguments is not None else []
+
+        error_log(f"[GraphWorkflowRunner] Executing tool: {functionName}")
+
+        try:
+            result = self.agentRunner.getToolsManager().execute(functionName, arguments)
+            return result if isinstance(result, str) else php_json_encode(result)
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
+            error_log(f"[GraphWorkflowRunner] Tool execution error: {e}")
+            return php_json_encode({'error': str(e)})
 
     def _buildToolsForParallelAgent(self, agent: Agent, toolsFilter: list | None) -> list:
-        """PHP 2282-2297."""
-        raise NotImplementedError('Task 5b')
+        """Build tools array for parallel agent execution (PHP 2282-2293)."""
+        allTools = self.agentRunner.getToolsManager().getToolDefinitions()
+        if php_empty(toolsFilter):
+            return allTools
+        return [t for t in allTools if t.get('name') in toolsFilter]
 
     def _executeAgentsInParallelNoTools(
         self, agentNodes: list, userId: int, userPrompt: str, edges: list, executedNodes: list
     ) -> dict:
-        """PHP 2298-2503."""
-        raise NotImplementedError('Task 5b')
+        """[DEPRECATED in PHP] Original curl_multi parallel execution without
+        tool support (PHP 2298-2498). Confirmed dead code: `grep -n
+        executeAgentsInParallelNoTools backend/src/AgentTeam/Services/GraphWorkflowRunner.php`
+        shows only the definition, no caller — ported anyway per the Task 5b
+        brief's explicit method list ("PHP wins over the brief"). curl_multi
+        -> `ThreadPoolExecutor`: every prepared request is submitted to the
+        pool up front (genuinely concurrent — proven in the unit test via
+        overlapping-interval timestamps), then collected in the ORIGINAL
+        `agentNodes` order, matching PHP's own `foreach ($curlHandles as
+        $index => $handleInfo)` collection loop (submission order, not
+        completion order) -- same rule as ParallelAgentExecutor.dispatchChunk.
+        Opens and closes its own httpx.Client within this call (curl_multi_init
+        / curl_multi_close's Python analogue), never touching
+        `self.parallelExecutor`."""
+        error_log(f"[GraphWorkflowRunner] Executing {len(agentNodes)} agents in parallel (no tools)")
+
+        prepared: dict = {}
+        for node in agentNodes:
+            nodeId = php_intval(node['id'])
+            agentId = node.get('agent_id')
+            config = node.get('config')
+            config = config if isinstance(config, dict) else {}
+
+            mergeStrategy = _coalesce(config.get('merge_strategy'), 'labeled')
+            context = self._buildContextForNode(nodeId, edges, executedNodes, mergeStrategy)
+            task = f"Do your job on the following input:\n\n{context}" if not php_empty(context) else userPrompt
+
+            self._emitNodeEvent('node_start', node, {'input': task})
+
+            agent = None
+            if agentId:
+                agent = self.agentRepository.findById(agentId)
+            elif not php_empty(config.get('agent_name')) or not php_empty(config.get('instructions')):
+                agent = Agent({
+                    'id': None, 'user_id': userId,
+                    'name': _coalesce(config.get('agent_name'), config.get('name'), 'Inline Agent'),
+                    'description': _coalesce(config.get('description'), ''),
+                    'agent_type': _coalesce(config.get('agent_type'), 'worker'),
+                    'provider': _coalesce(config.get('agent_provider'), config.get('provider'), 'openai'),
+                    'model': config.get('model'), 'instructions': _coalesce(config.get('instructions'), ''),
+                    'tools': _coalesce(config.get('tools'), []), 'settings': _coalesce(config.get('settings'), []),
+                })
+
+            if not agent:
+                error_log(f"[GraphWorkflowRunner] No agent configuration for node {nodeId}")
+                continue
+
+            error_log(
+                f"[GraphWorkflowRunner] Building request for {agent.getName()} - "
+                f"Provider: {agent.getProvider()}, Model: {agent.getModel()}"
+            )
+            request = self._buildAgentLLMRequest(agent, task, config)
+
+            if not request:
+                error_log(f"[GraphWorkflowRunner] Failed to build request for agent {agent.getName()}")
+                continue
+            error_log(f"[GraphWorkflowRunner] Request URL: {request['url']}")
+
+            prepared[nodeId] = {
+                'request': request, 'node': node, 'agent': agent,
+                'provider': request['provider'], 'task': task, 'start_time': time.time(),
+            }
+            error_log(f"[GraphWorkflowRunner] Prepared parallel request for agent: {agent.getName()}")
+
+        if not prepared:
+            return {}
+
+        error_log(f"[GraphWorkflowRunner] Starting parallel execution of {len(prepared)} LLM requests")
+
+        def _fetch(client: httpx.Client, entry: dict) -> dict:
+            req = entry['request']
+            try:
+                resp = client.post(
+                    req['url'], headers=_headers_list_to_dict(req['headers']),
+                    content=json.dumps(req['payload']).encode('utf-8'),
+                )
+                return {'http_code': resp.status_code, 'text': resp.text, 'error': None}
+            except httpx.HTTPError as e:
+                return {'http_code': None, 'text': None, 'error': str(e)}
+
+        results: dict = {}
+        with httpx.Client(timeout=httpx.Timeout(600, connect=30), verify=SHARED_SSL_CONTEXT) as client:
+            with ThreadPoolExecutor(max_workers=max(1, len(prepared))) as pool:
+                futures = {nodeId: pool.submit(_fetch, client, entry) for nodeId, entry in prepared.items()}
+
+                for nodeId, entry in prepared.items():
+                    outcome = futures[nodeId].result()
+                    node = entry['node']
+                    agent = entry['agent']
+                    provider = entry['provider']
+                    responseTime = (time.time() - entry['start_time']) * 1000
+
+                    if outcome['error']:
+                        error_log(f"[GraphWorkflowRunner] Parallel agent error for {agent.getName()}: {outcome['error']}")
+                        results[nodeId] = {
+                            'type': 'agent', 'agent_id': agent.getId(), 'agent_name': agent.getName(),
+                            'output': f"Error: Connection failed - {outcome['error']}", 'success': False,
+                            'error': outcome['error'],
+                        }
+                        self._emitNodeEvent('node_complete', node, {
+                            'agent_name': agent.getName(), 'success': False,
+                            'output': f"Error: Connection failed - {outcome['error']}",
+                            'input_tokens': 0, 'output_tokens': 0,
+                        })
+                        continue
+
+                    httpCode = outcome['http_code']
+                    response = outcome['text']
+
+                    if httpCode >= 400:
+                        error_log(f"[GraphWorkflowRunner] Parallel agent HTTP error for {agent.getName()}: {httpCode}")
+                        error_log("[GraphWorkflowRunner] Error response body: " + response[:500])
+                        results[nodeId] = {
+                            'type': 'agent', 'agent_id': agent.getId(), 'agent_name': agent.getName(),
+                            'output': f"Error: HTTP {httpCode}", 'success': False, 'error': f"HTTP error: {httpCode}",
+                        }
+                        self._emitNodeEvent('node_complete', node, {
+                            'agent_name': agent.getName(), 'success': False, 'output': f"Error: HTTP {httpCode}",
+                            'input_tokens': 0, 'output_tokens': 0,
+                        })
+                        continue
+
+                    parsed = self._parseAgentLLMResponse(response, provider)
+
+                    error_log(f"[GraphWorkflowRunner] Parallel agent {agent.getName()} completed in {responseTime}ms")
+
+                    agentOutput = _coalesce(parsed.get('text'), '')
+                    agentInput = entry['task']
+                    rawUsage = parsed.get('usage')
+                    usage = rawUsage if isinstance(rawUsage, dict) else {}
+                    inputTokens = _coalesce(usage.get('input_tokens'), usage.get('prompt_tokens'), 0)
+                    outputTokens = _coalesce(usage.get('output_tokens'), usage.get('completion_tokens'), 0)
+                    self.totalInputTokens += inputTokens
+                    self.totalOutputTokens += outputTokens
+
+                    results[nodeId] = {
+                        'type': 'agent', 'agent_id': agent.getId(), 'agent_name': agent.getName(),
+                        'input': agentInput, 'output': agentOutput, 'success': True, 'usage': rawUsage,
+                    }
+
+                    self._emitNodeEvent('node_complete', node, {
+                        'agent_name': agent.getName(), 'success': True, 'output': agentOutput,
+                        'input_tokens': inputTokens, 'output_tokens': outputTokens,
+                    })
+
+        error_log(f"[GraphWorkflowRunner] Parallel execution complete. Results for {len(results)} agents")
+        return results
 
     def _buildAgentLLMRequest(self, agent: Agent, task: str, nodeConfig: dict | None = None) -> dict | None:
-        """PHP 2504-2767."""
-        raise NotImplementedError('Task 5b')
+        """[DEPRECATED in PHP, called only by `_executeAgentsInParallelNoTools`
+        -- see that method's docstring] Build HTTP request for an agent's LLM
+        API call (PHP 2504-2763). A separate, hand-rolled implementation from
+        `ProviderRequestFactory`/`ParallelAgentExecutor` -- PHP itself never
+        routes this through `ProviderRequestFactory` (no reference to that
+        class anywhere in GraphWorkflowRunner.php); ported literally as its
+        own thing rather than delegating to the factory."""
+        provider = agent.getProvider()
+        model = agent.getModel()
+        settings = agent.getSettings()
+        settings = settings if isinstance(settings, dict) else {}
+
+        systemPrompt = agent.buildSystemPrompt()
+
+        messages = [
+            {'role': 'system', 'content': systemPrompt},
+            {'role': 'user', 'content': task},
+        ]
+
+        def getProviderConfig(name: str):
+            """Merges DB `system_llm_settings` (model/display preferences)
+            with config-file settings (has API keys) -- PHP's inline
+            `$getProviderConfig` closure (PHP 2520-2560)."""
+            configSettings = None
+            if self.config.get(name) is not None:
+                configSettings = self.config[name]
+            elif isinstance(self.config.get('providers'), dict) and self.config['providers'].get(name) is not None:
+                configSettings = self.config['providers'][name]
+
+            try:
+                row = self.db.fetch_one(
+                    "SELECT * FROM system_llm_settings WHERE provider_key = :key AND enabled = 1 LIMIT 1",
+                    {'key': name},
+                )
+                if row:
+                    dbApiKey = _coalesce(row.get('api_key'), '')
+                    configApiKey = _coalesce(_pc(configSettings, 'api_key'), '')
+                    return {
+                        'api_key': dbApiKey if not php_empty(dbApiKey) else configApiKey,
+                        'model': row['model'] if not php_empty(row.get('model')) else _coalesce(_pc(configSettings, 'model'), ''),
+                        'base_url': row['base_url'] if not php_empty(row.get('base_url')) else _coalesce(_pc(configSettings, 'base_url'), ''),
+                        'max_tokens': (
+                            php_intval(row['max_tokens']) if not php_empty(row.get('max_tokens'))
+                            else php_intval(_coalesce(_pc(configSettings, 'max_tokens'), 4096))
+                        ),
+                        'temperature': php_floatval(_coalesce(row.get('temperature'), _pc(configSettings, 'temperature'), 0.7)),
+                        'chat_endpoint': row['chat_endpoint'] if not php_empty(row.get('chat_endpoint')) else _coalesce(_pc(configSettings, 'chat_endpoint'), ''),
+                        'api_format': row['api_format'] if not php_empty(row.get('api_format')) else _coalesce(_pc(configSettings, 'api_format'), 'openai'),
+                        'streaming': php_bool(_coalesce(row.get('streaming'), True)),
+                        'supports_tools': php_bool(_coalesce(row.get('supports_tools'), True)),
+                        'supported_models': php_json_decode(_coalesce(row.get('supported_models'), '[]')),
+                    }
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
+                error_log(f"[GraphWorkflowRunner] Error loading provider from DB: {e}")
+
+            return configSettings
+
+        if provider == 'openai':
+            providerConfig = getProviderConfig('openai')
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('OPENAI_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No OpenAI API key configured")
+                return None
+
+            maxTokens = _coalesce(settings.get('max_tokens'), _pc(providerConfig, 'max_tokens'), 16384)
+
+            payload = {
+                'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'gpt-4o'),
+                'messages': messages,
+                'temperature': _coalesce(settings.get('temperature'), 0.7),
+                'max_completion_tokens': maxTokens,
+            }
+            return {
+                'url': 'https://api.openai.com/v1/chat/completions',
+                'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
+                'payload': payload, 'provider': 'openai',
+            }
+
+        if provider in ('claude', 'anthropic'):
+            providerConfig = _coalesce(getProviderConfig('claude'), getProviderConfig('anthropic'))
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('ANTHROPIC_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No Anthropic API key configured")
+                return None
+
+            claudeMessages = [{'role': 'user', 'content': task}]
+            payload = {
+                'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'claude-sonnet-4-20250514'),
+                'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
+                'system': systemPrompt,
+                'messages': claudeMessages,
+            }
+            return {
+                'url': 'https://api.anthropic.com/v1/messages',
+                'headers': ['Content-Type: application/json', f'x-api-key: {apiKey}', 'anthropic-version: 2023-06-01'],
+                'payload': payload, 'provider': 'claude',
+            }
+
+        if provider in ('gemini', 'google'):
+            providerConfig = _coalesce(getProviderConfig('gemini'), getProviderConfig('google'))
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('GEMINI_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No Gemini API key configured")
+                return None
+
+            geminiModel = model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'gemini-2.0-flash')
+            payload = {
+                'contents': [{'role': 'user', 'parts': [{'text': systemPrompt + "\n\n" + task}]}],
+                'generationConfig': {
+                    'temperature': _coalesce(settings.get('temperature'), 0.7),
+                    'maxOutputTokens': _coalesce(settings.get('max_tokens'), 4096),
+                },
+            }
+            return {
+                'url': f"https://generativelanguage.googleapis.com/v1beta/models/{geminiModel}:generateContent?key={apiKey}",
+                'headers': ['Content-Type: application/json'],
+                'payload': payload, 'provider': 'gemini',
+            }
+
+        if provider == 'deepseek':
+            providerConfig = getProviderConfig('deepseek')
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('DEEPSEEK_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No DeepSeek API key configured")
+                return None
+
+            payload = {
+                'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'deepseek-chat'),
+                'messages': messages,
+                'temperature': _coalesce(settings.get('temperature'), 0.7),
+                'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
+            }
+            return {
+                'url': 'https://api.deepseek.com/v1/chat/completions',
+                'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
+                'payload': payload, 'provider': 'deepseek',
+            }
+
+        if provider == 'grok':
+            providerConfig = getProviderConfig('grok')
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('XAI_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No Grok API key configured")
+                return None
+
+            payload = {
+                'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'grok-2-latest'),
+                'messages': messages,
+                'temperature': _coalesce(settings.get('temperature'), 0.7),
+                'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
+            }
+            baseUrl = _coalesce(_pc(providerConfig, 'base_url'), 'https://api.x.ai')
+            return {
+                'url': baseUrl.rstrip('/') + '/v1/chat/completions',
+                'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
+                'payload': payload, 'provider': 'grok',
+            }
+
+        if provider == 'kimi':
+            providerConfig = getProviderConfig('kimi')
+            apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('KIMI_API_KEY'))
+            if not apiKey:
+                error_log("[GraphWorkflowRunner] No Kimi API key configured")
+                return None
+
+            # Kimi requires temperature=1 for some models, so we don't send temperature.
+            payload = {
+                'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'moonshot-v1-auto'),
+                'messages': messages,
+                'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
+            }
+            baseUrl = _coalesce(_pc(providerConfig, 'base_url'), 'https://api.moonshot.cn')
+            return {
+                'url': baseUrl.rstrip('/') + '/v1/chat/completions',
+                'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
+                'payload': payload, 'provider': 'kimi',
+            }
+
+        # default: try to find the provider in config.
+        providerConfig = getProviderConfig(provider)
+        if not providerConfig:
+            error_log(f"[GraphWorkflowRunner] Unknown provider: {provider}")
+            return None
+
+        apiKey = _pc(providerConfig, 'api_key')
+        baseUrl = _pc(providerConfig, 'base_url')
+        if not apiKey or not baseUrl:
+            error_log(f"[GraphWorkflowRunner] Missing config for provider: {provider}")
+            return None
+
+        payload = {
+            'model': model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'default'),
+            'messages': messages,
+            'temperature': _coalesce(settings.get('temperature'), 0.7),
+            'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
+        }
+        return {
+            'url': baseUrl.rstrip('/') + _coalesce(_pc(providerConfig, 'chat_endpoint'), '/v1/chat/completions'),
+            'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
+            'payload': payload, 'provider': provider,
+        }
 
     def _parseAgentLLMResponse(self, response: str, provider: str) -> dict:
-        """PHP 2768-2827."""
-        raise NotImplementedError('Task 5b')
+        """Parse LLM response based on provider (PHP 2768-2815)."""
+        decoded = php_json_decode(response)
+
+        if php_empty(decoded):
+            error_log("[GraphWorkflowRunner] parseAgentLLMResponse: Invalid JSON response")
+            return {'text': '', 'usage': None, 'error': 'Invalid JSON response'}
+
+        if provider in ('openai', 'deepseek', 'grok', 'kimi'):
+            choices = decoded.get('choices') if isinstance(decoded, dict) else None
+            firstChoice = choices[0] if isinstance(choices, list) and choices else {}
+            message = firstChoice.get('message') if isinstance(firstChoice, dict) else {}
+            message = message if isinstance(message, dict) else {}
+            text = _coalesce(message.get('content'), '')
+            usage = decoded.get('usage') if isinstance(decoded, dict) else None
+
+            if php_empty(text) and not php_empty(choices):
+                error_log(
+                    "[GraphWorkflowRunner] OpenAI response has empty content. Message: "
+                    + php_json_encode(_coalesce(message, 'no message'))
+                )
+
+            return {'text': text, 'usage': usage}
+
+        if provider == 'claude':
+            text = ''
+            for block in _coalesce(decoded.get('content') if isinstance(decoded, dict) else None, []):
+                if isinstance(block, dict) and _coalesce(block.get('type'), '') == 'text':
+                    text += _coalesce(block.get('text'), '')
+            usage = decoded.get('usage') if isinstance(decoded, dict) else None
+            return {'text': text, 'usage': usage}
+
+        if provider == 'gemini':
+            candidates = decoded.get('candidates') if isinstance(decoded, dict) else None
+            firstCand = candidates[0] if isinstance(candidates, list) and candidates else {}
+            content = firstCand.get('content') if isinstance(firstCand, dict) else {}
+            content = content if isinstance(content, dict) else {}
+            parts = content.get('parts')
+            firstPart = parts[0] if isinstance(parts, list) and parts else {}
+            text = _coalesce(firstPart.get('text') if isinstance(firstPart, dict) else None, '')
+            usage = decoded.get('usageMetadata') if isinstance(decoded, dict) else None
+            return {'text': text, 'usage': usage}
+
+        # default: try OpenAI format as fallback.
+        choices = decoded.get('choices') if isinstance(decoded, dict) else None
+        firstChoice = choices[0] if isinstance(choices, list) and choices else {}
+        message = firstChoice.get('message') if isinstance(firstChoice, dict) else {}
+        message = message if isinstance(message, dict) else {}
+        text = _coalesce(message.get('content'), decoded.get('text') if isinstance(decoded, dict) else None, '')
+        return {'text': text, 'usage': decoded.get('usage') if isinstance(decoded, dict) else None}
 
     # ─── Documents: buildDocumentsContext ported for real (see module docstring) ──
 
@@ -1584,43 +2425,237 @@ class GraphWorkflowRunner:
 
         return "\n".join(textParts) if len(textParts) > 1 else ''
 
-    # ─── Task 5b stubs: documents (leaf reads) ───────────────────────────────
+    # ─── Documents (leaf reads) ──────────────────────────────────────────────
 
     def _getDocumentImages(self, node: dict) -> list:
-        """PHP 2866-2901."""
-        raise NotImplementedError('Task 5b')
+        """Get document images for multimodal models -- image content blocks
+        for the API (PHP 2866-2901)."""
+        config = node.get('config')
+        config = config if isinstance(config, dict) else {}
+        documents = _coalesce(config.get('documents'), [])
+        images: list = []
+
+        for doc in documents:
+            doc = doc if isinstance(doc, dict) else {}
+            if not self._isImageFile(_coalesce(doc.get('mimeType'), '')):
+                continue
+
+            # Skip locally stored images (cannot be accessed by backend).
+            storage = _coalesce(doc.get('storage'), 'remote')
+            if storage == 'local':
+                error_log(f"[GraphWorkflowRunner] Skipping local image: {doc.get('name')} (stored on user's machine)")
+                continue
+
+            try:
+                imageData = self._readFileRaw(doc)
+                if imageData:
+                    images.append({
+                        'type': 'image',
+                        'source': {
+                            'type': 'base64',
+                            'media_type': doc.get('mimeType'),
+                            'data': base64.b64encode(imageData).decode('ascii'),
+                        },
+                    })
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
+                error_log(f"[GraphWorkflowRunner] Error reading image {doc.get('name')}: {e}")
+
+        return images
 
     def _readDocumentContent(self, doc: dict) -> str:
-        """PHP 2906-2965."""
-        raise NotImplementedError('Task 5b')
+        """Read document content as text (PHP 2906-2961)."""
+        storage = _coalesce(doc.get('storage'), 'remote')
+        if storage == 'local':
+            docId = php_strval(_coalesce(doc.get('id'), ''))
 
-    def _readFileRaw(self, doc: dict) -> str | None:
-        """PHP 2966-3000."""
-        raise NotImplementedError('Task 5b')
+            # Bound-skill workflow: the browser pre-stashed the file body for
+            # Pyodide /scratch/<name>. Tell the agent where to find it via
+            # run_skill_script instead of inlining ~14K tokens of body it
+            # would just hand back to the script anyway.
+            if docId != '' and docId in self.scratchFilesByDocId:
+                sf = self.scratchFilesByDocId[docId]
+                path = php_strval(_coalesce(sf.get('path'), ''))
+                mime = php_strval(_coalesce(sf.get('mime_type'), 'application/octet-stream'))
+                size = php_intval(_coalesce(sf.get('size'), 0))
+                error_log(f"[GraphWorkflowRunner] Using scratch reference for {doc.get('name')} → {path} ({size} bytes)")
+                return (
+                    f"[Pre-loaded into the script runtime at `{path}` ({mime}, {size} bytes). "
+                    f'When you call run_skill_script, reference this path in argv (e.g. `argv: ["-i", "{path}", '
+                    f'"-o", "/outputs/<name>"]`). Do not paste or restate the file content — the script will read '
+                    "it directly.]"
+                )
+
+            # Non-skill workflow: ship the body inline so generic agents can
+            # see it. Without inline content, fall back to the legacy
+            # "stored locally" message.
+            error_log(
+                f"[GraphWorkflowRunner] readDocumentContent local doc id={docId} name={doc.get('name')} "
+                "inlineKeys=" + php_json_encode(list(self.inlineDocuments.keys()))
+            )
+            if docId != '' and isinstance(self.inlineDocuments.get(docId), str):
+                # strlen() -- byte length, matching PHP's own (mislabeled
+                # "chars") log message exactly.
+                byteLen = len(self.inlineDocuments[docId].encode('utf-8'))
+                error_log(f"[GraphWorkflowRunner] Using inline content for {doc.get('name')} ({byteLen} chars)")
+                return self.inlineDocuments[docId]
+            error_log(f"[GraphWorkflowRunner] Skipping local document: {doc.get('name')} (stored on user's machine, no inline content shipped)")
+            return (
+                f"[Document '{doc.get('name')}' is stored locally on user's machine and cannot be accessed "
+                "during server-side execution. Please use cloud storage for scheduled workflows.]"
+            )
+
+        mimeType = _coalesce(doc.get('mimeType'), 'application/octet-stream')
+
+        # PDF: extract text.
+        if mimeType == 'application/pdf':
+            return self._extractPdfText(doc)
+
+        # Text files: read directly.
+        content = self._readFileRaw(doc)
+        if content is None:
+            return ''
+
+        # mb_check_encoding($content, 'UTF-8') / mb_convert_encoding(...,
+        # 'auto'): decode strict UTF-8 first; on failure, fall back to
+        # Latin-1 (every byte 0-255 is a valid Latin-1 codepoint, so this
+        # never raises -- the same no-fail guarantee PHP's mbstring 'auto'
+        # detector gives for arbitrary 8-bit text).
+        try:
+            return content.decode('utf-8')
+        except UnicodeDecodeError:
+            return content.decode('latin-1')
+
+    def _readFileRaw(self, doc: dict) -> bytes | None:
+        """Read raw file content from storage (PHP 2966-2996). Returns
+        `bytes | None` (not `str`) -- PHP's `file_get_contents` returns a raw
+        binary string used both as text (readDocumentContent) and as image
+        bytes for base64 (getDocumentImages); `bytes` is the faithful Python
+        analogue for both callers, decoded to `str` only where PHP itself
+        treats the result as text."""
+        storagePath = _coalesce(doc.get('path'), '')
+        fullPath = _coalesce(doc.get('fullPath'), '')
+
+        if php_empty(storagePath) and php_empty(fullPath):
+            return None
+
+        # Try universalFS first.
+        adapter = self._getDocumentStorageAdapter()
+        if adapter:
+            # PHP 2976-2987 (universalFS $adapter->readStream()) — unreachable:
+            # _getDocumentStorageAdapter() always returns None (Phase 3/4
+            # ruling, see that method's docstring), so this branch never runs.
+            pass  # pragma: no cover
+
+        # Fallback to local storage.
+        localPath = self._getDocumentLocalPath(fullPath if not php_empty(fullPath) else storagePath)
+        if os.path.exists(localPath):
+            with open(localPath, 'rb') as fh:
+                return fh.read()
+
+        return None
 
     def _extractPdfText(self, doc: dict) -> str:
-        """PHP 3001-3033."""
-        raise NotImplementedError('Task 5b')
+        """Extract text from a PDF file (PHP 3001-3029). Constraints.md's
+        documents ruling replaces PHP's `shell_exec('pdftotext ...')` (a
+        poppler-utils dependency not present in this environment) with
+        pypdf, keeping PHP's own fallback structure: primary extractor first,
+        `basicPdfTextExtract`'s regex scan only if that yields nothing."""
+        pdfContent = self._readFileRaw(doc)
+        if not pdfContent:
+            return '[PDF content could not be read]'
 
-    def _basicPdfTextExtract(self, pdfContent: str) -> str:
-        """PHP 3034-3060."""
-        raise NotImplementedError('Task 5b')
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(pdfContent))
+            text = '\n'.join((page.extract_text() or '') for page in reader.pages).strip()
+            if text != '':
+                return text
+        except Exception as e:  # noqa: BLE001 -- pypdf raises on malformed PDFs
+            error_log(f"[GraphWorkflowRunner] pypdf extraction failed: {e}")
+
+        # Fallback: basic text extraction from PDF.
+        return self._basicPdfTextExtract(pdfContent)
+
+    def _basicPdfTextExtract(self, pdfContent: bytes) -> str:
+        """Basic PDF text extraction -- fallback when the primary extractor
+        finds nothing (PHP 3034-3056). `bytes` (not the 5a-stub-era `str`
+        hint) -- PHP's regex/`gzuncompress` operate on the raw binary PDF
+        stream, which a `str` type would misrepresent; see `_readFileRaw`'s
+        docstring for the same reasoning."""
+        text = b''
+
+        for stream in _PDF_STREAM_RE.findall(pdfContent):
+            try:
+                stream = zlib.decompress(stream)
+            except Exception:  # noqa: BLE001 -- mirrors PHP's @gzuncompress() error suppression
+                pass
+
+            textMatches = _PDF_TEXT_PAREN_RE.findall(stream)
+            if textMatches:
+                text += b' '.join(textMatches) + b'\n'
+
+        # PDF literal-string content is nominally PDFDocEncoding/WinAnsi, not
+        # UTF-8; decode leniently (never raises) since this is a last-resort
+        # fallback whose output only needs to be usable prompt text, not a
+        # byte-exact transcript.
+        decoded = text.decode('utf-8', errors='replace').strip()
+        return decoded if decoded != '' else '[PDF text extraction limited - install pdftotext for better results]'
 
     def _isImageFile(self, mimeType: str) -> bool:
-        """PHP 3061-3068."""
-        raise NotImplementedError('Task 5b')
+        """Check if a MIME type is an image (PHP 3061-3064)."""
+        return mimeType.startswith('image/')
 
     def _getDocumentStorageAdapter(self, userId: int | None = None):
-        """PHP 3069-3122."""
-        raise NotImplementedError('Task 5b')
+        """Get the universalFS adapter for document storage (PHP 3069-3122).
+        universalFS (Dotenv + a PDO credential store + an AdapterFactory) is
+        a PHP-only package with no Python port -- same ruling as
+        `WorkflowOutputStorage.getUniversalFSClient` /
+        `WorkflowController.getUniversalFSAdapter` (constraints.md: documents
+        "universalFS -> local path fallback"). Always returns None, so
+        `_readFileRaw` always takes the local-fallback branch; PHP's own
+        "no user ID" log guard is preserved since it fires unconditionally
+        before the (unported) adapter construction attempt."""
+        if userId is None:
+            userId = self.currentUserId
+        if not userId:
+            error_log("[GraphWorkflowRunner] No user ID available for document storage")
+            return None
+        return None
 
     def _getUserStorageProvider(self, userId: int) -> str:
-        """PHP 3127-3146."""
-        raise NotImplementedError('Task 5b')
+        """Get the user's storage provider -- user setting overrides global
+        config (PHP 3127-3146). Currently unreachable from
+        `_getDocumentStorageAdapter` (always None, see above) but ported for
+        parity per the Task 5b brief's explicit method list -- identical
+        precedent/logic to `WorkflowController.getUserStorageProvider`."""
+        row = self.db.fetch_one("SELECT storage_provider FROM users WHERE id = ?", [userId])
+        userProvider = row.get('storage_provider') if row else None
+
+        if not php_empty(userProvider):
+            return userProvider
+
+        storageCfg = self.config.get('storage')
+        if isinstance(storageCfg, dict) and storageCfg.get('default_provider') is not None:
+            return storageCfg['default_provider']
+        if self.config.get('default_storage_provider') is not None:
+            return self.config['default_storage_provider']
+        if self.config.get('storage_provider') is not None:
+            return self.config['storage_provider']
+        return 'local'
 
     def _getDocumentLocalPath(self, relativePath: str) -> str:
-        """PHP 3151-3155."""
-        raise NotImplementedError('Task 5b')
+        """Get the local storage path for a document (PHP 3151-3155). Default
+        base `__DIR__ . '/../../../../storage'` from
+        backend/src/AgentTeam/Services walks up 4 levels to `gpt/`, i.e.
+        `PHP_BACKEND.parent / 'storage'` (verified via the same `php -r`
+        walk documented in workflow_output_storage.py's module docstring --
+        this constant is one directory name shorter, no `workflow_outputs`
+        suffix; identical to `WorkflowController.getLocalStoragePath`'s
+        default)."""
+        basePath = self.config.get('storage_path')
+        if basePath is None:
+            basePath = str(PHP_BACKEND.parent / 'storage')
+        return basePath + '/' + relativePath.lstrip('/')
 
     # ─── Archive to conversation_contexts ────────────────────────────────────
 
