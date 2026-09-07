@@ -101,6 +101,31 @@ ported anyway for fidelity. Full unit suite: 1817 passing. Phase 5 differential 
 One known defect carried forward: `GraphWorkflowRunner._createExecution` encodes an empty `input_variables`
 body as JSON `"{}"` where PHP's untyped empty array encodes `"[]"`; fix pending in the Phase 5 final wave.
 
+Phase 6 (2026-09): code generators + ingestion. `PythonEmitHelpers` (the literal nowdoc/heredoc blocks —
+MCP client, skill deps/FS-sync, document-converter, workflow-doc/node-comment blocks — extracted
+programmatically from the PHP source, never hand-transcribed) and `WorkflowGraphAnalyzer` (graph typing,
+doc-node assembly, per-user MCP tool catalog) underpin all four generators: `LangGraphGenerator` (incl. A2A
+compile mode — one orchestrator + one agent server per node — and the playbook runtime), `ADKGenerator`,
+`MAFGenerator`, and `NOOAGenerator`. Byte-identical emission was verified with `php -r` oracles run against
+the live PHP source (autoloading `backend/vendor/autoload.php`), a regenerated golden fixture
+(`adk_diamond.golden.py` — the committed PHP golden was stale), and an all-workflows differential: user 3's
+24 workflows × 4 generators × 3 modes (default JSON, `?download=1`, `?a2a=1` for `generate-python`), byte-equal
+after normalising the `Generated: ...` docstring timestamp the same way PHP's own `GeneratedDocParityTest`
+does. The four `generate-{python,adk,maf,nooa}` routes reuse this. The ingestion pipeline —
+`IngestionCompiler`/`IngestionLoader`/`IngestionSplitter`/`VectorMcpStore` plus `IngestionController`'s 10
+routes (compile/save-script/loader-text/splitter-chunks/store-chunks/store-find/run-stream/run-start/
+run-worker/node-code) — talks to the langfs and vector-store MCP servers over HTTP exactly as PHP does
+(session handshake, JSON-RPC field order, `CURLOPT_TIMEOUT`-equivalent `httpx` timeouts); its differential
+suite gates real vector-DB writes behind `DIFF_INGESTION=1` pending a collection-isolation strategy, and
+skips the langfs-backed loader/splitter cases when that MCP server isn't reachable. Policy set this phase:
+stale PHP oracles (several fixtures predate current PHP — `PythonEmitHelpersPinTest`, `WorkflowGraphAnalyzerAnalyzeTest`,
+`AdkGeneratorEmitTest`/its golden, `MafGeneratorEmitTest`, `test-ingestion-loader.php`) are pinned to LIVE PHP
+behaviour, not the stale fixture; and PHP's `\w` under the `/u` modifier is Unicode-aware, so ASCII narrowing
+only applies to patterns without `/u` (every generator regex qualifies). Full unit suite: 2705 passing. One
+real bug caught and fixed by the all-workflows differential: `jsonToPython` rendered an empty dict as `{}`
+where PHP's `json_encode([])` always emits `[]`, affecting `ADKGenerator`'s `NODE_NAMES` for every
+zero-agent-node workflow.
+
 Phase 7 (2026-09): the back office (`gpt_admin`) — seven admin-facing controllers, 88 routes:
 `SystemSettingsController` (6), `AdminController` (34: users/providers/keys from Phase 3's Task 1/2
 plus usage stats, MCP server management + per-user overrides, and costs/exchange-rates), `LoginAdminController`
