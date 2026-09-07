@@ -53,6 +53,8 @@ exact match with no PHP routes intentionally left unported.
   undefined `ToolsManager` methods and 500s on every webhook with a valid `tool_name` — TS deliberately
   did not reproduce this, PY mirrors it on purpose).
 
+Cross-origin note: the frontend calls the API with `credentials: 'include'`, so when the Python backend is on its own origin (e.g. `localhost:3002`) it echoes the request `Origin` and sends `Access-Control-Allow-Credentials: true` instead of PHP's `*`. Set `CORS_ALLOWED_ORIGINS` (comma-separated) in `.env` to restrict which origins are accepted; unset allows any origin (parity tracker row 157).
+
 ## Status
 Phase 1 (2026-09): pipeline, auth (all actions, Firebase verify, SSO, app keys), model catalog,
 prompts, contexts, packages, WebAuthn — differential-tested against live PHP. `ProviderController`

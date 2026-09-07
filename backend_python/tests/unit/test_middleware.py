@@ -1,3 +1,4 @@
+import os
 import hashlib, hmac, time
 import jwt
 import pytest
@@ -41,6 +42,43 @@ def test_cors_headers_and_options():
                            'Access-Control-Allow-Headers': 'Content-Type, Authorization'}
     assert c.handle(ctx('OPTIONS')) == {'status_code': 204, 'headers': {}, 'body': ''}
     assert c.handle(ctx('GET')) is None
+
+
+def test_cors_echoes_origin_with_credentials_when_wildcard():
+    # Browsers reject '*' for credentialed requests (frontend uses credentials: 'include').
+    c = CorsMiddleware({})
+    assert c.headers('http://localhost') == {
+        'Access-Control-Allow-Origin': 'http://localhost',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Credentials': 'true',
+        'Vary': 'Origin',
+    }
+
+
+def test_cors_allowlist_echoes_match_and_denies_miss_like_php():
+    c = CorsMiddleware({'allowed_origins': ['https://app.example.com', 'http://localhost']})
+    hit = c.headers('http://localhost')
+    assert hit['Access-Control-Allow-Origin'] == 'http://localhost'
+    assert hit['Access-Control-Allow-Credentials'] == 'true'
+    miss = c.headers('https://evil.example.com')
+    # PHP fallback: first allowed origin, no credentials header → browser blocks the call.
+    assert miss['Access-Control-Allow-Origin'] == 'https://app.example.com'
+    assert 'Access-Control-Allow-Credentials' not in miss
+    # No Origin header (same-origin / curl / PHP differential): PHP's exact headers.
+    assert c.headers() == {'Access-Control-Allow-Origin': 'https://app.example.com',
+                           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                           'Access-Control-Allow-Headers': 'Content-Type, Authorization'}
+
+
+def test_cors_allowed_origins_config_from_env(monkeypatch):
+    from app.config import REQUIRED, load_config
+    for key in REQUIRED:  # load_config(None) validates the required vars even without a .env
+        monkeypatch.setenv(key, os.environ.get(key) or 'x')
+    monkeypatch.setenv('CORS_ALLOWED_ORIGINS', ' https://a.example , http://localhost ,')
+    assert load_config(env_file=None)['cors'] == {'allowed_origins': ['https://a.example', 'http://localhost']}
+    monkeypatch.delenv('CORS_ALLOWED_ORIGINS')
+    assert load_config(env_file=None)['cors'] == {'allowed_origins': ['*']}
 
 
 def test_protected_route_without_header_is_401():

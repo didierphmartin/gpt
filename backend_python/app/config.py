@@ -107,6 +107,9 @@ def load_config(env_file: str | None = '__default__') -> dict:
         },
         'scheduler': {'token': _e('SCHEDULER_TOKEN'), 'max_concurrent': 5, 'timeout_minutes': 30},
         'storage': {'default_provider': 's3'},
+        # Python-only: CORS origin allowlist (comma-separated). Unset → every Origin is
+        # echoed (LAN-only deployment). PHP is same-origin and hardcodes '*'.
+        'cors': {'allowed_origins': [o.strip() for o in _e('CORS_ALLOWED_ORIGINS').split(',') if o.strip()] or ['*']},
         # Python-only additions (not in ai_config.php):
         # ChatAttachmentController.php resolves this from __DIR__; the default
         # below is the same physical directory the PHP backend writes to.
