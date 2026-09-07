@@ -17,6 +17,7 @@ same physical directory PHP writes to.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import uuid
@@ -69,7 +70,6 @@ class ChatAttachmentController:
 
     def __init__(self, db, config):
         self.db = db
-        self.config = config
         self.storageRoot = php_strval(config.get('chat_upload_root') or '')
 
     def upload(self, request) -> dict:
@@ -86,7 +86,7 @@ class ChatAttachmentController:
 
         files = request.get('files') or {}
         upload = files.get('file')
-        if not upload or not isinstance(upload, (dict, list)):
+        if not upload or not isinstance(upload, dict):
             return {'success': False, 'error': 'No file field', 'status_code': 400}
 
         error = upload.get('error') if upload.get('error') is not None else 4   # UPLOAD_ERR_NO_FILE
@@ -239,8 +239,9 @@ class ChatAttachmentController:
     def _sniff(path: str) -> str | None:
         """The byte sniffer standing in for PHP's `finfo`. Recognises every
         binary type in ALLOWED_MIME by signature; anything that decodes as text
-        without NUL bytes is `text/plain` (which _detectMime then refines by
-        extension exactly as PHP does), everything else `application/octet-stream`.
+        without NUL bytes goes to _sniffText (libmagic's text family: svg/xml/
+        json/html/plain, which _detectMime then refines by extension exactly as
+        PHP does), everything else `application/octet-stream`.
         """
         try:
             with open(path, 'rb') as fh:
@@ -265,6 +266,49 @@ class ChatAttachmentController:
                 head[:-4].decode('utf-8')
             except UnicodeDecodeError:
                 return 'application/octet-stream'
+        return ChatAttachmentController._sniffText(head)
+
+    @staticmethod
+    def _sniffText(head: bytes) -> str:
+        """libmagic's text-family classification, calibrated against the XAMPP
+        php binary's `finfo` on this box:
+
+            <svg …> / <?xml …?><svg …>   → image/svg+xml   (document must start with it)
+            <?xml …?> (not svg)          → text/xml
+            valid JSON (leading ws ok)   → application/json
+            <html / <head / <body /
+            <!DOCTYPE html anywhere      → text/html       (libmagic searches the block)
+            anything else readable       → text/plain
+
+        `image/svg+xml` and `text/xml` are NOT in ALLOWED_MIME and are not
+        rescued by PHP's extension fallback (196-214), so such uploads 415 on
+        both backends.
+        """
+        text = head.decode('utf-8', errors='replace')
+        stripped = text.lstrip()
+        low = stripped.lower()
+
+        rest = low
+        if low.startswith('<?xml'):
+            end = low.find('?>')
+            rest = low[end + 2:].lstrip() if end != -1 else ''
+        if rest.startswith('<svg') or rest.startswith('<!doctype svg'):
+            return 'image/svg+xml'
+        if low.startswith('<?xml'):
+            return 'text/xml'
+
+        if stripped[:1] in ('{', '['):
+            try:
+                json.loads(stripped)
+                return 'application/json'
+            except ValueError:
+                pass
+
+        haystack = low[:4096]
+        for token in ('<!doctype html', '<html', '<head', '<body'):
+            if token in haystack:
+                return 'text/html'
+
         return 'text/plain'
 
     @staticmethod

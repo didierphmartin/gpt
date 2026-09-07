@@ -1,5 +1,6 @@
 """Upload parity: same multipart to both backends; rows/files removed afterwards."""
 import os
+import pathlib
 
 import pytest
 
@@ -36,6 +37,42 @@ def test_upload_parity_and_cleanup(php, py, token, config):
                 assert f.read() == data
             os.remove(row['stored_path'])
             db.execute('DELETE FROM chat_attachments WHERE id = ?', [j['attachment']['id']])
+    finally:
+        db.close()
+
+
+def test_docx_upload_divergence_is_environment_caused(php, py, token, config):
+    """KNOWN divergence, pinned so a libmagic upgrade tells us.
+
+    This box's libmagic types a .docx as `application/octet-stream`, and PHP's
+    octet-stream branch (ChatAttachmentController.php:196-204) maps only
+    md/csv/html/json/txt — so PHP 415s it. The Python sniffer sees the OOXML
+    `PK\\x03\\x04` container, returns `application/zip`, and PHP's own zip
+    branch (208-214) then maps it to the docx MIME — so Python accepts it.
+    """
+    h = {'Authorization': f'Bearer {token}'}
+    fixture = (pathlib.Path(__file__).resolve().parent.parent
+               / 'fixtures' / 'attachments' / 'tiny.docx')
+    data = fixture.read_bytes()
+    ctype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    a = php.post('/api/v1/chat/upload', files={'file': ('tiny.docx', data, ctype)}, headers=h)
+    b = py.post('/api/v1/chat/upload', files={'file': ('tiny.docx', data, ctype)}, headers=h)
+
+    assert a.status_code == 415, f'PHP now accepts docx ({a.status_code}) — libmagic upgraded?'
+    assert a.json()['error'].startswith('Unsupported file type: application/octet-stream.')
+    assert b.status_code == 200, b.text
+    jb = b.json()
+    assert jb['attachment']['mime_type'] == ctype
+    assert jb['attachment']['name'] == 'tiny.docx' and jb['attachment']['size'] == len(data)
+
+    db = Db.connect(config.get('contexts_database') or config['database'])
+    try:
+        row = db.fetch_one('SELECT stored_path FROM chat_attachments WHERE id = ?',
+                           [jb['attachment']['id']])
+        assert row is not None and row['stored_path'].endswith('.docx')
+        if os.path.isfile(row['stored_path']):
+            os.remove(row['stored_path'])
+        db.execute('DELETE FROM chat_attachments WHERE id = ?', [jb['attachment']['id']])
     finally:
         db.close()
 

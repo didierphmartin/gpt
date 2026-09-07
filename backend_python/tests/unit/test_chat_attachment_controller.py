@@ -119,6 +119,49 @@ def test_mime_sniffing_matches_php_finfo_for_allowed_types(tmp_path):
         assert c._detectMime(str(p), name) == mime, name
 
 
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+SVG_PROLOG = b'<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>'
+HTML_DOC = b'<!DOCTYPE html><html><head><title>t</title></head><body>x</body></html>'
+
+
+def test_text_family_sniffing_matches_php_finfo(tmp_path):
+    """Every expectation below was read off the XAMPP php binary's finfo
+    (`/Applications/XAMPP/xamppfiles/bin/php -r 'echo finfo_file(...)'`)."""
+    c = ChatAttachmentController(Db(), {'chat_upload_root': str(tmp_path)})
+    cases = [
+        ('a.svg', SVG, 'image/svg+xml'),                       # finfo: image/svg+xml
+        ('a2.svg', SVG_PROLOG, 'image/svg+xml'),               # finfo: image/svg+xml
+        ('a.xml', b'<?xml version="1.0"?><root/>', 'text/xml'),  # finfo: text/xml
+        ('page.htm', HTML_DOC, 'text/html'),                   # finfo: text/html
+        ('bare_html', b'<html><body>hello</body></html>', 'text/html'),   # finfo: text/html
+        ('mid_html.txt', b'hello world\nthis mentions <html> in the middle\n', 'text/html'),
+        ('lead_ws.json', b'  \n {"a": 1}\n', 'application/json'),   # finfo: application/json
+        ('arr.json', b'[1,2,3]', 'application/json'),          # finfo: application/json
+        ('notjson.json', b'{not json', 'application/json'),    # finfo: text/plain → ext fallback
+        ('xmlish.txt', b'<root><a/></root>', 'text/plain'),    # finfo: text/plain (no prolog)
+        ('svg_mid.txt', b'text before\n<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'text/plain'),
+        ('notes.txt', b'plain text body\n', 'text/plain'),     # finfo: text/plain
+        ('csv.csv', b'a,b\n1,2\n', 'text/csv'),                # finfo: text/plain → ext fallback
+    ]
+    for name, data, mime in cases:
+        p = tmp_path / name; p.write_bytes(data)
+        assert c._detectMime(str(p), name) == mime, name
+
+
+def test_svg_and_xml_are_rejected_html_and_text_accepted(tmp_path):
+    root = tmp_path / 'root'; c = ChatAttachmentController(Db(), {'chat_upload_root': str(root)})
+    for name, data in (('a.svg', SVG), ('a.xml', b'<?xml version="1.0"?><root/>')):
+        r = c.upload(ctx({'file': _file(tmp_path, name, data)}))
+        assert r['status_code'] == 415, name
+        assert r['error'].startswith('Unsupported file type: '
+                                     + ('image/svg+xml' if name.endswith('.svg') else 'text/xml'))
+    r = c.upload(ctx({'file': _file(tmp_path, 'page.htm', HTML_DOC)}))
+    assert r == {'success': True, 'attachment': {'id': 55, 'name': 'page.htm',
+                                                 'mime_type': 'text/html', 'size': len(HTML_DOC)}}
+    r = c.upload(ctx({'file': _file(tmp_path, 'notes.txt', b'plain text body\n')}))
+    assert r['success'] is True and r['attachment']['mime_type'] == 'text/plain'
+
+
 def test_ooxml_and_legacy_office_are_disambiguated_by_extension(tmp_path):
     c = ChatAttachmentController(Db(), {'chat_upload_root': str(tmp_path)})
     zipped = b'PK\x03\x04' + b'\x00' * 26
