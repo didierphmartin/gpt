@@ -14,6 +14,7 @@ from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
+from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
 from app.controllers.usage_controller import UsageController
@@ -37,6 +38,7 @@ CONTROLLERS = {
     'ProviderController': ProviderController,
     'RootController': RootController,
     'SettingsController': SettingsController,
+    'ToolsController': ToolsController,
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
     'UsageController': UsageController,
@@ -117,6 +119,10 @@ ROUTES = [
     ('POST', '/api/v1/genesis/record', ('GenesisController', 'record')),
     ('POST', '/api/v1/genesis/promotions/{id:\\d+}/dismiss', ('GenesisController', 'dismiss')),
     ('POST', '/api/v1/genesis/proposals', ('GenesisController', 'createProposal')),
+    # TOOLS ROUTES (List all available tools for LLM — routes.php:259-261)
+    ('GET', '/api/v1/tools', ('ToolsController', 'list')),
+    ('POST', '/api/v1/tools/execute', ('ToolsController', 'execute')),
+    ('POST', '/api/v1/tools/classify-intent', ('ToolsController', 'classifyIntent')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
