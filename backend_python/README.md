@@ -70,3 +70,15 @@ self-cleaning round-trips (keys saved by one backend decrypt on the other). Non-
 on the PHP-only universalFS package and answer with PHP's "adapter unavailable" path; the voice ephemeral-token
 live case is gated behind `DIFF_VOICE_TOKEN=1`. Phases 4–8 (agent-team data, engines, generators, back office,
 schedules) follow.
+
+Phase 4 (2026-09): agent-team data — models (`Agent`, `Team`, `Workflow`, `WorkflowSchema`) and their
+repositories, `StreamContext`, `WorkflowOutputStorage` (local fallback; non-local providers still answer with
+PHP's "adapter unavailable" path per Phase 3), and `WorkflowRunLog` (reads/writes the same
+`backend/storage/workflow-runs/*.jsonl` directory PHP uses, shared across both backends). Four new route
+blocks, each differential-tested against live PHP for user 3: teams (6 routes), workflow-schemas (5 routes),
+agents (14 routes), workflows (15 routes — data, outputs, node documents only). `run`, `chat`, `run-stream`,
+`tool-result`, `playbook-node`, and the `generate-python/adk/maf/nooa` code-gen routes are stubbed
+(`NotImplementedError`) and not yet routed; they land in Phases 5/6 along with the Playbook-interpreter-backed
+tool auto-derivation. One live-DB gap surfaced (not a port defect): `POST /workflow-schemas` 500s on both
+backends because the live `workflow_schemas` table lacks the `strict` column `WorkflowSchemaRepository::create`
+writes unconditionally.
