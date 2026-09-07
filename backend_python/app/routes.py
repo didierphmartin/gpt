@@ -6,6 +6,8 @@ from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
+from app.controllers.genesis_controller import GenesisController
+from app.controllers.heal_controller import HealController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
 from app.controllers.prompt_library_controller import PromptLibraryController
@@ -27,6 +29,8 @@ CONTROLLERS = {
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
     'ContextController': ContextController,
+    'GenesisController': GenesisController,
+    'HealController': HealController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
     'PromptLibraryController': PromptLibraryController,
@@ -103,6 +107,16 @@ ROUTES = [
     # Skill-genesis settings (promotion mode + cost guards)
     ('GET', '/api/v1/settings/genesis', ('SettingsController', 'getGenesisSettings')),
     ('POST', '/api/v1/settings/genesis', ('SettingsController', 'saveGenesisSettings')),
+    # HEAL (self-healing enforcement gate: mode/budget/ceiling — routes.php:137-139)
+    ('POST', '/api/v1/heal/authorize', ('HealController', 'authorize')),
+    ('POST', '/api/v1/heal/record', ('HealController', 'record')),
+    ('GET', '/api/v1/heal/status', ('HealController', 'status')),
+    # GENESIS (skill genesis, spec: docs/specs/2026-07-14-skill-genesis-design.md §7 — routes.php:142-146)
+    ('GET', '/api/v1/genesis/promotions', ('GenesisController', 'listPromotions')),
+    ('POST', '/api/v1/genesis/authorize', ('GenesisController', 'authorize')),
+    ('POST', '/api/v1/genesis/record', ('GenesisController', 'record')),
+    ('POST', '/api/v1/genesis/promotions/{id:\\d+}/dismiss', ('GenesisController', 'dismiss')),
+    ('POST', '/api/v1/genesis/proposals', ('GenesisController', 'createProposal')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
