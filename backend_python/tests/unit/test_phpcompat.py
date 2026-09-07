@@ -1,4 +1,7 @@
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from app.support import phpcompat as pc
 
 
@@ -68,8 +71,43 @@ def test_php_crc32_matches_php():
 
 def test_php_date_unsupported_format_raises():
     import pytest
+    # 'B' (Swatch Internet Time) is a real PHP date() character this port has
+    # not implemented; php_date() raises rather than silently emitting the
+    # wrong text (unlike PHP itself, which would just echo 'B' back).
     with pytest.raises(ValueError, match='unsupported php_date format'):
-        pc.php_date('D M j')
+        pc.php_date('B')
+
+
+def test_php_date_general_format_chars_match_php():
+    # php -r 'date_default_timezone_set("America/New_York");
+    #   $d = new DateTime("2026-04-07 15:45:30", new DateTimeZone("America/New_York"));
+    #   foreach (["F j, Y","g:i A","F j, Y g:i A","Y","F","n","j","l","Y-m-d","c"] as $f) echo $d->format($f)."\n";'
+    dt = datetime(2026, 4, 7, 15, 45, 30, tzinfo=ZoneInfo('America/New_York'))
+    assert pc.php_date('F j, Y', dt=dt) == 'April 7, 2026'
+    assert pc.php_date('g:i A', dt=dt) == '3:45 PM'
+    assert pc.php_date('F j, Y g:i A', dt=dt) == 'April 7, 2026 3:45 PM'
+    assert pc.php_date('Y', dt=dt) == '2026'
+    assert pc.php_date('F', dt=dt) == 'April'
+    assert pc.php_date('n', dt=dt) == '4'
+    assert pc.php_date('j', dt=dt) == '7'
+    assert pc.php_date('l', dt=dt) == 'Tuesday'
+    assert pc.php_date('Y-m-d', dt=dt) == '2026-04-07'
+    assert pc.php_date('c', dt=dt) == '2026-04-07T15:45:30-04:00'
+
+
+def test_php_date_dt_and_tz_seams():
+    # dt with a naive datetime + tz attaches the tz.
+    naive = datetime(2026, 4, 7, 15, 45, 30)
+    assert pc.php_date('c', dt=naive, tz=ZoneInfo('UTC')) == '2026-04-07T15:45:30+00:00'
+    # tz alone (no dt) drives the frozen-clock seam.
+    fixed = datetime(2026, 1, 1, 0, 0, 0, tzinfo=ZoneInfo('UTC'))
+    import app.support.phpcompat as pc_mod
+    orig = pc_mod._now
+    try:
+        pc_mod._now = lambda tz: fixed.astimezone(tz)
+        assert pc.php_date('Y-m-d', tz=ZoneInfo('America/New_York')) == '2025-12-31'
+    finally:
+        pc_mod._now = orig
 
 
 def test_php_strval_matches_php_string_cast():

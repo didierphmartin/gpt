@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import os
 import random
 import re
 import time
 import zlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _EMAIL_RE = re.compile(
@@ -80,15 +81,147 @@ def php_empty(v) -> bool:
     return False
 
 
-def php_date(fmt: str) -> str:
-    """Subset of PHP date(): Y-m-d, l, Y-m, Y-m-d H:i:s, Y-m-d H:i:s T, in PHP's timezone."""
-    now = datetime.now(php_tz())
-    table = {'Y-m-d': '%Y-%m-%d', 'l': '%A', 'Y-m': '%Y-%m', 'Y-m-d H:i:s': '%Y-%m-%d %H:%M:%S',
-             # T = timezone abbreviation (PHP 'CEST'); %Z on a ZoneInfo yields the same string.
-             'Y-m-d H:i:s T': '%Y-%m-%d %H:%M:%S %Z'}
-    if fmt not in table:
-        raise ValueError(f'unsupported php_date format: {fmt}')
-    return now.strftime(table[fmt])
+_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+           'August', 'September', 'October', 'November', 'December']
+
+
+def _now(tz) -> datetime:
+    """Seam for tests to freeze time (monkeypatch this module attribute);
+    production always uses the real clock."""
+    return datetime.now(tz)
+
+
+def _php_date_char(ch: str, dt: datetime) -> str:
+    """One PHP date() format character, English/locale-independent (PHP's
+    date() is never locale-aware — that's date_format with an Intl formatter)."""
+    if ch == 'd':
+        return f'{dt.day:02d}'
+    if ch == 'D':
+        return _DAYS[dt.weekday()][:3]
+    if ch == 'j':
+        return str(dt.day)
+    if ch == 'l':
+        return _DAYS[dt.weekday()]
+    if ch == 'N':
+        return str(dt.isoweekday())
+    if ch == 'S':
+        day = dt.day
+        if 11 <= day % 100 <= 13:
+            return 'th'
+        return {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+    if ch == 'w':
+        return str(dt.isoweekday() % 7)
+    if ch == 'z':
+        return str(dt.timetuple().tm_yday - 1)
+    if ch == 'W':
+        return f'{dt.isocalendar()[1]:02d}'
+    if ch == 'F':
+        return _MONTHS[dt.month - 1]
+    if ch == 'm':
+        return f'{dt.month:02d}'
+    if ch == 'M':
+        return _MONTHS[dt.month - 1][:3]
+    if ch == 'n':
+        return str(dt.month)
+    if ch == 't':
+        return str(calendar.monthrange(dt.year, dt.month)[1])
+    if ch == 'L':
+        y = dt.year
+        return '1' if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else '0'
+    if ch == 'o':
+        return str(dt.isocalendar()[0])
+    if ch == 'Y':
+        return str(dt.year)
+    if ch == 'y':
+        return f'{dt.year % 100:02d}'
+    if ch == 'a':
+        return 'am' if dt.hour < 12 else 'pm'
+    if ch == 'A':
+        return 'AM' if dt.hour < 12 else 'PM'
+    if ch == 'g':
+        h = dt.hour % 12
+        return str(h if h != 0 else 12)
+    if ch == 'G':
+        return str(dt.hour)
+    if ch == 'h':
+        h = dt.hour % 12
+        return f'{(h if h != 0 else 12):02d}'
+    if ch == 'H':
+        return f'{dt.hour:02d}'
+    if ch == 'i':
+        return f'{dt.minute:02d}'
+    if ch == 's':
+        return f'{dt.second:02d}'
+    if ch == 'u':
+        return f'{dt.microsecond:06d}'
+    if ch == 'v':
+        return f'{dt.microsecond // 1000:03d}'
+    if ch == 'e':
+        tz = dt.tzinfo
+        return getattr(tz, 'key', str(tz))
+    if ch == 'I':
+        dst = dt.dst()
+        return '1' if dst and dst.total_seconds() != 0 else '0'
+    if ch == 'O':
+        off = dt.utcoffset() or timedelta(0)
+        total_minutes = int(off.total_seconds() // 60)
+        sign = '+' if total_minutes >= 0 else '-'
+        total_minutes = abs(total_minutes)
+        return f'{sign}{total_minutes // 60:02d}{total_minutes % 60:02d}'
+    if ch == 'P':
+        o = _php_date_char('O', dt)
+        return o[:3] + ':' + o[3:]
+    if ch == 'T':
+        return dt.strftime('%Z')
+    if ch == 'Z':
+        off = dt.utcoffset() or timedelta(0)
+        return str(int(off.total_seconds()))
+    if ch == 'c':
+        return php_date('Y-m-d\\TH:i:sP', dt=dt)
+    if ch == 'r':
+        return php_date('D, d M Y H:i:s O', dt=dt)
+    if ch == 'U':
+        return str(int(dt.timestamp()))
+    raise KeyError(ch)
+
+
+def php_date(fmt: str, dt: datetime | None = None, tz: ZoneInfo | None = None) -> str:
+    """PHP date(): every format character PHP's date() recognizes (English
+    names/abbreviations always — PHP's date() is locale-independent). Only
+    letters are ever reserved format characters in PHP's date(); any
+    non-letter (punctuation, digits, spaces) always passes through literally,
+    exactly like PHP. `\\` (backslash-escape) additionally forces the next
+    character through literally, for a literal letter that would otherwise
+    be read as a format code (e.g. 'Y-m-d\\TH:i:sP' for the 'c' shorthand).
+    `dt` lets callers/tests pass an explicit moment (e.g. a frozen "now");
+    otherwise this uses `_now(tz or php_tz())` so tests can monkeypatch
+    `_now` instead of the real clock. A *letter* PHP reserves that this port
+    hasn't implemented raises ValueError rather than silently emitting the
+    wrong text (real PHP would still just echo an unrecognized letter back)."""
+    if dt is None:
+        dt = _now(tz or php_tz())
+    elif tz is not None and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    out = []
+    i = 0
+    n = len(fmt)
+    while i < n:
+        c = fmt[i]
+        if c == '\\' and i + 1 < n:
+            out.append(fmt[i + 1])
+            i += 2
+            continue
+        if not c.isalpha():
+            out.append(c)
+            i += 1
+            continue
+        try:
+            out.append(_php_date_char(c, dt))
+        except KeyError:
+            raise ValueError(f'unsupported php_date format: {fmt}')
+        i += 1
+    return ''.join(out)
 
 
 def php_uniqid(prefix: str = '', more_entropy: bool = False) -> str:
