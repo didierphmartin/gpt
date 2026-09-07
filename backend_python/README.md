@@ -23,6 +23,36 @@ Mirrors `../backend/src` one to one (class names, camelCase method names, raw SQ
 `app/agent_team/` · `app/services/` · `app/support/` (Ctx, renderer, dispatcher, PDO placeholder
 shim, PHP compat helpers). `resources/model_catalog.json` is a copy of the PHP file — re-copy when it changes.
 
+## Status (2026-09-07)
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Pipeline, auth (all actions, Firebase verify, SSO, app keys), model catalog, prompts, contexts, packages, WebAuthn | complete — final review clean |
+| 2 (a–d) | Chat path — Claude + all six other providers, streaming and non-streaming, `/agent`, `/verify`, `/compare`, attachments, the client-tool bridge | complete — final review clean |
+| 3 | User surface — settings (keys, providers, usage, phone, storage, heal, genesis), user memories, app keys, tools, MCP servers + per-user overrides, MCP proxy/app, local file storage, voice, Drive (13 controllers, 62 routes) | complete — final review clean |
+| 4 | Agent-team data — `Agent`/`Team`/`Workflow`/`WorkflowSchema` models + repositories, `StreamContext`, `WorkflowOutputStorage` | complete — final review clean |
+| 5 | Agent-team engines — `AgentRunner`, `AgentDelegationFunctions`, `AgentToolsExecutor`, `WorkflowRunner`, `ParallelAgentExecutor`, `GraphWorkflowRunner`, the Playbook interpreter package | complete — final review clean |
+| 6 | Code generators + ingestion — `PythonEmitHelpers`, `WorkflowGraphAnalyzer`, `LangGraphGenerator` (incl. A2A compile mode), `ADKGenerator`, `MAFGenerator`, `NOOAGenerator`, the ingestion compiler/loader/splitter + vector-store bridge | complete — final review clean |
+| 7 | Back office (`gpt_admin`) — seven admin-facing controllers, 88 routes | complete — final review clean |
+| 8 | Scheduled workflows — `ScheduledWorkflowService`, `ScheduledWorkflowController`, `SchedulerController`, the cron entry point | complete — final review clean |
+
+All 8 phases are complete as of 2026-09-07. The Python backend serves every route declared in
+`backend/src/routes.php` — 265 `$r->` route declarations there, 265 route rows in `app/routes.py`
+(`grep -c '\$r->' backend/src/routes.php` vs `grep -c "^    ('" backend_python/app/routes.py`), an
+exact match with no PHP routes intentionally left unported.
+
+**Deferred:**
+- Browser smokes: the frontend running against the Python backend (`BACKEND_KIND=python`), `gpt_admin`'s
+  `py` backend kind, and the admin Schedules panel — all pending the user signing in to click through them.
+- `DIFF_INGESTION=1` write round-trips — pending collection isolation so a differential run doesn't collide
+  with live data in the shared vector store.
+- PHP-side fixes tracked in `docs/backend-parity-tracker.md` section A: A-9 (`AgentController::chat`
+  validation failures wrongly answer HTTP 200 with a corrupted `null` body instead of the real error
+  status — already fixed in TS and PY, PHP still open), A-10 (`AdminController` has no admin-role gate —
+  mirrored as-is in TS/PY pending the PHP fix), A-11 (`EVIWebhookController::handleWebhook` calls two
+  undefined `ToolsManager` methods and 500s on every webhook with a valid `tool_name` — TS deliberately
+  did not reproduce this, PY mirrors it on purpose).
+
 ## Status
 Phase 1 (2026-09): pipeline, auth (all actions, Firebase verify, SSO, app keys), model catalog,
 prompts, contexts, packages, WebAuthn — differential-tested against live PHP. `ProviderController`

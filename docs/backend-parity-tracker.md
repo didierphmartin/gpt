@@ -2,8 +2,11 @@
 
 Tracks the suboptimal/quirky items found in the PHP backend (`gpt/backend`) and their status in
 each backend. The TypeScript backend (`gpt/backend_typescript`) is a faithful mirror, so most items
-are either **fixed in both** or **mirrored as-is** (deliberately replicating PHP). DB-schema changes
-are written as `.sql` for the owner to run (migrations are applied manually).
+are either **fixed in both** or **mirrored as-is** (deliberately replicating PHP). The Python backend
+(`gpt/backend_python`) is now a third implementation covering every route PHP serves (Phases 1–8
+complete 2026-09-07 — see `backend_python/README.md`'s Status table), so most rows below carry a PY
+column alongside PHP/TS on the same fixed/mirrored basis. DB-schema changes are written as `.sql` for
+the owner to run (migrations are applied manually).
 
 **Legend:** ✅ done · ⬜ to do · ➖ N/A · 🪞 mirror as-is (no fix intended) · 🚫 won't do (decided) · 🧪 differential-tested vs live PHP
 
