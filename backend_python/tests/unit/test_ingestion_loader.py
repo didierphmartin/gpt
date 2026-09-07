@@ -15,7 +15,7 @@ exist. See task-5-report.md for the full deviation writeup.
 """
 from __future__ import annotations
 
-from app.agent_team.services.ingestion_loader import IngestionLoader, _php_basename
+from app.agent_team.services.ingestion_loader import IngestionLoader
 
 
 def _f(path: str) -> dict:
@@ -168,22 +168,11 @@ def test_enumerate_max_depth_cap():
 # ---------------------------------------------------------------------------
 # Fix round 1 (Minor): PHP basename() strips trailing slashes FIRST, then
 # returns the final path segment; posixpath.basename() does not -- it returns
-# '' for any path ending in '/'. Pinned via `php -r`, 2026-09-07.
+# '' for any path ending in '/'. Pinned via `php -r`, 2026-09-07. (The
+# dedicated basename semantics test moved to test_phpcompat.py::
+# test_php_basename in the Phase 6 final wave, C2 -- phpcompat.php_basename
+# is now the single source of truth, imported here as `_php_basename`.)
 # ---------------------------------------------------------------------------
-
-def test_php_basename_matches_php_semantics():
-    assert _php_basename('/a/b/') == 'b'
-    assert _php_basename('/a/b') == 'b'
-    assert _php_basename('a/b/') == 'b'
-    assert _php_basename('b') == 'b'
-    assert _php_basename('') == ''
-    assert _php_basename('/') == ''
-    assert _php_basename('//') == ''
-    assert _php_basename('a/') == 'a'
-    assert _php_basename('///a///') == 'a'
-    assert _php_basename('a//b') == 'b'
-    assert _php_basename('noslash') == 'noslash'
-
 
 def test_enumerate_single_file_trailing_slash_path():
     # PHP: basename('/docs/report.pdf/') === 'report.pdf' (trailing slash

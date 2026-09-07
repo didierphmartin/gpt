@@ -16,10 +16,17 @@ from __future__ import annotations
 
 import re
 
-from app.support.phpcompat import php_empty, php_intval, php_strval, php_trim, php_values, ucfirst
+from app.support.phpcompat import (
+    php_array_cast as _phpArrayCast,
+    php_coalesce as _coalesce,
+    php_empty,
+    php_intval,
+    php_strval,
+    php_trim,
+    php_values,
+    ucfirst,
+)
 from app.support.phpjson import dumps as _php_json_lit
-
-from ._ingestion_compat import php_array_cast as _phpArrayCast
 
 _ASCII_UPPER_TO_LOWER = str.maketrans(
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'
@@ -30,12 +37,6 @@ def _strtolower(s: str) -> str:
     """PHP strtolower(): byte-wise, ASCII A-Z only -- unlike Python's .lower()
     it never touches non-ASCII letters (accents, etc.)."""
     return s.translate(_ASCII_UPPER_TO_LOWER)
-
-
-def _coalesce(v, default):
-    """PHP's `$x ?? $default` -- default only when v is None (missing/null),
-    NOT when v is merely falsy (0, '', False all pass through unchanged)."""
-    return default if v is None else v
 
 
 # Fixed template pieces of the emitted standalone script, captured verbatim

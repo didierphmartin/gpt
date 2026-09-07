@@ -170,5 +170,3 @@ skills), and `scripts/register_mock_okta.py` / `scripts/register_mock_stack.py` 
 registration for the New Hire Provisioning playbook demo). Four PHP files were deliberately not ported —
 `backend/scripts/test-ingestion-{compiler,loader,splitter}.php` and `test-vector-mcp-store.php` are plain-
 assert CLI test harnesses, not application code; their coverage lives in the Phase 6 unit suite instead.
-
-Phase 6 (generate-python/adk/maf/nooa code-gen routes, ingestion) is next.

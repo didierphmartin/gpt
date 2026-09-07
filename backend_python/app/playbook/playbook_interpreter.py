@@ -138,7 +138,9 @@ class PlaybookInterpreter:
                 'type': 'function',
                 'function': {
                     'name': toolCall['name'],
-                    'arguments': _json_dumps(toolCall.get('arguments') if isinstance(toolCall.get('arguments'), dict) else {}),
+                    # PHP: `(array)($toolCall['arguments'] ?? [])` (PlaybookInterpreter.php:159-160) —
+                    # a scalar/None argument casts to a wrapped/empty array, not silently to {}.
+                    'arguments': _json_dumps(php_array_cast(toolCall.get('arguments'))),
                 },
             })
         return {'role': 'assistant', 'content': text, 'tool_calls': calls}

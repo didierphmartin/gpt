@@ -26,22 +26,12 @@ import math
 import re
 import unicodedata
 
-from app.support.phpcompat import php_date, php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import php_coalesce as _coalesce, php_date, php_empty, php_intval, php_strval, php_trim
 from app.support.phpjson import dumps_pretty
 
 # PHP `preg_match('/\((\S+)\)$/', $p, $m)` (no `/u` modifier -> ASCII \S, not
 # PCRE_UCP -- re.ASCII mirrors that).
 _PARENT_ID_RE = re.compile(r'\((\S+)\)$', re.ASCII)
-
-
-def _coalesce(*vals):
-    """PHP `??` (null-coalescing) chain: first argument that is not None,
-    else None. NEVER use bare `or` for a `??` port -- `or` also falls
-    through on '', 0, False, [], {} which `??` does not."""
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 def _phpFloatDigitsDecpt(v: float) -> tuple[bool, str, int]:
@@ -147,6 +137,14 @@ def _jsonEncodeUnescapedUnicode(value) -> str:
     (Python's `json.dumps` keeps a trailing '.0' PHP's encoder does not);
     every other value type uses plain `json.dumps`, whose string/bool/None
     formatting already matches PHP's under these flags.
+
+    Not replaceable by `phpjson.dumps`/`dumps_pretty` (Phase 6 final wave,
+    C3): `phpjson.dumps` is compact but leaves `/` unescaped and has no
+    float-token hook (native `json.dumps` float formatting, which disagrees
+    with PHP's `serialize_precision=-1` rules -- see `_phpFloatToken`
+    above); `dumps_pretty(float_formatter=...)` has the float hook but is
+    always 4-space-indented, never compact. Neither reproduces this
+    function's exact byte output.
     """
     if isinstance(value, float):
         return _phpFloatToken(value)

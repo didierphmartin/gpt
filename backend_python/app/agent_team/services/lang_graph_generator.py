@@ -32,18 +32,16 @@ from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
 from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
 from app.playbook.playbook_analyzer import PlaybookAnalyzer
 from app.playbook.playbook_document import PlaybookDocument
-from app.support.phpcompat import PHP_TRIM_CHARS, php_date, php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import (
+    PHP_TRIM_CHARS,
+    php_coalesce as _coalesce,
+    php_date,
+    php_empty,
+    php_intval,
+    php_strval,
+    php_trim,
+)
 from app.support.phpjson import dumps as _php_compact_json
-
-
-def _coalesce(*vals):
-    """PHP `??` (null-coalescing) chain: first argument that is not None,
-    else None. NEVER use bare `or` for a `??` port -- `or` also falls
-    through on '', 0, False, [], {} which `??` does not."""
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 def _rtrim(s: str) -> str:

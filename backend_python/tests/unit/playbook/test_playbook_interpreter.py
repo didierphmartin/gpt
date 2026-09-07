@@ -277,3 +277,34 @@ def test_run_leg_arguments_scalar_casts_to_single_element_list(pb_state, pb_dir)
 
 def test_run_leg_arguments_list_passes_through_unchanged(pb_state, pb_dir):
     assert _run_one_call(pb_state, pb_dir, ['x', 'y']) == ['x', 'y']
+
+
+# ---------------------------------------------------------------------------
+# _buildAssistantMessage's own `function.arguments` JSON string -- C4 (Phase
+# 6 final wave). PHP: `json_encode((array)($toolCall['arguments'] ?? []), ...)`
+# (PlaybookInterpreter.php:159-160). Distinct cast site from runLeg's `args`
+# above: this one feeds the ASSISTANT message the LLM sees on the next round,
+# not the tool-execute call. Before this fix a scalar/None argument was
+# silently collapsed to `{}` instead of PHP's wrapped/empty array.
+# ---------------------------------------------------------------------------
+
+def _build_assistant_message_arguments(arguments):
+    interpreter = PlaybookInterpreter(space=None, state=None, transcript=None, llm=None)
+    msg = interpreter._buildAssistantMessage('', [{'id': 'tc_1', 'name': 'anything', 'arguments': arguments}])
+    return json.loads(msg['tool_calls'][0]['function']['arguments'])
+
+
+def test_build_assistant_message_arguments_dict_passes_through_unchanged():
+    assert _build_assistant_message_arguments({'a': 1}) == {'a': 1}
+
+
+def test_build_assistant_message_arguments_none_casts_to_empty_list():
+    assert _build_assistant_message_arguments(None) == []
+
+
+def test_build_assistant_message_arguments_scalar_casts_to_single_element_list():
+    assert _build_assistant_message_arguments('oops') == ['oops']
+
+
+def test_build_assistant_message_arguments_list_passes_through_unchanged():
+    assert _build_assistant_message_arguments(['x', 'y']) == ['x', 'y']

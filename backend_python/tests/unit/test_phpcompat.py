@@ -253,6 +253,24 @@ def test_php_array_cast():
     assert pc.php_array_cast(False) == [False]
 
 
+def test_php_basename():
+    # PHP basename(): strips trailing slashes FIRST, then returns the final
+    # path segment -- unlike posixpath.basename(), which returns '' for any
+    # path ending in '/'. Pinned via `php -r`, 2026-09-07 (moved from
+    # test_ingestion_loader.py in the Phase 6 final wave, C2).
+    assert pc.php_basename('/a/b/') == 'b'
+    assert pc.php_basename('/a/b') == 'b'
+    assert pc.php_basename('a/b/') == 'b'
+    assert pc.php_basename('b') == 'b'
+    assert pc.php_basename('') == ''
+    assert pc.php_basename('/') == ''
+    assert pc.php_basename('//') == ''
+    assert pc.php_basename('a/') == 'a'
+    assert pc.php_basename('///a///') == 'a'
+    assert pc.php_basename('a//b') == 'b'
+    assert pc.php_basename('noslash') == 'noslash'
+
+
 def test_php_values():
     # foreach ($v as $item) — values only, insertion order, for both shapes.
     assert pc.php_values([1, 2, 3]) == [1, 2, 3]

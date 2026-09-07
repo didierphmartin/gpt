@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 
-from app.support.phpcompat import mb_substr, php_empty, php_strval
+from app.support.phpcompat import mb_substr, php_basename as _php_basename, php_empty, php_strval
 
 _ASCII_UPPER_TO_LOWER = str.maketrans(
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'
@@ -34,25 +34,6 @@ def _strtolower(s: str) -> str:
     """PHP strtolower(): byte-wise, ASCII A-Z only."""
     return s.translate(_ASCII_UPPER_TO_LOWER)
 
-
-# TODO: promote to phpcompat.php_basename in a final wave (check it hasn't
-# already landed there before duplicating).
-def _php_basename(path: str) -> str:
-    """PHP basename(): strips trailing slashes FIRST, then returns the final
-    path segment -- unlike posixpath.basename(), which returns '' for any
-    path ending in '/'. Verified against `php -r`, 2026-09-07:
-      basename('/a/b/')  -> 'b'   (posixpath.basename gives '')
-      basename('a/')     -> 'a'   (posixpath.basename gives '')
-      basename('///a///')-> 'a'
-      basename('')       -> ''
-      basename('/')      -> ''
-      basename('a//b')   -> 'b'
-      basename('noslash')-> 'noslash'
-    """
-    stripped = path.rstrip('/')
-    if stripped == '':
-        return ''
-    return stripped.rsplit('/', 1)[-1]
 
 
 class IngestionLoader:

@@ -24,7 +24,7 @@ import re
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers, _phpFloatToken
 from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_intval, php_strval
+from app.support.phpcompat import php_coalesce as _coalesce, php_empty, php_intval, php_strval
 
 _NAME_SLUG_RE = re.compile(r'[^a-z0-9_]+', re.IGNORECASE | re.ASCII)
 _IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -43,13 +43,6 @@ _TYPE_MAP = {
     'string': 'str', 'integer': 'int', 'number': 'float',
     'boolean': 'bool', 'array': 'list', 'object': 'dict',
 }
-
-
-def _coalesce(*vals):
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 def _json_num(v):

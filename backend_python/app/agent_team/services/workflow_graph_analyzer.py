@@ -19,22 +19,12 @@ from __future__ import annotations
 
 import re
 
-from app.support.phpcompat import php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import php_coalesce as _coalesce, php_empty, php_intval, php_strval, php_trim
 from app.support.phpjson import php_json_decode
 
 # PHP `preg_match('/^\s*(?:#+\s*|\*\*)?Title:\s*(.+?)\s*(?:\*\*)?$/mi', ...)`
 # (no `/u` modifier -> ASCII \s, not PCRE_UCP; re.ASCII mirrors that).
 _PLAYBOOK_TITLE_RE = re.compile(r'^\s*(?:#+\s*|\*\*)?Title:\s*(.+?)\s*(?:\*\*)?$', re.M | re.I | re.A)
-
-
-def _coalesce(*vals):
-    """PHP `??` (null-coalescing) chain: first argument that is not None,
-    else None. NEVER use bare `or` for a `??` port -- `or` also falls
-    through on '', 0, False, [], {} which `??` does not."""
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 class WorkflowGraphAnalyzer:

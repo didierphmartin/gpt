@@ -17,9 +17,14 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from app.support.phpcompat import is_numeric, php_floatval, php_strval, php_trim, php_values
-
-from ._ingestion_compat import php_array_cast as _phpArrayCast
+from app.support.phpcompat import (
+    is_numeric,
+    php_array_cast as _phpArrayCast,
+    php_floatval,
+    php_strval,
+    php_trim,
+    php_values,
+)
 
 
 def _isArrayLike(v) -> bool:

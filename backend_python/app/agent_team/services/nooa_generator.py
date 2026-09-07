@@ -27,17 +27,9 @@ import re
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
 from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_intval, php_strval, php_trim
+from app.support.phpcompat import php_coalesce as _coalesce, php_empty, php_intval, php_strval, php_trim
 
 _NAME_SLUG_RE = re.compile(r'[^a-z0-9_]+', re.IGNORECASE | re.ASCII)
-
-
-def _coalesce(*vals):
-    """PHP `??` chain: first argument that is not None, else None."""
-    for v in vals:
-        if v is not None:
-            return v
-    return None
 
 
 class NOOAGenerator:

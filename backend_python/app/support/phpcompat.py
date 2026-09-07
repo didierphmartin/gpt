@@ -309,6 +309,24 @@ def php_array_cast(v):
     return [v]
 
 
+def php_basename(path: str) -> str:
+    """PHP basename(): strips trailing slashes FIRST, then returns the final
+    path segment -- unlike posixpath.basename(), which returns '' for any
+    path ending in '/'. Verified against `php -r`, 2026-09-07:
+      basename('/a/b/')  -> 'b'   (posixpath.basename gives '')
+      basename('a/')     -> 'a'   (posixpath.basename gives '')
+      basename('///a///')-> 'a'
+      basename('')       -> ''
+      basename('/')      -> ''
+      basename('a//b')   -> 'b'
+      basename('noslash')-> 'noslash'
+    """
+    stripped = path.rstrip('/')
+    if stripped == '':
+        return ''
+    return stripped.rsplit('/', 1)[-1]
+
+
 def is_php_array(v) -> bool:
     """PHP is_array(): true for anything that came out of json_decode(..., true)
     as an array — which covers BOTH a JSON list and a JSON object, since PHP's
