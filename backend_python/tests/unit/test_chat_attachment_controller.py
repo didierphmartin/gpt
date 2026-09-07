@@ -1,6 +1,8 @@
 """ChatAttachmentController parity with Controllers/ChatAttachmentController.php (26-241)."""
+import os
 import pathlib
 import re
+import stat
 
 from starlette.datastructures import Headers
 
@@ -79,7 +81,25 @@ def test_success_stores_under_user_dir_and_records_row(tmp_path):
     # PHP 129-132: uuid v4 (dashed) + the ALLOWED_MIME extension for the detected type.
     assert re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.md',
                         stored.name)
-    assert oct((root / '3').stat().st_mode)[-3:] == '755'   # PHP 124: mkdir(..., 0755, true)
+    # Live backend/storage/chat-uploads/3 is drwxrwxrwx daemon:admin and its
+    # PHP-written files are -rwxrwxrwx — mirror both so PHP (Apache `daemon`)
+    # can read/delete files this backend wrote, and vice versa.
+    assert oct((root / '3').stat().st_mode)[-3:] == '777'
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o666
+
+
+def test_existing_user_dir_permissions_are_left_alone(tmp_path):
+    """The chmod(0o777) mirror only applies to a directory this backend just
+    created — an existing dir (any pre-existing permission) is never widened,
+    so this stays true even for a tree an admin has deliberately locked
+    down."""
+    root = tmp_path / 'root'; db = Db(); c = ChatAttachmentController(db, {'chat_upload_root': str(root)})
+    userDir = root / '3'
+    userDir.mkdir(parents=True)
+    os.chmod(userDir, 0o700)
+    r = c.upload(ctx({'file': _file(tmp_path, 'notes.md', b'# hi\n', 'text/markdown')}))
+    assert r['success'] is True
+    assert oct(userDir.stat().st_mode)[-3:] == '700'
 
 
 def test_db_failure_rolls_back_the_disk_write(tmp_path):
@@ -142,10 +162,42 @@ def test_text_family_sniffing_matches_php_finfo(tmp_path):
         ('svg_mid.txt', b'text before\n<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'text/plain'),
         ('notes.txt', b'plain text body\n', 'text/plain'),     # finfo: text/plain
         ('csv.csv', b'a,b\n1,2\n', 'text/csv'),                # finfo: text/plain → ext fallback
+        # Shebang / C-source (Important #2) — calibrated against the same
+        # XAMPP php finfo binary; see final-fix-report.md for the full table.
+        ('bash.txt', b'#!/bin/bash\necho hi\n', 'text/x-shellscript'),        # finfo: text/x-shellscript
+        ('sh.txt', b'#!/bin/sh\necho hi\n', 'text/x-shellscript'),            # finfo: text/x-shellscript
+        ('envbash.txt', b'#!/usr/bin/env bash\necho hi\n', 'text/x-shellscript'),  # finfo: text/x-shellscript
+        ('py3.txt', b'#!/usr/bin/env python3\nprint("hi")\n', 'text/x-script.python'),  # finfo: text/x-script.python
+        ('py.txt', b'#!/usr/bin/env python\nprint("hi")\n', 'text/x-script.python'),    # finfo: text/x-script.python
+        ('perl.txt', b'#!/usr/bin/perl\nprint "hi";\n', 'text/x-perl'),       # finfo: text/x-perl
+        # Not implemented (deferred, tracker row): dash and bare env-sh
+        # shebangs, and non-shell/python/perl interpreters, are libmagic
+        # quirks finfo itself does NOT type as text/x-shellscript, so our
+        # sniffer correctly leaves them text/plain too — Python/PHP agree.
+        ('dash.txt', b'#!/bin/dash\necho hi\n', 'text/plain'),                # finfo: text/plain
+        ('envsh.txt', b'#!/usr/bin/env sh\necho hi\n', 'text/plain'),         # finfo: text/plain
+        ('weird.txt', b'#!not-a-real-interpreter\necho hi\n', 'text/plain'),  # finfo: text/plain
+        ('c1.txt', b'#include <stdio.h>\nint main(){return 0;}\n', 'text/x-c'),      # finfo: text/x-c
+        ('c2.txt', b'#include "myheader.h"\nint main(){return 0;}\n', 'text/x-c'),   # finfo: text/x-c
+        ('c3.txt', b'some text\n#include <stdio.h>\nmore text\n', 'text/x-c'),       # finfo: text/x-c (mid-file)
     ]
     for name, data, mime in cases:
         p = tmp_path / name; p.write_bytes(data)
         assert c._detectMime(str(p), name) == mime, name
+
+
+def test_shebang_txt_upload_is_rejected(tmp_path):
+    """A shell-script uploaded as .txt is 415 on PHP (text/x-shellscript is
+    not in ALLOWED_MIME); mirror it — Important #2."""
+    c = ChatAttachmentController(Db(), {'chat_upload_root': str(tmp_path / 'root')})
+    r = c.upload(ctx({'file': _file(tmp_path, 's.txt', b'#!/bin/bash\necho hi\n')}))
+    assert r == {
+        'success': False,
+        'error': 'Unsupported file type: text/x-shellscript. '
+                 'Allowed: PDF, PNG/JPEG/WebP/GIF, plain text, Markdown, CSV, HTML, JSON. '
+                 '(Office documents will be supported in a later release.)',
+        'status_code': 415,
+    }
 
 
 def test_svg_and_xml_are_rejected_html_and_text_accepted(tmp_path):

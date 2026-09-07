@@ -126,7 +126,11 @@ class UrlFetchController:
                         buf += chunk
                         if len(buf) > self.MAX_BYTES:
                             break
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
+                # httpx.InvalidURL (e.g. a non-printable/invalid character in
+                # the URL) is NOT an httpx.HTTPError subclass — it's a bare
+                # Exception — so it needs its own arm to land in the same
+                # 502 shape (Minor fix).
                 if len(buf) <= self.MAX_BYTES:
                     return {
                         'success': False,

@@ -1,4 +1,8 @@
+import pytest
+
 from .conftest import same
+
+pytestmark = pytest.mark.differential
 
 
 def test_fetch_url_validation_parity(both):

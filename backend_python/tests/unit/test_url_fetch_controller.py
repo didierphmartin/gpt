@@ -55,3 +55,12 @@ def test_network_failure_is_502(monkeypatch):
     def boom(req): raise httpx.ConnectError('Connection refused', request=req)
     r = _ctl(boom, monkeypatch).fetch(ctx({'url': 'https://example.com/'}))
     assert r['success'] is False and r['status_code'] == 502 and r['error'].startswith('Fetch failed (httpx ConnectError): ')
+
+
+def test_invalid_url_is_502(monkeypatch):
+    """httpx.InvalidURL is NOT an httpx.HTTPError subclass (it's a bare
+    Exception) — Minor fix: catch it too, same 502 shape."""
+    def boom(req): raise httpx.InvalidURL('Invalid non-printable ASCII character in URL')
+    r = _ctl(boom, monkeypatch).fetch(ctx({'url': 'https://exa mple.com/'}))
+    assert r['success'] is False and r['status_code'] == 502
+    assert r['error'].startswith('Fetch failed (httpx InvalidURL): ')

@@ -56,3 +56,23 @@ def test_malformed_result_file_yields_none(tmp_path, monkeypatch):
     (tmp_path / 'bridge').mkdir(); cid = 'ab' * 16
     (tmp_path / 'bridge' / f'{cid}.result').write_text('not json')
     assert SkillToolBridge().awaitResult(cid, 500) is None
+
+
+def test_await_polls_using_the_poll_interval_constant(tmp_path, monkeypatch):
+    """Minor fix: awaitResult must sleep POLL_INTERVAL_US / 1_000_000 (the
+    class constant), not a hardcoded literal — assert by reading the
+    constant back, so the test still passes if the constant is ever tuned."""
+    monkeypatch.setenv('SKILL_TOOL_BRIDGE_DIR', str(tmp_path / 'bridge'))
+    slept = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        raise StopIteration   # bail after the first poll — we only need one sample
+
+    monkeypatch.setattr(time, 'sleep', fake_sleep)
+    b = SkillToolBridge()
+    try:
+        b.awaitResult('ff' * 16, 5000)
+    except StopIteration:
+        pass
+    assert slept == [SkillToolBridge.POLL_INTERVAL_US / 1_000_000]

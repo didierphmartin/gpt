@@ -77,6 +77,38 @@ def test_docx_upload_divergence_is_environment_caused(php, py, token, config):
         db.close()
 
 
+def test_pptx_upload_divergence_is_environment_caused(php, py, token, config):
+    """Same KNOWN divergence as the docx pin above, for pptx: this box's
+    libmagic also types a .pptx as `application/octet-stream` (calibrated
+    with the XAMPP php finfo binary), so PHP 415s it while Python's
+    PK\\x03\\x04-signature sniff accepts it as the OOXML pptx MIME."""
+    h = {'Authorization': f'Bearer {token}'}
+    fixture = (pathlib.Path(__file__).resolve().parent.parent
+               / 'fixtures' / 'attachments' / 'tiny.pptx')
+    data = fixture.read_bytes()
+    ctype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    a = php.post('/api/v1/chat/upload', files={'file': ('tiny.pptx', data, ctype)}, headers=h)
+    b = py.post('/api/v1/chat/upload', files={'file': ('tiny.pptx', data, ctype)}, headers=h)
+
+    assert a.status_code == 415, f'PHP now accepts pptx ({a.status_code}) — libmagic upgraded?'
+    assert a.json()['error'].startswith('Unsupported file type: application/octet-stream.')
+    assert b.status_code == 200, b.text
+    jb = b.json()
+    assert jb['attachment']['mime_type'] == ctype
+    assert jb['attachment']['name'] == 'tiny.pptx' and jb['attachment']['size'] == len(data)
+
+    db = Db.connect(config.get('contexts_database') or config['database'])
+    try:
+        row = db.fetch_one('SELECT stored_path FROM chat_attachments WHERE id = ?',
+                           [jb['attachment']['id']])
+        assert row is not None and row['stored_path'].endswith('.pptx')
+        if os.path.isfile(row['stored_path']):
+            os.remove(row['stored_path'])
+        db.execute('DELETE FROM chat_attachments WHERE id = ?', [jb['attachment']['id']])
+    finally:
+        db.close()
+
+
 def test_upload_validation_parity(both):
     from .conftest import same
     same(*both('POST', '/api/v1/chat/upload', json={}, auth=False))

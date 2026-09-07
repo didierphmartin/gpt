@@ -125,13 +125,24 @@ class ChatAttachmentController:
 
         # Build per-user storage directory.
         userDir = self.storageRoot + '/' + str(userIdInt)
-        if not os.path.isdir(userDir):
+        dirJustCreated = not os.path.isdir(userDir)
+        if dirJustCreated:
             try:
                 os.makedirs(userDir, mode=0o755, exist_ok=True)
             except OSError:
                 pass
             if not os.path.isdir(userDir):
                 return {'success': False, 'error': 'Storage init failed', 'status_code': 500}
+            # mkdir's mode is masked by umask, and the live
+            # backend/storage/chat-uploads/<userId> PHP writes is
+            # drwxrwxrwx (Apache's `daemon` user needs to create/delete
+            # files there too) — mirror that, but only for a directory we
+            # just created ourselves, so an existing tree's permissions
+            # (e.g. deliberately locked down by an admin) are never widened.
+            try:
+                os.chmod(userDir, 0o777)
+            except OSError:
+                pass
 
         uuid_ = self._uuidv4()
         ext = self.ALLOWED_MIME[detectedMime]
@@ -143,6 +154,17 @@ class ChatAttachmentController:
         except OSError as e:
             error_log('[ChatAttachmentController] move_uploaded_file failed: ' + str(e))
             return {'success': False, 'error': 'Failed to persist upload', 'status_code': 500}
+
+        # NamedTemporaryFile (main.py) creates the source at mode 0600, which
+        # shutil.move preserves — PHP's own uploads land world-readable/
+        # writable (`-rwxrwxrwx`, owned by Apache's `daemon`) here. Mirror
+        # that so PHP can read a file this backend wrote, and so PHP can
+        # later delete it (e.g. attachment cleanup). Best-effort: a chmod
+        # failure must not fail the upload.
+        try:
+            os.chmod(storedPath, 0o666)
+        except OSError:
+            pass
 
         # Sanitize the display name — strip path separators, cap length.
         origName = os.path.basename(
@@ -268,11 +290,33 @@ class ChatAttachmentController:
                 return 'application/octet-stream'
         return ChatAttachmentController._sniffText(head)
 
+    #: A `#!` shebang at byte 0 → the interpreter-specific libmagic type,
+    #: calibrated against the XAMPP php `finfo` binary (Important #2; see
+    #: final-fix-report.md for the full table including non-matches).
+    #: libmagic's magic file matches specific known byte patterns rather
+    #: than parsing the interpreter name generically — e.g. `#!/bin/dash`
+    #: and `#!/usr/bin/env sh` both stay `text/plain` on finfo even though
+    #: `#!/bin/sh` and `#!/usr/bin/env bash` don't — so this is a literal
+    #: prefix table, not a name-based heuristic, to stay byte-for-byte
+    #: faithful to what was actually measured. Interpreters not covered
+    #: here (node, ruby, …) are a known, deferred divergence (tracker row).
+    _SHEBANG_MIME = (
+        ('#!/usr/bin/env python3', 'text/x-script.python'),
+        ('#!/usr/bin/env python2', 'text/x-script.python'),
+        ('#!/usr/bin/env python', 'text/x-script.python'),
+        ('#!/usr/bin/env bash', 'text/x-shellscript'),
+        ('#!/usr/bin/perl', 'text/x-perl'),
+        ('#!/bin/bash', 'text/x-shellscript'),
+        ('#!/bin/sh', 'text/x-shellscript'),
+    )
+
     @staticmethod
     def _sniffText(head: bytes) -> str:
         """libmagic's text-family classification, calibrated against the XAMPP
         php binary's `finfo` on this box:
 
+            #!<known interpreter> at byte 0   → see _SHEBANG_MIME
+            #include (anywhere in the head)   → text/x-c
             <svg …> / <?xml …?><svg …>   → image/svg+xml   (document must start with it)
             <?xml …?> (not svg)          → text/xml
             valid JSON (leading ws ok)   → application/json
@@ -280,11 +324,27 @@ class ChatAttachmentController:
             <!DOCTYPE html anywhere      → text/html       (libmagic searches the block)
             anything else readable       → text/plain
 
-        `image/svg+xml` and `text/xml` are NOT in ALLOWED_MIME and are not
-        rescued by PHP's extension fallback (196-214), so such uploads 415 on
-        both backends.
+        `image/svg+xml`, `text/xml`, `text/x-shellscript`, `text/x-c`, etc.
+        are NOT in ALLOWED_MIME and are not rescued by PHP's extension
+        fallback (196-214), so such uploads 415 on both backends.
         """
         text = head.decode('utf-8', errors='replace')
+
+        # Shebang — must be at byte 0, so check the raw (unstripped) text.
+        if text.startswith('#!'):
+            firstLine = text.split('\n', 1)[0].rstrip('\r')
+            for prefix, mime in ChatAttachmentController._SHEBANG_MIME:
+                if firstLine.startswith(prefix):
+                    return mime
+            # Unrecognised interpreter — falls through to text/plain below,
+            # same as libmagic on e.g. `#!/bin/dash`.
+
+        # C source — libmagic's rule is a loose "#include" anywhere in the
+        # head (verified live: matches `#include <x.h>`, `#include "x.h"`,
+        # even bare `#include x.h`, and mid-file, not just line 1).
+        if '#include' in text[:4096]:
+            return 'text/x-c'
+
         stripped = text.lstrip()
         low = stripped.lower()
 

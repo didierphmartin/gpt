@@ -1,4 +1,8 @@
+import pytest
+
 from .conftest import same
+
+pytestmark = pytest.mark.differential
 
 
 def test_traces_validation_and_diagnosis_parity(both):

@@ -61,7 +61,7 @@ class SkillToolBridge:
                 except ValueError:
                     return None
                 return decoded if isinstance(decoded, (dict, list)) else None
-            time.sleep(0.1)
+            time.sleep(self.POLL_INTERVAL_US / 1_000_000)
         return None
 
     def writeResult(self, toolCallId: str, result: Union[dict, list]) -> None:
