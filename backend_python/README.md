@@ -55,3 +55,10 @@ JSON-equal body to PHP (exact-JSON differential, user 3), so the frontend provid
 built-in `AnalysisFunctions` (FMP), `PortfolioFunctions` and `WatchlistFunctions` (registered by `setDatabase`,
 used by the agent-team paths in Phase 5), and the delegation tool names (`AgentDelegationFunctions.getToolNames`;
 handlers land in Phase 5). Verify/compare, attachments and the client-tool bridge remain pending Phase 2d.
+
+Phase 2d (2026-09): the chat path is complete — `POST /api/v1/agent`, `/verify`, `/compare` (with the in-chat
+verification/comparison phases), `/chat/upload` + document text extraction (pypdf / python-docx / openpyxl /
+python-pptx) feeding the chat prefix, `/traces` + `GET /traces/diagnosis`, `POST /fetch-url`, and the file-based
+`SkillToolBridge`/`SkillToolChoice` the workflow runner (Phase 5) uses. Live differential vs PHP: agent, verify,
+compare, upload, traces diagnosis, fetch-url. Uploads land in the same `backend/storage/chat-uploads` tree PHP
+uses. Phases 3–8 (user surface, agent-team data, engines, generators, back office, schedules) follow.
