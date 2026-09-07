@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -85,6 +86,78 @@ def test_dumps_pretty_matches_real_php_byte_for_byte():
 
     assert dumps_pretty(_NESTED) == php_unescaped
     assert dumps_pretty(_NESTED, unescaped=False) == php_escaped
+
+
+# ─── dumps_pretty(float_formatter=...) ─────────────────────────────────────
+# Phase 6 Task 1 fix round 1: PythonEmitHelpers.jsonToPython must render
+# floats using PHP's json_encode()/serialize_precision=-1 rules, not
+# Python's json.dumps/repr() rules -- see python_emit_helpers.py's
+# _phpFloatToken. Since stdlib json.dumps gives no hook for float
+# formatting, dumps_pretty grew an optional float_formatter callable that
+# bypasses stdlib json.dumps for a small recursive encoder. Default None
+# (all pre-existing call sites) is unaffected -- proven above (this whole
+# file's other tests still pass unchanged) and by the identical-shape
+# comparison below.
+
+def test_dumps_pretty_float_formatter_default_none_is_unaffected():
+    """No pre-existing caller passes float_formatter; confirm the parameter
+    defaults to None and produces byte-identical output to before."""
+    assert dumps_pretty(_NESTED) == dumps_pretty(_NESTED, float_formatter=None)
+
+
+def test_dumps_pretty_float_formatter_replaces_float_leaves_only():
+    out = dumps_pretty({'x': 1.0, 'y': [2.0, 'z'], 'w': True, 'n': None},
+                        float_formatter=lambda v: f'<{v!r}>')
+    assert out == (
+        '{\n'
+        '    "x": <1.0>,\n'
+        '    "y": [\n'
+        '        <2.0>,\n'
+        '        "z"\n'
+        '    ],\n'
+        '    "w": true,\n'
+        '    "n": null\n'
+        '}'
+    )
+
+
+def test_dumps_pretty_float_formatter_matches_stdlib_layout_when_no_floats():
+    """The custom recursive encoder used only when float_formatter is given
+    must reproduce stdlib json.dumps(indent=4)'s exact structural layout
+    (indent, separators, empty-container rendering, string escaping) for
+    every shape carrying no floats -- proven by direct comparison against
+    the float_formatter=None (stdlib) path on the same nested fixture."""
+    assert dumps_pretty(_NESTED, float_formatter=lambda v: json.dumps(v)) == dumps_pretty(_NESTED)
+    assert dumps_pretty(_NESTED, unescaped=False, float_formatter=lambda v: json.dumps(v)) == \
+        dumps_pretty(_NESTED, unescaped=False)
+
+
+@pytest.mark.skipif(not os.path.exists(_PHP_BIN), reason='php CLI not found')
+def test_dumps_pretty_float_formatter_matches_real_php_json_encode_floats():
+    """The reviewer's critical-bug cases plus threshold-boundary values,
+    diffed against live `php -r` with serialize_precision=-1 (the effective
+    runtime precision PythonEmitHelpers' callers set -- see
+    python_emit_helpers.py's _phpFloatToken docstring)."""
+    from app.agent_team.services.python_emit_helpers import _phpFloatToken
+
+    data = {
+        'wholeSmall': 1.0, 'wholeHundred': 100.0, 'zero': 0.0, 'negZero': -0.0,
+        'frac': 0.1, 'bigExp': 1.0e16, 'smallExp': 1.0e-5, 'hugeExp': 1.0e25,
+        'manyDigits': 123456789.123, 'half': 1.5,
+        'decptBoundaryDecimal': 1.0e-4, 'decptBoundaryExp': 1.0e17,
+    }
+    # Build a PHP array literal whose float values are Python's own repr()
+    # of the same doubles -- valid PHP float-literal syntax too (PHP parses
+    # "1e+16"/"1e-05"/"-0.0" exponent/sign forms the same as Python emits).
+    php_pairs = ', '.join(f'"{k}" => {repr(v)}' for k, v in data.items())
+    result = subprocess.run(
+        [_PHP_BIN, '-r', f'ini_set("serialize_precision","-1"); echo json_encode([{php_pairs}], JSON_PRETTY_PRINT);'],
+        capture_output=True, text=True, check=True,
+    )
+    php_out = result.stdout
+
+    py_out = dumps_pretty(data, unescaped=False, float_formatter=_phpFloatToken)
+    assert py_out == php_out
 
 
 # ─── php_json_arrays / php_json_decode ─────────────────────────────────────

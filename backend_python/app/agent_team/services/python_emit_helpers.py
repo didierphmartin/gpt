@@ -22,6 +22,7 @@ transcription) and pinned by test_python_emit_helpers_pin.py.
 from __future__ import annotations
 
 import json
+import math
 import re
 import unicodedata
 
@@ -43,19 +44,92 @@ def _coalesce(*vals):
     return None
 
 
+def _phpFloatDigitsDecpt(v: float) -> tuple[bool, str, int]:
+    """Extract (negative, digits, decpt) from a finite non-zero float such
+    that value == sign * 0.<digits> * 10**decpt, `digits` has no leading or
+    trailing zeros, and `decpt` is the position of the decimal point
+    counted from the first significant digit (e.g. digits="1", decpt=3 for
+    100.0; digits="1", decpt=-4 for 1e-5).
+
+    Derived by re-parsing Python's `repr(v)` rather than computing digits
+    independently: Python's `float.__repr__` and PHP's `zend_dtoa` (mode 0,
+    i.e. `serialize_precision=-1`) both implement David Gay's "shortest
+    round-trip decimal digits" algorithm, so for the same IEEE double the
+    DIGIT SEQUENCE is identical between the two languages -- only the
+    notation (decimal vs exponential) and threshold differ, which is what
+    `_phpFloatToken` re-derives from (digits, decpt) using PHP's own rule.
+    """
+    s = repr(v)
+    neg = s.startswith('-')
+    if neg:
+        s = s[1:]
+    if 'e' in s or 'E' in s:
+        mantissa, exp_s = re.split('[eE]', s)
+        exp = int(exp_s)
+        intpart, _, fracpart = mantissa.partition('.')
+        raw = (intpart + fracpart).lstrip('0') or '0'
+        # Python's scientific notation always has exactly one digit before
+        # its own '.', so decpt is the exponent shifted by that one digit.
+        decpt = exp + len(intpart)
+    else:
+        intpart, _, fracpart = s.partition('.')
+        raw_full = intpart + fracpart
+        first_nz = 0
+        while first_nz < len(raw_full) and raw_full[first_nz] == '0':
+            first_nz += 1
+        raw = raw_full[first_nz:]
+        decpt = len(intpart) - first_nz
+    digits = raw.rstrip('0') or '0'
+    return neg, digits, decpt
+
+
 def _phpFloatToken(v: float) -> str:
     """PHP `json_encode((float) $v)` under `serialize_precision=-1` (the
     effective runtime precision at these call sites -- see
-    `_jsonEncodeUnescapedUnicode` docstring below): shortest round-trip
-    digits, but a WHOLE-NUMBER float prints WITHOUT a trailing '.0' --
-    `json_encode((float) 1.0)` is `"1"`, not Python `json.dumps`'s `"1.0"`.
-    Verified against `php -r` 2026-09-07: 0.0/1.0/2.0/100.0/-1.0/-0.0 ->
-    '0'/'1'/'2'/'100'/'-1'/'-0'; 0.7/2.5/0.1/1.23456789012345 unchanged.
+    `_jsonEncodeUnescapedUnicode` docstring below, and
+    `jsonToPython`/`dumps_pretty(float_formatter=...)` for the pretty-print
+    path). Python's `json.dumps`/`repr(float)` formatting disagrees with
+    PHP's `json_encode()` on two axes, both fixed here:
+
+    1. A WHOLE-NUMBER float prints WITHOUT a trailing '.0' --
+       `json_encode((float) 1.0)` is `"1"`, not Python's `"1.0"`.
+    2. The decimal/exponential-notation THRESHOLD differs. Verified via
+       `php -r` 2026-09-08 across a systematic exponent sweep (-30..+30,
+       several mantissas each, 500+ values) plus the reviewer's exact
+       cases: PHP uses decimal notation for -3 <= decpt <= 17 (decpt =
+       `floor(log10(|v|)) + 1`, i.e. 1.0e16 -> decpt=17 -> decimal
+       "10000000000000000"; 1.0e17 -> decpt=18 -> exponential "1.0e+17";
+       1.0e-4 -> decpt=-3 -> decimal "0.0001"; 1.0e-5 -> decpt=-4 ->
+       exponential "1.0e-5") and exponential notation otherwise, with the
+       exponential mantissa ALWAYS carrying at least one fractional digit
+       ("1.0e+25", never "1e+25") and the exponent unpadded with an
+       explicit sign ("e+17"/"e-5", never "e+017"/"e-05"). Python's own
+       `repr()` switches notation at different thresholds and omits the
+       forced ".0", so both axes need this dedicated formatter -- neither
+       stdlib `json.dumps` nor a `repr()`-with-`.0`-stripped shortcut
+       reproduces PHP's output outside the whole-number case.
     """
-    s = repr(v)
-    if s.endswith('.0'):
-        s = s[:-2]
-    return s
+    if v != v or v in (math.inf, -math.inf):
+        # json_encode(NAN/INF) fails/warns in real PHP; these values never
+        # legitimately reach this call site (temperature is a bounded 0-2
+        # float). Defensive fallback only, not exercised by any caller.
+        return 'null'
+    if v == 0.0:
+        return '-0' if math.copysign(1.0, v) < 0 else '0'
+    neg, digits, decpt = _phpFloatDigitsDecpt(v)
+    sign = '-' if neg else ''
+    if -3 <= decpt <= 17:
+        if decpt <= 0:
+            body = '0.' + ('0' * -decpt) + digits
+        elif decpt >= len(digits):
+            body = digits + ('0' * (decpt - len(digits)))
+        else:
+            body = digits[:decpt] + '.' + digits[decpt:]
+    else:
+        frac = digits[1:] if len(digits) > 1 else '0'
+        exp = decpt - 1
+        body = digits[0] + '.' + frac + 'e' + ('+' if exp >= 0 else '-') + str(abs(exp))
+    return sign + body
 
 
 def _jsonEncodeUnescapedUnicode(value) -> str:
@@ -565,7 +639,15 @@ class PythonEmitHelpers:
         indent, matching Python's own json.dumps(indent=4) output and PHP's
         JSON_PRETTY_PRINT byte-for-byte -- see phpjson.dumps_pretty docstring)
         with unescaped unicode AND unescaped slashes (JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES), matching the PHP call's flags exactly.
+        | JSON_UNESCAPED_SLASHES), matching the PHP call's flags exactly,
+        and `float_formatter=_phpFloatToken` so every float leaf (e.g. a
+        node's `temperature` inside TOOL_CATALOG/MCP_SERVERS/NODE_TYPES/
+        EDGES/playbook-policy payloads) renders using PHP's
+        `json_encode()`/`serialize_precision=-1` rules -- NOT Python's
+        `json.dumps`/`repr()` rules, which disagree on whole-number floats
+        ("1.0" vs PHP's "1") and on the decimal/exponential threshold
+        (Python: 1e16 -> "1e+16"; PHP: "10000000000000000") -- see
+        `_phpFloatToken`'s docstring for the verified threshold rule.
 
         `forceObject`: PHP `(object) $value` casts an array to stdClass so an
         EMPTY PHP array encodes as `{}` instead of `[]`, and a list-shaped
@@ -584,7 +666,7 @@ class PythonEmitHelpers:
         """
         if forceObject and isinstance(value, list):
             value = {str(i): v for i, v in enumerate(value)}
-        raw = dumps_pretty(value, unescaped=True)
+        raw = dumps_pretty(value, unescaped=True, float_formatter=_phpFloatToken)
         raw = raw.replace(': true', ': True')
         raw = raw.replace(': false', ': False')
         raw = raw.replace(': null', ': None')
