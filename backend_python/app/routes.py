@@ -1,7 +1,9 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
 from app.agent_team.controllers.app_key_controller import AppKeyController
+from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
+from app.agent_team.controllers.workflow_schema_controller import WorkflowSchemaController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
@@ -31,7 +33,9 @@ from app.controllers.webauthn_controller import WebAuthnController
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
     'AgentTeam:AppKeyController': AppKeyController,
+    'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
+    'AgentTeam:WorkflowSchemaController': WorkflowSchemaController,
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
@@ -187,6 +191,19 @@ ROUTES = [
     ('GET', '/api/v1/app-keys/workflows', ('AgentTeam:AppKeyController', 'listUserWorkflows')),
     ('GET', '/api/v1/app-keys/agents', ('AgentTeam:AppKeyController', 'listUserAgents')),
     ('DELETE', '/api/v1/app-keys/{id:\\d+}', ('AgentTeam:AppKeyController', 'destroy')),
+    # TEAMS (routes.php:340-345)
+    ('GET', '/api/v1/teams', ('AgentTeam:TeamController', 'index')),
+    ('POST', '/api/v1/teams', ('AgentTeam:TeamController', 'create')),
+    ('GET', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'show')),
+    ('PUT', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'update')),
+    ('DELETE', '/api/v1/teams/{id:\\d+}', ('AgentTeam:TeamController', 'destroy')),
+    ('GET', '/api/v1/teams/{id:\\d+}/agents', ('AgentTeam:TeamController', 'agents')),
+    # WORKFLOW SCHEMAS (routes.php:395-399)
+    ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
+    ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),
+    ('GET', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'show')),
+    ('PUT', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'update')),
+    ('DELETE', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'destroy')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),
