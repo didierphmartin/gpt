@@ -29,7 +29,6 @@ from urllib.parse import urlsplit
 import httpx
 from ipaddress import ip_address
 
-from app.providers._http import SHARED_SSL_CONTEXT
 from app.support.phpcompat import php_empty, php_strval
 
 _BARE_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9.\-]+$')
