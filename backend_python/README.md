@@ -101,6 +101,29 @@ ported anyway for fidelity. Full unit suite: 1817 passing. Phase 5 differential 
 One known defect carried forward: `GraphWorkflowRunner._createExecution` encodes an empty `input_variables`
 body as JSON `"{}"` where PHP's untyped empty array encodes `"[]"`; fix pending in the Phase 5 final wave.
 
+Phase 7 (2026-09): the back office (`gpt_admin`) — seven admin-facing controllers, 88 routes:
+`SystemSettingsController` (6), `AdminController` (34: users/providers/keys from Phase 3's Task 1/2
+plus usage stats, MCP server management + per-user overrides, and costs/exchange-rates), `LoginAdminController`
+(9, the centralized login DB's own user/app-role admin panel), `AffiliateController` (16, admin CRUD +
+accounts/transactions/products + the affiliate's own `/me` self-service routes), `VideoEditorController`
+(16, a second app's admin panel that shares the chatbot DB only for its own role gate),
+`HumeToolController` (6) and `EVIWebhookController` (1, `POST /api/v1/evi/webhook`, PHP's only genuinely
+public route among these seven). SECURITY finding, ported verbatim for parity (tracker row 10): PHP's
+`AdminController` has NO admin-role gate at all — every `/api/v1/admin/*` method (including costs and MCP
+admin) is reachable by any authenticated user; TS already documents and mirrors this, so PY does too.
+The EVI webhook inherits a second PHP bug (tracker row 11): `handleWebhook` calls
+`ToolsManager::getAvailableTools()`/`executeTool()`, neither of which exists, so any payload past its
+`tool_name` check crashes into a 500 — TS deliberately implements the evident intent instead, but PY mirrors
+the crash on purpose (a public, unauthenticated endpoint is the wrong place to guess at intended behavior).
+`round()` half-tie divergence on real cost data got its own PHP-round helper (`_php_round`, tracker row 12,
+same pattern as TS's `phpRound`). Apache's `serialize_precision=100` still leaks float noise into PHP's
+JSON on `/admin/costs`/`/admin/usage/*` (tracker row 134); the differentials round both sides to 6 dp.
+Cross-backend bcrypt login parity holds for the new affiliate accounts too (`AffiliateController::adminCreate`
+is the actual bcrypt call site — the login-admin controller's `createUser` never writes a password column).
+Full unit suite: 2690 passing. `gpt_admin`'s `py` backend kind is now served end-to-end — every panel it
+calls (Users, LLM settings, MCP servers, Usage, Costs, Video Editor, Affiliates, Login-DB admin) has a
+routed, differential-tested Python handler.
+
 Phase 8 (2026-09): scheduled workflows — `ScheduledWorkflowService` (create/update/delete/pause/resume,
 `getDueSchedules`, `markRunning`/`markCompleted`/`markFailed`, and a `calculateNextRun` that reproduces PHP's
 `DateInterval` field arithmetic byte-for-byte, including month-end overflow and Europe/Berlin DST-gap
