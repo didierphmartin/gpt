@@ -293,7 +293,14 @@ def test_save_inserts_new_provider():
     r = c(db).saveLLMProvider(ctx(body=body))
     assert r == {'success': True, 'message': 'Provider created', 'provider_key': 'newp', 'status_code': 201}
     sql, params = db.calls[-1]
-    assert sql.startswith('INSERT INTO system_llm_settings (provider_key, display_name, api_key, model,')
+    assert sql == (
+        'INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, base_url, max_tokens,'
+        ' temperature, price_input_per_1m, price_output_per_1m, chat_endpoint, streaming, supports_tools,'
+        ' supported_models, api_format, system_prompt, enabled, sort_order, created_at, updated_at)'
+        ' VALUES (:provider_key, :display_name, :api_key, :model, :base_url, :max_tokens, :temperature,'
+        ' :price_input_per_1m, :price_output_per_1m, :chat_endpoint, :streaming, :supports_tools,'
+        ' :supported_models, :api_format, :system_prompt, :enabled, :sort_order, NOW(), NOW())'
+    )       # SystemSettingsController.php:439-448 (saveLLMProvider's INSERT branch)
     assert params[':provider_key'] == 'newp'
     assert params[':display_name'] == 'Newp'          # ucfirst fallback
     assert params[':api_key'] == 'sk-brandnewkey1'
@@ -317,8 +324,16 @@ def test_save_updates_existing_and_keeps_key_when_masked_or_blank():
         r = c(db).saveLLMProvider(ctx(body=body))
         assert r == {'success': True, 'message': 'Provider updated', 'provider_key': 'kimi', 'status_code': 200}
         sql, params = db.calls[-1]
-        assert sql.startswith('UPDATE system_llm_settings SET display_name')
-        assert sql.endswith('WHERE provider_key = :provider_key')
+        assert sql == (
+            'UPDATE system_llm_settings SET display_name = :display_name, api_key = :api_key,'
+            ' model = :model, base_url = :base_url, max_tokens = :max_tokens,'
+            ' temperature = :temperature, price_input_per_1m = :price_input_per_1m,'
+            ' price_output_per_1m = :price_output_per_1m, chat_endpoint = :chat_endpoint,'
+            ' streaming = :streaming, supports_tools = :supports_tools,'
+            ' supported_models = :supported_models, api_format = :api_format,'
+            ' system_prompt = :system_prompt, enabled = :enabled, sort_order = :sort_order,'
+            ' updated_at = NOW() WHERE provider_key = :provider_key'
+        )       # SystemSettingsController.php:418-436 (saveLLMProvider's UPDATE branch)
         assert params[':api_key'] == 'sk-existingkey1'
 
 

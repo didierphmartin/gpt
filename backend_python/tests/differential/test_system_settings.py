@@ -95,30 +95,46 @@ def test_save_kimi_unchanged_round_trip(both, h, php, py):
 def test_toggle_twice_restores_state(php, py, h):
     """Exercises Python's toggle then PHP's toggle on the SAME shared row —
     since `system_llm_settings` is one physical table, either backend's
-    'NOT enabled' flip is visible to both readers immediately."""
+    'NOT enabled' flip is visible to both readers immediately.
+
+    Self-cleaning: the restore runs in `finally` regardless of which assert
+    (if any) fails, so a mid-test failure never leaves the shared `kimi` row
+    with its `enabled` flag flipped (mirrors test_settings.py's
+    `keys_snapshot` fixture / test_providers.py's try/finally blocks)."""
     pre = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
     assert pre == py.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
     pre_enabled = pre['provider']['enabled']
 
-    r1 = py.post('/api/v1/admin/llm-settings/toggle', json={'provider_key': 'kimi'}, headers=h)
-    assert r1.json() == {'success': True, 'message': 'Provider toggled'}, r1.text
-    mid_php = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
-    mid_py = py.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
-    assert mid_php['provider']['enabled'] is (not pre_enabled)
-    mid_php['provider'].pop('updated_at', None)
-    mid_py['provider'].pop('updated_at', None)
-    assert mid_php == mid_py
+    try:
+        r1 = py.post('/api/v1/admin/llm-settings/toggle', json={'provider_key': 'kimi'}, headers=h)
+        assert r1.json() == {'success': True, 'message': 'Provider toggled'}, r1.text
+        mid_php = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
+        mid_py = py.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
+        assert mid_php['provider']['enabled'] is (not pre_enabled)
+        mid_php['provider'] = dict(mid_php['provider'])
+        mid_py['provider'] = dict(mid_py['provider'])
+        mid_php['provider'].pop('updated_at', None)
+        mid_py['provider'].pop('updated_at', None)
+        assert mid_php == mid_py
 
-    r2 = php.post('/api/v1/admin/llm-settings/toggle', json={'provider_key': 'kimi'}, headers=h)
-    assert r2.json() == {'success': True, 'message': 'Provider toggled'}, r2.text
+        r2 = php.post('/api/v1/admin/llm-settings/toggle', json={'provider_key': 'kimi'}, headers=h)
+        assert r2.json() == {'success': True, 'message': 'Provider toggled'}, r2.text
 
-    after_php = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
-    after_py = py.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
-    assert after_php['provider']['enabled'] == pre_enabled
-    for j in (after_php, after_py, pre):
-        j['provider'] = dict(j['provider'])
-        j['provider'].pop('updated_at', None)
-    assert after_php == after_py == pre
+        after_php = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
+        after_py = py.get('/api/v1/admin/llm-settings/kimi', headers=h).json()
+        assert after_php['provider']['enabled'] == pre_enabled
+        pre_cmp = dict(pre)
+        for j in (after_php, after_py, pre_cmp):
+            j['provider'] = dict(j['provider'])
+            j['provider'].pop('updated_at', None)
+        assert after_php == after_py == pre_cmp
+    finally:
+        # Best-effort restore: re-read the shared row and, if it still
+        # differs from the pre-test state, toggle it back. Runs even if an
+        # assert above raised, so the live `kimi` row is never left flipped.
+        current = php.get('/api/v1/admin/llm-settings/kimi', headers=h).json()['provider']['enabled']
+        if current != pre_enabled:
+            php.post('/api/v1/admin/llm-settings/toggle', json={'provider_key': 'kimi'}, headers=h)
 
 
 # ─── seed (no-op on the live config; see module docstring) ──────────────
