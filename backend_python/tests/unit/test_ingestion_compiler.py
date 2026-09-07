@@ -275,6 +275,50 @@ def test_compile_script_clamps_and_slugifies_and_workers_zero():
 
 
 # ---------------------------------------------------------------------------
+# Fix round 1 (Important): PHP's `(array)` cast wraps a bare scalar as a
+# one-element list -- it does NOT discard it. `php_values()` alone (no cast
+# first) drops a scalar to []; the fix routes every `types`/`connection` site
+# through the shared `php_array_cast` helper first. Pinned via `php -r`,
+# 2026-09-07:
+#   IngestionCompiler::compileScript(['types' => 'pdf'], [], ['connection' => 'abc'])
+#     -> "TYPES = [\"pdf\"]", "CONNECTION = [\"abc\"]"
+#   IngestionCompiler::compileNodeChunk('loader', ['types' => 'pdf'])
+#     -> LOADER = {...,"types":["pdf"]}
+#   IngestionCompiler::compileNodeChunk('vectorstore', ['connection' => 'abc'])
+#     -> STORE = {...,"connection":{"0":"abc"},...}   ((object)((array) 'abc'))
+# ---------------------------------------------------------------------------
+
+def test_compile_script_scalar_types_and_connection_are_array_cast_not_dropped():
+    r = IngestionCompiler.compileScript({'types': 'pdf'}, {}, {'connection': 'abc'})
+    assert 'TYPES = ["pdf"]' in r['code']
+    assert 'CONNECTION = ["abc"]' in r['code']
+
+
+def test_compile_node_chunk_loader_scalar_types_is_array_cast():
+    got = IngestionCompiler.compileNodeChunk('loader', {'types': 'pdf'})
+    assert got == (
+        "# Loader — langfs (provider: local)\n"
+        "# langfs enumerates + EXTRACTS text; no local decoders here.\n"
+        'LOADER = {"provider":"local","path":"","is_dir":false,"types":["pdf"]}\n'
+        "# files  = list_files(provider, path, types)        -> [source, ...]\n"
+        "# text   = read_file(provider, file_id, format='text')  -> extracted text\n"
+        "# (text per file) -> handed to the Splitter"
+    )
+
+
+def test_compile_node_chunk_vectorstore_scalar_connection_is_array_cast_then_object_cast():
+    got = IngestionCompiler.compileNodeChunk('vectorstore', {'connection': 'abc'})
+    assert got == (
+        '# Vector store — mcp_qrant "store" (provider: qdrant)\n'
+        "# mcp_qrant EMBEDS + upserts; no embeddings/vector-store libs here.\n"
+        'STORE = {"provider":"qdrant","connection":{"0":"abc"},"collection":"","embedding":""}\n'
+        '# "store"(provider, connection, collection,\n'
+        '#          items=[{"text": c, "metadata": {"source": src}} for c in chunks],\n'
+        '#          embedding) -> {"stored": int, "errors": int}'
+    )
+
+
+# ---------------------------------------------------------------------------
 # compileNodeChunk -- per-node "Generated code" fragments
 # ---------------------------------------------------------------------------
 

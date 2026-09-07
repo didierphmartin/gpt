@@ -19,15 +19,7 @@ from collections.abc import Callable
 
 from app.support.phpcompat import is_numeric, php_floatval, php_strval, php_trim, php_values
 
-
-def _phpArrayCast(v):
-    """`(array) $v` -- None becomes []; dict/list pass through unchanged; a
-    scalar is wrapped as a single-element list (PHP's scalar-to-array cast)."""
-    if v is None:
-        return []
-    if isinstance(v, (dict, list)):
-        return v
-    return [v]
+from ._ingestion_compat import php_array_cast as _phpArrayCast
 
 
 def _isArrayLike(v) -> bool:

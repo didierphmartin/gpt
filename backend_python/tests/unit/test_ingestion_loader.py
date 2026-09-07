@@ -15,7 +15,7 @@ exist. See task-5-report.md for the full deviation writeup.
 """
 from __future__ import annotations
 
-from app.agent_team.services.ingestion_loader import IngestionLoader
+from app.agent_team.services.ingestion_loader import IngestionLoader, _php_basename
 
 
 def _f(path: str) -> dict:
@@ -163,6 +163,47 @@ def test_enumerate_max_depth_cap():
     deep_tree['lvl5'] = [_f('lvl5/x.txt')]
     deep = IngestionLoader.enumerateFiles(_fake_list_files(deep_tree), 'local', 'lvl0', [], True, 3)
     assert deep == []  # lvl4 (depth 4) is never listed, so lvl5/x.txt is never reached
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (Minor): PHP basename() strips trailing slashes FIRST, then
+# returns the final path segment; posixpath.basename() does not -- it returns
+# '' for any path ending in '/'. Pinned via `php -r`, 2026-09-07.
+# ---------------------------------------------------------------------------
+
+def test_php_basename_matches_php_semantics():
+    assert _php_basename('/a/b/') == 'b'
+    assert _php_basename('/a/b') == 'b'
+    assert _php_basename('a/b/') == 'b'
+    assert _php_basename('b') == 'b'
+    assert _php_basename('') == ''
+    assert _php_basename('/') == ''
+    assert _php_basename('//') == ''
+    assert _php_basename('a/') == 'a'
+    assert _php_basename('///a///') == 'a'
+    assert _php_basename('a//b') == 'b'
+    assert _php_basename('noslash') == 'noslash'
+
+
+def test_enumerate_single_file_trailing_slash_path():
+    # PHP: basename('/docs/report.pdf/') === 'report.pdf' (trailing slash
+    # stripped first); posixpath.basename would give '' and drop the file.
+    single = IngestionLoader.enumerateFiles(_fake_list_files({}), 'local', '/docs/report.pdf/', [], False)
+    assert single == [{
+        'provider': 'local', 'file_id': '/docs/report.pdf/', 'name': 'report.pdf',
+        'source': '/docs/report.pdf/', 'doc_type': 'pdf',
+    }]
+
+
+def test_enumerate_folder_name_fallback_trailing_slash_id():
+    # An item with no 'name' key falls back to basename($itemId); the id here
+    # ends in '/', which only PHP's basename() semantics resolve to 'notes.txt'.
+    tree = {'root': [{'id': 'root/notes.txt/', 'type': 'file'}]}
+    walked = IngestionLoader.enumerateFiles(_fake_list_files(tree), 'local', 'root', [], True)
+    assert walked == [{
+        'provider': 'local', 'file_id': 'root/notes.txt/', 'name': 'notes.txt',
+        'source': 'root/notes.txt/', 'doc_type': 'text',
+    }]
 
 
 # ---------------------------------------------------------------------------

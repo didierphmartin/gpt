@@ -19,6 +19,8 @@ import re
 from app.support.phpcompat import php_empty, php_intval, php_strval, php_trim, php_values, ucfirst
 from app.support.phpjson import dumps as _php_json_lit
 
+from ._ingestion_compat import php_array_cast as _phpArrayCast
+
 _ASCII_UPPER_TO_LOWER = str.maketrans(
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'
 )
@@ -210,14 +212,15 @@ class IngestionCompiler:
 
     @staticmethod
     def _toObject(v) -> dict:
-        """`(object) ((array) $v)` -- None/missing becomes {}; a list is cast to an
-        object with string-index keys (PHP's array-to-object cast); a dict passes
-        through. Always returns a dict so json-encoding never collapses to `[]`."""
-        if isinstance(v, dict):
-            return dict(v)
-        if isinstance(v, list):
-            return {str(i): item for i, item in enumerate(v)}
-        return {}
+        """`(object) ((array) $v)` -- (array) first: None/missing becomes [];
+        a scalar is wrapped as a one-element list; dict/list pass through.
+        Then (object): a dict passes through; a list is cast to an object with
+        string-index keys (PHP's array-to-object cast). Always returns a dict
+        so json-encoding never collapses to `[]`."""
+        casted = _phpArrayCast(v)
+        if isinstance(casted, dict):
+            return dict(casted)
+        return {str(i): item for i, item in enumerate(casted)}
 
     @staticmethod
     def compileNodeChunk(kind: str, config: dict | None = None) -> str:
@@ -245,7 +248,7 @@ class IngestionCompiler:
         if kind == 'loader':
             provider = IngestionCompiler._strOrDefault(config.get('provider'), 'local')
             isDir = not php_empty(config.get('is_dir'))
-            types = [v for v in php_values(_coalesce(config.get('types'), [])) if isinstance(v, str)]
+            types = [v for v in php_values(_phpArrayCast(config.get('types'))) if isinstance(v, str)]
             j = IngestionCompiler._jsonLit({
                 'provider': provider,
                 'path': _coalesce(config.get('path'), ''),
@@ -344,7 +347,10 @@ class IngestionCompiler:
             if kind is None:
                 kind = ''
             kind = php_strval(kind)
-            cfg = s.get('config')
+            # PHP: $cfg = (array) ($s['config'] ?? []); a scalar config casts to a
+            # list, which compileNodeChunk normalizes to {} anyway (no string keys
+            # to find on it) -- applying the cast here is for parity, not behaviour.
+            cfg = _phpArrayCast(s.get('config'))
             chunks.append(IngestionCompiler.compileNodeChunk(kind, cfg if isinstance(cfg, dict) else {}))
         generated = chunks.pop()   # the target (last) stage
         input_ = "\n\n".join(chunks)   # all upstream stages
@@ -373,11 +379,11 @@ class IngestionCompiler:
         provider = IngestionCompiler._strOrDefault(loaderCfg.get('provider'), 'local')
         path = php_strval(_coalesce(loaderCfg.get('path'), ''))
         isDir = not php_empty(loaderCfg.get('is_dir'))
-        types = [v for v in php_values(_coalesce(loaderCfg.get('types'), [])) if isinstance(v, str)]
+        types = [v for v in php_values(_phpArrayCast(loaderCfg.get('types'))) if isinstance(v, str)]
         chunk = max(1, php_intval(_coalesce(splitterCfg.get('chunk_size'), 1000)))
         overlap = max(0, php_intval(_coalesce(splitterCfg.get('overlap'), 150)))
         vsProvider = IngestionCompiler._strOrDefault(storeCfg.get('provider'), 'qdrant')
-        connection = _coalesce(storeCfg.get('connection'), {})
+        connection = _phpArrayCast(storeCfg.get('connection'))
         collection = php_trim(php_strval(_coalesce(storeCfg.get('collection'), '')))
         embedding = php_trim(php_strval(_coalesce(storeCfg.get('embedding'), '')))
         workersInt = php_intval(_coalesce(loaderCfg.get('workers'), 0))
