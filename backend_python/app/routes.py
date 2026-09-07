@@ -6,6 +6,8 @@ from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
+from app.controllers.drive_controller import DriveController
+from app.controllers.file_storage_controller import FileStorageController
 from app.controllers.genesis_controller import GenesisController
 from app.controllers.heal_controller import HealController
 from app.controllers.mcp_app_controller import MCPAppController
@@ -21,6 +23,7 @@ from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
 from app.controllers.url_fetch_controller import UrlFetchController
 from app.controllers.usage_controller import UsageController
+from app.controllers.voice_controller import VoiceController
 from app.controllers.webauthn_controller import WebAuthnController
 
 # AgentTeam-namespaced controllers (backend/src/AgentTeam/Controllers/*) use the
@@ -33,6 +36,8 @@ CONTROLLERS = {
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
     'ContextController': ContextController,
+    'DriveController': DriveController,
+    'FileStorageController': FileStorageController,
     'GenesisController': GenesisController,
     'HealController': HealController,
     'MCPAppController': MCPAppController,
@@ -48,6 +53,7 @@ CONTROLLERS = {
     'TracesController': TracesController,
     'UrlFetchController': UrlFetchController,
     'UsageController': UsageController,
+    'VoiceController': VoiceController,
     'WebAuthnController': WebAuthnController,
 }
 
@@ -146,6 +152,17 @@ ROUTES = [
     # MCP APP (Public - serves HTML; routes.php:283-287)
     ('GET', '/api/v1/mcp/app', ('MCPAppController', 'getResource')),
     ('GET', '/api/mcp-app.php', ('MCPAppController', 'getResource')),  # Legacy path
+    # FILE STORAGE (universalFS; routes.php:151-153)
+    ('GET', '/api/v1/storage/providers', ('FileStorageController', 'getProviders')),
+    ('GET', '/api/v1/storage/list', ('FileStorageController', 'listFiles')),
+    ('GET', '/api/v1/storage/read', ('FileStorageController', 'readFile')),
+    # VOICE USAGE (routes.php:315-318)
+    ('POST', '/api/v1/voice/usage', ('VoiceController', 'logUsage')),
+    ('GET', '/api/v1/voice/stats', ('VoiceController', 'getStats')),
+    ('POST', '/api/v1/voice/token', ('VoiceController', 'getEphemeralToken')),
+    ('GET', '/api/v1/voice/config', ('VoiceController', 'getConfig')),
+    # GOOGLE DRIVE (routes.php:323)
+    ('POST', '/api/v1/drive/save', ('DriveController', 'save')),
     # PROMPT LIBRARY
     ('GET', '/api/v1/prompts', ('PromptLibraryController', 'getTree')),
     ('GET', '/api/v1/prompts/{id:\\d+}', ('PromptLibraryController', 'get')),
