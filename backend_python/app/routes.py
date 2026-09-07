@@ -1,5 +1,6 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
+from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.app_key_controller import AppKeyController
 from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
@@ -32,6 +33,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 # PHP-prefixed key 'AgentTeam:<ClassName>' so the registry mirrors routes.php's
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
+    'AgentTeam:AgentController': AgentController,
     'AgentTeam:AppKeyController': AppKeyController,
     'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
@@ -204,6 +206,23 @@ ROUTES = [
     ('GET', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'show')),
     ('PUT', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'update')),
     ('DELETE', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'destroy')),
+    # AGENTS (Agent CRUD and execution; routes.php:407-424 — `run` (419) and
+    # `chat` (420) are Phase 5 and NOT routed here)
+    ('GET', '/api/v1/agents', ('AgentTeam:AgentController', 'index')),
+    ('POST', '/api/v1/agents', ('AgentTeam:AgentController', 'create')),
+    ('GET', '/api/v1/agents/tools', ('AgentTeam:AgentController', 'listTools')),
+    ('POST', '/api/v1/agents/reorder', ('AgentTeam:AgentController', 'reorder')),
+    # Agent categories (containers for the Agents sidebar service)
+    ('GET', '/api/v1/agents/categories', ('AgentTeam:AgentController', 'listCategories')),
+    ('PUT', '/api/v1/agents/categories/rename', ('AgentTeam:AgentController', 'renameCategory')),
+    ('DELETE', '/api/v1/agents/categories', ('AgentTeam:AgentController', 'deleteCategory')),
+    ('GET', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'show')),
+    ('PUT', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'update')),
+    ('DELETE', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'destroy')),
+    ('GET', '/api/v1/agents/{id:\\d+}/executions', ('AgentTeam:AgentController', 'executions')),
+    ('POST', '/api/v1/agents/{id:\\d+}/duplicate', ('AgentTeam:AgentController', 'duplicate')),
+    ('POST', '/api/v1/agents/{id:\\d+}/move-up', ('AgentTeam:AgentController', 'moveUp')),
+    ('POST', '/api/v1/agents/{id:\\d+}/move-down', ('AgentTeam:AgentController', 'moveDown')),
     # ROOT / DEBUG
     ('GET', '/', ('RootController', 'index')),
     ('GET', '/api/v1', ('RootController', 'index')),
