@@ -3,6 +3,7 @@ Rows for controllers not yet ported are added phase by phase."""
 from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
+from app.agent_team.controllers.ingestion_controller import IngestionController
 from app.agent_team.controllers.team_controller import TeamController
 from app.agent_team.controllers.user_memory_controller import UserMemoryController
 from app.agent_team.controllers.workflow_controller import WorkflowController
@@ -39,6 +40,7 @@ CONTROLLERS = {
     'AgentTeam:AgentController': AgentController,
     'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
+    'AgentTeam:IngestionController': IngestionController,
     'AgentTeam:TeamController': TeamController,
     'AgentTeam:UserMemoryController': UserMemoryController,
     'AgentTeam:WorkflowController': WorkflowController,
@@ -219,6 +221,28 @@ ROUTES = [
     ('POST', '/api/v1/workflows/{id:\\d+}/run-stream', ('AgentTeam:WorkflowController', 'runStream')),
     ('POST', '/api/v1/workflows/tool-result', ('AgentTeam:WorkflowController', 'toolResult')),
     ('POST', '/api/v1/workflows/playbook-node/run', ('AgentTeam:WorkflowController', 'runPlaybookNode')),
+    # Standalone config-driven ingestion compiler (separate from agent code) —
+    # chunks/scripts are compiled from the node configs the frontend sends
+    # (routes.php 357-373; mirrors that ordering, positioned here per this
+    # phase's Task 6 routing guidance — after the WORKFLOWS run rows, before
+    # generate-* which Task 4 adds later).
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/node-code', ('AgentTeam:IngestionController', 'nodeCode')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/compile', ('AgentTeam:IngestionController', 'compile')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/save-script', ('AgentTeam:IngestionController', 'saveScript')),
+    # Interpreter (node-by-node): the loader node runs live and returns the
+    # files-as-text shown in its Output tab; the splitter chunks that text.
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/loader-text', ('AgentTeam:IngestionController', 'loaderText')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/splitter-chunks', ('AgentTeam:IngestionController', 'splitterChunks')),
+    # Store node: loader→split→write each chunk to the chosen vector-DB MCP.
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/store-chunks', ('AgentTeam:IngestionController', 'storeChunks')),
+    # Store node retrieval test: qdrant-find against the chosen vector-DB MCP.
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/store-find', ('AgentTeam:IngestionController', 'storeFind')),
+    # Closed event loop: server-side run (enumerate once → loop loader→split→store), SSE progress.
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/run-stream', ('AgentTeam:IngestionController', 'runStream')),
+    # Parallel run (true multi-core): run-start enumerates + creates a shared
+    # cursor; K concurrent run-worker SSE streams pull files work-stealing.
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/run-start', ('AgentTeam:IngestionController', 'runStart')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/ingestion/run-worker', ('AgentTeam:IngestionController', 'runWorker')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
