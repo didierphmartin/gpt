@@ -42,9 +42,13 @@ import os
 import re
 
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.adk_generator import ADKGenerator
 from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
+from app.agent_team.services.lang_graph_generator import LangGraphGenerator
+from app.agent_team.services.maf_generator import MAFGenerator
+from app.agent_team.services.nooa_generator import NOOAGenerator
 from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
 from app.agent_team.services.stream_context import StreamContext
@@ -293,20 +297,173 @@ class WorkflowController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     # ========================================================================
-    # Code generators (Phase 5/6, not routed) — PHP 240-467
+    # GET /api/v1/workflows/{id}/generate-python
     # ========================================================================
 
     def generatePython(self, request, id: int = 0) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 240-293.
+
+        Query parameters:
+          - ?a2a=1: Multi-file A2A manifest mode. Returns {root, files: [...]} (always JSON).
+          - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in A2A mode.
+        """
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        query = request['query'] if request.get('query') is not None else {}
+        download = (query.get('download') if query.get('download') is not None else '0') == '1'
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        if not workflowId:
+            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+
+            agentRepo = AgentRepository(self.db)
+            gen = LangGraphGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
+            a2a = (query.get('a2a') if query.get('a2a') is not None else '0') == '1'
+            result = gen.generate(workflowId, php_strval(userId), {'a2a': a2a})
+            if a2a:
+                # Multi-file output: always JSON (the editor writes the folder itself).
+                return {'success': True, 'data': result, 'status_code': 200}
+
+            if download:
+                return {
+                    'success': True,
+                    'raw_body': result['code'],
+                    'headers': {
+                        'Content-Type': 'text/x-python; charset=utf-8',
+                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
+                    },
+                    'status_code': 200,
+                }
+
+            return {'success': True, 'data': result, 'status_code': 200}
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
+            error_log(f'[WorkflowController] generatePython failed: {e}')
+            return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # GET /api/v1/workflows/{id}/generate-adk
+    # ========================================================================
 
     def generateAdk(self, request, id: int = 0) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 303-351."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        query = request['query'] if request.get('query') is not None else {}
+        download = (query.get('download') if query.get('download') is not None else '0') == '1'
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        if not workflowId:
+            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+
+            agentRepo = AgentRepository(self.db)
+            gen = ADKGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
+            result = gen.generate(workflowId, php_strval(userId))
+
+            if download:
+                return {
+                    'success': True,
+                    'raw_body': result['code'],
+                    'headers': {
+                        'Content-Type': 'text/x-python; charset=utf-8',
+                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
+                    },
+                    'status_code': 200,
+                }
+
+            return {'success': True, 'data': result, 'status_code': 200}
+        except Exception as e:  # noqa: BLE001
+            error_log(f'[WorkflowController] generateAdk failed: {e}')
+            return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # GET /api/v1/workflows/{id}/generate-maf
+    # ========================================================================
 
     def generateMaf(self, request, id: int = 0) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 361-409."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        query = request['query'] if request.get('query') is not None else {}
+        download = (query.get('download') if query.get('download') is not None else '0') == '1'
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        if not workflowId:
+            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+
+            agentRepo = AgentRepository(self.db)
+            gen = MAFGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
+            result = gen.generate(workflowId, php_strval(userId))
+
+            if download:
+                return {
+                    'success': True,
+                    'raw_body': result['code'],
+                    'headers': {
+                        'Content-Type': 'text/x-python; charset=utf-8',
+                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
+                    },
+                    'status_code': 200,
+                }
+
+            return {'success': True, 'data': result, 'status_code': 200}
+        except Exception as e:  # noqa: BLE001
+            error_log(f'[WorkflowController] generateMaf failed: {e}')
+            return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # GET /api/v1/workflows/{id}/generate-nooa
+    # ========================================================================
 
     def generateNooa(self, request, id: int = 0) -> dict:
-        raise NotImplementedError('Phase 5/6')
+        """PHP 419-467."""
+        userId = request['user_id'] if request.get('user_id') is not None else 0
+        workflowId = php_intval(id)
+        query = request['query'] if request.get('query') is not None else {}
+        download = (query.get('download') if query.get('download') is not None else '0') == '1'
+
+        if not userId:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        if not workflowId:
+            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
+
+        try:
+            if not self.workflowRepository.canUserAccess(userId, workflowId):
+                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+
+            agentRepo = AgentRepository(self.db)
+            gen = NOOAGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
+            result = gen.generate(workflowId, php_strval(userId))
+
+            if download:
+                return {
+                    'success': True,
+                    'raw_body': result['code'],
+                    'headers': {
+                        'Content-Type': 'text/x-python; charset=utf-8',
+                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
+                    },
+                    'status_code': 200,
+                }
+
+            return {'success': True, 'data': result, 'status_code': 200}
+        except Exception as e:  # noqa: BLE001
+            error_log(f'[WorkflowController] generateNooa failed: {e}')
+            return {'success': False, 'error': str(e), 'status_code': 500}
 
     # ========================================================================
     # GET /api/v1/workflows/{id}

@@ -223,20 +223,11 @@ def test_create_db_error_returns_500():
 
 
 # ============================================================================
-# generatePython/Adk/Maf/Nooa -- Phase 6, not routed. `run`/`runByName`/
-# `runStream`/`runPlaybookNode`/`toolResult` were ported in Phase 5, Task 6
-# -- see tests/unit/test_workflow_run_routes.py.
+# generatePython/Adk/Maf/Nooa -- ported in Phase 6, Task 4 -- see
+# tests/unit/test_workflow_generate_routes.py for their dedicated tests.
+# `run`/`runByName`/`runStream`/`runPlaybookNode`/`toolResult` were ported in
+# Phase 5, Task 6 -- see tests/unit/test_workflow_run_routes.py.
 # ============================================================================
-
-@pytest.mark.parametrize('method,args', [
-    ('generatePython', (ctx(), 1)),
-    ('generateAdk', (ctx(), 1)),
-    ('generateMaf', (ctx(), 1)),
-    ('generateNooa', (ctx(), 1)),
-])
-def test_unrouted_methods_raise_not_implemented(method, args):
-    with pytest.raises(NotImplementedError, match='Phase 5/6'):
-        getattr(wc(), method)(*args)
 
 
 # ============================================================================

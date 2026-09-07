@@ -658,6 +658,21 @@ class PythonEmitHelpers:
         list-shaped array) with forceObject=True: re-key it "0","1","2",...
         exactly like PHP's (object) cast would, so it renders as an object.
 
+        Without `forceObject`, PHP's own `json_encode` has the SAME
+        array/object ambiguity in reverse: an EMPTY PHP array -- even one a
+        caller builds and fills with string keys when non-empty, e.g.
+        ADKGenerator.php:892's `$nodeNames[(string) $nid] = ...` -- still
+        encodes as JSON `[]` when it happens to end up empty, because PHP
+        cannot tell "empty associative array" from "empty list" without an
+        explicit `(object)` cast (only ADKGenerator.php:893's call site
+        omits `forceObject`, so an empty `$nodeNames` renders
+        `NODE_NAMES = []`, not `{}` -- verified against a live PHP
+        generate-adk response for a workflow with no agent nodes, 2026-09-07).
+        A caller here that built the equivalent Python value as a `dict`
+        (the natural port of "assoc array, string keys when non-empty") must
+        match that: an empty dict with forceObject=False renders `[]`, same
+        as an empty list would.
+
         NOTE (ported verbatim, not fixed): PHP replaces the LITERAL substrings
         ': true' / ': false' / ': null' -- so a bare boolean/null that is a
         plain array ELEMENT (no preceding "key: ") is NOT rewritten and would
@@ -666,6 +681,8 @@ class PythonEmitHelpers:
         """
         if forceObject and isinstance(value, list):
             value = {str(i): v for i, v in enumerate(value)}
+        elif not forceObject and isinstance(value, dict) and not value:
+            value = []
         raw = dumps_pretty(value, unescaped=True, float_formatter=_phpFloatToken)
         raw = raw.replace(': true', ': True')
         raw = raw.replace(': false', ': False')

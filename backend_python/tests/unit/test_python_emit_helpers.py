@@ -19,6 +19,24 @@ def test_json_to_python_null_true_false():
     assert 'False' in out
 
 
+def test_json_to_python_empty_dict_without_force_object_renders_list():
+    """Phase 6, Task 4 fix (differential wf=27/38/40/41/42 generate-adk):
+    PHP's own json_encode() has no way to distinguish an empty associative
+    array from an empty list -- without an explicit `(object)` cast (i.e.
+    forceObject=False, the default), ANY empty PHP array -- even one built
+    with string keys when non-empty, like ADKGenerator.php:892-893's
+    `$nodeNames[(string) $nid] = ...; jsonToPython($nodeNames)` -- encodes
+    as JSON `[]`, never `{}`. Verified against a live PHP generate-adk
+    response for workflow 27 ("test ingestion workflow", no agent nodes):
+    PHP emits `NODE_NAMES = []`, not `{}`. A caller here that built the
+    natural Python port -- an empty `dict` -- must match that."""
+    assert PythonEmitHelpers.jsonToPython({}) == '[]'
+    # forceObject=True still takes the (object) cast path -- unaffected.
+    assert PythonEmitHelpers.jsonToPython({}, True) == '{}'
+    # A non-empty dict is unaffected either way.
+    assert PythonEmitHelpers.jsonToPython({'1': 'a'}) == '{\n    "1": "a"\n}'
+
+
 # ─── jsonToPython float tokens (Fix round 1) ───────────────────────────────
 # Critical bug found in review: jsonToPython delegated to phpjson.dumps_pretty,
 # which used Python's json.dumps/repr() float formatting -- disagreeing with
