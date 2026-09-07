@@ -4,8 +4,10 @@ Task 8 of Phase 2a brought the constructor, helpers, config appliers, quota
 check, and the LLM-facing tool builders (lines 36-686 and 2711-3102 of the PHP
 source). Task 9 adds the request flows — `chat` (PHP 686-942),
 `_handleStreamingChat` (PHP 1499-2091) and `_handleRegularChat` (PHP
-2360-2711). `agent`, `verify`, `compareOnly`, `_handleVerification` and
-`_handleComparison` land in Phase 2d.
+2360-2711). Phase 2d completes the class with the three remaining public
+entry points — `agent` (PHP 942-1008), `verify` (1009-1178) and
+`compareOnly` (1179-1498) — plus the in-chat `_handleVerification` (2091-2189)
+and `_handleComparison` (2190-2359) phases they share event names with.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import re
 import time
 
 from app.ai_portfolio_assistant import AIPortfolioAssistant
+from app.controllers.chat_sse_clients import ComparisonSseClient, VerificationSseClient
 from app.agent_team.services.memory_auto_updater import MemoryAutoUpdater
 from app.agent_team.services.session_search_service import SessionSearchService
 from app.agent_team.services.user_memory_repository import UserMemoryRepository
@@ -28,7 +31,7 @@ from app.services.sse_hub_client import SSEHubClient
 from app.services.usage_logger import UsageLogger
 from app.support.crypto import aes256cbc_decrypt
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_empty, php_intval, php_uniqid
+from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_date, php_empty, php_intval, php_uniqid
 from app.support.phpjson import dumps
 
 import base64
@@ -1202,6 +1205,523 @@ class ChatController:
         )
 
     # ------------------------------------------------------------------
+    # Single-pass agent call (PHP agent, lines 942-1008)
+    # ------------------------------------------------------------------
+
+    def agent(self, request: dict) -> dict:
+        """Single-pass LLM call: prompt in, text out. No tools, no history,
+        no streaming, no skill routing. Used by clients (e.g. the
+        skill-creator port) that just need "spawn an agent, get its
+        answer." Tools are forced off by passing `tools: []` to the
+        provider — see ClaudeProvider:174 and friends.
+        """
+        input_ = request['body']
+        prompt = str(input_.get('prompt') if input_.get('prompt') is not None else '').strip()
+        provider = input_.get('provider')
+        model = str(input_['model']).strip() if input_.get('model') is not None else ''
+        system = str(input_['system']) if input_.get('system') is not None else ''
+        userId = str(input_.get('user_id') if input_.get('user_id') is not None
+                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+
+        if prompt == '':
+            return {'success': False, 'error': 'prompt is required', 'status_code': 400}
+        if php_empty(provider):
+            return {'success': False, 'error': 'provider is required', 'status_code': 400}
+
+        quotaCheck = self._checkFreeTrialQuota(userId)
+        if quotaCheck is not None:
+            return quotaCheck
+
+        config = self._applyDatabaseProviderSettings(self.config)
+        config = self._applyPackageDefaults(config, userId)
+        config = self._applyUserApiKeys(config, userId, provider)
+        assistant = AIPortfolioAssistant(config)
+
+        try:
+            providerInstance = assistant.getLLMManager().getProvider(provider)
+            if not providerInstance:
+                return {'success': False, 'error': f"Provider '{provider}' not available", 'status_code': 400}
+            if model != '' and hasattr(providerInstance, 'setModel'):
+                providerInstance.setModel(model)
+
+            options = {
+                'provider': provider,
+                'tools': [],
+                'user_id': userId,
+            }
+            if system != '':
+                options['system_prompt'] = system
+
+            result = assistant.getLLMManager().chat(prompt, [], options)
+
+            return {
+                'success': True,
+                'text': result.get('text') if result.get('text') is not None else '',
+                'usage': result.get('usage'),
+                'provider': result.get('provider_used') if result.get('provider_used') is not None else provider,
+                'model': result.get('model'),
+            }
+        except Exception as e:  # noqa: BLE001
+            error_log("[ChatController::agent] " + str(e))
+            return {
+                'success': False,
+                'error': self.humanizeProviderError(str(e)),
+                'status_code': 500,
+            }
+        finally:
+            # Python-only cleanup (PHP has no Guzzle client to release).
+            try:
+                assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[ChatController] assistant.close() failed: {closeErr}")
+
+    # ------------------------------------------------------------------
+    # On-demand verification (PHP verify, lines 1009-1178)
+    # ------------------------------------------------------------------
+
+    def verify(self, request: dict) -> dict:
+        """On-demand verification of an already-completed assistant response.
+        Streams the verifier's output via SSE (verifier_chunk / verification_response /
+        verification_complete).
+        """
+        input_ = request['body']
+        originalMessage = str(input_.get('original_message') if input_.get('original_message') is not None else '').strip()
+        responseText = str(input_.get('response_text') if input_.get('response_text') is not None else '').strip()
+        verifierProvider = input_.get('verifier_provider')
+        userId = str(input_.get('user_id') if input_.get('user_id') is not None
+                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+
+        if originalMessage == '' or responseText == '' or php_empty(verifierProvider):
+            return {
+                'success': False,
+                'error': 'original_message, response_text, and verifier_provider are required',
+                'status_code': 400,
+            }
+
+        quotaCheck = self._checkFreeTrialQuota(userId)
+        if quotaCheck is not None:
+            return quotaCheck
+
+        config = self._applyDatabaseProviderSettings(self.config)
+        config = self._applyPackageDefaults(config, userId)
+        config = self._applyUserApiKeys(config, userId, verifierProvider)
+        assistant = AIPortfolioAssistant(config)
+
+        usageLogger = None
+        try:
+            usageLogger = UsageLogger(self.db, True, config.get('contexts_database') if config.get('contexts_database') is not None else config.get('database'))
+        except Exception as e:  # noqa: BLE001
+            error_log("[ChatController::verify] Usage logger unavailable: " + str(e))
+
+        # SSE headers / output buffering / ignore_user_abort are handled by
+        # main.py's StreamingResponse bridge (spec §3).
+        sse = request['sse']
+        # ContextVar set INSIDE the request thread — see handleStreamingChat.
+        sseToken = SSEHubClient.current_stream.set(sse)
+
+        # SSE event sender - detects client disconnect and throws to abort upstream LLM call
+        sendEvent = sse.send
+
+        startTime = time.time()
+
+        # PHP declares $mcpToolsLoader inside the try; hoisted here so the
+        # Python-only `finally` can close its HTTP clients on every path.
+        mcpToolsLoader = None
+        try:
+            sendEvent('verification_start', {'verifier': verifierProvider})
+
+            currentDate = php_date('Y-m-d')
+            currentDateTime = php_date('Y-m-d H:i:s T')
+            verificationPrompt = (
+                "You are a verification assistant. Your task is to analyze the following response for accuracy, completeness, and potential issues.\n\n"
+                + f"**Current Date:** {currentDate} (Full timestamp: {currentDateTime})\n\n"
+                + f"**Original Question:**\n{originalMessage}\n\n"
+                + f"**Response to Verify:**\n{responseText}\n\n"
+                + "**Your Task:**\n"
+                + "1. Check for factual accuracy (use the current date above as reference for time-sensitive information)\n"
+                + "2. Identify any errors or omissions\n"
+                + "3. Assess the quality of reasoning\n"
+                + "4. Provide a brief verification summary\n\n"
+                + "Be concise and focus on the most important points.\n"
+                + "IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.)."
+            )
+
+            verifierProviderInstance = assistant.getLLMManager().getProvider(verifierProvider)
+            if not verifierProviderInstance:
+                raise RuntimeError(f"Verifier provider '{verifierProvider}' not available")
+
+            # Load MCP tools and combine with base tools so the verifier can call external sources
+            verifierTools = assistant.getToolsManager().getToolDefinitions()
+            try:
+                mcpToolsLoader = MCPToolsLoader(self.db)
+                mcpToolsLoader.loadToolsForUser(userId, self._resolvePackageMcpAllowlist(userId))
+                if mcpToolsLoader.hasTools():
+                    verifierTools = verifierTools + mcpToolsLoader.getToolDefinitions()
+                    combinedExecutor = CombinedToolsExecutor(
+                        assistant.getToolsManager(),
+                        mcpToolsLoader,
+                    )
+                    if hasattr(verifierProviderInstance, 'setFunctionExecutor'):
+                        verifierProviderInstance.setFunctionExecutor(combinedExecutor)
+            except Exception as e:  # noqa: BLE001
+                error_log("[ChatController::verify] MCP tools load failed: " + str(e))
+
+            # PHP: $this->createVerificationSSEClient($sendEvent) — the anonymous
+            # class it returns is ported as VerificationSseClient (2a).
+            verifierSseClient = VerificationSseClient(sendEvent)
+            if hasattr(verifierProviderInstance, 'setSSEClient'):
+                verifierProviderInstance.setSSEClient(verifierSseClient)
+
+            verifierResponse = assistant.getLLMManager().streamChat(
+                verificationPrompt,
+                lambda chunk: sendEvent('verifier_chunk', chunk),
+                [],
+                {
+                    'provider': verifierProvider,
+                    'tools': verifierTools,
+                },
+            )
+
+            sendEvent('verification_response', {
+                'success': True,
+                'text': verifierResponse.get('text') if verifierResponse.get('text') is not None else '',
+                'verifier': verifierProvider,
+            })
+
+            if usageLogger:
+                u = verifierResponse.get('usage') if verifierResponse.get('usage') is not None else []
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId) if is_numeric(userId) else None,
+                    'session_id': php_uniqid('verify_', True),
+                    'provider': verifierProvider,
+                    'model': verifierResponse.get('model') if verifierResponse.get('model') is not None else 'unknown',
+                    'prompt_tokens': _coalesce(_arr_get(u, 'input_tokens'), _arr_get(u, 'prompt_tokens'), 0),
+                    'completion_tokens': _coalesce(_arr_get(u, 'output_tokens'), _arr_get(u, 'completion_tokens'), 0),
+                    'response_time_ms': int((time.time() - startTime) * 1000),
+                    'status': 'success',
+                    'function_calls_count': _coalesce(_arr_get(u, 'function_calls'), 0),
+                    'functions_called': verifierResponse.get('functions_called'),
+                    'mcp_calls_count': verifierResponse.get('mcp_calls_count') if verifierResponse.get('mcp_calls_count') is not None else 0,
+                    'mcp_tools_called': verifierResponse.get('mcp_tools_called'),
+                })
+
+            sendEvent('verification_complete', {'status': 'done'})
+        except Exception as e:  # noqa: BLE001
+            # Deviation: PHP has `catch (\RuntimeException)` then `catch (Exception)`
+            # with identical bodies apart from the CLIENT_ABORTED early return —
+            # the single block below is the faithful-in-effect form.
+            if isinstance(e, RuntimeError) and str(e) == 'CLIENT_ABORTED':
+                error_log("[ChatController::verify] Client aborted")
+                return {'streaming': True}
+            error_log("[ChatController::verify] Error: " + str(e))
+            try:
+                sendEvent('verification_error', {'message': self.humanizeProviderError(str(e))})
+                sendEvent('verification_complete', {'status': 'error'})
+            except RuntimeError as abort:      # the client vanished mid-error
+                if str(abort) != 'CLIENT_ABORTED':
+                    raise
+        finally:
+            # Python-only cleanup — see handleStreamingChat's finally.
+            SSEHubClient.current_stream.reset(sseToken)
+            try:
+                assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[ChatController] assistant.close() failed: {closeErr}")
+            if mcpToolsLoader is not None:
+                try:
+                    mcpToolsLoader.close()
+                except Exception as closeErr:  # noqa: BLE001
+                    error_log(f"[ChatController] mcpToolsLoader.close() failed: {closeErr}")
+
+        return {'streaming': True}
+
+    # ------------------------------------------------------------------
+    # On-demand comparison (PHP compareOnly, lines 1179-1498)
+    # ------------------------------------------------------------------
+
+    def compareOnly(self, request: dict) -> dict:
+        """On-demand comparison: run the last user prompt against the selected compare
+        provider without invoking the primary LLM. Streams compare_* SSE events so
+        the existing compare pane handlers render the response unchanged.
+        """
+        input_ = request['body']
+        message = str(input_.get('message') if input_.get('message') is not None else '').strip()
+        conversationHistory = (
+            self.stripVisualNoiseFromHistory(input_['conversation_history'])
+            if isinstance(input_.get('conversation_history'), (dict, list)) else []
+        )
+        compareProvider = input_.get('compare_provider')
+        userId = str(input_.get('user_id') if input_.get('user_id') is not None
+                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+
+        # Mirror chat()'s skill/attachment context parsing so the comparer
+        # gets the SAME inputs the primary does — so it can run the same
+        # skill flow and produce a comparable artifact. Without these the
+        # comparer was answering a degraded version of the prompt: no
+        # SKILL.md in system prompt, no run_skill_script tool, no
+        # attachment reference. The whole point of compare mode is
+        # apples-to-apples evaluation, which requires the apples to look
+        # the same on both sides.
+        skillContent = input_['skill_content'].strip() if isinstance(input_.get('skill_content'), str) else ''
+        skillMetadata = self.sanitizeSkillMetadata(input_.get('skill_metadata'))
+        availableSkills = self.sanitizeAvailableSkills(input_.get('available_skills'))
+
+        # Allow empty `message` when the request is a tool-result
+        # continuation: the frontend's compare-pane dispatcher posts an
+        # empty message with the tool result tucked into the tail of
+        # conversation_history (assistant tool_use turn → role:'tool'
+        # turn). Without this exception, every compare-pane skill turn
+        # would 400 after the tool runs (which is exactly the failure
+        # that broke the 4-pane test).
+        hasToolResultTail = False
+        if not php_empty(conversationHistory):
+            tail = conversationHistory[len(conversationHistory) - 1]
+            if isinstance(tail, (dict, list)) and _arr_get(tail, 'role', '') == 'tool':
+                hasToolResultTail = True
+        if (not hasToolResultTail and message == '') or php_empty(compareProvider):
+            return {
+                'success': False,
+                'error': 'message and compare_provider are required',
+                'status_code': 400,
+            }
+
+        quotaCheck = self._checkFreeTrialQuota(userId)
+        if quotaCheck is not None:
+            return quotaCheck
+
+        # Run attachments through AttachmentDispatcher with the SAME
+        # skillModeActive flag chat() uses, so the comparer's user message
+        # gets the same attachment treatment: short reference for skill-
+        # sensitive providers (Grok/DeepSeek), full inline elsewhere.
+        attachmentIds = input_.get('attachment_ids') if input_.get('attachment_ids') is not None else []
+        if not isinstance(attachmentIds, (dict, list)):
+            attachmentIds = []
+        imageAttachments = []
+        pdfAttachments = []
+        if not php_empty(attachmentIds) and is_numeric(userId):
+            try:
+                from app.services.attachment_dispatcher import AttachmentDispatcher
+                dispatcher = AttachmentDispatcher(self.db)
+                skillModeActive = (skillMetadata is not None) or not php_empty(availableSkills)
+                built = dispatcher.buildPrefix(attachmentIds, php_intval(userId), compareProvider, skillModeActive)
+                if built['prefix'] != '':
+                    message = built['prefix'] + message
+                if not php_empty(built.get('image_attachments')):
+                    imageAttachments = built['image_attachments']
+                if not php_empty(built.get('pdf_attachments')):
+                    pdfAttachments = built['pdf_attachments']
+                if not php_empty(built.get('notes')):
+                    error_log('[ChatController::compareOnly] Attachment notes: ' + ' | '.join(built['notes']))
+            except Exception as e:  # noqa: BLE001
+                error_log('[ChatController::compareOnly] Attachment dispatch failed: ' + str(e))
+
+        config = self._applyDatabaseProviderSettings(self.config)
+        config = self._applyPackageDefaults(config, userId)
+        config = self._applyUserApiKeys(config, userId, compareProvider)
+        assistant = AIPortfolioAssistant(config)
+
+        usageLogger = None
+        try:
+            usageLogger = UsageLogger(self.db, True, config.get('contexts_database') if config.get('contexts_database') is not None else config.get('database'))
+        except Exception as e:  # noqa: BLE001
+            error_log("[ChatController::compareOnly] Usage logger unavailable: " + str(e))
+
+        # SSE headers / output buffering / ignore_user_abort are handled by
+        # main.py's StreamingResponse bridge (spec §3).
+        sse = request['sse']
+        sseToken = SSEHubClient.current_stream.set(sse)
+        sendEvent = sse.send
+
+        startTime = time.time()
+
+        # PHP declares $mcpToolsLoader inside the try; hoisted for the close.
+        mcpToolsLoader = None
+        try:
+            sendEvent('compare_start', {'comparer': compareProvider})
+
+            compareProviderInstance = assistant.getLLMManager().getProvider(compareProvider)
+            if not compareProviderInstance:
+                raise RuntimeError(f"Compare provider '{compareProvider}' not available")
+
+            # Load MCP tools — needed for the no-skill and multi-skill
+            # branches. Combined executor wires MCP tool calls through to
+            # the provider when MCP is in scope.
+            try:
+                mcpToolsLoader = MCPToolsLoader(self.db)
+                mcpToolsLoader.loadToolsForUser(userId, self._resolvePackageMcpAllowlist(userId))
+                if mcpToolsLoader.hasTools():
+                    combinedExecutor = CombinedToolsExecutor(
+                        assistant.getToolsManager(),
+                        mcpToolsLoader,
+                    )
+                    if hasattr(compareProviderInstance, 'setFunctionExecutor'):
+                        compareProviderInstance.setFunctionExecutor(combinedExecutor)
+            except Exception as e:  # noqa: BLE001
+                error_log("[ChatController::compareOnly] MCP tools load failed: " + str(e))
+
+            # PHP: $this->createComparisonSSEClient($sendEvent) — see 2a.
+            compareSseClient = ComparisonSseClient(sendEvent)
+            if hasattr(compareProviderInstance, 'setSSEClient'):
+                compareProviderInstance.setSSEClient(compareSseClient)
+
+            # Build the SAME options block chat()'s skill-routing logic
+            # produces. The comparer needs to see the same tools,
+            # skill_content, tool_choice forcing, and attachments as the
+            # primary so the comparison is apples-to-apples.
+            options = {'provider': compareProvider}
+
+            # Tool selection — single-skill / multi-skill / no-skill,
+            # mirrored from handleStreamingChat.
+            if skillMetadata is not None:
+                skillTool = self.buildRunSkillScriptTool(skillMetadata)
+                taskTool = self.buildTaskTool()
+                options['tools'] = [skillTool, taskTool]
+                options['skill_metadata'] = skillMetadata
+
+                hasPriorRunSkillScript = False
+                for h in conversationHistory:
+                    if _arr_get(h, 'role', '') == 'tool' and _arr_get(h, 'name', '') == 'run_skill_script':
+                        hasPriorRunSkillScript = True
+                        break
+                    if _arr_get(h, 'role', '') == 'assistant' and not php_empty(_arr_get(h, 'tool_calls', None)):
+                        for tc in h['tool_calls']:
+                            tcName = _arr_get(_arr_get(tc, 'function', {}) or {}, 'name', None)
+                            if tcName is None:
+                                tcName = _arr_get(tc, 'name', '')
+                            if tcName == 'run_skill_script':
+                                hasPriorRunSkillScript = True
+                                break                 # PHP: break 2
+                        if hasPriorRunSkillScript:
+                            break
+
+                if not hasPriorRunSkillScript:
+                    # Provider-conditional tool_choice form (same as primary
+                    # path): bare 'required' for grok/deepseek (which
+                    # silently ignore the specific-function form),
+                    # specific-function for everyone else.
+                    compareProviderName = str(compareProvider).lower()
+                    if compareProviderName in ('grok', 'deepseek'):
+                        options['tool_choice'] = 'required'
+                    else:
+                        options['tool_choice'] = {
+                            'type': 'function',
+                            'function': {'name': 'run_skill_script'},
+                        }
+            elif not php_empty(availableSkills):
+                skillTool = self.buildMultiSkillTool(availableSkills)
+                discoverTool = self.buildDiscoverSkillTool(availableSkills)
+                tools = [discoverTool, skillTool]
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    tools = tools + mcpToolsLoader.getToolDefinitions()
+                options['tools'] = tools
+                options['available_skills'] = availableSkills
+            else:
+                compareTools = assistant.getToolsManager().getToolDefinitions()
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    compareTools = compareTools + mcpToolsLoader.getToolDefinitions()
+                options['tools'] = compareTools
+
+            # skill_content → appended to system prompt by the provider's
+            # buildSystemPrompt (same channel that gives chip-dragged
+            # turns their SKILL.md context).
+            if skillContent != '':
+                options['skill_content'] = skillContent
+
+            # Native image / PDF attachments — providers embed these in
+            # their message-construction path (Claude/Gemini have native
+            # PDF support; others fell back to text in the prefix).
+            if not php_empty(imageAttachments):
+                options['image_attachments'] = imageAttachments
+            if not php_empty(pdfAttachments):
+                options['pdf_attachments'] = pdfAttachments
+
+            error_log("🔧 [ChatController::compareOnly] Compare turn — provider: " + str(compareProvider)
+                      + " | skill_metadata: " + (skillMetadata['dir_name'] if skillMetadata else 'null')
+                      + " | available_skills: " + str(len(availableSkills))
+                      + " | tool_choice: " + dumps(options.get('tool_choice') if options.get('tool_choice') is not None else 'auto')
+                      + " | skill_content_len: " + str(len(skillContent))
+                      + " | attachments: " + str(len(attachmentIds)))
+
+            # Honor the frontend's streaming preference. Frontend sends
+            # streaming=true for compare-only-text (visible bubble, wants
+            # progressive UX) and streaming=false for compare-skill
+            # (hidden bubble, deliverable is a file).
+            useStreaming = input_.get('streaming') if input_.get('streaming') is not None else True
+            if not php_empty(useStreaming):
+                # Streaming path: streamChat fires the onChunk callback
+                # which emits compare_chunk events the frontend bubble
+                # listens to. Without this, providers whose chat() returns
+                # the full response in one shot (Gemini) leave the
+                # bubble stuck on a spinner because no chunks ever arrive.
+                compareResponse = assistant.getLLMManager().streamChat(
+                    message,
+                    lambda chunk: sendEvent('compare_chunk', chunk),
+                    conversationHistory,
+                    options,
+                )
+            else:
+                # Non-streaming path: single response with reliable usage,
+                # used when the bubble is hidden (compare-skill mode).
+                options['stream'] = False
+                compareResponse = assistant.getLLMManager().chat(
+                    message,
+                    conversationHistory,
+                    options,
+                )
+
+            sendEvent('compare_response', {
+                'success': True,
+                'text': compareResponse.get('text') if compareResponse.get('text') is not None else '',
+                'comparer': compareProvider,
+                'usage': compareResponse.get('usage'),
+            })
+
+            if usageLogger:
+                u = compareResponse.get('usage') if compareResponse.get('usage') is not None else []
+                usageLogger.logTransaction({
+                    'user_id': php_intval(userId) if is_numeric(userId) else None,
+                    'session_id': php_uniqid('compare_', True),
+                    'provider': compareProvider,
+                    'model': compareResponse.get('model') if compareResponse.get('model') is not None else 'unknown',
+                    'prompt_tokens': _coalesce(_arr_get(u, 'input_tokens'), _arr_get(u, 'prompt_tokens'), 0),
+                    'completion_tokens': _coalesce(_arr_get(u, 'output_tokens'), _arr_get(u, 'completion_tokens'), 0),
+                    'response_time_ms': int((time.time() - startTime) * 1000),
+                    'status': 'success',
+                    'function_calls_count': _coalesce(_arr_get(u, 'function_calls'), 0),
+                    'functions_called': compareResponse.get('functions_called'),
+                    'mcp_calls_count': compareResponse.get('mcp_calls_count') if compareResponse.get('mcp_calls_count') is not None else 0,
+                    'mcp_tools_called': compareResponse.get('mcp_tools_called'),
+                })
+
+            sendEvent('compare_complete', {'status': 'done'})
+        except Exception as e:  # noqa: BLE001
+            # Deviation: PHP's two catch blocks collapse into one — see verify().
+            if isinstance(e, RuntimeError) and str(e) == 'CLIENT_ABORTED':
+                error_log("[ChatController::compareOnly] Client aborted")
+                return {'streaming': True}
+            error_log("[ChatController::compareOnly] Error: " + str(e))
+            try:
+                sendEvent('compare_error', {'message': self.humanizeProviderError(str(e))})
+                sendEvent('compare_complete', {'status': 'error'})
+            except RuntimeError as abort:      # the client vanished mid-error
+                if str(abort) != 'CLIENT_ABORTED':
+                    raise
+        finally:
+            # Python-only cleanup — see handleStreamingChat's finally.
+            SSEHubClient.current_stream.reset(sseToken)
+            try:
+                assistant.close()
+            except Exception as closeErr:  # noqa: BLE001
+                error_log(f"[ChatController] assistant.close() failed: {closeErr}")
+            if mcpToolsLoader is not None:
+                try:
+                    mcpToolsLoader.close()
+                except Exception as closeErr:  # noqa: BLE001
+                    error_log(f"[ChatController] mcpToolsLoader.close() failed: {closeErr}")
+
+        return {'streaming': True}
+
+    # ------------------------------------------------------------------
     # Streaming chat (PHP handleStreamingChat, lines 1499-2091)
     # ------------------------------------------------------------------
 
@@ -1768,15 +2288,268 @@ class ChatController:
             'status_code': 200,
         }
 
-    def _handleVerification(self, *args, **kwargs):
-        """PHP handleVerification — pending Phase 2d. Only reachable when a request
-        enables verification (`verification_enabled` + a different verifier provider)."""
-        raise NotImplementedError('pending 2d')
+    # ------------------------------------------------------------------
+    # In-chat verification phase (PHP handleVerification, lines 2091-2189)
+    # ------------------------------------------------------------------
 
-    def _handleComparison(self, *args, **kwargs):
-        """PHP handleComparison — pending Phase 2d. Only reachable when a request
-        enables compare (`compare_enabled` + a different compare provider)."""
-        raise NotImplementedError('pending 2d')
+    def _handleVerification(
+        self,
+        assistant: AIPortfolioAssistant,
+        sendEvent,
+        originalMessage: str,
+        responseText: str,
+        verifierProvider: str,
+        mcpToolsLoader: MCPToolsLoader | None,
+        usageLogger: UsageLogger | None,
+        userId: str,
+        startTime: float,
+        mainResponseTimeMs: int,
+    ) -> None:
+        """Handle verification with another LLM."""
+        try:
+            sendEvent('verification_start', {'verifier': verifierProvider})
+
+            # Build verification prompt
+            currentDate = php_date('Y-m-d')
+            currentDateTime = php_date('Y-m-d H:i:s T')
+            verificationPrompt = "You are a verification assistant. Your task is to analyze the following response for accuracy, completeness, and potential issues.\n\n"
+            verificationPrompt += f"**Current Date:** {currentDate} (Full timestamp: {currentDateTime})\n\n"
+            verificationPrompt += f"**Original Question:**\n{originalMessage}\n\n"
+            verificationPrompt += f"**Response to Verify:**\n{responseText}\n\n"
+            verificationPrompt += "**Your Task:**\n"
+            verificationPrompt += "1. Check for factual accuracy (use the current date above as reference for time-sensitive information)\n"
+            verificationPrompt += "2. Identify any errors or omissions\n"
+            verificationPrompt += "3. Assess the quality of reasoning\n"
+            verificationPrompt += "4. Provide a brief verification summary\n\n"
+            verificationPrompt += "Be concise and focus on the most important points.\n"
+            verificationPrompt += "IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.)."
+
+            verifierSessionId = php_uniqid('verify_', True)
+
+            verifierProviderInstance = assistant.getLLMManager().getProvider(verifierProvider)
+            if verifierProviderInstance:
+                # Create custom SSE client for verification
+                verifierSseClient = VerificationSseClient(sendEvent)
+
+                if hasattr(verifierProviderInstance, 'setSSEClient'):
+                    verifierProviderInstance.setSSEClient(verifierSseClient)
+
+                # Get tools for verifier
+                verifierTools = assistant.getToolsManager().getToolDefinitions()
+                if mcpToolsLoader and mcpToolsLoader.hasTools():
+                    verifierTools = verifierTools + mcpToolsLoader.getToolDefinitions()
+
+                verifierResponse = assistant.getLLMManager().streamChat(
+                    verificationPrompt,
+                    lambda chunk: sendEvent('verifier_chunk', chunk),
+                    [],
+                    {
+                        'provider': verifierProvider,
+                        'tools': verifierTools,
+                    },
+                )
+
+                sendEvent('verification_response', {
+                    'success': True,
+                    'text': verifierResponse.get('text') if verifierResponse.get('text') is not None else '',
+                    'verifier': verifierProvider,
+                })
+
+                # Log verifier usage
+                if usageLogger:
+                    verifierUsage = verifierResponse.get('usage') if verifierResponse.get('usage') is not None else []
+                    verifierResponseTimeMs = int((time.time() - startTime) * 1000) - mainResponseTimeMs
+
+                    usageLogger.logTransaction({
+                        'user_id': php_intval(userId) if is_numeric(userId) else None,
+                        'session_id': verifierSessionId,
+                        'provider': verifierProvider,
+                        'model': verifierResponse.get('model') if verifierResponse.get('model') is not None else 'unknown',
+                        'prompt_tokens': _coalesce(_arr_get(verifierUsage, 'input_tokens'), _arr_get(verifierUsage, 'prompt_tokens'), 0),
+                        'completion_tokens': _coalesce(_arr_get(verifierUsage, 'output_tokens'), _arr_get(verifierUsage, 'completion_tokens'), 0),
+                        'response_time_ms': verifierResponseTimeMs if verifierResponseTimeMs > 0 else 0,
+                        'status': 'success',
+                        'function_calls_count': _coalesce(_arr_get(verifierUsage, 'function_calls'), 0),
+                        'functions_called': verifierResponse.get('functions_called'),
+                        'mcp_calls_count': verifierResponse.get('mcp_calls_count') if verifierResponse.get('mcp_calls_count') is not None else 0,
+                        'mcp_tools_called': verifierResponse.get('mcp_tools_called'),
+                    })
+
+            sendEvent('verification_complete', {'status': 'done'})
+
+        except Exception as e:  # noqa: BLE001
+            # PHP catches \Exception, which in PHP also covers the
+            # CLIENT_ABORTED \RuntimeException: it logs, then the first
+            # sendEvent below re-raises it (the stream is gone) and the abort
+            # surfaces in handleStreamingChat's own handler. Same here.
+            error_log("Verification error: " + str(e))
+            sendEvent('verification_error', {'message': self.humanizeProviderError(str(e))})
+            sendEvent('verification_complete', {'status': 'error'})
+
+    # ------------------------------------------------------------------
+    # In-chat comparison phase (PHP handleComparison, lines 2190-2359)
+    # ------------------------------------------------------------------
+
+    def _handleComparison(
+        self,
+        assistant: AIPortfolioAssistant,
+        sendEvent,
+        message: str,
+        conversationHistory: list,
+        compareProvider: str,
+        mcpToolsLoader: MCPToolsLoader | None,
+        usageLogger: UsageLogger | None,
+        userId: str,
+        startTime: float,
+        mainResponseTimeMs: int,
+        # The 5 skill/attachment context items the comparer needs to see
+        # the same scene as the primary. Without these, the compare pane
+        # was answering a degraded version of the prompt: no SKILL.md in
+        # system prompt, no run_skill_script tool, no native attachments.
+        # The whole point of compare mode is apples-to-apples evaluation.
+        skillMetadata: dict | None = None,
+        availableSkills: list | None = None,
+        skillContent: str = '',
+        imageAttachments: list | None = None,
+        pdfAttachments: list | None = None,
+    ) -> None:
+        """Handle comparison with another LLM."""
+        availableSkills = availableSkills if availableSkills is not None else []
+        imageAttachments = imageAttachments if imageAttachments is not None else []
+        pdfAttachments = pdfAttachments if pdfAttachments is not None else []
+
+        try:
+            sendEvent('compare_start', {'comparer': compareProvider})
+
+            compareSessionId = php_uniqid('compare_', True)
+
+            compareProviderInstance = assistant.getLLMManager().getProvider(compareProvider)
+            if compareProviderInstance:
+                # Create custom SSE client for comparison
+                compareSseClient = ComparisonSseClient(sendEvent)
+
+                if hasattr(compareProviderInstance, 'setSSEClient'):
+                    compareProviderInstance.setSSEClient(compareSseClient)
+
+                # Build the SAME options block the primary's skill-routing
+                # logic produces (see handleStreamingChat). The comparer
+                # gets the same tools, skill_content, tool_choice forcing,
+                # and attachments as the primary so it sees the same scene.
+                options = {'provider': compareProvider}
+
+                if skillMetadata is not None:
+                    skillTool = self.buildRunSkillScriptTool(skillMetadata)
+                    taskTool = self.buildTaskTool()
+                    options['tools'] = [skillTool, taskTool]
+                    options['skill_metadata'] = skillMetadata
+
+                    # Mirror the primary's loop guard — only count
+                    # run_skill_script tool rounds, not discover_skill.
+                    hasPriorRunSkillScript = False
+                    for h in conversationHistory:
+                        if _arr_get(h, 'role', '') == 'tool' and _arr_get(h, 'name', '') == 'run_skill_script':
+                            hasPriorRunSkillScript = True
+                            break
+                        if _arr_get(h, 'role', '') == 'assistant' and not php_empty(_arr_get(h, 'tool_calls', None)):
+                            for tc in h['tool_calls']:
+                                tcName = _arr_get(_arr_get(tc, 'function', {}) or {}, 'name', None)
+                                if tcName is None:
+                                    tcName = _arr_get(tc, 'name', '')
+                                if tcName == 'run_skill_script':
+                                    hasPriorRunSkillScript = True
+                                    break             # PHP: break 2
+                            if hasPriorRunSkillScript:
+                                break
+
+                    if not hasPriorRunSkillScript:
+                        # Provider-conditional tool_choice form, mirrored
+                        # from handleStreamingChat's gate (Grok/DeepSeek
+                        # reliably honor 'required' but ignore the
+                        # specific-function form).
+                        compareProviderName = str(compareProvider).lower()
+                        if compareProviderName in ('grok', 'deepseek'):
+                            options['tool_choice'] = 'required'
+                        else:
+                            options['tool_choice'] = {
+                                'type': 'function',
+                                'function': {'name': 'run_skill_script'},
+                            }
+                elif not php_empty(availableSkills):
+                    skillTool = self.buildMultiSkillTool(availableSkills)
+                    discoverTool = self.buildDiscoverSkillTool(availableSkills)
+                    tools = [discoverTool, skillTool]
+                    if mcpToolsLoader and mcpToolsLoader.hasTools():
+                        tools = tools + mcpToolsLoader.getToolDefinitions()
+                    options['tools'] = tools
+                    options['available_skills'] = availableSkills
+                else:
+                    compareTools = assistant.getToolsManager().getToolDefinitions()
+                    if mcpToolsLoader and mcpToolsLoader.hasTools():
+                        compareTools = compareTools + mcpToolsLoader.getToolDefinitions()
+                    options['tools'] = compareTools
+
+                if skillContent != '':
+                    options['skill_content'] = skillContent
+                if not php_empty(imageAttachments):
+                    options['image_attachments'] = imageAttachments
+                if not php_empty(pdfAttachments):
+                    options['pdf_attachments'] = pdfAttachments
+
+                error_log("🔧 [ChatController::handleComparison] Compare turn — provider: " + str(compareProvider)
+                          + " | skill_metadata: " + (skillMetadata['dir_name'] if skillMetadata else 'null')
+                          + " | available_skills: " + str(len(availableSkills))
+                          + " | tool_choice: " + dumps(options.get('tool_choice') if options.get('tool_choice') is not None else 'auto')
+                          + " | skill_content_len: " + str(len(skillContent)))
+
+                # Streaming path: this branch only runs when the primary
+                # call is itself streaming (handleStreamingChat). In that
+                # mode the compare bubble is visible and users benefit
+                # from progressive tokens, so we stream the LLM call here
+                # too. The other compare-side call (compareOnly) honors
+                # the frontend's per-turn streaming flag — see there for
+                # the no-skill vs skill rationale.
+                compareResponse = assistant.getLLMManager().streamChat(
+                    message,
+                    lambda chunk: sendEvent('compare_chunk', chunk),
+                    conversationHistory,
+                    options,
+                )
+
+                sendEvent('compare_response', {
+                    'success': True,
+                    'text': compareResponse.get('text') if compareResponse.get('text') is not None else '',
+                    'comparer': compareProvider,
+                    'usage': compareResponse.get('usage'),
+                })
+
+                # Log compare usage
+                if usageLogger:
+                    compareUsage = compareResponse.get('usage') if compareResponse.get('usage') is not None else []
+                    compareResponseTimeMs = int((time.time() - startTime) * 1000) - mainResponseTimeMs
+
+                    usageLogger.logTransaction({
+                        'user_id': php_intval(userId) if is_numeric(userId) else None,
+                        'session_id': compareSessionId,
+                        'provider': compareProvider,
+                        'model': compareResponse.get('model') if compareResponse.get('model') is not None else 'unknown',
+                        'prompt_tokens': _coalesce(_arr_get(compareUsage, 'input_tokens'), _arr_get(compareUsage, 'prompt_tokens'), 0),
+                        'completion_tokens': _coalesce(_arr_get(compareUsage, 'output_tokens'), _arr_get(compareUsage, 'completion_tokens'), 0),
+                        'response_time_ms': compareResponseTimeMs if compareResponseTimeMs > 0 else 0,
+                        'status': 'success',
+                        'function_calls_count': _coalesce(_arr_get(compareUsage, 'function_calls'), 0),
+                        'functions_called': compareResponse.get('functions_called'),
+                        'mcp_calls_count': compareResponse.get('mcp_calls_count') if compareResponse.get('mcp_calls_count') is not None else 0,
+                        'mcp_tools_called': compareResponse.get('mcp_tools_called'),
+                    })
+
+            sendEvent('compare_complete', {'status': 'done'})
+
+        except Exception as e:  # noqa: BLE001
+            # As in handleVerification: a client abort re-raises out of the
+            # first sendEvent below and lands in the caller's abort handler.
+            error_log("Compare error: " + str(e))
+            sendEvent('compare_error', {'message': self.humanizeProviderError(str(e))})
+            sendEvent('compare_complete', {'status': 'error'})
 
     # ------------------------------------------------------------------
     # Regular (non-streaming) chat (PHP handleRegularChat, lines 2360-2711)

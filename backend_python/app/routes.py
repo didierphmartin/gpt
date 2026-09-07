@@ -41,6 +41,9 @@ ROUTES = [
     ('POST', '/api/v1/auth/upgrade-plan', ('AuthController', 'upgradePlan')),
     # CHAT ROUTES
     ('POST', '/api/v1/chat', ('ChatController', 'chat')),
+    ('POST', '/api/v1/agent', ('ChatController', 'agent')),
+    ('POST', '/api/v1/verify', ('ChatController', 'verify')),
+    ('POST', '/api/v1/compare', ('ChatController', 'compareOnly')),
     # PROVIDER ROUTES
     ('GET', '/api/v1/providers', ('ProviderController', 'list')),
     ('POST', '/api/v1/providers', ('ProviderController', 'switch')),   # Legacy: switch via POST to same endpoint

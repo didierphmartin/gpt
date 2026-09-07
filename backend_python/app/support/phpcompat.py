@@ -81,9 +81,11 @@ def php_empty(v) -> bool:
 
 
 def php_date(fmt: str) -> str:
-    """Subset of PHP date(): Y-m-d, l, Y-m, Y-m-d H:i:s, in PHP's timezone."""
+    """Subset of PHP date(): Y-m-d, l, Y-m, Y-m-d H:i:s, Y-m-d H:i:s T, in PHP's timezone."""
     now = datetime.now(php_tz())
-    table = {'Y-m-d': '%Y-%m-%d', 'l': '%A', 'Y-m': '%Y-%m', 'Y-m-d H:i:s': '%Y-%m-%d %H:%M:%S'}
+    table = {'Y-m-d': '%Y-%m-%d', 'l': '%A', 'Y-m': '%Y-%m', 'Y-m-d H:i:s': '%Y-%m-%d %H:%M:%S',
+             # T = timezone abbreviation (PHP 'CEST'); %Z on a ZoneInfo yields the same string.
+             'Y-m-d H:i:s T': '%Y-%m-%d %H:%M:%S %Z'}
     if fmt not in table:
         raise ValueError(f'unsupported php_date format: {fmt}')
     return now.strftime(table[fmt])

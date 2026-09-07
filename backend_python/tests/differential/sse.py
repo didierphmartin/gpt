@@ -44,15 +44,26 @@ def normalize_usage(d):
     return d
 
 
+# The terminal event families: the primary chat pane plus the verification and
+# comparison panes (ChatController::verify / compareOnly and the in-chat phases).
+# Each triple is (response, complete, error) and is compared the same way.
+TERMINAL_FAMILIES = (
+    ('response', 'complete', 'error'),
+    ('verification_response', 'verification_complete', 'verification_error'),
+    ('compare_response', 'compare_complete', 'compare_error'),
+)
+
+
 def same_stream(a_text: str, b_text: str, *, ignore_response_keys=('text',)):
     a, b = parse_sse(a_text), parse_sse(b_text)
     assert skeleton(a) == skeleton(b), (skeleton(a), skeleton(b))
-    ra, rb = payload(a, 'response'), payload(b, 'response')
-    assert (ra is None) == (rb is None), (ra, rb)
-    if ra is not None or rb is not None:
-        for k in ignore_response_keys:
-            ra.pop(k, None); rb.pop(k, None)
-        assert normalize_usage(ra) == normalize_usage(rb), (ra, rb)
-    assert payload(a, 'complete') == payload(b, 'complete')
-    ea, eb = payload(a, 'error'), payload(b, 'error')
-    assert (ea is None) == (eb is None) and (ea is None or list(ea) == list(eb)), (ea, eb)
+    for resp, complete, error in TERMINAL_FAMILIES:
+        ra, rb = payload(a, resp), payload(b, resp)
+        assert (ra is None) == (rb is None), (resp, ra, rb)
+        if ra is not None or rb is not None:
+            for k in ignore_response_keys:
+                ra.pop(k, None); rb.pop(k, None)
+            assert normalize_usage(ra) == normalize_usage(rb), (resp, ra, rb)
+        assert payload(a, complete) == payload(b, complete), complete
+        ea, eb = payload(a, error), payload(b, error)
+        assert (ea is None) == (eb is None) and (ea is None or list(ea) == list(eb)), (error, ea, eb)
