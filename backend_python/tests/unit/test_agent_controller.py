@@ -1,6 +1,9 @@
 """Unit tests for AgentController — port of backend/src/AgentTeam/Controllers/
-AgentController.php (812 lines), every method except `run` (373-430) and
-`chat` (436-509), which are Phase 5 stubs raising NotImplementedError here.
+AgentController.php (812 lines), including `run` (373-430) and `chat`
+(436-509) as of Phase 5, Task 2 (previously Phase 5 stubs raising
+NotImplementedError). `run`/`chat` tests swap `c.runner` for a FakeRunner —
+AgentRunner's own behavior is pinned separately in
+tests/unit/test_agent_runner.py.
 
 PHP-truth strings copied verbatim from the source:
   - "Name is required"                                                   (117)
@@ -54,8 +57,13 @@ def agent(**overrides) -> Agent:
 
 
 class FakeDb:
-    """Only `executions()` reads the db directly (AgentRunner::getExecutionHistory
-    is a plain SQL query, ported inline since AgentRunner itself is Phase 5)."""
+    """`executions()` reads the db directly (AgentRunner::getExecutionHistory
+    is a plain SQL query, ported inline). Phase 5, Task 2: the real
+    AgentController constructor also queries the db now (LLMProviderResolver.
+    applyDbSettings' `SHOW TABLES LIKE 'system_llm_settings'` /
+    `SELECT * FROM system_llm_settings ...` probes) -- `all_queue` is
+    reserved for the `agent_executions` query under test, so any other SQL
+    (the constructor's probes included) always gets `[]` without touching it."""
 
     def __init__(self, all_=None):
         self.all_queue = list(all_) if all_ else []
@@ -63,7 +71,9 @@ class FakeDb:
 
     def fetch_all(self, sql, params=None):
         self.calls.append(('fetch_all', sql, params))
-        return self.all_queue.pop(0) if self.all_queue else []
+        if 'agent_executions' in sql:
+            return self.all_queue.pop(0) if self.all_queue else []
+        return []
 
 
 class FakeAgentRepository:
@@ -586,7 +596,8 @@ def test_executions_default_limit_offset(monkeypatch):
     repo.access[5] = True
     r = c.executions(ctx(), 5)
     assert r == {'success': True, 'data': [{'id': 1, 'agent_id': 5}], 'meta': {'count': 1, 'limit': 50, 'offset': 0}}
-    assert db.calls[0][2] == [5, 50, 0]
+    exec_call = next(c for c in db.calls if 'agent_executions' in c[1])
+    assert exec_call[2] == [5, 50, 0]
 
 
 def test_executions_custom_limit_offset(monkeypatch):
@@ -595,7 +606,8 @@ def test_executions_custom_limit_offset(monkeypatch):
     repo.access[5] = True
     r = c.executions(ctx(query={'limit': '10', 'offset': '20'}), 5)
     assert r['meta'] == {'count': 0, 'limit': 10, 'offset': 20}
-    assert db.calls[0][2] == [5, 10, 20]
+    exec_call = next(c for c in db.calls if 'agent_executions' in c[1])
+    assert exec_call[2] == [5, 10, 20]
 
 
 # ============================================================================
@@ -778,19 +790,181 @@ def test_reorder_exception_returns_500(monkeypatch):
 
 
 # ============================================================================
-# run / chat — Phase 5 stubs, not routed
+# run / chat — Phase 5, Task 2: real implementations, controller-level only
+# (AgentRunner's own behavior is pinned in tests/unit/test_agent_runner.py;
+# here `c.runner` is swapped for a fake so these tests exercise only the
+# controller's validation/access/plumbing, PHP 373-509).
 # ============================================================================
 
-def test_run_raises_not_implemented(monkeypatch):
-    c, _ = controller(monkeypatch)
-    with pytest.raises(NotImplementedError, match='Phase 5'):
-        c.run(ctx(), 5)
+class FakeRunner:
+    def __init__(self):
+        self.run_calls = []
+        self.stream_calls = []
+        self.run_result = {'success': True, 'text': 'hi'}
+        self.stream_result = {'success': True, 'text': 'hi', 'execution_id': 1}
+        self.stream_context = None
+
+    def run(self, agent, input_, conversation_history, user_id, context):
+        self.run_calls.append((agent, input_, conversation_history, user_id, context))
+        return self.run_result
+
+    def setStreamContext(self, sc):
+        self.stream_context = sc
+
+    def streamRun(self, agent, input_, conversation_history, user_id, on_chunk, context):
+        self.stream_calls.append((agent, input_, conversation_history, user_id, context))
+        if on_chunk:
+            on_chunk({'type': 'agent_start', 'agent_id': agent.getId()})
+        return self.stream_result
 
 
-def test_chat_raises_not_implemented(monkeypatch):
+class FakeSse:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, event, data):
+        self.sent.append((event, data))
+
+
+def test_run_not_found_returns_404(monkeypatch):
     c, _ = controller(monkeypatch)
-    with pytest.raises(NotImplementedError, match='Phase 5'):
-        c.chat(ctx(), 5)
+    r = c.run(ctx(body={'message': 'hi'}), 5)
+    assert r == {'success': False, 'error': 'Agent not found', 'status': 404, 'status_code': 404}
+
+
+def test_run_disabled_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent(enabled=0)
+    r = c.run(ctx(body={'message': 'hi'}), 5)
+    assert r == {'success': False, 'error': 'Agent is disabled', 'status': 400, 'status_code': 400}
+
+
+def test_run_missing_input_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    r = c.run(ctx(body={'message': '   '}), 5)
+    assert r == {'success': False, 'error': 'Input message is required', 'status': 400, 'status_code': 400}
+
+
+def test_run_bad_tools_filter_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    r = c.run(ctx(body={'message': 'hi', 'tools': 'not-a-list'}), 5)
+    assert r == {'success': False, 'error': 'tools must be an array of tool names', 'status': 400, 'status_code': 400}
+
+
+def test_run_app_key_missing_scope_returns_403(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    request = ctx(body={'message': 'hi'})
+    request['auth_type'] = 'app_key'
+    request['app_key_scopes'] = ['agents:run:6']
+    r = c.run(request, 5)
+    assert r == {'success': False, 'error': 'App key not authorized for this agent (missing scope agents:run)',
+                 'status': 403, 'status_code': 403}
+
+
+def test_run_app_key_scoped_to_this_agent_succeeds(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_runner = FakeRunner()
+    c.runner = fake_runner
+    request = ctx(body={'message': 'hi'})
+    request['auth_type'] = 'app_key'
+    request['app_key_scopes'] = ['agents:run:5']
+    r = c.run(request, 5)
+    assert r == fake_runner.run_result
+
+
+def test_run_success_delegates_to_runner(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_runner = FakeRunner()
+    fake_runner.run_result = {'success': True, 'text': 'hello', 'execution_id': 9}
+    c.runner = fake_runner
+    r = c.run(ctx(body={
+        'message': 'hi', 'conversation_history': [{'role': 'user', 'content': 'x'}], 'tools': ['a'],
+    }), 5)
+    assert r == {'success': True, 'text': 'hello', 'execution_id': 9}
+    assert len(fake_runner.run_calls) == 1
+    called_agent, called_input, called_history, called_user, called_context = fake_runner.run_calls[0]
+    assert called_agent.getId() == 5
+    assert called_input == 'hi'
+    assert called_history == [{'role': 'user', 'content': 'x'}]
+    assert called_user == 3
+    assert called_context == {'tools_filter': ['a']}
+
+
+def test_run_input_key_wins_over_message(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_runner = FakeRunner()
+    c.runner = fake_runner
+    c.run(ctx(body={'input': 'from-input', 'message': 'from-message'}), 5)
+    assert fake_runner.run_calls[0][1] == 'from-input'
+
+
+def test_chat_not_found_returns_404(monkeypatch):
+    c, _ = controller(monkeypatch)
+    r = c.chat(ctx(body={'message': 'hi'}), 5)
+    assert r == {'success': False, 'error': 'Agent not found', 'status': 404, 'status_code': 404}
+
+
+def test_chat_disabled_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent(enabled=0)
+    r = c.chat(ctx(body={'message': 'hi'}), 5)
+    assert r == {'success': False, 'error': 'Agent is disabled', 'status': 400, 'status_code': 400}
+
+
+def test_chat_missing_input_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    r = c.chat(ctx(body={'message': '   '}), 5)
+    assert r == {'success': False, 'error': 'Input message is required', 'status': 400, 'status_code': 400}
+
+
+def test_chat_bad_tools_filter_returns_400(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    r = c.chat(ctx(body={'message': 'hi', 'tools': 'not-a-list'}), 5)
+    assert r == {'success': False, 'error': 'tools must be an array of tool names', 'status': 400, 'status_code': 400}
+
+
+def test_chat_success_streams_events_and_sets_stream_context(monkeypatch):
+    c, repo = controller(monkeypatch)
+    repo.access[5] = True
+    repo.agents_by_id[5] = agent()
+    fake_runner = FakeRunner()
+    c.runner = fake_runner
+    fake_sse = FakeSse()
+    request = ctx(body={'message': 'hi', 'tools': ['a']})
+    request['sse'] = fake_sse
+
+    r = c.chat(request, 5)
+
+    assert r is None
+    # setStreamContext was called before streamRun (PHP 494-495 order)
+    assert fake_runner.stream_context is not None
+    assert len(fake_runner.stream_calls) == 1
+    called_agent, called_input, called_history, called_user, called_context = fake_runner.stream_calls[0]
+    assert called_agent.getId() == 5
+    assert called_input == 'hi'
+    assert called_user == 3
+    assert called_context == {'tools_filter': ['a']}
+    # The one event the FakeRunner emitted through on_chunk went out over
+    # SSE named by its own `type` field (see chat()'s DEVIATION docstring).
+    assert fake_sse.sent == [('agent_start', {'type': 'agent_start', 'agent_id': 5})]
 
 
 # ============================================================================

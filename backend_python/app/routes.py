@@ -237,8 +237,7 @@ ROUTES = [
     ('GET', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'show')),
     ('PUT', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'update')),
     ('DELETE', '/api/v1/workflow-schemas/{id:\\d+}', ('AgentTeam:WorkflowSchemaController', 'destroy')),
-    # AGENTS (Agent CRUD and execution; routes.php:407-424 — `run` (419) and
-    # `chat` (420) are Phase 5 and NOT routed here)
+    # AGENTS (Agent CRUD and execution; routes.php:407-424)
     ('GET', '/api/v1/agents', ('AgentTeam:AgentController', 'index')),
     ('POST', '/api/v1/agents', ('AgentTeam:AgentController', 'create')),
     ('GET', '/api/v1/agents/tools', ('AgentTeam:AgentController', 'listTools')),
@@ -250,6 +249,8 @@ ROUTES = [
     ('GET', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'show')),
     ('PUT', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'update')),
     ('DELETE', '/api/v1/agents/{id:\\d+}', ('AgentTeam:AgentController', 'destroy')),
+    ('POST', '/api/v1/agents/{id:\\d+}/run', ('AgentTeam:AgentController', 'run')),
+    ('POST', '/api/v1/agents/{id:\\d+}/chat', ('AgentTeam:AgentController', 'chat')),
     ('GET', '/api/v1/agents/{id:\\d+}/executions', ('AgentTeam:AgentController', 'executions')),
     ('POST', '/api/v1/agents/{id:\\d+}/duplicate', ('AgentTeam:AgentController', 'duplicate')),
     ('POST', '/api/v1/agents/{id:\\d+}/move-up', ('AgentTeam:AgentController', 'moveUp')),

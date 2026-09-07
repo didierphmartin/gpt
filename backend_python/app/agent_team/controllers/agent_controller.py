@@ -10,20 +10,22 @@ Endpoints:
 - GET    /api/v1/agents/{id}      - Get agent
 - PUT    /api/v1/agents/{id}      - Update agent
 - DELETE /api/v1/agents/{id}      - Delete agent
-- POST   /api/v1/agents/{id}/run  - Run agent               (Phase 5 — NOT routed here)
-- POST   /api/v1/agents/{id}/chat - Run agent (streaming)   (Phase 5 — NOT routed here)
+- POST   /api/v1/agents/{id}/run  - Run agent
+- POST   /api/v1/agents/{id}/chat - Run agent (streaming)
 - GET    /api/v1/agents/tools     - List available tools
 
 @see docs/agentDesign.md
 
-Only `run` (PHP 373-430) and `chat` (PHP 436-509) are out of scope for this
-task (Phase 5 — they need AgentRunner/StreamContext, not ported yet). Every
-other method is ported below.
+Phase 5, Task 2: `run` (PHP 373-430) and `chat` (PHP 436-509) are now fully
+ported, along with the constructor (PHP 40-67) that builds the AgentRunner.
+Routing them in app/routes.py is guarded — see the `run`/`chat` docstrings.
 """
 from __future__ import annotations
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.services.agent_repository import AgentRepository
+from app.agent_team.services.agent_runner import AgentRunner
+from app.agent_team.services.stream_context import StreamContext
 from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
@@ -44,9 +46,32 @@ VISIBILITIES = ('personal', 'workspace', 'public')
 
 class AgentController:
     def __init__(self, db, config):
+        """PHP 40-67."""
         self.db = db
         self.config = config
+
+        # Create repository
         self.repository = AgentRepository(db)
+
+        # Create AIPortfolioAssistant to get LLMManager and ToolsManager.
+        # DB-overlay first so the assistant registers all providers from
+        # system_llm_settings (the file no longer carries provider blocks).
+        config = LLMProviderResolver.applyDbSettings(db, config)
+        self.config = config
+        assistant = AIPortfolioAssistant(config)
+        assistant.setDatabase(db)
+
+        # Create MCPToolsLoader
+        mcpToolsLoader = MCPToolsLoader(db)
+
+        # Create AgentRunner with all dependencies
+        self.runner = AgentRunner(
+            assistant.getLLMManager(),
+            assistant.getToolsManager(),
+            mcpToolsLoader,
+            db,
+            config,
+        )
 
     # ========================================================================
     # GET /api/v1/agents — List agents accessible to the current user
@@ -576,16 +601,153 @@ class AgentController:
             return self.error(f'Failed to reorder agents: {e}', 500)
 
     # ========================================================================
-    # POST /api/v1/agents/{id}/run and /chat — Phase 5, not routed
+    # POST /api/v1/agents/{id}/run — Execute an agent (non-streaming)
     # ========================================================================
 
-    def run(self, request, id: int = 0):
-        """PHP 373-430. Needs AgentRunner (LLM tool loop) — Phase 5."""
-        raise NotImplementedError('Phase 5')
+    def run(self, request, id: int = 0) -> dict:
+        """PHP 373-430. Routed at `POST /api/v1/agents/{id:\\d+}/run` in
+        app/routes.py, at PHP's position (routes.php:419)."""
+        userId = self.getUserId(request)
+        agentId = php_intval(id)
+        data = request.get('body') if request.get('body') is not None else {}
+
+        # App-key auth is scope-gated. A JWT-authed user reaches the
+        # ownership check below unrestricted; an app key must explicitly
+        # carry `agents:run` or `agents:run:<id>` in its scopes. ($userId is
+        # already the app key's bound user — set by the middleware — so the
+        # canUserAccess() ownership check still holds.)
+        if request.get('auth_type') == 'app_key':
+            scopes = request.get('app_key_scopes') if request.get('app_key_scopes') is not None else []
+            scopeAllowed = 'agents:run' in scopes or f'agents:run:{agentId}' in scopes
+            if not scopeAllowed:
+                return self.error('App key not authorized for this agent (missing scope agents:run)', 403)
+
+        # Check access
+        if not self.repository.canUserAccess(userId, agentId):
+            return self.error('Agent not found', 404)
+
+        agent = self.repository.findById(agentId)
+
+        # Check if agent is enabled
+        if not agent.isEnabled():
+            return self.error('Agent is disabled', 400)
+
+        # Get input
+        input_ = data.get('input') if data.get('input') is not None else (
+            data.get('message') if data.get('message') is not None else '')
+        if php_empty(php_trim(php_strval(input_))):
+            return self.error('Input message is required', 400)
+
+        # Get conversation history
+        conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
+
+        # Get optional tools filter
+        toolsFilter = data.get('tools')
+        if toolsFilter is not None and not is_php_array(toolsFilter):
+            return self.error('tools must be an array of tool names', 400)
+
+        # Execute agent with optional tools filter
+        response = self.runner.run(
+            agent,
+            input_,
+            conversationHistory,
+            userId,
+            {'tools_filter': toolsFilter},
+        )
+
+        return response
+
+    # ========================================================================
+    # POST /api/v1/agents/{id}/chat — Execute an agent with streaming (SSE)
+    # ========================================================================
 
     def chat(self, request, id: int = 0):
-        """PHP 436-509. Needs AgentRunner + StreamContext (SSE) — Phase 5."""
-        raise NotImplementedError('Phase 5')
+        """PHP 436-509. Streams through the shared 2a SSE bridge
+        (`request['sse']` / `SseStream` — see app/support/sse.py and
+        app/controllers/chat_controller.py's established `sse.send(event,
+        data)` pattern, e.g. its `verify`/`compare`/streaming-chat handlers).
+
+        DEVIATION (bridge-forced, not a Task 2 choice): PHP's callback here
+        is `echo "data: " . json_encode($event) . "\n\n"` — a bare `data:`
+        line with NO `event:` line, unlike every OTHER PHP streaming
+        endpoint in this codebase (ChatController's `$sendEvent($event,
+        $data)` always writes `event: {$event}\n` first). The shared Python
+        SSE bridge (`app/support/sse.py::format_sse_frame`, already built in
+        Phase 2a and used by every other ported streaming controller method)
+        always frames `event: <name>\n` ahead of `data: ...\n\n` and offers
+        no raw-frame escape hatch, so this port sends each StreamContext
+        event as `sse.send(event['type'], event)` — the event's own `type`
+        field becomes the SSE `event:` name, and the full event dict (same
+        shape/keys as PHP) is still delivered as the JSON `data:` payload.
+        PHP's trailing `echo "data: [DONE]\n\n"` likewise has no literal
+        counterpart; the stream simply ends via `sse.end()`
+        (main.py's finally block), exactly like every other ported streaming
+        controller method (e.g. chat_controller.py never sends a synthetic
+        DONE frame either — it relies on stream closure).
+
+        Routed at `POST /api/v1/agents/{id:\\d+}/chat` in app/routes.py, at
+        PHP's position (routes.php:420).
+        """
+        userId = self.getUserId(request)
+        agentId = php_intval(id)
+        data = request.get('body') if request.get('body') is not None else {}
+
+        # Check access
+        if not self.repository.canUserAccess(userId, agentId):
+            return self.error('Agent not found', 404)
+
+        agent = self.repository.findById(agentId)
+
+        # Check if enabled
+        if not agent.isEnabled():
+            return self.error('Agent is disabled', 400)
+
+        # Get input
+        input_ = data.get('input') if data.get('input') is not None else (
+            data.get('message') if data.get('message') is not None else '')
+        if php_empty(php_trim(php_strval(input_))):
+            return self.error('Input message is required', 400)
+
+        # Get conversation history
+        conversationHistory = data.get('conversation_history') if data.get('conversation_history') is not None else []
+
+        # Get optional tools filter
+        toolsFilter = data.get('tools')
+        if toolsFilter is not None and not is_php_array(toolsFilter):
+            return self.error('tools must be an array of tool names', 400)
+
+        # SSE headers / output buffering / connection-abort handling are
+        # done by main.py's StreamingResponse bridge (spec §3) — PHP's
+        # explicit header()/ob_end_clean() calls (which PHP fires earlier,
+        # right after the input check) have no Python counterpart: this
+        # bridge doesn't send anything until `sse.send()` is first called,
+        # so grabbing the object here (after validation, instead of before
+        # it like PHP) is behaviorally identical and lets every validation
+        # failure above return a plain JSON error response.
+        sse = request['sse']
+
+        # Create SSE callback for streaming events — see the DEVIATION note
+        # above for why this frames a named `event:` line PHP's raw echo
+        # callback didn't.
+        def sseCallback(event) -> None:
+            eventType = event.get('type') if isinstance(event, dict) and event.get('type') is not None else 'message'
+            sse.send(eventType, event)
+
+        # Create stream context for agent activity events
+        streamContext = StreamContext(sseCallback, userId)
+        self.runner.setStreamContext(streamContext)
+
+        # Execute with streaming (pass tools filter via context)
+        self.runner.streamRun(
+            agent,
+            input_,
+            conversationHistory,
+            userId,
+            sseCallback,
+            {'tools_filter': toolsFilter},
+        )
+
+        return None
 
     # ========================================================================
     # Helper Methods
@@ -600,21 +762,22 @@ class AgentController:
         PlaybookAgentTools.php:42-53) — "never throws, returns [] on any
         failure" when the playbook registry/analyzer is unavailable.
 
-        DEVIATION: PHP's Playbook package (backend/src/Playbook/ on this
-        branch — PlaybookAnalyzer / PlaybookDocument / LoaderMcpExecutor) has
-        not been ported to Python yet; that port is Phase 5, Task 4
-        (`PlaybookAgentTools` itself) with Task 2 wiring this helper up to
-        the real analyzer. Out of scope for this Phase 4 (agent-team data)
-        task, so this always takes PHP's own "any failure" fallback path
-        (PlaybookAgentTools.php:49-52: catch \\Throwable -> error_log +
-        return []) rather than attempting analysis. When Phase 5 lands,
-        replace this with the real call.
+        Phase 5, Task 2 ruling (2): wired to the real
+        `app.agent_team.services.playbook_agent_tools.PlaybookAgentTools.forUser`
+        (Task 4's module, running concurrently) via a LAZY import so this
+        file doesn't hard-depend on Task 4 landing first. `PlaybookAgentTools.
+        forUser` itself already never throws (catches internally and returns
+        []); the try/except here only guards the import itself, reproducing
+        PHP's same "any failure -> error_log + []" fallback
+        (PlaybookAgentTools.php:49-52: catch \\Throwable) for that one
+        additional failure mode.
         """
-        error_log(
-            '[PlaybookAgentTools] registry unavailable: PlaybookAnalyzer not yet '
-            'ported to Python (backend_python/app/agent_team/controllers/agent_controller.py)'
-        )
-        return []
+        try:
+            from app.agent_team.services.playbook_agent_tools import PlaybookAgentTools
+        except Exception as e:  # noqa: BLE001
+            error_log(f'[PlaybookAgentTools] registry unavailable: {e}')
+            return []
+        return PlaybookAgentTools.forUser(self.db, user_id, text)
 
     def error(self, message: str, status: int = 400) -> dict:
         """PHP 792-804. index.php reads the HTTP status from `status_code`, not
