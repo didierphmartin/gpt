@@ -22,28 +22,8 @@ import json
 import re
 
 from app.support.logger import error_log
-from app.support.phpcompat import mb_substr, php_array, php_bool, php_empty, php_intval
-
-_FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
-
-
-def php_floatval(v) -> float:
-    """PHP (float) cast: numeric string -> float, leading-numeric prefix -> that
-    prefix, anything else -> 0.0."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        m = _FLOAT_PREFIX.match(v)
-        return float(m.group(0)) if m else 0.0
-    return 0.0
-
-
-def php_json_encode(value) -> str:
-    """json_encode() with PHP's defaults (escaped slashes + \\uXXXX non-ASCII).
-    Used for blobs written to the DB so the stored bytes match PHP's."""
-    return json.dumps(value, ensure_ascii=True, separators=(',', ':')).replace('/', '\\/')
+from app.support.phpcompat import mb_substr, php_array, php_empty, php_floatval, php_intval, php_trim
+from app.support.phpjson import php_json_encode
 
 
 def _is_php_array(v) -> bool:
@@ -329,13 +309,13 @@ class GenesisController:
             for n in nodes:
                 if n.get('type') == 'agent' and not php_empty(n.get('name')):
                     agentNames.append(n['name'])
-            wfNameRaw = str(wf['name']).strip() if wf.get('name') is not None else ''
+            wfNameRaw = php_trim(wf.get('name'))
             wfName = wfNameRaw if wfNameRaw != '' else f'workflow {workflowId}'
             name = wfName.lower()
             name = re.sub(r'[^a-z0-9]+', '-', name)
             name = re.sub(r'-+', '-', name).strip('-')
             name = (name if name != '' else f'workflow-{workflowId}')[:60]
-            wfDescr = str(wf['description']).strip() if wf.get('description') is not None else ''
+            wfDescr = php_trim(wf.get('description'))
             if wfDescr != '':
                 descr = wfDescr
             else:
@@ -362,7 +342,7 @@ class GenesisController:
             if not row:
                 return {'success': False, 'error': 'Prompt not found', 'status_code': 404}
             content = str(row['content']) if row.get('content') is not None else ''
-            if content.strip() == '':
+            if php_trim(content) == '':
                 return {'success': False, 'error': 'Prompt has no content', 'status_code': 400}
             from app.services.genesis_proposer import GenesisProposer
             prompt = GenesisProposer.buildPromptLibraryPrompt(str(row['name']), content, catalog)

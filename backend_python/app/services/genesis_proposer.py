@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from app.support.phpcompat import mb_substr, php_bool
+from app.support.phpcompat import mb_substr, php_bool, php_trim
 from app.support.phpjson import dumps as _json_encode
 
 # Cap transcript/run material so the reflection stays one cheap call.
@@ -75,7 +75,7 @@ class GenesisProposer:
             content = m.get('content')
             if not isinstance(content, str):
                 content = _json_encode(content if content is not None else '')
-            if str(content).strip() == '':
+            if php_trim(content) == '':
                 continue
             lines.append(f'{role}: {content}')
         transcript = GenesisProposer._truncate('\n\n'.join(lines), GenesisProposer.MAX_TRANSCRIPT_CHARS)
@@ -129,12 +129,12 @@ class GenesisProposer:
         if not hasSkillName and not isMerge:
             return None  # includes the explicit {"skill_name": null} no-procedure answer
         description = data.get('description')
-        if not isinstance(description, str) or description.strip() == '':
+        if not isinstance(description, str) or php_trim(description) == '':
             return None
 
         # Merge proposals carry the name in merge_target; non-merge proposals carry it in skill_name.
         rawName = mergeTarget if isMerge else rawSkillName
-        name = rawName.strip().lower()
+        name = php_trim(rawName).lower()
         name = re.sub(r'[^a-z0-9]+', '-', name)
         name = re.sub(r'-+', '-', name).strip('-')
         name = name[:60]
@@ -159,7 +159,7 @@ class GenesisProposer:
 
         return {
             'skill_name': name,
-            'description': description.strip(),
+            'description': php_trim(description),
             'eval_queries': evals,
             'parameter_schema': parameterSchema,
             'merge_target': mergeTarget,

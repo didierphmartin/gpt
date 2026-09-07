@@ -541,6 +541,27 @@ def test_genesis_create_proposal_workflow_is_deterministic_no_llm_call(monkeypat
     assert r['promotion']['rationale'] == 'Manual workflow promotion — structure is explicit, no reflection needed.'
 
 
+def test_genesis_create_proposal_workflow_name_nbsp_survives_trim(monkeypatch):
+    # PHP trim() strips only " \t\n\r\0\x0B" — NBSP (U+00A0) is NOT in that
+    # charlist and survives. Python's str.strip() DOES treat NBSP as
+    # whitespace and would silently remove it — this pins php_trim(), not
+    # .strip(), as the site that reads wf['name'].
+    def boom(self, request):
+        raise AssertionError('workflow promotions must not call the LLM')
+    monkeypatch.setattr('app.controllers.chat_controller.ChatController.agent', boom)
+
+    nbsp_name = '\xa0Newsletter Pipeline\xa0'
+    wf_row = {'id': 7, 'name': nbsp_name, 'description': None, 'steps': '[]'}
+    db = FakeDb(one=[wf_row], all_=[[]], insert_id=12)
+    c = GenesisController(db, {})
+    r = c.createProposal(ctx({'source': 'workflow', 'workflow_id': 7}))
+    assert r['success'] is True
+    # No description on the row -> the deterministic default embeds wfName
+    # verbatim (after trim, before the slug regex strips it for skill_name).
+    assert f"Runs the '{nbsp_name}' agent workflow" in r['promotion']['description']
+    assert '\xa0' in r['promotion']['description']
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # GenesisProposer — ported from GenesisProposerTest.php (buildWorkflowPrompt
 # cases omitted; see concern note in app/services/genesis_proposer.py)

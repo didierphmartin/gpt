@@ -20,25 +20,8 @@ kind). Ported as a presence check only (§3 tracker below).
 """
 from __future__ import annotations
 
-import re
-
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty
-
-_FLOAT_PREFIX = re.compile(r'\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?')
-
-
-def php_floatval(v) -> float:
-    """PHP (float) cast: numeric string -> float, leading-numeric prefix -> that
-    prefix, anything else -> 0.0."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        m = _FLOAT_PREFIX.match(v)
-        return float(m.group(0)) if m else 0.0
-    return 0.0
+from app.support.phpcompat import php_empty, php_floatval
 
 
 class HealController:
