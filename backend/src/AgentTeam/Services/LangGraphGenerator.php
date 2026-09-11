@@ -2916,8 +2916,9 @@ PY;
 # ==============================================================
 # RUN STATE
 # One RunState per POST /runs. The graph runs as an asyncio task; its
-# events land in a queue the SSE route drains, and in a ring buffer so a
-# reconnecting client can replay what it missed (see Last-Event-ID).
+# events fan out to one queue per attached client, and land in a ring
+# buffer so a reconnecting client can replay what it missed (see
+# Last-Event-ID).
 # ==============================================================
 RING = 500          # events kept per run for replay
 RUNS = {}           # run_id -> RunState
@@ -3007,7 +3008,7 @@ async def _drive(state: RunState) -> None:
 
     def sink(ev: dict) -> None:
         # Called from graph code that may be on a worker thread (sync tools),
-        # so hop back onto the loop before touching the queue.
+        # so hop back onto the loop before fanning it out to subscribers.
         loop.call_soon_threadsafe(state.publish, "message", ev)
 
     async with RUN_LOCK:
@@ -3054,16 +3055,38 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
         # Track the highest seq the replay loop already sent so the queue
         # loop skips those stale duplicates instead of re-yielding them.
         # Clamped to state.seq: an id ahead of the run (a stale tab, a
-        # reconnect against the wrong run) must not suppress every future
-        # frame -- including the terminal one, which would hang the stream.
+        # reconnect against the wrong run) must not suppress a frame the
+        # run still goes on to publish -- including the terminal one, which
+        # would hang the stream. That only holds while the run is still
+        # producing frames, though: once it has finished nothing more will
+        # ever be published, so a reconnect at or past the terminal seq must
+        # not fall through to the drain below -- see the status check after
+        # the replay loop.
         q = state.subscribe()
         try:
             sent_through = min(last_id, state.seq)
-            for seq, name, payload in state.since(last_id):
+            since = state.since(last_id)
+            if since and since[0][0] > last_id + 1:
+                # More than RING events have been published since last_id --
+                # the gap itself was evicted from the ring buffer, not just
+                # not-yet-seen. Say so up front instead of silently resuming
+                # mid-stream as though nothing were missing.
+                yield _frame(last_id, "message",
+                             {"type": "truncated", "from": last_id, "resumed_at": since[0][0]})
+            for seq, name, payload in since:
                 yield _frame(seq, name, payload)
                 sent_through = seq
                 if name in ("done", "error"):
                     return
+            if state.status != "running":
+                # The run is already over (this client saw the terminal frame
+                # already, or is reconnecting after it did) -- nothing more
+                # will ever be published, so there is nothing to wait for.
+                # EventSource auto-reconnects whenever the server closes the
+                # stream, including after a completed run, unless the page
+                # calls .close() -- without this check that reconnect would
+                # subscribe and then block on q.get() forever.
+                return
             while True:
                 seq, name, payload = await q.get()
                 if seq <= sent_through:

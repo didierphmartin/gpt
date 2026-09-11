@@ -115,7 +115,8 @@ async def main():
                 break
 
         seqs = [f[0] for f in rest]
-        assert min(seqs) == last_seq + 1, f"replayed a frame the client already had: {seqs}"
+        assert seqs == list(range(last_seq + 1, last_seq + 1 + len(seqs))), \
+            f"expected a contiguous run starting at {last_seq + 1}, got: {seqs}"
         assert rest[-1][1] == "done", rest
         assert any(f[1] == "message" and f[2].get("text") == "second" for f in rest), rest
         assert rest[-1][2]["status"] == "completed", rest

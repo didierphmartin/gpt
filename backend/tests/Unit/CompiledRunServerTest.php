@@ -78,4 +78,11 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }
+
+    public function testApiActuallyStreamsFramesBeforeTheRunCompletes(): void
+    {
+        [$rc, $out] = $this->probe('stream_probe.py', self::writePackage());
+        $this->assertSame(0, $rc, $out);
+        $this->assertStringContainsString('OK', $out);
+    }
 }
