@@ -30,7 +30,7 @@ class RunProtocolConformanceTest extends TestCase
      * events, so the scan skips the schema vocabulary. Anything else the
      * interpreter emits must be described by the contract.
      */
-    private const SCHEMA_WORDS = ['array', 'boolean', 'function', 'integer', 'number', 'object', 'string', 'prompt'];
+    private const SCHEMA_WORDS = ['array', 'boolean', 'function', 'integer', 'number', 'object', 'string'];
 
     public function testThePhpInterpreterEmitsOnlyContractEvents(): void
     {

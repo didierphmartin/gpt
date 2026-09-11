@@ -1,6 +1,6 @@
 {
   "version": "run/1",
-  "note": "The run event protocol. `truncated` is emitted when a reconnecting client asks to resume from a point the server's ring buffer no longer holds: the gap is signalled rather than silently skipped. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended, and the `leg`/`round` fields on round/tool_call/tool_result, are the PHP interpreter's -- it re-decides every round from the running transcript inside one leg; the compiled runtime delegates the loop to LangChain's own agent and never labels events with leg/round), but it must not emit one this file does not describe.",
+  "note": "The run event protocol. `truncated` is emitted when a reconnecting client asks to resume from a point the server's ring buffer no longer holds: the gap is signalled rather than silently skipped. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended/prompt, and the `leg`/`round` fields on round/tool_call/tool_result, are the PHP interpreter's -- it re-decides every round from the running transcript inside one leg, and appends leg_started/prompt/leg_ended to its on-disk transcript at the start/request/end of each leg; the compiled runtime delegates the loop to LangChain's own agent, keeps no separate transcript log, and never labels events with leg/round), but it must not emit one this file does not describe.",
   "events": {
     "round":        { "required": ["type", "round"],             "optional": ["leg"] },
     "tool_call":    { "required": ["type", "name"],               "optional": ["args", "leg", "round"] },
@@ -11,6 +11,7 @@
     "final":        { "required": ["type", "status"],             "optional": ["leg", "text"] },
     "leg_started":  { "required": ["type"],                       "optional": ["leg"] },
     "leg_ended":    { "required": ["type"],                       "optional": ["leg", "status"] },
+    "prompt":       { "required": ["type", "text"],               "optional": ["leg"] },
     "truncated":    { "required": ["type", "from", "resumed_at"], "optional": [] }
   },
   "terminal": {

@@ -2,15 +2,35 @@
 
 The graph itself is replaced so no LLM or MCP server is needed: this asserts
 the SERVER contract (run id, event stream, gate answering, done frame), which
-is what the frontend depends on.
+is what the frontend depends on. It also validates the two terminal frames
+(done, error) it captures from a real run against docs/run-protocol-v1.json
+(RunProtocolConformanceTest §8 drift control) -- this is the only probe that
+ever produces a real `done`/`error` SSE frame end to end, so it is the
+cheapest place to check them against the contract's `terminal` section.
 
 argv[1] is a compiled modular package root.
 """
-import asyncio, json, sys, importlib, threading
+import asyncio, json, os, sys, importlib, threading
 
 sys.path.insert(0, sys.argv[1])
 common = importlib.import_module("common")
 workflow = importlib.import_module("workflow")
+
+# docs/run-protocol-v1.json lives at the repo root; this file is at
+# backend/tests/fixtures/compiled/. Hardcoded (not an argv) because
+# CompiledRunServerTest::probe() invokes every probe here with just the
+# package root -- see conformance_probe.py for the argv-based alternative.
+_CONTRACT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "docs", "run-protocol-v1.json")
+_contract = json.load(open(_CONTRACT_PATH))
+
+
+def _check_terminal(name: str, payload: dict) -> None:
+    spec = _contract["terminal"][name]
+    for key in spec["required"]:
+        assert key in payload, f"{name} is missing required field {key}: {payload}"
+    extra = set(payload) - set(spec["required"]) - set(spec["optional"])
+    assert not extra, f"{name} has undescribed fields {sorted(extra)}: {payload}"
 
 
 # Stub the graph: emit one message, raise one gate, return the answer as output.
@@ -98,6 +118,7 @@ with TestClient(api.app) as client:
     assert done["status"] == "completed", done
     assert done["output"] == "decision=approved", done
     assert done["run_id"] == run_id, done
+    _check_terminal("done", done)
 
     # A tool-result for an unknown run is refused, not silently swallowed.
     assert client.post("/runs/nope/tool-result", json={"tool_call_id": "x"}).status_code == 404
@@ -109,5 +130,37 @@ with TestClient(api.app) as client:
     # above) is a 409, not a silently-accepted no-op.
     assert client.post(f"/runs/{run_id}/tool-result",
                         json={"tool_call_id": "no-such-gate"}).status_code == 409
+
+    # A second run whose graph raises: the error frame is the other half of
+    # the terminal contract and nothing else here produces one.
+    async def failing_run(prompt: str) -> str:
+        raise RuntimeError("boom")
+
+    workflow.run = failing_run
+    api.run_workflow = failing_run
+
+    started2 = client.post("/runs", json={"prompt": "hello"}).json()
+    run_id2 = started2["run_id"]
+    assert run_id2, started2
+
+    error = None
+    with client.stream("GET", f"/runs/{run_id2}/events") as resp2:
+        assert resp2.status_code == 200, resp2.status_code
+        name = "message"
+        for line in resp2.iter_lines():
+            if line.startswith("event:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                payload = json.loads(line.split(":", 1)[1].strip())
+                if name == "error":
+                    error = payload
+                    break
+                if name == "done":
+                    raise AssertionError(f"expected an error frame, got done: {payload}")
+
+    assert error is not None, "the failing run never produced an error frame"
+    assert error["error"], error
+    assert error["run_id"] == run_id2, error
+    _check_terminal("error", error)
 
 print("OK")
