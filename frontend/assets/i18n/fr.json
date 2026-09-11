@@ -986,7 +986,11 @@
       "ingestionGenerate": "Générer le script Python",
       "ingestionRun": "Lancer l’ingestion",
       "ingestionDownload": "Télécharger le script",
-      "savedTo": "Enregistré dans"
+      "savedTo": "Enregistré dans",
+      "stopServer": "Arrêter le serveur d’exécution",
+      "stopServerDone": "Serveur d’exécution arrêté.",
+      "stopServerNone": "Aucun serveur d’exécution n’était actif pour ce workflow.",
+      "stopServerFailed": "Impossible de joindre le runner pour arrêter le serveur :"
     },
     "runnerSetup": {
       "title": "Runtime Python non installé",

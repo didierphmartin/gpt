@@ -3228,6 +3228,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="run-url">
                 ${this.escapeHtml(this.t('workflow.output.runTargetUrl') || 'Run against a URL…')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="stop-server">
+                ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
+            </button>
             <button type="button" class="langgraph-menu-item" data-action="display-code">
                 ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
             </button>
@@ -3268,6 +3271,39 @@ class WorkflowEditor {
                 this._runIngestion();
             } else {
                 this._runLangGraphScript();
+            }
+        });
+        menu.querySelector('[data-action="stop-server"]')?.addEventListener('click', async () => {
+            menu.remove();
+            // The escape hatch for a run stuck on a gate nobody can answer (an
+            // overlay closed, a reloaded tab). Without this the re-entrancy
+            // guard blocks every later Run until the gate times out — and the
+            // guard's own message used to point at a menu item that did not
+            // exist.
+            const root = this._compiledRootName();
+            try {
+                const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/stop`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: root }),
+                });
+                const out = resp.ok ? await resp.json() : null;
+                // Local state goes regardless: the point is to unblock this tab.
+                try { this._runCompiledEs && this._runCompiledEs.close(); } catch (_) { /* already closed */ }
+                try {
+                    this._runCompiledReject
+                        && this._runCompiledReject(Object.assign(new Error('run server stopped'), { superseded: true }));
+                } catch (_) { /* nothing awaiting */ }
+                this._runCompiledEs = null;
+                this._runCompiledReject = null;
+                this._runCompiledWhat = null;
+                this._runTarget = null;
+                alert(out && out.stopped
+                    ? (this.t('workflow.output.stopServerDone') || 'Run server stopped.') + ` (${root})`
+                    : (this.t('workflow.output.stopServerNone') || 'No run server was running for this workflow.')
+                      + ` (${root})`);
+            } catch (e) {
+                alert(`${this.t('workflow.output.stopServerFailed') || 'Could not reach the runner to stop the server:'} ${e?.message || e}`);
             }
         });
         menu.querySelector('[data-action="run-url"]')?.addEventListener('click', async () => {
@@ -4826,6 +4862,17 @@ class WorkflowEditor {
         });
     }
 
+    /**
+     * The compiled package folder for this workflow, derived the same way the
+     * generator names it: the sanitised workflow name plus the mode suffix.
+     * Used by "Stop the run server", which must name the folder without
+     * regenerating anything first.
+     */
+    _compiledRootName() {
+        const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+        return `${safe}_${this._codegenOptions().mode === 'a2a' ? 'a2a' : 'modular'}`;
+    }
+
     /** The Start node's saved prompt, or '' when the graph has none. */
     _startNodePrompt() {
         try {
@@ -4872,7 +4919,7 @@ class WorkflowEditor {
                 `A compiled run is already in flight: ${busy.name || 'this workflow'}`
                 + `${busy.runId ? ` (run ${busy.runId})` : ''} on ${busy.base || 'its run server'}.\n\n`
                 + 'The run server executes one run at a time and has no cancel — wait for it to finish, '
-                + 'or stop the workflow server from the Output menu.'
+                + 'or use “Stop the run server” in this workflow\'s langGraph menu to end it now.'
             );
             return;
         }

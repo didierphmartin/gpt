@@ -986,7 +986,11 @@
       "ingestionGenerate": "Generate Python script",
       "ingestionRun": "Run ingestion",
       "ingestionDownload": "Download script",
-      "savedTo": "Saved to"
+      "savedTo": "Saved to",
+      "stopServer": "Stop the run server",
+      "stopServerDone": "Run server stopped.",
+      "stopServerNone": "No run server was running for this workflow.",
+      "stopServerFailed": "Could not reach the runner to stop the server:"
     },
     "runnerSetup": {
       "title": "Python runtime not installed",
