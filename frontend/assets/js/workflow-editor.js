@@ -82,6 +82,10 @@ class WorkflowEditor {
         // places that never touch this field, so a stale target could point
         // a run at another workflow's server.
         this._runTarget = null;
+        // The EventSource of a compiled run currently in flight, if any —
+        // lets a second Run() close/replace the first instead of two
+        // streams interleaving into the same overlay (see _runCompiled).
+        this._runCompiledEs = null;
     }
 
     /**
@@ -4734,6 +4738,12 @@ class WorkflowEditor {
      * server).
      */
     async _verifyRunTarget(url) {
+        // An unsaved workflow has no currentWorkflowId to match against — fail
+        // with a plain message instead of the confusing "serving workflow 44,
+        // not null" the identity check below would otherwise produce.
+        if (!this.currentWorkflowId) {
+            throw new Error(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+        }
         const base = url.endsWith('/') ? url : url + '/';
         // A stale process squatting on the port answers 200 too — check identity
         // before trusting it, or we run yesterday's graph against today's canvas.
@@ -4818,13 +4828,40 @@ class WorkflowEditor {
      * always re-acquires the target rather than trusting a leftover
      * this._runTarget: currentWorkflowId is reassigned in several other
      * places that never touch _runTarget, so a stale pointer could otherwise
-     * run this workflow against another workflow's server. The target is
-     * cleared in `finally` so a failed or finished run never leaves a pointer
-     * behind for the next call to (mis)trust.
+     * run this workflow against another workflow's server.
+     *
+     * this._runTarget must never be left set once this call returns without
+     * a run in flight — it is cleared on every early exit (prompt cancelled,
+     * acquire failed) as well as at the end, so a later LIVE-interpreter
+     * playbook run can never inherit a stale compiled target (which would
+     * both mislabel its overlay badge and send its gate answers to a
+     * `{staleBase}/runs/undefined/tool-result` 404, hanging the run).
      */
     async _runCompiled(root) {
+        // Re-entrancy guard (a second Run while one is in flight): hiding the
+        // overlay deliberately does not stop the stream, so without this a
+        // second EventSource would interleave into the same
+        // nodeExecutionData/overlay, and run 1's finally would null out
+        // _runTarget out from under run 2's gate answers mid-flight. Chosen
+        // behavior: close the in-flight run's stream and clear its state,
+        // then start the new one — "Run" always means "run now", matching
+        // the overlay's own "Hide (run continues)" framing rather than
+        // silently refusing the second click.
+        if (this._runCompiledEs) {
+            try { this._runCompiledEs.close(); } catch (_) { /* already closed */ }
+            this._runCompiledEs = null;
+            this._runTarget = null;
+        }
+
         const prompt = await this._showRunPromptModal(this._startNodePrompt());
-        if (prompt === null) return;
+        if (prompt === null) {
+            // The URL-override path (root === null) has already called
+            // _verifyRunTarget, which sets this._runTarget, before this
+            // modal ever opens — cancelling here must not leave it set.
+            if (root === null) this._runTarget = null;
+            return;
+        }
+
         const dfId = 'compiled';
         this.nodeExecutionData[dfId] = { pbEvents: [] };
         let target;
@@ -4834,9 +4871,12 @@ class WorkflowEditor {
                 : await this._acquireRunTarget(root);
         } catch (e) {
             alert(`Could not start the workflow server: ${e?.message || e}`);
+            this._runTarget = null;
             return;
         }
+
         this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], prompt);
+        let es;
         try {
             const started = await fetch(`${target.base}/runs`, {
                 method: 'POST',
@@ -4848,27 +4888,42 @@ class WorkflowEditor {
             this._runTarget.runId = runId;
 
             await new Promise((resolve, reject) => {
-                const es = new EventSource(`${target.base}/runs/${runId}/events`);
+                es = new EventSource(`${target.base}/runs/${runId}/events`);
+                this._runCompiledEs = es;
                 es.addEventListener('done', (m) => {
-                    const ev = JSON.parse(m.data);
-                    es.close();
-                    this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
-                    resolve();
+                    // Parse defensively: a malformed terminal frame must
+                    // reject the promise (so finally still runs and the
+                    // stream still closes), not throw inside the listener
+                    // where nothing outside can see it.
+                    try {
+                        const ev = JSON.parse(m.data);
+                        this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
+                        resolve();
+                    } catch (e) { reject(e); }
                 });
                 es.addEventListener('error', (m) => {
                     // A transport error has no data; a protocol error does.
                     if (!m.data) return;   // EventSource reconnects on its own
-                    const ev = JSON.parse(m.data);
-                    es.close();
-                    reject(new Error(ev.error || 'run failed'));
+                    try {
+                        const ev = JSON.parse(m.data);
+                        reject(new Error(ev.error || 'run failed'));
+                    } catch (e) { reject(e); }
                 });
                 es.onmessage = (m) => {
-                    try { this._handlePlaybookEvent(dfId, JSON.parse(m.data)); } catch (_) { /* keep streaming */ }
+                    let ev;
+                    try { ev = JSON.parse(m.data); } catch (_) { return; /* keep streaming */ }
+                    // _handlePlaybookEvent is async (it awaits the gate modal);
+                    // an unhandled rejection there must not escape this
+                    // handler and kill the stream — log it and keep going.
+                    Promise.resolve(this._handlePlaybookEvent(dfId, ev))
+                        .catch((err) => this._wfNodeLog(dfId, 'error', 'event handling failed: ' + (err?.message || err), 'error'));
                 };
             });
         } catch (e) {
             this._pbOverlayFinish(false, String(e?.message || e));
         } finally {
+            try { es?.close(); } catch (_) { /* already closed */ }
+            if (this._runCompiledEs === es) this._runCompiledEs = null;
             this._runTarget = null;
         }
     }
@@ -12127,7 +12182,7 @@ class WorkflowEditor {
         const el = this._pbAppend(`
             <div style="align-self:${align};max-width:85%;background:${bg};border-radius:10px;padding:8px 12px;">
                 <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">${this.escapeHtml(label)}</div>
-                <div class="markdown-content" style="font-size:13px;white-space:pre-wrap;">${body}</div>
+                <div class="markdown-content" style="font-size:13px;padding:0;">${body}</div>
             </div>`);
         // Final render pass only (the events driving this are already
         // complete messages, never a mid-stream partial) — same contract
