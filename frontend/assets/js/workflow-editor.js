@@ -2902,10 +2902,10 @@ class WorkflowEditor {
         const overlay = this._showGeneratingOverlay(
             this.t('workflow.output.generating') || 'Generating LangGraph Python script…'
         );
-        const a2a = !!(opts ? opts.a2a : this._codegenOptions().a2a);
+        const mode = (opts ? opts.mode : this._codegenOptions().mode) || 'single';
         try {
-            if (a2a) {
-                const data = await this._writeManifest();
+            if (mode !== 'single') {
+                const data = await this._writeManifest(mode);
                 const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
                 generated = { path: `${rootName}/python/scripts/${data.root}/`, code: data.files };
             } else {
@@ -3230,7 +3230,7 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="generate"]')?.addEventListener('click', async () => {
             menu.remove();
-            if (isIngestion) { this.downloadGeneratedPython({ a2a: false }); return; }
+            if (isIngestion) { this.downloadGeneratedPython({ mode: 'single' }); return; }
             const opts = await this._showCodegenOptionsModal();
             if (opts) this.downloadGeneratedPython(opts);
         });
@@ -3254,9 +3254,10 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
-            if (!isIngestion && this._codegenOptions().a2a) {
+            const codegenMode = this._codegenOptions().mode;
+            if (!isIngestion && codegenMode !== 'single') {
                 try {
-                    const data = await this._fetchManifest();
+                    const data = await this._fetchManifest(codegenMode);
                     this._showLangGraphCodeModal('', data.files, '');
                 } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
                 return;
@@ -4632,18 +4633,23 @@ class WorkflowEditor {
         this._showLangGraphCodeModal(savedPath, code, filename);
     }
 
-    /** Code-generation options remembered per workflow (browser-local). Shape: { a2a: boolean }. */
+    /**
+     * Code-generation options remembered per workflow (browser-local).
+     * Shape: { mode: 'single' | 'modular' | 'a2a' }. Entries written before the
+     * three-way form existed hold { a2a: true } — migrated on read.
+     */
     _codegenOptions() {
         try {
             const raw = localStorage.getItem(`wf:${this.currentWorkflowId}:codegen`);
             const o = raw ? JSON.parse(raw) : {};
-            return { a2a: !!o.a2a };
-        } catch (_) { return { a2a: false }; }
+            if (['single', 'modular', 'a2a'].includes(o.mode)) return { mode: o.mode };
+            return { mode: o.a2a ? 'a2a' : 'single' };
+        } catch (_) { return { mode: 'single' }; }
     }
 
     /** Persist code-generation options for the current workflow to `wf:<id>:codegen` in localStorage. Storage failures (e.g. private-browsing mode) are swallowed. */
     _saveCodegenOptions(opts) {
-        try { localStorage.setItem(`wf:${this.currentWorkflowId}:codegen`, JSON.stringify({ a2a: !!opts.a2a })); } catch (_) { /* private mode */ }
+        try { localStorage.setItem(`wf:${this.currentWorkflowId}:codegen`, JSON.stringify({ mode: opts.mode })); } catch (_) { /* private mode */ }
     }
 
     /**
@@ -4653,18 +4659,32 @@ class WorkflowEditor {
     _showCodegenOptionsModal() {
         return new Promise((resolve) => {
             const cur = this._codegenOptions();
+            // The three layouts are mutually exclusive: A2A already produces one
+            // file per node, so "agents in separate files" only means something
+            // for the single-process target.
+            const choices = [
+                ['single', this.t('workflow.output.codegenSingle') || 'Single file',
+                    this.t('workflow.output.codegenSingleHelp') || 'One .py file containing the whole workflow.'],
+                ['modular', this.t('workflow.output.codegenModular') || 'Agents in separate files',
+                    this.t('workflow.output.codegenModularHelp') || 'A Python package: workflow.py + common.py + one importable module per agent, linked by imports.'],
+                ['a2a', this.t('workflow.output.codegenA2A') || 'A2A',
+                    this.t('workflow.output.codegenA2AHelp') || 'Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.'],
+            ];
             const backdrop = document.createElement('div');
             backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
             backdrop.innerHTML = `
                 <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md" role="dialog" aria-modal="true">
                     <h3 class="text-lg font-semibold text-gray-900 mb-4">${this.escapeHtml(this.t('workflow.output.codegenTitle') || 'Code generation options')}</h3>
-                    <label class="flex items-start gap-3 cursor-pointer">
-                        <input type="checkbox" class="codegen-a2a mt-1 h-4 w-4" ${cur.a2a ? 'checked' : ''}>
-                        <span>
-                            <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(this.t('workflow.output.codegenA2A') || 'A2A')}</span>
-                            <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.output.codegenA2AHelp') || 'Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.')}</span>
-                        </span>
-                    </label>
+                    <div class="space-y-3">
+                        ${choices.map(([value, label, help]) => `
+                            <label class="flex items-start gap-3 cursor-pointer">
+                                <input type="radio" name="codegen-mode" value="${value}" class="codegen-mode mt-1 h-4 w-4" ${cur.mode === value ? 'checked' : ''}>
+                                <span>
+                                    <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(label)}</span>
+                                    <span class="block text-xs text-gray-500">${this.escapeHtml(help)}</span>
+                                </span>
+                            </label>`).join('')}
+                    </div>
                     <div class="flex justify-end gap-2 mt-6">
                         <button class="codegen-cancel px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.cancel') || 'Cancel')}</button>
                         <button class="codegen-go px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.codegenGenerate') || 'Generate')}</button>
@@ -4675,7 +4695,7 @@ class WorkflowEditor {
             backdrop.querySelector('.codegen-cancel').addEventListener('click', () => done(null));
             backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
             backdrop.querySelector('.codegen-go').addEventListener('click', () => {
-                const opts = { a2a: backdrop.querySelector('.codegen-a2a').checked };
+                const opts = { mode: backdrop.querySelector('.codegen-mode:checked')?.value || 'single' };
                 this._saveCodegenOptions(opts);
                 done(opts);
             });
@@ -4683,30 +4703,34 @@ class WorkflowEditor {
     }
 
     /**
-     * Fetch and validate the A2A manifest (generate-python?a2a=1) without writing
-     * anything to disk. Throws on an HTTP error, an explicit {success:false}
-     * response, or a malformed payload. Returns { root, files }.
+     * Fetch and validate a multi-file manifest (generate-python?a2a=1 or
+     * ?modular=1) without writing anything to disk. Throws on an HTTP error, an
+     * explicit {success:false} response, or a malformed payload.
+     * Returns { root, files }.
      */
-    async _fetchManifest() {
-        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?a2a=1`, { headers: this.getAuthHeaders() });
+    async _fetchManifest(mode = 'a2a') {
+        const flag = mode === 'modular' ? 'modular=1' : 'a2a=1';
+        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?${flag}`, { headers: this.getAuthHeaders() });
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const j = await resp.json();
         if (j?.success === false) throw new Error(j.error || 'Manifest request failed');
-        // A backend without the A2A path (e.g. the TypeScript backend) ignores the
-        // ?a2a=1 flag and returns the single-file shape instead of erroring — catch
-        // that here rather than let a raw .py file confuse the manifest code below.
-        if (j?.data?.filename && !j?.data?.root) throw new Error('A2A generation is not available on this backend');
+        // A backend without the multi-file path (e.g. the TypeScript backend)
+        // ignores the flag and returns the single-file shape instead of erroring —
+        // catch that here rather than let a raw .py file confuse the code below.
+        if (j?.data?.filename && !j?.data?.root) throw new Error(`${mode === 'modular' ? 'Modular' : 'A2A'} generation is not available on this backend`);
         const data = j?.data;
         if (!data?.root || !Array.isArray(data.files)) throw new Error('Unexpected manifest response');
         return data;
     }
 
     /**
-     * Fetch the A2A manifest and write it under python/scripts/<root>/ (orchestrator.py
-     * + agents/*.py) through the File System Access root. Returns { root, files } or null.
+     * Fetch a multi-file manifest and write it under python/scripts/<root>/
+     * (orchestrator.py + agents/*.py for A2A; workflow.py + common.py +
+     * agents/*.py for modular) through the File System Access root.
+     * Returns { root, files } or null.
      */
-    async _writeManifest() {
-        const data = await this._fetchManifest();
+    async _writeManifest(mode = 'a2a') {
+        const data = await this._fetchManifest(mode);
         for (const f of data.files) {
             const rel = `python/scripts/${data.root}/${f.path}`;
             const dirPath = rel.slice(0, rel.lastIndexOf('/'));
@@ -4718,7 +4742,7 @@ class WorkflowEditor {
             await w.close();
         }
         await this._syncRunnerEnv();
-        console.log(`[WorkflowEditor] Saved ${data.files.length} A2A files under python/scripts/${data.root}/`);
+        console.log(`[WorkflowEditor] Saved ${data.files.length} ${mode} files under python/scripts/${data.root}/`);
         return data;
     }
 
@@ -4884,9 +4908,13 @@ class WorkflowEditor {
         // workflow; the runner-down modal's command then points at fresh
         // code), THEN probe the runner.
         let filename;
-        if (this._codegenOptions().a2a) {
-            try { const data = await this._writeManifest(); filename = `${data.root}/orchestrator.py`; }
-            catch (e) { alert(`Could not generate the A2A folder: ${e?.message || e}`); return; }
+        const codegenMode = this._codegenOptions().mode;
+        if (codegenMode !== 'single') {
+            // Both multi-file layouts run from one entry point inside the folder;
+            // the runner accepts exactly one folder level under scripts/.
+            const entry = codegenMode === 'modular' ? 'workflow.py' : 'orchestrator.py';
+            try { const data = await this._writeManifest(codegenMode); filename = `${data.root}/${entry}`; }
+            catch (e) { alert(`Could not generate the ${codegenMode === 'modular' ? 'workflow package' : 'A2A folder'}: ${e?.message || e}`); return; }
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }

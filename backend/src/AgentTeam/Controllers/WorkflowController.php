@@ -230,10 +230,12 @@ class WorkflowController
      *
      * Query parameters:
      *   - ?a2a=1: Multi-file A2A manifest mode. Returns {root, files: [{path, code}, ...]} (always JSON).
-     *   - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in A2A mode.
+     *   - ?modular=1: Multi-file "agents in separate files" mode (one importable
+     *     module per node plus workflow.py/common.py). Same manifest shape as A2A.
+     *   - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in multi-file modes.
      *
      * Returns either:
-     *   - A2A mode (?a2a=1): {success: true, data: {root, files}} (JSON only)
+     *   - Multi-file (?a2a=1 or ?modular=1): {success: true, data: {root, files}} (JSON only)
      *   - Single-file with ?download=1: Content-Type: text/x-python (raw source)
      *   - Single-file default: application/json {filename, code}
      */
@@ -263,8 +265,11 @@ class WorkflowController
                 $agentRepo
             );
             $a2a = ($request['query']['a2a'] ?? '0') === '1';
-            $result = $gen->generate($workflowId, (string) $userId, ['a2a' => $a2a]);
-            if ($a2a) {
+            // A2A wins if both are set: the two are mutually exclusive in the
+            // editor's form, so this only guards a hand-written URL.
+            $modular = !$a2a && ($request['query']['modular'] ?? '0') === '1';
+            $result = $gen->generate($workflowId, (string) $userId, ['a2a' => $a2a, 'modular' => $modular]);
+            if ($a2a || $modular) {
                 // Multi-file output: always JSON (the editor writes the folder itself).
                 return ['success' => true, 'data' => $result, 'status_code' => 200];
             }
