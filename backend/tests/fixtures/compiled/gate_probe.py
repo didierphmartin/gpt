@@ -2,7 +2,7 @@
 
 argv[1] is a compiled modular package root.
 """
-import os, sys, threading, importlib
+import json, os, sys, threading, importlib
 
 os.environ["PLAYBOOK_GATE_TIMEOUT_S"] = "5"
 sys.path.insert(0, sys.argv[1])
@@ -57,5 +57,47 @@ denied = common._playbook_gate(run, "approval", "request_approval", {"question":
 assert denied["decision"]["decision"] == "denied", denied
 assert denied["decision"]["actor"] == "policy", denied
 del os.environ["PLAYBOOK_GATE_MODE"]
+
+# 4. The real tool surface (build_playbook_tools/wrap()) must emit exactly one
+# gate_request and one tool_result for a gate call -- not two. This is the
+# path a live agent actually calls; _playbook_gate() alone (cases 1-3 above)
+# bypasses wrap() and would not have caught the duplicate-tool_result bug.
+playbook_hr = importlib.import_module("agents.playbook_hr")
+run2 = common._PlaybookRun(False, {})
+tools = common.build_playbook_tools(playbook_hr.NODE, run2)
+approval_tool = next(t for t in tools if t.name == "request_approval")
+
+seen.clear()
+result2 = {}
+
+
+def ask2():
+    result2["value"] = approval_tool.invoke(
+        {"approver": "manager", "question": "Approve the PTO integration test?"})
+
+
+t2 = threading.Thread(target=ask2)
+t2.start()
+
+gate2 = None
+for _ in range(50):
+    gate2 = next((e for e in seen if e.get("type") == "gate_request"), None)
+    if gate2:
+        break
+    threading.Event().wait(0.05)
+assert gate2, f"no gate_request emitted via the tool surface: {seen}"
+
+assert common.resolve_gate(gate2["tool_call_id"], {"decision": "approved", "comment": "go ahead", "actor": "mgr@x"})
+t2.join(5)
+assert not t2.is_alive(), "the tool call did not resume after resolve_gate"
+
+gate_events = [e for e in seen if e.get("type") == "gate_request"]
+result_events = [e for e in seen if e.get("type") == "tool_result" and e.get("name") == "request_approval"]
+assert len(gate_events) == 1, f"expected exactly 1 gate_request, saw {len(gate_events)}: {seen}"
+assert len(result_events) == 1, f"expected exactly 1 tool_result, saw {len(result_events)}: {seen}"
+parsed = json.loads(result2["value"])
+assert parsed["ok"] is True, parsed
+assert parsed["decision"]["decision"] == "approved", parsed
+assert parsed["decision"]["comment"] == "go ahead", parsed
 
 print("OK")

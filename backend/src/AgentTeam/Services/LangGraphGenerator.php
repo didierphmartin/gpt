@@ -3282,16 +3282,15 @@ def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:
         waiter = open_gate(tool_call_id)
         run.events.append({"type": "gate_request", "kind": kind, "payload": dict(args)})
         emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
-        answered = waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
         answer = take_gate_answer(tool_call_id)
-        if answered and answer is not None:
-            emit_event(type="tool_result", name=name, result={"ok": True, "decision": answer})
+        if answer is not None:
             return {"ok": True, "decision": answer}
         # Nobody attached, or nobody answered in time: same result as a
         # non-interactive run, recorded so the transcript says who decided.
-        fallback = _playbook_gate_policy(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
-        emit_event(type="tool_result", name=name, result=fallback)
-        return fallback
+        # wrap() emits the single tool_result for this call, same as every
+        # other mode -- do not emit one here too.
+        return _playbook_gate_policy(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
     run.emit(type="gate_request", kind=kind, payload=dict(args))
     if mode == "prompt":
         print(f"\n✋ [{kind}] {what}", flush=True)
