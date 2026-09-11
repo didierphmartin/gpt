@@ -1,0 +1,24 @@
+{
+  "version": "run/1",
+  "note": "The run event protocol. `truncated` is emitted when a reconnecting client asks to resume from a point the server's ring buffer no longer holds: the gap is signalled rather than silently skipped. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended, and the `leg`/`round` fields on round/tool_call/tool_result, are the PHP interpreter's -- it re-decides every round from the running transcript inside one leg; the compiled runtime delegates the loop to LangChain's own agent and never labels events with leg/round), but it must not emit one this file does not describe.",
+  "events": {
+    "round":        { "required": ["type", "round"],             "optional": ["leg"] },
+    "tool_call":    { "required": ["type", "name"],               "optional": ["args", "leg", "round"] },
+    "tool_result":  { "required": ["type", "name"],               "optional": ["result", "leg", "round"] },
+    "message":      { "required": ["type", "text"],               "optional": ["sensitive"] },
+    "note":         { "required": ["type", "text"],               "optional": [] },
+    "gate_request": { "required": ["type", "kind", "payload"],    "optional": ["tool_call_id", "run_id", "ui_resource"] },
+    "final":        { "required": ["type", "status"],             "optional": ["leg", "text"] },
+    "leg_started":  { "required": ["type"],                       "optional": ["leg"] },
+    "leg_ended":    { "required": ["type"],                       "optional": ["leg", "status"] },
+    "truncated":    { "required": ["type", "from", "resumed_at"], "optional": [] }
+  },
+  "terminal": {
+    "done":  { "required": ["run_id", "status", "output"], "optional": ["seconds"] },
+    "error": { "required": ["error"],                      "optional": ["run_id"] }
+  },
+  "answer": {
+    "required": ["tool_call_id"],
+    "note": "Flat: {tool_call_id, ...answer}. Answer keys vary by gate kind — approval {decision, comment, actor}, handoff {decision, comment}, form {<field>: <value>}, await_message {text}. gate_request.ui_resource is reserved for agent-authored forms (spec §7): {uri, server_url}, hosted through mcp-app-host.js. Nothing emits it yet."
+  }
+}
