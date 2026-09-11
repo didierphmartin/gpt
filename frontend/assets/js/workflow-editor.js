@@ -4877,6 +4877,23 @@ class WorkflowEditor {
             return;
         }
 
+        // Probe the runner BEFORE asking for a prompt. Every other Run path
+        // does this (see _runLangGraphScript, the ADK and MAF paths); the
+        // compiled path returns before that probe, so a runner that is down
+        // used to surface as a raw "Failed to fetch" alert after the user had
+        // already typed a prompt. The browser cannot start the runner itself —
+        // no page can spawn a local process — so the honest answer is one
+        // copy-paste command, offered before the prompt rather than after it.
+        if (!verified) {
+            try {
+                const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+                if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+            } catch (_) {
+                this._showCompiledRunnerNotRunningModal(root);
+                return;
+            }
+        }
+
         const prompt = await this._showRunPromptModal(this._startNodePrompt());
         if (prompt === null) return;
 
@@ -5238,6 +5255,52 @@ class WorkflowEditor {
      * Modal shown when the runner liveness probe to /health fails.
      * Tells the user to start `python3 main.py` from the runtime folder.
      */
+    /**
+     * The runner is down and this workflow compiles to a package (modular or
+     * A2A). Unlike the single-file modal, the fallback here is NOT "run the
+     * script yourself" as a substitute: the run server is what makes gates
+     * answerable in the browser, so the primary action is starting the runner.
+     * The direct command is offered second, for a run without the UI.
+     */
+    _showCompiledRunnerNotRunningModal(root) {
+        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const directCmd = root
+            ? `cd ~/Documents/synergyAI/python/scripts/${root} && ../../.venv/bin/python workflow.py`
+            : '';
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">${this.escapeHtml(this.t('workflow.output.runnerDownTitle') || 'Start the local runner')}</h3>
+                <p class="text-sm text-gray-600 mb-3">${this.escapeHtml(this.t('workflow.output.runnerDownHelp') || 'The runner starts this workflow’s server and is what lets you answer its questions in the browser. It is not running — start it once and leave it running:')}</p>
+                <div class="relative mb-3">
+                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
+                </div>
+                ${directCmd ? `<p class="text-xs text-gray-500 mb-1">${this.escapeHtml(this.t('workflow.output.runnerDownDirect') || 'Or run it straight from a terminal, without the browser UI (gates are answered on the console):')}</p>
+                <pre class="bg-gray-100 text-gray-800 text-xs rounded p-2 mb-3 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>` : ''}
+                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.output.runnerDownSetup') || 'Never installed the local Python env? Click Setup in the LangGraph menu first.')}</p>
+                <div class="flex justify-end gap-2">
+                    <button class="rnr-retry-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.runnerDownRetry') || 'Retry')}</button>
+                    <button class="rnr-close-btn px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.cmd-copy-btn')?.addEventListener('click', () => {
+            try { navigator.clipboard.writeText(startCmd); } catch (_) { /* clipboard blocked */ }
+        });
+        // Retry without making the user hunt for the Run button again: they
+        // started the runner in a terminal a second ago, and this is the
+        // moment they want to try it.
+        backdrop.querySelector('.rnr-retry-btn').addEventListener('click', () => {
+            close();
+            this._runCompiled(root);
+        });
+    }
+
     _showRunnerNotRunningModal() {
         // Use the venv's Python directly (./.venv/bin/python) instead of
         // system python3. The runner spawns each script as a subprocess
