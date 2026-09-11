@@ -82,15 +82,13 @@ class WorkflowEditor {
         // places that never touch this field, so a stale target could point
         // a run at another workflow's server.
         this._runTarget = null;
-        // The EventSource of a compiled run currently in flight, if any —
-        // lets a second Run() close/replace the first instead of two
-        // streams interleaving into the same overlay (see _runCompiled).
+        // The EventSource of a compiled run currently in flight, if any — a
+        // second Run() is refused while it is set, because the run server
+        // executes one run at a time and offers no cancel (see _runCompiled).
         this._runCompiledEs = null;
-        // That run's promise-executor `reject`, so superseding it can settle
-        // its `await new Promise(...)` explicitly — close() alone fires no
-        // 'error' event, so without this the superseded run's finally would
-        // never run and its listener closures would leak.
-        this._runCompiledReject = null;
+        // What that in-flight run is, so the refusal can name it:
+        // {name, base, runId}.
+        this._runCompiledWhat = null;
     }
 
     /**
@@ -3276,13 +3274,17 @@ class WorkflowEditor {
             menu.remove();
             const url = prompt(this.t('workflow.output.runTargetPrompt') || 'Workflow server URL', 'http://127.0.0.1:8710/');
             if (!url) return;
+            let target;
             try {
-                await this._verifyRunTarget(url);        // identity check only, no spawn
+                target = await this._verifyRunTarget(url);   // identity check only, no spawn
             } catch (e) {
                 alert(`That server cannot run this workflow: ${e?.message || e}`);
                 return;
             }
-            await this._runCompiled(null);               // null root: never spawn, use _runTarget
+            // Hand the verified target over explicitly: _runCompiled clears
+            // this._runTarget on its own early exits, so re-reading the field
+            // there would find null and try to spawn the folder `null`.
+            await this._runCompiled(null, target);
         });
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
@@ -4737,7 +4739,13 @@ class WorkflowEditor {
     /**
      * Verify a run server at `url` is THIS workflow's current compile and
      * speaks the protocol this editor understands. Throws with an actionable
-     * message otherwise. Sets and returns this._runTarget = {base, version}.
+     * message otherwise. Returns {base, version}.
+     *
+     * It deliberately does NOT touch this._runTarget: only _runCompiled owns
+     * that field, and only for a run it is actually about to start. Verifying
+     * a URL while another run is in flight must not repoint that run's gate
+     * answers at the server the user was merely checking.
+     *
      * Shared by _acquireRunTarget (after a spawn) and the "Run against a
      * URL…" override (no spawn — just an identity check on an already-running
      * server).
@@ -4761,14 +4769,14 @@ class WorkflowEditor {
         if (card.protocol !== 'run/1') {
             throw new Error(`${base} speaks protocol ${card.protocol}, this editor speaks run/1`);
         }
-        this._runTarget = { base: base.replace(/\/$/, ''), version: card.version };
-        return this._runTarget;
+        return { base: base.replace(/\/$/, ''), version: card.version };
     }
 
     /**
      * Start (or reuse) the compiled workflow's run server and verify it is THIS
      * workflow's current compile. Throws with an actionable message otherwise.
-     * Returns {base, version}; also sets this._runTarget.
+     * Returns {base, version}; the caller decides whether it becomes
+     * this._runTarget.
      */
     async _acquireRunTarget(root) {
         const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/start`, {
@@ -4828,12 +4836,12 @@ class WorkflowEditor {
      *
      * `root` is the folder to spawn — pass it whenever the caller just
      * generated (or is about to spawn) a compiled package. Pass null ONLY
-     * from the "Run against a URL…" override, where _verifyRunTarget has just
-     * set this._runTarget and there is nothing to spawn. Every other path
-     * always re-acquires the target rather than trusting a leftover
-     * this._runTarget: currentWorkflowId is reassigned in several other
-     * places that never touch _runTarget, so a stale pointer could otherwise
-     * run this workflow against another workflow's server.
+     * from the "Run against a URL…" override, which passes its already
+     * verified target as `verified` instead. Every other path always
+     * re-acquires the target rather than trusting a leftover this._runTarget:
+     * currentWorkflowId is reassigned in several other places that never
+     * touch _runTarget, so a stale pointer could otherwise run this workflow
+     * against another workflow's server.
      *
      * this._runTarget must never be left set once this call returns without
      * a run in flight — it is cleared on every early exit (prompt cancelled,
@@ -4842,52 +4850,38 @@ class WorkflowEditor {
      * both mislabel its overlay badge and send its gate answers to a
      * `{staleBase}/runs/undefined/tool-result` 404, hanging the run).
      */
-    async _runCompiled(root) {
-        // Re-entrancy guard (a second Run while one is in flight): hiding the
-        // overlay deliberately does not stop the stream, so without this a
-        // second EventSource would interleave into the same
-        // nodeExecutionData/overlay, and run 1's finally would null out
-        // _runTarget out from under run 2's gate answers mid-flight. Chosen
-        // behavior: close the in-flight run's stream and clear its state,
-        // then start the new one — "Run" always means "run now", matching
-        // the overlay's own "Hide (run continues)" framing rather than
-        // silently refusing the second click.
+    async _runCompiled(root, verified = null) {
+        // Re-entrancy guard (a second Run while one is in flight). There is no
+        // cancel route on the run server, so closing run 1's EventSource would
+        // NOT stop run 1: it keeps making LLM calls, and run 2 then blocks on
+        // the server's RUN_LOCK forever behind it — an overlay that opens and
+        // never moves. Refusing the second click is the honest answer until a
+        // cancel route exists. (Hiding the overlay is still fine; it says
+        // "run continues", and this message is how you find it again.)
         if (this._runCompiledEs) {
-            try { this._runCompiledEs.close(); } catch (_) { /* already closed */ }
-            // close() fires no 'error' event, so without an explicit reject
-            // the superseded run's `await new Promise(...)` would never
-            // settle: its `finally` would never run and the closed
-            // EventSource + its listener closures would leak. Reject it
-            // directly instead — marked `.superseded` so the old call's
-            // catch below can swallow it silently rather than painting a
-            // "failed" banner over the NEW run's overlay (by the time this
-            // settles, #pb-ov-title etc. belong to run 2, not run 1).
-            try {
-                const superseded = new Error('superseded by a new run');
-                superseded.superseded = true;
-                this._runCompiledReject?.(superseded);
-            } catch (_) { /* nothing to reject */ }
-            this._runCompiledEs = null;
-            this._runCompiledReject = null;
-            this._runTarget = null;
+            const busy = this._runCompiledWhat || {};
+            alert(
+                `A compiled run is already in flight: ${busy.name || 'this workflow'}`
+                + `${busy.runId ? ` (run ${busy.runId})` : ''} on ${busy.base || 'its run server'}.\n\n`
+                + 'The run server executes one run at a time and has no cancel — wait for it to finish, '
+                + 'or stop the workflow server from the Output menu.'
+            );
+            return;
         }
 
         const prompt = await this._showRunPromptModal(this._startNodePrompt());
-        if (prompt === null) {
-            // The URL-override path (root === null) has already called
-            // _verifyRunTarget, which sets this._runTarget, before this
-            // modal ever opens — cancelling here must not leave it set.
-            if (root === null) this._runTarget = null;
-            return;
-        }
+        if (prompt === null) return;
 
         const dfId = 'compiled';
         this.nodeExecutionData[dfId] = { pbEvents: [] };
         let target;
         try {
-            target = (root === null && this._runTarget)
-                ? this._runTarget
-                : await this._acquireRunTarget(root);
+            // The override's target was verified before the prompt modal
+            // opened; re-reading this._runTarget here instead would see the
+            // null this method leaves behind and fall through to
+            // _acquireRunTarget(null), which alerts "Invalid workflow folder".
+            target = verified || await this._acquireRunTarget(root);
+            this._runTarget = target;
         } catch (e) {
             alert(`Could not start the workflow server: ${e?.message || e}`);
             this._runTarget = null;
@@ -4905,11 +4899,18 @@ class WorkflowEditor {
             if (!started.ok) throw new Error((await started.text()) || `HTTP ${started.status}`);
             const { run_id: runId } = await started.json();
             this._runTarget.runId = runId;
+            this._runCompiledWhat = { name: this.currentWorkflowName || 'Workflow', base: target.base, runId };
 
             await new Promise((resolve, reject) => {
-                es = new EventSource(`${target.base}/runs/${runId}/events`);
+                const eventsUrl = `${target.base}/runs/${runId}/events`;
+                // EventSource retries a dropped connection silently and forever,
+                // so a run server that CRASHED looks exactly like a slow one: no
+                // terminal frame ever arrives and this promise never settles,
+                // leaving the overlay at "running…" for good. Count reconnects
+                // that deliver nothing and give up after a few.
+                let deadRetries = 0;
+                es = new EventSource(eventsUrl);
                 this._runCompiledEs = es;
-                this._runCompiledReject = reject;
                 es.addEventListener('done', (m) => {
                     // Parse defensively: a malformed terminal frame must
                     // reject the promise (so finally still runs and the
@@ -4923,13 +4924,25 @@ class WorkflowEditor {
                 });
                 es.addEventListener('error', (m) => {
                     // A transport error has no data; a protocol error does.
-                    if (!m.data) return;   // EventSource reconnects on its own
+                    if (!m.data) {
+                        // EventSource reconnects on its own — but only a
+                        // reconnect that then delivers a frame proves the
+                        // server is still there. Three in a row with nothing
+                        // in between means it is gone.
+                        if (++deadRetries >= 3) {
+                            reject(new Error(
+                                `lost the run server at ${eventsUrl} (${deadRetries} failed reconnects, no events) — `
+                                + 'it probably crashed; check the workflow server log'));
+                        }
+                        return;
+                    }
                     try {
                         const ev = JSON.parse(m.data);
                         reject(new Error(ev.error || 'run failed'));
                     } catch (e) { reject(e); }
                 });
                 es.onmessage = (m) => {
+                    deadRetries = 0;   // a frame arrived: the connection is alive
                     let ev;
                     try { ev = JSON.parse(m.data); } catch (_) { return; /* keep streaming */ }
                     // _handlePlaybookEvent is async (it awaits the gate modal);
@@ -4940,17 +4953,11 @@ class WorkflowEditor {
                 };
             });
         } catch (e) {
-            // A superseded run's forced rejection (see the guard above) is
-            // expected housekeeping, not a failure of THIS run — the overlay
-            // it would paint "failed" onto already belongs to whatever
-            // superseded it.
-            if (!e?.superseded) this._pbOverlayFinish(false, String(e?.message || e));
+            this._pbOverlayFinish(false, String(e?.message || e));
         } finally {
             try { es?.close(); } catch (_) { /* already closed */ }
-            if (this._runCompiledEs === es) {
-                this._runCompiledEs = null;
-                this._runCompiledReject = null;
-            }
+            if (this._runCompiledEs === es) this._runCompiledEs = null;
+            this._runCompiledWhat = null;
             this._runTarget = null;
         }
     }
@@ -12181,13 +12188,33 @@ class WorkflowEditor {
      * markdown-renderer.js — rather than a second renderer or a vendored
      * markdown lib.
      */
+    /**
+     * Markdown for one overlay bubble, sanitized.
+     *
+     * The text here is LLM output shaped by fetched documents and tool
+     * results, and it lands in innerHTML in the origin that holds the JWT —
+     * so it is exactly the input an injected `<img onerror>` would arrive on.
+     * window.renderMarkdown runs `marked` with sanitize:false and no
+     * sanitizer of its own, so this is where the scrub has to happen:
+     * DOMPurify when the page loaded it (index.html, beside marked), plain
+     * escaped text when it did not. Escaped text is a worse-looking bubble,
+     * never an unsafe one — there is no third branch that renders raw HTML.
+     */
     _pbRenderBody(text) {
+        const raw = String(text || '');
         try {
-            if (typeof window.renderMarkdown === 'function') {
-                return window.renderMarkdown(String(text || ''));
+            if (typeof window.renderMarkdown === 'function' && window.DOMPurify?.sanitize) {
+                return window.DOMPurify.sanitize(window.renderMarkdown(raw), {
+                    // Wide enough for ordinary markdown — headings, lists,
+                    // code, tables, links, images, mermaid's <pre> — and
+                    // nothing that executes.
+                    USE_PROFILES: { html: true },
+                    ADD_ATTR: ['class', 'target', 'rel'],
+                    FORBID_TAGS: ['style', 'form', 'input', 'button'],
+                });
             }
         } catch (_) { /* fall through to plain text */ }
-        return this.escapeHtml(String(text || '')).replace(/\n/g, '<br>');
+        return this.escapeHtml(raw).replace(/\n/g, '<br>');
     }
 
     _pbBubble(who, text, opts = {}) {
