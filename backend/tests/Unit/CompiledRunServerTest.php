@@ -3,6 +3,11 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use AgentTeam\Models\Workflow;
+use AgentTeam\Services\AgentRepository;
+use AgentTeam\Services\LangGraphGenerator;
+use AgentTeam\Services\WorkflowGraphRepository;
+use AgentTeam\Services\WorkflowRepository;
 
 /**
  * The compiled package's run server: event sink, server gate mode, api.py.
@@ -17,6 +22,50 @@ class CompiledRunServerTest extends TestCase
         $m = LangGraphA2AGeneratorTest::generator()->generate(44, '3', ['modular' => true]);
         $root = sys_get_temp_dir() . '/compiled_' . bin2hex(random_bytes(6));
         foreach ($m['files'] as $f) {
+            $path = $root . '/' . $f['path'];
+            @mkdir(dirname($path), 0777, true);
+            file_put_contents($path, $f['code']);
+        }
+        return $root;
+    }
+
+    /**
+     * Write a PLAIN two-agent package: start -> Researcher -> Writer -> output.
+     *
+     * The workflow-44 fixture is a dispatcher demo -- it routes to one child, so
+     * a run of it never visits two agent nodes in a row, and its playbook node
+     * streams a transcript of its own. This graph has neither: no dispatcher,
+     * no playbook, no tools. Every frame a run of it produces therefore comes
+     * from _run_node_module itself, which is exactly what node_events_probe.py
+     * needs to assert.
+     */
+    public static function writeLinearPackage(): string
+    {
+        $agent = fn(string $name) => [
+            'type' => 'agent-template', 'agent_name' => $name, 'agent_type' => 'standard',
+            'instructions' => "You are {$name}.", 'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-5',
+            'tools' => [], 'settings' => ['temperature' => 0.7, 'max_tokens' => 4096],
+        ];
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'write something']],
+                ['id' => '2', 'node_type' => '', 'config' => $agent('Researcher')],
+                ['id' => '3', 'node_type' => '', 'config' => $agent('Writer')],
+                ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3'], ['from' => '3', 'to' => '4']],
+        ];
+        $t = new self('x');
+        $wfRepo = $t->createMock(WorkflowRepository::class);
+        $wfRepo->method('findById')->willReturn(new Workflow(['id' => 77, 'name' => 'Linear demo', 'user_id' => '3']));
+        $graphRepo = $t->createMock(WorkflowGraphRepository::class);
+        $graphRepo->method('getGraph')->willReturn($graph);
+        $agentRepo = $t->createMock(AgentRepository::class);
+        $agentRepo->method('findById')->willReturn(null);
+        $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
+
+        $root = sys_get_temp_dir() . '/compiled_linear_' . bin2hex(random_bytes(6));
+        foreach ($gen->generate(77, '3', ['modular' => true])['files'] as $f) {
             $path = $root . '/' . $f['path'];
             @mkdir(dirname($path), 0777, true);
             file_put_contents($path, $f['code']);
@@ -82,6 +131,18 @@ class CompiledRunServerTest extends TestCase
     public function testApiActuallyStreamsFramesBeforeTheRunCompletes(): void
     {
         [$rc, $out] = $this->probe('stream_probe.py', self::writePackage());
+        $this->assertSame(0, $rc, $out);
+        $this->assertStringContainsString('OK', $out);
+    }
+
+    /**
+     * The regression guard for "no per-node progress reaches the browser":
+     * a real compiled graph, only the chat model stubbed, must put at least
+     * one frame per node on the stream before the terminal done.
+     */
+    public function testARealGraphStreamsAFramePerNode(): void
+    {
+        [$rc, $out] = $this->probe('node_events_probe.py', self::writeLinearPackage());
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }

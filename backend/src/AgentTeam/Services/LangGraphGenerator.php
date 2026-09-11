@@ -1667,6 +1667,14 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
     t0 = time.monotonic()
     text_parts: list[str] = []
     data: dict = {}
+    # Each node opens a round so a watching host can tell the legs apart. The
+    # agents run in their own processes with no sink of their own, so relaying
+    # their status lines here is the ONLY way an A2A run streams anything but
+    # gates.
+    try:
+        emit_event(type="round", round=ORDER.index(nid))
+    except ValueError:
+        emit_event(type="round", round=0)
     async with httpx.AsyncClient(timeout=None) as hc:
         client = await create_client(url, ClientConfig(streaming=True, httpx_client=hc))
         req = T.SendMessageRequest(message=T.Message(message_id=str(uuid.uuid4()), role=T.Role.ROLE_USER, parts=[T.Part(text=request_text)]))
@@ -1685,6 +1693,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
                         for line in get_text_parts(su.status.message.parts):
                             if line and su.status.state != T.TaskState.TASK_STATE_INPUT_REQUIRED:
                                 print(f"[{ad['display']}] {line}", flush=True)
+                                emit_event(type="message", text=f"[{ad['display']}] {line}", sensitive=False)
                     if su.status.state == T.TaskState.TASK_STATE_INPUT_REQUIRED:
                         parts = get_data_parts(su.status.message.parts) if su.status.HasField("message") else []
                         gate_payload = dict(parts[0]) if parts and isinstance(parts[0], dict) else {"gate": "gate", "args": {}}
@@ -1716,7 +1725,11 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
     dt = time.monotonic() - t0
     NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
     print(f"[node] [{nid}] {ad['display']!r} done over A2A -- {sum(len(t) for t in text_parts)} chars ({dt:.1f}s)", flush=True)
-    return {"text": "\n".join(text_parts), "route": str(data.get("route") or ""), "notes": str(data.get("notes") or ""), "status": str(data.get("status") or "ok")}
+    out = {"text": "\n".join(text_parts), "route": str(data.get("route") or ""), "notes": str(data.get("notes") or ""), "status": str(data.get("status") or "ok")}
+    if out["text"]:
+        emit_event(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
+    emit_event(type="final", leg=nid, status=out["status"] or "ok")
+    return out
 
 
 # ==============================================================
@@ -2806,7 +2819,7 @@ TXT;
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import NODE_DURATIONS, WFState, build_context, _convert_doc_to_markdown';
+        $L[] = 'from common import NODE_DURATIONS, WFState, build_context, emit_event, _convert_doc_to_markdown';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -2878,9 +2891,20 @@ _RUN_T0 = None
 
 
 async def _run_node_module(nid: str, request_text: str) -> dict:
-    """Run node `nid` by calling its module. Returns {"text", "route", "notes", "status"}."""
+    """Run node `nid` by calling its module. Returns {"text", "route", "notes", "status"}.
+
+    A watching host (api.py) sees the run through these events and nothing
+    else: a plain agent node has no other sink, so without the round/message
+    pair below a workflow of ordinary agent nodes streams an empty overlay
+    until the terminal frame. Only message/tool_call/tool_result/gate_request
+    actually render there; round and final carry the structure.
+    """
     ad = AGENTS[nid]
     t0 = time.monotonic()
+    try:
+        emit_event(type="round", round=ORDER.index(nid))
+    except ValueError:
+        emit_event(type="round", round=0)
 
     async def trace(line: str):
         """Progress callback the module calls; in one process this is just a print."""
@@ -2894,6 +2918,11 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     # SUMMARY counts each node exactly once.
     NODE_DURATIONS[ad["display"]] = dt
     print(f"[node] [{nid}] {ad['display']!r} done -- {len(out['text'])} chars ({dt:.1f}s)", flush=True)
+    # A playbook node already streamed its own transcript through the sink --
+    # re-posting its answer here would double it in the overlay.
+    if ad.get("kind") != "playbook" and out.get("text"):
+        emit_event(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
+    emit_event(type="final", leg=nid, status=out.get("status") or "ok")
     return out
 
 
