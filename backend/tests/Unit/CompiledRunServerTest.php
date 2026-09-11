@@ -71,4 +71,11 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }
+
+    public function testAReconnectingClientReplaysMissedEvents(): void
+    {
+        [$rc, $out] = $this->probe('replay_probe.py', self::writePackage());
+        $this->assertSame(0, $rc, $out);
+        $this->assertStringContainsString('OK', $out);
+    }
 }

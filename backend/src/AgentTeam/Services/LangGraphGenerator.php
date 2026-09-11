@@ -2925,7 +2925,7 @@ RUN_LOCK = None     # asyncio.Lock, created on first use (see _drive)
 
 
 class RunState:
-    """One run: its status, its event history and the queue feeding the stream."""
+    """One run: its status, its event history and one queue per attached client."""
 
     def __init__(self, run_id: str, prompt: str):
         self.id = run_id
@@ -2935,21 +2935,33 @@ class RunState:
         self.error = ""
         self.seq = 0
         self.events = []                  # [(seq, name, payload)] capped at RING
-        self.queue = asyncio.Queue()
+        self.subscribers = []             # list[asyncio.Queue] -- one per attached client
         self.task = None
 
     def publish(self, name: str, payload: dict) -> None:
-        """Record one frame and hand it to whoever is streaming."""
+        """Record one frame and hand it to every attached client."""
         self.seq += 1
         frame = (self.seq, name, payload)
         self.events.append(frame)
         if len(self.events) > RING:
             del self.events[0]
-        self.queue.put_nowait(frame)
+        for q in list(self.subscribers):
+            q.put_nowait(frame)
 
     def since(self, last_id: int):
         """Frames after `last_id`, for a client that reconnected."""
         return [f for f in self.events if f[0] > last_id]
+
+    def subscribe(self) -> asyncio.Queue:
+        """Attach a client. Returns its own queue of frames."""
+        q = asyncio.Queue()
+        self.subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        """Detach a client (stream closed, browser gone)."""
+        if q in self.subscribers:
+            self.subscribers.remove(q)
 
 
 # ==============================================================
@@ -3004,12 +3016,20 @@ async def _drive(state: RunState) -> None:
         try:
             state.output = await run_workflow(state.prompt)
             state.status = "completed"
-            state.publish("done", {"run_id": state.id, "status": state.status,
+            # Publish the terminal frame through the same call_soon_threadsafe
+            # hop as every sink-driven event, not directly: the graph's last
+            # emit_event() can still have a publish() pending on the loop's
+            # ready queue when run_workflow() returns (it was only scheduled,
+            # not yet run). A direct call here would jump the queue and hand
+            # out "done" before that trailing event -- so a client can see
+            # "done" and stop, and the still-unpublished event that "done"
+            # skipped ahead of never gets delivered at all.
+            loop.call_soon_threadsafe(state.publish, "done", {"run_id": state.id, "status": state.status,
                                    "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
         except Exception as e:
             state.status = "failed"
             state.error = str(e)
-            state.publish("error", {"run_id": state.id, "error": state.error})
+            loop.call_soon_threadsafe(state.publish, "error", {"run_id": state.id, "error": state.error})
         finally:
             set_event_sink(prev)
 
@@ -3026,28 +3046,34 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
         last_id = 0
 
     async def frames():
-        # publish() puts every frame in BOTH the ring buffer and the live
-        # queue, so an event that lands before this request attaches is
-        # already sitting in the queue when we start draining it below.
+        # Subscribe before replaying: publish() puts every frame in BOTH the
+        # ring buffer and every attached subscriber's own queue, so an event
+        # published between the subscribe below and the end of the replay
+        # loop lands in this client's queue and is skipped as a duplicate --
+        # not lost, and not delivered to some other client's queue instead.
         # Track the highest seq the replay loop already sent so the queue
         # loop skips those stale duplicates instead of re-yielding them.
         # Clamped to state.seq: an id ahead of the run (a stale tab, a
         # reconnect against the wrong run) must not suppress every future
         # frame -- including the terminal one, which would hang the stream.
-        sent_through = min(last_id, state.seq)
-        for seq, name, payload in state.since(last_id):
-            yield _frame(seq, name, payload)
-            sent_through = seq
-            if name in ("done", "error"):
-                return
-        while True:
-            seq, name, payload = await state.queue.get()
-            if seq <= sent_through:
-                continue
-            yield _frame(seq, name, payload)
-            sent_through = seq
-            if name in ("done", "error"):
-                return
+        q = state.subscribe()
+        try:
+            sent_through = min(last_id, state.seq)
+            for seq, name, payload in state.since(last_id):
+                yield _frame(seq, name, payload)
+                sent_through = seq
+                if name in ("done", "error"):
+                    return
+            while True:
+                seq, name, payload = await q.get()
+                if seq <= sent_through:
+                    continue
+                yield _frame(seq, name, payload)
+                sent_through = seq
+                if name in ("done", "error"):
+                    return
+        finally:
+            state.unsubscribe(q)
 
     return StreamingResponse(frames(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
