@@ -38,4 +38,11 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }
+
+    public function testServerGateModeBlocksUntilAnsweredAndFallsBackOnTimeout(): void
+    {
+        [$rc, $out] = $this->probe('gate_probe.py', self::writePackage());
+        $this->assertSame(0, $rc, $out);
+        $this->assertStringContainsString('OK', $out);
+    }
 }

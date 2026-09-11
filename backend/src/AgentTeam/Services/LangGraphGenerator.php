@@ -312,7 +312,7 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time';
+        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid';
         $lines[] = '';
         $lines[] = 'from dotenv import load_dotenv';
         $lines[] = '';
@@ -1788,7 +1788,7 @@ PY;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time';
+        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
         $L[] = 'from typing import Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
@@ -2411,7 +2411,7 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time';
+        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid';
         $L[] = 'from typing import Annotated, Any, Literal, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
@@ -3260,11 +3260,38 @@ class _PlaybookRun:
 
 
 def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:
-    """Human gate. On an interactive terminal the question is asked on the console.
-    Otherwise (runner / batch) PLAYBOOK_GATE_MODE decides: auto (default) approves
-    approvals and acknowledges handoffs, deny denies, prompt forces the console."""
-    mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or ("prompt" if sys.stdin.isatty() else "auto")
+    """Human gate. A host watching this run (api.py) gets the question over the
+    event stream and answers it with resolve_gate(). On an interactive terminal
+    the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
+    auto (default) approves approvals and acknowledges handoffs, deny denies,
+    prompt forces the console. PLAYBOOK_GATE_MODE always wins."""
+    try:
+        _sink_active = _SINK is not None
+    except NameError:
+        _sink_active = False   # single-file/A2A targets without the sink block
+    mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
+        "server" if _sink_active
+        else "prompt" if sys.stdin.isatty()
+        else "auto")
     what = args.get("question") or args.get("prompt") or args.get("reason") or ""
+    if mode == "server":
+        # NOTE: run.emit() already tees a gate_request into the stream, but
+        # without the tool_call_id the answer must come back on, so the server
+        # mode emits its own and skips the bare one.
+        tool_call_id = uuid.uuid4().hex
+        waiter = open_gate(tool_call_id)
+        run.events.append({"type": "gate_request", "kind": kind, "payload": dict(args)})
+        emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
+        answered = waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        answer = take_gate_answer(tool_call_id)
+        if answered and answer is not None:
+            emit_event(type="tool_result", name=name, result={"ok": True, "decision": answer})
+            return {"ok": True, "decision": answer}
+        # Nobody attached, or nobody answered in time: same result as a
+        # non-interactive run, recorded so the transcript says who decided.
+        fallback = _playbook_gate_policy(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
+        emit_event(type="tool_result", name=name, result=fallback)
+        return fallback
     run.emit(type="gate_request", kind=kind, payload=dict(args))
     if mode == "prompt":
         print(f"\n✋ [{kind}] {what}", flush=True)
@@ -3276,11 +3303,19 @@ def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:
         ans = input("your answer: ").strip()
         return {"ok": True, "decision": {"decision": "answered", "comment": ans, "actor": "console"}}
     if mode == "deny":
-        return {"ok": True, "decision": {"decision": "denied", "comment": "denied by PLAYBOOK_GATE_MODE=deny", "actor": "policy"}}
+        return _playbook_gate_policy(kind, "denied by PLAYBOOK_GATE_MODE=deny", deny=True)
+    return _playbook_gate_policy(kind, "non-interactive run")
+
+
+def _playbook_gate_policy(kind: str, why: str, deny: bool = False) -> dict:
+    """The answer a policy gives when no human is available. One definition so
+    the auto, deny and timed-out-server paths cannot drift apart."""
+    if deny:
+        return {"ok": True, "decision": {"decision": "denied", "comment": why, "actor": "policy"}}
     if kind == "approval":
-        return {"ok": True, "decision": {"decision": "approved", "comment": "auto-approved (non-interactive run)", "actor": "policy"}}
+        return {"ok": True, "decision": {"decision": "approved", "comment": f"auto-approved ({why})", "actor": "policy"}}
     if kind == "handoff":
-        return {"ok": True, "decision": {"decision": "acknowledged", "comment": "handed off; no human available in this non-interactive run", "actor": "policy"}}
+        return {"ok": True, "decision": {"decision": "acknowledged", "comment": f"handed off; no human available ({why})", "actor": "policy"}}
     return {"ok": False, "timeout": True,
             "guidance": "No human is available in this non-interactive run. Continue with what you already know "
                         "and note the gap with leave_internal_note."}
