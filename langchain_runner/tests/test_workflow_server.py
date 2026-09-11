@@ -41,6 +41,9 @@ def test_resolve_package_dir_refuses_traversal_and_missing_api(tmp_path, monkeyp
 
 
 def test_start_serves_and_is_reused_then_stopped(tmp_path, monkeypatch):
+    """An UNCHANGED package is reused: the live process is still serving the
+    same modules it imported at boot, so respawning would only cost a second.
+    """
     _pkg(tmp_path, monkeypatch)
     try:
         first = runner._start_workflow_server("demo_modular")
@@ -49,12 +52,51 @@ def test_start_serves_and_is_reused_then_stopped(tmp_path, monkeypatch):
         again = runner._start_workflow_server("demo_modular")
         assert again["url"] == first["url"]
         assert again["reused"] is True
+        assert again["pid"] == first["pid"]
     finally:
         assert runner._stop_workflow_server("demo_modular")["stopped"] is True
     # The port is free again.
     port = int(first["url"].rsplit(":", 1)[1].strip("/"))
     with socket.socket() as s:
         s.bind(("127.0.0.1", port))
+
+
+def test_start_respawns_when_the_package_was_recompiled(tmp_path, monkeypatch):
+    """Finding 1 regression. Python imports the graph and the agent modules
+    once, at import time, so a server started before a recompile serves the
+    OLD graph forever -- every Run after an edit would silently execute the
+    previous compile. Touching any *.py under the package must therefore
+    retire the live process and spawn a fresh one.
+    """
+    scripts = _pkg(tmp_path, monkeypatch, name="edited_modular")
+    first = None
+    try:
+        first = runner._start_workflow_server("edited_modular")
+        assert first["reused"] is False
+        # Simulate a recompile: the generator rewrites every file in place.
+        node = scripts / "edited_modular" / "agents" / "node_a.py"
+        node.parent.mkdir(parents=True, exist_ok=True)
+        node.write_text("# regenerated\n")
+        os.utime(node, (time.time() + 5, time.time() + 5))
+
+        again = runner._start_workflow_server("edited_modular")
+        assert again["reused"] is False, "a recompiled package must not reuse the live server"
+        assert again["pid"] != first["pid"]
+        assert again["url"] != first["url"]
+        # The superseded process is gone, not orphaned holding its port.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                with socket.socket() as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.bind(("127.0.0.1", int(first["url"].rsplit(":", 1)[1].strip("/"))))
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            pytest.fail("the stale workflow server is still holding its port")
+    finally:
+        runner._stop_workflow_server("edited_modular")
 
 
 # The two stubs below patch socket.getfqdn() inside the *child* process to a

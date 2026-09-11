@@ -331,8 +331,34 @@ def _read_log_tail(log_path: Path, limit: int = 2000) -> str:
         return ""
 
 
+def _newest_py_mtime(pkg: Path) -> float:
+    """The newest mtime of any *.py under a compiled package, or 0.0 if the
+    tree can't be walked. Used to decide whether a live server is serving
+    stale code.
+    """
+    newest = 0.0
+    try:
+        for path in pkg.rglob("*.py"):
+            try:
+                newest = max(newest, path.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
+    return newest
+
+
 def _start_workflow_server(folder: str) -> dict:
     """Start (or reuse) the run server for a compiled package. Returns {url, pid, reused}.
+
+    A live process is reused only when the package on disk has not been
+    recompiled since it booted. Python imports the graph and every agent
+    module once, at import time, so a server started before a recompile
+    keeps serving the OLD graph forever -- every Run after an edit would
+    silently execute the previous compile. Comparing the card's version
+    string cannot catch this (it is 'id-Ymd' and does not change within a
+    day), so the test is the only thing that actually moves: the newest
+    *.py mtime under the package vs. the moment the process was spawned.
 
     The child's stdout/stderr are redirected to a temp file, never to a
     pipe. A generated api.py prints a trace line per node/tool call/gate
@@ -344,14 +370,19 @@ def _start_workflow_server(folder: str) -> dict:
     source for the crash-diagnostic tail below.
     """
     pkg = _resolve_package_dir(folder)
+    stale: subprocess.Popen | None = None
     with _SERVERS_LOCK:
         proc = _SERVERS.get(folder)
         if proc is not None and proc.poll() is None:
-            return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
+            if _newest_py_mtime(pkg) <= getattr(proc, "_workflow_started", 0.0):
+                return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
+            # Recompiled since boot: this process is serving dead modules.
+            stale = _SERVERS.pop(folder, None)
         port = _free_port()
         url = f"http://127.0.0.1:{port}/"
         log_fd, log_name = tempfile.mkstemp(prefix=f"workflow-{folder}-", suffix=".log")
         log_path = Path(log_name)
+        started = time.time()
         with os.fdopen(log_fd, "wb") as log_file:
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
@@ -359,7 +390,16 @@ def _start_workflow_server(folder: str) -> dict:
             )
         proc._workflow_url = url
         proc._workflow_log = log_path
+        proc._workflow_started = started
         _SERVERS[folder] = proc
+
+    # Outside the lock: terminating the superseded process can take up to
+    # the 5 s grace period, and nothing else needs to wait on it.
+    if stale is not None:
+        try:
+            _terminate_workflow_proc(stale)
+        except Exception:
+            logging.exception("Failed to stop the stale workflow server for %r", folder)
 
     # The readiness wait itself happens outside the lock -- it can take up
     # to 60s, and holding the lock that long would stall every other
@@ -385,21 +425,18 @@ def _start_workflow_server(folder: str) -> dict:
     return {"url": url, "pid": proc.pid, "reused": False}
 
 
-def _stop_workflow_server(folder: str) -> dict:
-    """Terminate the run server for a package (5 s grace, then kill), reap
-    it so it never lingers as a zombie, and remove its log file.
+def _terminate_workflow_proc(proc: subprocess.Popen) -> bool:
+    """Terminate one workflow server process (5 s grace, then kill), reap it
+    so it never lingers as a zombie, and remove its log file. Returns whether
+    a running process was actually signalled.
     """
-    with _SERVERS_LOCK:
-        proc = _SERVERS.pop(folder, None)
-    if proc is None:
-        return {"stopped": False}
     log_path: Path | None = getattr(proc, "_workflow_log", None)
     if proc.poll() is not None:
         # Already exited on its own (e.g. crashed after startup) -- nothing
         # to signal, but still clean up its log file.
         if log_path is not None:
             log_path.unlink(missing_ok=True)
-        return {"stopped": False}
+        return False
     proc.terminate()
     try:
         proc.wait(5)
@@ -408,7 +445,16 @@ def _stop_workflow_server(folder: str) -> dict:
         proc.wait()  # reap -- kill() alone leaves a zombie until collected
     if log_path is not None:
         log_path.unlink(missing_ok=True)
-    return {"stopped": True}
+    return True
+
+
+def _stop_workflow_server(folder: str) -> dict:
+    """Stop the run server for a package and forget it."""
+    with _SERVERS_LOCK:
+        proc = _SERVERS.pop(folder, None)
+    if proc is None:
+        return {"stopped": False}
+    return {"stopped": _terminate_workflow_proc(proc)}
 
 
 def _stop_all_workflow_servers() -> None:
