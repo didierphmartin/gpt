@@ -102,4 +102,12 @@ with TestClient(api.app) as client:
     # A tool-result for an unknown run is refused, not silently swallowed.
     assert client.post("/runs/nope/tool-result", json={"tool_call_id": "x"}).status_code == 404
 
+    # A body with no tool_call_id is a 400, not a KeyError or a silent no-op.
+    assert client.post(f"/runs/{run_id}/tool-result", json={}).status_code == 400
+
+    # A tool_call_id nobody is waiting on (the run's gate already answered
+    # above) is a 409, not a silently-accepted no-op.
+    assert client.post(f"/runs/{run_id}/tool-result",
+                        json={"tool_call_id": "no-such-gate"}).status_code == 409
+
 print("OK")

@@ -2969,7 +2969,7 @@ async def identity() -> dict:
 
 
 @app.post("/runs")
-async def start_run(body: dict) -> dict:
+async def start_run(body: dict | None = None) -> dict:
     """Start a run and return its id. Does not stream -- GET its events next."""
     prompt = str((body or {}).get("prompt") or "").strip() or DEFAULT_PROMPT or "Hello"
     state = RunState(uuid.uuid4().hex, prompt)
@@ -3031,7 +3031,10 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
         # already sitting in the queue when we start draining it below.
         # Track the highest seq the replay loop already sent so the queue
         # loop skips those stale duplicates instead of re-yielding them.
-        sent_through = last_id
+        # Clamped to state.seq: an id ahead of the run (a stale tab, a
+        # reconnect against the wrong run) must not suppress every future
+        # frame -- including the terminal one, which would hang the stream.
+        sent_through = min(last_id, state.seq)
         for seq, name, payload in state.since(last_id):
             yield _frame(seq, name, payload)
             sent_through = seq
@@ -3056,7 +3059,7 @@ def _frame(seq: int, name: str, payload: dict) -> str:
 
 
 @app.post("/runs/{run_id}/tool-result")
-async def tool_result(run_id: str, body: dict) -> dict:
+async def tool_result(run_id: str, body: dict | None = None) -> dict:
     """Answer a gate. Body is flat: {tool_call_id, ...answer} -- the same shape
     the app backend's /workflows/tool-result takes."""
     if run_id not in RUNS:
