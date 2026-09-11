@@ -86,6 +86,11 @@ class WorkflowEditor {
         // lets a second Run() close/replace the first instead of two
         // streams interleaving into the same overlay (see _runCompiled).
         this._runCompiledEs = null;
+        // That run's promise-executor `reject`, so superseding it can settle
+        // its `await new Promise(...)` explicitly — close() alone fires no
+        // 'error' event, so without this the superseded run's finally would
+        // never run and its listener closures would leak.
+        this._runCompiledReject = null;
     }
 
     /**
@@ -4849,7 +4854,21 @@ class WorkflowEditor {
         // silently refusing the second click.
         if (this._runCompiledEs) {
             try { this._runCompiledEs.close(); } catch (_) { /* already closed */ }
+            // close() fires no 'error' event, so without an explicit reject
+            // the superseded run's `await new Promise(...)` would never
+            // settle: its `finally` would never run and the closed
+            // EventSource + its listener closures would leak. Reject it
+            // directly instead — marked `.superseded` so the old call's
+            // catch below can swallow it silently rather than painting a
+            // "failed" banner over the NEW run's overlay (by the time this
+            // settles, #pb-ov-title etc. belong to run 2, not run 1).
+            try {
+                const superseded = new Error('superseded by a new run');
+                superseded.superseded = true;
+                this._runCompiledReject?.(superseded);
+            } catch (_) { /* nothing to reject */ }
             this._runCompiledEs = null;
+            this._runCompiledReject = null;
             this._runTarget = null;
         }
 
@@ -4890,6 +4909,7 @@ class WorkflowEditor {
             await new Promise((resolve, reject) => {
                 es = new EventSource(`${target.base}/runs/${runId}/events`);
                 this._runCompiledEs = es;
+                this._runCompiledReject = reject;
                 es.addEventListener('done', (m) => {
                     // Parse defensively: a malformed terminal frame must
                     // reject the promise (so finally still runs and the
@@ -4920,10 +4940,17 @@ class WorkflowEditor {
                 };
             });
         } catch (e) {
-            this._pbOverlayFinish(false, String(e?.message || e));
+            // A superseded run's forced rejection (see the guard above) is
+            // expected housekeeping, not a failure of THIS run — the overlay
+            // it would paint "failed" onto already belongs to whatever
+            // superseded it.
+            if (!e?.superseded) this._pbOverlayFinish(false, String(e?.message || e));
         } finally {
             try { es?.close(); } catch (_) { /* already closed */ }
-            if (this._runCompiledEs === es) this._runCompiledEs = null;
+            if (this._runCompiledEs === es) {
+                this._runCompiledEs = null;
+                this._runCompiledReject = null;
+            }
             this._runTarget = null;
         }
     }
@@ -12173,16 +12200,26 @@ class WorkflowEditor {
         const align = you ? 'flex-end' : 'flex-start';
         const label = you ? 'You' : (opts.channel ? `📢 ${opts.channel}` : '📖 Playbook');
         let body;
+        // The sensitive branch is plain escaped text — its only formatting
+        // is its own newlines, so it needs white-space:pre-wrap to keep
+        // them. The markdown branch (_pbRenderBody) already carries its own
+        // block spacing (marked + breaks:true, or already-<br>-converted
+        // fallback text) — pre-wrap on top of that doubles every blank
+        // line, so it must NOT get pre-wrap. One shared div serves both
+        // branches, so the whitespace handling is chosen per-branch here
+        // rather than fixed in the markup below.
+        let bodyWhiteSpace = '';
         if (opts.sensitive) {
             const esc = this.escapeHtml(text);
             body = `<span class="pb-sensitive" style="cursor:pointer;color:#9ca3af;" data-revealed="0">•••••• (sensitive — click to reveal)</span><span hidden>${esc}</span>`;
+            bodyWhiteSpace = 'white-space:pre-wrap;';
         } else {
             body = this._pbRenderBody(text);
         }
         const el = this._pbAppend(`
             <div style="align-self:${align};max-width:85%;background:${bg};border-radius:10px;padding:8px 12px;">
                 <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">${this.escapeHtml(label)}</div>
-                <div class="markdown-content" style="font-size:13px;padding:0;">${body}</div>
+                <div class="markdown-content" style="font-size:13px;padding:0;${bodyWhiteSpace}">${body}</div>
             </div>`);
         // Final render pass only (the events driving this are already
         // complete messages, never a mid-stream partial) — same contract
