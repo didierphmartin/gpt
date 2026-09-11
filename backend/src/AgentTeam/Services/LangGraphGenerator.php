@@ -2936,6 +2936,7 @@ class RunState:
         self.error = ""
         self.seq = 0
         self.events = []                  # [(seq, name, payload)] capped at RING
+        self.terminal = False             # True once the done/error frame is PUBLISHED
         self.subscribers = []             # list[asyncio.Queue] -- one per attached client
         self.task = None
 
@@ -2946,6 +2947,8 @@ class RunState:
         self.events.append(frame)
         if len(self.events) > RING:
             del self.events[0]
+        if name in ("done", "error"):
+            self.terminal = True
         for q in list(self.subscribers):
             q.put_nowait(frame)
 
@@ -3058,10 +3061,10 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
         # reconnect against the wrong run) must not suppress a frame the
         # run still goes on to publish -- including the terminal one, which
         # would hang the stream. That only holds while the run is still
-        # producing frames, though: once it has finished nothing more will
-        # ever be published, so a reconnect at or past the terminal seq must
-        # not fall through to the drain below -- see the status check after
-        # the replay loop.
+        # producing frames, though: once the terminal frame has been
+        # published nothing more ever will be, so a reconnect at or past
+        # it must not fall through to the drain below -- see the
+        # state.terminal check after the replay loop.
         q = state.subscribe()
         try:
             sent_through = min(last_id, state.seq)
@@ -3078,10 +3081,17 @@ async def stream_events(run_id: str, request: Request) -> StreamingResponse:
                 sent_through = seq
                 if name in ("done", "error"):
                     return
-            if state.status != "running":
-                # The run is already over (this client saw the terminal frame
-                # already, or is reconnecting after it did) -- nothing more
-                # will ever be published, so there is nothing to wait for.
+            if state.terminal:
+                # The terminal frame has already been PUBLISHED (not just
+                # "the run isn't running" -- state.status flips to
+                # completed/failed synchronously in _drive(), but the
+                # terminal publish() is only *scheduled* via
+                # call_soon_threadsafe right after, same as every
+                # sink-driven event, for FIFO ordering; state.status alone
+                # would wrongly match during that window and cut off a
+                # subscriber who just subscribed *before* the publish that
+                # was meant to reach it). Once true, nothing more will ever
+                # be published, so there is nothing to wait for.
                 # EventSource auto-reconnects whenever the server closes the
                 # stream, including after a completed run, unless the page
                 # calls .close() -- without this check that reconnect would

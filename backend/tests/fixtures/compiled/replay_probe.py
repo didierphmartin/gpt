@@ -29,6 +29,13 @@ it's left running in the background exactly like that ghost connection,
 and the reconnect is proven to get every frame despite it still being
 attached.
 
+`terminal_publish_race()` below covers a third, narrower case: a subscriber
+attaching in the exact window where `_drive()` has set `state.status` but
+not yet published the terminal frame (deferred one loop tick via
+`call_soon_threadsafe`, for FIFO ordering against the sink). That window is
+real but timing-dependent to hit by racing real code, so it drives a
+`RunState` directly instead.
+
 argv[1] is a compiled modular package root.
 """
 import asyncio, json, sys, importlib
@@ -89,6 +96,54 @@ async def ghost(gen) -> None:
         pass
 
 
+async def terminal_publish_race():
+    """A subscriber attaching in the window where _drive() has already set
+    state.status = "completed"/"failed" but the terminal frame itself has
+    only been *scheduled* (call_soon_threadsafe, not yet run) must still get
+    it -- not be cut off because a guard read state.status instead of
+    "has the terminal frame actually been published".
+
+    That window is real but timing-dependent in a live run, so it's driven
+    directly here instead of raced: construct a RunState by hand, flip
+    status the way _drive() does, but withhold the terminal publish() the
+    same way call_soon_threadsafe withholds it for one loop tick, attach a
+    subscriber, THEN publish it -- and prove it arrives.
+    """
+    state = api.RunState("race-run", "x")
+    api.RUNS[state.id] = state
+    try:
+        state.publish("message", {"type": "message", "text": "before", "sensitive": False})
+        state.status = "completed"          # set synchronously in _drive(), same as a real run
+        assert not state.terminal, "probe setup is wrong: terminal must still be False here"
+
+        gen = await attach(state.id)
+        first = _parse(await gen.__anext__())
+        assert first[1] == "message" and first[2]["text"] == "before", first
+
+        # Drive the generator past the replay loop and the terminal guard
+        # WHILE state.terminal is still False, so it reaches the real drain
+        # (`await q.get()`) and genuinely suspends there -- the exact moment
+        # the race is about. A status-based guard would already have
+        # returned by now (state.status == "completed" the whole time), so
+        # this __anext__() would finish (raise StopAsyncIteration) instead
+        # of blocking; asyncio.sleep(0) lets it run to its own next
+        # suspension point before we check.
+        pending = asyncio.ensure_future(gen.__anext__())
+        await asyncio.sleep(0)
+        assert not pending.done(), (
+            "the subscriber's stream already ended before the terminal frame "
+            "was published -- a status-based guard would cut it off here and "
+            "drop \"done\": " + repr(pending.exception() if pending.done() else None))
+
+        # NOW the deferred terminal publish() finally runs.
+        state.publish("done", {"run_id": state.id, "status": "completed", "output": "x", "seconds": 0.0})
+
+        second = _parse(await asyncio.wait_for(pending, timeout=2))
+        assert second[1] == "done", second
+    finally:
+        del api.RUNS[state.id]
+
+
 async def main():
     transport = httpx.ASGITransport(app=api.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
@@ -122,6 +177,8 @@ async def main():
         assert rest[-1][2]["status"] == "completed", rest
 
         await asyncio.wait_for(ghost_task, timeout=5)
+
+    await terminal_publish_race()
 
     print("OK")
 
