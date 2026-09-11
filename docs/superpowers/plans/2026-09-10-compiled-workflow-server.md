@@ -1794,7 +1794,7 @@ Create `docs/run-protocol-v1.json`:
 ```json
 {
   "version": "run/1",
-  "note": "The run event protocol. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended are the PHP interpreter's), but it must not emit one this file does not describe.",
+  "note": "The run event protocol. `truncated` is emitted when a reconnecting client asks to resume from a point the server's ring buffer no longer holds: the gap is signalled rather than silently skipped. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended are the PHP interpreter's), but it must not emit one this file does not describe.",
   "events": {
     "round":        { "required": ["type", "round"],                  "optional": [] },
     "tool_call":    { "required": ["type", "name"],                   "optional": ["args"] },
@@ -1804,7 +1804,8 @@ Create `docs/run-protocol-v1.json`:
     "gate_request": { "required": ["type", "kind", "payload"],        "optional": ["tool_call_id", "ui_resource"] },
     "final":        { "required": ["type", "status"],                 "optional": ["leg"] },
     "leg_started":  { "required": ["type"],                           "optional": ["leg"] },
-    "leg_ended":    { "required": ["type"],                           "optional": ["leg", "status"] }
+    "leg_ended":    { "required": ["type"],                           "optional": ["leg", "status"] },
+    "truncated":    { "required": ["type", "from", "resumed_at"],      "optional": [] }
   },
   "terminal": {
     "done":  { "required": ["run_id", "status", "output"], "optional": ["seconds"] },
