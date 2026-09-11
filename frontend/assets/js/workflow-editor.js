@@ -4703,6 +4703,75 @@ class WorkflowEditor {
     }
 
     /**
+     * Start (or reuse) the compiled workflow's run server and verify it is THIS
+     * workflow's current compile. Throws with an actionable message otherwise.
+     * Returns {base, version}; also sets this._runTarget.
+     */
+    async _acquireRunTarget(root) {
+        const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: root }),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+        const { url } = await resp.json();
+        // A stale process squatting on the port answers 200 too — check identity
+        // before trusting it, or we run yesterday's graph against today's canvas.
+        const cardResp = await fetch(`${url}.well-known/workflow.json`);
+        if (!cardResp.ok) throw new Error(`${url} did not serve its identity`);
+        const card = await cardResp.json();
+        if (String(card.workflow_id) !== String(this.currentWorkflowId)) {
+            throw new Error(`${url} is serving workflow ${card.workflow_id}, not ${this.currentWorkflowId} — stop that process`);
+        }
+        if (card.protocol !== 'run/1') {
+            throw new Error(`${url} speaks protocol ${card.protocol}, this editor speaks run/1`);
+        }
+        this._runTarget = { base: url.replace(/\/$/, ''), version: card.version };
+        return this._runTarget;
+    }
+
+    /**
+     * "Run workflow" — the prompt for this run, pre-filled from the Start node.
+     * Resolves with the text, or null when cancelled.
+     */
+    _showRunPromptModal(defaultPrompt) {
+        return new Promise((resolve) => {
+            const backdrop = document.createElement('div');
+            backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+            backdrop.innerHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-1">${this.escapeHtml(this.t('workflow.output.runPromptTitle') || 'Run workflow')}</h3>
+                    <p class="text-xs text-gray-500 mb-3">${this.escapeHtml(this.t('workflow.output.runPromptHelp') || "This run only — the Start node's saved prompt is unchanged.")}</p>
+                    <textarea class="run-prompt w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" rows="6"></textarea>
+                    <div class="flex justify-end gap-2 mt-4">
+                        <button class="run-cancel px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.cancel') || 'Cancel')}</button>
+                        <button class="run-go px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.runPromptRun') || 'Run')}</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(backdrop);
+            const ta = backdrop.querySelector('.run-prompt');
+            ta.value = defaultPrompt || '';
+            ta.focus();
+            const done = (v) => { backdrop.remove(); resolve(v); };
+            backdrop.querySelector('.run-cancel').addEventListener('click', () => done(null));
+            backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
+            backdrop.querySelector('.run-go').addEventListener('click', () => done(ta.value));
+        });
+    }
+
+    /** The Start node's saved prompt, or '' when the graph has none. */
+    _startNodePrompt() {
+        try {
+            const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+            for (const id of Object.keys(data)) {
+                const nd = data[id]?.data || {};
+                if (nd.type === 'start') return String(nd.prompt || '');
+            }
+        } catch (_) { /* unsaved canvas */ }
+        return '';
+    }
+
+    /**
      * Fetch and validate a multi-file manifest (generate-python?a2a=1 or
      * ?modular=1) without writing anything to disk. Throws on an HTTP error, an
      * explicit {success:false} response, or a malformed payload.
