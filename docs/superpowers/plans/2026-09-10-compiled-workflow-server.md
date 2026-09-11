@@ -651,6 +651,7 @@ Add `modularApiBlock()` beside `modularRunnerBlock()`:
 # ==============================================================
 RING = 500          # events kept per run for replay
 RUNS = {}           # run_id -> RunState
+RUN_LOCK = None     # asyncio.Lock, created on first use (see _drive)
 
 
 class RunState:
@@ -708,27 +709,39 @@ async def start_run(body: dict) -> dict:
 
 
 async def _drive(state: RunState) -> None:
-    """Run the graph with the event sink installed, then publish the terminal frame."""
+    """Run the graph with the event sink installed, then publish the terminal frame.
+
+    Runs are serialised. The sink is a module global and the playbook's gate
+    tools are sync callables LangChain runs in an executor -- which does not
+    carry a ContextVar across -- so two concurrent runs would cross-deliver
+    each other's events. A second run waits here rather than corrupting both
+    transcripts; different workflows run in different processes anyway.
+    """
+    global RUN_LOCK
     loop = asyncio.get_running_loop()
+    app.state.loop = loop
+    if RUN_LOCK is None:
+        RUN_LOCK = asyncio.Lock()
 
     def sink(ev: dict) -> None:
         # Called from graph code that may be on a worker thread (sync tools),
         # so hop back onto the loop before touching the queue.
         loop.call_soon_threadsafe(state.publish, "message", ev)
 
-    prev = set_event_sink(sink)
-    t0 = time.monotonic()
-    try:
-        state.output = await run_workflow(state.prompt)
-        state.status = "completed"
-        state.publish("done", {"run_id": state.id, "status": state.status,
-                               "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
-    except Exception as e:
-        state.status = "failed"
-        state.error = str(e)
-        state.publish("error", {"run_id": state.id, "error": state.error})
-    finally:
-        set_event_sink(prev)
+    async with RUN_LOCK:
+        prev = set_event_sink(sink)
+        t0 = time.monotonic()
+        try:
+            state.output = await run_workflow(state.prompt)
+            state.status = "completed"
+            state.publish("done", {"run_id": state.id, "status": state.status,
+                                   "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
+        except Exception as e:
+            state.status = "failed"
+            state.error = str(e)
+            state.publish("error", {"run_id": state.id, "error": state.error})
+        finally:
+            set_event_sink(prev)
 
 
 @app.get("/runs/{run_id}/events")
@@ -979,12 +992,7 @@ and in the route:
             state.unsubscribe(q)
 ```
 
-Also record the loop in `_drive()` — Task 8's A2A supervisor hook needs it:
-
-```python
-    loop = asyncio.get_running_loop()
-    app.state.loop = loop
-```
+(`_drive()` already records `app.state.loop`; Task 8's supervisor hook uses it.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
