@@ -1070,6 +1070,9 @@
       "mcpBadge": "MCP",
       "save": "Guardar",
       "cancel": "Cancelar"
+    },
+    "node": {
+      "edit": "Editar el agente"
     }
   }
 }

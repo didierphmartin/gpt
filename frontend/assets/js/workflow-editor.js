@@ -2420,6 +2420,14 @@ class WorkflowEditor {
                 const drawflowNode = editBtn.closest('.drawflow-node');
                 const nodeId = drawflowNode ? drawflowNode.id.replace('node-', '') : null;
 
+                // An unconfigured template has no agent to edit yet: the pen opens
+                // the same config modal its ⚙ hint and a body click open, so the
+                // affordance is the same on every node from the moment it lands.
+                if (nodeId && editBtn.closest('.workflow-node')?.classList.contains('template')) {
+                    this.showAgentTemplateConfigModal(nodeId);
+                    return;
+                }
+
                 // Ingestion nodes (loader / splitter / vectorstore) use the same
                 // pen affordance as agent nodes, but open their own config modal.
                 if (editBtn.dataset.ingestion === 'true' && nodeId) {
@@ -8063,6 +8071,25 @@ class WorkflowEditor {
     /**
      * Add an agent template node to the canvas
      */
+    /**
+     * The body every agent node shows: elapsed timer, provider badge once known,
+     * and the ✏️ edit affordance. One definition because this markup was written
+     * out in three places that drifted — an unconfigured template ended up with
+     * no pencil on the canvas, then grew one after save+reload, which is the
+     * inconsistency this fixes.
+     *
+     * An unconfigured template passes no agentId; the pencil then opens the
+     * template config modal (see the .node-edit-btn handler) rather than the
+     * agent editor, so the affordance is identical on every node.
+     */
+    _agentNodeBodyHtml({ provider = '', agentId = '' } = {}) {
+        return `
+                    <span class="node-timer">0:00</span>
+                    ${provider ? `<span class="node-provider">${this.escapeHtml(String(provider))}</span>` : ''}
+                    <button class="node-edit-btn" data-agent-id="${this.escapeHtml(String(agentId || ''))}" title="${this.escapeHtml(this.t('workflow.node.edit') || 'Edit agent')}">✏️</button>
+        `;
+    }
+
     addAgentTemplateNode(x, y) {
         const html = `
             <div class="workflow-node agent-node template configurable">
@@ -8072,9 +8099,7 @@ class WorkflowEditor {
                     <span class="node-config-hint" title="Click to configure">⚙</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
-                <div class="node-body">
-                    <small class="node-config-display">${this.t('agentTeams.templateDesc')}</small>
-                </div>
+                <div class="node-body">${this._agentNodeBodyHtml()}</div>
             </div>
         `;
 
@@ -11074,9 +11099,7 @@ class WorkflowEditor {
                                     <span class="node-config-hint" title="Click to configure">⚙</span>
                                     <button class="node-delete-btn" title="Delete node">×</button>
                                 </div>
-                                <div class="node-body">
-                                    <small class="node-config-display">${this.t('agentTeams.templateDesc')}</small>
-                                </div>
+                                <div class="node-body">${this._agentNodeBodyHtml()}</div>
                             </div>
                         `;
                         inputs = 1;
@@ -13477,11 +13500,7 @@ class WorkflowEditor {
             // Update body with proper agent node structure (timer, provider, edit button)
             if (bodyElement) {
                 const providerDisplay = agent.provider || agent.llm_provider || '';
-                bodyElement.innerHTML = `
-                    <span class="node-timer">0:00</span>
-                    ${providerDisplay ? `<span class="node-provider">${this.escapeHtml(providerDisplay)}</span>` : ''}
-                    <button class="node-edit-btn" data-agent-id="${agent.id}" title="Edit agent">✏️</button>
-                `;
+                bodyElement.innerHTML = this._agentNodeBodyHtml({ provider: providerDisplay, agentId: agent.id });
             }
 
             // Change from template yellow to configured style
@@ -16754,11 +16773,7 @@ Based on the analysis...
 
         // Update body with proper agent node structure (timer, provider, edit button)
         if (bodyElement) {
-            bodyElement.innerHTML = `
-                <span class="node-timer">0:00</span>
-                ${agentData.provider ? `<span class="node-provider">${this.escapeHtml(agentData.provider)}</span>` : ''}
-                <button class="node-edit-btn" data-agent-id="${newNodeData.agent_id || ''}" title="Edit agent">✏️</button>
-            `;
+            bodyElement.innerHTML = this._agentNodeBodyHtml({ provider: agentData.provider, agentId: newNodeData.agent_id || '' });
         }
 
         // Update the workflow-node div
