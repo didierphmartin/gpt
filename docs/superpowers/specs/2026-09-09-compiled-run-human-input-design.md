@@ -1,6 +1,11 @@
 # Human input for compiled workflow runs — design
 
-Date: 2026-09-09. Branch: feat/backend-python. Status: approved in discussion.
+Date: 2026-09-09. Branch: feat/backend-python. Status: SUPERSEDED on 2026-09-10 by `2026-09-10-compiled-workflow-server-design.md`.
+
+The stdin bridge described below was replaced before implementation: instead of piping gate
+answers into the subprocess, a compiled workflow serves the run protocol the frontend already
+speaks, so the existing run overlay and gate cards drive it directly. Only the run-prompt box
+survives into the new design.
 
 ## 1. Goal
 
