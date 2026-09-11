@@ -17,12 +17,15 @@ CLI:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 
 import httpx
@@ -292,6 +295,7 @@ async def _stream_script_run(script_path: Path, args: list[str] | None = None):
 
 
 _SERVERS: dict[str, subprocess.Popen] = {}   # folder -> live workflow server process
+_SERVERS_LOCK = threading.Lock()             # guards _SERVERS now that routes run it off-thread
 
 
 def _resolve_package_dir(folder: str) -> Path:
@@ -317,23 +321,57 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _read_log_tail(log_path: Path, limit: int = 2000) -> str:
+    """Best-effort read of a workflow server's captured stdout/stderr, for
+    crash diagnostics. Never raises -- the file may already be gone.
+    """
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
+
+
 def _start_workflow_server(folder: str) -> dict:
-    """Start (or reuse) the run server for a compiled package. Returns {url, pid, reused}."""
+    """Start (or reuse) the run server for a compiled package. Returns {url, pid, reused}.
+
+    The child's stdout/stderr are redirected to a temp file, never to a
+    pipe. A generated api.py prints a trace line per node/tool call/gate
+    plus uvicorn's own logging for the server's entire (possibly long)
+    lifetime, and nothing here ever drains a PIPE fd after startup -- a
+    child that fills the kernel pipe buffer (commonly ~64KB) with nobody
+    reading it deadlocks on its next write(), permanently, with no error
+    and no exit code. A file has no such limit, and it doubles as the
+    source for the crash-diagnostic tail below.
+    """
     pkg = _resolve_package_dir(folder)
-    proc = _SERVERS.get(folder)
-    if proc is not None and proc.poll() is None:
-        return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
-    port = _free_port()
-    url = f"http://127.0.0.1:{port}/"
-    proc = subprocess.Popen([sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
-                            cwd=str(pkg), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    proc._workflow_url = url
-    _SERVERS[folder] = proc
+    with _SERVERS_LOCK:
+        proc = _SERVERS.get(folder)
+        if proc is not None and proc.poll() is None:
+            return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
+        port = _free_port()
+        url = f"http://127.0.0.1:{port}/"
+        log_fd, log_name = tempfile.mkstemp(prefix=f"workflow-{folder}-", suffix=".log")
+        log_path = Path(log_name)
+        with os.fdopen(log_fd, "wb") as log_file:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
+                cwd=str(pkg), stdout=log_file, stderr=subprocess.STDOUT,
+            )
+        proc._workflow_url = url
+        proc._workflow_log = log_path
+        _SERVERS[folder] = proc
+
+    # The readiness wait itself happens outside the lock -- it can take up
+    # to 60s, and holding the lock that long would stall every other
+    # start/stop call (any folder) for the duration.
     deadline = time.monotonic() + 60
     while True:
         if proc.poll() is not None:
-            out = (proc.stdout.read() or "")[-2000:]
-            _SERVERS.pop(folder, None)
+            out = _read_log_tail(proc._workflow_log)
+            with _SERVERS_LOCK:
+                if _SERVERS.get(folder) is proc:
+                    _SERVERS.pop(folder, None)
+            proc._workflow_log.unlink(missing_ok=True)
             raise RuntimeError(f"{folder}/api.py exited with code {proc.returncode} before serving {url}:\n{out}")
         try:
             if httpx.get(url + ".well-known/workflow.json", timeout=2).status_code == 200:
@@ -348,16 +386,45 @@ def _start_workflow_server(folder: str) -> dict:
 
 
 def _stop_workflow_server(folder: str) -> dict:
-    """Terminate the run server for a package (5 s grace, then kill)."""
-    proc = _SERVERS.pop(folder, None)
-    if proc is None or proc.poll() is not None:
+    """Terminate the run server for a package (5 s grace, then kill), reap
+    it so it never lingers as a zombie, and remove its log file.
+    """
+    with _SERVERS_LOCK:
+        proc = _SERVERS.pop(folder, None)
+    if proc is None:
+        return {"stopped": False}
+    log_path: Path | None = getattr(proc, "_workflow_log", None)
+    if proc.poll() is not None:
+        # Already exited on its own (e.g. crashed after startup) -- nothing
+        # to signal, but still clean up its log file.
+        if log_path is not None:
+            log_path.unlink(missing_ok=True)
         return {"stopped": False}
     proc.terminate()
     try:
         proc.wait(5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait()  # reap -- kill() alone leaves a zombie until collected
+    if log_path is not None:
+        log_path.unlink(missing_ok=True)
     return {"stopped": True}
+
+
+def _stop_all_workflow_servers() -> None:
+    """Shutdown hook: stop every workflow server this runner started, so
+    killing the runner doesn't orphan them holding their ports. Idempotent
+    -- _stop_workflow_server pops from _SERVERS as it goes, so calling this
+    more than once finds nothing left to do on the second call.
+    """
+    for folder in list(_SERVERS.keys()):
+        try:
+            _stop_workflow_server(folder)
+        except Exception:
+            logging.exception("Failed to stop workflow server %r during shutdown", folder)
+
+
+atexit.register(_stop_all_workflow_servers)
 
 
 @app.get("/api/scripts")
@@ -469,9 +536,15 @@ async def run_file(req: RunFileReq):
 
 @app.post("/api/workflow-server/start")
 async def workflow_server_start(req: dict):
-    """Start the compiled workflow's run server and return its URL."""
+    """Start the compiled workflow's run server and return its URL.
+
+    _start_workflow_server does blocking work (spawning a subprocess, then
+    up to 60s of synchronous httpx polling) -- run it in a thread so it
+    doesn't stall the event loop, and with it every other in-flight
+    request (e.g. someone else's /api/run-file SSE stream).
+    """
     try:
-        return _start_workflow_server(str(req.get("folder") or ""))
+        return await asyncio.to_thread(_start_workflow_server, str(req.get("folder") or ""))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -480,8 +553,12 @@ async def workflow_server_start(req: dict):
 
 @app.post("/api/workflow-server/stop")
 async def workflow_server_stop(req: dict):
-    """Stop the compiled workflow's run server."""
-    return _stop_workflow_server(str(req.get("folder") or ""))
+    """Stop the compiled workflow's run server.
+
+    _stop_workflow_server blocks for up to 5s waiting on the child --
+    same reasoning as the start route above.
+    """
+    return await asyncio.to_thread(_stop_workflow_server, str(req.get("folder") or ""))
 
 
 def _cli_run(filename: str, extra_args: list[str] | None = None) -> int:
