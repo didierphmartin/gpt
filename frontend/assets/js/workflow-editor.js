@@ -5162,17 +5162,13 @@ class WorkflowEditor {
         // code), THEN probe the runner.
         let filename;
         const codegenMode = this._codegenOptions().mode;
-        if (codegenMode === 'modular') {
-            // The compiled package serves its own run API; the overlay drives it.
+        if (codegenMode !== 'single') {
+            // Both multi-file targets (modular and A2A) serve their own run API
+            // (api.py); the overlay drives it the same way for either one.
             let data;
             try { data = await this._writeManifest(codegenMode); }
             catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
             return this._runCompiled(data.root);
-        }
-        if (codegenMode !== 'single') {
-            const entry = 'orchestrator.py';
-            try { const data = await this._writeManifest(codegenMode); filename = `${data.root}/${entry}`; }
-            catch (e) { alert(`Could not generate the A2A folder: ${e?.message || e}`); return; }
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }

@@ -208,14 +208,24 @@ class LangGraphA2AGeneratorTest extends TestCase
     {
         $m = self::generator()->generate(44, '3', ['a2a' => true]);
         $this->assertSame('dispatcher_demo_a2a', $m['root']);
-        $this->assertSame(['orchestrator.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py'],
+        $this->assertSame(['orchestrator.py', 'api.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py'],
             array_column($m['files'], 'path'));
         foreach ($m['files'] as $f) {
             $this->assertStringContainsString('PROVENANCE', $f['code'], $f['path']);
             $this->assertStringContainsString('GRAPH EDGES', $f['code'], $f['path']);
             $this->assertCompiles($f['code'], $f['path']);
         }
-        $this->assertStringContainsString('<== this agent', $m['files'][1]['code']);
+        $this->assertStringContainsString('<== this agent', $m['files'][2]['code']);
         $this->assertStringContainsString('AGENT ENDPOINTS', $m['files'][0]['code']);
+        // api.py: same run contract as the modular package, plus the A2A supervisor lifecycle.
+        $api = $m['files'][1]['code'];
+        foreach (['@app.post("/runs")', '@app.get("/runs/{run_id}/events")', '@app.post("/runs/{run_id}/tool-result")',
+                  '@app.get("/.well-known/workflow.json")', 'class RunState', 'AgentSupervisor',
+                  'from orchestrator import run as run_workflow, AgentSupervisor, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
+                  'from orchestrator import set_event_sink, resolve_gate', 'def _ensure_agents() -> None:',
+                  '_SUPERVISOR = AgentSupervisor(spawn=True)'] as $needle) {
+            $this->assertStringContainsString($needle, $api, "missing: {$needle}");
+        }
+        $this->assertStringNotContainsString('Authorization', $api, 'the run server has no auth');
     }
 }

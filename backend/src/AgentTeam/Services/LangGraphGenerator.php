@@ -1269,11 +1269,14 @@ class LangGraphGenerator
         return ['root' => $facts['safeName'] . '_a2a', 'agents' => $agents];
     }
 
-    /** A2A mode: orchestrator first, then one agent file per agent/playbook node (see a2aLayout). */
+    /** A2A mode: orchestrator, then api.py (same run contract as the modular package), then one agent file per agent/playbook node (see a2aLayout). */
     private function generateA2A(array $facts): array
     {
         $layout = self::a2aLayout($facts);
-        $files = [['path' => 'orchestrator.py', 'code' => $this->emitA2AOrchestrator($facts, $layout)]];
+        $files = [
+            ['path' => 'orchestrator.py', 'code' => $this->emitA2AOrchestrator($facts, $layout)],
+            ['path' => 'api.py', 'code' => $this->emitA2AApi($facts, $layout)],
+        ];
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitA2AAgentFile($facts, $layout, (string)$nid)];
         }
@@ -1372,6 +1375,10 @@ class LangGraphGenerator
         $L[] = self::datetimeInjectorBlock();
         $L[] = self::contextBuilderBlock();
         $L[] = PythonEmitHelpers::documentConverterBlock();
+        // orchestrator.py carries no common.py, so the event sink + gate rendezvous
+        // (installed by api.py, consumed by _handle_gate() below) is emitted here.
+        $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
+        $L[] = PythonEmitHelpers::eventSinkBlock();
         $L[] = self::a2aOrchestratorBlock();
         return implode("\n", $L) . "\n";
     }
@@ -1388,6 +1395,85 @@ parent outputs), relays status updates, answers gates, and takes the
 in the artifact's data part and drives a LangGraph conditional edge, so only
 that child runs. Start and Output nodes are local (no LLM).
 TXT;
+    }
+
+    /** DATA FLOW text for api.py (A2A). */
+    private static function a2aApiDataFlowDoc(): string
+    {
+        return <<<'TXT'
+api.py is the same run server the modular package serves (see modularApiBlock
+in the compiler): POST /runs starts a run, GET /runs/<id>/events streams it
+over SSE, POST /runs/<id>/tool-result answers a gate. The graph itself still
+runs in orchestrator.py exactly as the CLI entry point runs it -- api.py only
+drives it (run_workflow = orchestrator.run) and observes it (set_event_sink).
+The one A2A-specific addition is _ensure_agents(): the agent servers are
+spawned on the first run (via AgentSupervisor) instead of orchestrator.py's
+own __main__ block, since that block is never reached here.
+TXT;
+    }
+
+    /** api.py for the A2A folder: the same run contract as the modular package (see modularApiBlock),
+     *  plus the agent supervisor's lifecycle -- the agent servers start on the first run. */
+    private function emitA2AApi(array $facts, array $layout): string
+    {
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+        $L = [];
+        $L[] = '"""Run server for workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' (A2A)';
+        $L[] = '';
+        $body = PythonEmitHelpers::workflowDocBlock([
+            'target' => 'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+            'dispatch_supported' => true,
+            'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
+            'nodes' => $this->a2aDocNodes($facts, $layout), 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
+            'data_flow' => self::a2aApiDataFlowDoc(),
+            'run' => ['deps' => ['pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv'],
+                      'usage' => 'python api.py --port 8710        # then open the workflow from the editor',
+                      'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
+                                  '#         GET /.well-known/workflow.json (identity)',
+                                  '# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
+                                  '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.'],
+                      // This file lives at <root>/api.py; python/.env is two levels up (same as orchestrator.py).
+                      'env_path' => '../../.env'],
+            'storage' => ['enabled' => false, 'folder' => null],
+        ]);
+        foreach (explode("\n", $esc($body)) as $dl) {
+            $L[] = $dl;
+        }
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'import argparse, asyncio, json, os, time, uuid';
+        $L[] = '';
+        $L[] = 'from fastapi import FastAPI, HTTPException, Request';
+        $L[] = 'from fastapi.middleware.cors import CORSMiddleware';
+        $L[] = 'from fastapi.responses import StreamingResponse';
+        $L[] = 'import uvicorn';
+        $L[] = '';
+        $L[] = 'from orchestrator import run as run_workflow, AgentSupervisor, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME';
+        $L[] = 'from orchestrator import set_event_sink, resolve_gate';
+        $L[] = '';
+        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
+        $L[] = '';
+        $L[] = '# The agent servers start with the first run and stop with this process.';
+        $L[] = '_SUPERVISOR = None';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'def _ensure_agents() -> None:';
+        $L[] = '    """Start the A2A agent servers once, on the first run.';
+        $L[] = '';
+        $L[] = '    AgentSupervisor.start() is BLOCKING -- it spawns one subprocess per';
+        $L[] = '    agent and polls each one\'s Agent Card for up to 60s. _drive() (see';
+        $L[] = '    modularApiBlock below) calls this hook through asyncio.to_thread so';
+        $L[] = '    the event loop stays free to serve /runs/<id>/events while the agents';
+        $L[] = '    are still coming up, instead of stalling every request for that long.';
+        $L[] = '    """';
+        $L[] = '    global _SUPERVISOR';
+        $L[] = '    if _SUPERVISOR is None:';
+        $L[] = '        _SUPERVISOR = AgentSupervisor(spawn=True)';
+        $L[] = '        _SUPERVISOR.start()';
+        $L[] = '';
+        $L[] = self::modularApiBlock();
+        return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
     /** Supervisor, remote node runner, gate handler, graph wiring, CLI entry. */
@@ -1512,7 +1598,25 @@ def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
     args = gate.get("args") or {}
     question = args.get("question") or args.get("prompt") or args.get("reason") or kind
     print("[gate] " + json.dumps({"agent": agent_name, "task": task_id, "kind": kind, "question": question, "args": args}, ensure_ascii=False), flush=True)
-    mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or ("prompt" if sys.stdin.isatty() else "auto")
+    mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
+        "server" if _SINK is not None
+        else "prompt" if sys.stdin.isatty()
+        else "auto")
+    if mode == "server":
+        # A host (api.py) has installed an event sink: mint a tool_call_id, tee the
+        # gate onto the event stream, and block this A2A task's coroutine until
+        # resolve_gate() delivers an answer or PLAYBOOK_GATE_TIMEOUT_S runs out.
+        tool_call_id = uuid.uuid4().hex
+        waiter = open_gate(tool_call_id)
+        emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
+        answered = waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        answer = take_gate_answer(tool_call_id) if answered else None
+        if answer is not None:
+            print("[gate-answer] " + json.dumps({"agent": agent_name, "task": task_id, **answer}, ensure_ascii=False), flush=True)
+            return answer
+        # Nobody attached, or nobody answered in time: fall through to the same
+        # non-interactive policy a run without a sink would get.
+        mode = "auto"
     if mode == "prompt":
         print(f"\n✋ [{agent_name}] {kind}: {question}", flush=True)
         if kind == "approval":
@@ -3015,6 +3119,16 @@ async def _drive(state: RunState) -> None:
         loop.call_soon_threadsafe(state.publish, "message", ev)
 
     async with RUN_LOCK:
+        # A2A only: the agent servers start with the first run. Not present in
+        # the modular package (no globals() hit -> no-op there). The hook itself
+        # is a blocking call (AgentSupervisor.start() polls each agent's card
+        # for up to 60s), so it is hopped to a worker thread rather than run
+        # inline -- run inline it would stall this loop, and everyone on it,
+        # for that whole window. Inside RUN_LOCK so two runs racing to start it
+        # can't double-spawn the agents.
+        ensure_agents = globals().get("_ensure_agents")
+        if ensure_agents is not None:
+            await asyncio.to_thread(ensure_agents)
         prev = set_event_sink(sink)
         t0 = time.monotonic()
         try:

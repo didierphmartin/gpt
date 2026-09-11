@@ -85,4 +85,17 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }
+
+    public function testA2AManifestCarriesTheSameRunServer(): void
+    {
+        $m = LangGraphA2AGeneratorTest::generator()->generate(44, '3', ['a2a' => true]);
+        $paths = array_column($m['files'], 'path');
+        $this->assertContains('api.py', $paths);
+        $api = $m['files'][array_search('api.py', $paths, true)]['code'];
+        foreach (['@app.post("/runs")', '@app.get("/runs/{run_id}/events")',
+                  '@app.get("/.well-known/workflow.json")', 'AgentSupervisor',
+                  'from orchestrator import run as run_workflow'] as $needle) {
+            $this->assertStringContainsString($needle, $api, "missing: {$needle}");
+        }
+    }
 }
