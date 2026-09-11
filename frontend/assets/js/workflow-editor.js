@@ -4784,6 +4784,14 @@ class WorkflowEditor {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ folder: root }),
         });
+        if (resp.status === 404) {
+            // The route exists in the runner's source but not in the process
+            // answering right now: it was started before the runner was updated
+            // and uvicorn does not reload. Say so — a bare "Not Found" here sends
+            // people looking for a bug in the workflow instead of restarting.
+            throw new Error('the local runner is running an older version (no workflow-server route). '
+                + 'Restart it — stop the running runner, then: cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py');
+        }
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
         return this._verifyRunTarget(url);
