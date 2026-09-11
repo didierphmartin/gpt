@@ -981,7 +981,12 @@
       "runnerDownChecking": "Checking…",
       "runnerDownStillDown": "Still no answer from the runner at",
       "runnerDownStillDownHint": "Give it a few seconds to start, and check the terminal for an error — “address already in use” means an older runner is still holding the port.",
-      "runnerDownDirectNote": "Same workflow, but its questions are asked on the console instead of here."
+      "runnerDownDirectNote": "Same workflow, but its questions are asked on the console instead of here.",
+      "fsaUnavailable": "Local filesystem access is not available in this browser.",
+      "ingestionGenerate": "Generate Python script",
+      "ingestionRun": "Run ingestion",
+      "ingestionDownload": "Download script",
+      "savedTo": "Saved to"
     },
     "runnerSetup": {
       "title": "Python runtime not installed",

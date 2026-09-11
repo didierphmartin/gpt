@@ -981,7 +981,12 @@
       "runnerDownChecking": "Comprobando…",
       "runnerDownStillDown": "El runner sigue sin responder en",
       "runnerDownStillDownHint": "Déle unos segundos y revise si hay errores en la terminal: «address already in use» significa que un runner anterior aún ocupa el puerto.",
-      "runnerDownDirectNote": "El mismo flujo de trabajo, pero sus preguntas se responden en la consola en lugar de aquí."
+      "runnerDownDirectNote": "El mismo flujo de trabajo, pero sus preguntas se responden en la consola en lugar de aquí.",
+      "fsaUnavailable": "El acceso al sistema de archivos local no está disponible en este navegador.",
+      "ingestionGenerate": "Generar script de Python",
+      "ingestionRun": "Ejecutar la ingesta",
+      "ingestionDownload": "Descargar el script",
+      "savedTo": "Guardado en"
     },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",
