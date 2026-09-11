@@ -2459,6 +2459,10 @@ TXT;
         $L[] = $sep;
         $L[] = self::toolBuilderBlock();
         $L[] = $sep;
+        $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)';
+        $L[] = $sep;
+        $L[] = PythonEmitHelpers::eventSinkBlock();
+        $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
         $L[] = $sep;
         $L[] = 'NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work; workflow.py prints the RUN SUMMARY from it';
@@ -3247,7 +3251,12 @@ class _PlaybookRun:
         self.ledger = {}
 
     def emit(self, **ev):
+        # The run's own timeline AND, when a host is watching, the live stream.
         self.events.append(ev)
+        try:
+            emit_event(**ev)
+        except NameError:
+            pass   # single-file/A2A targets without the sink block
 
 
 def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:

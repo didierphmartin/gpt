@@ -428,6 +428,69 @@ PY;
     }
 
     /**
+     * Event sink + gate rendezvous. Inert unless a host (the generated api.py)
+     * installs a sink, so CLI runs behave exactly as before. Gates block a
+     * worker thread on a threading.Event rather than an asyncio.Future: the
+     * playbook's gate tools are sync callables that LangChain runs in an
+     * executor, so the server's event loop stays free to serve the POST that
+     * answers them.
+     */
+    public static function eventSinkBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# EVENT SINK + GATE RENDEZVOUS
+# Inert until a host installs a sink (see api.py). With no sink the
+# generated code prints its trace lines and nothing else changes.
+# ==============================================================
+_SINK = None            # callable(dict) -> None, or None
+_GATES = {}             # tool_call_id -> {"event": threading.Event, "answer": dict | None}
+_GATES_LOCK = threading.Lock()
+
+
+def set_event_sink(fn):
+    """Install (or clear with None) the run-event sink. Returns the previous one."""
+    global _SINK
+    prev, _SINK = _SINK, fn
+    return prev
+
+
+def emit_event(**ev):
+    """Publish one protocol event. A no-op when no sink is installed."""
+    sink = _SINK
+    if sink is not None:
+        sink(dict(ev))
+
+
+def open_gate(tool_call_id: str):
+    """Register a pending gate and return the Event the waiter blocks on."""
+    with _GATES_LOCK:
+        slot = {"event": threading.Event(), "answer": None}
+        _GATES[tool_call_id] = slot
+    return slot["event"]
+
+
+def resolve_gate(tool_call_id: str, answer: dict) -> bool:
+    """Deliver a human answer to a waiting gate. False when no gate is waiting."""
+    with _GATES_LOCK:
+        slot = _GATES.get(tool_call_id)
+    if slot is None:
+        return False
+    slot["answer"] = dict(answer or {})
+    slot["event"].set()
+    return True
+
+
+def take_gate_answer(tool_call_id: str):
+    """Pop a resolved gate's answer (None when unanswered), clearing the slot."""
+    with _GATES_LOCK:
+        slot = _GATES.pop(tool_call_id, None)
+    return slot["answer"] if slot else None
+
+PY;
+    }
+
+    /**
      * Emit the document-to-markdown converter Python function.
      *
      * Returns _convert_doc_to_markdown(path) which reads a file and returns
