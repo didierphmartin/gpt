@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Never edit generated Python.** Fix `backend/src/AgentTeam/Services/LangGraphGenerator.php` or `PythonEmitHelpers.php` and regenerate. Files under `~/Documents/synergyAI/python/scripts/` are output, never input.
-- **Protocol vocabulary is fixed** (spec §3): `round{round}`, `tool_call{name,args}`, `tool_result{name,result}`, `message{text,sensitive}`, `gate_request{kind,payload,tool_call_id}`, `final{leg,status}`, terminal SSE `event: done` → `{run_id,status,output}` and `event: error` → `{error}`. Do not invent fields.
+- **Protocol vocabulary is fixed** (spec §3): `round{round}`, `tool_call{name,args}`, `tool_result{name,result}`, `message{text,sensitive}`, `gate_request{kind,payload,tool_call_id}`, `final{leg,status}`, terminal SSE `event: done` → `{run_id,status,output}` and `event: error` → `{error}`. Do not invent fields, with two permitted optionals: `done.seconds` (the run summary prints it) and `error.run_id` (a client watching more than one run cannot correlate an error without it). `docs/run-protocol-v1.json` (Task 9) is the normative list.
 - **Answer shape** is flat, as `/workflows/tool-result` takes today: `{tool_call_id, ...answer}`.
 - **`PLAYBOOK_GATE_MODE` still wins** over every automatic mode selection.
 - **No authentication** on the generated server (LAN-only posture); it must not read or require an `Authorization` header.

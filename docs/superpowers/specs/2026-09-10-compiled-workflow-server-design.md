@@ -49,8 +49,8 @@ The event vocabulary is taken verbatim from what `_handlePlaybookEvent()` (`work
 | `message` | `text`, `sensitive` | bubble (redacted when sensitive) |
 | `gate_request` | `kind`, `payload`, `tool_call_id` | gate card, answered by POST |
 | `final` | `leg`, `status` | node log line |
-| SSE `event: done` | `{run_id, status, output}` | finish banner, node output |
-| SSE `event: error` | `{error}` | error banner |
+| SSE `event: done` | `{run_id, status, output}` (+ optional `seconds`) | finish banner, node output |
+| SSE `event: error` | `{error}` (+ optional `run_id`) | error banner |
 
 Three routes plus an identity endpoint:
 
