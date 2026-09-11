@@ -5267,22 +5267,37 @@ class WorkflowEditor {
         const directCmd = root
             ? `cd ~/Documents/synergyAI/python/scripts/${root} && ../../.venv/bin/python workflow.py`
             : '';
+        const t = (k, fallback) => this.escapeHtml(this.t(k) || fallback);
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">${this.escapeHtml(this.t('workflow.output.runnerDownTitle') || 'Start the local runner')}</h3>
-                <p class="text-sm text-gray-600 mb-3">${this.escapeHtml(this.t('workflow.output.runnerDownHelp') || 'The runner starts this workflow’s server and is what lets you answer its questions in the browser. It is not running — start it once and leave it running:')}</p>
+                <h3 class="text-lg font-semibold text-gray-900 mb-1">${t('workflow.output.runnerDownTitle', 'Start the local runner first')}</h3>
+                <p class="text-sm text-gray-600 mb-4">${t('workflow.output.runnerDownHelp', 'This workflow runs on your machine. The runner launches its server and is what lets you answer the workflow’s questions here in the browser — the browser cannot start it for you.')}</p>
+
+                <p class="text-sm font-medium text-gray-900 mb-1">${t('workflow.output.runnerDownStep1', '1. Paste this into a terminal:')}</p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(startCmd)}</pre>
                     <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
                 </div>
-                ${directCmd ? `<p class="text-xs text-gray-500 mb-1">${this.escapeHtml(this.t('workflow.output.runnerDownDirect') || 'Or run it straight from a terminal, without the browser UI (gates are answered on the console):')}</p>
-                <pre class="bg-gray-100 text-gray-800 text-xs rounded p-2 mb-3 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>` : ''}
-                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.output.runnerDownSetup') || 'Never installed the local Python env? Click Setup in the LangGraph menu first.')}</p>
+
+                <div class="mb-4 rounded border-l-4 border-amber-500 bg-amber-50 p-3">
+                    <p class="text-sm font-medium text-amber-900">${t('workflow.output.runnerDownStep2', '2. Leave that terminal open.')}</p>
+                    <p class="text-xs text-amber-900 mt-1">${t('workflow.output.runnerDownWarning', 'The runner must stay running for the whole workflow — closing the terminal or pressing Ctrl-C stops it, and the run stops with it.')}</p>
+                </div>
+
+                <p class="text-sm font-medium text-gray-900 mb-3">${t('workflow.output.runnerDownStep3', '3. Come back here and click Continue.')}</p>
+
+                <p class="rnr-status hidden text-sm rounded p-2 mb-3"></p>
+
+                ${directCmd ? `<details class="mb-4"><summary class="text-xs text-gray-500 cursor-pointer">${t('workflow.output.runnerDownDirect', 'Or skip the browser entirely and run it in the terminal')}</summary>
+                <pre class="bg-gray-100 text-gray-800 text-xs rounded p-2 mt-2 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
+                <p class="text-xs text-gray-500 mt-1">${t('workflow.output.runnerDownDirectNote', 'Same workflow, but its questions are asked on the console instead of here.')}</p></details>` : ''}
+
+                <p class="text-xs text-gray-500 mb-4">${t('workflow.output.runnerDownSetup', 'Never installed the local Python environment? Click Setup in the LangGraph menu first.')}</p>
                 <div class="flex justify-end gap-2">
-                    <button class="rnr-retry-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.runnerDownRetry') || 'Retry')}</button>
-                    <button class="rnr-close-btn px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
+                    <button class="rnr-close-btn px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${t('common.cancel', 'Cancel')}</button>
+                    <button class="rnr-continue-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${t('workflow.output.runnerDownContinue', 'Continue')}</button>
                 </div>
             </div>`;
         document.body.appendChild(backdrop);
@@ -5292,10 +5307,34 @@ class WorkflowEditor {
         backdrop.querySelector('.cmd-copy-btn')?.addEventListener('click', () => {
             try { navigator.clipboard.writeText(startCmd); } catch (_) { /* clipboard blocked */ }
         });
-        // Retry without making the user hunt for the Run button again: they
-        // started the runner in a terminal a second ago, and this is the
-        // moment they want to try it.
-        backdrop.querySelector('.rnr-retry-btn').addEventListener('click', () => {
+
+        // Continue re-probes and stays open when the runner still is not
+        // answering. Closing on a failed check would drop the user back to a
+        // bare canvas with no idea what to do next — the common case here is
+        // "ran the command a second ago, it is still booting", which wants a
+        // second click, not a rediscovered menu item.
+        const status = backdrop.querySelector('.rnr-status');
+        const btn = backdrop.querySelector('.rnr-continue-btn');
+        btn.addEventListener('click', async () => {
+            const label = btn.textContent;
+            btn.disabled = true;
+            btn.style.opacity = '0.6';
+            btn.textContent = this.t('workflow.output.runnerDownChecking') || 'Checking…';
+            status.className = 'rnr-status hidden text-sm rounded p-2 mb-3';
+            try {
+                const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+                if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+            } catch (_) {
+                status.textContent = (this.t('workflow.output.runnerDownStillDown')
+                    || 'Still no answer from the runner at') + ` ${this._langgraphRunnerBase}. `
+                    + (this.t('workflow.output.runnerDownStillDownHint')
+                    || 'Give it a few seconds to start, and check the terminal for an error — “address already in use” means an older runner is still holding the port.');
+                status.className = 'rnr-status text-sm rounded p-2 mb-3 bg-red-50 text-red-800 border-l-4 border-red-500';
+                btn.disabled = false;
+                btn.style.opacity = '';
+                btn.textContent = label;
+                return;
+            }
             close();
             this._runCompiled(root);
         });
