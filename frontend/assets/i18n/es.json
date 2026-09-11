@@ -940,6 +940,8 @@
       "runPromptRun": "Ejecutar",
       "runTargetCompiled": "compilado",
       "runTargetLive": "intérprete en vivo",
+      "runTargetUrl": "Ejecutar contra una URL…",
+      "runTargetPrompt": "URL del servidor del flujo de trabajo",
       "adkTitle": "Google ADK: instalar el runtime o generar el script",
       "adkSetup": "Instalar",
       "adkGenerate": "Generar",

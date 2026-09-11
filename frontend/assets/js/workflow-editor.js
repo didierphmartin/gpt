@@ -74,6 +74,14 @@ class WorkflowEditor {
 
         // Realtime workflow support
         this.runtimeMode = 'batch';  // 'batch' or 'realtime'
+
+        // Compiled-workflow run server this editor is currently driving
+        // ({base, version, runId} — set by _acquireRunTarget/_verifyRunTarget,
+        // cleared in _runCompiled's finally). Never trust a leftover value
+        // across runs: currentWorkflowId is reassigned in several other
+        // places that never touch this field, so a stale target could point
+        // a run at another workflow's server.
+        this._runTarget = null;
     }
 
     /**
@@ -3210,6 +3218,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="run">
                 ${this.escapeHtml(this.t('workflow.output.langgraphRun') || 'Run')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="run-url">
+                ${this.escapeHtml(this.t('workflow.output.runTargetUrl') || 'Run against a URL…')}
+            </button>
             <button type="button" class="langgraph-menu-item" data-action="display-code">
                 ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
             </button>
@@ -3251,6 +3262,18 @@ class WorkflowEditor {
             } else {
                 this._runLangGraphScript();
             }
+        });
+        menu.querySelector('[data-action="run-url"]')?.addEventListener('click', async () => {
+            menu.remove();
+            const url = prompt(this.t('workflow.output.runTargetPrompt') || 'Workflow server URL', 'http://127.0.0.1:8710/');
+            if (!url) return;
+            try {
+                await this._verifyRunTarget(url);        // identity check only, no spawn
+            } catch (e) {
+                alert(`That server cannot run this workflow: ${e?.message || e}`);
+                return;
+            }
+            await this._runCompiled(null);               // null root: never spawn, use _runTarget
         });
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
@@ -4703,6 +4726,31 @@ class WorkflowEditor {
     }
 
     /**
+     * Verify a run server at `url` is THIS workflow's current compile and
+     * speaks the protocol this editor understands. Throws with an actionable
+     * message otherwise. Sets and returns this._runTarget = {base, version}.
+     * Shared by _acquireRunTarget (after a spawn) and the "Run against a
+     * URL…" override (no spawn — just an identity check on an already-running
+     * server).
+     */
+    async _verifyRunTarget(url) {
+        const base = url.endsWith('/') ? url : url + '/';
+        // A stale process squatting on the port answers 200 too — check identity
+        // before trusting it, or we run yesterday's graph against today's canvas.
+        const cardResp = await fetch(`${base}.well-known/workflow.json`);
+        if (!cardResp.ok) throw new Error(`${base} did not serve its identity`);
+        const card = await cardResp.json();
+        if (String(card.workflow_id) !== String(this.currentWorkflowId)) {
+            throw new Error(`${base} is serving workflow ${card.workflow_id}, not ${this.currentWorkflowId} — stop that process`);
+        }
+        if (card.protocol !== 'run/1') {
+            throw new Error(`${base} speaks protocol ${card.protocol}, this editor speaks run/1`);
+        }
+        this._runTarget = { base: base.replace(/\/$/, ''), version: card.version };
+        return this._runTarget;
+    }
+
+    /**
      * Start (or reuse) the compiled workflow's run server and verify it is THIS
      * workflow's current compile. Throws with an actionable message otherwise.
      * Returns {base, version}; also sets this._runTarget.
@@ -4715,19 +4763,7 @@ class WorkflowEditor {
         });
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
-        // A stale process squatting on the port answers 200 too — check identity
-        // before trusting it, or we run yesterday's graph against today's canvas.
-        const cardResp = await fetch(`${url}.well-known/workflow.json`);
-        if (!cardResp.ok) throw new Error(`${url} did not serve its identity`);
-        const card = await cardResp.json();
-        if (String(card.workflow_id) !== String(this.currentWorkflowId)) {
-            throw new Error(`${url} is serving workflow ${card.workflow_id}, not ${this.currentWorkflowId} — stop that process`);
-        }
-        if (card.protocol !== 'run/1') {
-            throw new Error(`${url} speaks protocol ${card.protocol}, this editor speaks run/1`);
-        }
-        this._runTarget = { base: url.replace(/\/$/, ''), version: card.version };
-        return this._runTarget;
+        return this._verifyRunTarget(url);
     }
 
     /**
@@ -4769,6 +4805,72 @@ class WorkflowEditor {
             }
         } catch (_) { /* unsaved canvas */ }
         return '';
+    }
+
+    /**
+     * Run a compiled workflow through its own server: start it, open the overlay,
+     * stream the run protocol into the same handlers the live interpreter uses.
+     *
+     * `root` is the folder to spawn — pass it whenever the caller just
+     * generated (or is about to spawn) a compiled package. Pass null ONLY
+     * from the "Run against a URL…" override, where _verifyRunTarget has just
+     * set this._runTarget and there is nothing to spawn. Every other path
+     * always re-acquires the target rather than trusting a leftover
+     * this._runTarget: currentWorkflowId is reassigned in several other
+     * places that never touch _runTarget, so a stale pointer could otherwise
+     * run this workflow against another workflow's server. The target is
+     * cleared in `finally` so a failed or finished run never leaves a pointer
+     * behind for the next call to (mis)trust.
+     */
+    async _runCompiled(root) {
+        const prompt = await this._showRunPromptModal(this._startNodePrompt());
+        if (prompt === null) return;
+        const dfId = 'compiled';
+        this.nodeExecutionData[dfId] = { pbEvents: [] };
+        let target;
+        try {
+            target = (root === null && this._runTarget)
+                ? this._runTarget
+                : await this._acquireRunTarget(root);
+        } catch (e) {
+            alert(`Could not start the workflow server: ${e?.message || e}`);
+            return;
+        }
+        this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], prompt);
+        try {
+            const started = await fetch(`${target.base}/runs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt }),
+            });
+            if (!started.ok) throw new Error((await started.text()) || `HTTP ${started.status}`);
+            const { run_id: runId } = await started.json();
+            this._runTarget.runId = runId;
+
+            await new Promise((resolve, reject) => {
+                const es = new EventSource(`${target.base}/runs/${runId}/events`);
+                es.addEventListener('done', (m) => {
+                    const ev = JSON.parse(m.data);
+                    es.close();
+                    this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
+                    resolve();
+                });
+                es.addEventListener('error', (m) => {
+                    // A transport error has no data; a protocol error does.
+                    if (!m.data) return;   // EventSource reconnects on its own
+                    const ev = JSON.parse(m.data);
+                    es.close();
+                    reject(new Error(ev.error || 'run failed'));
+                });
+                es.onmessage = (m) => {
+                    try { this._handlePlaybookEvent(dfId, JSON.parse(m.data)); } catch (_) { /* keep streaming */ }
+                };
+            });
+        } catch (e) {
+            this._pbOverlayFinish(false, String(e?.message || e));
+        } finally {
+            this._runTarget = null;
+        }
     }
 
     /**
@@ -4978,12 +5080,17 @@ class WorkflowEditor {
         // code), THEN probe the runner.
         let filename;
         const codegenMode = this._codegenOptions().mode;
+        if (codegenMode === 'modular') {
+            // The compiled package serves its own run API; the overlay drives it.
+            let data;
+            try { data = await this._writeManifest(codegenMode); }
+            catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+            return this._runCompiled(data.root);
+        }
         if (codegenMode !== 'single') {
-            // Both multi-file layouts run from one entry point inside the folder;
-            // the runner accepts exactly one folder level under scripts/.
-            const entry = codegenMode === 'modular' ? 'workflow.py' : 'orchestrator.py';
+            const entry = 'orchestrator.py';
             try { const data = await this._writeManifest(codegenMode); filename = `${data.root}/${entry}`; }
-            catch (e) { alert(`Could not generate the ${codegenMode === 'modular' ? 'workflow package' : 'A2A folder'}: ${e?.message || e}`); return; }
+            catch (e) { alert(`Could not generate the A2A folder: ${e?.message || e}`); return; }
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }
@@ -11951,11 +12058,17 @@ class WorkflowEditor {
         const badges = (servers || []).map(n =>
             `<span style="display:inline-block;padding:1px 8px;margin-left:6px;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;">${this.escapeHtml(n)}</span>`
         ).join('');
+        // Show which engine is executing this run — a compiled run's own
+        // server (with its host:port, in case of the URL-override path), or
+        // the live interpreter (the server-side playbook-node/run path).
+        const target = this._runTarget
+            ? `${this.t('workflow.output.runTargetCompiled') || 'compiled'} · ${this._runTarget.base.replace(/^https?:\/\//, '')}`
+            : (this.t('workflow.output.runTargetLive') || 'live interpreter');
         const html = `
             <div id="playbook-run-overlay" class="storage-config-overlay">
                 <div class="storage-config-modal" style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;">
                     <div class="storage-config-header" style="flex-wrap:wrap;">
-                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span></h3>
+                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
                         ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
@@ -11983,6 +12096,22 @@ class WorkflowEditor {
         return feed.lastElementChild;
     }
 
+    /**
+     * Message body HTML: markdown (+ mermaid, upgraded after insertion by the
+     * caller) when the shared renderer is loaded, escaped text otherwise.
+     * Routes through the same window.renderMarkdown() chat.js uses — see
+     * markdown-renderer.js — rather than a second renderer or a vendored
+     * markdown lib.
+     */
+    _pbRenderBody(text) {
+        try {
+            if (typeof window.renderMarkdown === 'function') {
+                return window.renderMarkdown(String(text || ''));
+            }
+        } catch (_) { /* fall through to plain text */ }
+        return this.escapeHtml(String(text || '')).replace(/\n/g, '<br>');
+    }
+
     _pbBubble(who, text, opts = {}) {
         const you = who === 'you';
         const bg = you ? 'rgba(59,130,246,0.12)' : (opts.channel ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.12)');
@@ -11993,13 +12122,17 @@ class WorkflowEditor {
             const esc = this.escapeHtml(text);
             body = `<span class="pb-sensitive" style="cursor:pointer;color:#9ca3af;" data-revealed="0">•••••• (sensitive — click to reveal)</span><span hidden>${esc}</span>`;
         } else {
-            body = this.escapeHtml(text);
+            body = this._pbRenderBody(text);
         }
         const el = this._pbAppend(`
             <div style="align-self:${align};max-width:85%;background:${bg};border-radius:10px;padding:8px 12px;">
                 <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">${this.escapeHtml(label)}</div>
-                <div style="font-size:13px;white-space:pre-wrap;">${body}</div>
+                <div class="markdown-content" style="font-size:13px;white-space:pre-wrap;">${body}</div>
             </div>`);
+        // Final render pass only (the events driving this are already
+        // complete messages, never a mid-stream partial) — same contract
+        // chat.js uses: mermaid.run() against the mounted DOM.
+        try { window.renderMermaidIn?.(el); } catch (_) { /* diagram stays as code */ }
         el?.querySelector('.pb-sensitive')?.addEventListener('click', (e) => {
             const hiddenEl = e.target.nextElementSibling;
             const shown = e.target.dataset.revealed === '1';
@@ -12251,10 +12384,17 @@ class WorkflowEditor {
         this._wfNodeLog(dfId, 'skill', `gate answered (${ev.kind})`);
         this.nodeExecutionData[dfId]?.pbEvents?.push({ type: 'gate_answer', kind: ev.kind, decision: answer?.decision || (ev.kind === 'form' ? 'submitted' : 'sent'), comment: answer?.comment || '' });
         try {
-            await fetch(`${this.apiBase}/workflows/tool-result`, {
+            const base = this._runTarget?.base;
+            const url = base
+                ? `${base}/runs/${this._runTarget.runId}/tool-result`
+                : `${this.apiBase}/workflows/tool-result`;
+            const headers = base
+                ? { 'Content-Type': 'application/json' }
+                : { ...this.getAuthHeaders(), 'Content-Type': 'application/json' };
+            await fetch(url, {
                 method: 'POST',
-                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
-                credentials: 'include',
+                headers,
+                ...(base ? {} : { credentials: 'include' }),
                 body: JSON.stringify({ tool_call_id: ev.tool_call_id, ...answer }),
             });
         } catch (e) {

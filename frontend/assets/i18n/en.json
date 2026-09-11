@@ -940,6 +940,8 @@
       "runPromptRun": "Run",
       "runTargetCompiled": "compiled",
       "runTargetLive": "live interpreter",
+      "runTargetUrl": "Run against a URL…",
+      "runTargetPrompt": "Workflow server URL",
       "adkTitle": "Google ADK: set up the runtime or generate the script",
       "adkSetup": "Setup",
       "adkGenerate": "Generate",
