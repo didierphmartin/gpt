@@ -45,4 +45,30 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame(0, $rc, $out);
         $this->assertStringContainsString('OK', $out);
     }
+
+    public function testApiFileIsEmittedIntoTheModularPackage(): void
+    {
+        $m = LangGraphA2AGeneratorTest::generator()->generate(44, '3', ['modular' => true]);
+        $this->assertSame([
+            'workflow.py', 'common.py', 'api.py', 'agents/__init__.py',
+            'agents/techbuddy.py', 'agents/it_claims.py', 'agents/human_resources.py', 'agents/playbook_hr.py',
+        ], array_column($m['files'], 'path'));
+        $api = $m['files'][2]['code'];
+        foreach (['"""Run server for workflow "Dispatcher demo"', 'PROVENANCE', 'GRAPH EDGES',
+                  'from fastapi import FastAPI', 'from workflow import run as run_workflow',
+                  'from common import set_event_sink, resolve_gate', 'class RunState',
+                  '@app.post("/runs")', '@app.get("/runs/{run_id}/events")',
+                  '@app.post("/runs/{run_id}/tool-result")', '@app.get("/.well-known/workflow.json")',
+                  'uvicorn.run(', 'WORKFLOW_API_PORT'] as $needle) {
+            $this->assertStringContainsString($needle, $api, "missing: {$needle}");
+        }
+        $this->assertStringNotContainsString('Authorization', $api, 'the run server has no auth');
+    }
+
+    public function testApiServesARunEndToEnd(): void
+    {
+        [$rc, $out] = $this->probe('api_probe.py', self::writePackage());
+        $this->assertSame(0, $rc, $out);
+        $this->assertStringContainsString('OK', $out);
+    }
 }

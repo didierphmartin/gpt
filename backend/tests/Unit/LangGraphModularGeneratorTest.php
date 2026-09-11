@@ -119,7 +119,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $m = self::manifest();
         $this->assertSame('dispatcher_demo_modular', $m['root']);
         $this->assertSame([
-            'workflow.py', 'common.py', 'agents/__init__.py',
+            'workflow.py', 'common.py', 'api.py', 'agents/__init__.py',
             'agents/techbuddy.py', 'agents/it_claims.py', 'agents/human_resources.py', 'agents/playbook_hr.py',
         ], array_column($m['files'], 'path'));
         foreach ($m['files'] as $f) {

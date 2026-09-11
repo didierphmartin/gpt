@@ -2327,6 +2327,7 @@ PY;
         $files = [
             ['path' => 'workflow.py', 'code' => $this->emitModularWorkflow($facts, $layout)],
             ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
+            ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
             ['path' => 'agents/__init__.py', 'code' => '"""Agent modules of workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
                 . " -- one per agent/playbook node.\n\nEach module exposes NODE (the frozen editor settings) and\nrun_node(request_text, trace), which workflow.py calls from its graph.\n\"\"\"\n"],
         ];
@@ -2496,6 +2497,43 @@ TXT;
         $L[] = '# ATTACHMENT CONVERTER (Start-node documents)';
         $L[] = $sep;
         $L[] = PythonEmitHelpers::documentConverterBlock();
+        return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    /** api.py: the run server — the graph behind POST /runs + an SSE event stream. */
+    private function emitModularApi(array $facts, array $layout): string
+    {
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+        $L = [];
+        $L[] = '"""Run server for workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $L[] = '';
+        $body = $this->modularDocBody($facts, $layout,
+            'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+            ['deps' => ['pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
+             'usage' => 'python api.py --port 8710        # then open the workflow from the editor',
+             'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
+                         '#         GET /.well-known/workflow.json (identity)',
+                         '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.'],
+             'env_path' => '../../.env']);
+        foreach (explode("\n", $esc($body)) as $dl) {
+            $L[] = $dl;
+        }
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'import argparse, asyncio, json, os, time, uuid';
+        $L[] = '';
+        $L[] = 'from fastapi import FastAPI, HTTPException, Request';
+        $L[] = 'from fastapi.middleware.cors import CORSMiddleware';
+        $L[] = 'from fastapi.responses import StreamingResponse';
+        $L[] = 'import uvicorn';
+        $L[] = '';
+        $L[] = 'from common import set_event_sink, resolve_gate';
+        $L[] = 'from workflow import run as run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME';
+        $L[] = '';
+        $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
+        $L[] = '';
+        $L[] = self::modularApiBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -2868,6 +2906,177 @@ if __name__ == "__main__":
     print(f"  Final output: {len(output)} chars", flush=True)
     print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
     print("=" * 74, flush=True)
+PY;
+    }
+
+    /** api.py's runtime half: run state, the four routes, the uvicorn entry point. */
+    private static function modularApiBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# RUN STATE
+# One RunState per POST /runs. The graph runs as an asyncio task; its
+# events land in a queue the SSE route drains, and in a ring buffer so a
+# reconnecting client can replay what it missed (see Last-Event-ID).
+# ==============================================================
+RING = 500          # events kept per run for replay
+RUNS = {}           # run_id -> RunState
+RUN_LOCK = None     # asyncio.Lock, created on first use (see _drive)
+
+
+class RunState:
+    """One run: its status, its event history and the queue feeding the stream."""
+
+    def __init__(self, run_id: str, prompt: str):
+        self.id = run_id
+        self.prompt = prompt
+        self.status = "running"
+        self.output = ""
+        self.error = ""
+        self.seq = 0
+        self.events = []                  # [(seq, name, payload)] capped at RING
+        self.queue = asyncio.Queue()
+        self.task = None
+
+    def publish(self, name: str, payload: dict) -> None:
+        """Record one frame and hand it to whoever is streaming."""
+        self.seq += 1
+        frame = (self.seq, name, payload)
+        self.events.append(frame)
+        if len(self.events) > RING:
+            del self.events[0]
+        self.queue.put_nowait(frame)
+
+    def since(self, last_id: int):
+        """Frames after `last_id`, for a client that reconnected."""
+        return [f for f in self.events if f[0] > last_id]
+
+
+# ==============================================================
+# THE APP
+# No authentication by design: this server has no users and no session.
+# Bind it to 127.0.0.1 or a trusted LAN interface.
+# ==============================================================
+app = FastAPI(title=f"{WORKFLOW_NAME} run server")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.get("/.well-known/workflow.json")
+async def identity() -> dict:
+    """Who this server is. The editor checks it before trusting a port."""
+    return {"workflow_id": WORKFLOW_ID, "name": WORKFLOW_NAME,
+            "version": WORKFLOW_VERSION, "protocol": "run/1"}
+
+
+@app.post("/runs")
+async def start_run(body: dict) -> dict:
+    """Start a run and return its id. Does not stream -- GET its events next."""
+    prompt = str((body or {}).get("prompt") or "").strip() or DEFAULT_PROMPT or "Hello"
+    state = RunState(uuid.uuid4().hex, prompt)
+    RUNS[state.id] = state
+    state.task = asyncio.create_task(_drive(state))
+    return {"run_id": state.id, "status": state.status}
+
+
+async def _drive(state: RunState) -> None:
+    """Run the graph with the event sink installed, then publish the terminal frame.
+
+    Runs are serialised. The sink is a module global and the playbook's gate
+    tools are sync callables LangChain runs in an executor -- which does not
+    carry a ContextVar across -- so two concurrent runs would cross-deliver
+    each other's events. A second run waits here rather than corrupting both
+    transcripts; different workflows run in different processes anyway.
+    """
+    global RUN_LOCK
+    loop = asyncio.get_running_loop()
+    app.state.loop = loop
+    if RUN_LOCK is None:
+        RUN_LOCK = asyncio.Lock()
+
+    def sink(ev: dict) -> None:
+        # Called from graph code that may be on a worker thread (sync tools),
+        # so hop back onto the loop before touching the queue.
+        loop.call_soon_threadsafe(state.publish, "message", ev)
+
+    async with RUN_LOCK:
+        prev = set_event_sink(sink)
+        t0 = time.monotonic()
+        try:
+            state.output = await run_workflow(state.prompt)
+            state.status = "completed"
+            state.publish("done", {"run_id": state.id, "status": state.status,
+                                   "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
+        except Exception as e:
+            state.status = "failed"
+            state.error = str(e)
+            state.publish("error", {"run_id": state.id, "error": state.error})
+        finally:
+            set_event_sink(prev)
+
+
+@app.get("/runs/{run_id}/events")
+async def stream_events(run_id: str, request: Request) -> StreamingResponse:
+    """SSE stream of one run. Replays from Last-Event-ID when reconnecting."""
+    state = RUNS.get(run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"unknown run {run_id}")
+    try:
+        last_id = int(request.headers.get("last-event-id") or 0)
+    except ValueError:
+        last_id = 0
+
+    async def frames():
+        # publish() puts every frame in BOTH the ring buffer and the live
+        # queue, so an event that lands before this request attaches is
+        # already sitting in the queue when we start draining it below.
+        # Track the highest seq the replay loop already sent so the queue
+        # loop skips those stale duplicates instead of re-yielding them.
+        sent_through = last_id
+        for seq, name, payload in state.since(last_id):
+            yield _frame(seq, name, payload)
+            sent_through = seq
+            if name in ("done", "error"):
+                return
+        while True:
+            seq, name, payload = await state.queue.get()
+            if seq <= sent_through:
+                continue
+            yield _frame(seq, name, payload)
+            sent_through = seq
+            if name in ("done", "error"):
+                return
+
+    return StreamingResponse(frames(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _frame(seq: int, name: str, payload: dict) -> str:
+    """One SSE frame. `id:` is what a reconnecting client sends back."""
+    return f"id: {seq}\nevent: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/runs/{run_id}/tool-result")
+async def tool_result(run_id: str, body: dict) -> dict:
+    """Answer a gate. Body is flat: {tool_call_id, ...answer} -- the same shape
+    the app backend's /workflows/tool-result takes."""
+    if run_id not in RUNS:
+        raise HTTPException(status_code=404, detail=f"unknown run {run_id}")
+    payload = dict(body or {})
+    tool_call_id = str(payload.pop("tool_call_id", ""))
+    if not tool_call_id:
+        raise HTTPException(status_code=400, detail="tool_call_id is required")
+    if not resolve_gate(tool_call_id, payload):
+        raise HTTPException(status_code=409, detail=f"no gate waiting for {tool_call_id}")
+    return {"ok": True}
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=f"Run server for workflow {WORKFLOW_NAME!r}")
+    ap.add_argument("--host", default=os.environ.get("WORKFLOW_API_HOST", "127.0.0.1"))
+    ap.add_argument("--port", type=int, default=int(os.environ.get("WORKFLOW_API_PORT", "8710")))
+    a = ap.parse_args()
+    print(f"[api] {WORKFLOW_NAME!r} serving http://{a.host}:{a.port}/ (workflow {WORKFLOW_ID}, {WORKFLOW_VERSION})", flush=True)
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 PY;
     }
 
