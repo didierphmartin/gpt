@@ -372,16 +372,19 @@ def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:
         waiter = open_gate(tool_call_id)
         run.events.append({"type": "gate_request", "kind": kind, "payload": dict(args)})
         emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
-        answered = waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        # Pop first, then decide on the answer alone: an answer that lands
+        # between wait() timing out and this pop was still accepted by
+        # resolve_gate(), and throwing it away would lose a human decision.
         answer = take_gate_answer(tool_call_id)
-        if answered and answer is not None:
-            emit_event(type="tool_result", name=name, result={"ok": True, "decision": answer})
+        if answer is not None:
             return {"ok": True, "decision": answer}
         # Nobody attached, or nobody answered in time: same result as a
-        # non-interactive run, recorded so the transcript says who decided.
-        fallback = _playbook_gate_policy(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
-        emit_event(type="tool_result", name=name, result=fallback)
-        return fallback
+        # non-interactive run. No tool_result is emitted here -- the generic
+        # wrap() in build_playbook_tools() emits exactly one for every tool
+        # call, gates included, and a second would double the overlay's
+        # activity card.
+        return _playbook_gate_policy(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
     run.emit(type="gate_request", kind=kind, payload=dict(args))
     if mode == "prompt":
         print(f"\n✋ [{kind}] {what}", flush=True)
