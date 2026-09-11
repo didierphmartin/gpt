@@ -990,7 +990,10 @@
       "stopServer": "Detener el servidor de ejecución",
       "stopServerDone": "Servidor de ejecución detenido.",
       "stopServerNone": "No había ningún servidor de ejecución activo para este flujo de trabajo.",
-      "stopServerFailed": "No se pudo contactar con el runner para detener el servidor:"
+      "stopServerFailed": "No se pudo contactar con el runner para detener el servidor:",
+      "runModeSingle": "archivo único",
+      "runModeModular": "archivos separados",
+      "runModeA2A": "A2A"
     },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",

@@ -3224,6 +3224,7 @@ class WorkflowEditor {
             </button>
             <button type="button" class="langgraph-menu-item" data-action="run">
                 ${this.escapeHtml(this.t('workflow.output.langgraphRun') || 'Run')}
+                <span class="text-xs text-gray-400">(${this.escapeHtml(this._codegenModeLabel())})</span>
             </button>
             <button type="button" class="langgraph-menu-item" data-action="run-url">
                 ${this.escapeHtml(this.t('workflow.output.runTargetUrl') || 'Run against a URL…')}
@@ -4709,12 +4710,25 @@ class WorkflowEditor {
      * three-way form existed hold { a2a: true } — migrated on read.
      */
     _codegenOptions() {
+        // DEFAULT IS 'modular'. The single file is still a first-class target,
+        // but it cannot serve a run: no api.py, so no browser overlay and no
+        // answerable gates. Defaulting to it hid the whole interactive path
+        // behind a form most people never open — Run just produced a log.
+        // An explicitly stored choice always wins over this default.
         try {
             const raw = localStorage.getItem(`wf:${this.currentWorkflowId}:codegen`);
             const o = raw ? JSON.parse(raw) : {};
             if (['single', 'modular', 'a2a'].includes(o.mode)) return { mode: o.mode };
-            return { mode: o.a2a ? 'a2a' : 'single' };
-        } catch (_) { return { mode: 'single' }; }
+            return { mode: o.a2a ? 'a2a' : 'modular' };
+        } catch (_) { return { mode: 'modular' }; }
+    }
+
+    /** Short human label for the active codegen mode, shown on the Run menu item. */
+    _codegenModeLabel() {
+        const mode = this._codegenOptions().mode;
+        if (mode === 'a2a') return this.t('workflow.output.runModeA2A') || 'A2A';
+        if (mode === 'single') return this.t('workflow.output.runModeSingle') || 'single file';
+        return this.t('workflow.output.runModeModular') || 'separate files';
     }
 
     /** Persist code-generation options for the current workflow to `wf:<id>:codegen` in localStorage. Storage failures (e.g. private-browsing mode) are swallowed. */

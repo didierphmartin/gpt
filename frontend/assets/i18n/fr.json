@@ -990,7 +990,10 @@
       "stopServer": "Arrêter le serveur d’exécution",
       "stopServerDone": "Serveur d’exécution arrêté.",
       "stopServerNone": "Aucun serveur d’exécution n’était actif pour ce workflow.",
-      "stopServerFailed": "Impossible de joindre le runner pour arrêter le serveur :"
+      "stopServerFailed": "Impossible de joindre le runner pour arrêter le serveur :",
+      "runModeSingle": "fichier unique",
+      "runModeModular": "fichiers séparés",
+      "runModeA2A": "A2A"
     },
     "runnerSetup": {
       "title": "Runtime Python non installé",
