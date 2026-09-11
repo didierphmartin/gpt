@@ -20,8 +20,12 @@ import asyncio
 import json
 import logging
 import os
+import socket
+import subprocess
 import sys
+import time
 
+import httpx
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -287,6 +291,75 @@ async def _stream_script_run(script_path: Path, args: list[str] | None = None):
     yield f"event: exit\ndata: {rc}\n\n"
 
 
+_SERVERS: dict[str, subprocess.Popen] = {}   # folder -> live workflow server process
+
+
+def _resolve_package_dir(folder: str) -> Path:
+    """Path-traversal-safe lookup of a compiled package under scripts/.
+
+    One plain path segment holding an api.py. Mirrors _resolve_script_path's
+    rules: no '..', no absolute paths, no dotfiles, no nesting.
+    """
+    if not folder or "/" in folder or "\\" in folder or folder.startswith("."):
+        raise ValueError(f"Invalid workflow folder: {folder!r}")
+    candidate = (SCRIPTS_DIR / folder).resolve()
+    if SCRIPTS_DIR.resolve() not in candidate.parents:
+        raise ValueError(f"Path escapes scripts directory: {folder!r}")
+    if not (candidate / "api.py").is_file():
+        raise ValueError(f"No api.py in {folder!r} — regenerate with 'Agents in separate files'")
+    return candidate
+
+
+def _free_port() -> int:
+    """A port the OS says is free right now. Racy in theory; the child binds it immediately."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _start_workflow_server(folder: str) -> dict:
+    """Start (or reuse) the run server for a compiled package. Returns {url, pid, reused}."""
+    pkg = _resolve_package_dir(folder)
+    proc = _SERVERS.get(folder)
+    if proc is not None and proc.poll() is None:
+        return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}/"
+    proc = subprocess.Popen([sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
+                            cwd=str(pkg), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc._workflow_url = url
+    _SERVERS[folder] = proc
+    deadline = time.monotonic() + 60
+    while True:
+        if proc.poll() is not None:
+            out = (proc.stdout.read() or "")[-2000:]
+            _SERVERS.pop(folder, None)
+            raise RuntimeError(f"{folder}/api.py exited with code {proc.returncode} before serving {url}:\n{out}")
+        try:
+            if httpx.get(url + ".well-known/workflow.json", timeout=2).status_code == 200:
+                break
+        except Exception:
+            pass
+        if time.monotonic() > deadline:
+            _stop_workflow_server(folder)
+            raise RuntimeError(f"{folder}/api.py did not serve its identity at {url} within 60s")
+        time.sleep(0.2)
+    return {"url": url, "pid": proc.pid, "reused": False}
+
+
+def _stop_workflow_server(folder: str) -> dict:
+    """Terminate the run server for a package (5 s grace, then kill)."""
+    proc = _SERVERS.pop(folder, None)
+    if proc is None or proc.poll() is not None:
+        return {"stopped": False}
+    proc.terminate()
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    return {"stopped": True}
+
+
 @app.get("/api/scripts")
 async def list_scripts():
     """List .py files available under scripts/.
@@ -392,6 +465,23 @@ async def run_file(req: RunFileReq):
         _stream_script_run(script_path, req.args),
         media_type="text/event-stream",
     )
+
+
+@app.post("/api/workflow-server/start")
+async def workflow_server_start(req: dict):
+    """Start the compiled workflow's run server and return its URL."""
+    try:
+        return _start_workflow_server(str(req.get("folder") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/workflow-server/stop")
+async def workflow_server_stop(req: dict):
+    """Stop the compiled workflow's run server."""
+    return _stop_workflow_server(str(req.get("folder") or ""))
 
 
 def _cli_run(filename: str, extra_args: list[str] | None = None) -> int:
