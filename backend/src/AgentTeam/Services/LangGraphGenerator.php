@@ -1609,8 +1609,12 @@ def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
         tool_call_id = uuid.uuid4().hex
         waiter = open_gate(tool_call_id)
         emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
-        answered = waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
-        answer = take_gate_answer(tool_call_id) if answered else None
+        waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+        # Pop unconditionally, and decide on what the pop returned: an answer
+        # that lands between the wait() timing out and this line is still the
+        # human's answer, and popping also clears the slot so a later POST gets
+        # a truthful 404 instead of answering 200 into a run that moved on.
+        answer = take_gate_answer(tool_call_id)
         if answer is not None:
             print("[gate-answer] " + json.dumps({"agent": agent_name, "task": task_id, **answer}, ensure_ascii=False), flush=True)
             return answer
@@ -1696,7 +1700,16 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
             if gate_payload is None:
                 pending = None
             else:
-                answer = _handle_gate(ad["display"], task_id, gate_payload)
+                # _handle_gate is SYNCHRONOUS and its server branch blocks on a
+                # threading.Event for up to PLAYBOOK_GATE_TIMEOUT_S. Inside api.py
+                # this coroutine shares FastAPI's event loop, so calling it
+                # directly would freeze the loop: the gate_request frame is
+                # scheduled with loop.call_soon_threadsafe and would never be
+                # delivered, and POST /runs/<id>/tool-result could never be
+                # served -- every gate would time out to the policy answer.
+                # to_thread keeps the loop serving while the human decides (and
+                # unblocks console 'prompt' mode for the same reason).
+                answer = await asyncio.to_thread(_handle_gate, ad["display"], task_id, gate_payload)
                 pending = T.SendMessageRequest(message=T.Message(message_id=str(uuid.uuid4()), task_id=task_id, context_id=ctx_id, role=T.Role.ROLE_USER,
                                                                  parts=[T.Part(text=str(answer.get("decision", ""))), new_data_part(answer)]))
         await client.close()
