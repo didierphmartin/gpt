@@ -1431,7 +1431,9 @@ TXT;
                       'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
                                   '#         GET /.well-known/workflow.json (identity)',
                                   '# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
-                                  '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.'],
+                                  '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
+                                  '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
+                                  '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'],
                       // This file lives at <root>/api.py; python/.env is two levels up (same as orchestrator.py).
                       'env_path' => '../../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
@@ -2666,7 +2668,9 @@ TXT;
              'usage' => 'python api.py --port 8710        # then open the workflow from the editor',
              'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
                          '#         GET /.well-known/workflow.json (identity)',
-                         '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.'],
+                         '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
+                         '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
+                         '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'],
              'env_path' => '../../.env']);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
@@ -3141,9 +3145,24 @@ class RunState:
 # THE APP
 # No authentication by design: this server has no users and no session.
 # Bind it to 127.0.0.1 or a trusted LAN interface.
+#
+# CORS is therefore the only thing standing between this server and any
+# page the user happens to have open: starting a run here spends real API
+# credit and performs real tool side effects, and the event stream carries
+# the run's transcript. Loopback origins on any port are allowed (that is
+# the local frontend); a LAN-hosted frontend adds itself with
+# WORKFLOW_API_ALLOW_ORIGIN=http://host:port (comma-separated for several).
 # ==============================================================
+_EXTRA_ORIGINS = [o.strip() for o in os.environ.get("WORKFLOW_API_ALLOW_ORIGIN", "").split(",") if o.strip()]
+
 app = FastAPI(title=f"{WORKFLOW_NAME} run server")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_EXTRA_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/.well-known/workflow.json")
