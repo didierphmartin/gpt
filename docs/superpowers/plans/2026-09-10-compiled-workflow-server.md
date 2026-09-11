@@ -1131,8 +1131,13 @@ def _start_workflow_server(folder: str) -> dict:
         return {"url": proc._workflow_url, "pid": proc.pid, "reused": True}
     port = _free_port()
     url = f"http://127.0.0.1:{port}/"
+    # NEVER subprocess.PIPE here: nothing drains it, and the generated server
+    # prints a trace line per node, tool call and gate — the child would block
+    # forever once ~64KB accumulated, mid-run, with no error and no exit code.
+    # A temp file keeps the crash diagnostics without the deadlock.
+    log = tempfile.NamedTemporaryFile(prefix=f"wfserver-{folder}-", suffix=".log", delete=False)
     proc = subprocess.Popen([sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
-                            cwd=str(pkg), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                            cwd=str(pkg), stdout=log, stderr=subprocess.STDOUT, text=True)
     proc._workflow_url = url
     _SERVERS[folder] = proc
     deadline = time.monotonic() + 60
