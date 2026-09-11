@@ -1783,7 +1783,7 @@ Create `docs/run-protocol-v1.json`:
 ```json
 {
   "version": "run/1",
-  "note": "The run event protocol. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that.",
+  "note": "The run event protocol. Both the PHP playbook interpreter and every compiled run server must emit events that validate against this. Changing it requires updating both sides; RunProtocolConformanceTest.php enforces that. An implementation need not emit every event (leg_started/leg_ended are the PHP interpreter's), but it must not emit one this file does not describe.",
   "events": {
     "round":        { "required": ["type", "round"],                  "optional": [] },
     "tool_call":    { "required": ["type", "name"],                   "optional": ["args"] },
@@ -1791,7 +1791,9 @@ Create `docs/run-protocol-v1.json`:
     "message":      { "required": ["type", "text"],                   "optional": ["sensitive"] },
     "note":         { "required": ["type", "text"],                   "optional": [] },
     "gate_request": { "required": ["type", "kind", "payload"],        "optional": ["tool_call_id", "ui_resource"] },
-    "final":        { "required": ["type", "status"],                 "optional": ["leg"] }
+    "final":        { "required": ["type", "status"],                 "optional": ["leg"] },
+    "leg_started":  { "required": ["type"],                           "optional": ["leg"] },
+    "leg_ended":    { "required": ["type"],                           "optional": ["leg", "status"] }
   },
   "terminal": {
     "done":  { "required": ["run_id", "status", "output"], "optional": ["seconds"] },
@@ -1836,15 +1838,31 @@ class RunProtocolConformanceTest extends TestCase
         $this->assertSame(0, $rc, implode("\n", $out));
     }
 
+    /**
+     * JSON-Schema property types share the `'type' => '...'` shape with run
+     * events, so the scan skips the schema vocabulary. Anything else the
+     * interpreter emits must be described by the contract.
+     */
+    private const SCHEMA_WORDS = ['array', 'boolean', 'function', 'integer', 'number', 'object', 'string', 'prompt'];
+
     public function testThePhpInterpreterEmitsOnlyContractEvents(): void
     {
         $contract = self::contract();
-        $src = file_get_contents(__DIR__ . '/../../src/AgentTeam/Services/PlaybookInterpreter.php');
-        preg_match_all("/'type'\s*=>\s*'([a-z_]+)'/", $src, $m);
-        $emitted = array_unique($m[1]);
-        $known = array_merge(array_keys($contract['events']), ['error']);
+        $dir = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(__DIR__ . '/../../src/Playbook'));
+        $emitted = [];
+        foreach ($dir as $file) {
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                preg_match_all("/'type'\s*=>\s*'([a-z_]+)'/", file_get_contents($file->getPathname()), $m);
+                foreach ($m[1] as $t) {
+                    $emitted[$t] = true;
+                }
+            }
+        }
+        $emitted = array_diff(array_keys($emitted), self::SCHEMA_WORDS);
+        $this->assertNotEmpty($emitted, 'found no emitted event types — the scan path is wrong');
+        $known = array_merge(array_keys($contract['events']), ['error', 'done']);
         foreach ($emitted as $type) {
-            $this->assertContains($type, $known, "PlaybookInterpreter emits '{$type}', which run-protocol-v1.json does not describe");
+            $this->assertContains($type, $known, "the PHP interpreter emits '{$type}', which run-protocol-v1.json does not describe");
         }
     }
 }
@@ -1900,7 +1918,7 @@ print("OK")
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `cd backend && php vendor/bin/phpunit tests/Unit/RunProtocolConformanceTest.php`
-Expected: FAIL on the first test — the `tool_result` the server-mode gate emits carries `decision` inside `result`, which is allowed, but `gate_request` carries `tool_call_id`; if either mismatch appears, the probe prints the exact field and event.
+Expected: FAIL — `docs/run-protocol-v1.json` does not exist yet on the first run of the suite, or (once it does) the probe prints the exact event and field that does not match. Both tests must fail before Step 4, not error on a missing path: if `testThePhpInterpreterEmitsOnlyContractEvents` fails on `found no emitted event types`, the scan directory is wrong — fix the path, not the assertion.
 
 - [ ] **Step 4: Reconcile contract and code**
 
