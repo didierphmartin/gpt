@@ -10,7 +10,9 @@ Builds on `2026-09-10-compiled-workflow-server-design.md`, which gave the LangGr
 2. **Multi-user, optionally.** A checkbox in the code-generation form, chosen before compiling like the packaging mode. When on, a run belongs to its caller: you see and answer only your own.
 3. **A shared, target-agnostic core.** The concurrency machinery lives in one file that knows nothing about LangGraph, so ADK, MAF and NOOA can adopt it without reimplementation (§9).
 
-Non-goals here: durable runs across a server restart; a login story inside the generated server (identity comes from the deployment); cross-run memory (a separate feature).
+Non-goals here: durable runs across a server restart; a login story inside the generated server (identity comes from the deployment); the swarm architecture (its own spec).
+
+Phase 1 deliberately excludes playbook nodes — see §1c.
 
 ## 1b. Terminology — one flag
 
@@ -23,6 +25,38 @@ Nobody is ever asked to turn "concurrency" on.
 |---|---|---|---|
 | off | the constant `"local"` | yes | one per thread |
 | on | from the deployment (§5) | yes | one per user per thread |
+
+## 1c. Phasing — dispatcher workflows first, playbooks after
+
+**Phase 1 covers workflows with no playbook node**: a dispatcher and plain agent nodes.
+**Phase 2 adds playbook nodes**, whose human gates are the genuinely hard part of
+concurrency.
+
+This is not arbitrary. Almost everything difficult about running two workflows at once
+lives in the gate machinery: a rendezvous keyed by `tool_call_id`, a blocked thread
+waiting on an answer, a timeout, and — in A2A — an agent server that serialises
+specifically so its gate bridge can find "the run in progress" through a module-global
+`_ACTIVE`. Take playbooks out of phase 1 and all of that goes with them.
+
+What phase 1 still has to solve, and what it defers:
+
+| | Phase 1 | Phase 2 |
+|---|---|---|
+| per-run event sink (replaces the global) | yes | — |
+| per-run `NODE_DURATIONS` / `_RUN_T0` (else two runs blend one summary) | yes | — |
+| run registry keyed by owner, ownership on every route | yes | — |
+| history per `(owner, thread)` | yes | — |
+| gate rendezvous per run | — | yes |
+| A2A agent servers: drop `_ACTIVE` and `_RUN_LOCK` | — | yes |
+
+**Until phase 2 lands, a workflow that contains a playbook node keeps today's
+serialisation.** The generator already knows at emit time whether `playbookData` is
+empty, so it emits `RUN_LOCK` only for those workflows, with a comment saying why. That
+is two behaviours rather than one — accepted deliberately and temporarily, because the
+alternative is blocking every concurrent run behind the hardest part of the problem.
+
+Phase 1's test workflow is a dispatcher with two dispatched nodes, which exercises
+routing, per-run sinks, ownership and history without a single gate.
 
 ## 2. Why per-run isolation is a fix, not a feature
 
@@ -113,7 +147,7 @@ Resolved from the environment, in a fixed precedence:
 
 1. `WORKFLOW_API_JWT_SECRET` set → verify the Bearer token; owner is its subject.
 2. `WORKFLOW_API_TRUST_HEADER=1` → owner is `X-Forwarded-User` (an authenticating proxy already checked).
-3. Neither, with the flag on → **refuse to start**, naming both variables. A multi-user server that silently accepts everyone as one user is worse than one that will not boot.
+3. Neither, with the flag on → **refuse to start**, naming both variables. Confirmed with the owner: in multi-user mode users must be identified, so booting anyway with everyone collapsed into one identity is not an acceptable fallback.
 
 With the flag off, the owner is the constant `"local"` and every route behaves exactly as it does today — byte-identical output, so the folder you hand someone is unchanged.
 
@@ -160,7 +194,7 @@ The A2A folder reuses `modularApiBlock()` and therefore inherits §4 and §5. Tw
 
 **The orchestrator** carries the same `_SINK`/`_GATES` globals plus `NODE_DURATIONS` and `_RUN_T0`, which would blend two runs' timings into one nonsense summary. All four become per-run state on the `Run` object. `AgentSupervisor` stays shared — one agent fleet serving many runs is correct — and `_ensure_agents` already makes its start once-only.
 
-**The agent servers are the hard part.** Each currently serialises deliberately:
+**The agent servers are the hard part — and they are phase 2**, because what they serialise for is the gate bridge. Each currently does:
 
 ```python
 _ACTIVE: _NodeRun | None = None   # the run currently executing (one at a time)
@@ -188,8 +222,9 @@ This is where bugs are most likely, and where §8 concentrates.
 - `get(owner, run_id)` returns None for a foreign owner;
 - reaping removes finished runs and never a live one.
 
-**Generated modular package:**
-- two workflows run concurrently end to end (LLM stubbed at `_make_llm`), asserting no event crosses between streams and both terminal frames arrive;
+**Generated modular package (phase 1 — dispatcher + two dispatched nodes, no playbook):**
+- two runs of that workflow proceed concurrently end to end (LLM stubbed at `_make_llm`), asserting no event crosses between streams, both terminal frames arrive, and each run's `NODE_DURATIONS` reflects only its own nodes;
+- the two runs route to *different* branches, so a crossed sink would show up as a node appearing in the wrong stream;
 - with the flag on: an unowned `GET /events` is 404; an unowned `tool-result` is 404; `workflow.json` stays 200 without a token;
 - with the flag off: output byte-identical to today's (pinned, as the single-file target already is).
 
