@@ -253,56 +253,83 @@ This is where bugs are most likely, and where §8 concentrates.
 - **Per-user resource limits.** Nothing stops one caller starting fifty runs. Worth revisiting if this ever faces more than a handful of people.
 - **Cross-run memory.** Discussed separately; orthogonal to ownership.
 
-## 8. Testing
+## 8. Tests
 
-`runs.py` is testable without a model, an MCP server or a graph — that is the main reason it exists as its own file.
+Phase 1 only — no playbook nodes, therefore no gates. Every test below runs without a
+model or an MCP server except where it says otherwise.
 
-**Unit (`runs.py` alone):**
-- two runs publish concurrently; each subscriber receives only its own run's frames, in order, exactly once;
-- two runs block on gates simultaneously and are answered **out of order**; each resumes with its own answer;
-- an answer for run A's `tool_call_id` presented to run B resolves nothing;
-- `get(owner, run_id)` returns None for a foreign owner;
-- reaping removes finished runs and never a live one.
+### 8.1 `runs.py`, on its own
 
-**Generated modular package (phase 1 — dispatcher + two dispatched nodes, no playbook):**
-- two runs of that workflow proceed concurrently end to end (LLM stubbed at `_make_llm`), asserting no event crosses between streams, both terminal frames arrive, and each run's `NODE_DURATIONS` reflects only its own nodes;
-- the two runs route to *different* branches, so a crossed sink would show up as a node appearing in the wrong stream;
-- with the flag on: an unowned `GET /events` is 404; an unowned `tool-result` is 404; `workflow.json` stays 200 without a token;
-- with the flag off: output byte-identical to today's (pinned, as the single-file target already is).
+The reason this file exists separately is that its invariants can be tested with no
+graph, no LLM and no HTTP.
 
-**A2A:** two runs against one agent fleet, both parked on gates at the same agent, answered out of order — the case `_ACTIVE` cannot express.
+- two runs publish concurrently → each subscriber receives only its own run's frames, in
+  order, exactly once;
+- a run's ring buffer overflows → `since()` reports the gap rather than resuming silently;
+- `get(owner, run_id)` returns `None` for a foreign owner, and the same value as `get`
+  with the right owner otherwise;
+- reaping removes a finished run and never a live one;
+- **the import test:** the emitted `runs.py` imports nothing beyond the standard library.
+  Written in step 1, not retrofitted — it is the only thing protecting §9.
 
-**Two-user verification — automated.** A probe that starts the generated server with a
-**test** `WORKFLOW_API_JWT_SECRET` (never the real one) and signs two tokens itself,
-`sub=1` and `sub=2`, with PyJWT:
+### 8.2 The generated package, phase 1
 
-- both users start a run; each `GET /events` returns only that user's frames;
-- user 2 requests user 1's run id → **404**, and the same for `tool-result`;
-- `workflow.json` answers 200 with `multi_user: true` and no token;
-- an expired token → 401; a token signed with the wrong secret → 401;
-- with the flag off, the same probe's unauthenticated calls all succeed, proving the
-  single-user path is untouched.
+Fixture: the dispatcher test workflow — one dispatcher, two dispatched nodes, no
+playbook. `_make_llm` stubbed, so no provider is called.
 
-`PyJWT 2.13` is already installed in the runner's venv, so the emitted server adds no
-new dependency to install; `pyjwt` joins the requirements line in the generated
-docstring for anyone deploying the folder elsewhere. The app signs with
-`firebase/php-jwt` HS256, which PyJWT verifies natively — same algorithm, same claims.
+- two runs proceed concurrently end to end; no event crosses between the streams, both
+  terminal frames arrive;
+- the two runs are made to route to **different** branches, so a crossed sink shows up as
+  a node appearing in the wrong stream rather than as a subtle ordering difference;
+- each run's `NODE_DURATIONS` reflects only its own nodes;
+- a workflow **with** a playbook node still emits `RUN_LOCK` and still serialises (the
+  phase-1 boundary, pinned so it cannot regress silently);
+- flag off → output byte-identical to today's, pinned the way the single-file target
+  already is.
 
-**Two-user verification — manual, and it is the part that matters.** The automated probe
-proves the server; only a browser proves the whole chain. What the human pass adds:
+### 8.3 Multi-user, automated
 
-- **two real accounts, in two browser profiles** (or one normal and one private window) —
-  the session token lives in per-profile storage, so two tabs of one profile are the same
-  user and test concurrency, not isolation;
-- each user runs the dispatcher test workflow at the same time and sees only their own
-  overlay filling in;
-- the editor is actually sending the bearer token — visible as the run surviving at all,
-  since without it the server answers 401;
-- and the negative case worth trying deliberately: copy a run id from one profile's
-  network tab, ask for it from the other, and confirm 404 rather than someone else's
-  transcript.
+The probe starts the server with a **test** `WORKFLOW_API_JWT_SECRET` — never the real
+one — and signs its own tokens with PyJWT (2.13, already in the runner venv; the app
+signs HS256 via `firebase/php-jwt`, so the claims match).
 
-**Conformance:** `docs/run-protocol-v1.json` is unchanged by this work; the existing test must stay green, since none of this adds or alters an event.
+- `sub=1` and `sub=2` each start a run; each `GET /events` yields only that user's frames;
+- user 2 requests user 1's run id → **404**; same for `tool-result`;
+- `workflow.json` → 200 with `multi_user: true`, no token required;
+- expired token → 401; token signed with the wrong secret → 401; no token → 401;
+- flag off → the same calls succeed unauthenticated, proving the single-user path is
+  untouched.
+
+### 8.4 Multi-user, manual
+
+The automated probe proves the server. Only a browser proves the chain — that the editor
+reads `multi_user` from `workflow.json` and sends the bearer token.
+
+Setup, and the detail that decides whether the test is real:
+
+- **two accounts, in two browser profiles.** Chrome profile A + profile B, or normal +
+  incognito, or Chrome + Safari. **Two incognito windows do not work** — Chrome shares one
+  incognito session, so both tabs hold the same token and you are testing concurrency
+  again, not isolation.
+- **both windows on the same workflow.** Different workflows get different servers on
+  different ports and cannot leak into each other by construction — a pass that proves
+  nothing.
+
+The pass:
+
+1. Both users press Run at roughly the same time; each overlay fills with only its own run.
+2. Copy a `run_id` from one profile's network tab and request it from the other →
+   **404**, not the other user's transcript. This is the check that actually proves
+   ownership rather than assuming it.
+3. Flag off, one user: everything behaves exactly as it does today.
+
+### 8.5 Must stay green
+
+- `docs/run-protocol-v1.json` is unchanged by this work — no event is added or altered —
+  so `RunProtocolConformanceTest` must pass untouched.
+- The existing compiled-server suite (`CompiledRunServerTest`), the modular and A2A
+  generator suites, and the runner's pytest suite.
+- The 25 pre-existing failures in `tests/Unit` stay at 25, name for name.
 
 ## 8b. Delivery order
 
