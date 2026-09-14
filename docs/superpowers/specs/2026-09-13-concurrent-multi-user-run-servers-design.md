@@ -143,19 +143,61 @@ Gates move from a module-level `_GATES` dict to per-`Run` state, which is the ch
 
 ## 5. Identity and ownership (behind the flag)
 
-Resolved from the environment, in a fixed precedence:
+**The run server uses the system's existing authentication.** No second login, no
+separate credential: the browser already holds a session from the app, and the same
+token identifies the caller to the compiled server.
 
-1. `WORKFLOW_API_JWT_SECRET` set → verify the Bearer token; owner is its subject.
-2. `WORKFLOW_API_TRUST_HEADER=1` → owner is `X-Forwarded-User` (an authenticating proxy already checked).
-3. Neither, with the flag on → **refuse to start**, naming both variables. Confirmed with the owner: in multi-user mode users must be identified, so booting anyway with everyone collapsed into one identity is not an acceptable fallback.
+The mechanism, read from `backend/src/Middleware/AuthMiddleware.php`:
 
-With the flag off, the owner is the constant `"local"` and every route behaves exactly as it does today — byte-identical output, so the folder you hand someone is unchanged.
+- **HS256**, verified against the shared `JWT_SECRET`.
+- The user id is the **`sub`** claim, cast to an int — the same `user_id` every
+  controller in the app receives.
+
+So the generated server does exactly what the PHP middleware does:
+
+```python
+payload = jwt.decode(token, WORKFLOW_API_JWT_SECRET, algorithms=["HS256"])
+owner = str(payload["sub"])          # same identity the app uses
+```
+
+Resolution order with the flag on:
+
+1. `Authorization: Bearer <token>` verified against `WORKFLOW_API_JWT_SECRET` → owner is `sub`.
+2. `WORKFLOW_API_TRUST_HEADER=1` → owner is `X-Forwarded-User`, for a deployment behind
+   a proxy that has already authenticated. Secondary, not the normal path.
+3. Neither configured → **refuse to start**, naming the variables. Confirmed with the
+   owner: in multi-user mode users must be identified, so booting with everyone
+   collapsed into one identity is not an acceptable fallback.
+
+With the flag off, the owner is the constant `"local"`, no token is read, and every
+route behaves exactly as it does today — byte-identical output.
+
+**Two consequences to build deliberately:**
+
+- **The editor must send its token to the run target when multi-user is on.** The
+  current rule is the opposite — the run target never receives `getAuthHeaders()` —
+  because the server had no identity. That rule becomes conditional: send the bearer
+  token when the compiled server declares multi-user, never otherwise. `workflow.json`
+  gains a `multi_user: true|false` field so the editor knows which it is talking to
+  before the first run, rather than guessing from a 401.
+- **The secret has to reach the server.** It is the app's `JWT_SECRET`, so the runner
+  passes it in the child's environment when spawning `api.py`, reading it from the same
+  `.env` it already loads for provider keys. A compiled folder handed to someone else
+  therefore needs that variable set before multi-user works — which is correct: without
+  the app's secret it cannot validate the app's users.
+
+**Token expiry is the app's business.** The run server verifies `exp` as part of
+`jwt.decode` and returns 401 on an expired token; the editor already refreshes sessions,
+and a run in flight is unaffected because ownership was recorded when it started.
 
 Route scoping when on:
 
 - `POST /runs` records the owner from the dependency.
-- `GET /runs/{id}/events` and `POST /runs/{id}/tool-result` return **404, not 403**, for a run the caller does not own — the server must not confirm that another user's run exists.
-- `GET /.well-known/workflow.json` stays unauthenticated: it carries no run data and the editor reads it before it has a token.
+- `GET /runs/{id}/events` and `POST /runs/{id}/tool-result` return **404, not 403**, for
+  a run the caller does not own — the server must not confirm that another user's run
+  exists.
+- `GET /.well-known/workflow.json` stays unauthenticated: it carries no run data, and
+  the editor reads it (including the new `multi_user` field) before it has sent a token.
 
 ## 5b. Conversation history
 
