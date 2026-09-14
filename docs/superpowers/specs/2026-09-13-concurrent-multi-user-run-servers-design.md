@@ -12,7 +12,19 @@ Builds on `2026-09-10-compiled-workflow-server-design.md`, which gave the LangGr
 
 Non-goals here: durable runs across a server restart; a login story inside the generated server (identity comes from the deployment); cross-run memory (a separate feature).
 
-## 2. Why concurrency is a fix, not a feature
+## 1b. Terminology — one flag
+
+There is **one user-facing setting: "Multi-user run server."** Everything below that
+talks about per-run isolation is internal plumbing, not a second choice: without it
+multi-user cannot work, and with it a single user gets two overlapping runs for free.
+Nobody is ever asked to turn "concurrency" on.
+
+| Multi-user | Owner of a run | Runs may overlap | History |
+|---|---|---|---|
+| off | the constant `"local"` | yes | one per thread |
+| on | from the deployment (§5) | yes | one per user per thread |
+
+## 2. Why per-run isolation is a fix, not a feature
 
 Today the event sink is a module global:
 
@@ -110,6 +122,37 @@ Route scoping when on:
 - `POST /runs` records the owner from the dependency.
 - `GET /runs/{id}/events` and `POST /runs/{id}/tool-result` return **404, not 403**, for a run the caller does not own — the server must not confirm that another user's run exists.
 - `GET /.well-known/workflow.json` stays unauthenticated: it carries no run data and the editor reads it before it has a token.
+
+## 5b. Conversation history
+
+History follows the same key as ownership, so the flag governs both with one rule:
+**history is stored per `(owner, thread)`**, where `owner` is `"local"` when multi-user
+is off. Flipping the checkbox changes what `owner` resolves to — never how history works
+— so there is one storage shape to build and test, and history is useful on a single
+laptop as well as on a shared server.
+
+`runs.py` owns the store, because it already owns state keyed by owner:
+
+```python
+class HistoryStore:
+    def load(owner, thread_id) -> dict | None
+    def save(owner, thread_id, state) -> None
+    def clear(owner, thread_id) -> None       # the editor's "start fresh"
+```
+
+The store treats the payload as **opaque**. That matters because the two architectures
+put different things in it and read it differently:
+
+| | Stored per thread | Read by |
+|---|---|---|
+| Workflow (today) | node outputs, which branch ran, gate answers | the agent whose branch is re-entered — scoped |
+| Swarm (separate spec) | one shared message list | whoever is active — in full |
+
+Keeping the payload opaque means neither architecture constrains the other, and the
+store needs no change when the second one arrives.
+
+Out of scope here, to be settled when history is implemented: what exactly a workflow
+thread carries forward, when a thread expires, and how the editor surfaces "start fresh".
 
 ## 6. A2A
 
