@@ -315,9 +315,17 @@ Setup, and the detail that decides whether the test is real:
   different ports and cannot leak into each other by construction — a pass that proves
   nothing.
 
+**The overlay names the owner when multi-user is on.** Today the badge reads
+`compiled · 127.0.0.1:8710`; with the flag on it reads `compiled · 127.0.0.1:8710 · user 7`.
+Without it this pass is inferential — two overlays filling in plausibly is not evidence
+they are separate, and a crossed stream between two runs of the *same* workflow is easy
+to miss. The server already knows the owner and `workflow.json` already tells the editor
+the server is multi-user, so this costs one field.
+
 The pass:
 
-1. Both users press Run at roughly the same time; each overlay fills with only its own run.
+1. Both users press Run at roughly the same time; each overlay fills with only its own
+   run, and each badge names its own user.
 2. Copy a `run_id` from one profile's network tab and request it from the other →
    **404**, not the other user's transcript. This is the check that actually proves
    ownership rather than assuming it.
