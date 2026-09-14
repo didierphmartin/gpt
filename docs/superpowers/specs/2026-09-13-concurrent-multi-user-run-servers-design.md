@@ -300,36 +300,52 @@ signs HS256 via `firebase/php-jwt`, so the claims match).
 - flag off → the same calls succeed unauthenticated, proving the single-user path is
   untouched.
 
-### 8.4 Multi-user, manual
+### 8.4 Multi-user, manual — the tester's runbook
 
-The automated probe proves the server. Only a browser proves the chain — that the editor
-reads `multi_user` from `workflow.json` and sends the bearer token.
+The automated probe proves the server. Only a browser proves the chain: that the editor
+reads `multi_user` from `workflow.json`, sends the bearer token, and shows each user
+their own run. This part is performed by a person; everything it needs is listed first
+so nothing is discovered halfway through.
 
-Setup, and the detail that decides whether the test is real:
+**What must be in place before starting**
 
-- **two accounts, in two browser profiles.** Chrome profile A + profile B, or normal +
-  incognito, or Chrome + Safari. **Two incognito windows do not work** — Chrome shares one
-  incognito session, so both tabs hold the same token and you are testing concurrency
-  again, not isolation.
-- **both windows on the same workflow.** Different workflows get different servers on
-  different ports and cannot leak into each other by construction — a pass that proves
-  nothing.
+| # | Requirement | Why it is needed | How to check |
+|---|---|---|---|
+| 1 | **Two user accounts** in the app | One account cannot demonstrate isolation — both sessions would be the same owner | Log into each once, separately |
+| 2 | **Two browser profiles** — Chrome A + Chrome B, or normal + incognito, or Chrome + Safari | The session token lives in per-profile storage. **Two incognito windows share one Chrome session** and would both carry the same token | Each window shows a different user in the app header |
+| 3 | **The runner running**, and left running | It spawns the workflow server and passes `JWT_SECRET` into its environment | `curl -s localhost:8765/health` → 200 |
+| 4 | **`JWT_SECRET` readable by the runner** — the app's value, in the `.env` the runner already loads | Without it the server cannot verify the app's tokens and every call is 401 | The server starts instead of refusing (§5) |
+| 5 | **The test workflow saved**: a dispatcher and two dispatched nodes, **no playbook node**, branches with visibly different output | A playbook pulls phase-2 gate machinery into a phase-1 test; visibly different branches make a crossed stream obvious rather than subtle | Open it in the editor |
+| 6 | **Generated with "Multi-user run server" ticked**, mode *Agents in separate files* | The flag is compiled in; an old package is single-user whatever the browser does | The generated `api.py` contains the identity dependency |
+| 7 | **Both windows on the same workflow** | Two different workflows get different servers on different ports and cannot leak into each other — a pass that proves nothing | Same workflow name in both |
 
-**The overlay names the owner when multi-user is on.** Today the badge reads
-`compiled · 127.0.0.1:8710`; with the flag on it reads `compiled · 127.0.0.1:8710 · user 7`.
-Without it this pass is inferential — two overlays filling in plausibly is not evidence
-they are separate, and a crossed stream between two runs of the *same* workflow is easy
-to miss. The server already knows the owner and `workflow.json` already tells the editor
-the server is multi-user, so this costs one field.
+**What to do**
 
-The pass:
+1. In **window A**, press Run. The prompt box appears; run it. The overlay opens and the
+   badge reads `compiled · 127.0.0.1:<port> · user <A's id>`.
+2. While A is still running, in **window B** press Run on the same workflow. B's overlay
+   opens with **its own** badge naming B.
+3. Watch both. Each overlay should fill only with its own run's nodes. With visibly
+   different branch outputs, a crossed stream is immediately obvious.
+4. When both finish, check each transcript belongs to the user who started it.
+5. **The ownership check — the one that actually proves it.** In window A, open the
+   browser's network tab and copy the `run_id` from the `POST /runs` response. In window
+   B's console, request it directly:
+   `fetch('<base>/runs/<A's run id>/events', {headers:{Authorization:'Bearer '+<B's token>}}).then(r=>r.status)`
+   Expected: **404**. Anything else — 200, a transcript, even 403 — is a failure.
+6. **Flag-off sanity.** Regenerate with the checkbox cleared and run once in a single
+   window. Everything behaves exactly as it does today, no token required.
 
-1. Both users press Run at roughly the same time; each overlay fills with only its own
-   run, and each badge names its own user.
-2. Copy a `run_id` from one profile's network tab and request it from the other →
-   **404**, not the other user's transcript. This is the check that actually proves
-   ownership rather than assuming it.
-3. Flag off, one user: everything behaves exactly as it does today.
+**What a failure looks like**
+
+- A node from B's branch appearing in A's overlay → crossed event sink (§2 not fixed).
+- Both badges naming the same user → the editor is not sending the token, or the server
+  is not reading it.
+- Step 5 returning 200 or a transcript → ownership is not enforced on the stream route.
+- Either overlay hanging with no frames while the other runs → the runs are still
+  serialised; `RUN_LOCK` was not removed, or the workflow contains a playbook node
+  (which is expected to serialise until phase 2).
+- The server refusing to start → `JWT_SECRET` is not reaching it (requirement 4).
 
 ### 8.5 Must stay green
 
