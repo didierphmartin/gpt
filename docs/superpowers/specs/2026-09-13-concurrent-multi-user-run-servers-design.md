@@ -232,6 +232,24 @@ This is where bugs are most likely, and where §8 concentrates.
 
 **Conformance:** `docs/run-protocol-v1.json` is unchanged by this work; the existing test must stay green, since none of this adds or alters an event.
 
+## 8b. Delivery order
+
+Confirmed with the owner: **LangGraph first, proved by running it, then one framework at
+a time.** Nothing about ADK, MAF or NOOA is built or designed in detail until the
+LangGraph phase 1 is working in the editor against the dispatcher test workflow.
+
+1. **LangGraph modular, phase 1** — `runs.py`, per-run sinks, ownership, history, the
+   multi-user checkbox. Verified with a real two-user run, not only by tests.
+2. **LangGraph A2A, phase 1** — the orchestrator's globals become per-run; the agent
+   servers are untouched until phase 2 (they serialise for the gate bridge).
+3. **LangGraph phase 2** — playbook gates per run, then the A2A agent servers.
+4. **The other frameworks**, one at a time, in the order of §9 — each reusing `runs.py`
+   unchanged, which is the only reason this is a small job rather than three.
+
+The one thing that must be right before step 4 begins is that `runs.py` stayed
+framework-free. §10's import test is what protects that, and it should be written in
+step 1 rather than retrofitted.
+
 ## 9. The other targets — planned, not built here
 
 ADK, MAF and NOOA are today **single-file only** (714, 778 and 425 lines for the Dispatcher demo), have **no run server**, and document playbook nodes as NOT RUN. Bringing them to parity means three things each, in this order:
