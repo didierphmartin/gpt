@@ -230,6 +230,58 @@ store needs no change when the second one arrives.
 Out of scope here, to be settled when history is implemented: what exactly a workflow
 thread carries forward, when a thread expires, and how the editor surfaces "start fresh".
 
+## 5c. Audit trail
+
+**Purpose: debugging, not the UI.** The SSE stream is what the browser renders and is
+deliberately lean — a 500-event ring buffer in memory that disappears with the process.
+The audit trail is the durable record you read after the fact, and it answers the
+question the stream cannot: *what did this node actually receive?*
+
+**A superset of the stream, written by a second sink.** `runs.py` already hands the graph
+one sink; it gains a second that appends every event to a file. Because it is a separate
+consumer, the audit can record things the stream does not carry, and no protocol change
+is needed — `docs/run-protocol-v1.json` stays exactly as it is.
+
+One append-only JSONL file per run:
+
+```
+~/Documents/synergyAI/outputs/runs/<workflow>/<YYYYMMDD-HHMMSS>-<run_id>.jsonl
+```
+
+Chosen over the current temp file because that one is `unlink`ed when the server stops —
+the moment you most want it. Surviving the process is the point.
+
+**What each line carries**, beyond the streamed events:
+
+| Record | Fields |
+|---|---|
+| `node_enter` | node id, display name, **the framed input verbatim**, its length, the parents it came from |
+| `node_exit` | node id, output text, status, elapsed seconds, tokens if the provider reports them |
+| `handoff` | from, to, reason/notes — the dispatcher's `route_to` today; every handoff in swarm mode |
+| `active` | which agent holds the turn, emitted whenever it changes (swarm) |
+| everything already streamed | `round`, `message`, `tool_call`, `tool_result`, `gate_request`, `final`, terminal |
+
+`node_enter` is the one that pays for itself. A node that behaves oddly is usually
+receiving something other than what you assumed, and today that framed input exists only
+in flight.
+
+**Redaction.** The trail contains prompts, tool arguments and gate answers. Anything the
+protocol already marks `sensitive` is written as `"[redacted]"` with its length, matching
+how the transcript treats it. A `WORKFLOW_AUDIT=off` env var disables the file entirely
+for anyone who wants nothing on disk.
+
+**Ownership and retention.** In multi-user mode the file records the owner, and lives
+under that owner's directory, so one user's trail is not casually readable next to
+another's. Retention is a count, not a duration — keep the most recent N runs per
+workflow (default 50) and delete the rest on start, which bounds growth without a cron
+job.
+
+**Why it matters more in swarm mode.** A workflow's path is drawn on a canvas; when it
+misbehaves you already know where to look. A swarm's path is decided at run time, so
+`handoff` and `active` records are the only way to reconstruct why a message ended up
+where it did. The trail is specified here because it is shared machinery, but the swarm
+spec is where it earns its keep.
+
 ## 6. A2A
 
 The A2A folder reuses `modularApiBlock()` and therefore inherits §4 and §5. Two further pieces are specific to it:
