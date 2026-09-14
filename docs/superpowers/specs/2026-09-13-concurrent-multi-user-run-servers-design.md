@@ -272,6 +272,36 @@ This is where bugs are most likely, and where §8 concentrates.
 
 **A2A:** two runs against one agent fleet, both parked on gates at the same agent, answered out of order — the case `_ACTIVE` cannot express.
 
+**Two-user verification — automated.** A probe that starts the generated server with a
+**test** `WORKFLOW_API_JWT_SECRET` (never the real one) and signs two tokens itself,
+`sub=1` and `sub=2`, with PyJWT:
+
+- both users start a run; each `GET /events` returns only that user's frames;
+- user 2 requests user 1's run id → **404**, and the same for `tool-result`;
+- `workflow.json` answers 200 with `multi_user: true` and no token;
+- an expired token → 401; a token signed with the wrong secret → 401;
+- with the flag off, the same probe's unauthenticated calls all succeed, proving the
+  single-user path is untouched.
+
+`PyJWT 2.13` is already installed in the runner's venv, so the emitted server adds no
+new dependency to install; `pyjwt` joins the requirements line in the generated
+docstring for anyone deploying the folder elsewhere. The app signs with
+`firebase/php-jwt` HS256, which PyJWT verifies natively — same algorithm, same claims.
+
+**Two-user verification — manual, and it is the part that matters.** The automated probe
+proves the server; only a browser proves the whole chain. What the human pass adds:
+
+- **two real accounts, in two browser profiles** (or one normal and one private window) —
+  the session token lives in per-profile storage, so two tabs of one profile are the same
+  user and test concurrency, not isolation;
+- each user runs the dispatcher test workflow at the same time and sees only their own
+  overlay filling in;
+- the editor is actually sending the bearer token — visible as the run surviving at all,
+  since without it the server answers 401;
+- and the negative case worth trying deliberately: copy a run id from one profile's
+  network tab, ask for it from the other, and confirm 404 rather than someone else's
+  transcript.
+
 **Conformance:** `docs/run-protocol-v1.json` is unchanged by this work; the existing test must stay green, since none of this adds or alters an event.
 
 ## 8b. Delivery order
