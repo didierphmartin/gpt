@@ -44,8 +44,20 @@ class SwarmRewriter
 
         // Every returned list is ordered by node id, never by insertion:
         // PHP keeps insertion order and JS does not, and the two must agree.
+        // Numeric-string ids sort numerically; anything else falls back to a
+        // plain byte-order compare. This tiebreak must match the JS twin
+        // exactly, so it is strcmp(), never localeCompare() (locale-aware,
+        // decides non-numeric ties differently) — and the "is this numeric"
+        // test is a literal /^\d+$/, never PHP's (int) cast vs JS's Number(),
+        // which disagree with each other on strings like "a".
         $byId = static function (array $list): array {
-            usort($list, static fn($a, $b) => (int) $a <=> (int) $b ?: strcmp((string) $a, (string) $b));
+            usort($list, static function ($a, $b) {
+                $as = (string) $a;
+                $bs = (string) $b;
+                $an = (bool) preg_match('/^\d+$/', $as);
+                $bn = (bool) preg_match('/^\d+$/', $bs);
+                return ($an && $bn) ? ((int) $as <=> (int) $bs) : strcmp($as, $bs);
+            });
             return array_values($list);
         };
         $children = static function (string $id) use ($edges): array {
@@ -116,10 +128,13 @@ class SwarmRewriter
             return ['ok' => false, 'error' => 'two_entry_points', 'nodes' => $entryTargets];
         }
 
-        $menu = $byId(array_values(array_filter(
+        // A self-edge on the dispatcher must not put it in its own menu (it
+        // stays dissolved, spec §3b), and a duplicated Dispatcher->X edge
+        // must not count X twice.
+        $menu = $byId(array_unique(array_values(array_filter(
             $children($dispatcherId),
-            static fn($c) => isset($nodes[$c]) && $isAgent($nodes[$c])
-        )));
+            static fn($c) => isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId
+        ))));
         if (count($menu) < 2) {
             return ['ok' => false, 'error' => 'dispatcher_needs_two_children', 'nodes' => [$dispatcherId]];
         }
@@ -157,9 +172,18 @@ class SwarmRewriter
         $members = $byId($members);
 
         $nameOf = static fn(string $id): string => (string) ($nodes[$id]['config']['agent_name'] ?? $nodes[$id]['config']['name'] ?? "node {$id}");
+        // PHP's trim()/rtrim() default charlist is " \t\n\r\0\x0B" (ASCII
+        // only) and every trim() below relies on that. The JS twin uses its
+        // own phpTrim() helper — never .trim() or /\s/ — to strip the
+        // identical fixed set; those are Unicode-aware and also eat things
+        // like U+00A0 NBSP, which would diverge from PHP here (finding 7).
         $roleOf = static function (string $id) use ($nodes): string {
             $text = trim((string) ($nodes[$id]['config']['instructions'] ?? ''));
             $first = trim(explode("\n", $text)[0] ?? '');
+            // Truncate by codepoint (mb_substr), never by byte or UTF-16 unit.
+            // The JS twin truncates via Array.from(...).slice(0,120) to match
+            // this exactly — plain .slice(0,120) there would count UTF-16
+            // units and can split an astral codepoint's surrogate pair.
             return mb_substr($first, 0, 120);
         };
 
@@ -174,7 +198,7 @@ class SwarmRewriter
                 }
             }
             foreach ($children($id) as $c) {          // preserved edges to non-dispatcher agents
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId && !in_array($c, $handoffs, true)) {
+                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId && $c !== $id && !in_array($c, $handoffs, true)) {
                     $handoffs[] = $c;
                 }
             }
@@ -189,6 +213,9 @@ class SwarmRewriter
                 : self::handoffGuide((string) ($nodes[$dispatcherId]['config']['instructions'] ?? ''), $colleagues);
 
             $skills = $nodes[$id]['config']['bound_skill'] ?? null;
+            // rtrim()'s default charlist is " \t\n\r\0\x0B" (ASCII only). The
+            // JS twin strips the identical fixed set, never JS's Unicode-
+            // aware \s (which also eats U+00A0 NBSP and would diverge here).
             $agents[$id] = [
                 'id' => $id,
                 'name' => $nameOf($id),
@@ -219,6 +246,8 @@ class SwarmRewriter
      */
     public static function handoffGuide(string $dispatcherInstructions, array $colleagues): string
     {
+        // trim() here is PHP's ASCII-only default (" \t\n\r\0\x0B"); the JS
+        // twin's phpTrim() must match it exactly, not .trim() (finding 7).
         $lines = ["## Colleagues you can hand this to"];
         foreach ($colleagues as $c) {
             $role = trim((string) $c['role']);

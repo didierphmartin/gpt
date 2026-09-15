@@ -9,13 +9,21 @@
 (function (global) {
     const HOP_BUDGET = 25;
 
+    // Mirrors PHP's trim()/rtrim() default charlist (" \t\n\r\0\x0B", ASCII
+    // only). JS's native .trim() and /\s/ are Unicode-aware and also strip
+    // things like U+00A0 NBSP, which PHP's do not — every trim in this file
+    // must go through this helper (or the matching trailing-only regex
+    // below), never .trim()/\s, or non-ASCII whitespace makes the two
+    // implementations diverge (finding 7).
+    const phpTrim = s => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+
     function handoffGuide(dispatcherInstructions, colleagues) {
         const lines = ['## Colleagues you can hand this to'];
         for (const c of colleagues) {
-            const role = (c.role || '').trim();
+            const role = phpTrim(c.role || '');
             lines.push('- ' + c.name + (role ? ' — ' + role : ''));
         }
-        const routing = (dispatcherInstructions || '').trim();
+        const routing = phpTrim(dispatcherInstructions || '');
         if (routing) { lines.push('', '## When to hand off', routing); }
         lines.push('',
             'Hand off when the request is theirs rather than yours, and say why in the reason.',
@@ -33,7 +41,18 @@
         ]);
         // Order every returned list by node id, never by insertion: the PHP
         // twin keeps insertion order and JS does not, and they must agree.
-        const byId = list => [...list].sort((a, b) => (Number(a) - Number(b)) || String(a).localeCompare(String(b)));
+        // Numeric-string ids sort numerically; anything else falls back to a
+        // plain byte-order compare. This tiebreak must match the PHP twin
+        // exactly, so it is never localeCompare() (locale-aware, decides
+        // non-numeric ties differently from PHP's strcmp()) — and the "is
+        // this numeric" test is a literal /^\d+$/, never JS's Number() vs
+        // PHP's (int) cast, which disagree with each other on strings like "a".
+        const byId = list => [...list].sort((a, b) => {
+            const as = String(a), bs = String(b);
+            const an = /^\d+$/.test(as), bn = /^\d+$/.test(bs);
+            if (an && bn) return Number(as) - Number(bs);
+            return as < bs ? -1 : as > bs ? 1 : 0;
+        });
         const children = id => edges.filter(([f]) => f === id).map(([, t]) => t);
         const parents = id => edges.filter(([, t]) => t === id).map(([f]) => f);
         const typeOf = n => String(n.config?.type ?? n.node_type ?? '');
@@ -53,7 +72,10 @@
         const entryTargets = byId([...new Set(ids.filter(id => typeOf(nodes[id]) === 'start').flatMap(children))]);
         if (entryTargets.length > 1) return { ok: false, error: 'two_entry_points', nodes: entryTargets };
 
-        const menu = byId(children(dispatcherId).filter(c => nodes[c] && isAgent(nodes[c])));
+        // A self-edge on the dispatcher must not put it in its own menu (it
+        // stays dissolved, spec §3b), and a duplicated Dispatcher->X edge
+        // must not count X twice.
+        const menu = byId([...new Set(children(dispatcherId).filter(c => nodes[c] && isAgent(nodes[c]) && c !== dispatcherId))]);
         if (menu.length < 2) return { ok: false, error: 'dispatcher_needs_two_children', nodes: [dispatcherId] };
 
         for (const id of ids) {
@@ -76,14 +98,24 @@
         const ordered = byId(members);
 
         const nameOf = id => String(nodes[id].config?.agent_name ?? nodes[id].config?.name ?? `node ${id}`);
-        const roleOf = id => String(nodes[id].config?.instructions ?? '').trim().split('\n')[0].slice(0, 120);
+        // Truncate by codepoint, never by UTF-16 code unit: Array.from(...)
+        // splits astral characters (surrogate pairs) into single elements,
+        // matching PHP's mb_substr($s, 0, 120), which counts codepoints.
+        // Plain .slice(0,120) here would diverge on non-BMP input and can
+        // split a surrogate pair in half.
+        const roleOf = id => {
+            const text = phpTrim(String(nodes[id].config?.instructions ?? ''));
+            const first = phpTrim(text.split('\n')[0] ?? '');
+            return Array.from(first).slice(0, 120).join('');
+        };
 
         const agents = {};
         for (const id of ordered) {
             let handoffs = [];
             if (menu.includes(id)) for (const other of menu) if (other !== id) handoffs.push(other);
             for (const c of children(id)) {
-                if (nodes[c] && isAgent(nodes[c]) && c !== dispatcherId && !handoffs.includes(c)) handoffs.push(c);
+                // c !== id: a self-edge on a member must not hand off to itself.
+                if (nodes[c] && isAgent(nodes[c]) && c !== dispatcherId && c !== id && !handoffs.includes(c)) handoffs.push(c);
             }
             handoffs = byId(handoffs);
             const colleagues = handoffs.map(h => ({ name: nameOf(h), role: roleOf(h) }));
@@ -92,9 +124,12 @@
                 ? handoffGuide(String(nodes[dispatcherId].config?.instructions ?? ''), colleagues)
                 : '';
             const skill = nodes[id].config?.bound_skill;
+            // PHP's rtrim() default charlist is " \t\n\r\0\x0B" (ASCII only).
+            // Strip the identical fixed set here, never JS's Unicode-aware
+            // \s (which also eats U+00A0 NBSP and would diverge from PHP).
             agents[id] = {
                 id, name: nameOf(id),
-                instructions: guide ? own.replace(/\s+$/, '') + '\n\n' + guide : own,
+                instructions: guide ? own.replace(/[ \t\n\r\0\x0B]+$/, '') + '\n\n' + guide : own,
                 tools: [...(nodes[id].config?.tools || [])],
                 skills: skill ? [skill] : [],
                 handoffs,
