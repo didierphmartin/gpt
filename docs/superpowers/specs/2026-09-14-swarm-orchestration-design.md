@@ -11,7 +11,7 @@ A workflow drawn on the canvas can be compiled as a **swarm**: agents that hand 
 Three decisions, taken with the owner, define it:
 
 1. **An edge means "may hand off to."** You draw the allowed handoffs; an agent gets one handoff tool per outgoing edge. The topology stays reviewable and a handoff you did not draw is impossible rather than merely unlikely.
-2. **A dispatcher node dissolves.** A swarm routes by itself, so the dispatcher is scaffolding: it is not compiled as an agent. Its children become the swarm, wired to each other, and its system prompt becomes the handoff guide every member carries (§3c).
+2. **A dispatcher node dissolves.** A swarm routes by itself, so the dispatcher is scaffolding: it is not compiled as an agent. Its children become the swarm, wired to each other, and its system prompt becomes the handoff guide every member carries (§3b).
 3. **Modular packaging only, at first.** Single file and A2A come later, once the semantics are proven.
 
 This is a **bounded swarm**: the behaviour of a swarm, with the set of possible handoffs fixed in advance by the canvas.
@@ -59,7 +59,7 @@ required under any approach.
 |---|---|---|
 | Edge A → B | B runs after A | A gets a `transfer_to_B` tool |
 | Start → X | X is the first node | X is the **entry agent** |
-| Dispatcher node | one forced `route_to`, one child runs | **dissolved** — not an agent; its children become a mesh and its prompt becomes their shared handoff guide (§3c) |
+| Dispatcher node | one forced `route_to`, one child runs | **dissolved** — not an agent; its children become a mesh and its prompt becomes their shared handoff guide (§3b) |
 | Agent node | runs once when reached | an agent that may hold the turn any number of times |
 | Output node | collects parents' outputs | where the final answer is delivered when no agent hands off |
 | Playbook node | the playbook runtime, with gates | **not supported in v1** — see §7 |
@@ -91,57 +91,7 @@ and forth until the hop budget ends the run.
 
 **Termination.** The swarm ends when the agent holding the turn replies without calling a handoff tool. That reply is the run's output. A hop budget (default 25 handoffs) ends a run that ping-pongs, with a `final` event carrying `status: "hop_budget_exhausted"` — the structural guarantee a DAG gets for free and a swarm does not.
 
-### 3c. Dissolving the dispatcher
-
-A dispatcher exists so that *something* decides where a request goes. A swarm makes that
-decision continuously, so the node has no work left: it is not compiled as an agent.
-`Dispatcher + A + B` compiles to a **two-agent swarm**, not three.
-
-```
-   canvas                        compiled swarm
-
-   Start                         Start
-     │                             │
-     ▼                             ▼
-  Dispatcher                       A ◀────────▶ B
-   │      │                    (each holds the other's
-   ▼      ▼                     handoff tool, and both
-   A      B                     carry the dispatcher's
-                                 routing prompt)
-```
-
-**The rewrite, precisely:**
-
-1. **Remove the dispatcher node.** It contributes no agent, no LLM call, no turn.
-2. **Its children become a fully connected mesh.** Every child gets a handoff tool for
-   every other child — with three children, A↔B, A↔C, B↔C. This is the one place edges are
-   *synthesised* rather than read from the canvas, and it is the faithful reading: the
-   dispatcher's menu was the set of agents allowed to receive the conversation, so they may
-   now pass it among themselves.
-3. **Its system prompt becomes the handoff guide**, appended to every child (§3, "Every
-   agent that can hand off is told how to"). The dispatcher's persona — *"greet callers
-   warmly"* — is routing scaffolding too, and is dropped; what is kept is the mapping of
-   subjects to agents.
-4. **The Start edge moves to the entry agent** (below).
-5. **Edges from a child to a non-dispatcher node are preserved** as ordinary handoffs.
-
-**Which child is the entry.** With the dispatcher gone, someone must hold the first turn.
-The rule: **the first child in canvas order** (lowest node id), recorded in the generated
-docstring so it is never a mystery. Because every member carries the routing guide, a
-first turn that lands on the wrong agent is self-correcting — it hands off immediately —
-at the cost of one extra LLM turn. A future refinement is an "entry" marker in the editor;
-it is not needed for v1 and would add UI for a case the routing guide already handles.
-
-**What the user sees, and must be told.** The compiled swarm has *fewer agents than the
-canvas shows*, and the run overlay and audit trail will name only the children. The
-Generate step says so plainly: *"In swarm mode the Dispatcher node is not an agent. Its
-prompt becomes the team's handoff guide, and its 2 connected agents form the swarm."*
-Without that line the missing node reads as a bug.
-
-**A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
-nobody to hand to, and the dispatcher was doing nothing to begin with.
-
-### 3b. Swarm mode requires one shape
+### 3a. Swarm mode requires one shape
 
 **Nothing here changes workflow mode.** Every pattern — fan-out, fan-in, chains,
 dispatchers, playbooks — keeps compiling exactly as it does today when the workflow's
@@ -210,7 +160,8 @@ The message states the diagnosis first (what is in *this* canvas), then the requ
 then the picture — so it teaches the shape rather than only refusing the current one. The
 second button opens the node form at the agent-type field.
 
-### 3c. Dissolving the dispatcher
+
+### 3b. Dissolving the dispatcher
 
 A dispatcher exists so that *something* decides where a request goes. A swarm makes that
 decision continuously, so the node has no work left: it is not compiled as an agent.
@@ -259,83 +210,6 @@ Without that line the missing node reads as a bug.
 
 **A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
 nobody to hand to, and the dispatcher was doing nothing to begin with.
-
-### 3b. The four canvas patterns
-
-**Nothing here changes workflow mode.** Every pattern below — fan-out, fan-in, chains,
-dispatchers, playbooks — keeps compiling exactly as it does today when Architecture is
-*Workflow*. That path is untouched and pinned byte-identical by the existing tests.
-
-**The shape does not carry the meaning — the fan-out parent's type does.** One picture,
-two behaviours, and this rule is not new: it is how the workflow compiler already reads a
-canvas.
-
-```
-   ┌──▶ B          parent is a WORKER agent      → B and C run CONCURRENTLY
-A ─┤                                               (plain edges, one topological layer)
-   └──▶ C          parent is a DISPATCHER agent  → ONE of B or C runs, chosen by the
-                                                   dispatcher reading the prompt
-                                                   (conditional edges on state["routes"])
-```
-
-Everything downstream follows from that one distinction, in both architectures:
-
-| Fan-out parent | Workflow mode | Swarm mode |
-|---|---|---|
-| **Worker** | concurrent branches, merged downstream | no representation — one agent holds the turn |
-| **Dispatcher** | one branch chosen per run | the canonical swarm: handoff tools, chosen per *turn* rather than per run |
-
-So the two fan-out rows in the table below are the same drawing distinguished only by the
-parent's type — which is why the architecture selector cannot infer intent from the
-picture, and why a worker fan-out refused as a swarm is refused on its parent's type, not
-its shape.
-
-What follows is only about which patterns can also be compiled **as a swarm**. The same
-canvas means different things under the two architectures, and not every pattern survives
-the translation, so choosing Swarm classifies the canvas first:
-
-| Pattern | Workflow mode | Swarm mode | Verdict |
-|---|---|---|---|
-| **Dispatcher + connected agents** | dispatcher routes once, one branch runs | entry agent + handoff tools — routing decided per turn, and reversible | ✅ **canonical**. What swarm is for |
-| **Connected agents in a chain** (A → B → C) | all three run, in order | A holds the turn and *may* hand to B; it may also answer and stop | ⚠️ **valid but different** — warn, do not reject |
-| **Worker fan-out** (worker A → B, C) | A runs, then B and C run concurrently | A is an agent with two handoff tools: it picks one *or* answers itself | ⚠️ **valid but different** — concurrency becomes choice |
-| **Fan-in / merge** (B, C → D) — the newspaper publisher | D receives both outputs, labelled | one active agent, one conversation: nothing merges | ❌ **not available as a swarm** |
-| **Two entry points** (Start → A and Start → B) | both start, in parallel | a swarm has exactly one first turn | ❌ **not available as a swarm** |
-| **Anything containing a playbook node** | playbook runtime with human gates | who holds the turn while a human is being asked? Unanswered | ❌ **rejected in v1** |
-
-**A worker keeps its place; a dispatcher does not.** The two node types differ in what
-they contribute: a **worker produces content** — its output is what flows onward — while a
-**dispatcher produces only a decision**. In workflow mode the decision must come from
-somewhere, so the dispatcher runs and costs a turn. In a swarm every member decides for
-itself, so a node whose only job was deciding has nothing left to do, and is dissolved
-(§3c). A worker in the same position stays exactly what it was: an agent, active in the
-orchestration, that now happens to hold handoff tools instead of unconditional edges.
-
-That is why worker fan-out only warns while the dispatcher disappears — and why the two
-cannot be inferred from the drawing.
-
-**Why fan-in is refused as a swarm rather than degraded into one.** It could be mapped — A entry, hands to
-B, B hands to C — but that silently converts a parallel, aggregating pipeline into a
-sequential chain: different latency, different cost, and C merging two inputs becomes C
-receiving one conversation. A workflow whose whole point is "these two run at once and the
-third combines them" is not a swarm. The merge is the part with no representation: one
-conversation arrives at one agent, so "both inputs, labelled" cannot happen. Compiling it
-into a sequential chain would look similar and behave differently, which is worse than
-refusing. The message names the merge node and its parents — and points at Workflow mode,
-where that canvas already does exactly what it should.
-
-**If parallel work inside a swarm is wanted later**, the shape would be an agent that
-invokes a sub-graph rather than the swarm itself fanning out — one active agent that
-happens to do parallel work internally. That is a separate design, not a constraint of
-this one.
-
-**Why the chain only warns.** It is structurally legal — one entry, handoffs along the
-drawn edges — so the compiler emits it, but the editor says plainly what changed: *"In
-swarm mode each agent decides whether to hand on. B and C may never run."* In a workflow
-the chain is a guarantee; in a swarm it is a possibility. That difference is invisible in
-the picture, which is exactly why it is worth saying out loud.
-
-**Validation at compile time.** A swarm canvas must have exactly one entry (one Start edge) and at least one agent; an agent with no outgoing edges is legal (a terminal specialist). A canvas whose agents form no reachable set from the entry is rejected with the unreachable names listed.
 
 ## 4. The generated package
 
@@ -644,7 +518,7 @@ proven rather than alongside it.
 
 1. Store `orchestration` on the workflow **now**, even though only the compiler reads it in
    v1 — so the interpreter has nothing to migrate.
-2. Keep the dissolution rule (§3c) and the handoff-guide composition (§3) in the **PHP
+2. Keep the dissolution rule (§3b) and the handoff-guide composition (§3) in the **PHP
    analyzer**, shared by both paths, rather than inside the LangGraph emitter. The
    interpreter then consumes the same rewritten graph the compiler does, and "dispatcher
    disappears in swarm mode" is decided in one place for both.
