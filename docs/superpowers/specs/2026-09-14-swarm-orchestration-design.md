@@ -195,6 +195,39 @@ decision continuously, so the node has no work left: it is not compiled as an ag
 4. **The Start edge moves to the entry agent** (below).
 5. **Edges from a child to a non-dispatcher node are preserved** as ordinary handoffs.
 
+**What survives the dissolution, and what does not.** The dispatcher stops being an agent,
+so everything that only makes sense for an agent goes with it:
+
+| On the Dispatcher node | In swarm mode |
+|---|---|
+| system prompt — the **routing rules** | ✅ becomes the handoff guide every member carries |
+| system prompt — persona, greeting, tone | ✗ dropped: nothing speaks with that voice |
+| **MCP tools / servers** | ✗ dropped: it takes no turn, so nothing would ever call them |
+| **Skills** | ✗ dropped: it produces no deliverable to transform |
+| provider, model, temperature, max_tokens | ✗ dropped: it makes no LLM call |
+| display name | kept in the warning below and in the audit trail |
+
+The connected agents are untouched: **their** MCP tools, skills, providers and sampling
+settings work exactly as in workflow mode. Swarm changes who is called next, not what an
+agent is.
+
+**A dispatcher carrying tools or skills warns at flip time**, because dropping them
+silently is indistinguishable from a bug:
+
+```
+"techBuddy" is tagged Dispatcher and carries 3 MCP tools and 1 skill.
+
+In swarm mode the Dispatcher is not an agent, so those are never called —
+only its routing rules are used, as the team's handoff guide.
+
+If those tools are needed, move them to the agents that use them.
+
+  [ Keep workflow mode ]   [ Continue — I'll move them ]
+```
+
+This is also the practical reason a dispatcher's prompt should say *which subjects belong
+to whom* and little else: everything else on that node is discarded.
+
 **Which child is the entry.** With the dispatcher gone, someone must hold the first turn.
 The rule: **the first child in canvas order** (lowest node id), recorded in the generated
 docstring so it is never a mystery. Because every member carries the routing guide, a
@@ -506,7 +539,7 @@ This is the editor-side twin of the audit trail's `node_enter` record (concurren
 `_runNodeAsChatUnit()` already executes agents with tools, already handles dispatcher
 routing through `dispatchTargets`/`routedBy`, and already streams into the overlay. Swarm
 is *less* machinery than the DAG it runs today: handoff tools on each agent, one shared
-message array, a loop while a handoff is returned, and the same dissolution rule from §3c.
+message array, a loop while a handoff is returned, and the same dissolution rule from §3b.
 
 It is **not in v1**, for one reason worth stating: it would be a third implementation of
 swarm semantics (the Python library, this JavaScript, then ADK and MAF), and this codebase
