@@ -11,7 +11,7 @@ A workflow drawn on the canvas can be compiled as a **swarm**: agents that hand 
 Three decisions, taken with the owner, define it:
 
 1. **An edge means "may hand off to."** You draw the allowed handoffs; an agent gets one handoff tool per outgoing edge. The topology stays reviewable and a handoff you did not draw is impossible rather than merely unlikely.
-2. **A dispatcher node becomes the entry agent.** It is an ordinary swarm agent that happens to start, with handoff tools to the children on its menu, and its routing prompt carried over as its instructions. Existing dispatcher workflows therefore convert without being rewritten.
+2. **A dispatcher node dissolves.** A swarm routes by itself, so the dispatcher is scaffolding: it is not compiled as an agent. Its children become the swarm, wired to each other, and its system prompt becomes the handoff guide every member carries (§3c).
 3. **Modular packaging only, at first.** Single file and A2A come later, once the semantics are proven.
 
 This is a **bounded swarm**: the behaviour of a swarm, with the set of possible handoffs fixed in advance by the canvas.
@@ -59,7 +59,7 @@ required under any approach.
 |---|---|---|
 | Edge A → B | B runs after A | A gets a `transfer_to_B` tool |
 | Start → X | X is the first node | X is the **entry agent** |
-| Dispatcher node | one forced `route_to`, one child runs | the entry agent — **and its routing rules become the team's shared handoff guide** (below) |
+| Dispatcher node | one forced `route_to`, one child runs | **dissolved** — not an agent; its children become a mesh and its prompt becomes their shared handoff guide (§3c) |
 | Agent node | runs once when reached | an agent that may hold the turn any number of times |
 | Output node | collects parents' outputs | where the final answer is delivered when no agent hands off |
 | Playbook node | the playbook runtime, with gates | **not supported in v1** — see §7 |
@@ -90,6 +90,56 @@ The last line of the block matters: without it two agents can volley the same re
 and forth until the hop budget ends the run.
 
 **Termination.** The swarm ends when the agent holding the turn replies without calling a handoff tool. That reply is the run's output. A hop budget (default 25 handoffs) ends a run that ping-pongs, with a `final` event carrying `status: "hop_budget_exhausted"` — the structural guarantee a DAG gets for free and a swarm does not.
+
+### 3c. Dissolving the dispatcher
+
+A dispatcher exists so that *something* decides where a request goes. A swarm makes that
+decision continuously, so the node has no work left: it is not compiled as an agent.
+`Dispatcher + A + B` compiles to a **two-agent swarm**, not three.
+
+```
+   canvas                        compiled swarm
+
+   Start                         Start
+     │                             │
+     ▼                             ▼
+  Dispatcher                       A ◀────────▶ B
+   │      │                    (each holds the other's
+   ▼      ▼                     handoff tool, and both
+   A      B                     carry the dispatcher's
+                                 routing prompt)
+```
+
+**The rewrite, precisely:**
+
+1. **Remove the dispatcher node.** It contributes no agent, no LLM call, no turn.
+2. **Its children become a fully connected mesh.** Every child gets a handoff tool for
+   every other child — with three children, A↔B, A↔C, B↔C. This is the one place edges are
+   *synthesised* rather than read from the canvas, and it is the faithful reading: the
+   dispatcher's menu was the set of agents allowed to receive the conversation, so they may
+   now pass it among themselves.
+3. **Its system prompt becomes the handoff guide**, appended to every child (§3, "Every
+   agent that can hand off is told how to"). The dispatcher's persona — *"greet callers
+   warmly"* — is routing scaffolding too, and is dropped; what is kept is the mapping of
+   subjects to agents.
+4. **The Start edge moves to the entry agent** (below).
+5. **Edges from a child to a non-dispatcher node are preserved** as ordinary handoffs.
+
+**Which child is the entry.** With the dispatcher gone, someone must hold the first turn.
+The rule: **the first child in canvas order** (lowest node id), recorded in the generated
+docstring so it is never a mystery. Because every member carries the routing guide, a
+first turn that lands on the wrong agent is self-correcting — it hands off immediately —
+at the cost of one extra LLM turn. A future refinement is an "entry" marker in the editor;
+it is not needed for v1 and would add UI for a case the routing guide already handles.
+
+**What the user sees, and must be told.** The compiled swarm has *fewer agents than the
+canvas shows*, and the run overlay and audit trail will name only the children. The
+Generate step says so plainly: *"In swarm mode the Dispatcher node is not an agent. Its
+prompt becomes the team's handoff guide, and its 2 connected agents form the swarm."*
+Without that line the missing node reads as a bug.
+
+**A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
+nobody to hand to, and the dispatcher was doing nothing to begin with.
 
 ### 3b. The four canvas patterns
 
