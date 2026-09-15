@@ -91,6 +91,32 @@ and forth until the hop budget ends the run.
 
 **Termination.** The swarm ends when the agent holding the turn replies without calling a handoff tool. That reply is the run's output. A hop budget (default 25 handoffs) ends a run that ping-pongs, with a `final` event carrying `status: "hop_budget_exhausted"` — the structural guarantee a DAG gets for free and a swarm does not.
 
+### 3b. The four canvas patterns
+
+The same canvas means different things under the two architectures, and not every pattern
+survives the translation. Compiling a swarm therefore classifies the canvas first:
+
+| Pattern | Workflow mode | Swarm mode | Verdict |
+|---|---|---|---|
+| **Dispatcher + connected agents** | dispatcher routes once, one branch runs | entry agent + handoff tools — routing decided per turn, and reversible | ✅ **canonical**. What swarm is for |
+| **Connected agents in a chain** (A → B → C) | all three run, in order | A holds the turn and *may* hand to B; it may also answer and stop | ⚠️ **valid but different** — warn, do not reject |
+| **Fan-out / fan-in** (Start → A, B → C) — the newspaper publisher | A and B run in parallel, C merges both outputs | a swarm has one entry and one active agent: no parallelism, no merge | ❌ **rejected** |
+| **Anything containing a playbook node** | playbook runtime with human gates | who holds the turn while a human is being asked? Unanswered | ❌ **rejected in v1** |
+
+**Why fan-out is rejected rather than degraded.** It could be mapped — A entry, hands to
+B, B hands to C — but that silently converts a parallel, aggregating pipeline into a
+sequential chain: different latency, different cost, and C merging two inputs becomes C
+receiving one conversation. A workflow whose whole point is "these two run at once and the
+third combines them" is not a swarm, and compiling it into something that looks similar
+and behaves differently is worse than refusing. The message names the node with more than
+one Start edge, and the merge node with more than one parent.
+
+**Why the chain only warns.** It is structurally legal — one entry, handoffs along the
+drawn edges — so the compiler emits it, but the editor says plainly what changed: *"In
+swarm mode each agent decides whether to hand on. B and C may never run."* In a workflow
+the chain is a guarantee; in a swarm it is a possibility. That difference is invisible in
+the picture, which is exactly why it is worth saying out loud.
+
 **Validation at compile time.** A swarm canvas must have exactly one entry (one Start edge) and at least one agent; an agent with no outgoing edges is legal (a terminal specialist). A canvas whose agents form no reachable set from the entry is rejected with the unreachable names listed.
 
 ## 4. The generated package
