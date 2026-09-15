@@ -140,10 +140,16 @@ class SwarmRewriter
         }
 
         // --- the rewrite ---
+        // Walk outward from the menu: any agent reachable from a swarm member
+        // is itself a member. Absorbing only the menu's direct children is not
+        // enough — a member's child may have its own child, and then that
+        // grandchild is a handoff target with no agent behind it, which the
+        // interpreter would dereference and crash on. The loop re-reads
+        // count($members) each pass, so newly absorbed members are walked too.
         $members = $menu;                                   // the swarm proper
-        foreach ($menu as $m) {                             // children of members survive as agents too
-            foreach ($children($m) as $c) {
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && !in_array($c, $members, true)) {
+        for ($i = 0; $i < count($members); $i++) {
+            foreach ($children($members[$i]) as $c) {
+                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId && !in_array($c, $members, true)) {
                     $members[] = $c;
                 }
             }

@@ -62,10 +62,15 @@
             if (agentParents.length > 1) return { ok: false, error: 'merge_node', nodes: [id] };
         }
 
+        // Walk outward from the menu: any agent reachable from a swarm member is
+        // itself a member. Absorbing only the menu's direct children leaves a
+        // grandchild as a handoff target with no agent behind it, which the
+        // interpreter dereferences and crashes on. members.length is re-read
+        // each pass, so newly absorbed members are walked too.
         const members = [...menu];
-        for (const m of menu) {
-            for (const c of children(m)) {
-                if (nodes[c] && isAgent(nodes[c]) && !members.includes(c)) members.push(c);
+        for (let i = 0; i < members.length; i++) {
+            for (const c of children(members[i])) {
+                if (nodes[c] && isAgent(nodes[c]) && c !== dispatcherId && !members.includes(c)) members.push(c);
             }
         }
         const ordered = byId(members);
