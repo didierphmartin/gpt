@@ -179,17 +179,31 @@ the translation, so choosing Swarm classifies the canvas first:
 |---|---|---|---|
 | **Dispatcher + connected agents** | dispatcher routes once, one branch runs | entry agent + handoff tools — routing decided per turn, and reversible | ✅ **canonical**. What swarm is for |
 | **Connected agents in a chain** (A → B → C) | all three run, in order | A holds the turn and *may* hand to B; it may also answer and stop | ⚠️ **valid but different** — warn, do not reject |
-| **Fan-out / fan-in** (Start → A, B → C) — the newspaper publisher | A and B run in parallel, C merges both outputs — **unchanged, fully supported** | a swarm has one entry and one active agent: no parallelism, no merge | ❌ **not available as a swarm** |
+| **Worker fan-out** (worker A → B, C) | A runs, then B and C run concurrently | A is an agent with two handoff tools: it picks one *or* answers itself | ⚠️ **valid but different** — concurrency becomes choice |
+| **Fan-in / merge** (B, C → D) — the newspaper publisher | D receives both outputs, labelled | one active agent, one conversation: nothing merges | ❌ **not available as a swarm** |
+| **Two entry points** (Start → A and Start → B) | both start, in parallel | a swarm has exactly one first turn | ❌ **not available as a swarm** |
 | **Anything containing a playbook node** | playbook runtime with human gates | who holds the turn while a human is being asked? Unanswered | ❌ **rejected in v1** |
 
-**Why fan-out is refused as a swarm rather than degraded into one.** It could be mapped — A entry, hands to
+**A worker keeps its place; a dispatcher does not.** The two node types differ in what
+they contribute: a **worker produces content** — its output is what flows onward — while a
+**dispatcher produces only a decision**. In workflow mode the decision must come from
+somewhere, so the dispatcher runs and costs a turn. In a swarm every member decides for
+itself, so a node whose only job was deciding has nothing left to do, and is dissolved
+(§3c). A worker in the same position stays exactly what it was: an agent, active in the
+orchestration, that now happens to hold handoff tools instead of unconditional edges.
+
+That is why worker fan-out only warns while the dispatcher disappears — and why the two
+cannot be inferred from the drawing.
+
+**Why fan-in is refused as a swarm rather than degraded into one.** It could be mapped — A entry, hands to
 B, B hands to C — but that silently converts a parallel, aggregating pipeline into a
 sequential chain: different latency, different cost, and C merging two inputs becomes C
 receiving one conversation. A workflow whose whole point is "these two run at once and the
-third combines them" is not a swarm, and compiling it into something that looks similar
-and behaves differently is worse than refusing. The message names the node with more than
-one Start edge, and the merge node with more than one parent — and points at Workflow
-mode, where that canvas already does exactly what it should.
+third combines them" is not a swarm. The merge is the part with no representation: one
+conversation arrives at one agent, so "both inputs, labelled" cannot happen. Compiling it
+into a sequential chain would look similar and behave differently, which is worse than
+refusing. The message names the merge node and its parents — and points at Workflow mode,
+where that canvas already does exactly what it should.
 
 **If parallel work inside a swarm is wanted later**, the shape would be an agent that
 invokes a sub-graph rather than the swarm itself fanning out — one active agent that
