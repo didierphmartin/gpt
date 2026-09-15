@@ -93,23 +93,34 @@ and forth until the hop budget ends the run.
 
 ### 3b. The four canvas patterns
 
-The same canvas means different things under the two architectures, and not every pattern
-survives the translation. Compiling a swarm therefore classifies the canvas first:
+**Nothing here changes workflow mode.** Every pattern below — fan-out, fan-in, chains,
+dispatchers, playbooks — keeps compiling exactly as it does today when Architecture is
+*Workflow*. That path is untouched and pinned byte-identical by the existing tests.
+
+What follows is only about which patterns can also be compiled **as a swarm**. The same
+canvas means different things under the two architectures, and not every pattern survives
+the translation, so choosing Swarm classifies the canvas first:
 
 | Pattern | Workflow mode | Swarm mode | Verdict |
 |---|---|---|---|
 | **Dispatcher + connected agents** | dispatcher routes once, one branch runs | entry agent + handoff tools — routing decided per turn, and reversible | ✅ **canonical**. What swarm is for |
 | **Connected agents in a chain** (A → B → C) | all three run, in order | A holds the turn and *may* hand to B; it may also answer and stop | ⚠️ **valid but different** — warn, do not reject |
-| **Fan-out / fan-in** (Start → A, B → C) — the newspaper publisher | A and B run in parallel, C merges both outputs | a swarm has one entry and one active agent: no parallelism, no merge | ❌ **rejected** |
+| **Fan-out / fan-in** (Start → A, B → C) — the newspaper publisher | A and B run in parallel, C merges both outputs — **unchanged, fully supported** | a swarm has one entry and one active agent: no parallelism, no merge | ❌ **not available as a swarm** |
 | **Anything containing a playbook node** | playbook runtime with human gates | who holds the turn while a human is being asked? Unanswered | ❌ **rejected in v1** |
 
-**Why fan-out is rejected rather than degraded.** It could be mapped — A entry, hands to
+**Why fan-out is refused as a swarm rather than degraded into one.** It could be mapped — A entry, hands to
 B, B hands to C — but that silently converts a parallel, aggregating pipeline into a
 sequential chain: different latency, different cost, and C merging two inputs becomes C
 receiving one conversation. A workflow whose whole point is "these two run at once and the
 third combines them" is not a swarm, and compiling it into something that looks similar
 and behaves differently is worse than refusing. The message names the node with more than
-one Start edge, and the merge node with more than one parent.
+one Start edge, and the merge node with more than one parent — and points at Workflow
+mode, where that canvas already does exactly what it should.
+
+**If parallel work inside a swarm is wanted later**, the shape would be an agent that
+invokes a sub-graph rather than the swarm itself fanning out — one active agent that
+happens to do parallel work internally. That is a separate design, not a constraint of
+this one.
 
 **Why the chain only warns.** It is structurally legal — one entry, handoffs along the
 drawn edges — so the compiler emits it, but the editor says plainly what changed: *"In
