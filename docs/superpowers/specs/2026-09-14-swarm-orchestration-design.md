@@ -59,10 +59,35 @@ required under any approach.
 |---|---|---|
 | Edge A → B | B runs after A | A gets a `transfer_to_B` tool |
 | Start → X | X is the first node | X is the **entry agent** |
-| Dispatcher node | one forced `route_to`, one child runs | the entry agent, with handoff tools to its menu children |
+| Dispatcher node | one forced `route_to`, one child runs | the entry agent — **and its routing rules become the team's shared handoff guide** (below) |
 | Agent node | runs once when reached | an agent that may hold the turn any number of times |
 | Output node | collects parents' outputs | where the final answer is delivered when no agent hands off |
 | Playbook node | the playbook runtime, with gates | **not supported in v1** — see §7 |
+
+**Every agent that can hand off is told how to.** In a workflow the routing knowledge
+belongs to the dispatcher alone, because only the dispatcher routes. In a swarm any member
+may branch, so that knowledge has to travel with the handoff tools. Each agent with
+outgoing edges gets a generated block appended to its instructions:
+
+```
+## Colleagues you can hand this to
+- Human resources — leave, PTO, payroll, personal matters
+- IT claims — passwords, network access, technical support
+
+Hand off when the request is theirs rather than yours; say why in the reason.
+Answer directly when it is yours. Do not hand back what you were just handed
+unless the subject has genuinely changed.
+```
+
+The list comes from the drawn edges; each line's description is the target agent's own
+role summary (the first line of its instructions). **When the canvas has a dispatcher, its
+routing prompt is the best statement of that mapping the workflow contains** — it already
+says which subjects belong to whom — so it is carried into this block for every agent, not
+left with the entry agent alone. The dispatcher keeps its own persona as its instructions;
+what is shared is the routing knowledge, not the greeting.
+
+The last line of the block matters: without it two agents can volley the same request back
+and forth until the hop budget ends the run.
 
 **Termination.** The swarm ends when the agent holding the turn replies without calling a handoff tool. That reply is the run's output. A hop budget (default 25 handoffs) ends a run that ping-pongs, with a `final` event carrying `status: "hop_budget_exhausted"` — the structural guarantee a DAG gets for free and a swarm does not.
 
@@ -113,39 +138,37 @@ This is the reason swarm was asked for, so it is not optional here: **a swarm ca
 - Persistence is a **checkpointer keyed by thread**: `graph.compile(checkpointer=…)`, invoked with `{"configurable": {"thread_id": f"{owner}:{thread}"}}` — the same `(owner, thread)` key the history store uses, so swarm and workflow threads live side by side without a second scheme.
 - `active_agent` is checkpointed with the messages, so a follow-up resumes with the agent that handled the last turn. This is what makes *"actually make it 5 days"* reach HR without anyone re-routing it.
 
-**Where checkpoints are stored — MySQL, the database the app already uses.**
-`langgraph-checkpoint-mysql 3.0.0` exists and is the right fit: the app already runs a
-MySQL instance and already connects to it, so threads live beside the workflows and agents
-they belong to rather than in a second store nobody backs up.
+**Persistence is staged, and v1 needs none.** The checkpointer buys continuity *between*
+runs and nothing else — within a single run the messages and `active_agent` live in state,
+and handoffs work with no checkpointer configured at all.
 
-Concrete facts, read from the package:
+| Goal | What is required |
+|---|---|
+| One prompt, handoffs, an answer — **v1 and the test workflow** | nothing |
+| A follow-up in the same session, while the server is up | `MemorySaver`, in-process, zero configuration |
+| Follow-ups surviving a restart, or shared across servers | a database |
 
-- Savers: `PyMySQLSaver` (sync) and `AIOMySQLSaver` (async). The server is async, so
-  `AIOMySQLSaver` with the `aiomysql` extra.
-- It creates and owns five tables: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
-  `checkpoint_migrations`, `store` — via its own `setup()`, run once at server start.
-- The driver is an extra, not a hard dependency: `langgraph-checkpoint-mysql[aiomysql]`.
+So v1 ships without a checkpointer, `MemorySaver` is a one-line follow-up, and the
+database is a separable step taken when threads must outlive a process. The generated code
+is written so the saver is a single injection point, not a shape the graph depends on.
 
-**Three consequences to decide with the owner before building:**
+**When a database is wanted, it is the MySQL the app already uses.**
+`langgraph-checkpoint-mysql 3.0.0` exists and fits: `AIOMySQLSaver` over the `aiomysql`
+extra, matching the async server. It creates and migrates five tables itself —
+`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`, `store`.
+
+Three consequences, to settle when that step is taken rather than now:
 
 1. **Which schema owns those five tables.** They are the library's, migrated by the
-   library. Putting them in the CONTEXTS database (where workflows and agents live) keeps
-   one backup story; a separate `..._checkpoints` schema keeps generated-code tables away
-   from app tables. **Recommendation: a separate schema**, because the generated server
-   creating tables inside the app's schema makes compiled output a schema owner, which it
-   should not be.
-2. **Hold the connection open.** The owner's own note records that fresh connections to
-   the CONTEXTS database sometimes stall for minutes. A checkpointer writes on every turn,
-   so a per-write connection would freeze runs. The saver is opened once at startup and
-   pooled for the life of the server; a stall then costs one slow start rather than a
-   hung conversation.
-3. **The compiled folder stops being self-contained** when MySQL is configured — it needs
-   host, user, password and schema. Handled the same way as identity (§5): the environment
-   decides. `WORKFLOW_CHECKPOINT_DSN` set → MySQL; unset → a SQLite file beside the
-   package (`langgraph-checkpoint-sqlite 3.1.1`, also available), which keeps "hand someone
-   the folder" working with history intact. `MemorySaver` is used only when both are
-   explicitly disabled, and the docstring says plainly that history then dies with the
-   process.
+   library. Recommendation: a dedicated schema, not the app's — compiled output should not
+   become a schema owner alongside users and agents.
+2. **Hold the connection open.** A checkpointer writes every turn, and fresh connections to
+   the CONTEXTS database are known to stall for minutes here; the saver is opened once at
+   startup and pooled, so a stall costs one slow start rather than a frozen conversation.
+3. **The folder stops being self-contained** when a DSN is configured. Environment decides,
+   as with identity: `WORKFLOW_CHECKPOINT_DSN` → MySQL; unset → SQLite beside the package
+   (`langgraph-checkpoint-sqlite 3.1.1`); neither → in-memory, with the docstring saying
+   plainly that history dies with the process.
 
 **The cost, stated plainly.** Every turn carries the whole conversation. Token cost grows with conversation length rather than with the work done, and a long thread eventually meets the model's context limit. This is the opposite of the lean-node property the workflow target was tuned for (16.5s → 10.9s), and it is inherent to the architecture, not a defect. Mitigation is deferred: a summarisation step when a thread exceeds a configurable message count, specified only when a real thread gets long enough to need it.
 
