@@ -77,7 +77,7 @@ workflow.py   the swarm: state, handoff tools, graph wiring, entry, CLI
 common.py     unchanged — stateless runtime
 runs.py       unchanged — run registry, sinks, history store, audit
 api.py        unchanged — the run server
-agents/*.py   one agent each: NODE + run_node(request, trace)
+agents/*.py   one agent each: NODE + the compiled agent (swarm) / run_node (workflow)
 ```
 
 **State** extends the library's schema rather than replacing it:
@@ -95,7 +95,15 @@ one per drawn edge, each wrapped to emit the audit record before returning the l
 compiled with the checkpointer (§5). `add_active_agent_router` inside the library handles
 resuming a thread with whoever held the turn — the behaviour §5 depends on.
 
-**What is reused unchanged:** every agent module keeps the `run_node(request, trace)` contract, the MCP tool builder, the skills runtime, the provider factory, the run server and the event protocol. A swarm differs in who is called next, not in what an agent is.
+**What is reused unchanged:** the MCP tool builder, the skills runtime, the provider
+factory, the run server, the event protocol and every agent's `NODE` definition. A swarm
+differs in who is called next, not in what an agent is.
+
+**What differs, and only here:** the agent module's export. In workflow mode it exposes
+`run_node(request, trace)` — run this node on this text, return text. In swarm mode it
+exposes the **compiled agent** plus its handoff tools, because the library composes
+`Pregel` objects into one graph. Both are emitted from the same node facts, so the two
+architectures share everything except this one function per module.
 
 ## 5. Conversation history — the property that matters
 
