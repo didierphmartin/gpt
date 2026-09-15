@@ -29,6 +29,10 @@ class Workflow
     private bool $outputStorageEnabled = false;
     private ?string $outputFolder = null;
 
+    // How the graph is interpreted: a DAG ("workflow") or a swarm of agents
+    // handing control to one another ("swarm").
+    private string $orchestration = 'workflow';
+
     // Graph structure (normalized nodes/edges from database)
     private ?array $graph = null;
 
@@ -62,6 +66,12 @@ class Workflow
         // Output storage settings
         $this->outputStorageEnabled = (bool) ($data['output_storage_enabled'] ?? false);
         $this->outputFolder = $data['output_folder'] ?? null;
+
+        // How the graph is interpreted: a DAG ("workflow") or a swarm of
+        // agents handing control to one another ("swarm"). Anything else
+        // falls back — an unknown value must not change how a graph runs.
+        $o = (string) ($data['orchestration'] ?? 'workflow');
+        $this->orchestration = in_array($o, ['workflow', 'swarm'], true) ? $o : 'workflow';
 
         return $this;
     }
@@ -97,6 +107,7 @@ class Workflow
             'updated_at' => $this->updatedAt,
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
+            'orchestration' => $this->orchestration,
         ];
 
         // Include graph if available
@@ -123,6 +134,7 @@ class Workflow
             'created_at' => $this->createdAt,
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
+            'orchestration' => $this->orchestration,
             'schedule_enabled' => $this->isScheduleEnabled(), // Computed from triggers
             'runtime_mode' => $this->detectRuntimeMode(),
         ];
@@ -305,6 +317,11 @@ class Workflow
         return $this->outputFolder;
     }
 
+    public function getOrchestration(): string
+    {
+        return $this->orchestration;
+    }
+
     /**
      * Check if workflow has scheduling enabled (from triggers JSON)
      * When schedule is enabled, document attachments must use remote storage
@@ -389,6 +406,12 @@ class Workflow
     public function setOutputFolder(?string $folder): self
     {
         $this->outputFolder = $folder;
+        return $this;
+    }
+
+    public function setOrchestration(string $o): self
+    {
+        $this->orchestration = in_array($o, ['workflow', 'swarm'], true) ? $o : 'workflow';
         return $this;
     }
 

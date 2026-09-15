@@ -122,8 +122,8 @@ class WorkflowRepository
      */
     public function create(Workflow $workflow): Workflow
     {
-        $sql = "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder)
-                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder)";
+        $sql = "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration)
+                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder, :orchestration)";
 
         $data = $workflow->toArray();
 
@@ -139,6 +139,7 @@ class WorkflowRepository
             'enabled' => $data['enabled'] ? 1 : 0,
             'output_storage_enabled' => $data['output_storage_enabled'] ? 1 : 0,
             'output_folder' => $data['output_folder'],
+            'orchestration' => $data['orchestration'] ?? 'workflow',
         ]);
 
         $id = (int) $this->db->lastInsertId();
@@ -159,7 +160,8 @@ class WorkflowRepository
                 enabled = :enabled,
                 workspace_id = :workspace_id,
                 output_storage_enabled = :output_storage_enabled,
-                output_folder = :output_folder
+                output_folder = :output_folder,
+                orchestration = :orchestration
                 WHERE id = :id";
 
         $data = $workflow->toArray();
@@ -176,6 +178,7 @@ class WorkflowRepository
             'workspace_id' => $data['workspace_id'],
             'output_storage_enabled' => $data['output_storage_enabled'] ? 1 : 0,
             'output_folder' => $data['output_folder'],
+            'orchestration' => $data['orchestration'] ?? 'workflow',
         ]);
 
         return $this->findById($workflow->getId());

@@ -79,4 +79,19 @@ class SwarmRewriterTest extends TestCase
         $this->assertStringContainsString('transfer to Human resources', $guide);
         $this->assertStringContainsString('Do not hand back', $guide, 'the volley guard must be present');
     }
+
+    public function testWorkflowCarriesAnOrchestrationDefaultingToWorkflow(): void
+    {
+        $w = new \AgentTeam\Models\Workflow(['id' => 1, 'name' => 'x', 'user_id' => '3']);
+        $this->assertSame('workflow', $w->getOrchestration(), 'default');
+        $this->assertSame('workflow', $w->toArray()['orchestration'] ?? null);
+
+        $s = new \AgentTeam\Models\Workflow(['id' => 2, 'name' => 'y', 'user_id' => '3', 'orchestration' => 'swarm']);
+        $this->assertSame('swarm', $s->getOrchestration());
+        $this->assertSame('swarm', $s->toArray()['orchestration'] ?? null);
+
+        // anything unrecognised falls back rather than propagating
+        $j = new \AgentTeam\Models\Workflow(['id' => 3, 'name' => 'z', 'user_id' => '3', 'orchestration' => 'nonsense']);
+        $this->assertSame('workflow', $j->getOrchestration());
+    }
 }

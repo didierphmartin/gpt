@@ -162,7 +162,8 @@ class WorkflowController
                      ->setEnabled($body['enabled'] ?? true)
                      ->setWorkspaceId($body['workspace_id'] ?? null)
                      ->setOutputStorageEnabled((bool) ($body['output_storage_enabled'] ?? false))
-                     ->setOutputFolder($body['output_folder'] ?? null);
+                     ->setOutputFolder($body['output_folder'] ?? null)
+                     ->setOrchestration((string) ($body['orchestration'] ?? 'workflow'));
 
             // Set steps (for backward compatibility or legacy workflows)
             if ($hasSteps) {
@@ -604,6 +605,11 @@ class WorkflowController
             }
             if (array_key_exists('output_folder', $body)) {
                 $workflow->setOutputFolder($body['output_folder']);
+            }
+            // Orchestration is a property of the workflow, not of a build:
+            // the live interpreter and every compile target read the same value.
+            if (isset($body['orchestration'])) {
+                $workflow->setOrchestration((string) $body['orchestration']);
             }
 
             // Check for graph-based workflow (from visual editor)
