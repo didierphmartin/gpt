@@ -211,8 +211,29 @@ The connected agents are untouched: **their** MCP tools, skills, providers and s
 settings work exactly as in workflow mode. Swarm changes who is called next, not what an
 agent is.
 
-**A dispatcher carrying tools or skills warns at flip time**, because dropping them
-silently is indistinguishable from a bug:
+**The node form follows the mode.** Better than warning about fields that will be ignored
+is not offering them. When the workflow's orchestration is `swarm`, the Dispatcher node's
+form shows only what a dispatcher still contributes:
+
+| Field | Workflow mode | Swarm mode |
+|---|---|---|
+| Name | shown | shown |
+| System prompt | shown — the routing instructions | shown, **relabelled**: *"Handoff guide — which subjects belong to which agent. Every member of the swarm receives this."* |
+| MCP servers / tools | shown | **hidden** |
+| Skills | shown | **hidden** |
+| Provider, model, temperature, max_tokens | shown | **hidden** |
+
+In workflow mode a dispatcher is a real agent: it makes an LLM call to choose a branch, so
+it has a provider, and it may legitimately carry tools. In swarm mode it makes no call at
+all, so those fields describe nothing.
+
+**Hidden, never deleted.** Values set in workflow mode are preserved in the node's config
+and reappear untouched if the workflow is switched back. Hiding is a view concern; the data
+is the user's.
+
+**And the flip-time warning still applies**, because hiding a field does not unset it —
+someone who configured tools in workflow mode and then switched needs to be told those
+tools are now inert:
 
 ```
 "techBuddy" is tagged Dispatcher and carries 3 MCP tools and 1 skill.
