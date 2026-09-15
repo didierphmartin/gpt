@@ -141,6 +141,125 @@ Without that line the missing node reads as a bug.
 **A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
 nobody to hand to, and the dispatcher was doing nothing to begin with.
 
+### 3b. Swarm mode requires one shape
+
+**Nothing here changes workflow mode.** Every pattern — fan-out, fan-in, chains,
+dispatchers, playbooks — keeps compiling exactly as it does today when the workflow's
+orchestration is `workflow`. That path is untouched and pinned byte-identical.
+
+**Swarm mode accepts exactly one structure:** a node tagged **Dispatcher**, fanning out to
+**two or more agents**. Anything else is an error, raised the moment the setting is
+flipped rather than at Run.
+
+```
+   valid                          compiles to
+
+   Start                          Start
+     │                              │
+     ▼                              ▼
+  Dispatcher  (tagged)              A ◀──▶ B ◀──▶ C
+   │    │    │                   (mesh, each carrying the
+   ▼    ▼    ▼                    dispatcher's routing prompt)
+   A    B    C
+```
+
+The rule is deliberately narrow. The alternatives — a bare chain, a worker fanning out —
+are *structurally* expressible as handoffs, but they mean something different from what the
+same drawing means in workflow mode, and a difference that silent is worse than a refusal.
+One shape also makes the feature teachable: this is how you draw a swarm.
+
+**What is refused, and why:**
+
+| Canvas | Why it cannot be a swarm |
+|---|---|
+| No Dispatcher node at all | Nothing supplies the routing knowledge every member needs |
+| Dispatcher with one child | A one-agent swarm has nobody to hand to |
+| Worker fanning out to agents | A worker's fan-out means "run these concurrently"; a swarm has one active agent |
+| Fan-in / merge (B, C → D) | One conversation reaches one agent — nothing merges |
+| Two Start edges | A swarm has exactly one first turn |
+| Contains a playbook node | Gates plus handoffs is unresolved in v1 (§7) |
+
+**The error is a lesson, not a rejection.** It names what was found, what is needed, and
+draws the target:
+
+```
+This workflow cannot run as a swarm.
+
+Found:     "Newspaper Publisher" — 2 agents feeding one merge node,
+           no Dispatcher node.
+Needed:    one agent tagged Dispatcher, connected to 2 or more agents.
+
+A swarm looks like this:
+
+        Start
+          │
+          ▼
+    ┌─────────────┐
+    │  Dispatcher │  ← tag an agent as Dispatcher; its system prompt
+    └──┬───┬───┬──┘    says which subjects belong to which colleague
+       ▼   ▼   ▼
+      HR  IT  Devices  ← the swarm: each can hand to the others
+
+In swarm mode the Dispatcher is not an agent — its prompt becomes the
+handoff guide every member carries.
+
+  [ Keep workflow mode ]   [ Show me how to tag an agent ]
+```
+
+The message states the diagnosis first (what is in *this* canvas), then the requirement,
+then the picture — so it teaches the shape rather than only refusing the current one. The
+second button opens the node form at the agent-type field.
+
+### 3c. Dissolving the dispatcher
+
+A dispatcher exists so that *something* decides where a request goes. A swarm makes that
+decision continuously, so the node has no work left: it is not compiled as an agent.
+`Dispatcher + A + B` compiles to a **two-agent swarm**, not three.
+
+```
+   canvas                        compiled swarm
+
+   Start                         Start
+     │                             │
+     ▼                             ▼
+  Dispatcher                       A ◀────────▶ B
+   │      │                    (each holds the other's
+   ▼      ▼                     handoff tool, and both
+   A      B                     carry the dispatcher's
+                                 routing prompt)
+```
+
+**The rewrite, precisely:**
+
+1. **Remove the dispatcher node.** It contributes no agent, no LLM call, no turn.
+2. **Its children become a fully connected mesh.** Every child gets a handoff tool for
+   every other child — with three children, A↔B, A↔C, B↔C. This is the one place edges are
+   *synthesised* rather than read from the canvas, and it is the faithful reading: the
+   dispatcher's menu was the set of agents allowed to receive the conversation, so they may
+   now pass it among themselves.
+3. **Its system prompt becomes the handoff guide**, appended to every child (§3, "Every
+   agent that can hand off is told how to"). The dispatcher's persona — *"greet callers
+   warmly"* — is routing scaffolding too, and is dropped; what is kept is the mapping of
+   subjects to agents.
+4. **The Start edge moves to the entry agent** (below).
+5. **Edges from a child to a non-dispatcher node are preserved** as ordinary handoffs.
+
+**Which child is the entry.** With the dispatcher gone, someone must hold the first turn.
+The rule: **the first child in canvas order** (lowest node id), recorded in the generated
+docstring so it is never a mystery. Because every member carries the routing guide, a
+first turn that lands on the wrong agent is self-correcting — it hands off immediately —
+at the cost of one extra LLM turn. A future refinement is an "entry" marker in the editor;
+it is not needed for v1 and would add UI for a case the routing guide already handles.
+
+**What the user sees, and must be told.** The compiled swarm has *fewer agents than the
+canvas shows*, and the run overlay and audit trail will name only the children. The
+Generate step says so plainly: *"In swarm mode the Dispatcher node is not an agent. Its
+prompt becomes the team's handoff guide, and its 2 connected agents form the swarm."*
+Without that line the missing node reads as a bug.
+
+**A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
+nobody to hand to, and the dispatcher was doing nothing to begin with.
+
 ### 3b. The four canvas patterns
 
 **Nothing here changes workflow mode.** Every pattern below — fan-out, fan-in, chains,
