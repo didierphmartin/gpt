@@ -380,7 +380,40 @@ Packaging:     ( ) Single file        ← greyed out for Swarm in v1
 workflow row and travels with it — export, import, and every compile target read the same
 value. The Run menu item names both: `Run (swarm · separate files)`.
 
-**The live interpreter can implement swarm, and should — later.** `runWorkflow()` /
+**Order reversed on the owner's call: the interpreter goes first.** The earlier draft
+sequenced the compiler first, on the grounds that `langgraph-swarm` would supply proven
+semantics. That was the wrong instinct. The risky part of this design is not execution but
+**interpretation** — dissolution, mesh synthesis, handoff-guide composition, which canvases
+are refused — and the interpreter exercises exactly those with the fastest feedback and the
+least scaffolding: press ▶ and watch, with no Generate, no runner, no spawned server, no
+files. The compiler would validate the same rules through the slowest possible loop.
+
+It is also the smaller step: no `langgraph-swarm`, no run server, no checkpointer, no
+multi-user.
+
+**v1(a) — the interpreter**
+
+1. `workflow.orchestration` persisted on the workflow row, set in the editor's settings
+   panel.
+2. **The rewrite, in the analyzer**: dissolve the dispatcher, synthesise the mesh among its
+   children, compose each agent's handoff guide, validate the pattern (§3b) — a pure
+   `graph → graph` function.
+3. The live run path consuming the rewritten graph: handoff tools per agent, one shared
+   message array, loop while a handoff is returned, hop budget.
+4. The owner runs one canvas in both modes and compares.
+
+**v1(b) — the LangGraph compiler**, built against rules already validated in (a), then the
+other frameworks (§9).
+
+**The risk this ordering introduces, and its mitigation.** The interpreter's loop is
+hand-written, so the compiler must later agree with it — the same drift risk, inverted.
+Mitigation: the rewrite is defined **once**, as a pure function with a shared fixture both
+paths are tested against. One implementation, server-side in the analyzer, with the editor
+requesting the effective graph when `orchestration = "swarm"`; the alternative (JS for the
+interpreter, PHP for the compiler) is two implementations of the one rule this design
+turns on.
+
+**Why the interpreter could always have done this.** `runWorkflow()` /
 `_runNodeAsChatUnit()` already executes agents with tools, already handles dispatcher
 routing through `dispatchTargets`/`routedBy`, and already streams into the overlay. Swarm
 is *less* machinery than the DAG it runs today: handoff tools on each agent, one shared
