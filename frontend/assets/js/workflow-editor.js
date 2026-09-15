@@ -12021,7 +12021,7 @@ class WorkflowEditor {
         return false;
     }
 
-    async _runNodeAsChatUnit(node, inputText, { dispatchTargets = null, routedBy = null } = {}) {
+    async _runNodeAsChatUnit(node, inputText, { dispatchTargets = null, routedBy = null, history = null, skipSkills = false } = {}) {
         const dfId = String(node.id);
         const data = node.data || {};
         const provider = data.agent_provider || data.provider || 'openai';
@@ -12039,7 +12039,13 @@ class WorkflowEditor {
         const instructions = ((data.instructions || '').trim() || this._wfDefaultInstructions(agentLabel, data.description || ''))
             + (routedBy ? '\n\n' + this._wfRoutedPrompt(agentLabel, routedBy.from, routedBy.notes) : '')
             + (dispatchTargets?.length ? '\n\n' + this._wfDispatchPrompt(dispatchTargets) : '');
-        const dirName = data.bound_skill?.dir_name || null;
+        // A swarm calls this once per hop; only the turn that answers has a
+        // deliverable, so the caller suppresses skills on the others (§6b).
+        const dirName = skipSkills ? null : (data.bound_skill?.dir_name || null);
+        // A swarm shares one conversation across agents: the caller passes the
+        // transcript in and takes the grown one back. A workflow run passes
+        // nothing and gets today's behaviour, an empty history per node.
+        const conversationHistory = Array.isArray(history) ? [...history] : [];
         // Per-node context from the agent form. These OVERRIDE the backend
         // provider-config defaults (the user's form is the source of truth).
         // Sent only when set, so a node that specifies nothing falls back to
@@ -12094,10 +12100,9 @@ class WorkflowEditor {
             this._wfNodeLog(dfId, 'error', skillLoadError, 'error');
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
-            return { success: false, output: 'Error: ' + skillLoadError };
+            return { success: false, output: 'Error: ' + skillLoadError, history: conversationHistory };
         }
 
-        const conversationHistory = [];
         const MAX_ROUNDS = 8;
         try {
             for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -12171,7 +12176,7 @@ class WorkflowEditor {
                         this._wfNodeLog(dfId, 'error', nd.output, 'error');
                         this.highlightNode(dfId, 'error', dfId, 'agent');
                         this.updateModalInputOutput(dfId);
-                        return { success: false, output: nd.output };
+                        return { success: false, output: nd.output, history: conversationHistory };
                     }
                     // The target receives the dispatcher's ORIGINAL input (+ notes),
                     // not the dispatcher's prose — the batch analog of transferring the caller.
@@ -12180,7 +12185,7 @@ class WorkflowEditor {
                     this._wfNodeLog(dfId, 'routing', `routed to ${route.name}${route.notes ? ' — ' + route.notes : ''}`);
                     this.highlightNode(dfId, 'completed', dfId, 'agent');
                     this.updateModalInputOutput(dfId);
-                    return { success: true, output: nd.output, route };
+                    return { success: true, output: nd.output, route, history: conversationHistory };
                 }
                 if (r.pending_client_tool_call) {
                     const calls = Array.isArray(r.pending_tool_calls) ? r.pending_tool_calls : [];
@@ -12362,7 +12367,7 @@ class WorkflowEditor {
                         this.highlightNode(dfId, 'completed', dfId, 'agent');
                     }
                     this.updateModalInputOutput(dfId);
-                    return { success: !failed, output: finalText };
+                    return { success: !failed, output: finalText, history: conversationHistory };
                 }
             }
             throw new Error(`did not finish within ${MAX_ROUNDS} rounds`);
@@ -12377,7 +12382,7 @@ class WorkflowEditor {
             this._wfNodeLog(dfId, 'error', msg, 'error');
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
-            return { success: false, output: 'Error: ' + msg };
+            return { success: false, output: 'Error: ' + msg, history: conversationHistory };
         }
     }
 
@@ -13037,8 +13042,123 @@ class WorkflowEditor {
         return parts.join('\n\n');
     }
 
+    /**
+     * Run the workflow as a swarm: the rewritten graph's entry agent holds the
+     * first turn, and control passes on each handoff until an agent answers
+     * without handing off, or the hop budget is spent.
+     *
+     * One conversation, not a relay. `transcript` is the shared message array
+     * every agent is handed, so an agent taking the turn at hop 4 sees what
+     * was said at hop 0 — including any documents dropped on Start, which the
+     * caller has already folded into userPrompt.
+     *
+     * Handoffs reuse the dispatcher machinery already here: a forced tool call
+     * over a typed menu. The differences are that the menu is the agent's own
+     * colleagues, and that the turn can move any number of times.
+     */
+    async _runSwarm(userPrompt, onProgress) {
+        const rw = window.swarmRewrite(this._currentGraphForRewrite());
+        if (!rw.ok) {
+            this._showSwarmRefusalModal(rw);
+            return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0, handoffs: [], status: 'refused', history: [] };
+        }
+
+        const _startedAt = Date.now();
+        this._wfOutputs = {};
+
+        const budget = window.SWARM_HOP_BUDGET || 25;
+        const handoffs = [];
+        let transcript = [];
+        let active = rw.entry;
+        let output = '';
+        let status = 'completed';
+        let answered = null;
+
+        for (let hop = 0; hop <= budget; hop++) {
+            if (hop === budget) {
+                // No turn answered, so no deliverable and no skill run (§6b).
+                status = 'hop_budget_exhausted';
+                output = `Stopped after ${budget} handoffs without an answer.`;
+                break;
+            }
+
+            const agent = rw.agents[active];
+            const node = this.editor.getNodeFromId(active);
+            // The agent's own node, carrying the instructions the rewrite composed:
+            // its system prompt plus the handoff guide built from the dispatcher's.
+            const swarmNode = { ...node, data: { ...node.data, instructions: agent.instructions } };
+            const targets = agent.handoffs.map(id => ({ id, name: rw.agents[id].name }));
+            const last = handoffs[handoffs.length - 1];
+
+            this._wfNodeLog(active, 'llm', `${agent.name} holds the turn (hop ${hop})`);
+            try { onProgress?.({ type: 'node_start', node_id: active, agent_name: agent.name }); } catch (_) {}
+
+            const res = await this._runNodeAsChatUnit(swarmNode, hop === 0 ? userPrompt : '', {
+                dispatchTargets: targets.length ? targets : null,
+                routedBy: last ? { from: rw.agents[last.from].name, notes: last.reason } : null,
+                history: transcript,
+                skipSkills: true,          // a handoff is not a deliverable
+            });
+
+            // Take the grown transcript even on failure: what was said was said.
+            if (Array.isArray(res?.history)) transcript = res.history;
+            this._wfOutputs[active] = res?.output || '';
+
+            if (res && res.success === false) {
+                status = 'error';
+                output = res.output || 'The swarm stopped on an error.';
+                break;
+            }
+
+            if (res?.route) {
+                const to = String(res.route.id);
+                handoffs.push({ from: active, to, reason: res.route.notes || '' });
+                this._wfNodeLog(active, 'routing', `hands to ${rw.agents[to].name}${res.route.notes ? ' — ' + res.route.notes : ''}`);
+                active = to;
+                continue;
+            }
+
+            output = res?.output || '';
+            answered = active;
+            break;
+        }
+
+        // The answer exists; now let the agent that produced it run its skill,
+        // with the full conversation behind it.
+        const answerNode = answered != null ? this.editor.getNodeFromId(answered) : null;
+        if (status === 'completed' && answerNode?.data?.bound_skill?.dir_name) {
+            this._wfNodeLog(answered, 'skill', `running ${answerNode.data.bound_skill.dir_name} on the answer`);
+            const skillRes = await this._runNodeAsChatUnit(answerNode, output, { history: transcript });
+            if (Array.isArray(skillRes?.history)) transcript = skillRes.history;
+            if (skillRes?.output) output = skillRes.output;
+        }
+
+        const runResult = {
+            output,
+            node_outputs: this._wfOutputs,
+            success: status === 'completed',
+            nodes_executed: handoffs.length + 1,
+            response_time_ms: Date.now() - _startedAt,
+            // swarm-specific, ignored by the DAG consumers
+            handoffs, status, history: transcript, answered,
+        };
+        if (runResult.success && output && typeof this._saveWorkflowOutput === 'function') {
+            this._saveWorkflowOutput(output).catch(err => {
+                console.warn('[WorkflowEditor] Could not save swarm output:', err);
+            });
+        }
+        if (typeof this.showWorkflowResults === 'function' && output) {
+            try { this.showWorkflowResults(runResult); } catch (_) {}
+        }
+        return runResult;
+    }
+
     async executeWorkflowInBrowser(userPrompt, { onProgress } = {}) {
         this.lastUserPrompt = userPrompt;
+        if (this._isSwarm()) {
+            // A swarm has no topological order: control moves by handoff.
+            return await this._runSwarm(userPrompt, onProgress);
+        }
         // Clear any artifact from a prior run so the Output node never shows a
         // stale file (the SSE path resets this on 'workflow_start'; the
         // browser-driven path must do it here).
