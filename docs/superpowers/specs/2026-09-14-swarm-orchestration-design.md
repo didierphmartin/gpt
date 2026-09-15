@@ -426,6 +426,50 @@ The **audit trail** (concurrency spec §5c) is where swarm earns its records, an
 - `active` — who holds the turn, written whenever it changes;
 - `node_enter` — what the agent actually received, which in a swarm is the shared conversation rather than a framed input.
 
+### 6b. Cases the canvas raises
+
+Five situations the drawing permits, each needing a decision rather than an accident.
+
+**Skills on a swarm agent — run only on the turn that ends the run.** In workflow mode a
+skill is a mandatory post-agent step: the agent produces text, the skill turns it into the
+deliverable. In a swarm a turn does one of two things, and only one of them produces a
+deliverable:
+
+| The turn | Skills |
+|---|---|
+| hands off | **do not run** — there is no deliverable yet, and a layout or document skill on an intermediate handoff is wasted work and a wasted LLM call |
+| answers without handing off | **run**, on that reply, and the result is the run's output |
+
+The skills that run are those of the **agent that answered**, not of every agent that held
+the turn. A skill belongs to the agent that produced the deliverable. If the hop budget
+ends a run, no turn answered, so no skill runs and the output is the budget message.
+
+**Start-node attachments — into the shared conversation.** Documents dropped on Start are
+converted to Markdown and prepended to the first human message. Because that message is in
+the shared channel, **every agent that later holds the turn sees them** — which is the
+behaviour you want: an attachment is context for the conversation, not for whoever happens
+to go first. It also needs no special mechanism; it falls out of the swarm's shared state.
+
+The cost is worth stating: a swarm's context grows with the conversation anyway, and
+attachments make it start large rather than grow into it. A canvas with attachments above
+a threshold warns at flip time, pointing at the same summarisation question §5 defers.
+
+**Nested dispatchers — refused in v1.** A dispatcher among a dispatcher's children raises
+a question nothing answers yet: may an inner member hand to an outer one, or is the inner
+group sealed? Two defensible answers, no evidence for either, so the canvas is refused
+naming both dispatcher nodes. Revisit when someone has a real workflow shaped that way.
+
+**More than one Output node — refused in v1.** A swarm produces one final answer, from the
+turn that stopped handing off. Two outputs would need a rule for which receives it, and
+inventing one before anyone wants it is guessing. Refused, naming both.
+
+**Swarm with multi-user — already aligned, and worth pinning.** The concurrency spec keys
+history by `(owner, thread)`; a swarm's checkpointer is invoked with
+`thread_id = f"{owner}:{thread}"`. So a swarm thread is owned exactly like a run, one
+user's conversation is invisible to another, and no second scheme is needed. The seam gets
+one test rather than a design: two owners, one workflow, same `thread` value, and neither
+sees the other's messages.
+
 ## 7. Out of scope for v1
 
 - **Playbook nodes in a swarm.** Gates plus handoffs is a combination worth understanding separately; a playbook agent inside a swarm raises "who holds the turn while a human is being asked?", and nothing answers that yet. The compiler rejects a swarm canvas containing a playbook node, naming it.
