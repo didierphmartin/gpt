@@ -349,18 +349,60 @@ Assessed against the installed packages, not from memory.
 
 Order: LangGraph (this spec) → ADK → MAF → NOOA excluded.
 
-## 10. UI
+## 10. Where the setting lives, and the live interpreter
 
-The code-generation modal gains an architecture choice above the packaging radios:
+**Architecture is a property of the workflow, not of the build.** Packaging (single file /
+separate files / A2A) answers "how do we ship this"; architecture answers "what does this
+drawing mean". The same canvas is a pipeline or a swarm depending on it, and the **live
+interpreter needs to know it just as much as the compiler does** — so it is stored with
+the workflow, beside `output_storage_enabled` and friends:
 
 ```
-Architecture:  (•) Workflow      ( ) Swarm
+workflow.orchestration = "workflow" | "swarm"      default "workflow"
+```
+
+Set in the workflow's settings panel in the editor, where it is visible while you draw —
+which matters, because a chain drawn under `swarm` promises something different from the
+same chain under `workflow` (§3b).
+
+The code-generation modal keeps **packaging and multi-user only**, and shows the
+architecture read-only so there is one source of truth:
+
+```
+Architecture:  Swarm            ← from the workflow's settings, not editable here
 Packaging:     ( ) Single file        ← greyed out for Swarm in v1
                (•) Agents in separate files
                ( ) A2A                ← greyed out for Swarm in v1
+  [ ] Multi-user run server
 ```
 
-Stored as `{architecture, mode, multiUser}` under the existing `wf:<id>:codegen` key; sent as `&architecture=swarm`; default stays `workflow`. New i18n keys in en/es/fr, cache-buster bump. The Run menu item already names the packaging mode and gains the architecture: `Run (swarm · separate files)`.
+`{mode, multiUser}` stays in `wf:<id>:codegen`; `orchestration` is persisted on the
+workflow row and travels with it — export, import, and every compile target read the same
+value. The Run menu item names both: `Run (swarm · separate files)`.
+
+**The live interpreter can implement swarm, and should — later.** `runWorkflow()` /
+`_runNodeAsChatUnit()` already executes agents with tools, already handles dispatcher
+routing through `dispatchTargets`/`routedBy`, and already streams into the overlay. Swarm
+is *less* machinery than the DAG it runs today: handoff tools on each agent, one shared
+message array, a loop while a handoff is returned, and the same dissolution rule from §3c.
+
+It is **not in v1**, for one reason worth stating: it would be a third implementation of
+swarm semantics (the Python library, this JavaScript, then ADK and MAF), and this codebase
+already has two run paths that drift. Sequencing it after the compiled target means the
+compiled behaviour is the reference, and the interpreter is written against something
+proven rather than alongside it.
+
+**What v1 must not do is make that later work harder.** Two concrete obligations:
+
+1. Store `orchestration` on the workflow **now**, even though only the compiler reads it in
+   v1 — so the interpreter has nothing to migrate.
+2. Keep the dissolution rule (§3c) and the handoff-guide composition (§3) in the **PHP
+   analyzer**, shared by both paths, rather than inside the LangGraph emitter. The
+   interpreter then consumes the same rewritten graph the compiler does, and "dispatcher
+   disappears in swarm mode" is decided in one place for both.
+
+Obligation 2 is the one that makes interpreter-swarm a small job later instead of a
+reimplementation.
 
 ## 11. Risks and decisions
 
