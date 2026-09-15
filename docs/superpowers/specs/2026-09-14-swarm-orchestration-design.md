@@ -413,6 +413,58 @@ requesting the effective graph when `orchestration = "swarm"`; the alternative (
 interpreter, PHP for the compiler) is two implementations of the one rule this design
 turns on.
 
+**Where the rewrite lives: both sides, one fixture.** The compiler must have it in PHP —
+it emits from there. The editor must have it in JS — the visual feedback below updates as
+you draw, and a round trip per canvas edit is the wrong trade. So it is implemented twice,
+as a pure `graph → graph` function of perhaps fifty lines, and pinned by a **shared JSON
+fixture**: canvases in, expected rewritten graphs out, run by both the PHP test suite and a
+JS check. The same discipline `run-protocol-v1.json` already applies to three
+implementations of the event protocol. A round-trip endpoint was considered and rejected:
+it buys one implementation at the cost of latency on every edit and a failure mode while
+drawing.
+
+### Visual feedback — both modes
+
+A swarm hides more than a workflow does: a node that is not an agent, edges that were never
+drawn, and a prompt assembled from two places. None of that may be invisible.
+
+**On the canvas, in swarm mode:**
+
+- the **dispatcher node is greyed** with a note — *"Not an agent in swarm mode. Its prompt
+  is the team's handoff guide."* — so a node that does not run says so;
+- the **synthesised mesh is drawn**, distinctly from edges the user drew (dashed, say), so
+  A↔B is visible rather than implied;
+- a canvas the mode refuses is marked **when the setting is flipped**, not at Run — you
+  find out while looking at the graph. The offending nodes are named (the merge and its
+  parents, or the second Start edge).
+
+**In the agent's context display — the important one.** Wherever the editor shows an
+agent's prompt, swarm mode shows the **composed** context, because that is what the model
+will actually receive:
+
+```
+┌─ Human resources — context (swarm) ─────────────────────┐
+│ System prompt                            [editable]     │
+│   You are the HR specialist at Intact…                  │
+│                                                          │
+│ ── appended in swarm mode ──────────────  [read-only]   │
+│ ## Colleagues you can hand this to                       │
+│ - IT claims — passwords, network access, support         │
+│ - Devices management — repairs, laptops, tickets         │
+│                                                          │
+│ ## When to hand off      ← from the Dispatcher's prompt  │
+│ When the caller mentions Repairs, service tickets…       │
+│ Hand off when the request is theirs rather than yours…   │
+└──────────────────────────────────────────────────────────┘
+```
+
+The agent's own prompt stays editable; the appended block is read-only and labelled with
+where it came from, so its source is never a guess. Switch the workflow back to `workflow`
+mode and the block disappears — the same display then shows exactly what runs there too.
+
+This is the editor-side twin of the audit trail's `node_enter` record (concurrency spec
+§5c): one shows what an agent *will* receive, the other what it *did*.
+
 **Why the interpreter could always have done this.** `runWorkflow()` /
 `_runNodeAsChatUnit()` already executes agents with tools, already handles dispatcher
 routing through `dispatchTargets`/`routedBy`, and already streams into the overlay. Swarm
