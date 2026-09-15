@@ -12151,7 +12151,7 @@ class WorkflowEditor {
                 body.memory = false;
                 // Ask the backend to echo what it actually sent (Context tab).
                 body.return_context = true;
-                if (dispatchTargets?.length) body.client_tools = [this._wfDispatchTool(dispatchTargets)];
+                if (dispatchTargets?.length) body.client_tools = [this._wfDispatchTool(dispatchTargets, handoffStyle)];
                 if (nodeMaxTokens != null) body.max_tokens = nodeMaxTokens;
                 if (nodeTemperature != null) body.temperature = nodeTemperature;
                 const resp = await fetch(`${this.apiBase}/chat`, {
@@ -12971,12 +12971,26 @@ class WorkflowEditor {
             .map(id => ({ id, name: nodes[id]?.data?.agent_name || nodes[id]?.data?.name || `Agent ${id}` }));
     }
 
-    _wfDispatchTool(targets) {
+    /**
+     * The route_to tool. Its description differs by mode, because the two modes
+     * mean opposite things by "not calling it":
+     *   dispatch — a DAG Dispatcher node exists only to route, so declining to
+     *              call this is a failure (the run has nowhere to go).
+     *   swarm    — answering without calling this is how a swarm ENDS (spec §3),
+     *              so the tool must read as optional. A description saying
+     *              "REQUIRED" here would contradict the swarm handoff prompt.
+     */
+    _wfDispatchTool(targets, handoffStyle = 'dispatch') {
         const names = targets.map(t => t.name);
+        const description = handoffStyle === 'swarm'
+            ? 'Hand the conversation to one colleague when the request belongs to them rather than to you. '
+                + `Colleagues: ${names.join(', ')}. Optional — if the request is yours, answer it directly instead of calling this. `
+                + 'The colleague receives the conversation so far, plus your notes.'
+            : 'REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent whose role matches the request. '
+                + `Available targets: ${names.join(', ')}. The chosen agent receives the original request, plus your notes.`;
         return {
             name: 'route_to',
-            description: 'REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent whose role matches the request. '
-                + `Available targets: ${names.join(', ')}. The chosen agent receives the original request, plus your notes.`,
+            description,
             input_schema: {
                 type: 'object',
                 properties: {
