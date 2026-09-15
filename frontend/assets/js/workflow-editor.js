@@ -1451,14 +1451,16 @@ class WorkflowEditor {
                     this._showSwarmRefusalModal(result);
                     return;
                 }
-                // A swarm's context starts large rather than growing into it:
-                // Start attachments reach every agent, on every hop (spec §6b).
-                // Warn, do not block — the user may well want exactly that.
+                // Spec §6b wants Start's documents to reach every agent. The
+                // browser-driven run path does not deliver them — it never
+                // reads Start's `data.documents` (see _runSwarm) — so warn that
+                // they will be ignored rather than claiming the opposite.
+                // Advisory only: do not block the flip.
                 const attached = this._startNodeAttachments().length;
-                if (attached > 2) {
+                if (attached > 0) {
                     this.showToast(
                         this.t('workflow.swarmAttachWarn') ||
-                        `${attached} documents on Start will be sent to every agent on every hop.`,
+                        'Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.',
                         'warning'
                     );
                 }
@@ -5794,9 +5796,10 @@ class WorkflowEditor {
     /**
      * The Start node's attached documents, read the same way the rest of the
      * editor reads a node's document list (see renderNodeDocuments /
-     * showAgentEditForm's `data.documents`). Used only to size the swarm
-     * "documents go to every agent on every hop" warning -- advisory, so an
-     * empty/missing Start node just yields no warning.
+     * showAgentEditForm's `data.documents`). Used only to decide whether to
+     * warn that swarm mode does not deliver them (spec §6b is an open item --
+     * see _runSwarm) -- advisory, so an empty/missing Start node just yields
+     * no warning.
      */
     _startNodeAttachments() {
         const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
@@ -12021,7 +12024,11 @@ class WorkflowEditor {
         return false;
     }
 
-    async _runNodeAsChatUnit(node, inputText, { dispatchTargets = null, routedBy = null, history = null, skipSkills = false } = {}) {
+    // handoffStyle: 'dispatch' (default, a DAG Dispatcher node — must route) or
+    // 'swarm' (a mesh member — MAY route, answering ends the run). preserveLog:
+    // keep the node's activity/logs/context from an earlier turn instead of
+    // wiping them. Both default to today's exact workflow-mode behaviour.
+    async _runNodeAsChatUnit(node, inputText, { dispatchTargets = null, routedBy = null, history = null, skipSkills = false, handoffStyle = 'dispatch', preserveLog = false } = {}) {
         const dfId = String(node.id);
         const data = node.data || {};
         const provider = data.agent_provider || data.provider || 'openai';
@@ -12035,16 +12042,25 @@ class WorkflowEditor {
         // fallback) — give it a minimal role prompt. A routed target is told
         // who sent the request and not to re-route it. Twins of
         // DispatchRouting::defaultInstructions / routedPrompt.
+        // A swarm member is NOT a dispatcher: handing off is optional there and
+        // answering in prose is how the run ends, so it gets its own handoff
+        // prompt and never the "do not redirect" routed prompt (those three
+        // blocks contradict each other). See _wfSwarmHandoffPrompt.
         const agentLabel = data.agent_name || data.name || `Agent ${dfId}`;
+        const isSwarmTurn = handoffStyle === 'swarm';
         const instructions = ((data.instructions || '').trim() || this._wfDefaultInstructions(agentLabel, data.description || ''))
-            + (routedBy ? '\n\n' + this._wfRoutedPrompt(agentLabel, routedBy.from, routedBy.notes) : '')
-            + (dispatchTargets?.length ? '\n\n' + this._wfDispatchPrompt(dispatchTargets) : '');
+            + ((routedBy && !isSwarmTurn) ? '\n\n' + this._wfRoutedPrompt(agentLabel, routedBy.from, routedBy.notes) : '')
+            + (dispatchTargets?.length
+                ? '\n\n' + (isSwarmTurn ? this._wfSwarmHandoffPrompt(dispatchTargets) : this._wfDispatchPrompt(dispatchTargets))
+                : '');
         // A swarm calls this once per hop; only the turn that answers has a
         // deliverable, so the caller suppresses skills on the others (§6b).
         const dirName = skipSkills ? null : (data.bound_skill?.dir_name || null);
         // A swarm shares one conversation across agents: the caller passes the
-        // transcript in and takes the grown one back. A workflow run passes
-        // nothing and gets today's behaviour, an empty history per node.
+        // transcript in as the history behind this turn. What grows here is
+        // only this turn's own tool rounds, so the caller does NOT take it back
+        // (see _runSwarm). A workflow run passes nothing and gets today's
+        // behaviour, an empty history per node.
         const conversationHistory = Array.isArray(history) ? [...history] : [];
         // Per-node context from the agent form. These OVERRIDE the backend
         // provider-config defaults (the user's form is the source of truth).
@@ -12056,9 +12072,19 @@ class WorkflowEditor {
 
         if (!this.nodeExecutionData[dfId]) this.nodeExecutionData[dfId] = {};
         this.nodeExecutionData[dfId].input = inputText;
-        this.nodeExecutionData[dfId].activity = [];
-        this.nodeExecutionData[dfId].logs = [];
-        this.nodeExecutionData[dfId].llmContext = []; // Context tab: one entry per LLM round
+        // A swarm announces "<name> holds the turn" on the node before calling
+        // here, and the mesh lets one agent hold the turn more than once —
+        // wiping would erase both that line and the agent's earlier turns.
+        // Workflow mode keeps today's behaviour: a node run starts clean.
+        if (preserveLog) {
+            if (!Array.isArray(this.nodeExecutionData[dfId].activity)) this.nodeExecutionData[dfId].activity = [];
+            if (!Array.isArray(this.nodeExecutionData[dfId].logs)) this.nodeExecutionData[dfId].logs = [];
+            if (!Array.isArray(this.nodeExecutionData[dfId].llmContext)) this.nodeExecutionData[dfId].llmContext = [];
+        } else {
+            this.nodeExecutionData[dfId].activity = [];
+            this.nodeExecutionData[dfId].logs = [];
+            this.nodeExecutionData[dfId].llmContext = []; // Context tab: one entry per LLM round
+        }
         this.nodeExecutionData[dfId].agentName = data.agent_name || data.name || null;
         const _startedAt = Date.now();
         this.nodeExecutionData[dfId].startTime = _startedAt;
@@ -12971,6 +12997,30 @@ class WorkflowEditor {
             + 'Never call it more than once.';
     }
 
+    /**
+     * The swarm twin of _wfDispatchPrompt, and deliberately not a reuse of it.
+     * A swarm member is not a dispatcher: it has a real role, and spec §3's
+     * termination rule is that the swarm ENDS when the agent holding the turn
+     * replies without handing off. So handing off has to read as optional here,
+     * where the dispatcher's version reads "your only job… you MUST call
+     * route_to". The target menu is presented exactly as _wfDispatchPrompt
+     * presents it — the menu and _wfDispatchTool are the reusable parts.
+     * Model-facing text: not user-visible, so not i18n'd.
+     */
+    _wfSwarmHandoffPrompt(targets) {
+        return '## Handing off\n'
+            + 'You are one of several agents working on this conversation together. Your colleagues are:\n'
+            + targets.map(t => `  - ${t.name}`).join('\n') + '\n'
+            + 'You have two ways to finish your turn, and both are normal:\n'
+            + "  1. Answer. If the request is yours to handle, handle it directly and completely. "
+            + 'Answering is how the conversation finishes — it is the expected outcome whenever the work is yours.\n'
+            + '  2. Hand off. If what is being asked belongs to a colleague, call the route_to function with '
+            + "target set to that colleague's exact name, and use notes to say what you understood and what you "
+            + 'are asking them to do. Call it at most once, and only to move work you should not be doing yourself.\n'
+            + 'Everything said earlier in this conversation is already above — do not ask the requester to repeat it, '
+            + 'and do not hand off merely to acknowledge or confirm.';
+    }
+
     _wfDefaultInstructions(agentName, description) {
         const desc = String(description || '').trim();
         return `You are "${agentName}"${desc ? ', ' + desc : ''}, an agent in the workflow "${this.currentWorkflowName || ''}". `
@@ -13047,14 +13097,28 @@ class WorkflowEditor {
      * first turn, and control passes on each handoff until an agent answers
      * without handing off, or the hop budget is spent.
      *
-     * One conversation, not a relay. `transcript` is the shared message array
-     * every agent is handed, so an agent taking the turn at hop 4 sees what
-     * was said at hop 0 — including any documents dropped on Start, which the
-     * caller has already folded into userPrompt.
+     * One conversation, not a relay. This function OWNS `transcript`: it is the
+     * shared message array every agent is handed, so an agent taking the turn
+     * at hop 4 sees what was said at hop 0. Each turn appends exactly one entry
+     * — the handoff it made (that line is what carries context across the
+     * handoff) or the answer it gave.
      *
-     * Handoffs reuse the dispatcher machinery already here: a forced tool call
-     * over a typed menu. The differences are that the menu is the agent's own
-     * colleagues, and that the turn can move any number of times.
+     * The human's request goes out as the `message` on EVERY hop, never ''.
+     * What happened before is the history; the request is still the request.
+     * (The backend also only accepts an empty message when the last history
+     * entry is a tool result, which a swarm transcript never is.)
+     *
+     * NOT in the transcript: documents dropped on the Start node. The
+     * browser-driven run path never reads Start's `data.documents` — nothing
+     * folds them into userPrompt and nothing puts them in the /chat body — so
+     * spec §6b ("the documents reach every agent") is an OPEN ITEM, not
+     * something this code does. `_startNodeAttachments()` exists only to warn
+     * the user about that at flip time.
+     *
+     * Handoffs reuse the dispatcher's menu machinery (a typed route_to tool),
+     * but not its prompt: see _wfSwarmHandoffPrompt. The differences are that
+     * the menu is the agent's own colleagues, that handing off is optional, and
+     * that the turn can move any number of times.
      */
     async _runSwarm(userPrompt, onProgress) {
         const rw = window.swarmRewrite(this._currentGraphForRewrite());
@@ -13066,9 +13130,27 @@ class WorkflowEditor {
         const _startedAt = Date.now();
         this._wfOutputs = {};
 
+        // Per-run resets the browser-driven path has to do itself (the SSE path
+        // does them on 'workflow_start'). Without these a swarm run shows the
+        // previous run's artifact in the results modal and the previous run's
+        // node colours on the canvas.
+        this.lastProducedArtifact = null;
+        {
+            const _nodes = this.editor.drawflow.drawflow.Home.data;
+            for (const id of Object.keys(_nodes)) {
+                const kind = this._wfNodeKind(id, _nodes);
+                if (kind === 'agent' || kind === 'playbook') {
+                    this.nodeExecutionData[id] = {};
+                    this.highlightNode(id, 'idle', id, 'agent');
+                }
+            }
+        }
+
         const budget = window.SWARM_HOP_BUDGET || 25;
         const handoffs = [];
-        let transcript = [];
+        // The one shared conversation. {role, content} entries, the same shape
+        // the backend's conversation_history uses. Owned here, never replaced.
+        const transcript = [];
         let active = rw.entry;
         let output = '';
         let status = 'completed';
@@ -13088,20 +13170,28 @@ class WorkflowEditor {
             // its system prompt plus the handoff guide built from the dispatcher's.
             const swarmNode = { ...node, data: { ...node.data, instructions: agent.instructions } };
             const targets = agent.handoffs.map(id => ({ id, name: rw.agents[id].name }));
-            const last = handoffs[handoffs.length - 1];
 
             this._wfNodeLog(active, 'llm', `${agent.name} holds the turn (hop ${hop})`);
             try { onProgress?.({ type: 'node_start', node_id: active, agent_name: agent.name }); } catch (_) {}
 
-            const res = await this._runNodeAsChatUnit(swarmNode, hop === 0 ? userPrompt : '', {
+            // The request is the message on every hop; the transcript is the
+            // history behind it. No routedBy: the handoff reason travels in the
+            // transcript entry the previous turn appended, which is where the
+            // rest of the conversation can see it.
+            const res = await this._runNodeAsChatUnit(swarmNode, userPrompt, {
                 dispatchTargets: targets.length ? targets : null,
-                routedBy: last ? { from: rw.agents[last.from].name, notes: last.reason } : null,
                 history: transcript,
                 skipSkills: true,          // a handoff is not a deliverable
+                handoffStyle: 'swarm',     // handing off is optional; answering ends the run
+                preserveLog: true,         // keep "holds the turn" + any earlier turn of this agent
             });
 
-            // Take the grown transcript even on failure: what was said was said.
-            if (Array.isArray(res?.history)) transcript = res.history;
+            // res.history is deliberately NOT read back. It is the node's own
+            // tool-round bookkeeping for the single turn it just ran, not this
+            // conversation — _runSwarm owns `transcript` and appends the turn
+            // itself, below. (The `history:` field is left on the returns
+            // because it is harmless and seeds correctly; ignoring it here is
+            // the intent, not an oversight.)
             this._wfOutputs[active] = res?.output || '';
 
             if (res && res.success === false) {
@@ -13112,14 +13202,25 @@ class WorkflowEditor {
 
             if (res?.route) {
                 const to = String(res.route.id);
-                handoffs.push({ from: active, to, reason: res.route.notes || '' });
-                this._wfNodeLog(active, 'routing', `hands to ${rw.agents[to].name}${res.route.notes ? ' — ' + res.route.notes : ''}`);
+                const toName = rw.agents[to].name;
+                const reason = String(res.route.notes || '').trim();
+                handoffs.push({ from: active, to, reason });
+                this._wfNodeLog(active, 'routing', `hands to ${toName}${reason ? ' — ' + reason : ''}`);
+                // The one line that carries context across the handoff: the next
+                // agent reads it as the previous agent's turn.
+                transcript.push({
+                    role: 'assistant',
+                    content: reason
+                        ? `${agent.name}: I'm handing this to ${toName} — ${reason}`
+                        : `${agent.name}: I'm handing this to ${toName}.`,
+                });
                 active = to;
                 continue;
             }
 
             output = res?.output || '';
             answered = active;
+            transcript.push({ role: 'assistant', content: output });
             break;
         }
 
@@ -13128,9 +13229,21 @@ class WorkflowEditor {
         const answerNode = answered != null ? this.editor.getNodeFromId(answered) : null;
         if (status === 'completed' && answerNode?.data?.bound_skill?.dir_name) {
             this._wfNodeLog(answered, 'skill', `running ${answerNode.data.bound_skill.dir_name} on the answer`);
-            const skillRes = await this._runNodeAsChatUnit(answerNode, output, { history: transcript });
-            if (Array.isArray(skillRes?.history)) transcript = skillRes.history;
-            if (skillRes?.output) output = skillRes.output;
+            // Same as in the loop: the returned `history` is this node's own
+            // tool rounds, not the conversation, so it is not read back. The
+            // skill turn refines the deliverable, so the answer entry already
+            // in the transcript is updated in place rather than duplicated.
+            const skillRes = await this._runNodeAsChatUnit(answerNode, output, {
+                // The answer is the message here, so the history is everything
+                // before it — sending both would repeat the answer verbatim.
+                history: transcript.slice(0, -1),
+                preserveLog: true,     // do not erase the answering agent's answer turn
+            });
+            if (skillRes?.output) {
+                output = skillRes.output;
+                const lastEntry = transcript[transcript.length - 1];
+                if (lastEntry && lastEntry.role === 'assistant') lastEntry.content = output;
+            }
         }
 
         const runResult = {
@@ -13657,9 +13770,6 @@ class WorkflowEditor {
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
 
-        // Update workflow info box
-        this.updateWorkflowInfoBox();
-
         // Clear stored workflow results, prompt, and schedule
         this.lastWorkflowResults = null;
         this.lastUserPrompt = '';
@@ -13678,6 +13788,12 @@ class WorkflowEditor {
 
         // Reset schedule setting
         this.scheduleEnabled = false;
+
+        // Update the workflow info box LAST: it renders the swarm and schedule
+        // checkboxes from this.orchestration / this.scheduleEnabled, so running
+        // it before the resets above left both showing the cleared workflow's
+        // values while the state said otherwise.
+        this.updateWorkflowInfoBox();
 
         // Update left panel to remove active state
         this.renderSavedWorkflowsList();

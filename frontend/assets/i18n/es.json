@@ -1078,7 +1078,7 @@
       "swarm": "Ejecutar como enjambre",
       "swarmHelp": "Los agentes se pasan la conversación entre ellos en lugar de ejecutarse en un orden fijo. Requiere un Dispatcher conectado a dos o más agentes."
     },
-    "swarmAttachWarn": "Los documentos de Start se enviarán a todos los agentes en cada salto.",
+    "swarmAttachWarn": "Los documentos adjuntos a Start todavía no se entregan a los agentes del enjambre; incluye en el prompt lo que necesiten.",
     "swarmCanvas": {
       "dissolved": "No es un agente en modo enjambre — su prompt es la guía de traspaso del equipo."
     },

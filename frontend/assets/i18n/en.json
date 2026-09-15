@@ -1078,7 +1078,7 @@
       "swarm": "Run as a swarm",
       "swarmHelp": "Agents hand the conversation to one another instead of running in a fixed order. Requires a Dispatcher connected to two or more agents."
     },
-    "swarmAttachWarn": "The documents on Start will be sent to every agent on every hop.",
+    "swarmAttachWarn": "Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.",
     "swarmCanvas": {
       "dissolved": "Not an agent in swarm mode — its prompt is the team's handoff guide."
     },
