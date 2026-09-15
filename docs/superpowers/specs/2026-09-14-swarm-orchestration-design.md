@@ -58,7 +58,7 @@ required under any approach.
 | Canvas element | Workflow mode (today) | Swarm mode |
 |---|---|---|
 | Edge A → B | B runs after A | A gets a `transfer_to_B` tool |
-| Start → X | X is the first node | X is the **entry agent** |
+| Start → Dispatcher | the dispatcher runs first | the dispatcher dissolves; the first turn goes to its first child (§3b) |
 | Dispatcher node | one forced `route_to`, one child runs | **dissolved** — not an agent; its children become a mesh and its prompt becomes their shared handoff guide (§3b) |
 | Agent node | runs once when reached | an agent that may hold the turn any number of times |
 | Output node | collects parents' outputs | where the final answer is delivered when no agent hands off |
@@ -407,25 +407,67 @@ sees the other's messages.
 
 ## 8. Tests
 
-Fixture: the owner's swarm test workflow — a dispatcher and two agents, drawn as a swarm.
+Staged as the work is (§10): the interpreter first, the compiler second. The fixture in
+both cases is the owner's swarm test workflow — one Dispatcher fanning out to two agents.
 
-**Generated package, no model (LLM stubbed at `_make_llm`, handoff tools invoked directly):**
-- an agent calling `transfer_to_X` moves the turn to X and appends a `handoffs` record;
-- an agent replying without a handoff ends the run, and its reply is the output;
-- an agent has a handoff tool for **exactly** its drawn edges — no more, no fewer;
+### 8.1 The rewrite — shared fixture, both implementations
+
+A JSON fixture of canvases in and expected rewritten graphs out, run by the PHP suite and
+by a JS check, so the two implementations (§10) cannot diverge:
+
+- dispatcher + 2 children → 2 agents, mesh A↔B, dispatcher absent;
+- dispatcher + 3 children → 3 agents, full mesh (A↔B, A↔C, B↔C);
+- each child's composed instructions = its own prompt + the colleague list + the
+  dispatcher's routing rules, and **no** dispatcher persona;
+- a child's edge to a non-dispatcher node survives as an ordinary handoff;
+- the entry is the first child in canvas order, deterministically, across repeated runs;
+- **every refusal in §3a**, each naming the offending nodes: no dispatcher; dispatcher with
+  one child; worker fan-out; fan-in/merge; two Start edges; a playbook node; nested
+  dispatchers; two Output nodes;
+- the dispatcher's MCP tools and skills do not appear on any compiled agent.
+
+### 8.2 v1(a) — the interpreter
+
+- a handoff moves the turn and records `{from, to, reason}`;
+- a reply without a handoff ends the run and is the output;
+- each agent's tool list is exactly its mesh colleagues — no more, no fewer;
 - the hop budget ends a deliberate ping-pong with `status: "hop_budget_exhausted"`;
-- a canvas with a playbook node is rejected at compile time, naming the node;
-- a canvas whose agents are unreachable from the entry is rejected, naming them.
+- **skills** (§6b): an agent that hands off runs none; the agent that answers runs its own,
+  and the result is the run's output; a budget-exhausted run runs none;
+- **attachments** (§6b): a document on Start is visible to the *second* agent to hold the
+  turn, not only the first;
+- the same canvas under `workflow` still routes once and runs one branch — the two modes
+  compared on one graph.
 
-**History:**
-- two turns on one `thread_id`: the second turn's agent sees the first turn's messages;
-- the second turn begins with the agent that ended the first — asserted by the entry condition, not by luck;
-- two different `thread_id`s do not see each other's messages;
-- with a SQLite checkpointer, history survives a process restart (the test that decides the §5 dependency question).
+### 8.3 v1(b) — the compiler
 
-**Manual, by the owner:** run the swarm workflow, confirm the dispatcher agent starts, watch a handoff happen in the overlay, then send a follow-up that implicitly refers to the first turn and confirm it reaches the right agent without re-routing.
+Everything in 8.2, against the generated package with `_make_llm` stubbed, plus:
 
-**Must stay green:** the whole workflow-mode suite. Swarm is a new emit path; it must not alter single-file, modular or A2A output. The existing byte-identical pins cover this.
+- the emitted package contains one agent module per child and none for the dispatcher;
+- `create_swarm` is called with `default_active_agent` = the first child;
+- **workflow-mode output is byte-identical** to today's for single-file, modular and A2A —
+  swarm is a new emit path and must not disturb the existing ones (the current pins cover
+  this).
+
+### 8.4 History — only when it is built (§5)
+
+Not part of v1: a single run needs no checkpointer.
+
+- two turns on one thread: the second turn's agent sees the first turn's messages;
+- the second turn begins with the agent that ended the first, by the entry condition rather
+  than by luck;
+- two threads do not see each other's messages;
+- with a persistent checkpointer, a thread survives a process restart;
+- with multi-user, two owners using the same `thread` value see nothing of each other
+  (§6b's seam test).
+
+### 8.5 Manual, by the owner
+
+Run the swarm test workflow and confirm, in order: the **first child** holds the first turn
+(there is no dispatcher agent — if one appears, the dissolution failed); a handoff happens
+and the overlay names both agents; the context display for each agent shows its own prompt
+plus the labelled handoff guide; and the same workflow switched to `workflow` mode routes
+once and ends, so the difference between the modes is visible on one canvas.
 
 ## 9. The other frameworks
 
@@ -453,8 +495,8 @@ workflow.orchestration = "workflow" | "swarm"      default "workflow"
 ```
 
 Set in the workflow's settings panel in the editor, where it is visible while you draw —
-which matters, because a chain drawn under `swarm` promises something different from the
-same chain under `workflow` (§3b).
+which matters, because the same canvas is legal under `workflow` and may be refused under
+`swarm` (§3a) — and because the dispatcher's node form changes with it (§3b).
 
 The code-generation modal keeps **packaging and multi-user only**, and shows the
 architecture read-only so there is one source of truth:
