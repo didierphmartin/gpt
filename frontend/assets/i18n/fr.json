@@ -1073,6 +1073,32 @@
     },
     "node": {
       "edit": "Modifier l’agent"
+    },
+    "orchestration": {
+      "swarm": "Exécuter en essaim",
+      "swarmHelp": "Les agents se transmettent la conversation au lieu de s'exécuter dans un ordre fixe. Nécessite un Dispatcher connecté à au moins deux agents."
+    },
+    "swarmAttachWarn": "Les documents de Start seront envoyés à chaque agent à chaque relais.",
+    "swarmCanvas": {
+      "dissolved": "N'est pas un agent en mode essaim — son prompt est le guide de transmission de l'équipe."
+    },
+    "swarmError": {
+      "title": "Ce workflow ne peut pas s'exécuter en essaim",
+      "found": "Constaté",
+      "needed": "Nécessaire",
+      "neededText": "un agent identifié comme Dispatcher, connecté à deux agents ou plus.",
+      "note": "En mode essaim, le Dispatcher n'est pas un agent — son prompt devient le guide de transmission que porte chaque membre.",
+      "noDispatcher": "Aucun agent n'est identifié comme Dispatcher.",
+      "oneChild": "Le Dispatcher n'est connecté qu'à un seul agent.",
+      "merge": "Deux agents alimentent un même nœud. Un essaim n'a qu'une seule conversation, donc rien ne fusionne.",
+      "twoEntries": "Start est connecté à plus d'un nœud. Un essaim n'a qu'un seul premier tour.",
+      "playbook": "Ce workflow contient un nœud Playbook, que le mode essaim ne prend pas encore en charge.",
+      "nested": "Il y a plus d'un Dispatcher.",
+      "outputs": "Il y a plus d'un nœud Output. Un essaim produit une seule réponse."
+    },
+    "swarmForm": {
+      "guideLabel": "Guide de transmission — quels sujets appartiennent à quel agent. Chaque membre de l'essaim le reçoit.",
+      "guideTab": "Guide de transmission"
     }
   }
 }

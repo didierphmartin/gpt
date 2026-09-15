@@ -1073,6 +1073,32 @@
     },
     "node": {
       "edit": "Edit agent"
+    },
+    "orchestration": {
+      "swarm": "Run as a swarm",
+      "swarmHelp": "Agents hand the conversation to one another instead of running in a fixed order. Requires a Dispatcher connected to two or more agents."
+    },
+    "swarmAttachWarn": "The documents on Start will be sent to every agent on every hop.",
+    "swarmCanvas": {
+      "dissolved": "Not an agent in swarm mode — its prompt is the team's handoff guide."
+    },
+    "swarmError": {
+      "title": "This workflow cannot run as a swarm",
+      "found": "Found",
+      "needed": "Needed",
+      "neededText": "one agent tagged Dispatcher, connected to two or more agents.",
+      "note": "In swarm mode the Dispatcher is not an agent — its prompt becomes the handoff guide every member carries.",
+      "noDispatcher": "No agent is tagged Dispatcher.",
+      "oneChild": "The Dispatcher is connected to only one agent.",
+      "merge": "Two agents feed one node. A swarm has one conversation, so nothing merges.",
+      "twoEntries": "Start is connected to more than one node. A swarm has exactly one first turn.",
+      "playbook": "This workflow contains a Playbook node, which swarm mode does not support yet.",
+      "nested": "There is more than one Dispatcher.",
+      "outputs": "There is more than one Output node. A swarm produces one answer."
+    },
+    "swarmForm": {
+      "guideLabel": "Handoff guide — which subjects belong to which agent. Every member of the swarm receives this.",
+      "guideTab": "Handoff guide"
     }
   }
 }

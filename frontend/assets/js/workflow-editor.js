@@ -27,6 +27,11 @@ class WorkflowEditor {
         this.outputStorageEnabled = false;
         this.outputFolder = '';
 
+        // How this workflow's graph is interpreted. A property of the
+        // workflow, not of a build: the interpreter and every compile target
+        // read the same value.
+        this.orchestration = 'workflow';
+
         // API base URL
         this.apiBase = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
 
@@ -1129,6 +1134,13 @@ class WorkflowEditor {
                 </label>
                 <div class="workflow-schedule-hint">When enabled, attachments are stored remotely for offline execution</div>
             </div>
+            <label class="flex items-start gap-3 cursor-pointer mt-3">
+                <input type="checkbox" class="wf-swarm-toggle mt-1 h-4 w-4">
+                <span>
+                    <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(this.t('workflow.orchestration.swarm') || 'Run as a swarm')}</span>
+                    <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.orchestration.swarmHelp') || 'Agents hand the conversation to one another instead of running in a fixed order. Requires a Dispatcher connected to two or more agents.')}</span>
+                </span>
+            </label>
             <div class="workflow-btn-group">
                 <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
                     📥 Import
@@ -1428,6 +1440,34 @@ class WorkflowEditor {
             this.updateLocalStorageGroupState();
         });
 
+        document.querySelector('.wf-swarm-toggle')?.addEventListener('change', (e) => {
+            const wanted = e.target.checked ? 'swarm' : 'workflow';
+            if (wanted === 'swarm') {
+                // Refuse at flip time, not at Run: the user is looking at the
+                // graph now, which is when the message is useful.
+                const result = window.swarmRewrite(this._currentGraphForRewrite());
+                if (!result.ok) {
+                    e.target.checked = false;
+                    this._showSwarmRefusalModal(result);
+                    return;
+                }
+                // A swarm's context starts large rather than growing into it:
+                // Start attachments reach every agent, on every hop (spec §6b).
+                // Warn, do not block — the user may well want exactly that.
+                const attached = this._startNodeAttachments().length;
+                if (attached > 2) {
+                    this.showToast(
+                        this.t('workflow.swarmAttachWarn') ||
+                        `${attached} documents on Start will be sent to every agent on every hop.`,
+                        'warning'
+                    );
+                }
+            }
+            this.orchestration = wanted;
+            this._workflowDirty = true;
+            this._applyOrchestrationToCanvas();
+        });
+
         saveBtn.addEventListener('click', async () => {
             if (saveBtn.disabled) return;
             // Same in-button progress as the playbook modal's Save / the top
@@ -1658,6 +1698,13 @@ class WorkflowEditor {
         }
         if (scheduleCheckbox) {
             scheduleCheckbox.checked = this.scheduleEnabled;
+        }
+        // Not in the brief's literal text, but needed for correctness: without
+        // this the checkbox stays wherever it last was left in the DOM rather
+        // than reflecting the workflow that was just loaded.
+        const swarmCheckbox = document.querySelector('.wf-swarm-toggle');
+        if (swarmCheckbox) {
+            swarmCheckbox.checked = this._isSwarm();
         }
 
         const audioName = document.getElementById('audio-workflow-name-input');
@@ -5717,6 +5764,119 @@ class WorkflowEditor {
         document.body.insertAdjacentHTML('beforeend', modalHtml);
     }
 
+    /** True when this workflow is interpreted as a swarm (see swarm-rewrite.js). */
+    _isSwarm() {
+        return this.orchestration === 'swarm';
+    }
+
+    /**
+     * The current canvas in the shape swarm-rewrite.js expects: the same
+     * {nodes:[{id,node_type,config}], edges:[{from,to}]} the API uses, so one
+     * rewrite serves the editor and the backend.
+     */
+    _currentGraphForRewrite() {
+        const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        const nodes = Object.keys(data).map(id => ({
+            id: String(id),
+            node_type: data[id].data?.type || '',
+            config: data[id].data || {},
+        }));
+        const edges = [];
+        for (const id of Object.keys(data)) {
+            const outputs = data[id].outputs || {};
+            for (const o of Object.values(outputs)) {
+                for (const c of (o.connections || [])) edges.push({ from: String(id), to: String(c.node) });
+            }
+        }
+        return { nodes, edges };
+    }
+
+    /**
+     * The Start node's attached documents, read the same way the rest of the
+     * editor reads a node's document list (see renderNodeDocuments /
+     * showAgentEditForm's `data.documents`). Used only to size the swarm
+     * "documents go to every agent on every hop" warning -- advisory, so an
+     * empty/missing Start node just yields no warning.
+     */
+    _startNodeAttachments() {
+        const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        for (const id of Object.keys(data)) {
+            if (data[id].data?.type === 'start') {
+                return data[id].data?.documents || [];
+            }
+        }
+        return [];
+    }
+
+    /** Swarm mode refused this canvas: name what was found, what is needed, and draw it. */
+    _showSwarmRefusalModal(result) {
+        const names = (result.nodes || [])
+            .map(id => this.editor?.drawflow?.drawflow?.Home?.data?.[id]?.data?.agent_name
+                || this.editor?.drawflow?.drawflow?.Home?.data?.[id]?.data?.name || `node ${id}`);
+        const reason = {
+            no_dispatcher: this.t('workflow.swarmError.noDispatcher') || 'No agent is tagged Dispatcher.',
+            dispatcher_needs_two_children: this.t('workflow.swarmError.oneChild') || 'The Dispatcher is connected to only one agent.',
+            merge_node: this.t('workflow.swarmError.merge') || 'Two agents feed one node. A swarm has one conversation, so nothing merges.',
+            two_entry_points: this.t('workflow.swarmError.twoEntries') || 'Start is connected to more than one node. A swarm has exactly one first turn.',
+            playbook_unsupported: this.t('workflow.swarmError.playbook') || 'This workflow contains a Playbook node, which swarm mode does not support yet.',
+            nested_dispatchers: this.t('workflow.swarmError.nested') || 'There is more than one Dispatcher.',
+            multiple_outputs: this.t('workflow.swarmError.outputs') || 'There is more than one Output node. A swarm produces one answer.',
+        }[result.error] || result.error;
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">${this.escapeHtml(this.t('workflow.swarmError.title') || 'This workflow cannot run as a swarm')}</h3>
+                <p class="text-sm text-gray-700 mb-1"><strong>${this.escapeHtml(this.t('workflow.swarmError.found') || 'Found')}:</strong> ${this.escapeHtml(reason)}</p>
+                ${names.length ? `<p class="text-sm text-gray-600 mb-3">${this.escapeHtml(names.join(', '))}</p>` : '<div class="mb-3"></div>'}
+                <p class="text-sm text-gray-700 mb-2"><strong>${this.escapeHtml(this.t('workflow.swarmError.needed') || 'Needed')}:</strong> ${this.escapeHtml(this.t('workflow.swarmError.neededText') || 'one agent tagged Dispatcher, connected to two or more agents.')}</p>
+                <pre class="bg-gray-100 text-gray-800 text-xs rounded p-3 mb-3 overflow-auto">      Start
+        │
+        ▼
+   ┌────────────┐
+   │ Dispatcher │  ← its prompt says which subjects
+   └─┬───┬───┬──┘    belong to which colleague
+     ▼   ▼   ▼
+    HR  IT  Devices  ← the swarm: each can hand to the others</pre>
+                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.swarmError.note') || 'In swarm mode the Dispatcher is not an agent — its prompt becomes the handoff guide every member carries.')}</p>
+                <div class="flex justify-end">
+                    <button class="swarm-err-close px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(backdrop);
+        const close = () => backdrop.remove();
+        backdrop.querySelector('.swarm-err-close').addEventListener('click', close);
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    }
+
+    /**
+     * Swarm mode hides things the canvas still shows: a node that is not an
+     * agent, and edges nobody drew. Make both visible.
+     */
+    _applyOrchestrationToCanvas() {
+        const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        for (const id of Object.keys(data)) {
+            const wrapper = document.getElementById(`node-${id}`);
+            // The dissolved styling and note live on .workflow-node (the inner
+            // element the rest of the editor already styles/classes -- see
+            // node-disabled), not on the #node-<id> Drawflow wrapper.
+            const el = wrapper?.querySelector('.workflow-node');
+            if (!el) continue;
+            const isDispatcher = (data[id].data?.agent_type === 'dispatcher');
+            el.classList.toggle('swarm-dissolved', this._isSwarm() && isDispatcher);
+            const existing = el.querySelector('.swarm-dissolved-note');
+            if (this._isSwarm() && isDispatcher) {
+                if (!existing) {
+                    el.querySelector('.node-body')?.insertAdjacentHTML('beforeend',
+                        `<div class="swarm-dissolved-note text-xs text-amber-800 mt-1">${this.escapeHtml(this.t('workflow.swarmCanvas.dissolved') || 'Not an agent in swarm mode — its prompt is the team\'s handoff guide.')}</div>`);
+                }
+            } else if (existing) {
+                existing.remove();
+            }
+        }
+    }
+
     /**
      * Show the JSON payload this workflow would POST to /api/v1/workflows on save.
      * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
@@ -5738,6 +5898,7 @@ class WorkflowEditor {
             },
             triggers: { schedule: { enabled: this.scheduleEnabled } },
             output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
+            orchestration: this.orchestration,
             output_folder: this.outputFolder || null
         };
         const pretty = JSON.stringify(payload, null, 2);
@@ -5888,10 +6049,12 @@ class WorkflowEditor {
 
         this.outputStorageEnabled = !!payload.output_storage_enabled;
         this.outputFolder = payload.output_folder || '';
+        this.orchestration = payload.orchestration === 'swarm' ? 'swarm' : 'workflow';
         this.scheduleEnabled = !!(payload.triggers?.schedule?.enabled);
 
         this.importGraphFromBackend({ nodes, edges });
         this.restorePromptFromStartNode(nodes);
+        this._applyOrchestrationToCanvas();
 
         this.updateWorkflowInfoBox();
         this.renderSavedWorkflowsList();
@@ -10339,6 +10502,9 @@ class WorkflowEditor {
             },
             html
         );
+        // A dropped template may already be tagged Dispatcher -- grey it
+        // immediately if the workflow is a swarm.
+        this._applyOrchestrationToCanvas();
     }
 
     /**
@@ -10713,6 +10879,7 @@ class WorkflowEditor {
                     }
                 },
                 output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
+                orchestration: this.orchestration,
                 output_folder: this.outputFolder || null
             };
 
@@ -10797,6 +10964,7 @@ class WorkflowEditor {
                     }
                 },
                 output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
+                orchestration: this.orchestration,
                 output_folder: this.outputFolder || null
             };
 
@@ -10930,6 +11098,10 @@ class WorkflowEditor {
             // Load output storage settings
             this.outputStorageEnabled = !!workflowData.output_storage_enabled;
             this.outputFolder = workflowData.output_folder || '';
+            // Second load path (see the one in _applyImportedWorkflow above) --
+            // both must be wired or the toggle reads correctly on one arrival
+            // path and silently reverts on the other.
+            this.orchestration = workflowData.orchestration === 'swarm' ? 'swarm' : 'workflow';
 
             // Load schedule enabled setting (from triggers or computed field)
             this.scheduleEnabled = !!workflowData.schedule_enabled ||
@@ -10956,6 +11128,7 @@ class WorkflowEditor {
                 console.log('[WorkflowEditor] No graph data found for workflow. Workflow may need to be re-created.');
                 alert(this.t('workflow.errors.noGraphData'));
             }
+            this._applyOrchestrationToCanvas();
 
             // Update left panel to show active workflow
             this.renderSavedWorkflowsList();
@@ -13379,6 +13552,10 @@ class WorkflowEditor {
         this.outputStorageEnabled = false;
         this.outputFolder = '';
 
+        // Reset orchestration -- without this it leaks from whichever
+        // workflow was open before into the next one opened on this canvas.
+        this.orchestration = 'workflow';
+
         // Reset schedule setting
         this.scheduleEnabled = false;
 
@@ -14992,6 +15169,12 @@ class WorkflowEditor {
         if (this.editingNodeId && this.nodeExecutionData?.[this.editingNodeId]?.success === false) {
             this.switchAgentModalTab('logs');
         }
+
+        // Opening a dispatcher's form in swarm mode should show the right
+        // tabs immediately, not only after the user touches the type select.
+        // (Runs after the logs-tab redirect above so a failed-run node still
+        // opens on Logs instead of being bounced to System Prompt.)
+        this._applyOrchestrationToAgentForm(agent.agent_type);
     }
 
     /**
@@ -15020,7 +15203,13 @@ class WorkflowEditor {
             if (lbl) lbl.textContent = isPb ? tf2('playbook') : tf2('systemPrompt');
             const ta = document.getElementById('agent-instructions-input');
             if (ta) ta.placeholder = isPb ? tf2('playbookPlaceholder') : tf2('systemPromptPlaceholder');
-            document.getElementById('tab-mcp-servers')?.classList.toggle('hidden', !isPb);
+            // _applyOrchestrationToAgentForm owns tab-mcp-servers' hidden state
+            // from here on (playbook-only, further hidden for a dissolved swarm
+            // dispatcher) so there is exactly one decision per tab rather than
+            // two toggles fighting over the same class (Ruling 4). Also hides
+            // tab-skills/tab-settings and relabels the prompt when this retag
+            // makes the node a dissolved dispatcher.
+            this._applyOrchestrationToAgentForm(e.target.value);
         });
         // Provider change → model dropdown follows (keeps the current choice when the new provider lists it).
         document.getElementById('agent-provider-select')?.addEventListener('change', (e) => {
@@ -15351,6 +15540,47 @@ class WorkflowEditor {
             logsTab.classList.remove('text-gray-500', 'border-transparent');
             logsContent.classList.remove('hidden');
             this._renderNodeLogs(this.editingNodeId);
+        }
+    }
+
+    /**
+     * A dispatcher in swarm mode is not an agent: it contributes no turn, so
+     * it has no tools, no skills and no model (spec §3b). Hide those tabs and
+     * relabel its prompt, which is now the team's handoff guide. Reuses the
+     * tab-hiding the playbook type already does (Ruling 4).
+     *
+     * Also takes over tab-mcp-servers' hidden state, which is otherwise a
+     * playbook-only tab toggled by the agent-type-select handler below --
+     * computing both conditions here means there is exactly one decision per
+     * tab instead of two toggles fighting over the same class. tab-skills'
+     * dissolved-hiding lives in _wirePlaybookFacet's applyVisibility instead
+     * (same reason: it already owns that tab's hidden class for playbooks).
+     */
+    _applyOrchestrationToAgentForm(agentType) {
+        const dissolved = this._isSwarm() && agentType === 'dispatcher';
+        const isPb = agentType === 'playbook';
+        // tab-mcp-servers is normally playbook-only; a dispatcher is never a
+        // playbook, so "dissolved" and "isPb" never both apply here, but
+        // computing them together keeps this the single source of truth.
+        document.getElementById('tab-mcp-servers')?.classList.toggle('hidden', dissolved || !isPb);
+        // Hidden, never removed: switching back to workflow mode restores it.
+        document.getElementById('tab-settings')?.classList.toggle('hidden', dissolved);
+        const lbl = document.getElementById('agent-instructions-label');
+        if (lbl && dissolved) lbl.textContent = this.t('workflow.swarmForm.guideLabel');
+        const tab = document.getElementById('tab-system-prompt');
+        if (tab && dissolved) tab.textContent = this.t('workflow.swarmForm.guideTab');
+        // Settings (provider/model/temperature/max tokens) is the modal's
+        // default active tab. If it -- or Skills / MCP Servers -- is the tab
+        // currently showing and we just hid its button, land on System
+        // Prompt (the handoff guide) instead of leaving hidden-tab content
+        // on screen.
+        if (dissolved) {
+            const stillShowing = ['settings-tab-content', 'skills-tab-content', 'mcp-servers-tab-content']
+                .some(cid => {
+                    const el = document.getElementById(cid);
+                    return el && !el.classList.contains('hidden');
+                });
+            if (stillShowing) this.switchAgentModalTab('system-prompt');
         }
     }
 
@@ -15853,8 +16083,14 @@ Based on the analysis...
         const isPb = () => document.getElementById('agent-type-select')?.value === 'playbook';
         const applyVisibility = () => {
             const pb = isPb();
+            // tab-skills also has no place on a dissolved swarm dispatcher
+            // (spec §3b) -- fold that in here rather than in a second
+            // classList.toggle('hidden', ...) on the same element, which
+            // would just have the two listeners overwrite each other on
+            // every agent-type-select change (Ruling 4).
+            const dissolved = document.getElementById('agent-type-select')?.value === 'dispatcher' && this._isSwarm();
             document.getElementById('tools-content')?.closest('.flex-col')?.classList.toggle('hidden', pb);
-            document.getElementById('tab-skills')?.classList.toggle('hidden', pb);
+            document.getElementById('tab-skills')?.classList.toggle('hidden', pb || dissolved);
             document.getElementById('tab-schema')?.classList.toggle('hidden', pb);
             document.getElementById('agent-writes-block')?.classList.toggle('hidden', !pb);
             document.getElementById('agent-pb-toolbar')?.classList.toggle('hidden', !pb);
@@ -16601,6 +16837,10 @@ Based on the analysis...
                 this.editingNodeId = null;
                 this.closeAgentEditModal();
 
+                // A retag (e.g. to/from Dispatcher) changes how swarm mode
+                // treats this node -- refresh the canvas's greyed/annotated state.
+                this._applyOrchestrationToCanvas();
+
                 // Node edit is applied to the in-memory model only (instant, no race).
                 // Mark dirty; the DB write is flushed by _persistIfDirty() before the next
                 // Generate/Run or when you leave the workflow.
@@ -16677,6 +16917,10 @@ Based on the analysis...
 
             // Close modal
             this.closeAgentEditModal();
+
+            // syncTemplateToWorkflowNodes() above may have retagged other
+            // canvas nodes sharing this template -- refresh the canvas.
+            this._applyOrchestrationToCanvas();
 
             // If editing a standalone template that is referenced by nodes
             // in the current workflow, syncTemplateToWorkflowNodes() above

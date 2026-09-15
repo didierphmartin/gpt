@@ -2090,6 +2090,12 @@
 
         /* mermaid.run() owns the rendering target and cleans up after
            itself — no defensive svg/div orphan rules needed here. */
+
+        /* Swarm mode: a Dispatcher node dissolves -- it takes no turn and
+           makes no LLM call, only its routing prompt survives as a handoff
+           guide appended to its children. Grey + dash it on the canvas so
+           that is visible at a glance (workflow-editor.js:_applyOrchestrationToCanvas). */
+        .workflow-node.swarm-dissolved { opacity: .55; border-style: dashed; }
     </style>
 
     <!-- Embed mode: when gpt/frontend is loaded in an iframe by another app
@@ -4204,7 +4210,7 @@
     <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260915-swarm1"></script>
-    <script src="assets/js/workflow-editor.js?v=20260911-tplnode1"></script>
+    <script src="assets/js/workflow-editor.js?v=20260915-swarm2"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>

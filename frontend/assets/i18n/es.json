@@ -1073,6 +1073,32 @@
     },
     "node": {
       "edit": "Editar el agente"
+    },
+    "orchestration": {
+      "swarm": "Ejecutar como enjambre",
+      "swarmHelp": "Los agentes se pasan la conversación entre ellos en lugar de ejecutarse en un orden fijo. Requiere un Dispatcher conectado a dos o más agentes."
+    },
+    "swarmAttachWarn": "Los documentos de Start se enviarán a todos los agentes en cada salto.",
+    "swarmCanvas": {
+      "dissolved": "No es un agente en modo enjambre — su prompt es la guía de traspaso del equipo."
+    },
+    "swarmError": {
+      "title": "Este flujo de trabajo no puede ejecutarse como un enjambre",
+      "found": "Encontrado",
+      "needed": "Necesario",
+      "neededText": "un agente etiquetado como Dispatcher, conectado a dos o más agentes.",
+      "note": "En modo enjambre el Dispatcher no es un agente — su prompt se convierte en la guía de traspaso que lleva cada miembro.",
+      "noDispatcher": "Ningún agente está etiquetado como Dispatcher.",
+      "oneChild": "El Dispatcher está conectado a un solo agente.",
+      "merge": "Dos agentes alimentan un mismo nodo. Un enjambre tiene una sola conversación, así que nada se combina.",
+      "twoEntries": "Start está conectado a más de un nodo. Un enjambre tiene exactamente un primer turno.",
+      "playbook": "Este flujo de trabajo contiene un nodo Playbook, que el modo enjambre aún no admite.",
+      "nested": "Hay más de un Dispatcher.",
+      "outputs": "Hay más de un nodo Output. Un enjambre produce una sola respuesta."
+    },
+    "swarmForm": {
+      "guideLabel": "Guía de traspaso — qué temas pertenecen a qué agente. Todos los miembros del enjambre la reciben.",
+      "guideTab": "Guía de traspaso"
     }
   }
 }
