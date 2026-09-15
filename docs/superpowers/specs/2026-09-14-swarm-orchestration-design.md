@@ -97,6 +97,30 @@ and forth until the hop budget ends the run.
 dispatchers, playbooks — keeps compiling exactly as it does today when Architecture is
 *Workflow*. That path is untouched and pinned byte-identical by the existing tests.
 
+**The shape does not carry the meaning — the fan-out parent's type does.** One picture,
+two behaviours, and this rule is not new: it is how the workflow compiler already reads a
+canvas.
+
+```
+   ┌──▶ B          parent is a WORKER agent      → B and C run CONCURRENTLY
+A ─┤                                               (plain edges, one topological layer)
+   └──▶ C          parent is a DISPATCHER agent  → ONE of B or C runs, chosen by the
+                                                   dispatcher reading the prompt
+                                                   (conditional edges on state["routes"])
+```
+
+Everything downstream follows from that one distinction, in both architectures:
+
+| Fan-out parent | Workflow mode | Swarm mode |
+|---|---|---|
+| **Worker** | concurrent branches, merged downstream | no representation — one agent holds the turn |
+| **Dispatcher** | one branch chosen per run | the canonical swarm: handoff tools, chosen per *turn* rather than per run |
+
+So the two fan-out rows in the table below are the same drawing distinguished only by the
+parent's type — which is why the architecture selector cannot infer intent from the
+picture, and why a worker fan-out refused as a swarm is refused on its parent's type, not
+its shape.
+
 What follows is only about which patterns can also be compiled **as a swarm**. The same
 canvas means different things under the two architectures, and not every pattern survives
 the translation, so choosing Swarm classifies the canvas first:
