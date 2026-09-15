@@ -16,18 +16,42 @@ Three decisions, taken with the owner, define it:
 
 This is a **bounded swarm**: the behaviour of a swarm, with the set of possible handoffs fixed in advance by the canvas.
 
-## 2. Build it on LangGraph primitives, not on `langgraph-swarm`
+## 2. Use `langgraph-swarm`
 
-`langgraph-swarm` is not installed; everything it is built from is — `langgraph 1.2.7` with `Command(goto=…)`, `StateGraph`, `MemorySaver` and `create_react_agent`.
+**Decision: adopt the library.** An earlier draft argued for hand-rolling the pattern on
+`Command(goto=…)`; that was wrong, and the package itself settles it. `langgraph-swarm
+0.1.0` is **411 lines of pure Python** and supplies precisely what we would otherwise
+write:
 
-We emit the pattern ourselves. Reasons, in order:
+```python
+create_swarm(agents: list[Pregel], default_active_agent, state_schema=SwarmState)
+create_handoff_tool(agent_name, description)
+add_active_agent_router(...)        # entry routing from the persisted active_agent
+class SwarmState(MessagesState):    # messages + active_agent
+```
 
-- **No dependency to install wherever the folder is deployed.** The package already runs on what the runner venv has.
-- **We own `active_agent` persistence**, which has to interoperate with the history store and the audit trail rather than with a library's private state shape.
-- **`langgraph-swarm` imposes its own state** (a messages channel plus its own active-agent key). Our runs carry `node_outputs`, `routes` and a run id; reconciling the two is more work than emitting ~60 lines of handoff plumbing.
-- **The hand-rolled shape ports.** ADK and MAF will be hand-rolled against *their* primitives anyway (§9), so one mental model covers all three.
+The objections that did not survive inspection: a dependency this small is not a cost
+worth engineering around; `state_schema` is a parameter, so our fields extend `SwarmState`
+rather than collide with it; and `active_agent` checkpointed in state under our own
+`thread_id` is the behaviour we want, not a loss of control.
 
-The trade accepted: we maintain the pattern. It is small and the tests pin it.
+**Pinned** as `langgraph-swarm>=0.1,<0.2` in the runner requirements and in the generated
+package's docstring. At 0.1.0 the API may move; the version pin plus §8's tests are the
+guard, and the surface we depend on is three functions.
+
+**What we still write ourselves:**
+
+- **Handoff tool descriptions**, built from each target's display name so the model names
+  a colleague rather than an id (`create_handoff_tool` takes a description).
+- **Audit records.** Each handoff tool is wrapped so the `handoff` record — from, to,
+  reason — reaches the audit sink; the library does not know about our trail.
+- **The hop budget** (§3), which the library does not impose.
+
+**The one structural change to agent modules.** `create_swarm` takes agents as `Pregel`
+objects — what `create_react_agent` returns. Our modules build that *inside*
+`run_node(request, trace)` and hand back text. In swarm mode a module exposes the compiled
+agent instead, with its MCP tools, skills and provider settings unchanged. Mechanical, and
+required under any approach.
 
 ## 3. Canvas semantics
 
@@ -56,29 +80,20 @@ api.py        unchanged — the run server
 agents/*.py   one agent each: NODE + run_node(request, trace)
 ```
 
-**State:**
+**State** extends the library's schema rather than replacing it:
 
 ```python
-class SwarmState(TypedDict, total=False):
-    messages: Annotated[list, add_messages]   # the shared conversation
-    active_agent: str                         # who holds the turn
+class SwarmState(_SwarmState):        # messages + active_agent from langgraph-swarm
     handoffs: Annotated[list, operator.add]   # [{from, to, reason}] — audit and re-entry
 ```
 
-**A handoff tool per drawn edge**, built from the target's display name so the model names a colleague rather than an id:
+**Handoff tools** come from `create_handoff_tool(agent_name=<target display>, description=…)`,
+one per drawn edge, each wrapped to emit the audit record before returning the library's
+`Command`.
 
-```python
-def _handoff_tool(target_id: str, target_name: str):
-    @tool(f"transfer_to_{slug(target_name)}",
-          description=f"Hand the conversation to {target_name}. Use when the request is theirs, not yours.")
-    def _t(reason: str = "") -> Command:
-        return Command(goto=target_id, graph=Command.PARENT,
-                       update={"active_agent": target_id,
-                               "handoffs": [{"from": _THIS_NODE, "to": target_id, "reason": reason}]})
-    return _t
-```
-
-**Graph wiring:** one node per agent; each node is that agent's ReAct loop over its own MCP tools *plus* its handoff tools. Entry is a conditional edge from START that reads `active_agent` — the entry agent on a fresh run, the persisted one on a resumed thread (§5).
+**Graph** is `create_swarm(agents, default_active_agent=<entry agent>, state_schema=SwarmState)`,
+compiled with the checkpointer (§5). `add_active_agent_router` inside the library handles
+resuming a thread with whoever held the turn — the behaviour §5 depends on.
 
 **What is reused unchanged:** every agent module keeps the `run_node(request, trace)` contract, the MCP tool builder, the skills runtime, the provider factory, the run server and the event protocol. A swarm differs in who is called next, not in what an agent is.
 
@@ -165,4 +180,4 @@ Stored as `{architecture, mode, multiUser}` under the existing `wf:<id>:codegen`
 - **Context growth is inherent** (§5). Not a bug to fix in v1, but it will be the first complaint on a long thread, and the mitigation should be specified before it is met rather than after.
 - **Two architectures in one generator.** The analyzer and every shared emit helper now serve both. The guard is that swarm is a new emit path and the workflow output is pinned byte-identical.
 - **A canvas means two different things** depending on the selector. Mitigated by the Run item naming the architecture, and by compile-time rejection of canvases that are invalid as swarms.
-- **Hand-rolled handoff could drift from the ecosystem.** If `langgraph-swarm` becomes the obvious standard, §2's decision is worth revisiting — the pattern is small enough to swap.
+- **`langgraph-swarm` is at 0.1.0.** A pre-1.0 dependency on the critical path; pinned `>=0.1,<0.2`, and the surface used is three functions, so a breaking release is a contained fix rather than a rewrite. The 411-line source is small enough to vendor if the project ever stalls.
