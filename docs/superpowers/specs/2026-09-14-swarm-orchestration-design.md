@@ -113,7 +113,39 @@ This is the reason swarm was asked for, so it is not optional here: **a swarm ca
 - Persistence is a **checkpointer keyed by thread**: `graph.compile(checkpointer=…)`, invoked with `{"configurable": {"thread_id": f"{owner}:{thread}"}}` — the same `(owner, thread)` key the history store uses, so swarm and workflow threads live side by side without a second scheme.
 - `active_agent` is checkpointed with the messages, so a follow-up resumes with the agent that handled the last turn. This is what makes *"actually make it 5 days"* reach HR without anyone re-routing it.
 
-**Dependency note, to decide before building:** `MemorySaver` is installed and gives per-process history — lost on restart. Durable history needs `langgraph-checkpoint-sqlite`, which is **not installed**. The spec assumes SQLite for anything the user would call memory; if we ship with `MemorySaver` only, history dies with the server and the feature is half-delivered.
+**Where checkpoints are stored — MySQL, the database the app already uses.**
+`langgraph-checkpoint-mysql 3.0.0` exists and is the right fit: the app already runs a
+MySQL instance and already connects to it, so threads live beside the workflows and agents
+they belong to rather than in a second store nobody backs up.
+
+Concrete facts, read from the package:
+
+- Savers: `PyMySQLSaver` (sync) and `AIOMySQLSaver` (async). The server is async, so
+  `AIOMySQLSaver` with the `aiomysql` extra.
+- It creates and owns five tables: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+  `checkpoint_migrations`, `store` — via its own `setup()`, run once at server start.
+- The driver is an extra, not a hard dependency: `langgraph-checkpoint-mysql[aiomysql]`.
+
+**Three consequences to decide with the owner before building:**
+
+1. **Which schema owns those five tables.** They are the library's, migrated by the
+   library. Putting them in the CONTEXTS database (where workflows and agents live) keeps
+   one backup story; a separate `..._checkpoints` schema keeps generated-code tables away
+   from app tables. **Recommendation: a separate schema**, because the generated server
+   creating tables inside the app's schema makes compiled output a schema owner, which it
+   should not be.
+2. **Hold the connection open.** The owner's own note records that fresh connections to
+   the CONTEXTS database sometimes stall for minutes. A checkpointer writes on every turn,
+   so a per-write connection would freeze runs. The saver is opened once at startup and
+   pooled for the life of the server; a stall then costs one slow start rather than a
+   hung conversation.
+3. **The compiled folder stops being self-contained** when MySQL is configured — it needs
+   host, user, password and schema. Handled the same way as identity (§5): the environment
+   decides. `WORKFLOW_CHECKPOINT_DSN` set → MySQL; unset → a SQLite file beside the
+   package (`langgraph-checkpoint-sqlite 3.1.1`, also available), which keeps "hand someone
+   the folder" working with history intact. `MemorySaver` is used only when both are
+   explicitly disabled, and the docstring says plainly that history then dies with the
+   process.
 
 **The cost, stated plainly.** Every turn carries the whole conversation. Token cost grows with conversation length rather than with the work done, and a long thread eventually meets the model's context limit. This is the opposite of the lean-node property the workflow target was tuned for (16.5s → 10.9s), and it is inherent to the architecture, not a defect. Mitigation is deferred: a summarisation step when a thread exceeds a configurable message count, specified only when a real thread gets long enough to need it.
 
@@ -184,7 +216,8 @@ Stored as `{architecture, mode, multiUser}` under the existing `wf:<id>:codegen`
 
 ## 11. Risks and decisions
 
-- **`MemorySaver` vs SQLite (§5).** Shipping in-memory only means history dies with the server, which users will read as "it forgot me". Decide before building; adding `langgraph-checkpoint-sqlite` to the runner requirements is the cheap answer.
+- **The checkpointer owns five tables** (§5). `langgraph-checkpoint-mysql` migrates its own schema, so the generated server becomes a schema owner wherever it points. Recommendation: a dedicated schema, not the app's. Decide before building.
+- **A stalled connection stalls a conversation** (§5). The checkpointer writes every turn, and this deployment has a history of fresh connections hanging; the saver is opened once and pooled for exactly that reason.
 - **Context growth is inherent** (§5). Not a bug to fix in v1, but it will be the first complaint on a long thread, and the mitigation should be specified before it is met rather than after.
 - **Two architectures in one generator.** The analyzer and every shared emit helper now serve both. The guard is that swarm is a new emit path and the workflow output is pinned byte-identical.
 - **A canvas means two different things** depending on the selector. Mitigated by the Run item naming the architecture, and by compile-time rejection of canvases that are invalid as swarms.
