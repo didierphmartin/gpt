@@ -71,9 +71,13 @@ the drawing and the running system have the same members.
 | Output node | collects parents' outputs | where the current answer is shown |
 | Playbook node | the playbook runtime, with gates | **not supported in v1** — see §7 |
 
-The members form a mesh: each can hand to any other. An edge drawn *between* members adds
-nothing they do not already have; an edge from a member to an agent **not** connected to
-Start extends the swarm to that agent too, and it is reachable only through its parent.
+The members form a mesh: each can hand to any other. Two consequences follow, and both are
+refusals or no-ops rather than special cases. An edge drawn *between* members **adds nothing
+and is ignored** — everyone can already reach everyone, so the drawing is redundant, not
+wrong. An agent connected to a member but **not** to Start is **refused**: admitting it
+would make it reachable through one parent only, which is a partial mesh, and absorbing it
+fully would make the edge the user drew mean exactly what `Start → that agent` already
+means.
 
 **Why the fan-out, and not a dispatcher.** An earlier draft of this spec had swarm mode
 built around a node tagged Dispatcher that dissolved at compile time — you drew three
@@ -127,13 +131,16 @@ default and what every existing workflow is.
 |---|---|
 | Start connected to fewer than two agents | A one-agent swarm has nobody to hand to |
 | Contains a node tagged Dispatcher | A swarm routes itself; the tag belongs to workflow mode. Connect the agents to Start directly |
-| Fan-in / merge (B, C → D) | One conversation reaches one agent — nothing merges |
+| An agent not connected to Start | It is not in the swarm. Connect it to Start, or remove it |
 | More than one Output node | A session shows one answer at a time |
 | Contains a playbook node | Gates plus handoffs is unresolved in v1 (§7) |
 
-Five refusals, where the dispatcher-based draft had seven. The two that disappear —
-"no dispatcher" and "dispatcher with one child" — were both artefacts of requiring a node
-that no longer exists.
+Five refusals, where the dispatcher-based draft had seven. Three disappeared with the
+dispatcher — "no dispatcher", "dispatcher with one child" and nested dispatchers, all
+artefacts of requiring a node that no longer exists. A fourth, fan-in/merge, disappeared
+with the full mesh: once every member can hand to every other, nothing arrives anywhere, so
+there is nothing to merge. Two took their place: the Dispatcher tag itself, and an agent
+that is not connected to Start.
 
 **The error is a lesson, not a rejection.** It names what was found, what is needed, and
 draws the target:

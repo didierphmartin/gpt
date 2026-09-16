@@ -72,15 +72,6 @@ class SwarmRewriter
             }
             return $out;
         };
-        $parents = static function (string $id) use ($edges): array {
-            $out = [];
-            foreach ($edges as [$f, $t]) {
-                if ($t === $id) {
-                    $out[] = $f;
-                }
-            }
-            return $out;
-        };
         $typeOf = static fn(array $n): string => (string) ($n['config']['type'] ?? $n['node_type'] ?? '');
         $isAgent = static fn(array $n): bool => in_array($typeOf($n), ['agent', 'agent-template'], true);
         $isDispatcher = static fn(array $n): bool => ($n['config']['agent_type'] ?? '') === 'dispatcher';
@@ -133,21 +124,6 @@ class SwarmRewriter
         $menu = $byId($menu);
         if (count($menu) < 2) {
             return ['ok' => false, 'error' => 'start_needs_two_agents', 'nodes' => []];
-        }
-
-        // A merge is any agent with more than one agent parent: one
-        // conversation cannot arrive twice.
-        foreach ($ids as $id) {
-            if (!$isAgent($nodes[$id])) {
-                continue;
-            }
-            $agentParents = array_values(array_filter(
-                $parents($id),
-                static fn($p) => isset($nodes[$p]) && $isAgent($nodes[$p])
-            ));
-            if (count($agentParents) > 1) {
-                return ['ok' => false, 'error' => 'merge_node', 'nodes' => [$id]];
-            }
         }
 
         // Every agent in the swarm can hand to every other (spec, revised).

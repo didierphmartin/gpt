@@ -1098,7 +1098,8 @@
       "startNeedsTwo": "Start is connected to fewer than two agents. A swarm is the agents drawn from Start, so connect at least two of them to it.",
       "dispatcherTag": "An agent is tagged Dispatcher. In a swarm every member routes, so the tag has no meaning here — remove the Dispatcher tag and connect the agents to Start directly.",
       "neededFanout": "two or more agents connected directly to Start. Each one can hand the conversation to the others.",
-      "noteFanout": "The prompt you type goes to whichever agent is holding the turn. The first prompt of a conversation goes to the first agent connected to Start."
+      "noteFanout": "The prompt you type goes to whichever agent is holding the turn. The first prompt of a conversation goes to the first agent connected to Start.",
+      "notOnStart": "This agent is not connected to Start, so it is not in the swarm. Connect it to Start, or remove it."
     },
     "swarmForm": {
       "guideLabel": "Handoff guide — which subjects belong to which agent. Every member of the swarm receives this.",

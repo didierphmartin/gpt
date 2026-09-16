@@ -5831,7 +5831,7 @@ class WorkflowEditor {
         const reason = {
             start_needs_two_agents: this.t('workflow.swarmError.startNeedsTwo'),
             dispatcher_in_swarm:    this.t('workflow.swarmError.dispatcherTag'),
-            merge_node:             this.t('workflow.swarmError.merge'),
+            agent_not_on_start:     this.t('workflow.swarmError.notOnStart'),
             multiple_outputs:       this.t('workflow.swarmError.outputs'),
             playbook_unsupported:   this.t('workflow.swarmError.playbook'),
         }[result.error] || result.error;

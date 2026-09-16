@@ -744,7 +744,7 @@
       }
     },
     {
-      "name": "a merge node is refused",
+      "name": "two members pointing at the same off-Start agent is still not-on-Start",
       "graph": {
         "nodes": [
           {
@@ -806,7 +806,7 @@
       },
       "expect": {
         "ok": false,
-        "error": "merge_node",
+        "error": "agent_not_on_start",
         "nodes": [
           "4"
         ]
@@ -947,6 +947,112 @@
         "nodes": [
           "4",
           "5"
+        ]
+      }
+    },
+    {
+      "name": "redundant edges between members are ignored, not refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "D",
+              "agent_type": "standard",
+              "instructions": "D."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          },
+          {
+            "from": "1",
+            "to": "4"
+          },
+          {
+            "from": "2",
+            "to": "4"
+          },
+          {
+            "from": "3",
+            "to": "4"
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "agents": [
+          "2",
+          "3",
+          "4"
+        ],
+        "handoffs": [
+          [
+            "2",
+            "3"
+          ],
+          [
+            "2",
+            "4"
+          ],
+          [
+            "3",
+            "2"
+          ],
+          [
+            "3",
+            "4"
+          ],
+          [
+            "4",
+            "2"
+          ],
+          [
+            "4",
+            "3"
+          ]
+        ],
+        "entry": "2",
+        "guide_contains": [
+          "A",
+          "B",
+          "D"
         ]
       }
     }

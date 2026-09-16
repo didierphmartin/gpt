@@ -60,7 +60,6 @@
             return as < bs ? -1 : as > bs ? 1 : 0;
         });
         const children = id => edges.filter(([f]) => f === id).map(([, t]) => t);
-        const parents = id => edges.filter(([, t]) => t === id).map(([f]) => f);
         const typeOf = n => String(n.config?.type ?? n.node_type ?? '');
         const isAgent = n => ['agent', 'agent-template'].includes(typeOf(n));
         const isDispatcher = n => (n.config?.agent_type || '') === 'dispatcher';
@@ -88,14 +87,6 @@
         }
         const menu = byId(menuIds);
         if (menu.length < 2) return { ok: false, error: 'start_needs_two_agents', nodes: [] };
-
-        // A merge is any agent with more than one agent parent: one
-        // conversation cannot arrive twice.
-        for (const id of ids) {
-            if (!isAgent(nodes[id])) continue;
-            const agentParents = parents(id).filter(p => nodes[p] && isAgent(nodes[p]));
-            if (agentParents.length > 1) return { ok: false, error: 'merge_node', nodes: [id] };
-        }
 
         // Every agent in the swarm can hand to every other (spec, revised).
         // An agent connected to a member but not to Start — "connected to
