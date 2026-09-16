@@ -32,6 +32,11 @@ class WorkflowEditor {
         // read the same value.
         this.orchestration = 'workflow';
 
+        // The live swarm session (spec §3b): {workflowId, rewrite, activeAgent,
+        // transcript}, or null when no swarm conversation is open. See
+        // _swarmSessionStart.
+        this._swarmSession = null;
+
         // API base URL
         this.apiBase = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
 
@@ -1453,7 +1458,7 @@ class WorkflowEditor {
                 }
                 // Spec §6b wants Start's documents to reach every agent. The
                 // browser-driven run path does not deliver them — it never
-                // reads Start's `data.documents` (see _runSwarm) — so warn that
+                // reads Start's `data.documents` (see _swarmTurn) — so warn that
                 // they will be ignored rather than claiming the opposite.
                 // Advisory only: do not block the flip.
                 const attached = this._startNodeAttachments().length;
@@ -1466,6 +1471,10 @@ class WorkflowEditor {
                 }
             }
             this.orchestration = wanted;
+            // Flipping the mode ends any conversation held under the old one:
+            // a session pins the rewrite it started with, and that rewrite is
+            // exactly what this flip invalidates.
+            this._swarmSessionEnd();
             this._workflowDirty = true;
             this._applyOrchestrationToCanvas();
         });
@@ -5798,7 +5807,7 @@ class WorkflowEditor {
      * editor reads a node's document list (see renderNodeDocuments /
      * showAgentEditForm's `data.documents`). Used only to decide whether to
      * warn that swarm mode does not deliver them (spec §6b is an open item --
-     * see _runSwarm) -- advisory, so an empty/missing Start node just yields
+     * see _swarmTurn) -- advisory, so an empty/missing Start node just yields
      * no warning.
      */
     _startNodeAttachments() {
@@ -5816,14 +5825,15 @@ class WorkflowEditor {
         const names = (result.nodes || [])
             .map(id => this.editor?.drawflow?.drawflow?.Home?.data?.[id]?.data?.agent_name
                 || this.editor?.drawflow?.drawflow?.Home?.data?.[id]?.data?.name || `node ${id}`);
+        // The five codes swarm-rewrite.js actually returns. `t()` renders the
+        // raw key when one is missing, so a `|| 'fallback'` would never fire --
+        // every key here exists in all three of en/es/fr instead.
         const reason = {
-            no_dispatcher: this.t('workflow.swarmError.noDispatcher') || 'No agent is tagged Dispatcher.',
-            dispatcher_needs_two_children: this.t('workflow.swarmError.oneChild') || 'The Dispatcher is connected to only one agent.',
-            merge_node: this.t('workflow.swarmError.merge') || 'Two agents feed one node. A swarm has one conversation, so nothing merges.',
-            two_entry_points: this.t('workflow.swarmError.twoEntries') || 'Start is connected to more than one node. A swarm has exactly one first turn.',
-            playbook_unsupported: this.t('workflow.swarmError.playbook') || 'This workflow contains a Playbook node, which swarm mode does not support yet.',
-            nested_dispatchers: this.t('workflow.swarmError.nested') || 'There is more than one Dispatcher.',
-            multiple_outputs: this.t('workflow.swarmError.outputs') || 'There is more than one Output node. A swarm produces one answer.',
+            start_needs_two_agents: this.t('workflow.swarmError.startNeedsTwo'),
+            dispatcher_in_swarm:    this.t('workflow.swarmError.dispatcherTag'),
+            merge_node:             this.t('workflow.swarmError.merge'),
+            multiple_outputs:       this.t('workflow.swarmError.outputs'),
+            playbook_unsupported:   this.t('workflow.swarmError.playbook'),
         }[result.error] || result.error;
 
         const backdrop = document.createElement('div');
@@ -5833,16 +5843,12 @@ class WorkflowEditor {
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">${this.escapeHtml(this.t('workflow.swarmError.title') || 'This workflow cannot run as a swarm')}</h3>
                 <p class="text-sm text-gray-700 mb-1"><strong>${this.escapeHtml(this.t('workflow.swarmError.found') || 'Found')}:</strong> ${this.escapeHtml(reason)}</p>
                 ${names.length ? `<p class="text-sm text-gray-600 mb-3">${this.escapeHtml(names.join(', '))}</p>` : '<div class="mb-3"></div>'}
-                <p class="text-sm text-gray-700 mb-2"><strong>${this.escapeHtml(this.t('workflow.swarmError.needed') || 'Needed')}:</strong> ${this.escapeHtml(this.t('workflow.swarmError.neededText') || 'one agent tagged Dispatcher, connected to two or more agents.')}</p>
+                <p class="text-sm text-gray-700 mb-2"><strong>${this.escapeHtml(this.t('workflow.swarmError.needed'))}:</strong> ${this.escapeHtml(this.t('workflow.swarmError.neededFanout'))}</p>
                 <pre class="bg-gray-100 text-gray-800 text-xs rounded p-3 mb-3 overflow-auto">      Start
-        │
-        ▼
-   ┌────────────┐
-   │ Dispatcher │  ← its prompt says which subjects
-   └─┬───┬───┬──┘    belong to which colleague
-     ▼   ▼   ▼
-    HR  IT  Devices  ← the swarm: each can hand to the others</pre>
-                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.swarmError.note') || 'In swarm mode the Dispatcher is not an agent — its prompt becomes the handoff guide every member carries.')}</p>
+     ╱  │  ╲
+    ▼   ▼   ▼
+   HR  IT  Devices      ← the swarm: each can hand to the others</pre>
+                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.swarmError.noteFanout'))}</p>
                 <div class="flex justify-end">
                     <button class="swarm-err-close px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
                 </div>
@@ -12059,7 +12065,7 @@ class WorkflowEditor {
         // A swarm shares one conversation across agents: the caller passes the
         // transcript in as the history behind this turn. What grows here is
         // only this turn's own tool rounds, so the caller does NOT take it back
-        // (see _runSwarm). A workflow run passes nothing and gets today's
+        // (see _swarmTurn). A workflow run passes nothing and gets today's
         // behaviour, an empty history per node.
         const conversationHistory = Array.isArray(history) ? [...history] : [];
         // Per-node context from the agent form. These OVERRIDE the backend
@@ -13107,15 +13113,46 @@ class WorkflowEditor {
     }
 
     /**
-     * Run the workflow as a swarm: the rewritten graph's entry agent holds the
-     * first turn, and control passes on each handoff until an agent answers
-     * without handing off, or the hop budget is spent.
+     * A swarm is a session, not a run (spec §3b). Between prompts it holds who
+     * is active and everything said so far — that pair is what makes a
+     * follow-up like "make it 5 days" land on the right agent with the context
+     * it needs. Both live in memory for as long as the overlay is open;
+     * persisting them across a reload is the checkpointer question in §5.
      *
-     * One conversation, not a relay. This function OWNS `transcript`: it is the
+     * The rewrite is computed ONCE here, not once per prompt: the swarm a
+     * conversation is being held with must not change under it mid-session.
+     */
+    _swarmSessionStart() {
+        const rw = window.swarmRewrite(this._currentGraphForRewrite());
+        if (!rw.ok) return rw;
+        this._swarmSession = {
+            workflowId: this.currentWorkflowId,
+            rewrite: rw,
+            // No prompt has been handled yet, so nobody is active. The first
+            // prompt goes to the first agent connected to Start.
+            activeAgent: null,
+            transcript: [],
+        };
+        return { ok: true };
+    }
+
+    /** Discard the session: the next prompt starts a fresh conversation at the entry agent. */
+    _swarmSessionEnd() {
+        this._swarmSession = null;
+    }
+
+    /**
+     * Run ONE turn of the swarm session: the session's active agent holds the
+     * turn, and control passes on each handoff until an agent answers without
+     * handing off, or the hop budget is spent. The agent that ends the turn
+     * holds the next prompt.
+     *
+     * One conversation, not a relay. The session OWNS `transcript`: it is the
      * shared message array every agent is handed, so an agent taking the turn
-     * at hop 4 sees what was said at hop 0. Each turn appends exactly one entry
-     * — the handoff it made (that line is what carries context across the
-     * handoff) or the answer it gave.
+     * at hop 4 sees what was said at hop 0 — and, because the array outlives
+     * the turn, what was said on the previous prompt too. Each hop appends
+     * exactly one entry — the handoff it made (that line is what carries
+     * context across the handoff) or the answer it gave.
      *
      * The human's request goes out as the `message` on EVERY hop, never ''.
      * What happened before is the history; the request is still the request.
@@ -13134,12 +13171,22 @@ class WorkflowEditor {
      * the menu is the agent's own colleagues, that handing off is optional, and
      * that the turn can move any number of times.
      */
-    async _runSwarm(userPrompt, onProgress) {
-        const rw = window.swarmRewrite(this._currentGraphForRewrite());
-        if (!rw.ok) {
-            this._showSwarmRefusalModal(rw);
-            return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0, handoffs: [], status: 'refused', history: [] };
+    async _swarmTurn(userPrompt, onProgress) {
+        // A session belongs to one workflow: opening another one leaves a
+        // session whose agent ids and transcript describe a canvas that is no
+        // longer on screen.
+        if (this._swarmSession && this._swarmSession.workflowId !== this.currentWorkflowId) {
+            this._swarmSessionEnd();
         }
+        if (!this._swarmSession) {
+            const started = this._swarmSessionStart();
+            if (!started.ok) {
+                this._showSwarmRefusalModal(started);
+                return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0, handoffs: [], status: 'refused', history: [] };
+            }
+        }
+        const s = this._swarmSession;
+        const rw = s.rewrite;
 
         const _startedAt = Date.now();
         this._wfOutputs = {};
@@ -13162,10 +13209,14 @@ class WorkflowEditor {
 
         const budget = window.SWARM_HOP_BUDGET || 25;
         const handoffs = [];
-        // The one shared conversation. {role, content} entries, the same shape
-        // the backend's conversation_history uses. Owned here, never replaced.
-        const transcript = [];
-        let active = rw.entry;
+        // The one shared conversation, carried over from the previous prompts of
+        // this session. {role, content} entries, the same shape the backend's
+        // conversation_history uses. Owned by the session, never replaced.
+        let transcript = s.transcript;
+        // First prompt of the session: nobody is active yet, so it goes to the
+        // first agent connected to Start. Later prompts go to whoever ended the
+        // previous turn.
+        let active = s.activeAgent || rw.entry;
         let output = '';
         let status = 'completed';
         let answered = null;
@@ -13202,7 +13253,7 @@ class WorkflowEditor {
 
             // res.history is deliberately NOT read back. It is the node's own
             // tool-round bookkeeping for the single turn it just ran, not this
-            // conversation — _runSwarm owns `transcript` and appends the turn
+            // conversation — the session owns `transcript` and this loop appends the turn
             // itself, below. (The `history:` field is left on the returns
             // because it is harmless and seeds correctly; ignoring it here is
             // the intent, not an oversight.)
@@ -13260,6 +13311,12 @@ class WorkflowEditor {
             }
         }
 
+        // The agent that ended this turn holds the next prompt. On a hop-budget
+        // exhaustion nobody answered, so the turn's last holder keeps it rather
+        // than silently resetting the session to the top.
+        s.activeAgent = answered || active;
+        s.transcript = transcript;
+
         const runResult = {
             output,
             node_outputs: this._wfOutputs,
@@ -13283,8 +13340,10 @@ class WorkflowEditor {
     async executeWorkflowInBrowser(userPrompt, { onProgress } = {}) {
         this.lastUserPrompt = userPrompt;
         if (this._isSwarm()) {
-            // A swarm has no topological order: control moves by handoff.
-            return await this._runSwarm(userPrompt, onProgress);
+            // A swarm has no topological order: control moves by handoff. And
+            // it is a session, so this is one turn of an ongoing conversation,
+            // not a run from the top (§3b).
+            return await this._swarmTurn(userPrompt, onProgress);
         }
         // Clear any artifact from a prior run so the Output node never shows a
         // stale file (the SSE path resets this on 'workflow_start'; the
@@ -13799,6 +13858,9 @@ class WorkflowEditor {
         // Reset orchestration -- without this it leaks from whichever
         // workflow was open before into the next one opened on this canvas.
         this.orchestration = 'workflow';
+        // A swarm session belongs to one workflow (§3b): its active agent and
+        // transcript mean nothing on the next canvas.
+        this._swarmSessionEnd();
 
         // Reset schedule setting
         this.scheduleEnabled = false;

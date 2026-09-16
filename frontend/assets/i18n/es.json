@@ -1094,7 +1094,11 @@
       "twoEntries": "Start está conectado a más de un nodo. Un enjambre tiene exactamente un primer turno.",
       "playbook": "Este flujo de trabajo contiene un nodo Playbook, que el modo enjambre aún no admite.",
       "nested": "Hay más de un Dispatcher.",
-      "outputs": "Hay más de un nodo Output. Un enjambre produce una sola respuesta."
+      "outputs": "Hay más de un nodo Output. Un enjambre produce una sola respuesta.",
+      "startNeedsTwo": "Start está conectado a menos de dos agentes. Un enjambre son los agentes dibujados desde Start, así que conecta al menos dos a él.",
+      "dispatcherTag": "Un agente está etiquetado como Dispatcher. En un enjambre cada miembro enruta, así que la etiqueta no tiene sentido aquí — quita la etiqueta Dispatcher y conecta los agentes directamente a Start.",
+      "neededFanout": "dos o más agentes conectados directamente a Start. Cada uno puede pasar la conversación a los demás.",
+      "noteFanout": "El prompt que escribes va al agente que tiene el turno. El primer prompt de una conversación va al primer agente conectado a Start."
     },
     "swarmForm": {
       "guideLabel": "Guía de traspaso — qué temas pertenecen a qué agente. Todos los miembros del enjambre la reciben.",
