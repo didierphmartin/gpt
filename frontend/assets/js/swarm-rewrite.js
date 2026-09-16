@@ -25,6 +25,18 @@
     // implementations diverge (finding 7).
     const phpTrim = s => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
 
+    /* The display name a handoff would use. Shared so the duplicate check and the
+       composed colleague list can never disagree about what a node is called.
+       Only a non-empty STRING counts: String()-ing whatever is there diverges
+       from the PHP twin on non-strings (JS renders false as "false", PHP as ""). */
+    function displayName(nodes, id) {
+        for (const k of ['agent_name', 'name']) {
+            const v = nodes[id].config?.[k];
+            if (typeof v === 'string' && v !== '') return v;
+        }
+        return `node ${id}`;
+    }
+
     function handoffGuide(colleagues) {
         const lines = ['## Colleagues you can hand this to'];
         for (const c of colleagues) {
@@ -97,19 +109,24 @@
         const notOnStart = ids.filter(id => isAgent(nodes[id]) && !menu.includes(id));
         if (notOnStart.length) return { ok: false, error: 'agent_not_on_start', nodes: byId(notOnStart) };
 
+        // A handoff names its target: the route_to enum is built from display
+        // names and the resolver matches case- and space-insensitively, taking
+        // the first hit. Two members sharing a name are not merely ambiguous to
+        // us — the model cannot express which it means, and control would go to
+        // whichever sorted first. Refuse instead.
+        const seen = new Map();
+        const dupes = new Set();
+        for (const id of menu) {
+            const key = displayName(nodes, id).trim().toLowerCase();
+            if (seen.has(key)) { dupes.add(seen.get(key)); dupes.add(id); }
+            else seen.set(key, id);
+        }
+        if (dupes.size) return { ok: false, error: 'duplicate_agent_names', nodes: byId([...dupes]) };
+
         // The swarm is exactly the menu: no absorption, no transitive walk.
         const ordered = menu;
 
-        // Only a non-empty STRING counts as a name. String()-ing whatever is
-        // there diverges from the PHP twin on non-strings — JS renders false as
-        // "false" and PHP as "" — and the two must agree byte for byte.
-        const nameOf = (id) => {
-            for (const k of ['agent_name', 'name']) {
-                const v = nodes[id].config?.[k];
-                if (typeof v === 'string' && v !== '') return v;
-            }
-            return `node ${id}`;
-        };
+        const nameOf = (id) => displayName(nodes, id);
         // Truncate by codepoint, never by UTF-16 code unit: Array.from(...)
         // splits astral characters (surrogate pairs) into single elements,
         // matching PHP's mb_substr($s, 0, 120), which counts codepoints.

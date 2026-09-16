@@ -142,6 +142,28 @@ class SwarmRewriter
             return ['ok' => false, 'error' => 'agent_not_on_start', 'nodes' => $byId($notOnStart)];
         }
 
+        // A handoff names its target: the route_to enum is built from display
+        // names, and the resolver matches case- and space-insensitively, taking
+        // the first hit. Two members sharing a name are therefore not merely
+        // ambiguous to us — the model has no way to express which it means, and
+        // control would silently go to whichever sorted first. Refuse instead.
+        $seen = [];
+        $dupes = [];
+        foreach ($menu as $id) {
+            $key = mb_strtolower(trim(self::displayName($nodes, $id)));
+            if (isset($seen[$key])) {
+                $dupes[$seen[$key]] = true;
+                $dupes[$id] = true;
+            } else {
+                $seen[$key] = $id;
+            }
+        }
+        if ($dupes !== []) {
+            // array_keys on a set keyed by node id hands back INTs — PHP coerces
+            // numeric-string keys — and the JS twin returns strings. Cast back.
+            return ['ok' => false, 'error' => 'duplicate_agent_names', 'nodes' => $byId(array_map('strval', array_keys($dupes)))];
+        }
+
         // --- the rewrite ---
         // The swarm is exactly the menu: no absorption, no transitive walk.
         $members = $menu;
@@ -149,15 +171,7 @@ class SwarmRewriter
         // Only a non-empty STRING counts as a name. Casting whatever is there
         // diverges from the JS twin on non-strings — PHP renders false as ""
         // and JS as "false" — and the two must agree byte for byte.
-        $nameOf = static function (string $id) use ($nodes): string {
-            foreach (['agent_name', 'name'] as $k) {
-                $v = $nodes[$id]['config'][$k] ?? null;
-                if (is_string($v) && $v !== '') {
-                    return $v;
-                }
-            }
-            return "node {$id}";
-        };
+        $nameOf = static fn(string $id): string => self::displayName($nodes, $id);
         // PHP's trim()/rtrim() default charlist is " \t\n\r\0\x0B" (ASCII
         // only) and every trim() below relies on that. The JS twin uses its
         // own phpTrim() helper — never .trim() or /\s/ — to strip the
@@ -220,6 +234,19 @@ class SwarmRewriter
      * are, each carrying its own role summary. There is no dispatcher and no
      * shared routing prose in a swarm — each member decides for itself.
      */
+    /** The display name a handoff would use. Shared so the duplicate check and the
+     *  composed colleague list can never disagree about what a node is called. */
+    private static function displayName(array $nodes, string $id): string
+    {
+        foreach (['agent_name', 'name'] as $k) {
+            $v = $nodes[$id]['config'][$k] ?? null;
+            if (is_string($v) && $v !== '') {
+                return $v;
+            }
+        }
+        return "node {$id}";
+    }
+
     /** A genuine list, or nothing. Must match swarm-rewrite.js's Array.isArray check. */
     private static function toolList(mixed $v): array
     {

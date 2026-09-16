@@ -5860,6 +5860,7 @@ class WorkflowEditor {
             start_needs_two_agents: this.t('workflow.swarmError.startNeedsTwo'),
             dispatcher_in_swarm:    this.t('workflow.swarmError.dispatcherTag'),
             agent_not_on_start:     this.t('workflow.swarmError.notOnStart'),
+            duplicate_agent_names:  this.t('workflow.swarmError.duplicateNames'),
             multiple_outputs:       this.t('workflow.swarmError.outputs'),
             playbook_unsupported:   this.t('workflow.swarmError.playbook'),
         }[result.error] || result.error;

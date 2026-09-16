@@ -1095,7 +1095,8 @@
       "dispatcherTag": "Un agent est identifié comme Dispatcher. Dans un essaim, chaque membre aiguille, donc cette étiquette n'a aucun sens ici — retirez l'étiquette Dispatcher et connectez les agents directement à Start.",
       "neededFanout": "deux agents ou plus connectés directement à Start. Chacun peut transmettre la conversation aux autres.",
       "noteFanout": "Le prompt que vous saisissez va à l'agent qui détient le tour. Le premier prompt d'une conversation va au premier agent connecté à Start.",
-      "notOnStart": "Cet agent n'est pas relié à Start, il ne fait donc pas partie de l'essaim. Reliez-le à Start ou supprimez-le."
+      "notOnStart": "Cet agent n'est pas relié à Start, il ne fait donc pas partie de l'essaim. Reliez-le à Start ou supprimez-le.",
+      "duplicateNames": "Deux agents portent le même nom. Un passage de main désigne sa cible, l'essaim ne pourrait donc pas les distinguer — renommez-en un."
     },
     "swarmSession": {
       "startHint": "Cliquez pour ouvrir la conversation de l'essaim",
