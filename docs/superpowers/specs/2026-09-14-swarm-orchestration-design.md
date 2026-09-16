@@ -1,6 +1,8 @@
 # Swarm orchestration — design
 
-Date: 2026-09-14. Branch: feat/backend-python. Status: draft for review.
+Date: 2026-09-14, revised 2026-09-15. Branch: feat/backend-python. Status: draft for review.
+
+**Revision 2026-09-15.** Swarm membership changed from "a Dispatcher node that dissolves" to "the fan-out from Start", after two users independently proposed it on seeing the editor (§3). The same revision adds §3b, the session: a swarm accepts prompts continuously and keeps its active agent and transcript between them, where the first draft treated a swarm as a single run. v1(a) as built implements the turn but not the session.
 
 Second architecture alongside the existing workflow (DAG) compiler. Scope of this spec: **LangGraph, modular packaging only**. The other frameworks are assessed in §9; multi-user and the workflow-mode history feature are separate specs and follow this one.
 
@@ -8,11 +10,12 @@ Second architecture alongside the existing workflow (DAG) compiler. Scope of thi
 
 A workflow drawn on the canvas can be compiled as a **swarm**: agents that hand control to one another, with the conversation carried between them automatically, instead of a fixed graph that decides who runs next.
 
-Three decisions, taken with the owner, define it:
+Four decisions, taken with the owner, define it:
 
 1. **An edge means "may hand off to."** You draw the allowed handoffs; an agent gets one handoff tool per outgoing edge. The topology stays reviewable and a handoff you did not draw is impossible rather than merely unlikely.
-2. **A dispatcher node dissolves.** A swarm routes by itself, so the dispatcher is scaffolding: it is not compiled as an agent. Its children become the swarm, wired to each other, and its system prompt becomes the handoff guide every member carries (§3b).
-3. **Modular packaging only, at first.** Single file and A2A come later, once the semantics are proven.
+2. **The swarm is the fan-out from Start.** The agents connected to the Start node are the members; each gets a handoff tool for the others. There is no router node, nothing is added at compile time and nothing disappears — the drawing and the running system have the same members (§3). The Dispatcher tag stays what it has always been: a workflow-mode router.
+3. **A swarm is a session, not a run.** Workflow mode injects one prompt and processes it to completion. Swarm mode is continuous: Start is an input line, prompts arrive one after another, and between them the swarm holds which agent is active and everything said so far (§3b). This is what makes a follow-up land on the right agent with the right context.
+4. **Modular packaging only, at first.** Single file and A2A come later, once the semantics are proven.
 
 This is a **bounded swarm**: the behaviour of a swarm, with the set of possible handoffs fixed in advance by the canvas.
 
@@ -55,19 +58,35 @@ required under any approach.
 
 ## 3. Canvas semantics
 
+**The swarm is what you drew from Start.** In swarm mode the agents fanned out from the
+Start node *are* the swarm. There is no router node and nothing disappears at compile time:
+the drawing and the running system have the same members.
+
 | Canvas element | Workflow mode (today) | Swarm mode |
 |---|---|---|
-| Edge A → B | B runs after A | A gets a `transfer_to_B` tool |
-| Start → Dispatcher | the dispatcher runs first | the dispatcher dissolves; the first turn goes to its first child (§3b) |
-| Dispatcher node | one forced `route_to`, one child runs | **dissolved** — not an agent; its children become a mesh and its prompt becomes their shared handoff guide (§3b) |
+| Start → A, B, C (fan-out) | A, B and C run concurrently | A, B and C **are the swarm**; the session's first prompt goes to the first of them |
+| Edge A → B | B runs after A | A gets a handoff tool for B |
+| Dispatcher node | one forced `route_to`, one child runs | **refused** — a swarm routes itself, so there is nothing for a dispatcher to do (§3a) |
 | Agent node | runs once when reached | an agent that may hold the turn any number of times |
-| Output node | collects parents' outputs | where the final answer is delivered when no agent hands off |
+| Output node | collects parents' outputs | where the current answer is shown |
 | Playbook node | the playbook runtime, with gates | **not supported in v1** — see §7 |
 
-**Every agent that can hand off is told how to.** In a workflow the routing knowledge
-belongs to the dispatcher alone, because only the dispatcher routes. In a swarm any member
-may branch, so that knowledge has to travel with the handoff tools. Each agent with
-outgoing edges gets a generated block appended to its instructions:
+The members form a mesh: each can hand to any other. An edge drawn *between* members adds
+nothing they do not already have; an edge from a member to an agent **not** connected to
+Start extends the swarm to that agent too, and it is reachable only through its parent.
+
+**Why the fan-out, and not a dispatcher.** An earlier draft of this spec had swarm mode
+built around a node tagged Dispatcher that dissolved at compile time — you drew three
+nodes and got two. Shown the editor, two users independently proposed the fan-out instead.
+They were right, and the reason is worth recording: a drawing whose parts vanish is a
+drawing you have to be taught to read. Start already means "this is where the prompt goes",
+so "the agents on the other end of Start" is the swarm with no further explanation. It also
+returns the Dispatcher tag to meaning exactly one thing, in exactly one mode.
+
+**Every agent is told who its colleagues are.** In a workflow the routing knowledge belongs
+to the dispatcher alone, because only the dispatcher routes. In a swarm any member may
+branch, so that knowledge travels with the handoff tools. Each agent with colleagues gets a
+generated block appended to its instructions:
 
 ```
 ## Colleagues you can hand this to
@@ -79,55 +98,42 @@ Answer directly when it is yours. Do not hand back what you were just handed
 unless the subject has genuinely changed.
 ```
 
-The list comes from the drawn edges; each line's description is the target agent's own
-role summary (the first line of its instructions). **When the canvas has a dispatcher, its
-routing prompt is the best statement of that mapping the workflow contains** — it already
-says which subjects belong to whom — so it is carried into this block for every agent, not
-left with the entry agent alone. The dispatcher keeps its own persona as its instructions;
-what is shared is the routing knowledge, not the greeting.
+Each line's description is the target agent's **own** role summary — the first line of its
+own instructions. There is no separate routing document and no shared "when to hand off"
+prose: an agent that describes its own job well is already telling its colleagues when to
+send work its way. This is the one capability the dissolved dispatcher used to supply, and
+dropping it is deliberate; if real sessions route badly we add a shared guide then, with
+evidence, rather than designing one now.
 
 The last line of the block matters: without it two agents can volley the same request back
-and forth until the hop budget ends the run.
+and forth until the hop budget ends the turn.
 
-**Termination.** The swarm ends when the agent holding the turn replies without calling a handoff tool. That reply is the run's output. A hop budget (default 25 handoffs) ends a run that ping-pongs, with a `final` event carrying `status: "hop_budget_exhausted"` — the structural guarantee a DAG gets for free and a swarm does not.
+**Termination — a turn ends, a session does not.** These are different events and an
+earlier draft conflated them, which is the kind of error that reaches the code.
 
-### 3a. Swarm mode requires one shape
+- A **turn** ends when the agent holding it replies without calling a handoff tool. That
+  reply is the answer to the prompt that started the turn. A hop budget (default 25
+  handoffs) ends a turn that ping-pongs, with `status: "hop_budget_exhausted"` — the
+  structural guarantee a DAG gets for free and a swarm does not.
+- A **session** ends when the user closes it. Nothing the agents do ends a session.
+
+### 3a. What swarm mode refuses
 
 **Nothing here changes workflow mode.** Every pattern — fan-out, fan-in, chains,
-dispatchers, playbooks — keeps compiling exactly as it does today when the workflow's
-orchestration is `workflow`. That path is untouched and pinned byte-identical.
-
-**Swarm mode accepts exactly one structure:** a node tagged **Dispatcher**, fanning out to
-**two or more agents**. Anything else is an error, raised the moment the setting is
-flipped rather than at Run.
-
-```
-   valid                          compiles to
-
-   Start                          Start
-     │                              │
-     ▼                              ▼
-  Dispatcher  (tagged)              A ◀──▶ B ◀──▶ C
-   │    │    │                   (mesh, each carrying the
-   ▼    ▼    ▼                    dispatcher's routing prompt)
-   A    B    C
-```
-
-The rule is deliberately narrow. The alternatives — a bare chain, a worker fanning out —
-are *structurally* expressible as handoffs, but they mean something different from what the
-same drawing means in workflow mode, and a difference that silent is worse than a refusal.
-One shape also makes the feature teachable: this is how you draw a swarm.
-
-**What is refused, and why:**
+dispatchers — keeps its current meaning when `orchestration = "workflow"`, which is the
+default and what every existing workflow is.
 
 | Canvas | Why it cannot be a swarm |
 |---|---|
-| No Dispatcher node at all | Nothing supplies the routing knowledge every member needs |
-| Dispatcher with one child | A one-agent swarm has nobody to hand to |
-| Worker fanning out to agents | A worker's fan-out means "run these concurrently"; a swarm has one active agent |
+| Start connected to fewer than two agents | A one-agent swarm has nobody to hand to |
+| Contains a node tagged Dispatcher | A swarm routes itself; the tag belongs to workflow mode. Connect the agents to Start directly |
 | Fan-in / merge (B, C → D) | One conversation reaches one agent — nothing merges |
-| Two Start edges | A swarm has exactly one first turn |
+| More than one Output node | A session shows one answer at a time |
 | Contains a playbook node | Gates plus handoffs is unresolved in v1 (§7) |
+
+Five refusals, where the dispatcher-based draft had seven. The two that disappear —
+"no dispatcher" and "dispatcher with one child" — were both artefacts of requiring a node
+that no longer exists.
 
 **The error is a lesson, not a rejection.** It names what was found, what is needed, and
 draws the target:
@@ -135,135 +141,51 @@ draws the target:
 ```
 This workflow cannot run as a swarm.
 
-Found:     "Newspaper Publisher" — 2 agents feeding one merge node,
-           no Dispatcher node.
-Needed:    one agent tagged Dispatcher, connected to 2 or more agents.
+Found:     "Newspaper Publisher" — Start is connected to one agent.
+Needed:    Start connected to two or more agents.
 
 A swarm looks like this:
 
-        Start
-          │
-          ▼
-    ┌─────────────┐
-    │  Dispatcher │  ← tag an agent as Dispatcher; its system prompt
-    └──┬───┬───┬──┘    says which subjects belong to which colleague
-       ▼   ▼   ▼
-      HR  IT  Devices  ← the swarm: each can hand to the others
+      Start
+     ╱  │  ╲
+    ▼   ▼   ▼
+   HR  IT  Devices      ← the swarm: each can hand to the others
 
-In swarm mode the Dispatcher is not an agent — its prompt becomes the
-handoff guide every member carries.
-
-  [ Keep workflow mode ]   [ Show me how to tag an agent ]
+The prompt you type goes to whichever agent is holding the turn.
 ```
 
-The message states the diagnosis first (what is in *this* canvas), then the requirement,
-then the picture — so it teaches the shape rather than only refusing the current one. The
-second button opens the node form at the agent-type field.
+### 3b. The session
 
+This is the part that distinguishes swarm mode from a run, and the part an earlier draft
+missed entirely.
 
-### 3b. Dissolving the dispatcher
+**Workflow mode injects a prompt once.** You press Run, the graph processes that prompt to
+completion, and the run is over. A second prompt is a second run with no memory of the
+first.
 
-A dispatcher exists so that *something* decides where a request goes. A swarm makes that
-decision continuously, so the node has no work left: it is not compiled as an agent.
-`Dispatcher + A + B` compiles to a **two-agent swarm**, not three.
+**Swarm mode is continuous.** The Start node is an input line, not a trigger. You type a
+prompt, it lands on whichever agent is currently active, that agent answers or hands off,
+and then you type the next one. The swarm sits between prompts holding two things:
 
-```
-   canvas                        compiled swarm
-
-   Start                         Start
-     │                             │
-     ▼                             ▼
-  Dispatcher                       A ◀────────▶ B
-   │      │                    (each holds the other's
-   ▼      ▼                     handoff tool, and both
-   A      B                     carry the dispatcher's
-                                 routing prompt)
-```
-
-**The rewrite, precisely:**
-
-1. **Remove the dispatcher node.** It contributes no agent, no LLM call, no turn.
-2. **Its children become a fully connected mesh.** Every child gets a handoff tool for
-   every other child — with three children, A↔B, A↔C, B↔C. This is the one place edges are
-   *synthesised* rather than read from the canvas, and it is the faithful reading: the
-   dispatcher's menu was the set of agents allowed to receive the conversation, so they may
-   now pass it among themselves.
-3. **Its system prompt becomes the handoff guide**, appended to every child (§3, "Every
-   agent that can hand off is told how to"). The dispatcher's persona — *"greet callers
-   warmly"* — is routing scaffolding too, and is dropped; what is kept is the mapping of
-   subjects to agents.
-4. **The Start edge moves to the entry agent** (below).
-5. **Edges from a child to a non-dispatcher node are preserved** as ordinary handoffs.
-
-**What survives the dissolution, and what does not.** The dispatcher stops being an agent,
-so everything that only makes sense for an agent goes with it:
-
-| On the Dispatcher node | In swarm mode |
+| Session state | What it is for |
 |---|---|
-| system prompt — the **routing rules** | ✅ becomes the handoff guide every member carries |
-| system prompt — persona, greeting, tone | ✗ dropped: nothing speaks with that voice |
-| **MCP tools / servers** | ✗ dropped: it takes no turn, so nothing would ever call them |
-| **Skills** | ✗ dropped: it produces no deliverable to transform |
-| provider, model, temperature, max_tokens | ✗ dropped: it makes no LLM call |
-| display name | kept in the warning below and in the audit trail |
+| `activeAgent` | which member holds the turn, so the next prompt goes there rather than back to the beginning |
+| `transcript` | every turn so far, as `{role, content}`, handed to whichever agent takes the next turn |
 
-The connected agents are untouched: **their** MCP tools, skills, providers and sampling
-settings work exactly as in workflow mode. Swarm changes who is called next, not what an
-agent is.
+Those two together are what make a follow-up work. *"Make it 5 days"* is a **second
+prompt**: it reaches HR because HR was active when the previous turn ended, and it makes
+sense to HR because the transcript carries what the 5 days refer to. Sharing a transcript
+only *within* one turn buys none of that — it is the session that matters.
 
-**The node form follows the mode.** Better than warning about fields that will be ignored
-is not offering them. When the workflow's orchestration is `swarm`, the Dispatcher node's
-form shows only what a dispatcher still contributes:
+- **The first prompt of a session** has no previously active agent, so it goes to the first
+  agent connected to Start. The order is the canvas order, so it is stable and visible.
+- **Every later prompt** goes to the agent that ended the previous turn.
+- **Closing the session** discards both. Reopening starts a fresh conversation.
 
-| Field | Workflow mode | Swarm mode |
-|---|---|---|
-| Name | shown | shown |
-| System prompt | shown — the routing instructions | shown, **relabelled**: *"Handoff guide — which subjects belong to which agent. Every member of the swarm receives this."* |
-| MCP servers / tools | shown | **hidden** |
-| Skills | shown | **hidden** |
-| Provider, model, temperature, max_tokens | shown | **hidden** |
-
-In workflow mode a dispatcher is a real agent: it makes an LLM call to choose a branch, so
-it has a provider, and it may legitimately carry tools. In swarm mode it makes no call at
-all, so those fields describe nothing.
-
-**Hidden, never deleted.** Values set in workflow mode are preserved in the node's config
-and reappear untouched if the workflow is switched back. Hiding is a view concern; the data
-is the user's.
-
-**And the flip-time warning still applies**, because hiding a field does not unset it —
-someone who configured tools in workflow mode and then switched needs to be told those
-tools are now inert:
-
-```
-"techBuddy" is tagged Dispatcher and carries 3 MCP tools and 1 skill.
-
-In swarm mode the Dispatcher is not an agent, so those are never called —
-only its routing rules are used, as the team's handoff guide.
-
-If those tools are needed, move them to the agents that use them.
-
-  [ Keep workflow mode ]   [ Continue — I'll move them ]
-```
-
-This is also the practical reason a dispatcher's prompt should say *which subjects belong
-to whom* and little else: everything else on that node is discarded.
-
-**Which child is the entry.** With the dispatcher gone, someone must hold the first turn.
-The rule: **the first child in canvas order** (lowest node id), recorded in the generated
-docstring so it is never a mystery. Because every member carries the routing guide, a
-first turn that lands on the wrong agent is self-correcting — it hands off immediately —
-at the cost of one extra LLM turn. A future refinement is an "entry" marker in the editor;
-it is not needed for v1 and would add UI for a case the routing guide already handles.
-
-**What the user sees, and must be told.** The compiled swarm has *fewer agents than the
-canvas shows*, and the run overlay and audit trail will name only the children. The
-Generate step says so plainly: *"In swarm mode the Dispatcher node is not an agent. Its
-prompt becomes the team's handoff guide, and its 2 connected agents form the swarm."*
-Without that line the missing node reads as a bug.
-
-**A canvas with a dispatcher and only one child** is rejected: a one-agent swarm has
-nobody to hand to, and the dispatcher was doing nothing to begin with.
+**v1(a) needs no storage for this.** The session lives in the editor, in memory, for as
+long as it is open — the same place the rest of the run state lives. Persisting a session
+across a page reload, or across the compiled server's restart, is the checkpointer question
+in §5, and it is staged separately.
 
 ## 4. The generated package
 
@@ -310,19 +232,23 @@ This is the reason swarm was asked for, so it is not optional here: **a swarm ca
 - Persistence is a **checkpointer keyed by thread**: `graph.compile(checkpointer=…)`, invoked with `{"configurable": {"thread_id": f"{owner}:{thread}"}}` — the same `(owner, thread)` key the history store uses, so swarm and workflow threads live side by side without a second scheme.
 - `active_agent` is checkpointed with the messages, so a follow-up resumes with the agent that handled the last turn. This is what makes *"actually make it 5 days"* reach HR without anyone re-routing it.
 
-**Persistence is staged, and v1 needs none.** The checkpointer buys continuity *between*
-runs and nothing else — within a single run the messages and `active_agent` live in state,
-and handoffs work with no checkpointer configured at all.
+**A session is required from v1(a); only its *persistence* is staged.** These are different
+things, and an earlier draft ran them together — it listed "one prompt, handoffs, an answer"
+as the whole of v1, which is a turn, not a session (§3b). Multi-prompt continuity is the
+feature, not an enhancement to it.
+
+What differs between the two paths is only where the session is kept:
 
 | Goal | What is required |
 |---|---|
-| One prompt, handoffs, an answer — **v1 and the test workflow** | nothing |
-| A follow-up in the same session, while the server is up | `MemorySaver`, in-process, zero configuration |
-| Follow-ups surviving a restart, or shared across servers | a database |
+| A session in the editor's interpreter — **v1(a) and the test workflow** | nothing: the active agent and transcript live in memory for as long as the overlay is open |
+| A session in the compiled server, while it is up | `MemorySaver`, in-process, zero configuration |
+| A session surviving a reload, a restart, or shared across servers | a database |
 
-So v1 ships without a checkpointer, `MemorySaver` is a one-line follow-up, and the
-database is a separable step taken when threads must outlive a process. The generated code
-is written so the saver is a single injection point, not a shape the graph depends on.
+So v1(a) ships with an in-memory session and no checkpointer at all, `MemorySaver` is the
+compiled path's one-line equivalent, and the database is a separable step taken when a
+session must outlive a process. The generated code is written so the saver is a single
+injection point, not a shape the graph depends on.
 
 **When a database is wanted, it is the MySQL the app already uses.**
 `langgraph-checkpoint-mysql 3.0.0` exists and fits: `AIOMySQLSaver` over the `aiomysql`
@@ -382,10 +308,11 @@ The cost is worth stating: a swarm's context grows with the conversation anyway,
 attachments make it start large rather than grow into it. A canvas with attachments above
 a threshold warns at flip time, pointing at the same summarisation question §5 defers.
 
-**Nested dispatchers — refused in v1.** A dispatcher among a dispatcher's children raises
-a question nothing answers yet: may an inner member hand to an outer one, or is the inner
-group sealed? Two defensible answers, no evidence for either, so the canvas is refused
-naming both dispatcher nodes. Revisit when someone has a real workflow shaped that way.
+**A member's own children — part of the swarm.** An agent connected to a swarm member but
+not to Start joins the swarm through its parent: it is a member, and it is reachable only
+from the agent that points at it. The member walk is transitive, so a chain A → C → E puts
+all of A, C and E in the swarm; stopping at one level would leave E as a handoff target
+with no agent behind it.
 
 **More than one Output node — refused in v1.** A swarm produces one final answer, from the
 turn that stopped handing off. Two outputs would need a rule for which receives it, and
@@ -407,55 +334,84 @@ sees the other's messages.
 
 ## 8. Tests
 
-Staged as the work is (§10): the interpreter first, the compiler second. The fixture in
-both cases is the owner's swarm test workflow — one Dispatcher fanning out to two agents.
+Staged as the work is (§10): the interpreter first, the compiler second. The subject in
+both cases is the owner's swarm test workflow — **Start fanning out to two agents**, no
+dispatcher, no playbook, with visibly different outputs per branch.
 
 ### 8.1 The rewrite — shared fixture, both implementations
 
 A JSON fixture of canvases in and expected rewritten graphs out, run by the PHP suite and
-by a JS check, so the two implementations (§10) cannot diverge:
+by a JS check, so the two implementations (§10) cannot diverge. This file is the contract:
+a change to it must make both sides pass or neither.
 
-- dispatcher + 2 children → 2 agents, mesh A↔B, dispatcher absent;
-- dispatcher + 3 children → 3 agents, full mesh (A↔B, A↔C, B↔C);
-- each child's composed instructions = its own prompt + the colleague list + the
-  dispatcher's routing rules, and **no** dispatcher persona;
-- a child's edge to a non-dispatcher node survives as an ordinary handoff;
-- the entry is the first child in canvas order, deterministically, across repeated runs;
-- **every refusal in §3a**, each naming the offending nodes: no dispatcher; dispatcher with
-  one child; worker fan-out; fan-in/merge; two Start edges; a playbook node; nested
-  dispatchers; two Output nodes;
-- the dispatcher's MCP tools and skills do not appear on any compiled agent.
+- Start → 2 agents → 2 members, mesh A↔B;
+- Start → 3 agents → 3 members, full mesh (A↔B, A↔C, B↔C);
+- each member's composed instructions = its own prompt + the colleague list, where each
+  colleague line is **that colleague's own** role summary;
+- a member's edge to an agent not connected to Start extends the swarm to it, transitively,
+  so no handoff target is ever missing from the member set;
+- the first agent connected to Start is the session's first responder, deterministically,
+  across repeated runs;
+- ordering is by node id in both languages, never by insertion order — PHP preserves
+  insertion order and JS does not, and a divergence there is a defect even when each side
+  is individually defensible;
+- duplicated and self-referential edges change nothing: a doubled Start→A edge does not make
+  a one-agent swarm legal, and a self-edge does not give an agent a handoff to itself;
+- **every refusal in §3a**, each naming the offending nodes: Start with fewer than two
+  agents; a node tagged Dispatcher; fan-in/merge; two Output nodes; a playbook node.
+
+Beyond the fixture's own assertions, the two implementations are diffed **whole**: the full
+rewrite output of every case, through both languages, compared byte for byte — including
+the composed instruction text the fixture only spot-checks. Truncation, trimming and sort
+tiebreaks have all diverged between the two in practice; only a whole-output diff catches
+that class.
 
 ### 8.2 v1(a) — the interpreter
 
-- a handoff moves the turn and records `{from, to, reason}`;
-- a reply without a handoff ends the run and is the output;
-- each agent's tool list is exactly its mesh colleagues — no more, no fewer;
-- the hop budget ends a deliberate ping-pong with `status: "hop_budget_exhausted"`;
-- **skills** (§6b): an agent that hands off runs none; the agent that answers runs its own,
-  and the result is the run's output; a budget-exhausted run runs none;
-- **attachments** (§6b): a document on Start is visible to the *second* agent to hold the
-  turn, not only the first;
-- the same canvas under `workflow` still routes once and runs one branch — the two modes
-  compared on one graph.
+The session is the thing under test, and it cannot be reached by the rewrite's fixture.
+
+- **A turn**: the active agent answers without handing off → the turn ends, that reply is
+  the answer, and only that agent's skill runs.
+- **A handoff**: the active agent calls the handoff tool → control moves, and the agent
+  that hands off runs no skill, because it produced no deliverable.
+- **The session, which is the point**: prompt 1 goes to the first agent connected to Start;
+  it hands to B; prompt 2 goes to **B**, not back to A, and B's call carries a transcript
+  containing prompt 1 and the handoff. This is the *"make it 5 days"* case, and it is a
+  two-prompt test — a single-prompt test cannot distinguish a working session from a broken
+  one.
+- **Every call carries a non-empty message.** The backend rejects an empty message unless
+  the last history entry is a tool result, which a swarm transcript never is. This is worth
+  its own assertion because it is exactly the assumption that broke the first build.
+- **The hop budget** terminates two agents that hand to each other forever, at the budget,
+  with `hop_budget_exhausted` and no skill run.
+- **Closing a session** discards the active agent and the transcript; the next session
+  starts at the first agent again.
+- **Workflow mode is unchanged.** Every existing workflow runs exactly as before. The
+  shared per-node execution path is on both modes' hot path, so any option added for the
+  swarm must default to today's behaviour, and that default is asserted.
+
+These are drivable with a stubbed per-node executor returning a scripted sequence — hand
+off, hand off, answer — which is how the loop gets tested without live LLM calls.
 
 ### 8.3 v1(b) — the compiler
 
 Everything in 8.2, against the generated package with `_make_llm` stubbed, plus:
 
-- the emitted package contains one agent module per child and none for the dispatcher;
-- `create_swarm` is called with `default_active_agent` = the first child;
+- the emitted package contains one agent module per swarm member and no router module;
+- `create_swarm` is called with `default_active_agent` = the first agent connected to Start;
 - **workflow-mode output is byte-identical** to today's for single-file, modular and A2A —
   swarm is a new emit path and must not disturb the existing ones (the current pins cover
   this).
 
-### 8.4 History — only when it is built (§5)
+### 8.4 Persisting a session — only when it is built (§5)
 
-Not part of v1: a single run needs no checkpointer.
+The session itself is v1(a) and is covered in 8.2; what is staged is making it **survive**
+a reload or a restart. Not part of v1: an in-memory session needs no checkpointer.
 
-- two turns on one thread: the second turn's agent sees the first turn's messages;
-- the second turn begins with the agent that ended the first, by the entry condition rather
-  than by luck;
+- two turns on one thread after a restart: the second turn's agent sees the first turn's
+  messages;
+- the second turn begins with the agent that ended the first, restored from the
+  checkpointer rather than reset to the first responder;
 - two threads do not see each other's messages;
 - with a persistent checkpointer, a thread survives a process restart;
 - with multi-user, two owners using the same `thread` value see nothing of each other
@@ -463,11 +419,19 @@ Not part of v1: a single run needs no checkpointer.
 
 ### 8.5 Manual, by the owner
 
-Run the swarm test workflow and confirm, in order: the **first child** holds the first turn
-(there is no dispatcher agent — if one appears, the dissolution failed); a handoff happens
-and the overlay names both agents; the context display for each agent shows its own prompt
-plus the labelled handoff guide; and the same workflow switched to `workflow` mode routes
-once and ends, so the difference between the modes is visible on one canvas.
+Run the swarm test workflow and confirm, in order:
+
+1. The **first agent connected to Start** takes the first prompt.
+2. Ask something belonging to the other agent: a handoff happens and the overlay names both
+   agents and the reason.
+3. **Send a second prompt that only makes sense given the first** — *"make it 5 days"*. It
+   must land on the agent that just answered, and that agent must understand it without
+   being told the context again. This single step is the whole point of the feature; if it
+   fails, nothing else passing matters.
+4. The context display for each agent shows its own prompt plus the labelled colleague list.
+5. Close and reopen the session: it starts fresh, at the first agent, with no memory.
+6. Switch the same canvas to `workflow` mode and run it: Start's fan-out runs concurrently,
+   one prompt, one result — so the difference between the modes is visible on one drawing.
 
 ## 9. The other frameworks
 
@@ -496,7 +460,8 @@ workflow.orchestration = "workflow" | "swarm"      default "workflow"
 
 Set in the workflow's settings panel in the editor, where it is visible while you draw —
 which matters, because the same canvas is legal under `workflow` and may be refused under
-`swarm` (§3a) — and because the dispatcher's node form changes with it (§3b).
+`swarm` (§3a), and because the same fan-out from Start means two different things under the
+two modes.
 
 The code-generation modal keeps **packaging and multi-user only**, and shows the
 architecture read-only so there is one source of truth:
@@ -516,8 +481,9 @@ value. The Run menu item names both: `Run (swarm · separate files)`.
 **Order reversed on the owner's call: the interpreter goes first.** The earlier draft
 sequenced the compiler first, on the grounds that `langgraph-swarm` would supply proven
 semantics. That was the wrong instinct. The risky part of this design is not execution but
-**interpretation** — dissolution, mesh synthesis, handoff-guide composition, which canvases
-are refused — and the interpreter exercises exactly those with the fastest feedback and the
+**interpretation** — which agents are members, mesh synthesis, colleague-list composition,
+which canvases are refused, and how a session carries its state from one prompt to the next
+— and the interpreter exercises exactly those with the fastest feedback and the
 least scaffolding: press ▶ and watch, with no Generate, no runner, no spawned server, no
 files. The compiler would validate the same rules through the slowest possible loop.
 
@@ -528,12 +494,15 @@ multi-user.
 
 1. `workflow.orchestration` persisted on the workflow row, set in the editor's settings
    panel.
-2. **The rewrite, in the analyzer**: dissolve the dispatcher, synthesise the mesh among its
-   children, compose each agent's handoff guide, validate the pattern (§3b) — a pure
-   `graph → graph` function.
-3. The live run path consuming the rewritten graph: handoff tools per agent, one shared
-   message array, loop while a handoff is returned, hop budget.
-4. The owner runs one canvas in both modes and compares.
+2. **The rewrite**: members are Start's fan-out plus whatever they reach, synthesise the
+   mesh, compose each agent's colleague list, validate the pattern (§3a) — a pure
+   `graph → graph` function, defined once and pinned by a shared fixture.
+3. **The turn**: handoff tools per agent, loop while a handoff is returned, hop budget,
+   skills only on the turn that answers.
+4. **The session**: a persistent active agent and transcript, and a surface that keeps
+   accepting prompts (§3b). This is the half an earlier draft missed, and it is the half
+   the feature is judged on.
+5. The owner runs one canvas in both modes, and sends a **second** prompt in swarm mode.
 
 **v1(b) — the LangGraph compiler**, built against rules already validated in (a), then the
 other frameworks (§9).
@@ -558,18 +527,18 @@ drawing.
 
 ### Visual feedback — both modes
 
-A swarm hides more than a workflow does: a node that is not an agent, edges that were never
-drawn, and a prompt assembled from two places. None of that may be invisible.
+Swarm mode still shows less than it runs — handoffs nobody drew, a prompt assembled from
+two places, and an active agent that moves. None of that may be invisible. The fan-out
+shape removes the worst of it: there is no longer a node on the canvas that does not run.
 
 **On the canvas, in swarm mode:**
 
-- the **dispatcher node is greyed** with a note — *"Not an agent in swarm mode. Its prompt
-  is the team's handoff guide."* — so a node that does not run says so;
 - the **synthesised mesh is drawn**, distinctly from edges the user drew (dashed, say), so
   A↔B is visible rather than implied;
-- a canvas the mode refuses is marked **when the setting is flipped**, not at Run — you
-  find out while looking at the graph. The offending nodes are named (the merge and its
-  parents, or the second Start edge).
+- the **active agent is marked** during a session, because "where does my next prompt go"
+  is the one question a swarm raises that a DAG never does;
+- a canvas the mode refuses is marked **when the setting is flipped**, not at Run — you find
+  out while looking at the graph, and the offending nodes are named.
 
 **In the agent's context display — the important one.** Wherever the editor shows an
 agent's prompt, swarm mode shows the **composed** context, because that is what the model
@@ -584,43 +553,48 @@ will actually receive:
 │ ## Colleagues you can hand this to                       │
 │ - IT claims — passwords, network access, support         │
 │ - Devices management — repairs, laptops, tickets         │
-│                                                          │
-│ ## When to hand off      ← from the Dispatcher's prompt  │
-│ When the caller mentions Repairs, service tickets…       │
 │ Hand off when the request is theirs rather than yours…   │
+│ Answer directly when it is yours.                        │
 └──────────────────────────────────────────────────────────┘
 ```
 
-The agent's own prompt stays editable; the appended block is read-only and labelled with
-where it came from, so its source is never a guess. Switch the workflow back to `workflow`
+The agent's own prompt stays editable; the appended block is read-only and labelled, so its
+source is never a guess. Each colleague line is that colleague's own role summary, which
+means an agent's description of itself is what its teammates read — worth showing, because
+it makes a vague first line visibly costly. Switch the workflow back to `workflow`
 mode and the block disappears — the same display then shows exactly what runs there too.
 
 This is the editor-side twin of the audit trail's `node_enter` record (concurrency spec
 §5c): one shows what an agent *will* receive, the other what it *did*.
 
-**Why the interpreter could always have done this.** `runWorkflow()` /
-`_runNodeAsChatUnit()` already executes agents with tools, already handles dispatcher
-routing through `dispatchTargets`/`routedBy`, and already streams into the overlay. Swarm
-is *less* machinery than the DAG it runs today: handoff tools on each agent, one shared
-message array, a loop while a handoff is returned, and the same dissolution rule from §3b.
+**Why the interpreter carries this well.** `runWorkflow()` / `_runNodeAsChatUnit()` already
+executes agents with tools, already handles routing through `dispatchTargets`, and already
+streams into the run overlay. A turn is *less* machinery than the DAG it runs today:
+handoff tools on each agent, a loop while a handoff is returned, and the member set from
+§3. What is genuinely new is the session — state that outlives a single press of Run — and
+that has no precedent in either run path.
 
-It is **not in v1**, for one reason worth stating: it would be a third implementation of
-swarm semantics (the Python library, this JavaScript, then ADK and MAF), and this codebase
-already has two run paths that drift. Sequencing it after the compiled target means the
-compiled behaviour is the reference, and the interpreter is written against something
-proven rather than alongside it.
+**The surface.** A session needs somewhere to keep accepting prompts. That is the existing
+**run overlay**, with a prompt box at its foot — not a new pane. The overlay already shows
+the per-node trace this design insists on, and already knows how to render input cards from
+the playbook gate work. A second conversational surface in the same product would be the
+wrong trade, and the trace and the conversation belong in one place anyway.
 
-**What v1 must not do is make that later work harder.** Two concrete obligations:
+Two consequences follow, and both contradict how a DAG run ends:
 
-1. Store `orchestration` on the workflow **now**, even though only the compiler reads it in
-   v1 — so the interpreter has nothing to migrate.
-2. Keep the dissolution rule (§3b) and the handoff-guide composition (§3) in the **PHP
-   analyzer**, shared by both paths, rather than inside the LangGraph emitter. The
-   interpreter then consumes the same rewritten graph the compiler does, and "dispatcher
-   disappears in swarm mode" is decided in one place for both.
+- **The results modal is not the terminus.** A swarm produces a conversation, not "the
+  workflow output". A turn's answer is shown in the overlay; what, if anything, gets saved
+  as a workflow output is the last answer of a session, not each turn's.
+- **"Run" is the wrong verb.** In swarm mode the control opens a session. The Run menu item
+  reads accordingly.
 
-Obligation 2 is the one that makes interpreter-swarm a small job later instead of a
-reimplementation.
+**What v1(a) must not make harder.** Two obligations toward the compiler in v1(b):
+
+1. `orchestration` is stored on the workflow row, so both paths read one value.
+2. The rewrite is a pure `graph → graph` function pinned by a shared fixture, implemented in
+   PHP for the compiler and JS for the editor, and **diffed whole** between the two (§8.1).
+   Which agents are members and how a colleague list is composed is then decided once, for
+   both paths, rather than twice with a drift risk.
 
 ## 11. Risks and decisions
 
@@ -628,5 +602,6 @@ reimplementation.
 - **A stalled connection stalls a conversation** (§5). The checkpointer writes every turn, and this deployment has a history of fresh connections hanging; the saver is opened once and pooled for exactly that reason.
 - **Context growth is inherent** (§5). Not a bug to fix in v1, but it will be the first complaint on a long thread, and the mitigation should be specified before it is met rather than after.
 - **Two architectures in one generator.** The analyzer and every shared emit helper now serve both. The guard is that swarm is a new emit path and the workflow output is pinned byte-identical.
-- **A canvas means two different things** depending on the selector. Mitigated by the Run item naming the architecture, and by compile-time rejection of canvases that are invalid as swarms.
+- **A canvas means two different things** depending on the selector — and under the fan-out shape the collision is sharper: `Start → A, B, C` means "run these three concurrently" in workflow mode and "these three are the swarm" in swarm mode, on the same drawing. This is accepted rather than mitigated away, because the alternative — a shape that is only legal in one mode — is what the dispatcher draft did, and two users rejected it. The mitigations are that the mode is an explicit workflow-level setting, the Run item names the architecture, the canvas marks the synthesised mesh and the active agent (§10), and a canvas invalid as a swarm is refused at flip time rather than at Run.
+- **Two users, one sample.** The fan-out shape came from showing the editor to two people, not from testing it. It is a better shape by the arguments in §3, but "clearer to two users who saw a canvas" is weaker evidence than it sounds, and the owner's manual pass (§8.5) is the first real use. Expect the session surface, not the canvas shape, to be what needs revision.
 - **`langgraph-swarm` is at 0.1.0.** A pre-1.0 dependency on the critical path; pinned `>=0.1,<0.2`, and the surface used is three functions, so a breaking release is a contained fix rather than a rewrite. The 411-line source is small enough to vendor if the project ever stalls.
