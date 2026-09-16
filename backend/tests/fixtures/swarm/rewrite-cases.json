@@ -2,7 +2,7 @@
   "note": "The swarm rewrite contract. Read by SwarmRewriterTest.php (PHP) and swarm-rewrite.test (JS). A change here must make both sides pass or neither.",
   "cases": [
     {
-      "name": "dispatcher with two children becomes a two-agent mesh",
+      "name": "Start fanning out to two agents is a two-agent swarm",
       "graph": {
         "nodes": [
           {
@@ -18,9 +18,9 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "techBuddy",
-              "agent_type": "dispatcher",
-              "instructions": "Greet the caller warmly. When they mention vacations or HR, transfer to Human resources. When they mention passwords or network, transfer to IT claims."
+              "agent_name": "Human resources",
+              "agent_type": "standard",
+              "instructions": "You handle leave and payroll."
             }
           },
           {
@@ -28,26 +28,9 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "Human resources",
-              "agent_type": "standard",
-              "instructions": "You handle leave and payroll."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
               "agent_name": "IT claims",
               "agent_type": "standard",
               "instructions": "You handle passwords and access."
-            }
-          },
-          {
-            "id": "5",
-            "node_type": "output",
-            "config": {
-              "type": "output"
             }
           }
         ],
@@ -57,49 +40,38 @@
             "to": "2"
           },
           {
-            "from": "2",
+            "from": "1",
             "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          },
-          {
-            "from": "3",
-            "to": "5"
-          },
-          {
-            "from": "4",
-            "to": "5"
           }
         ]
       },
       "expect": {
         "ok": true,
         "agents": [
-          "3",
-          "4"
+          "2",
+          "3"
         ],
         "handoffs": [
           [
-            "3",
-            "4"
+            "2",
+            "3"
           ],
           [
-            "4",
-            "3"
+            "3",
+            "2"
           ]
         ],
-        "entry": "3",
+        "entry": "2",
         "guide_contains": [
           "Human resources",
           "IT claims",
-          "transfer to Human resources"
+          "leave and payroll",
+          "passwords and access"
         ]
       }
     },
     {
-      "name": "three children become a full mesh",
+      "name": "Start fanning out to three agents is a three-agent full mesh",
       "graph": {
         "nodes": [
           {
@@ -114,23 +86,13 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
               "agent_name": "A",
               "agent_type": "standard",
               "instructions": "A."
             }
           },
           {
-            "id": "4",
+            "id": "3",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -140,7 +102,7 @@
             }
           },
           {
-            "id": "5",
+            "id": "4",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -156,53 +118,49 @@
             "to": "2"
           },
           {
-            "from": "2",
+            "from": "1",
             "to": "3"
           },
           {
-            "from": "2",
+            "from": "1",
             "to": "4"
-          },
-          {
-            "from": "2",
-            "to": "5"
           }
         ]
       },
       "expect": {
         "ok": true,
         "agents": [
+          "2",
           "3",
-          "4",
-          "5"
+          "4"
         ],
         "handoffs": [
           [
-            "3",
+            "2",
+            "3"
+          ],
+          [
+            "2",
             "4"
           ],
           [
             "3",
-            "5"
+            "2"
           ],
           [
-            "4",
-            "3"
-          ],
-          [
-            "4",
-            "5"
-          ],
-          [
-            "5",
-            "3"
-          ],
-          [
-            "5",
+            "3",
             "4"
+          ],
+          [
+            "4",
+            "2"
+          ],
+          [
+            "4",
+            "3"
           ]
         ],
-        "entry": "3",
+        "entry": "2",
         "guide_contains": [
           "A",
           "B",
@@ -211,7 +169,7 @@
       }
     },
     {
-      "name": "the dispatcher's tools and skills reach no agent",
+      "name": "an agent's own tools and skills stay on that agent",
       "graph": {
         "nodes": [
           {
@@ -226,12 +184,11 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it.",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A.",
               "tools": [
-                "mcp_get_news",
-                "mcp_lookup_users"
+                "mcp_own_tool"
               ],
               "bound_skill": {
                 "dir_name": "html"
@@ -243,19 +200,6 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A.",
-              "tools": [
-                "mcp_own_tool"
-              ]
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
               "agent_name": "B",
               "agent_type": "standard",
               "instructions": "B."
@@ -268,678 +212,42 @@
             "to": "2"
           },
           {
-            "from": "2",
+            "from": "1",
             "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
           }
         ]
       },
       "expect": {
         "ok": true,
         "agents": [
-          "3",
-          "4"
+          "2",
+          "3"
         ],
         "handoffs": [
           [
-            "3",
-            "4"
+            "2",
+            "3"
           ],
           [
-            "4",
-            "3"
+            "3",
+            "2"
           ]
         ],
-        "entry": "3",
+        "entry": "2",
         "tools_by_agent": {
-          "3": [
+          "2": [
             "mcp_own_tool"
           ],
-          "4": []
+          "3": []
         },
         "skills_by_agent": {
-          "3": [],
-          "4": []
-        },
-        "dropped_from_dispatcher": {
-          "tools": 2,
-          "skills": 1
+          "2": [
+            {
+              "dir_name": "html"
+            }
+          ],
+          "3": []
         }
-      }
-    },
-    {
-      "name": "an edge from a child to a non-dispatcher node survives",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          },
-          {
-            "id": "6",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "Specialist",
-              "agent_type": "standard",
-              "instructions": "S."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          },
-          {
-            "from": "3",
-            "to": "6"
-          }
-        ]
-      },
-      "expect": {
-        "ok": true,
-        "agents": [
-          "3",
-          "4",
-          "6"
-        ],
-        "handoffs": [
-          [
-            "3",
-            "4"
-          ],
-          [
-            "3",
-            "6"
-          ],
-          [
-            "4",
-            "3"
-          ]
-        ],
-        "entry": "3",
-        "guide_contains": [
-          "Specialist"
-        ]
-      }
-    },
-    {
-      "name": "no dispatcher is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "no_dispatcher",
-        "nodes": []
-      }
-    },
-    {
-      "name": "a dispatcher with one child is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "dispatcher_needs_two_children",
-        "nodes": [
-          "2"
-        ]
-      }
-    },
-    {
-      "name": "a worker fanning out is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "W",
-              "agent_type": "standard",
-              "instructions": "W."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "no_dispatcher",
-        "nodes": []
-      }
-    },
-    {
-      "name": "a merge node is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          },
-          {
-            "id": "5",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "M",
-              "agent_type": "standard",
-              "instructions": "M."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          },
-          {
-            "from": "3",
-            "to": "5"
-          },
-          {
-            "from": "4",
-            "to": "5"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "merge_node",
-        "nodes": [
-          "5"
-        ]
-      }
-    },
-    {
-      "name": "two start edges are refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "1",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "two_entry_points",
-        "nodes": [
-          "2",
-          "3"
-        ]
-      }
-    },
-    {
-      "name": "a playbook node is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "playbook",
-            "config": {
-              "type": "playbook",
-              "name": "PB",
-              "playbook": "Title: X"
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "playbook_unsupported",
-        "nodes": [
-          "4"
-        ]
-      }
-    },
-    {
-      "name": "nested dispatchers are refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D1",
-              "agent_type": "dispatcher",
-              "instructions": "Route."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D2",
-              "agent_type": "dispatcher",
-              "instructions": "Route again."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "nested_dispatchers",
-        "nodes": [
-          "2",
-          "3"
-        ]
-      }
-    },
-    {
-      "name": "two output nodes are refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          },
-          {
-            "id": "5",
-            "node_type": "output",
-            "config": {
-              "type": "output"
-            }
-          },
-          {
-            "id": "6",
-            "node_type": "output",
-            "config": {
-              "type": "output"
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          },
-          {
-            "from": "3",
-            "to": "5"
-          },
-          {
-            "from": "4",
-            "to": "6"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "multiple_outputs",
-        "nodes": [
-          "5",
-          "6"
-        ]
       }
     },
     {
@@ -958,23 +266,13 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
               "agent_name": "A",
               "agent_type": "standard",
               "instructions": "A."
             }
           },
           {
-            "id": "4",
+            "id": "3",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -984,7 +282,7 @@
             }
           },
           {
-            "id": "5",
+            "id": "4",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -994,7 +292,7 @@
             }
           },
           {
-            "id": "6",
+            "id": "5",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -1010,7 +308,7 @@
             "to": "2"
           },
           {
-            "from": "2",
+            "from": "1",
             "to": "3"
           },
           {
@@ -1018,259 +316,40 @@
             "to": "4"
           },
           {
-            "from": "3",
+            "from": "4",
             "to": "5"
-          },
-          {
-            "from": "5",
-            "to": "6"
           }
         ]
       },
       "expect": {
         "ok": true,
         "agents": [
+          "2",
           "3",
           "4",
-          "5",
-          "6"
+          "5"
         ],
         "handoffs": [
           [
-            "3",
+            "2",
+            "3"
+          ],
+          [
+            "2",
             "4"
           ],
           [
             "3",
-            "5"
+            "2"
           ],
           [
             "4",
-            "3"
-          ],
-          [
-            "5",
-            "6"
+            "5"
           ]
         ],
-        "entry": "3",
+        "entry": "2",
         "guide_contains": [
           "E"
-        ]
-      }
-    },
-    {
-      "name": "a self-edge on the dispatcher does not un-dissolve it",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": true,
-        "agents": [
-          "3",
-          "4"
-        ],
-        "handoffs": [
-          [
-            "3",
-            "4"
-          ],
-          [
-            "4",
-            "3"
-          ]
-        ],
-        "entry": "3"
-      }
-    },
-    {
-      "name": "a duplicated dispatcher edge does not duplicate the menu",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          },
-          {
-            "id": "4",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "B",
-              "agent_type": "standard",
-              "instructions": "B."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "4"
-          }
-        ]
-      },
-      "expect": {
-        "ok": true,
-        "agents": [
-          "3",
-          "4"
-        ],
-        "handoffs": [
-          [
-            "3",
-            "4"
-          ],
-          [
-            "4",
-            "3"
-          ]
-        ],
-        "entry": "3"
-      }
-    },
-    {
-      "name": "a duplicated single-child edge is still a one-agent swarm and is refused",
-      "graph": {
-        "nodes": [
-          {
-            "id": "1",
-            "node_type": "start",
-            "config": {
-              "type": "start"
-            }
-          },
-          {
-            "id": "2",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
-              "agent_name": "A",
-              "agent_type": "standard",
-              "instructions": "A."
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "1",
-            "to": "2"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          },
-          {
-            "from": "2",
-            "to": "3"
-          }
-        ]
-      },
-      "expect": {
-        "ok": false,
-        "error": "dispatcher_needs_two_children",
-        "nodes": [
-          "2"
         ]
       }
     },
@@ -1290,23 +369,13 @@
             "node_type": "",
             "config": {
               "type": "agent-template",
-              "agent_name": "D",
-              "agent_type": "dispatcher",
-              "instructions": "Route it."
-            }
-          },
-          {
-            "id": "3",
-            "node_type": "",
-            "config": {
-              "type": "agent-template",
               "agent_name": "A",
               "agent_type": "standard",
               "instructions": "A."
             }
           },
           {
-            "id": "4",
+            "id": "3",
             "node_type": "",
             "config": {
               "type": "agent-template",
@@ -1322,7 +391,350 @@
             "to": "2"
           },
           {
+            "from": "1",
+            "to": "3"
+          },
+          {
             "from": "2",
+            "to": "2"
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "agents": [
+          "2",
+          "3"
+        ],
+        "handoffs": [
+          [
+            "2",
+            "3"
+          ],
+          [
+            "3",
+            "2"
+          ]
+        ],
+        "entry": "2"
+      }
+    },
+    {
+      "name": "a duplicated Start edge does not count a member twice",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          }
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "agents": [
+          "2",
+          "3"
+        ],
+        "handoffs": [
+          [
+            "2",
+            "3"
+          ],
+          [
+            "3",
+            "2"
+          ]
+        ],
+        "entry": "2"
+      }
+    },
+    {
+      "name": "Start fanning out to only one agent is refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "start_needs_two_agents",
+        "nodes": []
+      }
+    },
+    {
+      "name": "a duplicated Start edge to a single agent is still a one-agent swarm and is refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "2"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "start_needs_two_agents",
+        "nodes": []
+      }
+    },
+    {
+      "name": "a dispatcher-tagged agent in the swarm is refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "dispatcher",
+              "instructions": "Route it."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "C",
+              "agent_type": "dispatcher",
+              "instructions": "Route it too."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          },
+          {
+            "from": "1",
+            "to": "4"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "dispatcher_in_swarm",
+        "nodes": [
+          "2",
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "a dispatcher-tagged node with no edges at all is still refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "D",
+              "agent_type": "dispatcher",
+              "instructions": "Route it."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "dispatcher_in_swarm",
+        "nodes": [
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "a merge node is refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "M",
+              "agent_type": "standard",
+              "instructions": "M."
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
             "to": "3"
           },
           {
@@ -1331,27 +743,154 @@
           },
           {
             "from": "3",
-            "to": "3"
+            "to": "4"
           }
         ]
       },
       "expect": {
-        "ok": true,
-        "agents": [
-          "3",
+        "ok": false,
+        "error": "merge_node",
+        "nodes": [
           "4"
+        ]
+      }
+    },
+    {
+      "name": "a playbook node is refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "playbook",
+            "config": {
+              "type": "playbook",
+              "name": "PB",
+              "playbook": "Title: X"
+            }
+          }
         ],
-        "handoffs": [
-          [
-            "3",
-            "4"
-          ],
-          [
-            "4",
-            "3"
-          ]
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          },
+          {
+            "from": "2",
+            "to": "4"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "playbook_unsupported",
+        "nodes": [
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "two output nodes are refused",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "output",
+            "config": {
+              "type": "output"
+            }
+          },
+          {
+            "id": "5",
+            "node_type": "output",
+            "config": {
+              "type": "output"
+            }
+          }
         ],
-        "entry": "3"
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          },
+          {
+            "from": "2",
+            "to": "4"
+          },
+          {
+            "from": "3",
+            "to": "5"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "multiple_outputs",
+        "nodes": [
+          "4",
+          "5"
+        ]
       }
     }
   ]
