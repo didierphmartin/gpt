@@ -354,6 +354,16 @@ sees the other's messages.
 - **Single-file and A2A packaging.** A2A swarm is genuinely interesting — handoffs crossing the network between agent servers — and genuinely novel; it waits until the in-process semantics are proved.
 - **Multi-user.** Its own spec, which this one is deliberately compatible with: the checkpointer key already begins with the owner.
 - **Summarisation of long threads** (§5).
+- **Skills on a compiled swarm member.** In the interpreter, a bound skill runs on the turn
+  that answers and on no other (§6b) — the agent that produced the deliverable owns it. The
+  compiled target has no equivalent: `create_react_agent` offers no post-hoc step, and the
+  interpreter's approach (re-invoking the node with the answer as its input) does not map onto
+  a graph the library owns. So a swarm member's bound skill is **not applied** in generated
+  code, while the same member's skill does run in the editor.
+  That divergence is the uncomfortable part, and it is recorded rather than hidden: the same
+  canvas behaves differently in the two places. Resolving it means either a wrapper node after
+  the answering member, or accepting that skills are an interpreter-only feature for swarms and
+  saying so in the editor. Decide before the ADK and MAF targets copy the omission.
 - **Authoring a swarm from chat.** The `workflow-compile` skill emits a DSL whose top-level
   fields are `name`, `description`, `definition`, `triggers`, `output_folder` and
   `output_storage_enabled` — there is no `orchestration`, and neither the skill nor `chat.js`
