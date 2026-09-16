@@ -2630,9 +2630,8 @@ class WorkflowEditor {
             }
 
             // Handle Output node clicks to show last workflow results.
-            // The "LangGraph" button inside the output node opens a small
-            // menu (Setup / Generate) and must not also trigger the
-            // results modal.
+            // Compiling to a framework now lives in the canvas toolbar
+            // (_showCompileMenu) rather than as buttons on this node.
             // Ingestion output node: one click on "Compile to Python" produces
             // and shows the standalone ingestion script directly (no dropdown).
             const ingestionCompileBtn = e.target.closest('[data-action="ingestion-compile"]');
@@ -2642,18 +2641,6 @@ class WorkflowEditor {
                 return;
             }
 
-            const langgraphBtn = e.target.closest('[data-action="langgraph-menu"]');
-            if (langgraphBtn) {
-                e.stopPropagation();
-                this._showLangGraphMenu(langgraphBtn);
-                return;
-            }
-            const adkBtn = e.target.closest('[data-action="adk-menu"]');
-            if (adkBtn) { e.stopPropagation(); this._showAdkMenu(adkBtn); return; }
-            const mafBtn = e.target.closest('[data-action="maf-menu"]');
-            if (mafBtn) { e.stopPropagation(); this._showMafMenu(mafBtn); return; }
-            const nooaBtn = e.target.closest('[data-action="nooa-menu"]');
-            if (nooaBtn) { e.stopPropagation(); this._showNooaMenu(nooaBtn); return; }
             const viewJsonBtn = e.target.closest('[data-action="view-json"]');
             if (viewJsonBtn) {
                 e.stopPropagation();
@@ -11757,22 +11744,6 @@ class WorkflowEditor {
                     <span class="storage-icon">${storageIcon}</span>
                     <span class="storage-label">${storageLabel}</span>
                 </div>
-                <button class="node-langgraph" title="${this.t('workflow.output.langgraphTitle') || 'LangGraph: setup the runtime or generate the script'}" data-action="langgraph-menu">
-                    <span class="gen-label">langGraph - Python</span>
-                    <span class="gen-caret" aria-hidden="true">▾</span>
-                </button>
-                <button class="node-langgraph node-adk" title="${this.t('workflow.output.adkTitle') || 'Google ADK: set up the runtime or generate the script'}" data-action="adk-menu">
-                    <span class="gen-label">Google ADK - Python</span>
-                    <span class="gen-caret" aria-hidden="true">▾</span>
-                </button>
-                <button class="node-langgraph node-maf" title="${this.t('workflow.output.mafTitle') || 'Microsoft Agent Framework: set up the runtime or generate the script'}" data-action="maf-menu">
-                    <span class="gen-label">Microsoft Agent Framework - Python</span>
-                    <span class="gen-caret" aria-hidden="true">▾</span>
-                </button>
-                <button class="node-langgraph node-nooa" title="${this.t('workflow.output.nooaTitle') || 'NVIDIA OO Agents: set up the runtime or generate the script'}" data-action="nooa-menu">
-                    <span class="gen-label">NVIDIA OO Agents - Python</span>
-                    <span class="gen-caret" aria-hidden="true">▾</span>
-                </button>
                 <button class="node-view-json" title="${this.t('workflow.output.viewJsonTitle') || 'View the JSON payload this workflow sends to the backend on save'}" data-action="view-json">
                     <span class="gen-label">${this.t('workflow.output.viewJson') || '{ } View JSON'}</span>
                 </button>
