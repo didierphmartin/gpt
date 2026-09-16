@@ -259,7 +259,17 @@ class LangGraphGenerator
                     'Single file packaging is not supported for swarm workflows yet. Generate this swarm with the modular layout ("Agents in separate files").'
                 );
             }
-            return $this->generateSwarm($facts);
+            // TEMPORARY, removed by Task 3 when the real emitter lands.
+            // generateSwarm() already produces the correct file layout and runs
+            // the rewrite (so its refusals are live and useful), but the module
+            // bodies are still placeholders. The toolbar's Compile button
+            // reaches this path, and handing someone a package of TODO stubs
+            // that looks like real output is worse than saying it is not ready.
+            $swarm = $this->generateSwarm($facts);
+            throw new RuntimeException(
+                'Compiling a swarm is not finished yet — the package layout and validation are in place, '
+                . 'but the agent modules are not emitted. Run this swarm from the editor instead: open it and click Start.'
+            );
         }
         if (!empty($options['a2a'])) {
             return $this->generateA2A($facts);   // Task 4
