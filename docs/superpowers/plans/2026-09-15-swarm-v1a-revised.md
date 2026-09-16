@@ -417,22 +417,77 @@ Requirements:
 - the status line names the agent now holding the turn — that is the one question a swarm raises that a DAG never does;
 - closing the overlay calls `_swarmSessionEnd()`, because a closed session starts fresh (spec §3b). The existing `hide` handler is where this goes.
 
-- [ ] **Step 3: Open a session instead of running once**
+- [ ] **Step 3: The Start node opens the session — this is the entry point**
 
-In `executeWorkflowInBrowser`, the swarm branch currently runs one turn and returns. It now starts a session, opens the overlay with the composer, runs the first turn, and leaves the overlay accepting prompts:
+**The Start node is the door into the swarm.** Clicking it opens the conversation; the
+overlay is where the conversation lives. This is the primary way a session begins, not the
+Run menu.
+
+The seam already exists. At `workflow-editor.js:2678-2688` a click on `.workflow-node.start-node`
+currently calls `this.showPromptForm()` — the one-shot prompt editor, which is the right
+behaviour for a workflow and the wrong one for a swarm. Branch it:
+
+```js
+            const startNode = e.target.closest('.workflow-node.start-node');
+            if (startNode) {
+                // …the existing document-zone guards stay exactly as they are…
+                if (this._isSwarm()) {
+                    // Start is the door into a swarm, not a prompt to fill in
+                    // once: clicking it opens the conversation (spec §3b).
+                    this._openSwarmSession();
+                } else {
+                    this.showPromptForm();
+                }
+            }
+```
+
+Write `_openSwarmSession()` as the single entry point both triggers use:
+
+```js
+    /**
+     * Open the swarm's conversation. A refused canvas is reported here rather
+     * than at the first prompt, so the user finds out while looking at the
+     * graph. Re-opening while a session is live just re-shows the overlay —
+     * it must not silently discard the transcript.
+     */
+    async _openSwarmSession() {
+        if (!this._swarmSession || this._swarmSession.workflowId !== this.currentWorkflowId) {
+            const started = this._swarmSessionStart();
+            if (!started.ok) { this._showSwarmRefusalModal(started); return; }
+        }
+        this._pbOverlayOpen('swarm', this.currentWorkflowName || 'Swarm', [], null, { session: true });
+    }
+```
+
+Note the two consequences of Start being a door:
+
+- **The overlay opens empty**, with the composer focused. There is no first prompt to seed
+  it with — `_pbOverlayOpen`'s existing `this._pbBubble('you', prompt)` must be skipped when
+  `prompt` is null, or the session opens with a blank user bubble.
+- **Start's stored prompt is not used in swarm mode.** It is a workflow-mode field: one
+  prompt, stored on the node, replayed at Run. A swarm's prompts are typed into the overlay
+  and there is no "the prompt" to store. Leave the field alone in the node's form — flipping
+  back to workflow mode must find it intact — but do not read it when starting a session,
+  and skip `updateStartNodeIndicator`'s has-a-prompt styling in swarm mode, where it means
+  nothing.
+
+- [ ] **Step 4: Make Run open the same session, and name it honestly**
+
+Run must not become a dead control in swarm mode, and it must not open a *second*
+conversation. Point it at the same entry point. In `executeWorkflowInBrowser`:
 
 ```js
         if (this._isSwarm()) {
-            const started = this._swarmSessionStart();
-            if (!started.ok) { this._showSwarmRefusalModal(started); return { output: '', success: false, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 }; }
-            this._pbOverlayOpen('swarm', this.currentWorkflowName || 'Swarm', [], userPrompt, { session: true });
-            return await this._swarmTurn(userPrompt, onProgress);
+            await this._openSwarkSession_FIXME();   // see below — use _openSwarmSession()
+            return { output: '', success: true, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 };
         }
 ```
 
-- [ ] **Step 4: Name the control honestly**
+(That placeholder name is deliberate — replace it with `this._openSwarmSession()`. If you
+copied it through, the verification in Step 5 will not run.)
 
-In swarm mode the Run item opens a session rather than performing a run (spec §10). Update the label where the Run menu item is built, and add the i18n keys for it.
+In swarm mode the control opens a session rather than performing a run (spec §10). Update
+the Run item's label accordingly and add its i18n keys.
 
 - [ ] **Step 5: Verify**
 
