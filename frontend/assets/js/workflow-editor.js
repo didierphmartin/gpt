@@ -5912,13 +5912,20 @@ class WorkflowEditor {
 
             const holdsTurn = holderId != null && String(id) === String(holderId);
             el.classList.toggle('swarm-turn-holder', holdsTurn);
+            let chip = el.querySelector(':scope > .swarm-turn-chip');
             if (holdsTurn) {
-                // The chip is rendered from this attribute (CSS content:attr),
-                // so the label stays translatable; the title explains it.
-                el.dataset.swarmTurn = this.t('workflow.swarmCanvas.turnBadge') || 'holds the turn';
+                if (!chip) {
+                    chip = document.createElement('div');
+                    chip.className = 'swarm-turn-chip';
+                    // Directly under the agent's name. The glyph is set here and
+                    // not in the translated string, so no locale can drop it.
+                    el.querySelector(':scope > .node-header')?.insertAdjacentElement('afterend', chip)
+                        || el.prepend(chip);
+                }
+                chip.textContent = '\u21BB\u00A0' + (this.t('workflow.swarmCanvas.turnBadge') || 'holds the turn');
                 el.title = holdingLabel;
             } else {
-                delete el.dataset.swarmTurn;
+                chip?.remove();
                 if (el.title === holdingLabel) el.title = '';
             }
         }
