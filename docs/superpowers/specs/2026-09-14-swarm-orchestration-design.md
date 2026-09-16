@@ -206,6 +206,22 @@ api.py        unchanged — the run server
 agents/*.py   one agent each: NODE + the compiled agent (swarm) / run_node (workflow)
 ```
 
+**The packaging dialog must know the architecture.** The code-generation modal offers three
+mutually exclusive layouts — single file, agents in separate files, and A2A — and today it
+offers all three regardless of orchestration. A swarm supports only the modular layout in v1
+(§1 decision 4; single file and A2A are deferred in §7), so picking either of the others on a
+swarm workflow would produce something that cannot work, with nothing to say why.
+
+In swarm mode the modal **shows all three and disables the two that are unsupported**, each
+with a one-line reason, rather than hiding them or refusing after the user has chosen. Hiding
+them would make the feature look absent; refusing at Generate would let someone pick, commit,
+and only then be told. The user learns both that the option exists and why it is not available
+yet — the same standard §3a sets for a refused canvas.
+
+Note this is the one place where a *setting* legitimately constrains a choice, unlike the
+orchestration toggle itself, which never refuses (§10): here the choice and the action are the
+same click.
+
 **State** extends the library's schema rather than replacing it:
 
 ```python
