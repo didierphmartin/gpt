@@ -7,12 +7,13 @@ namespace AgentTeam\Services;
 /**
  * Turns a swarm canvas into the graph that actually runs.
  *
- * A swarm is the agents fanned out directly from Start (spec §3). Nothing
- * dissolves and nothing is synthesised: the members are exactly the agents
- * on the other end of Start's edges, wired into a full mesh with each other
- * plus whatever they hand off to beyond that. The Dispatcher tag belongs to
- * workflow mode; in a swarm every member routes, so the tag is refused
- * wherever it appears.
+ * A swarm is exactly the agents fanned out directly from Start (spec §3),
+ * wired into a full mesh with each other and nothing else. An agent not
+ * connected to Start is refused rather than absorbed: every agent in a
+ * swarm can hand to every other, so a partial mesh (a member's child
+ * reachable only through its parent) would contradict that. The Dispatcher
+ * tag belongs to workflow mode; in a swarm every member routes, so the tag
+ * is refused wherever it appears.
  *
  * Pure: no I/O, no randomness, no state. The JS twin in
  * frontend/assets/js/swarm-rewrite.js must produce the same result, and
@@ -149,22 +150,25 @@ class SwarmRewriter
             }
         }
 
-        // --- the rewrite ---
-        // Walk outward from the menu: any agent reachable from a swarm member
-        // is itself a member. Absorbing only the menu's direct children is not
-        // enough — a member's child may have its own child, and then that
-        // grandchild is a handoff target with no agent behind it, which the
-        // interpreter would dereference and crash on. The loop re-reads
-        // count($members) each pass, so newly absorbed members are walked too.
-        $members = $menu;                                   // the swarm proper
-        for ($i = 0; $i < count($members); $i++) {
-            foreach ($children($members[$i]) as $c) {
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && !in_array($c, $members, true)) {
-                    $members[] = $c;
-                }
+        // Every agent in the swarm can hand to every other (spec, revised).
+        // An agent connected to a member but not to Start — "connected to
+        // Start" means Start has an edge TO it, not merely a path from it —
+        // would otherwise be reachable only through that one parent, a
+        // partial mesh the owner has ruled out. Refuse it by name rather
+        // than silently absorbing or dropping it.
+        $notOnStart = [];
+        foreach ($ids as $id) {
+            if ($isAgent($nodes[$id]) && !in_array($id, $menu, true)) {
+                $notOnStart[] = $id;
             }
         }
-        $members = $byId($members);
+        if ($notOnStart !== []) {
+            return ['ok' => false, 'error' => 'agent_not_on_start', 'nodes' => $byId($notOnStart)];
+        }
+
+        // --- the rewrite ---
+        // The swarm is exactly the menu: no absorption, no transitive walk.
+        $members = $menu;
 
         $nameOf = static fn(string $id): string => (string) ($nodes[$id]['config']['agent_name'] ?? $nodes[$id]['config']['name'] ?? "node {$id}");
         // PHP's trim()/rtrim() default charlist is " \t\n\r\0\x0B" (ASCII
@@ -185,16 +189,9 @@ class SwarmRewriter
         $agents = [];
         foreach ($members as $id) {
             $handoffs = [];
-            if (in_array($id, $menu, true)) {
-                foreach ($menu as $other) {           // the synthesised mesh
-                    if ($other !== $id) {
-                        $handoffs[] = $other;
-                    }
-                }
-            }
-            foreach ($children($id) as $c) {          // preserved edges to other agents
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $id && !in_array($c, $handoffs, true)) {
-                    $handoffs[] = $c;
+            foreach ($menu as $other) {               // the full mesh
+                if ($other !== $id) {
+                    $handoffs[] = $other;
                 }
             }
             $handoffs = $byId($handoffs);

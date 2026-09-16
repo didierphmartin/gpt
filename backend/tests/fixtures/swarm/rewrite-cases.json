@@ -251,7 +251,7 @@
       }
     },
     {
-      "name": "a member's child's child is still a member, so no handoff dangles",
+      "name": "an agent hanging off a member, not off Start, is refused, along with its own child",
       "graph": {
         "nodes": [
           {
@@ -322,34 +322,91 @@
         ]
       },
       "expect": {
-        "ok": true,
-        "agents": [
-          "2",
-          "3",
+        "ok": false,
+        "error": "agent_not_on_start",
+        "nodes": [
           "4",
           "5"
+        ]
+      }
+    },
+    {
+      "name": "two agents hanging off two different members are both named in the refusal",
+      "graph": {
+        "nodes": [
+          {
+            "id": "1",
+            "node_type": "start",
+            "config": {
+              "type": "start"
+            }
+          },
+          {
+            "id": "2",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "A",
+              "agent_type": "standard",
+              "instructions": "A."
+            }
+          },
+          {
+            "id": "3",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "B",
+              "agent_type": "standard",
+              "instructions": "B."
+            }
+          },
+          {
+            "id": "4",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "C",
+              "agent_type": "standard",
+              "instructions": "C."
+            }
+          },
+          {
+            "id": "5",
+            "node_type": "",
+            "config": {
+              "type": "agent-template",
+              "agent_name": "D",
+              "agent_type": "standard",
+              "instructions": "D."
+            }
+          }
         ],
-        "handoffs": [
-          [
-            "2",
-            "3"
-          ],
-          [
-            "2",
-            "4"
-          ],
-          [
-            "3",
-            "2"
-          ],
-          [
-            "4",
-            "5"
-          ]
-        ],
-        "entry": "2",
-        "guide_contains": [
-          "E"
+        "edges": [
+          {
+            "from": "1",
+            "to": "2"
+          },
+          {
+            "from": "1",
+            "to": "3"
+          },
+          {
+            "from": "2",
+            "to": "4"
+          },
+          {
+            "from": "3",
+            "to": "5"
+          }
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "agent_not_on_start",
+        "nodes": [
+          "4",
+          "5"
         ]
       }
     },

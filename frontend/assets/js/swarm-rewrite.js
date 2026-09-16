@@ -1,12 +1,13 @@
 /**
  * The swarm rewrite: a swarm canvas -> the graph that actually runs.
  *
- * A swarm is the agents fanned out directly from Start (spec §3). Nothing
- * dissolves and nothing is synthesised: the members are exactly the agents
- * on the other end of Start's edges, wired into a full mesh with each other
- * plus whatever they hand off to beyond that. The Dispatcher tag belongs to
- * workflow mode; in a swarm every member routes, so the tag is refused
- * wherever it appears.
+ * A swarm is exactly the agents fanned out directly from Start (spec §3),
+ * wired into a full mesh with each other and nothing else. An agent not
+ * connected to Start is refused rather than absorbed: every agent in a
+ * swarm can hand to every other, so a partial mesh (a member's child
+ * reachable only through its parent) would contradict that. The Dispatcher
+ * tag belongs to workflow mode; in a swarm every member routes, so the tag
+ * is refused wherever it appears.
  *
  * Twin of backend/src/AgentTeam/Services/SwarmRewriter.php. Both are tested
  * against backend/tests/fixtures/swarm/rewrite-cases.json; a change that
@@ -96,18 +97,17 @@
             if (agentParents.length > 1) return { ok: false, error: 'merge_node', nodes: [id] };
         }
 
-        // Walk outward from the menu: any agent reachable from a swarm member is
-        // itself a member. Absorbing only the menu's direct children leaves a
-        // grandchild as a handoff target with no agent behind it, which the
-        // interpreter dereferences and crashes on. members.length is re-read
-        // each pass, so newly absorbed members are walked too.
-        const members = [...menu];
-        for (let i = 0; i < members.length; i++) {
-            for (const c of children(members[i])) {
-                if (nodes[c] && isAgent(nodes[c]) && !members.includes(c)) members.push(c);
-            }
-        }
-        const ordered = byId(members);
+        // Every agent in the swarm can hand to every other (spec, revised).
+        // An agent connected to a member but not to Start — "connected to
+        // Start" means Start has an edge TO it, not merely a path from it —
+        // would otherwise be reachable only through that one parent, a
+        // partial mesh the owner has ruled out. Refuse it by name rather
+        // than silently absorbing or dropping it.
+        const notOnStart = ids.filter(id => isAgent(nodes[id]) && !menu.includes(id));
+        if (notOnStart.length) return { ok: false, error: 'agent_not_on_start', nodes: byId(notOnStart) };
+
+        // The swarm is exactly the menu: no absorption, no transitive walk.
+        const ordered = menu;
 
         const nameOf = id => String(nodes[id].config?.agent_name ?? nodes[id].config?.name ?? `node ${id}`);
         // Truncate by codepoint, never by UTF-16 code unit: Array.from(...)
@@ -124,11 +124,7 @@
         const agents = {};
         for (const id of ordered) {
             let handoffs = [];
-            if (menu.includes(id)) for (const other of menu) if (other !== id) handoffs.push(other);
-            for (const c of children(id)) {
-                // c !== id: a self-edge on a member must not hand off to itself.
-                if (nodes[c] && isAgent(nodes[c]) && c !== id && !handoffs.includes(c)) handoffs.push(c);
-            }
+            for (const other of menu) if (other !== id) handoffs.push(other);   // the full mesh
             handoffs = byId(handoffs);
             const colleagues = handoffs.map(h => ({ name: nameOf(h), role: roleOf(h) }));
             const own = String(nodes[id].config?.instructions ?? '');
