@@ -1,6 +1,13 @@
 /**
  * The swarm rewrite: a swarm canvas -> the graph that actually runs.
  *
+ * A swarm is the agents fanned out directly from Start (spec §3). Nothing
+ * dissolves and nothing is synthesised: the members are exactly the agents
+ * on the other end of Start's edges, wired into a full mesh with each other
+ * plus whatever they hand off to beyond that. The Dispatcher tag belongs to
+ * workflow mode; in a swarm every member routes, so the tag is refused
+ * wherever it appears.
+ *
  * Twin of backend/src/AgentTeam/Services/SwarmRewriter.php. Both are tested
  * against backend/tests/fixtures/swarm/rewrite-cases.json; a change that
  * satisfies one side only fails the other. The editor needs this in JS so
@@ -17,14 +24,12 @@
     // implementations diverge (finding 7).
     const phpTrim = s => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
 
-    function handoffGuide(dispatcherInstructions, colleagues) {
+    function handoffGuide(colleagues) {
         const lines = ['## Colleagues you can hand this to'];
         for (const c of colleagues) {
             const role = phpTrim(c.role || '');
             lines.push('- ' + c.name + (role ? ' — ' + role : ''));
         }
-        const routing = phpTrim(dispatcherInstructions || '');
-        if (routing) { lines.push('', '## When to hand off', routing); }
         lines.push('',
             'Hand off when the request is theirs rather than yours, and say why in the reason.',
             'Answer directly when it is yours.',
@@ -64,23 +69,30 @@
         const outputs = ids.filter(id => typeOf(nodes[id]) === 'output');
         if (outputs.length > 1) return { ok: false, error: 'multiple_outputs', nodes: byId(outputs) };
 
-        const dispatchers = ids.filter(id => isAgent(nodes[id]) && isDispatcher(nodes[id]));
-        if (dispatchers.length > 1) return { ok: false, error: 'nested_dispatchers', nodes: byId(dispatchers) };
-        if (!dispatchers.length) return { ok: false, error: 'no_dispatcher', nodes: [] };
-        const dispatcherId = dispatchers[0];
+        // The Dispatcher tag belongs to workflow mode. In a swarm every member
+        // routes, so the tag has no meaning here wherever it appears — including
+        // on a node nothing connects to.
+        const tagged = ids.filter(id => isAgent(nodes[id]) && isDispatcher(nodes[id]));
+        if (tagged.length) return { ok: false, error: 'dispatcher_in_swarm', nodes: byId(tagged) };
 
-        const entryTargets = byId([...new Set(ids.filter(id => typeOf(nodes[id]) === 'start').flatMap(children))]);
-        if (entryTargets.length > 1) return { ok: false, error: 'two_entry_points', nodes: entryTargets };
+        // The swarm is what was drawn from Start (spec §3). No node is
+        // dissolved and none is synthesised: the members are exactly the
+        // agents on the other end of Start's edges.
+        const menuIds = [];
+        for (const id of ids) {
+            if (typeOf(nodes[id]) !== 'start') continue;
+            for (const c of children(id)) {
+                if (nodes[c] && isAgent(nodes[c]) && !menuIds.includes(c)) menuIds.push(c);   // a doubled edge must not double a member
+            }
+        }
+        const menu = byId(menuIds);
+        if (menu.length < 2) return { ok: false, error: 'start_needs_two_agents', nodes: [] };
 
-        // A self-edge on the dispatcher must not put it in its own menu (it
-        // stays dissolved, spec §3b), and a duplicated Dispatcher->X edge
-        // must not count X twice.
-        const menu = byId([...new Set(children(dispatcherId).filter(c => nodes[c] && isAgent(nodes[c]) && c !== dispatcherId))]);
-        if (menu.length < 2) return { ok: false, error: 'dispatcher_needs_two_children', nodes: [dispatcherId] };
-
+        // A merge is any agent with more than one agent parent: one
+        // conversation cannot arrive twice.
         for (const id of ids) {
             if (!isAgent(nodes[id])) continue;
-            const agentParents = parents(id).filter(p => p !== dispatcherId && nodes[p] && isAgent(nodes[p]));
+            const agentParents = parents(id).filter(p => nodes[p] && isAgent(nodes[p]));
             if (agentParents.length > 1) return { ok: false, error: 'merge_node', nodes: [id] };
         }
 
@@ -92,7 +104,7 @@
         const members = [...menu];
         for (let i = 0; i < members.length; i++) {
             for (const c of children(members[i])) {
-                if (nodes[c] && isAgent(nodes[c]) && c !== dispatcherId && !members.includes(c)) members.push(c);
+                if (nodes[c] && isAgent(nodes[c]) && !members.includes(c)) members.push(c);
             }
         }
         const ordered = byId(members);
@@ -115,14 +127,12 @@
             if (menu.includes(id)) for (const other of menu) if (other !== id) handoffs.push(other);
             for (const c of children(id)) {
                 // c !== id: a self-edge on a member must not hand off to itself.
-                if (nodes[c] && isAgent(nodes[c]) && c !== dispatcherId && c !== id && !handoffs.includes(c)) handoffs.push(c);
+                if (nodes[c] && isAgent(nodes[c]) && c !== id && !handoffs.includes(c)) handoffs.push(c);
             }
             handoffs = byId(handoffs);
             const colleagues = handoffs.map(h => ({ name: nameOf(h), role: roleOf(h) }));
             const own = String(nodes[id].config?.instructions ?? '');
-            const guide = colleagues.length
-                ? handoffGuide(String(nodes[dispatcherId].config?.instructions ?? ''), colleagues)
-                : '';
+            const guide = colleagues.length ? handoffGuide(colleagues) : '';
             const skill = nodes[id].config?.bound_skill;
             // PHP's rtrim() default charlist is " \t\n\r\0\x0B" (ASCII only).
             // Strip the identical fixed set here, never JS's Unicode-aware
@@ -136,11 +146,7 @@
             };
         }
 
-        const dcfg = nodes[dispatcherId].config || {};
-        return {
-            ok: true, agents, entry: menu[0],
-            dropped: { tools: (dcfg.tools || []).length, skills: dcfg.bound_skill ? 1 : 0 },
-        };
+        return { ok: true, agents, entry: menu[0] };
     }
 
     if (typeof module !== 'undefined' && module.exports) {

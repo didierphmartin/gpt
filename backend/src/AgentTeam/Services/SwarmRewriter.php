@@ -7,10 +7,12 @@ namespace AgentTeam\Services;
 /**
  * Turns a swarm canvas into the graph that actually runs.
  *
- * A swarm is drawn as a node tagged Dispatcher fanning out to two or more
- * agents. The dispatcher is scaffolding: a swarm routes itself, so the node
- * is NOT compiled as an agent. Its children become the swarm, wired to each
- * other, carrying its routing prompt as their shared handoff guide.
+ * A swarm is the agents fanned out directly from Start (spec §3). Nothing
+ * dissolves and nothing is synthesised: the members are exactly the agents
+ * on the other end of Start's edges, wired into a full mesh with each other
+ * plus whatever they hand off to beyond that. The Dispatcher tag belongs to
+ * workflow mode; in a swarm every member routes, so the tag is refused
+ * wherever it appears.
  *
  * Pure: no I/O, no randomness, no state. The JS twin in
  * frontend/assets/js/swarm-rewrite.js must produce the same result, and
@@ -23,7 +25,7 @@ class SwarmRewriter
 
     /**
      * @param array $graph {nodes: [...], edges: [...]}
-     * @return array ok: {ok, agents, entry, dropped} | refusal: {ok:false, error, nodes}
+     * @return array ok: {ok, agents, entry} | refusal: {ok:false, error, nodes}
      */
     public static function rewrite(array $graph): array
     {
@@ -100,54 +102,47 @@ class SwarmRewriter
             return ['ok' => false, 'error' => 'multiple_outputs', 'nodes' => $byId($outputs)];
         }
 
-        $dispatchers = [];
+        // The Dispatcher tag belongs to workflow mode. In a swarm every member
+        // routes, so the tag has no meaning here wherever it appears — including
+        // on a node nothing connects to.
+        $tagged = [];
         foreach ($ids as $id) {
             if ($isAgent($nodes[$id]) && $isDispatcher($nodes[$id])) {
-                $dispatchers[] = $id;
+                $tagged[] = $id;
             }
         }
-        if (count($dispatchers) > 1) {
-            return ['ok' => false, 'error' => 'nested_dispatchers', 'nodes' => $byId($dispatchers)];
+        if ($tagged !== []) {
+            return ['ok' => false, 'error' => 'dispatcher_in_swarm', 'nodes' => $byId($tagged)];
         }
-        if ($dispatchers === []) {
-            return ['ok' => false, 'error' => 'no_dispatcher', 'nodes' => []];
-        }
-        $dispatcherId = $dispatchers[0];
 
-        $entryTargets = [];
+        // The swarm is what was drawn from Start (spec §3). No node is
+        // dissolved and none is synthesised: the members are exactly the
+        // agents on the other end of Start's edges.
+        $menu = [];
         foreach ($ids as $id) {
             if ($typeOf($nodes[$id]) !== 'start') {
                 continue;
             }
             foreach ($children($id) as $c) {
-                $entryTargets[] = $c;
+                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && !in_array($c, $menu, true)) {
+                    $menu[] = $c;          // a doubled edge must not double a member
+                }
             }
         }
-        $entryTargets = $byId(array_unique($entryTargets));
-        if (count($entryTargets) > 1) {
-            return ['ok' => false, 'error' => 'two_entry_points', 'nodes' => $entryTargets];
-        }
-
-        // A self-edge on the dispatcher must not put it in its own menu (it
-        // stays dissolved, spec §3b), and a duplicated Dispatcher->X edge
-        // must not count X twice.
-        $menu = $byId(array_unique(array_values(array_filter(
-            $children($dispatcherId),
-            static fn($c) => isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId
-        ))));
+        $menu = $byId($menu);
         if (count($menu) < 2) {
-            return ['ok' => false, 'error' => 'dispatcher_needs_two_children', 'nodes' => [$dispatcherId]];
+            return ['ok' => false, 'error' => 'start_needs_two_agents', 'nodes' => []];
         }
 
-        // A merge is any agent with more than one agent parent once the
-        // dispatcher is removed: one conversation cannot arrive twice.
+        // A merge is any agent with more than one agent parent: one
+        // conversation cannot arrive twice.
         foreach ($ids as $id) {
             if (!$isAgent($nodes[$id])) {
                 continue;
             }
             $agentParents = array_values(array_filter(
                 $parents($id),
-                static fn($p) => $p !== $dispatcherId && isset($nodes[$p]) && $isAgent($nodes[$p])
+                static fn($p) => isset($nodes[$p]) && $isAgent($nodes[$p])
             ));
             if (count($agentParents) > 1) {
                 return ['ok' => false, 'error' => 'merge_node', 'nodes' => [$id]];
@@ -164,7 +159,7 @@ class SwarmRewriter
         $members = $menu;                                   // the swarm proper
         for ($i = 0; $i < count($members); $i++) {
             foreach ($children($members[$i]) as $c) {
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId && !in_array($c, $members, true)) {
+                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && !in_array($c, $members, true)) {
                     $members[] = $c;
                 }
             }
@@ -197,8 +192,8 @@ class SwarmRewriter
                     }
                 }
             }
-            foreach ($children($id) as $c) {          // preserved edges to non-dispatcher agents
-                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $dispatcherId && $c !== $id && !in_array($c, $handoffs, true)) {
+            foreach ($children($id) as $c) {          // preserved edges to other agents
+                if (isset($nodes[$c]) && $isAgent($nodes[$c]) && $c !== $id && !in_array($c, $handoffs, true)) {
                     $handoffs[] = $c;
                 }
             }
@@ -208,9 +203,7 @@ class SwarmRewriter
                 $handoffs
             );
             $own = (string) ($nodes[$id]['config']['instructions'] ?? '');
-            $guide = $colleagues === []
-                ? ''
-                : self::handoffGuide((string) ($nodes[$dispatcherId]['config']['instructions'] ?? ''), $colleagues);
+            $guide = $colleagues === [] ? '' : self::handoffGuide($colleagues);
 
             $skills = $nodes[$id]['config']['bound_skill'] ?? null;
             // rtrim()'s default charlist is " \t\n\r\0\x0B" (ASCII only). The
@@ -226,25 +219,19 @@ class SwarmRewriter
             ];
         }
 
-        $dispatcherCfg = $nodes[$dispatcherId]['config'] ?? [];
         return [
             'ok' => true,
             'agents' => $agents,
             'entry' => $menu[0],
-            'dropped' => [
-                'tools' => count((array) ($dispatcherCfg['tools'] ?? [])),
-                'skills' => isset($dispatcherCfg['bound_skill']) ? 1 : 0,
-            ],
         ];
     }
 
     /**
      * The block appended to every agent that can hand off: who the colleagues
-     * are, and the dispatcher's routing rules, which say which subject belongs
-     * to whom. The dispatcher's persona is deliberately not carried — nothing
-     * speaks with that voice in a swarm.
+     * are, each carrying its own role summary. There is no dispatcher and no
+     * shared routing prose in a swarm — each member decides for itself.
      */
-    public static function handoffGuide(string $dispatcherInstructions, array $colleagues): string
+    public static function handoffGuide(array $colleagues): string
     {
         // trim() here is PHP's ASCII-only default (" \t\n\r\0\x0B"); the JS
         // twin's phpTrim() must match it exactly, not .trim() (finding 7).
@@ -252,12 +239,6 @@ class SwarmRewriter
         foreach ($colleagues as $c) {
             $role = trim((string) $c['role']);
             $lines[] = '- ' . $c['name'] . ($role !== '' ? ' — ' . $role : '');
-        }
-        $routing = trim($dispatcherInstructions);
-        if ($routing !== '') {
-            $lines[] = '';
-            $lines[] = '## When to hand off';
-            $lines[] = $routing;
         }
         $lines[] = '';
         $lines[] = 'Hand off when the request is theirs rather than yours, and say why in the reason.';

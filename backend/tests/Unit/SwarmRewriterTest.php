@@ -69,14 +69,16 @@ class SwarmRewriterTest extends TestCase
         }
     }
 
-    public function testTheDispatcherPersonaIsNotCarriedButItsRoutingIs(): void
+    public function testTheGuideListsEachColleagueWithItsOwnRoleSummary(): void
     {
-        $guide = SwarmRewriter::handoffGuide(
-            "Greet the caller warmly and be friendly.\nWhen they mention vacations, transfer to Human resources.",
-            [['name' => 'Human resources', 'role' => 'leave and payroll']]
-        );
+        $guide = SwarmRewriter::handoffGuide([
+            ['name' => 'Human resources', 'role' => 'leave and payroll'],
+            ['name' => 'IT claims', 'role' => 'passwords and access'],
+        ]);
         $this->assertStringContainsString('Human resources', $guide);
-        $this->assertStringContainsString('transfer to Human resources', $guide);
+        $this->assertStringContainsString('leave and payroll', $guide);
+        $this->assertStringContainsString('IT claims', $guide);
+        $this->assertStringContainsString('passwords and access', $guide);
         $this->assertStringContainsString('Do not hand back', $guide, 'the volley guard must be present');
     }
 
