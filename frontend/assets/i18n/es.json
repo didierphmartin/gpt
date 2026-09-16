@@ -1080,7 +1080,8 @@
     },
     "swarmAttachWarn": "Los documentos adjuntos a Start todavía no se entregan a los agentes del enjambre; incluye en el prompt lo que necesiten.",
     "swarmCanvas": {
-      "dissolved": "No es un agente en modo enjambre — su prompt es la guía de traspaso del equipo."
+      "dissolved": "No es un agente en modo enjambre — su prompt es la guía de traspaso del equipo.",
+      "holdingTurn": "Tiene el turno — tu próximo mensaje llegará aquí"
     },
     "swarmError": {
       "title": "Este flujo de trabajo no puede ejecutarse como un enjambre",

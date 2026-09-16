@@ -1080,7 +1080,8 @@
     },
     "swarmAttachWarn": "Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.",
     "swarmCanvas": {
-      "dissolved": "Not an agent in swarm mode — its prompt is the team's handoff guide."
+      "dissolved": "Not an agent in swarm mode — its prompt is the team's handoff guide.",
+      "holdingTurn": "Holding the turn — your next message goes here"
     },
     "swarmError": {
       "title": "This workflow cannot run as a swarm",

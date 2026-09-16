@@ -1080,7 +1080,8 @@
     },
     "swarmAttachWarn": "Les documents attachés à Start ne sont pas encore transmis aux agents de l'essaim — mettez ce dont ils ont besoin dans le prompt.",
     "swarmCanvas": {
-      "dissolved": "N'est pas un agent en mode essaim — son prompt est le guide de transmission de l'équipe."
+      "dissolved": "N'est pas un agent en mode essaim — son prompt est le guide de transmission de l'équipe.",
+      "holdingTurn": "A la parole — votre prochain message arrivera ici"
     },
     "swarmError": {
       "title": "Ce workflow ne peut pas s'exécuter en essaim",

@@ -5890,9 +5890,22 @@ class WorkflowEditor {
     /**
      * Swarm mode hides things the canvas still shows: a node that is not an
      * agent, and edges nobody drew. Make both visible.
+     *
+     * Task 6 addendum: also mark whichever agent is holding the turn while a
+     * swarm session is open — the one question a swarm raises that a DAG
+     * never does is "where does my next prompt go", and the transcript
+     * answers it in prose while the canvas should answer it at a glance.
+     * The mark lives on .workflow-node (same element swarm-dissolved uses),
+     * NOT on the #node-<id> wrapper highlightNode's node-active/-completed/
+     * -error classes live on — so the two marking systems never fight over
+     * one element's classList, and both can be visible on the same node at
+     * once (e.g. the agent that just answered is briefly both "completed"
+     * and "holding the turn").
      */
     _applyOrchestrationToCanvas() {
         const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        const holderId = this._swarmSession?.activeAgent ?? null;
+        const holdingLabel = this.t('workflow.swarmCanvas.holdingTurn') || 'Holding the turn — your next message goes here';
         for (const id of Object.keys(data)) {
             const wrapper = document.getElementById(`node-${id}`);
             // The dissolved styling and note live on .workflow-node (the inner
@@ -5910,6 +5923,14 @@ class WorkflowEditor {
                 }
             } else if (existing) {
                 existing.remove();
+            }
+
+            const holdsTurn = holderId != null && String(id) === String(holderId);
+            el.classList.toggle('swarm-turn-holder', holdsTurn);
+            if (holdsTurn) {
+                el.title = holdingLabel;
+            } else if (el.title === holdingLabel) {
+                el.title = '';
             }
         }
     }
@@ -12592,9 +12613,19 @@ class WorkflowEditor {
                             <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t('workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
                             <button class="storage-config-btn" id="pb-ov-send">${this.escapeHtml(this.t('workflow.swarmSession.send'))}</button>
                         </div>` : '';
+        // Session variant (Task 6): the swarm overlay is a movable window
+        // over the live canvas, not a modal — the playbook/compiled-run
+        // overlay (session=false) must render byte-identically to before,
+        // so the extra class and the sizing it enables are ONLY added here.
+        // The size/position for that case come from CSS under
+        // .pb-overlay-window, not this inline style, so a restored/dragged
+        // rect (set later as inline styles by _pbInitOverlayWindow) is free
+        // to override them without fighting a hardcoded 760px/92%/84vh.
+        const overlayClass = session ? 'storage-config-overlay pb-overlay-window' : 'storage-config-overlay';
+        const modalStyleAttr = session ? '' : ' style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;"';
         const html = `
-            <div id="playbook-run-overlay" class="storage-config-overlay">
-                <div class="storage-config-modal" style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;">
+            <div id="playbook-run-overlay" class="${overlayClass}">
+                <div class="storage-config-modal"${modalStyleAttr}>
                     <div class="storage-config-header" style="flex-wrap:wrap;">
                         <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
@@ -12609,14 +12640,20 @@ class WorkflowEditor {
                 </div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
+        // Set by _pbInitOverlayWindow() below (session only) — hide() must
+        // tear down its listeners/observer before the overlay is removed,
+        // or they leak across sessions.
+        let windowCleanup = null;
         const hide = () => {
             // A closed session starts fresh — the next Start click or Run
             // begins a new conversation rather than resuming this one.
             if (session) this._swarmSessionEnd();
+            windowCleanup?.();
             document.getElementById('playbook-run-overlay')?.remove();
         };
         document.getElementById('pb-ov-close')?.addEventListener('click', hide);
         document.getElementById('pb-ov-hide')?.addEventListener('click', hide);
+        if (session) windowCleanup = this._pbInitOverlayWindow();
         // The session opens empty, with nothing typed yet — there is no
         // first prompt to seed the feed with, so skip the bubble rather than
         // rendering one for a null/undefined prompt.
@@ -12664,6 +12701,149 @@ class WorkflowEditor {
             this._pbUpdateSwarmStatus();
             input?.focus();
         }
+    }
+
+    /**
+     * Task 6 — owner feedback: "could not be moved on the screen like a
+     * window and this is needed to be able to move it to see behind what is
+     * happening in the workflow." Makes the SESSION overlay (the
+     * .pb-overlay-window variant only — see _pbOverlayOpen) a draggable,
+     * resizable, position-remembering window instead of a centred modal.
+     * Never called for the playbook/compiled-run overlay.
+     *
+     * Returns a cleanup function; the caller (hide(), in _pbOverlayOpen)
+     * must call it before removing the overlay so the window-resize
+     * listener and the ResizeObserver don't outlive it.
+     */
+    _pbInitOverlayWindow() {
+        const overlay = document.getElementById('playbook-run-overlay');
+        const modal = overlay?.querySelector('.storage-config-modal');
+        const header = overlay?.querySelector('.storage-config-header');
+        if (!overlay || !modal || !header) return () => {};
+
+        const STORAGE_KEY = 'wf:swarm-overlay:rect'; // per-viewer, per-purpose
+
+        // Private windows, cleared site data, and storage blocked by browser
+        // policy all make localStorage fail — sometimes by throwing on the
+        // `localStorage` accessor itself, not just get/setItem. None of that
+        // may stop the overlay from opening, so every touch is wrapped and a
+        // failure here just means "nothing was remembered."
+        const readRect = () => {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return null;
+                const r = JSON.parse(raw);
+                const nums = [r?.left, r?.top, r?.width, r?.height];
+                if (nums.some(n => typeof n !== 'number' || !Number.isFinite(n))) return null;
+                return { left: r.left, top: r.top, width: r.width, height: r.height };
+            } catch (_) { return null; }
+        };
+        const writeRect = (r) => {
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(r)); } catch (_) { /* see readRect */ }
+        };
+
+        // Clamp so the panel can never end up somewhere it cannot be grabbed
+        // back from: the whole panel — header included — stays fully inside
+        // the CURRENT viewport at every edge. Applied both on open (so a
+        // rect saved on a large monitor can't land off-screen on a laptop)
+        // and on every later viewport resize.
+        const clamp = (r) => {
+            const vw = window.innerWidth, vh = window.innerHeight;
+            const width = Math.max(1, Math.min(r.width, vw));
+            const height = Math.max(1, Math.min(r.height, vh));
+            const left = Math.min(Math.max(r.left, 0), Math.max(vw - width, 0));
+            const top = Math.min(Math.max(r.top, 0), Math.max(vh - height, 0));
+            return { left, top, width, height };
+        };
+
+        const apply = (r) => {
+            modal.style.position = 'fixed';
+            modal.style.margin = '0';
+            modal.style.right = 'auto';
+            modal.style.bottom = 'auto';
+            modal.style.left = r.left + 'px';
+            modal.style.top = r.top + 'px';
+            modal.style.width = r.width + 'px';
+            modal.style.height = r.height + 'px';
+        };
+
+        const persist = () => {
+            const r = modal.getBoundingClientRect();
+            writeRect({ left: r.left, top: r.top, width: r.width, height: r.height });
+        };
+
+        const saved = readRect();
+        if (saved) {
+            apply(clamp(saved));
+        } else {
+            // Nothing stored (or the read failed) — pin the CSS variant's
+            // own resting place (bottom-right, see .pb-overlay-window in
+            // workflow-editor.css) as a fixed-position rect, so the first
+            // drag has real pixel coordinates to start from.
+            const r = modal.getBoundingClientRect();
+            apply(clamp({ left: r.left, top: r.top, width: r.width, height: r.height }));
+        }
+
+        // ---- Draggable by the header --------------------------------------
+        // Pointer events (not mouse events) so trackpad/touch/pen drags all
+        // work the same way.
+        let drag = null;
+        const onPointerDown = (e) => {
+            // A drag must not start on the header's own buttons — close and
+            // hide have to keep working as clicks.
+            if (e.target.closest('button')) return;
+            const r = modal.getBoundingClientRect();
+            drag = { x: e.clientX, y: e.clientY, left: r.left, top: r.top, width: r.width, height: r.height };
+            try { header.setPointerCapture(e.pointerId); } catch (_) {}
+        };
+        const onPointerMove = (e) => {
+            if (!drag) return;
+            apply(clamp({
+                left: drag.left + (e.clientX - drag.x),
+                top: drag.top + (e.clientY - drag.y),
+                width: drag.width,
+                height: drag.height,
+            }));
+        };
+        const onPointerUp = (e) => {
+            if (!drag) return;
+            drag = null;
+            try { header.releasePointerCapture(e.pointerId); } catch (_) {}
+            persist();
+        };
+        header.addEventListener('pointerdown', onPointerDown);
+        header.addEventListener('pointermove', onPointerMove);
+        header.addEventListener('pointerup', onPointerUp);
+        header.addEventListener('pointercancel', onPointerUp);
+
+        // ---- Resizable ------------------------------------------------------
+        // `resize: both` on .pb-overlay-window .storage-config-modal (CSS)
+        // does the gesture itself with no JS; this only remembers whatever
+        // size the user settles on.
+        let ro = null;
+        if (typeof ResizeObserver === 'function') {
+            ro = new ResizeObserver(() => { if (!drag) persist(); });
+            ro.observe(modal);
+        }
+
+        // A viewport resize (window resized, DevTools toggled, rotated
+        // device) must re-clamp the CURRENT rect too, not just the one
+        // restored at open — otherwise shrinking the viewport while the
+        // overlay is open can strand it partly unreachable.
+        const onViewportResize = () => {
+            const r = modal.getBoundingClientRect();
+            apply(clamp({ left: r.left, top: r.top, width: r.width, height: r.height }));
+        };
+        window.addEventListener('resize', onViewportResize);
+
+        return () => {
+            ro?.disconnect();
+            window.removeEventListener('resize', onViewportResize);
+            header.removeEventListener('pointerdown', onPointerDown);
+            header.removeEventListener('pointermove', onPointerMove);
+            header.removeEventListener('pointerup', onPointerUp);
+            header.removeEventListener('pointercancel', onPointerUp);
+        };
     }
 
     /**
@@ -13255,6 +13435,10 @@ class WorkflowEditor {
             });
         }
         this._swarmSession = null;
+        // No session means nobody holds the turn — clear the canvas mark.
+        // Optional chaining: the transcript-harness stubs this class without
+        // _applyOrchestrationToCanvas, and this method must still run clean.
+        this._applyOrchestrationToCanvas?.();
     }
 
     /**
@@ -13463,6 +13647,11 @@ class WorkflowEditor {
         // exhaustion nobody answered, so the turn's last holder keeps it rather
         // than silently resetting the session to the top.
         s.activeAgent = answered || active;
+        // Mark control's new resting place on the canvas immediately, so the
+        // highlight follows the turn as it moves rather than waiting for the
+        // next open/refresh. Optional chaining: the transcript-harness's
+        // stubbed object has no _applyOrchestrationToCanvas.
+        this._applyOrchestrationToCanvas?.();
         // Conversation order: the prompt that opened this turn, then what the
         // swarm said back. Without the user entry the next turn would receive
         // the swarm's own answers with none of the questions behind them.

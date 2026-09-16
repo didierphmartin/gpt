@@ -1818,6 +1818,42 @@ svg.connection.selected .main-path,
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
+/* Swarm turn holder (Task 6 addendum) — which agent the next swarm prompt
+   reaches, set by _applyOrchestrationToCanvas(). Lives on .workflow-node
+   (the inner element), not on the #node-<id> wrapper that node-active /
+   node-completed / node-error live on, so it never fights those classes on
+   the same element and can render alongside them (e.g. the agent that just
+   answered is briefly both "completed" and "holding the turn").
+   Deliberately static (no pulse) and a distinct violet accent: node-active's
+   amber pulse means "executing right now"; this means "idle, waiting for the
+   next message" — a different thing, badged bottom-left so it never
+   overlaps the other states' top-right badges. */
+.workflow-node.swarm-turn-holder {
+    border: 2px solid #8b5cf6 !important;
+    box-shadow:
+        0 0 0 1px rgba(139, 92, 246, 0.85),
+        0 0 0 4px rgba(139, 92, 246, 0.35),
+        0 0 0 8px rgba(139, 92, 246, 0.15) !important;
+}
+
+.workflow-node.swarm-turn-holder::before {
+    content: '🗣';
+    position: absolute;
+    bottom: -10px;
+    left: -10px;
+    width: 22px;
+    height: 22px;
+    background: #8b5cf6;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    z-index: 10;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
 /* Node timer display */
 .node-timer {
     color: #64748b;
@@ -2545,6 +2581,63 @@ svg.connection.selected .main-path,
 .storage-config-btn.save:hover {
     background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
     box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+/* ============================================
+   Session overlay window (Task 6)
+   ============================================
+   .storage-config-overlay/.storage-config-modal are SHARED with the
+   playbook and compiled-run overlays, which are shipped, tested, and
+   genuinely modal — a dimmed, click-swallowing backdrop is correct there.
+   Everything below is scoped under .pb-overlay-window, the variant class
+   _pbOverlayOpen adds ONLY when called with { session: true } (today, only
+   _openSwarmSession()). No selector here can match without that class, so
+   an overlay opened without the flag renders exactly as it did before this
+   task — see the bare .storage-config-overlay / .storage-config-modal rules
+   above, both unchanged. */
+
+/* Not a backdrop: no dim, no blur, and clicks pass through to the canvas
+   behind it so the user can keep working the graph while the session is
+   open. Anchored bottom-right by default (a sensible resting place that
+   doesn't cover the middle of the canvas) rather than centred. */
+.storage-config-overlay.pb-overlay-window {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+    align-items: flex-end;
+    justify-content: flex-end;
+}
+
+/* The panel itself stays interactive, sized for a conversation (not 90vh),
+   resizable via the native handle, with a floor so it can't be shrunk past
+   usability. _pbInitOverlayWindow() converts this default rect (and any
+   restored/dragged one) to explicit inline left/top/width/height, so these
+   are only the FIRST-paint values. */
+.pb-overlay-window .storage-config-modal {
+    pointer-events: auto;
+    width: 420px;
+    height: 560px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    margin: 12px;
+    min-width: 320px;
+    min-height: 280px;
+    resize: both;
+    overflow: hidden;
+}
+
+/* Grab handle. Buttons inside keep their own pointer cursor and stay
+   clickable — _pbInitOverlayWindow()'s pointerdown handler explicitly
+   ignores clicks on header buttons, so close/hide are never swallowed by a
+   drag start. Text selection is suppressed only here, not site-wide, so a
+   drag gesture over the title doesn't select it. */
+.pb-overlay-window .storage-config-header {
+    cursor: move;
+    user-select: none;
+}
+
+.pb-overlay-window .storage-config-header button {
+    cursor: pointer;
 }
 
 /* ============================================
