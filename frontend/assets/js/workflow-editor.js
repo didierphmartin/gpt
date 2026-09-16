@@ -11783,6 +11783,16 @@ class WorkflowEditor {
             return;
         }
 
+        // In swarm mode there is no prompt to collect up front. A swarm takes a
+        // stream of prompts typed into the conversation, so asking for one in a
+        // separate form first and then opening the conversation anyway is two
+        // doors into the same room — and the wrong-shaped one is first. Run,
+        // the Start node and its play button all open the conversation (§3b).
+        if (this._isSwarm()) {
+            await this._openSwarmSession();
+            return;
+        }
+
         // Show prompt form and execute when submitted
         this.showPromptForm((userPrompt) => {
             this.executeWorkflow(userPrompt);
