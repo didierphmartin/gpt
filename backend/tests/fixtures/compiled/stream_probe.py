@@ -24,7 +24,7 @@ workflow = importlib.import_module("workflow")
 # fake_run, reused here because it already exercises the executor hop
 # correctly (see that file's comment on why the gate must not be awaited
 # directly on the loop thread).
-async def fake_run(prompt: str) -> str:
+async def fake_run(prompt: str, session: str | None = None) -> str:
     common.emit_event(type="round", round=1)
     common.emit_event(type="message", text=f"echo: {prompt}", sensitive=False)
     run = common._PlaybookRun(False, {})

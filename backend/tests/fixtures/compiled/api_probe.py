@@ -41,7 +41,7 @@ def _check_terminal(name: str, payload: dict) -> None:
 # starve every other coroutine, including the SSE route delivering the very
 # gate_request this is waiting to be answered). Route it through an executor
 # here too, the same way the real graph does.
-async def fake_run(prompt: str) -> str:
+async def fake_run(prompt: str, session: str | None = None) -> str:
     common.emit_event(type="round", round=1)
     common.emit_event(type="message", text=f"echo: {prompt}", sensitive=False)
     run = common._PlaybookRun(False, {})
@@ -133,7 +133,7 @@ with TestClient(api.app) as client:
 
     # A second run whose graph raises: the error frame is the other half of
     # the terminal contract and nothing else here produces one.
-    async def failing_run(prompt: str) -> str:
+    async def failing_run(prompt: str, session: str | None = None) -> str:
         raise RuntimeError("boom")
 
     workflow.run = failing_run

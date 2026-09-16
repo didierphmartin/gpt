@@ -216,6 +216,62 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $this->assertSame($modularFiles['api.py'], $swarmFiles['api.py']);
     }
 
+    /**
+     * A swarm is a conversation: a caller that passes the same `session` on a
+     * later call must resume it (same transcript, same active agent) rather
+     * than starting over at DEFAULT_ACTIVE_AGENT with a brand-new thread_id.
+     */
+    public function testSwarmRunAcceptsASessionAndUsesItAsTheThreadId(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $this->assertStringContainsString(
+            'async def run(user_prompt: str, session: str | None = None) -> str:',
+            $files['workflow.py']
+        );
+        $this->assertStringContainsString(
+            'config = {"configurable": {"thread_id": session or uuid.uuid4().hex}}',
+            $files['workflow.py']
+        );
+    }
+
+    /** The DAG target shares api.py's run contract but has no conversation to resume: it takes `session` and drops it on the floor. */
+    public function testModularRunAcceptsASessionButIgnoresIt(): void
+    {
+        $modularGen = self::generator(self::twoAgentSwarm(), 'workflow');
+        $modularFacts = self::facts(self::twoAgentSwarm(), 'workflow');
+        $m = new \ReflectionMethod($modularGen, 'generateModular');
+        $m->setAccessible(true);
+        $modularManifest = $m->invoke($modularGen, $modularFacts);
+        $modularFiles = [];
+        foreach ($modularManifest['files'] as $f) {
+            $modularFiles[$f['path']] = $f['code'];
+        }
+
+        $this->assertStringContainsString(
+            'async def run(user_prompt: str, session: str | None = None) -> str:',
+            $modularFiles['workflow.py']
+        );
+        $this->assertStringNotContainsString('thread_id', $modularFiles['workflow.py']);
+    }
+
+    /** POST /runs takes an optional `session` in its body and forwards it through to run_workflow(). */
+    public function testRunsRouteForwardsSessionToRunWorkflow(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $this->assertStringContainsString(
+            'session = (body or {}).get("session") or None',
+            $files['api.py']
+        );
+        $this->assertStringContainsString(
+            'state = RunState(uuid.uuid4().hex, prompt, session)',
+            $files['api.py']
+        );
+        $this->assertStringContainsString(
+            'state.output = await run_workflow(state.prompt, state.session)',
+            $files['api.py']
+        );
+    }
+
     public function testSingleFileIsRefusedForASwarm(): void
     {
         $this->expectException(\RuntimeException::class);

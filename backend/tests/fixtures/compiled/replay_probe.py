@@ -47,7 +47,7 @@ workflow = importlib.import_module("workflow")
 gate = asyncio.Event()
 
 
-async def fake_run(prompt: str) -> str:
+async def fake_run(prompt: str, session: str | None = None) -> str:
     common.emit_event(type="round", round=1)
     common.emit_event(type="message", text="first", sensitive=False)
     await gate.wait()                       # hold the run open across the reconnect

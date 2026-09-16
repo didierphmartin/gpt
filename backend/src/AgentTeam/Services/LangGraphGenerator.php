@@ -1785,8 +1785,14 @@ NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)
 _RUN_T0 = None
 
 
-async def run(user_prompt: str) -> str:
-    """Build the graph (agent nodes call their A2A servers), run it, return the final output."""
+async def run(user_prompt: str, session: str | None = None) -> str:
+    """Build the graph (agent nodes call their A2A servers), run it, return the final output.
+
+    `session` is accepted so this signature matches api.py's run contract
+    (shared with the modular and swarm targets) but is ignored here: an A2A
+    run dispatches independent tasks to remote agents and has no
+    conversation to resume between calls.
+    """
     sg = StateGraph(WFState)
     for nid in ORDER:
         ntype = NODE_TYPES.get(nid, "")
@@ -2792,13 +2798,16 @@ PY;
         $L[] = $sep;
         $L[] = '# MAIN EXECUTION';
         $L[] = $sep;
-        $L[] = 'async def run(user_prompt: str) -> str:';
-        $L[] = '    """Run the swarm once, starting from DEFAULT_ACTIVE_AGENT, and return the';
-        $L[] = '    final message text. api.py calls this exactly as it calls the modular';
-        $L[] = '    workflow.py\'s run() -- one prompt in, one answer out. Each call gets a';
-        $L[] = '    fresh thread_id, so the checkpointer holds a run\'s own hand-offs together';
-        $L[] = '    without carrying state INTO the next run."""';
-        $L[] = '    config = {"configurable": {"thread_id": uuid.uuid4().hex}}';
+        $L[] = 'async def run(user_prompt: str, session: str | None = None) -> str:';
+        $L[] = '    """Run the swarm, starting from DEFAULT_ACTIVE_AGENT, and return the final';
+        $L[] = '    message text. api.py calls this exactly as it calls the modular';
+        $L[] = '    workflow.py\'s run() -- one prompt in, one answer out.';
+        $L[] = '';
+        $L[] = '    A swarm is a conversation: passing the same `session` on a later call';
+        $L[] = '    resumes it -- same transcript, and the agent that answered last still';
+        $L[] = '    holds the turn. Omitting it starts a fresh one, which is the right';
+        $L[] = '    default for a single-shot invocation."""';
+        $L[] = '    config = {"configurable": {"thread_id": session or uuid.uuid4().hex}}';
         $L[] = '    result = await _graph().ainvoke({"messages": [HumanMessage(content=user_prompt)]}, config=config)';
         $L[] = '    final = result["messages"][-1]';
         $L[] = '    text = final.content if isinstance(final, AIMessage) else str(final)';
@@ -3369,8 +3378,13 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
 # ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over the agent modules
 # ==============================================================
-async def run(user_prompt: str) -> str:
-    """Build the graph (agent nodes call their modules), run it, return the final output."""
+async def run(user_prompt: str, session: str | None = None) -> str:
+    """Build the graph (agent nodes call their modules), run it, return the final output.
+
+    `session` is accepted so this signature matches the swarm target's run()
+    (api.py calls both the same way) but is ignored here: a DAG run has no
+    conversation to resume -- each call is already a fresh, independent run.
+    """
     sg = StateGraph(WFState)
     for nid in ORDER:
         ntype = NODE_TYPES.get(nid, "")
@@ -3514,9 +3528,10 @@ RUN_LOCK = None     # asyncio.Lock, created on first use (see _drive)
 class RunState:
     """One run: its status, its event history and one queue per attached client."""
 
-    def __init__(self, run_id: str, prompt: str):
+    def __init__(self, run_id: str, prompt: str, session: str | None = None):
         self.id = run_id
         self.prompt = prompt
+        self.session = session            # thread_id to resume (swarm only; ignored elsewhere)
         self.status = "running"
         self.output = ""
         self.error = ""
@@ -3587,9 +3602,17 @@ async def identity() -> dict:
 
 @app.post("/runs")
 async def start_run(body: dict | None = None) -> dict:
-    """Start a run and return its id. Does not stream -- GET its events next."""
+    """Start a run and return its id. Does not stream -- GET its events next.
+
+    `session` in the body is forwarded to run_workflow() as the conversation
+    to resume. Only the swarm target's run() acts on it -- the modular and
+    A2A targets accept and ignore it -- so a caller can pass the same
+    session across every target without knowing which one is behind this
+    server.
+    """
     prompt = str((body or {}).get("prompt") or "").strip() or DEFAULT_PROMPT or "Hello"
-    state = RunState(uuid.uuid4().hex, prompt)
+    session = (body or {}).get("session") or None
+    state = RunState(uuid.uuid4().hex, prompt, session)
     RUNS[state.id] = state
     state.task = asyncio.create_task(_drive(state))
     return {"run_id": state.id, "status": state.status}
@@ -3629,7 +3652,7 @@ async def _drive(state: RunState) -> None:
         prev = set_event_sink(sink)
         t0 = time.monotonic()
         try:
-            state.output = await run_workflow(state.prompt)
+            state.output = await run_workflow(state.prompt, state.session)
             state.status = "completed"
             # Publish the terminal frame through the same call_soon_threadsafe
             # hop as every sink-driven event, not directly: the graph's last
