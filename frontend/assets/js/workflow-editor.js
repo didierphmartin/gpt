@@ -2677,7 +2677,7 @@ class WorkflowEditor {
                 } else if (this._isSwarm()) {
                     // Run and a Start-node click are the same door in swarm
                     // mode: this button opens the conversation, not a run.
-                    this._openSwarmSession();
+                    this._openSwarmSession().catch(err => console.error('[WorkflowEditor] could not open the swarm session:', err));
                 } else if (this.lastUserPrompt) {
                     this.executeWorkflow(this.lastUserPrompt);
                 } else {
@@ -2701,7 +2701,7 @@ class WorkflowEditor {
                 if (this._isSwarm()) {
                     // Start is the door into a swarm, not a prompt to fill in
                     // once: clicking it opens the conversation (spec §3b).
-                    this._openSwarmSession();
+                    this._openSwarmSession().catch(err => console.error('[WorkflowEditor] could not open the swarm session:', err));
                 } else {
                     this.showPromptForm();
                 }
@@ -5861,6 +5861,9 @@ class WorkflowEditor {
             dispatcher_in_swarm:    this.t('workflow.swarmError.dispatcherTag'),
             agent_not_on_start:     this.t('workflow.swarmError.notOnStart'),
             duplicate_agent_names:  this.t('workflow.swarmError.duplicateNames'),
+            // Not canvas refusals — the rewrite itself could not run.
+            rewrite_unavailable:    this.t('workflow.swarmError.rewriteUnavailable'),
+            rewrite_failed:         this.t('workflow.swarmError.rewriteFailed'),
             multiple_outputs:       this.t('workflow.swarmError.outputs'),
             playbook_unsupported:   this.t('workflow.swarmError.playbook'),
         }[result.error] || result.error;
@@ -12598,6 +12601,13 @@ class WorkflowEditor {
     // activity log keeps recording).
 
     _pbOverlayOpen(dfId, name, servers, prompt, { session = false, replay = null } = {}) {
+        // Tear the previous overlay down through its own cleanup, not by yanking
+        // the element. hide() is the only caller of windowCleanup, so removing
+        // the node directly left the resize listener and the ResizeObserver
+        // alive on a detached modal — and re-opening a live session is a
+        // supported flow, so they accumulated one pair per re-open.
+        this._pbOverlayTeardown?.();
+        this._pbOverlayTeardown = null;
         document.getElementById('playbook-run-overlay')?.remove();
         this._pbCurrentName = name || 'Playbook';
         const badges = (servers || []).map(n =>
@@ -12656,11 +12666,17 @@ class WorkflowEditor {
             // begins a new conversation rather than resuming this one.
             if (session) this._swarmSessionEnd();
             windowCleanup?.();
+            this._pbOverlayTeardown = null;
             document.getElementById('playbook-run-overlay')?.remove();
         };
         document.getElementById('pb-ov-close')?.addEventListener('click', hide);
         document.getElementById('pb-ov-hide')?.addEventListener('click', hide);
-        if (session) windowCleanup = this._pbInitOverlayWindow();
+        if (session) {
+            windowCleanup = this._pbInitOverlayWindow();
+            // Also reachable from the next _pbOverlayOpen, which does not go
+            // through hide().
+            this._pbOverlayTeardown = windowCleanup;
+        }
         // The session opens empty, with nothing typed yet — there is no
         // first prompt to seed the feed with, so skip the bubble rather than
         // rendering one for a null/undefined prompt.
@@ -12775,7 +12791,13 @@ class WorkflowEditor {
         };
 
         const persist = () => {
+            // A detached element reports 0x0, and Chrome fires exactly that at a
+            // ResizeObserver when the observed node leaves the document. Writing
+            // it would replace the user's remembered geometry with zeros, and the
+            // window would reopen pinned to the top-left at minimum size.
+            if (!modal.isConnected) return;
             const r = modal.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) return;
             writeRect({ left: r.left, top: r.top, width: r.width, height: r.height });
         };
 
@@ -13415,8 +13437,21 @@ class WorkflowEditor {
      * conversation is being held with must not change under it mid-session.
      */
     _swarmSessionStart() {
-        const rw = window.swarmRewrite(this._currentGraphForRewrite());
-        if (!rw.ok) return rw;
+        // Both failures below used to surface as nothing at all: this runs inside
+        // an async method whose click-handler callers neither await nor catch, so
+        // a throw became an unhandled rejection and the Start node was simply
+        // inert — no overlay, no modal, no toast.
+        if (typeof window.swarmRewrite !== 'function') {
+            return { ok: false, error: 'rewrite_unavailable', nodes: [] };
+        }
+        let rw;
+        try {
+            rw = window.swarmRewrite(this._currentGraphForRewrite());
+        } catch (err) {
+            console.error('[WorkflowEditor] swarm rewrite threw:', err);
+            return { ok: false, error: 'rewrite_failed', nodes: [] };
+        }
+        if (!rw || !rw.ok) return rw || { ok: false, error: 'rewrite_failed', nodes: [] };
         this._swarmSession = {
             workflowId: this.currentWorkflowId,
             rewrite: rw,

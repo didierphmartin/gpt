@@ -1096,7 +1096,9 @@
       "neededFanout": "dos o más agentes conectados directamente a Start. Cada uno puede pasar la conversación a los demás.",
       "noteFanout": "El prompt que escribes va al agente que tiene el turno. El primer prompt de una conversación va al primer agente conectado a Start.",
       "notOnStart": "Este agente no está conectado a Start, así que no forma parte del enjambre. Conéctalo a Start o elimínalo.",
-      "duplicateNames": "Dos agentes comparten el mismo nombre. Un traspaso nombra a su destinatario, así que el enjambre no podría distinguirlos: cambia el nombre de uno."
+      "duplicateNames": "Dos agentes comparten el mismo nombre. Un traspaso nombra a su destinatario, así que el enjambre no podría distinguirlos: cambia el nombre de uno.",
+      "rewriteUnavailable": "No se pudieron cargar las reglas del enjambre. Recarga la página; si persiste, falta el script swarm-rewrite del editor.",
+      "rewriteFailed": "Las reglas del enjambre no pudieron leer este lienzo. La consola del navegador tiene los detalles."
     },
     "swarmSession": {
       "startHint": "Haz clic para abrir la conversación del enjambre",

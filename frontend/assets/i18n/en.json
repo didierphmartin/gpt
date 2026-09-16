@@ -1096,7 +1096,9 @@
       "neededFanout": "two or more agents connected directly to Start. Each one can hand the conversation to the others.",
       "noteFanout": "The prompt you type goes to whichever agent is holding the turn. The first prompt of a conversation goes to the first agent connected to Start.",
       "notOnStart": "This agent is not connected to Start, so it is not in the swarm. Connect it to Start, or remove it.",
-      "duplicateNames": "Two agents share a name. A handoff names its target, so the swarm could not tell them apart — rename one."
+      "duplicateNames": "Two agents share a name. A handoff names its target, so the swarm could not tell them apart — rename one.",
+      "rewriteUnavailable": "The swarm rules could not be loaded. Reload the page; if it persists, the editor's swarm-rewrite script is missing.",
+      "rewriteFailed": "The swarm rules could not read this canvas. The browser console has the details."
     },
     "swarmSession": {
       "startHint": "Click to open the swarm conversation",

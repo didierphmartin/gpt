@@ -1096,7 +1096,9 @@
       "neededFanout": "deux agents ou plus connectés directement à Start. Chacun peut transmettre la conversation aux autres.",
       "noteFanout": "Le prompt que vous saisissez va à l'agent qui détient le tour. Le premier prompt d'une conversation va au premier agent connecté à Start.",
       "notOnStart": "Cet agent n'est pas relié à Start, il ne fait donc pas partie de l'essaim. Reliez-le à Start ou supprimez-le.",
-      "duplicateNames": "Deux agents portent le même nom. Un passage de main désigne sa cible, l'essaim ne pourrait donc pas les distinguer — renommez-en un."
+      "duplicateNames": "Deux agents portent le même nom. Un passage de main désigne sa cible, l'essaim ne pourrait donc pas les distinguer — renommez-en un.",
+      "rewriteUnavailable": "Les règles de l'essaim n'ont pas pu être chargées. Rechargez la page ; si cela persiste, le script swarm-rewrite de l'éditeur est absent.",
+      "rewriteFailed": "Les règles de l'essaim n'ont pas pu lire ce canevas. La console du navigateur contient les détails."
     },
     "swarmSession": {
       "startHint": "Cliquez pour ouvrir la conversation de l'essaim",
