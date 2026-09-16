@@ -478,13 +478,13 @@ conversation. Point it at the same entry point. In `executeWorkflowInBrowser`:
 
 ```js
         if (this._isSwarm()) {
-            await this._openSwarkSession_FIXME();   // see below — use _openSwarmSession()
+            // Run and a Start-node click are the same door. Returning an empty
+            // success keeps the DAG callers' contract satisfied without
+            // claiming a run happened — a session produces turns, not a result.
+            await this._openSwarmSession();
             return { output: '', success: true, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 };
         }
 ```
-
-(That placeholder name is deliberate — replace it with `this._openSwarmSession()`. If you
-copied it through, the verification in Step 5 will not run.)
 
 In swarm mode the control opens a session rather than performing a run (spec §10). Update
 the Run item's label accordingly and add its i18n keys.
