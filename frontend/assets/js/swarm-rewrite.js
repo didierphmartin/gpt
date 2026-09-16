@@ -100,7 +100,16 @@
         // The swarm is exactly the menu: no absorption, no transitive walk.
         const ordered = menu;
 
-        const nameOf = id => String(nodes[id].config?.agent_name ?? nodes[id].config?.name ?? `node ${id}`);
+        // Only a non-empty STRING counts as a name. String()-ing whatever is
+        // there diverges from the PHP twin on non-strings — JS renders false as
+        // "false" and PHP as "" — and the two must agree byte for byte.
+        const nameOf = (id) => {
+            for (const k of ['agent_name', 'name']) {
+                const v = nodes[id].config?.[k];
+                if (typeof v === 'string' && v !== '') return v;
+            }
+            return `node ${id}`;
+        };
         // Truncate by codepoint, never by UTF-16 code unit: Array.from(...)
         // splits astral characters (surrogate pairs) into single elements,
         // matching PHP's mb_substr($s, 0, 120), which counts codepoints.
@@ -127,8 +136,13 @@
             agents[id] = {
                 id, name: nameOf(id),
                 instructions: guide ? own.replace(/[ \t\n\r\0\x0B]+$/, '') + '\n\n' + guide : own,
-                tools: [...(nodes[id].config?.tools || [])],
-                skills: skill ? [skill] : [],
+                // A genuine list or nothing: spreading an object throws and
+                // spreading a string splits it into characters, neither of which
+                // the PHP twin does.
+                tools: Array.isArray(nodes[id].config?.tools) ? [...nodes[id].config.tools] : [],
+                // Presence, not truthiness: PHP treats the string "0" as false
+                // and JS does not.
+                skills: (skill !== null && skill !== undefined && skill !== '' && skill !== false) ? [skill] : [],
                 handoffs,
             };
         }

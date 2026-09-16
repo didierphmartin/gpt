@@ -146,7 +146,18 @@ class SwarmRewriter
         // The swarm is exactly the menu: no absorption, no transitive walk.
         $members = $menu;
 
-        $nameOf = static fn(string $id): string => (string) ($nodes[$id]['config']['agent_name'] ?? $nodes[$id]['config']['name'] ?? "node {$id}");
+        // Only a non-empty STRING counts as a name. Casting whatever is there
+        // diverges from the JS twin on non-strings — PHP renders false as ""
+        // and JS as "false" — and the two must agree byte for byte.
+        $nameOf = static function (string $id) use ($nodes): string {
+            foreach (['agent_name', 'name'] as $k) {
+                $v = $nodes[$id]['config'][$k] ?? null;
+                if (is_string($v) && $v !== '') {
+                    return $v;
+                }
+            }
+            return "node {$id}";
+        };
         // PHP's trim()/rtrim() default charlist is " \t\n\r\0\x0B" (ASCII
         // only) and every trim() below relies on that. The JS twin uses its
         // own phpTrim() helper — never .trim() or /\s/ — to strip the
@@ -186,8 +197,13 @@ class SwarmRewriter
                 'id' => $id,
                 'name' => $nameOf($id),
                 'instructions' => $guide === '' ? $own : rtrim($own) . "\n\n" . $guide,
-                'tools' => array_values((array) ($nodes[$id]['config']['tools'] ?? [])),
-                'skills' => $skills ? [$skills] : [],
+                // A genuine list or nothing. `(array)` would turn an object or a
+                // scalar into a one-or-more element list here while the JS twin
+                // throws or splits a string into characters.
+                'tools' => self::toolList($nodes[$id]['config']['tools'] ?? null),
+                // Presence, not truthiness: PHP treats the string "0" as false
+                // and JS does not.
+                'skills' => self::hasSkill($skills) ? [$skills] : [],
                 'handoffs' => $handoffs,
             ];
         }
@@ -204,6 +220,18 @@ class SwarmRewriter
      * are, each carrying its own role summary. There is no dispatcher and no
      * shared routing prose in a swarm — each member decides for itself.
      */
+    /** A genuine list, or nothing. Must match swarm-rewrite.js's Array.isArray check. */
+    private static function toolList(mixed $v): array
+    {
+        return is_array($v) && array_is_list($v) ? $v : [];
+    }
+
+    /** Presence, not truthiness — PHP's "0" is falsy and JS's is not. */
+    private static function hasSkill(mixed $v): bool
+    {
+        return $v !== null && $v !== '' && $v !== false;
+    }
+
     public static function handoffGuide(array $colleagues): string
     {
         // trim() here is PHP's ASCII-only default (" \t\n\r\0\x0B"); the JS
