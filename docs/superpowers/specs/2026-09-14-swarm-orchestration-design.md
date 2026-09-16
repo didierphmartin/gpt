@@ -544,8 +544,10 @@ shape removes the worst of it: there is no longer a node on the canvas that does
   A↔B is visible rather than implied;
 - the **active agent is marked** during a session, because "where does my next prompt go"
   is the one question a swarm raises that a DAG never does;
-- a canvas the mode refuses is marked **when the setting is flipped**, not at Run — you find
-  out while looking at the graph, and the offending nodes are named.
+- a canvas the mode refuses is marked **when the session opens**, not when the setting is
+  flipped — flipping the toggle states an intention and makes no claim about a canvas that may
+  not be drawn yet, so it never refuses; the refusal names the offending nodes when the user
+  actually acts on the mode.
 
 **In the agent's context display — the important one.** Wherever the editor shows an
 agent's prompt, swarm mode shows the **composed** context, because that is what the model

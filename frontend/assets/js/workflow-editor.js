@@ -1448,14 +1448,12 @@ class WorkflowEditor {
         document.querySelector('.wf-swarm-toggle')?.addEventListener('change', (e) => {
             const wanted = e.target.checked ? 'swarm' : 'workflow';
             if (wanted === 'swarm') {
-                // Refuse at flip time, not at Run: the user is looking at the
-                // graph now, which is when the message is useful.
-                const result = window.swarmRewrite(this._currentGraphForRewrite());
-                if (!result.ok) {
-                    e.target.checked = false;
-                    this._showSwarmRefusalModal(result);
-                    return;
-                }
+                // Flipping the toggle states an intention, not a claim about
+                // the canvas — it never refuses. The canvas is validated
+                // where the user acts on it: when the session opens
+                // (_openSwarmSession -> _swarmSessionStart), which surfaces
+                // the same refusal modal if the rewrite rejects the graph.
+                //
                 // Spec §6b wants Start's documents to reach every agent. The
                 // browser-driven run path does not deliver them — it never
                 // reads Start's `data.documents` (see _swarmTurn) — so warn that
@@ -12571,7 +12569,7 @@ class WorkflowEditor {
     // when a playbook node starts; closing it never stops the run (the node
     // activity log keeps recording).
 
-    _pbOverlayOpen(dfId, name, servers, prompt, { session = false } = {}) {
+    _pbOverlayOpen(dfId, name, servers, prompt, { session = false, replay = null } = {}) {
         document.getElementById('playbook-run-overlay')?.remove();
         this._pbCurrentName = name || 'Playbook';
         const badges = (servers || []).map(n =>
@@ -12623,6 +12621,18 @@ class WorkflowEditor {
         // first prompt to seed the feed with, so skip the bubble rather than
         // rendering one for a null/undefined prompt.
         if (prompt != null) this._pbBubble('you', prompt);
+
+        // Reopening a live session: replay what was already said before the
+        // composer gets focus, so the conversation doesn't look lost. The
+        // transcript carries no per-entry agent name, so replayed assistant
+        // entries render as a generic (unlabelled-channel) agent bubble
+        // rather than a guessed one.
+        if (session && replay && replay.length) {
+            for (const entry of replay) {
+                if (entry.role === 'user') this._pbBubble('you', entry.content);
+                else if (entry.role === 'assistant') this._pbBubble('agent', entry.content);
+            }
+        }
 
         if (session) {
             const input = document.getElementById('pb-ov-input');
@@ -13231,8 +13241,19 @@ class WorkflowEditor {
         return { ok: true };
     }
 
-    /** Discard the session: the next prompt starts a fresh conversation at the entry agent. */
+    /**
+     * Discard the session: the next prompt starts a fresh conversation at the
+     * entry agent. This is the single place a session is discarded, so it is
+     * also the single place the session's output is saved — spec §10: what
+     * gets saved is the LAST answer of the session, not each turn's.
+     */
     _swarmSessionEnd() {
+        const s = this._swarmSession;
+        if (s?.lastAnswer && typeof this._saveWorkflowOutput === 'function') {
+            this._saveWorkflowOutput(s.lastAnswer).catch(err => {
+                console.warn('[WorkflowEditor] Could not save swarm output:', err);
+            });
+        }
         this._swarmSession = null;
     }
 
@@ -13247,7 +13268,14 @@ class WorkflowEditor {
             const started = this._swarmSessionStart();
             if (!started.ok) { this._showSwarmRefusalModal(started); return; }
         }
-        this._pbOverlayOpen('swarm', this.currentWorkflowName || 'Swarm', [], null, { session: true });
+        // Re-opening a live session must show what was already said — the
+        // transcript is intact and the backend still has full context, so an
+        // empty feed here would look like the conversation was lost. A fresh
+        // session's transcript is simply empty, so this is a no-op for it.
+        this._pbOverlayOpen('swarm', this.currentWorkflowName || 'Swarm', [], null, {
+            session: true,
+            replay: this._swarmSession.transcript,
+        });
     }
 
     /**
@@ -13380,6 +13408,11 @@ class WorkflowEditor {
                 const reason = String(res.route.notes || '').trim();
                 handoffs.push({ from: active, to, reason });
                 this._wfNodeLog(active, 'routing', `hands to ${toName}${reason ? ' — ' + reason : ''}`);
+                // Render the handoff into the feed as it happens, so the user
+                // sees control move rather than inferring it from silence.
+                this._pbAppend(`<div style="align-self:center;font-size:11px;color:#9ca3af;">${
+                    this.escapeHtml(`${rw.agents[active].name} → ${rw.agents[to].name}${res.route.notes ? ' — ' + res.route.notes : ''}`)
+                }</div>`);
                 // The one line that carries context across the handoff: the next
                 // agent reads it as the previous agent's turn.
                 transcript.push({
@@ -13435,13 +13468,21 @@ class WorkflowEditor {
             // swarm-specific, ignored by the DAG consumers
             handoffs, status, history: transcript, answered,
         };
-        if (runResult.success && output && typeof this._saveWorkflowOutput === 'function') {
-            this._saveWorkflowOutput(output).catch(err => {
-                console.warn('[WorkflowEditor] Could not save swarm output:', err);
-            });
-        }
-        if (typeof this.showWorkflowResults === 'function' && output) {
-            try { this.showWorkflowResults(runResult); } catch (_) {}
+        // A session produces a conversation, not a run result — render the
+        // turn's outcome into the overlay feed rather than popping the
+        // results modal (that modal is for the DAG path; see
+        // executeWorkflowInBrowser's non-swarm branch below).
+        if (status === 'completed' && answered != null) {
+            this._pbBubble('agent', output, { channel: rw.agents[answered].name });
+            // §10: what gets saved is the session's LAST answer, not every
+            // turn's — keep it on the session and let _swarmSessionEnd (the
+            // one place a session is discarded) save it.
+            if (output) s.lastAnswer = output;
+        } else if (output) {
+            // Hop-budget exhaustion or an error still ends the turn — the
+            // user typed something, so silence here would be the worst
+            // outcome. Same bubble, no channel: nobody "answered".
+            this._pbBubble('agent', output);
         }
         return runResult;
     }
