@@ -62,9 +62,12 @@
 
   // Admin backend switcher (Settings → Account). Persists the choice and reloads so the whole
   // app re-resolves against the selected backend.
+  // Choosing a flavour makes it the source of truth: the manual `API_BASE_URL` override
+  // (also written by older gpt_admin builds) is cleared, otherwise it silently pins the
+  // previous backend and the click looks like it did nothing.
   window.setBackendKind = function (k) {
     k = normalizeKind(k);
-    try { localStorage.setItem('BACKEND_KIND', k); } catch (e) {}
+    try { localStorage.setItem('BACKEND_KIND', k); localStorage.removeItem('API_BASE_URL'); } catch (e) {}
     location.reload();
   };
 
