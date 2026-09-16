@@ -1080,7 +1080,8 @@
     },
     "swarmAttachWarn": "Les documents attachés à Start ne sont pas encore transmis aux agents de l'essaim — mettez ce dont ils ont besoin dans le prompt.",
     "swarmCanvas": {
-      "holdingTurn": "A la parole — votre prochain message arrivera ici"
+      "holdingTurn": "A la parole — votre prochain message arrivera ici",
+      "turnBadge": "a la main"
     },
     "swarmError": {
       "title": "Ce workflow ne peut pas s'exécuter en essaim",

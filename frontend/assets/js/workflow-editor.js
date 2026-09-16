@@ -5913,9 +5913,13 @@ class WorkflowEditor {
             const holdsTurn = holderId != null && String(id) === String(holderId);
             el.classList.toggle('swarm-turn-holder', holdsTurn);
             if (holdsTurn) {
+                // The chip is rendered from this attribute (CSS content:attr),
+                // so the label stays translatable; the title explains it.
+                el.dataset.swarmTurn = this.t('workflow.swarmCanvas.turnBadge') || 'holds the turn';
                 el.title = holdingLabel;
-            } else if (el.title === holdingLabel) {
-                el.title = '';
+            } else {
+                delete el.dataset.swarmTurn;
+                if (el.title === holdingLabel) el.title = '';
             }
         }
     }
