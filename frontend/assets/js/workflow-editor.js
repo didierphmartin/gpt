@@ -5888,17 +5888,16 @@ class WorkflowEditor {
     }
 
     /**
-     * Swarm mode hides things the canvas still shows: a node that is not an
-     * agent, and edges nobody drew. Make both visible.
+     * Mark whichever agent is holding the turn while a swarm session is
+     * open — the one question a swarm raises that a DAG never does is
+     * "where does my next prompt go", and the transcript answers it in
+     * prose while the canvas should answer it at a glance.
      *
-     * Task 6 addendum: also mark whichever agent is holding the turn while a
-     * swarm session is open — the one question a swarm raises that a DAG
-     * never does is "where does my next prompt go", and the transcript
-     * answers it in prose while the canvas should answer it at a glance.
-     * The mark lives on .workflow-node (same element swarm-dissolved uses),
-     * NOT on the #node-<id> wrapper highlightNode's node-active/-completed/
-     * -error classes live on — so the two marking systems never fight over
-     * one element's classList, and both can be visible on the same node at
+     * The mark lives on .workflow-node (the inner element the rest of the
+     * editor already styles/classes -- see node-disabled), NOT on the
+     * #node-<id> wrapper highlightNode's node-active/-completed/-error
+     * classes live on — so the two marking systems never fight over one
+     * element's classList, and both can be visible on the same node at
      * once (e.g. the agent that just answered is briefly both "completed"
      * and "holding the turn").
      */
@@ -5908,22 +5907,8 @@ class WorkflowEditor {
         const holdingLabel = this.t('workflow.swarmCanvas.holdingTurn') || 'Holding the turn — your next message goes here';
         for (const id of Object.keys(data)) {
             const wrapper = document.getElementById(`node-${id}`);
-            // The dissolved styling and note live on .workflow-node (the inner
-            // element the rest of the editor already styles/classes -- see
-            // node-disabled), not on the #node-<id> Drawflow wrapper.
             const el = wrapper?.querySelector('.workflow-node');
             if (!el) continue;
-            const isDispatcher = (data[id].data?.agent_type === 'dispatcher');
-            el.classList.toggle('swarm-dissolved', this._isSwarm() && isDispatcher);
-            const existing = el.querySelector('.swarm-dissolved-note');
-            if (this._isSwarm() && isDispatcher) {
-                if (!existing) {
-                    el.querySelector('.node-body')?.insertAdjacentHTML('beforeend',
-                        `<div class="swarm-dissolved-note text-xs text-amber-800 mt-1">${this.escapeHtml(this.t('workflow.swarmCanvas.dissolved') || 'Not an agent in swarm mode — its prompt is the team\'s handoff guide.')}</div>`);
-                }
-            } else if (existing) {
-                existing.remove();
-            }
 
             const holdsTurn = holderId != null && String(id) === String(holderId);
             el.classList.toggle('swarm-turn-holder', holdsTurn);
@@ -15832,12 +15817,6 @@ class WorkflowEditor {
         if (this.editingNodeId && this.nodeExecutionData?.[this.editingNodeId]?.success === false) {
             this.switchAgentModalTab('logs');
         }
-
-        // Opening a dispatcher's form in swarm mode should show the right
-        // tabs immediately, not only after the user touches the type select.
-        // (Runs after the logs-tab redirect above so a failed-run node still
-        // opens on Logs instead of being bounced to System Prompt.)
-        this._applyOrchestrationToAgentForm(agent.agent_type);
     }
 
     /**
@@ -15866,13 +15845,7 @@ class WorkflowEditor {
             if (lbl) lbl.textContent = isPb ? tf2('playbook') : tf2('systemPrompt');
             const ta = document.getElementById('agent-instructions-input');
             if (ta) ta.placeholder = isPb ? tf2('playbookPlaceholder') : tf2('systemPromptPlaceholder');
-            // _applyOrchestrationToAgentForm owns tab-mcp-servers' hidden state
-            // from here on (playbook-only, further hidden for a dissolved swarm
-            // dispatcher) so there is exactly one decision per tab rather than
-            // two toggles fighting over the same class (Ruling 4). Also hides
-            // tab-skills/tab-settings and relabels the prompt when this retag
-            // makes the node a dissolved dispatcher.
-            this._applyOrchestrationToAgentForm(e.target.value);
+            document.getElementById('tab-mcp-servers')?.classList.toggle('hidden', !isPb);
         });
         // Provider change → model dropdown follows (keeps the current choice when the new provider lists it).
         document.getElementById('agent-provider-select')?.addEventListener('change', (e) => {
@@ -16203,47 +16176,6 @@ class WorkflowEditor {
             logsTab.classList.remove('text-gray-500', 'border-transparent');
             logsContent.classList.remove('hidden');
             this._renderNodeLogs(this.editingNodeId);
-        }
-    }
-
-    /**
-     * A dispatcher in swarm mode is not an agent: it contributes no turn, so
-     * it has no tools, no skills and no model (spec §3b). Hide those tabs and
-     * relabel its prompt, which is now the team's handoff guide. Reuses the
-     * tab-hiding the playbook type already does (Ruling 4).
-     *
-     * Also takes over tab-mcp-servers' hidden state, which is otherwise a
-     * playbook-only tab toggled by the agent-type-select handler below --
-     * computing both conditions here means there is exactly one decision per
-     * tab instead of two toggles fighting over the same class. tab-skills'
-     * dissolved-hiding lives in _wirePlaybookFacet's applyVisibility instead
-     * (same reason: it already owns that tab's hidden class for playbooks).
-     */
-    _applyOrchestrationToAgentForm(agentType) {
-        const dissolved = this._isSwarm() && agentType === 'dispatcher';
-        const isPb = agentType === 'playbook';
-        // tab-mcp-servers is normally playbook-only; a dispatcher is never a
-        // playbook, so "dissolved" and "isPb" never both apply here, but
-        // computing them together keeps this the single source of truth.
-        document.getElementById('tab-mcp-servers')?.classList.toggle('hidden', dissolved || !isPb);
-        // Hidden, never removed: switching back to workflow mode restores it.
-        document.getElementById('tab-settings')?.classList.toggle('hidden', dissolved);
-        const lbl = document.getElementById('agent-instructions-label');
-        if (lbl && dissolved) lbl.textContent = this.t('workflow.swarmForm.guideLabel');
-        const tab = document.getElementById('tab-system-prompt');
-        if (tab && dissolved) tab.textContent = this.t('workflow.swarmForm.guideTab');
-        // Settings (provider/model/temperature/max tokens) is the modal's
-        // default active tab. If it -- or Skills / MCP Servers -- is the tab
-        // currently showing and we just hid its button, land on System
-        // Prompt (the handoff guide) instead of leaving hidden-tab content
-        // on screen.
-        if (dissolved) {
-            const stillShowing = ['settings-tab-content', 'skills-tab-content', 'mcp-servers-tab-content']
-                .some(cid => {
-                    const el = document.getElementById(cid);
-                    return el && !el.classList.contains('hidden');
-                });
-            if (stillShowing) this.switchAgentModalTab('system-prompt');
         }
     }
 
@@ -16746,14 +16678,8 @@ Based on the analysis...
         const isPb = () => document.getElementById('agent-type-select')?.value === 'playbook';
         const applyVisibility = () => {
             const pb = isPb();
-            // tab-skills also has no place on a dissolved swarm dispatcher
-            // (spec §3b) -- fold that in here rather than in a second
-            // classList.toggle('hidden', ...) on the same element, which
-            // would just have the two listeners overwrite each other on
-            // every agent-type-select change (Ruling 4).
-            const dissolved = document.getElementById('agent-type-select')?.value === 'dispatcher' && this._isSwarm();
             document.getElementById('tools-content')?.closest('.flex-col')?.classList.toggle('hidden', pb);
-            document.getElementById('tab-skills')?.classList.toggle('hidden', pb || dissolved);
+            document.getElementById('tab-skills')?.classList.toggle('hidden', pb);
             document.getElementById('tab-schema')?.classList.toggle('hidden', pb);
             document.getElementById('agent-writes-block')?.classList.toggle('hidden', !pb);
             document.getElementById('agent-pb-toolbar')?.classList.toggle('hidden', !pb);

@@ -1080,7 +1080,6 @@
     },
     "swarmAttachWarn": "Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.",
     "swarmCanvas": {
-      "dissolved": "Not an agent in swarm mode — its prompt is the team's handoff guide.",
       "holdingTurn": "Holding the turn — your next message goes here"
     },
     "swarmError": {
@@ -1089,22 +1088,13 @@
       "needed": "Needed",
       "neededText": "one agent tagged Dispatcher, connected to two or more agents.",
       "note": "In swarm mode the Dispatcher is not an agent — its prompt becomes the handoff guide every member carries.",
-      "noDispatcher": "No agent is tagged Dispatcher.",
-      "oneChild": "The Dispatcher is connected to only one agent.",
-      "merge": "Two agents feed one node. A swarm has one conversation, so nothing merges.",
-      "twoEntries": "Start is connected to more than one node. A swarm has exactly one first turn.",
       "playbook": "This workflow contains a Playbook node, which swarm mode does not support yet.",
-      "nested": "There is more than one Dispatcher.",
       "outputs": "There is more than one Output node. A swarm produces one answer.",
       "startNeedsTwo": "Start is connected to fewer than two agents. A swarm is the agents drawn from Start, so connect at least two of them to it.",
       "dispatcherTag": "An agent is tagged Dispatcher. In a swarm every member routes, so the tag has no meaning here — remove the Dispatcher tag and connect the agents to Start directly.",
       "neededFanout": "two or more agents connected directly to Start. Each one can hand the conversation to the others.",
       "noteFanout": "The prompt you type goes to whichever agent is holding the turn. The first prompt of a conversation goes to the first agent connected to Start.",
       "notOnStart": "This agent is not connected to Start, so it is not in the swarm. Connect it to Start, or remove it."
-    },
-    "swarmForm": {
-      "guideLabel": "Handoff guide — which subjects belong to which agent. Every member of the swarm receives this.",
-      "guideTab": "Handoff guide"
     },
     "swarmSession": {
       "startHint": "Click to open the swarm conversation",
