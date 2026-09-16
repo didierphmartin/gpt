@@ -1843,7 +1843,12 @@ svg.connection.selected .main-path,
     /* .workflow-node is overflow:hidden, so a badge hanging outside the box is
        clipped to a meaningless fragment. Keep it inside, and label it — an
        unlabelled dot makes the reader ask what it means. */
-    content: attr(data-swarm-turn);
+    /* U+21BB, a text glyph rather than an emoji so it inherits `color` and
+       stays white on the violet pill. It reads as "the turn rotates, and it is
+       here now" — paired with the label because a circular arrow on its own can
+       equally read as retry or refresh. The glyph lives here, not in the
+       translated string, so no locale can lose it. */
+    content: "\21BB\00A0" attr(data-swarm-turn);
     position: absolute;
     bottom: 6px;
     left: 6px;
