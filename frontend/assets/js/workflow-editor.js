@@ -13448,6 +13448,13 @@ class WorkflowEditor {
      * it must not silently discard the transcript.
      */
     async _openSwarmSession() {
+        // Flush the mode before anything else. Ticking "Run as a swarm" only
+        // sets _workflowDirty; the DAG Run path flushes on its way through
+        // Generate/Run, but every swarm door bypasses that. Without this the
+        // toggle survives in memory, the session opens, and the next load of
+        // the workflow reads orchestration = "workflow" again — so the
+        // conversation silently reverts to the one-shot prompt form.
+        await this._persistIfDirty();
         if (!this._swarmSession || this._swarmSession.workflowId !== this.currentWorkflowId) {
             const started = this._swarmSessionStart();
             if (!started.ok) { this._showSwarmRefusalModal(started); return; }
