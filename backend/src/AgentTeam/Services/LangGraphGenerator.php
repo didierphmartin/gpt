@@ -259,17 +259,7 @@ class LangGraphGenerator
                     'Single file packaging is not supported for swarm workflows yet. Generate this swarm with the modular layout ("Agents in separate files").'
                 );
             }
-            // TEMPORARY, removed by Task 3 when the real emitter lands.
-            // generateSwarm() already produces the correct file layout and runs
-            // the rewrite (so its refusals are live and useful), but the module
-            // bodies are still placeholders. The toolbar's Compile button
-            // reaches this path, and handing someone a package of TODO stubs
-            // that looks like real output is worse than saying it is not ready.
-            $swarm = $this->generateSwarm($facts);
-            throw new RuntimeException(
-                'Compiling a swarm is not finished yet — the package layout and validation are in place, '
-                . 'but the agent modules are not emitted. Run this swarm from the editor instead: open it and click Start.'
-            );
+            return $this->generateSwarm($facts);
         }
         if (!empty($options['a2a'])) {
             return $this->generateA2A($facts);   // Task 4
@@ -2511,12 +2501,13 @@ PY;
      * with workflow.py replaced by a graph built from create_swarm() over
      * the SAME SwarmRewriter::rewrite() the editor runs live.
      *
-     * This method only runs the rewrite and turns a refusal into a generation
-     * error naming the offending nodes (Task 2); the real swarm content --
-     * workflow.py's create_swarm() call and each member's create_react_agent
-     * + create_handoff_tool module -- is Task 3's. What this returns already
-     * carries the final file layout (modularLayout(), the same naming Task 3
-     * reuses) so the members-from-Start-in-canvas-order wiring is provable now.
+     * common.py and api.py are emitted by the SAME emitModularCommon()/
+     * emitModularApi() generateModular() calls -- a swarm shares the shared
+     * runtime and the run server verbatim; only workflow.py (create_swarm()
+     * over the members) and agents/*.py (create_react_agent() + one
+     * create_handoff_tool() per colleague) are swarm-specific. There is no
+     * agents/__init__.py: a swarm package is exactly workflow.py, common.py,
+     * api.py and one module per member -- no package marker, no dispatcher.
      */
     private function generateSwarm(array $facts): array
     {
@@ -2559,23 +2550,298 @@ PY;
         // order, so the manifest is provably in canvas order regardless of how
         // topological order happens to tie-break.
         $layout = self::modularLayout($facts);
-        $files = [];
+        $files = [
+            ['path' => 'workflow.py', 'code' => $this->emitSwarmWorkflow($facts, $layout)],
+            // common.py and api.py are the EXISTING modular emitters, called
+            // (not copied): a swarm shares the shared runtime and run server
+            // verbatim with the modular workflow path.
+            ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
+            ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
+        ];
         foreach ($rw['agents'] as $id => $agent) {
             $entry = $layout['agents'][$id] ?? null;
             if ($entry === null) {
                 continue;
             }
-            $files[] = [
-                'path' => $entry['file'],
-                // Placeholder body: Task 3 replaces this with the real
-                // create_react_agent()/create_handoff_tool() module. What matters
-                // here is the file existing at the name modularLayout() -- and
-                // Task 3 after it -- actually gives this member.
-                'code' => "# Swarm member: {$agent['name']}\n"
-                    . "# TODO(Task 3): create_react_agent() + one create_handoff_tool() per colleague.\n",
-            ];
+            $files[] = ['path' => $entry['file'], 'code' => $this->emitSwarmAgentFile($facts, $layout, (string) $id)];
         }
         return ['root' => $layout['root'] . '_swarm', 'files' => $files];
+    }
+
+    /**
+     * agents/<name>.py, swarm mode: ONE member -- its frozen NODE metadata
+     * (shared shape with the modular agent module, via nodeDefinitionLines()),
+     * the rewrite's own composed INSTRUCTIONS (colleague guide included --
+     * never recomputed here), one create_handoff_tool() per colleague, and
+     * build_agent() wiring them into a create_react_agent(). There is no
+     * run_node(): a swarm member is a Pregel graph create_swarm() consumes
+     * directly, not a function workflow.py frames input for and calls once.
+     */
+    private function emitSwarmAgentFile(array $facts, array $layout, string $nid): string
+    {
+        $rw = $facts['swarm'];
+        $entry = $layout['agents'][$nid];
+        $member = $rw['agents'][$nid];
+        $def = $facts['agentData'][$nid];
+        $sep = '# ' . str_repeat('=', 62);
+        $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+
+        $L = [];
+        $L[] = '"""Swarm member ' . $j($entry['display']) . " -- node {$nid} of workflow " . $j($facts['wfName']);
+        $L[] = '';
+        $body = $this->modularDocBody($facts, $layout,
+            'LangGraph swarm member (Python) -- one create_react_agent(); workflow.py hands it to create_swarm()',
+            ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv'],
+             'usage' => 'imported by workflow.py as ' . $entry['module'] . ' -- run the swarm, not this file',
+             'extra' => ['# Exposes NODE (frozen editor settings), INSTRUCTIONS (the rewrite\'s composed',
+                         '# prompt, colleague guide included) and build_agent().'],
+             'env_path' => '../../../.env'], $nid, false, self::swarmDataFlowDoc());
+        foreach (explode("\n", $esc($body)) as $dl) {
+            $L[] = $dl;
+        }
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'from langgraph_swarm import create_handoff_tool';
+        $L[] = 'try:';
+        $L[] = '    from langchain.agents import create_agent as create_react_agent';
+        $L[] = 'except ImportError:';
+        $L[] = '    from langgraph.prebuilt import create_react_agent';
+        $L[] = '';
+        $L[] = '# The shared runtime lives in common.py, one directory up. Python puts the';
+        $L[] = '# workflow folder on sys.path when workflow.py starts, so this resolves for';
+        $L[] = '# every module of the package.';
+        $L[] = 'from common import _make_llm, build_tools_from_catalog, inject_datetime, RUN_SKILL_SCRIPT_TOOL';
+        $L[] = '';
+        $L[] = $sep;
+        $L[] = '# NODE DEFINITION -- frozen from the workflow editor';
+        $L[] = $sep;
+        foreach ($this->modularDocNodes($facts, $layout) as $dn) {
+            if ($dn['id'] === $nid) {
+                foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($dn)) as $cl) {
+                    $L[] = $cl;
+                }
+            }
+        }
+        foreach (explode("\n", $this->nodeDefinitionLines($facts, $nid, 'agent', $entry['display'], $def, false)) as $nl) {
+            $L[] = $nl;
+        }
+        $L[] = '';
+        $L[] = $sep;
+        $L[] = "# INSTRUCTIONS -- SwarmRewriter's composed prompt: this member's own";
+        $L[] = '# instructions, plus (when it has colleagues) the "Colleagues you can hand';
+        $L[] = "# this to\" guide. Read from the rewrite, never recomputed here.";
+        $L[] = $sep;
+        $L[] = 'INSTRUCTIONS = """';
+        foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], (string) $member['instructions'])) as $il) {
+            $L[] = $il;
+        }
+        $L[] = '"""';
+        $L[] = '';
+        $L[] = $sep;
+        $L[] = '# HANDOFFS -- one handoff tool per colleague. create_swarm() and';
+        $L[] = "# these tools both identify agents by NAME (the display name SwarmRewriter";
+        $L[] = '# guaranteed unique).';
+        $L[] = $sep;
+        $L[] = 'HANDOFFS = [';
+        foreach ($member['handoffs'] as $otherId) {
+            $otherId = (string) $otherId;
+            $other = $rw['agents'][$otherId] ?? null;
+            if ($other === null) {
+                continue;
+            }
+            $role = rtrim(self::swarmColleagueRole($rw, $otherId), ". \t");
+            $desc = 'Hand the conversation to ' . $other['name'] . ($role !== '' ? ' — ' . $role : '') . '.';
+            $L[] = '    create_handoff_tool(';
+            $L[] = '        agent_name=' . PythonEmitHelpers::pyStr((string) $other['name']) . ',';
+            $L[] = '        description=' . PythonEmitHelpers::pyStr($desc) . ',';
+            $L[] = '    ),';
+        }
+        $L[] = ']';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'def _llm():';
+        $L[] = '    """The chat model for this member, built from NODE (provider/model/sampling/thinking)."""';
+        $L[] = '    return _make_llm(NODE["provider"], NODE["model"], float(NODE["temperature"]), int(NODE["max_tokens"]), thinking=NODE.get("thinking"))';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'def build_agent():';
+        $L[] = '    """Build this member\'s react agent: its own MCP tools plus one handoff per colleague.';
+        $L[] = '';
+        $L[] = '    name= is the member\'s DISPLAY name -- what create_swarm() and every colleague\'s';
+        $L[] = '    HANDOFFS identify it by, the same name the rewrite guaranteed unique.';
+        $L[] = '    """';
+        $L[] = '    catalog = build_tools_from_catalog()';
+        $L[] = '    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL';
+        $L[] = '    tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]';
+        $L[] = '    return create_react_agent(';
+        $L[] = '        _llm(),';
+        $L[] = '        tools + HANDOFFS,';
+        $L[] = '        prompt=inject_datetime(INSTRUCTIONS),';
+        $L[] = '        name=NODE["display"],';
+        $L[] = '    )';
+        return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    /** First line of a colleague's OWN composed instructions -- the exact role summary
+     *  SwarmRewriter::rewrite() folded into every OTHER member's "Colleagues" guide.
+     *  Read from the rewrite's output, never recomputed. */
+    private static function swarmColleagueRole(array $rw, string $colleagueId): string
+    {
+        $instructions = (string) ($rw['agents'][$colleagueId]['instructions'] ?? '');
+        $first = trim(explode("\n", $instructions)[0] ?? '');
+        return mb_substr($first, 0, 120);
+    }
+
+    /**
+     * workflow.py, swarm mode: create_swarm() over one create_react_agent()
+     * per member (built by their own module's build_agent()), compiled with
+     * a checkpointer -- the single injection point a database-backed saver
+     * replaces later without changing this shape. Exposes the same
+     * run()/DEFAULT_PROMPT/WORKFLOW_ID/WORKFLOW_NAME surface as the modular
+     * workflow.py, so api.py (unchanged, reused verbatim) drives it exactly
+     * the same way.
+     */
+    private function emitSwarmWorkflow(array $facts, array $layout): string
+    {
+        $rw = $facts['swarm'];
+        $sep = '# ' . str_repeat('=', 62);
+        $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
+
+        $members = []; // nid => layout entry, in canvas (Start fan-out) order
+        foreach ($rw['agents'] as $id => $agent) {
+            $entry = $layout['agents'][$id] ?? null;
+            if ($entry !== null) {
+                $members[(string) $id] = $entry;
+            }
+        }
+        $modules = [];
+        foreach ($members as $nid => $e) {
+            $modules[] = sprintf('  %-6s %-24s %s', $nid, $e['display'], $e['file']);
+        }
+
+        $L = [];
+        $L[] = '"""LangGraph swarm: ' . $facts['wfName'];
+        $L[] = '';
+        $body = $this->modularDocBody($facts, $layout,
+            'LangGraph swarm (Python) -- create_swarm() over one create_react_agent() per member',
+            ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv'],
+             'usage' => 'python workflow.py "your prompt here"',
+             'extra' => !empty($facts['missing'])
+                 ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]
+                 : [],
+             'env_path' => '../../.env'], null, true, self::swarmDataFlowDoc());
+        foreach (explode("\n", $esc($body)) as $dl) {
+            $L[] = $dl;
+        }
+        $L[] = '';
+        $L[] = 'MEMBERS  (id, name, file -- each exposes NODE, INSTRUCTIONS, HANDOFFS, build_agent)';
+        $L[] = '=======';
+        foreach ($modules as $m) {
+            $L[] = $m;
+        }
+        $L[] = '  common.py holds the runtime they share; api.py is the unmodified run server.';
+        $L[] = '"""';
+        $L[] = 'from __future__ import annotations';
+        $L[] = '';
+        $L[] = 'import argparse, asyncio, time, uuid';
+        $L[] = '';
+        $L[] = 'from langchain_core.messages import AIMessage, HumanMessage';
+        $L[] = 'from langgraph.checkpoint.memory import MemorySaver';
+        $L[] = 'from langgraph_swarm import create_swarm';
+        $L[] = '';
+        $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
+        $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
+        foreach ($members as $nid => $e) {
+            $L[] = 'from ' . $e['module'] . ' import build_agent as build_' . $e['name'];
+        }
+        $L[] = '';
+        $L[] = 'WORKFLOW_ID = ' . (int) $facts['workflowId'];
+        $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($facts['wfName']);
+        $L[] = 'OUTPUT_STORAGE_ENABLED = ' . ($facts['workflow']->isOutputStorageEnabled() ? 'True' : 'False');
+        $ofolder = $facts['workflow']->getOutputFolder();
+        $L[] = 'OUTPUT_FOLDER = ' . (($ofolder ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
+        $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
+        $entryName = (string) ($rw['agents'][$rw['entry']]['name'] ?? '');
+        $L[] = 'DEFAULT_ACTIVE_AGENT = ' . PythonEmitHelpers::pyStr($entryName) . '   # the member wired to Start';
+        $L[] = '';
+        $L[] = $sep;
+        $L[] = '# GRAPH -- create_swarm() returns an UNCOMPILED StateGraph; .compile() is ours.';
+        $L[] = '# MemorySaver keeps hand-offs (active_agent + message history) coherent for';
+        $L[] = '# the run; it is the single point a database-backed saver replaces later.';
+        $L[] = $sep;
+        $L[] = 'def build_graph():';
+        $L[] = '    return create_swarm(';
+        $L[] = '        [' . implode(', ', array_map(fn($e) => 'build_' . $e['name'] . '()', $members)) . '],';
+        $L[] = '        default_active_agent=DEFAULT_ACTIVE_AGENT,';
+        $L[] = '    ).compile(checkpointer=MemorySaver())';
+        $L[] = '';
+        $L[] = '';
+        $L[] = '_GRAPH = None';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'def _graph():';
+        $L[] = '    """Build the compiled graph once per process and reuse it."""';
+        $L[] = '    global _GRAPH';
+        $L[] = '    if _GRAPH is None:';
+        $L[] = '        _GRAPH = build_graph()';
+        $L[] = '    return _GRAPH';
+        $L[] = '';
+        $L[] = '';
+        $L[] = $sep;
+        $L[] = '# MAIN EXECUTION';
+        $L[] = $sep;
+        $L[] = 'async def run(user_prompt: str) -> str:';
+        $L[] = '    """Run the swarm once, starting from DEFAULT_ACTIVE_AGENT, and return the';
+        $L[] = '    final message text. api.py calls this exactly as it calls the modular';
+        $L[] = '    workflow.py\'s run() -- one prompt in, one answer out. Each call gets a';
+        $L[] = '    fresh thread_id, so the checkpointer holds a run\'s own hand-offs together';
+        $L[] = '    without carrying state INTO the next run."""';
+        $L[] = '    config = {"configurable": {"thread_id": uuid.uuid4().hex}}';
+        $L[] = '    result = await _graph().ainvoke({"messages": [HumanMessage(content=user_prompt)]}, config=config)';
+        $L[] = '    final = result["messages"][-1]';
+        $L[] = '    text = final.content if isinstance(final, AIMessage) else str(final)';
+        $L[] = '    if isinstance(text, list):';
+        $L[] = '        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))';
+        $L[] = '    return text';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'def _save_output(output: str) -> str | None:';
+        $L[] = '    """Honour the workflow\'s output storage setting (same rule as the non-swarm workflow.py)."""';
+        $L[] = '    import os, re';
+        $L[] = '    if not OUTPUT_STORAGE_ENABLED:';
+        $L[] = '        return None';
+        $L[] = '    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")';
+        $L[] = '    folder = OUTPUT_FOLDER or os.path.join(root, "workflow")';
+        $L[] = '    if not os.path.isabs(folder):';
+        $L[] = '        folder = os.path.join(root, folder)';
+        $L[] = '    os.makedirs(folder, exist_ok=True)';
+        $L[] = '    m = re.search(r"(?is)<!doctype html.*?</html\\s*>", output) or re.search(r"(?is)<html[\\s>].*?</html\\s*>", output)';
+        $L[] = '    ext = "html" if m else "md"';
+        $L[] = '    slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]';
+        $L[] = '    path = os.path.join(folder, f"{WORKFLOW_ID}-{slug}_{time.strftime(\'%Y%m%d-%H%M%S\')}.{ext}")';
+        $L[] = '    with open(path, "w", encoding="utf-8") as fh:';
+        $L[] = '        fh.write(m.group(0) if m else output)';
+        $L[] = '    return path';
+        $L[] = '';
+        $L[] = '';
+        $L[] = 'if __name__ == "__main__":';
+        $L[] = '    ap = argparse.ArgumentParser(description=f"LangGraph swarm {WORKFLOW_NAME!r}")';
+        $L[] = '    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")';
+        $L[] = '    a = ap.parse_args()';
+        $L[] = '    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"';
+        $L[] = '    print(f"[info] Prompt: {prompt[:100]}{\'...\' if len(prompt) > 100 else \'\'}", flush=True)';
+        $L[] = '    _t0 = time.monotonic()';
+        $L[] = '    output = asyncio.run(run(prompt))';
+        $L[] = '    print("\\n" + "=" * 60 + "\\nFINAL OUTPUT\\n" + "=" * 60 + "\\n" + output, flush=True)';
+        $L[] = '    saved = _save_output(output)';
+        $L[] = '    print("\\n" + "=" * 74 + "\\nRUN SUMMARY\\n" + "-" * 74, flush=True)';
+        $L[] = '    print(f"  Total wall-clock: {time.monotonic() - _t0:.1f}s", flush=True)';
+        $L[] = '    print(f"  Final output: {len(output)} chars", flush=True)';
+        $L[] = '    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)';
+        $L[] = '    print("=" * 74, flush=True)';
+        return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
     /** One sentence per SwarmRewriter refusal code, close to the editor's copy (frontend/assets/i18n/en.json workflow.swarmError.*). Developer-facing: not i18n'd. */
@@ -2630,7 +2896,7 @@ PY;
      * Module-docstring body shared by the three file kinds. $nid marks one node
      * as "<== this module" (agent modules); pass null for workflow.py/common.py.
      */
-    private function modularDocBody(array $facts, array $layout, string $target, array $run, ?string $nid = null, bool $storage = false): string
+    private function modularDocBody(array $facts, array $layout, string $target, array $run, ?string $nid = null, bool $storage = false, ?string $dataFlow = null): string
     {
         $nodes = $this->modularDocNodes($facts, $layout);
         if ($nid !== null) {
@@ -2645,7 +2911,11 @@ PY;
             'dispatch_supported' => true,
             'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
             'nodes' => $nodes, 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
-            'data_flow' => self::modularDataFlowDoc(),
+            // $dataFlow is null for every existing (modular/workflow) caller, so
+            // this is additive: swarm's emitters are the only ones that pass a
+            // DATA FLOW paragraph of their own (run_node()/dispatcher/playbook
+            // prose does not describe a swarm, which has none of those).
+            'data_flow' => $dataFlow ?? self::modularDataFlowDoc(),
             'run' => $run,
             'storage' => $storage
                 ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()]
@@ -2667,6 +2937,25 @@ and drives a conditional edge, so only the chosen child runs; a PLAYBOOK node =
 the playbook runtime, whose transcript is the text. common.py holds everything
 they share -- LLM factory, MCP client, tool builder, skills, dispatcher and
 playbook runtimes -- imported once instead of copied per node.
+TXT;
+    }
+
+    /** DATA FLOW text shared by every file of a swarm package (workflow.py + agents/<name>.py). */
+    private static function swarmDataFlowDoc(): string
+    {
+        return <<<'TXT'
+This workflow is a SWARM: one conversation, handed between colleagues, not a
+graph a dispatcher routes. All members are wired into a full mesh (spec §3).
+workflow.py builds the compiled graph via create_swarm() over one
+create_react_agent() per member; each member is its own agents/<name>.py,
+exposing NODE (frozen editor settings), INSTRUCTIONS (the rewrite's composed
+prompt -- its own instructions plus, when it has colleagues, the "Colleagues
+you can hand this to" guide) and build_agent(). A member either answers or
+calls its own handoff tool to pass the turn to a named colleague; there is no
+dispatcher and no shared routing prompt. common.py holds everything members
+share -- LLM factory, MCP client, tool builder -- imported once instead of
+copied per member; api.py (unmodified) serves the same run protocol as the
+non-swarm workflow.
 TXT;
     }
 

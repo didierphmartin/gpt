@@ -151,17 +151,69 @@ class LangGraphSwarmGeneratorTest extends TestCase
         return self::generator($graph, $orchestration)->generate(90, '3', $options);
     }
 
-    /**
-     * Task 3 wires generateSwarm() to actually emit a package; here it is
-     * still the Task-1 stub (`throw new RuntimeException('not implemented')`),
-     * so this is expected to fail until Task 3 lands.
-     */
     public function testASwarmWorkflowCompilesThroughTheSwarmPath(): void
     {
-        $this->markTestSkipped('generateSwarm() emission is Task 3; Task 1 only wires dispatch + refusals.');
         $files = $this->generateSwarm(self::twoAgentSwarm());
         $this->assertArrayHasKey('workflow.py', $files);
         $this->assertStringContainsString('create_swarm', $files['workflow.py']);
+    }
+
+    /** default_active_agent is the display name of $facts['swarm']['entry'] -- the first agent Start fans out to. */
+    public function testWorkflowUsesTheEntryAgentsDisplayNameAsDefaultActiveAgent(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $this->assertStringContainsString('DEFAULT_ACTIVE_AGENT = "Alice"', $files['workflow.py']);
+        $this->assertStringContainsString('default_active_agent=DEFAULT_ACTIVE_AGENT', $files['workflow.py']);
+    }
+
+    /** create_swarm() returns an uncompiled StateGraph; workflow.py must call .compile() itself. */
+    public function testWorkflowCompilesTheGraphItBuilds(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $this->assertMatchesRegularExpression('/create_swarm\(.*?\)\.compile\(checkpointer=MemorySaver\(\)\)/s', $files['workflow.py']);
+    }
+
+    /** A three-member mesh gives each agent module exactly two create_handoff_tool() calls -- one per colleague, none for itself. */
+    public function testEachMemberGetsOneHandoffToolPerColleague(): void
+    {
+        $files = $this->generateSwarm(self::threeAgentSwarm());
+        foreach (['agents/agent_a.py', 'agents/agent_b.py', 'agents/agent_c.py'] as $path) {
+            $this->assertSame(2, substr_count($files[$path], 'create_handoff_tool('), "expected 2 handoffs in {$path}");
+            $this->assertStringContainsString('from langgraph_swarm import create_handoff_tool', $files[$path]);
+        }
+        // Agent A never hands off to itself.
+        $this->assertStringNotContainsString('agent_name="Agent A"', $files['agents/agent_a.py']);
+    }
+
+    /** A swarm has no router/dispatcher module -- every member routes for itself via its own handoff tools. */
+    public function testNoRouterOrDispatcherModuleIsEmitted(): void
+    {
+        $files = $this->generateSwarm(self::threeAgentSwarm());
+        foreach (array_keys($files) as $path) {
+            $this->assertStringNotContainsString('dispatcher', strtolower($path));
+            $this->assertStringNotContainsString('router', strtolower($path));
+        }
+        $this->assertArrayNotHasKey('agents/__init__.py', $files);
+    }
+
+    /** common.py, runs (api.py's POST/runs server) are the EXISTING modular emitters, called rather than duplicated. */
+    public function testCommonAndApiAreByteIdenticalToTheModularPath(): void
+    {
+        $graph = self::twoAgentSwarm();
+        $swarmFiles = $this->generateSwarm($graph);
+
+        $modularGen = self::generator($graph, 'workflow');
+        $modularFacts = self::facts($graph, 'workflow');
+        $m = new \ReflectionMethod($modularGen, 'generateModular');
+        $m->setAccessible(true);
+        $modularManifest = $m->invoke($modularGen, $modularFacts);
+        $modularFiles = [];
+        foreach ($modularManifest['files'] as $f) {
+            $modularFiles[$f['path']] = $f['code'];
+        }
+
+        $this->assertSame($modularFiles['common.py'], $swarmFiles['common.py']);
+        $this->assertSame($modularFiles['api.py'], $swarmFiles['api.py']);
     }
 
     public function testSingleFileIsRefusedForASwarm(): void
