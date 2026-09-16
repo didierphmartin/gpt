@@ -245,6 +245,22 @@ class LangGraphGenerator
     public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
         $facts = $this->analyzeForEmit($workflowId, $userId);
+        if (($facts['orchestration'] ?? 'workflow') === 'swarm') {
+            // §7 defers both. A2A swarm in particular is a different design —
+            // handoffs crossing the network between agent servers — not a
+            // packaging variation, so refusing is honest rather than lazy.
+            if (!empty($options['a2a'])) {
+                throw new RuntimeException(
+                    'A2A packaging is not supported for swarm workflows yet. Generate this swarm with "Agents in separate files".'
+                );
+            }
+            if (empty($options['modular'])) {
+                throw new RuntimeException(
+                    'Single file packaging is not supported for swarm workflows yet. Generate this swarm with the modular layout ("Agents in separate files").'
+                );
+            }
+            return $this->generateSwarm($facts);
+        }
         if (!empty($options['a2a'])) {
             return $this->generateA2A($facts);   // Task 4
         }
@@ -1100,9 +1116,14 @@ class LangGraphGenerator
         foreach ($edges as $e) {
             $edgeList[] = [self::edgeFrom($e), self::edgeTo($e)];
         }
+        // Architecture is a property of the workflow, not of the build (§10):
+        // read it here rather than taking it as a generate() option, so every
+        // caller agrees without having to remember to pass it.
+        $orchestration = $workflow->getOrchestration();
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
-            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'usedCatalog', 'usedServers', 'missing', 'edgeList');
+            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
+            'orchestration');
     }
 
     /** Kebab-case ASCII slug for file names (max 40 chars). */
@@ -2473,6 +2494,18 @@ PY;
                 'display' => $display, 'kind' => $kind];
         }
         return ['root' => $facts['safeName'] . '_modular', 'agents' => $agents];
+    }
+
+    /**
+     * Swarm mode: the modular layout (§7 -- only layout a swarm supports),
+     * with workflow.py replaced by a graph built from create_swarm() over
+     * the SAME SwarmRewriter::rewrite() the editor runs live.
+     *
+     * Stub for Task 1 (dispatch + refusals only); Task 3 fills this in.
+     */
+    private function generateSwarm(array $facts): array
+    {
+        throw new RuntimeException('not implemented');
     }
 
     /** Modular mode: workflow.py, common.py, the package marker, then one module per agent/playbook node. */
