@@ -13350,6 +13350,12 @@ class WorkflowEditor {
         // this session. {role, content} entries, the same shape the backend's
         // conversation_history uses. Owned by the session, never replaced.
         let transcript = s.transcript;
+        // What THIS turn adds. Kept apart from the session transcript until the
+        // turn ends, because the user's prompt is sent as `message` on every
+        // hop and must not also appear in `history` — it would be repeated
+        // verbatim. At the end, the prompt and these entries are appended in
+        // conversation order: user, then whatever the swarm said back.
+        const turnEntries = [];
         // First prompt of the session: nobody is active yet, so it goes to the
         // first agent connected to Start. Later prompts go to whoever ended the
         // previous turn.
@@ -13382,7 +13388,7 @@ class WorkflowEditor {
             // rest of the conversation can see it.
             const res = await this._runNodeAsChatUnit(swarmNode, userPrompt, {
                 dispatchTargets: targets.length ? targets : null,
-                history: transcript,
+                history: transcript.concat(turnEntries),
                 skipSkills: true,          // a handoff is not a deliverable
                 handoffStyle: 'swarm',     // handing off is optional; answering ends the run
                 preserveLog: true,         // keep "holds the turn" + any earlier turn of this agent
@@ -13415,7 +13421,7 @@ class WorkflowEditor {
                 }</div>`);
                 // The one line that carries context across the handoff: the next
                 // agent reads it as the previous agent's turn.
-                transcript.push({
+                turnEntries.push({
                     role: 'assistant',
                     content: reason
                         ? `${agent.name}: I'm handing this to ${toName} — ${reason}`
@@ -13427,7 +13433,7 @@ class WorkflowEditor {
 
             output = res?.output || '';
             answered = active;
-            transcript.push({ role: 'assistant', content: output });
+            turnEntries.push({ role: 'assistant', content: output });
             break;
         }
 
@@ -13443,12 +13449,12 @@ class WorkflowEditor {
             const skillRes = await this._runNodeAsChatUnit(answerNode, output, {
                 // The answer is the message here, so the history is everything
                 // before it — sending both would repeat the answer verbatim.
-                history: transcript.slice(0, -1),
+                history: transcript.concat([{ role: 'user', content: userPrompt }], turnEntries.slice(0, -1)),
                 preserveLog: true,     // do not erase the answering agent's answer turn
             });
             if (skillRes?.output) {
                 output = skillRes.output;
-                const lastEntry = transcript[transcript.length - 1];
+                const lastEntry = turnEntries[turnEntries.length - 1];
                 if (lastEntry && lastEntry.role === 'assistant') lastEntry.content = output;
             }
         }
@@ -13457,6 +13463,10 @@ class WorkflowEditor {
         // exhaustion nobody answered, so the turn's last holder keeps it rather
         // than silently resetting the session to the top.
         s.activeAgent = answered || active;
+        // Conversation order: the prompt that opened this turn, then what the
+        // swarm said back. Without the user entry the next turn would receive
+        // the swarm's own answers with none of the questions behind them.
+        transcript = transcript.concat([{ role: 'user', content: userPrompt }], turnEntries);
         s.transcript = transcript;
 
         const runResult = {
