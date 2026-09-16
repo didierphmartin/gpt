@@ -12744,7 +12744,11 @@ class WorkflowEditor {
         const header = overlay?.querySelector('.storage-config-header');
         if (!overlay || !modal || !header) return () => {};
 
-        const STORAGE_KEY = 'wf:swarm-overlay:rect'; // per-viewer, per-purpose
+        // Versioned: the default geometry changed (the window was too short for a
+        // conversation), and a rect saved under the old default would silently
+        // win over it forever. Bumping the key retires those once; everything
+        // the user sizes from here on is remembered as before.
+        const STORAGE_KEY = 'wf:swarm-overlay:rect:v2'; // per-viewer, per-purpose
 
         // Private windows, cleared site data, and storage blocked by browser
         // policy all make localStorage fail — sometimes by throwing on the

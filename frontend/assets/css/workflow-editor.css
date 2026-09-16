@@ -2619,13 +2619,16 @@ svg.connection.selected .main-path,
    are only the FIRST-paint values. */
 .pb-overlay-window .storage-config-modal {
     pointer-events: auto;
-    width: 420px;
-    height: 560px;
+    width: 440px;
+    /* A conversation wants vertical room: take most of the viewport rather than
+       a fixed 560px, but stay capped so it does not become unwieldy on a tall
+       display. The user can still resize, and that choice is remembered. */
+    height: min(82vh, 860px);
     max-width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
     margin: 12px;
     min-width: 320px;
-    min-height: 280px;
+    min-height: 420px;
     resize: both;
     overflow: hidden;
 }
