@@ -2501,11 +2501,92 @@ PY;
      * with workflow.py replaced by a graph built from create_swarm() over
      * the SAME SwarmRewriter::rewrite() the editor runs live.
      *
-     * Stub for Task 1 (dispatch + refusals only); Task 3 fills this in.
+     * This method only runs the rewrite and turns a refusal into a generation
+     * error naming the offending nodes (Task 2); the real swarm content --
+     * workflow.py's create_swarm() call and each member's create_react_agent
+     * + create_handoff_tool module -- is Task 3's. What this returns already
+     * carries the final file layout (modularLayout(), the same naming Task 3
+     * reuses) so the members-from-Start-in-canvas-order wiring is provable now.
      */
     private function generateSwarm(array $facts): array
     {
-        throw new RuntimeException('not implemented');
+        // The shape SwarmRewriter::rewrite() expects -- {nodes:[{id,node_type,
+        // config}], edges:[{from,to}]}, the same the API/editor use. analyzeForEmit()
+        // already holds this as byId (node-by-id) + edges (normalised {from,to} by
+        // WorkflowGraphAnalyzer), so this is a reshape, not a re-derivation.
+        $nodes = [];
+        $nodeNames = [];
+        foreach ($facts['byId'] as $nid => $node) {
+            // PHP coerces a numeric-string array key back to int, so the key here
+            // may already have lost its "3"-ness -- cast it back before it travels
+            // any further, or every downstream === against an edge's string id
+            // silently fails.
+            $id = (string) $nid;
+            $nodes[] = [
+                'id' => $id,
+                'node_type' => self::nodeType($node),
+                'config' => is_array($node['config'] ?? null) ? $node['config'] : [],
+            ];
+            $nodeNames[$id] = self::displayName($node);
+        }
+        $edges = [];
+        foreach ($facts['edges'] as $e) {
+            $edges[] = ['from' => (string) ($e['from'] ?? ''), 'to' => (string) ($e['to'] ?? '')];
+        }
+
+        $rw = SwarmRewriter::rewrite(['nodes' => $nodes, 'edges' => $edges]);
+        if (!$rw['ok']) {
+            $names = implode(', ', array_map(fn($id) => $nodeNames[(string) $id] ?? "node {$id}", $rw['nodes']));
+            throw new RuntimeException(self::swarmRefusalMessage($rw['error']) . ($names !== '' ? " ({$names})" : ''));
+        }
+        $facts['swarm'] = $rw;
+
+        // File layout: the same modularLayout() Task 3's real emitters reuse.
+        // A canvas that reached here has already passed every swarm refusal, so
+        // its agent/playbook nodes are exactly $rw['agents']'s members -- no
+        // dispatcher, no playbook, no agent off Start. Iterate $rw['agents'] (built
+        // in menu order, i.e. Start's fan-out order) rather than the layout's own
+        // order, so the manifest is provably in canvas order regardless of how
+        // topological order happens to tie-break.
+        $layout = self::modularLayout($facts);
+        $files = [];
+        foreach ($rw['agents'] as $id => $agent) {
+            $entry = $layout['agents'][$id] ?? null;
+            if ($entry === null) {
+                continue;
+            }
+            $files[] = [
+                'path' => $entry['file'],
+                // Placeholder body: Task 3 replaces this with the real
+                // create_react_agent()/create_handoff_tool() module. What matters
+                // here is the file existing at the name modularLayout() -- and
+                // Task 3 after it -- actually gives this member.
+                'code' => "# Swarm member: {$agent['name']}\n"
+                    . "# TODO(Task 3): create_react_agent() + one create_handoff_tool() per colleague.\n",
+            ];
+        }
+        return ['root' => $layout['root'] . '_swarm', 'files' => $files];
+    }
+
+    /** One sentence per SwarmRewriter refusal code, close to the editor's copy (frontend/assets/i18n/en.json workflow.swarmError.*). Developer-facing: not i18n'd. */
+    private static function swarmRefusalMessage(string $code): string
+    {
+        switch ($code) {
+            case 'start_needs_two_agents':
+                return 'A swarm needs two or more agents connected directly to Start; this canvas has fewer than two.';
+            case 'dispatcher_in_swarm':
+                return 'An agent is tagged Dispatcher, which has no meaning in a swarm -- every member routes for itself. Remove the Dispatcher tag and connect the agent to Start directly.';
+            case 'agent_not_on_start':
+                return 'This agent is not connected to Start, so it is not part of the swarm. Connect it to Start, or remove it.';
+            case 'duplicate_agent_names':
+                return 'Two agents share a name. A handoff names its target, so the swarm could not tell them apart -- rename one.';
+            case 'multiple_outputs':
+                return 'This workflow has more than one Output node. A swarm produces one answer.';
+            case 'playbook_unsupported':
+                return 'This workflow contains a Playbook node, which swarm mode does not support yet.';
+            default:
+                return "This workflow cannot run as a swarm ({$code}).";
+        }
     }
 
     /** Modular mode: workflow.py, common.py, the package marker, then one module per agent/playbook node. */

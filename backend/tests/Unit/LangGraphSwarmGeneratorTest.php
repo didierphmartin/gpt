@@ -74,6 +74,35 @@ class LangGraphSwarmGeneratorTest extends TestCase
         return $g;
     }
 
+    /** Start -> three agents, no dispatcher: proves member order follows Start's fan-out (canvas order). */
+    private static function threeAgentSwarm(): array
+    {
+        $agent = fn(string $name) => [
+            'type' => 'agent-template', 'agent_name' => $name, 'agent_type' => 'standard',
+            'instructions' => "You are {$name}.", 'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-5',
+            'tools' => [], 'settings' => ['temperature' => 0.7, 'max_tokens' => 4096],
+        ];
+        return [
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'Help me plan a trip.']],
+                ['id' => '2', 'node_type' => '', 'config' => $agent('Agent A')],
+                ['id' => '3', 'node_type' => '', 'config' => $agent('Agent B')],
+                ['id' => '4', 'node_type' => '', 'config' => $agent('Agent C')],
+            ],
+            'edges' => [
+                ['from' => '1', 'to' => '2'], ['from' => '1', 'to' => '3'], ['from' => '1', 'to' => '4'],
+            ],
+        ];
+    }
+
+    /** Start -> two agents, one tagged Dispatcher: the tag has no meaning in a swarm (dispatcher_in_swarm). */
+    private static function swarmWithDispatcherTag(): array
+    {
+        $g = self::twoAgentSwarm();
+        $g['nodes'][1]['config']['agent_type'] = 'dispatcher';
+        return $g;
+    }
+
     private static function generator(array $graph, string $orchestration = 'swarm'): LangGraphGenerator
     {
         $t = new self('x');
@@ -147,5 +176,30 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches('/A2A/i');
         $this->generate(self::twoAgentSwarm(), ['a2a' => true]);
+    }
+
+    public function testARefusedCanvasFailsGenerationNamingTheNodes(): void
+    {
+        // Start -> ONE agent: start_needs_two_agents
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/two or more agents|start_needs_two_agents/i');
+        $this->generateSwarm($this->oneAgentSwarm());
+    }
+
+    public function testADispatcherTaggedNodeIsRefusedAtCompileTime(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/Dispatcher/i');
+        $this->generateSwarm($this->swarmWithDispatcherTag());
+    }
+
+    public function testTheMembersAreStartsFanOutInCanvasOrder(): void
+    {
+        $files = $this->generateSwarm($this->threeAgentSwarm());
+        // one module per member, none for anything else
+        $this->assertSame(
+            ['agents/agent_a.py', 'agents/agent_b.py', 'agents/agent_c.py'],
+            array_values(array_filter(array_keys($files), fn($f) => str_starts_with($f, 'agents/')))
+        );
     }
 }
