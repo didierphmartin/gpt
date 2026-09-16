@@ -13547,7 +13547,19 @@ class WorkflowEditor {
             for (const id of Object.keys(_nodes)) {
                 const kind = this._wfNodeKind(id, _nodes);
                 if (kind === 'agent' || kind === 'playbook') {
-                    this.nodeExecutionData[id] = {};
+                    // Reset the canvas colour, but KEEP the node's activity, logs
+                    // and LLM context. This reset came from the single-shot run
+                    // path, where one run is the whole story. In a session the
+                    // panes are the conversation's audit trail across every
+                    // prompt — wiping them per turn left only the most recent one
+                    // visible, which is precisely the record needed to see where
+                    // a handoff went.
+                    const prev = this.nodeExecutionData[id] || {};
+                    this.nodeExecutionData[id] = {
+                        activity: prev.activity || [],
+                        logs: prev.logs || [],
+                        llmContext: prev.llmContext || [],
+                    };
                     this.highlightNode(id, 'idle', id, 'agent');
                 }
             }
@@ -13578,13 +13590,20 @@ class WorkflowEditor {
                 // No turn answered, so no deliverable and no skill run (§6b).
                 status = 'hop_budget_exhausted';
                 output = `Stopped after ${budget} handoffs without an answer.`;
+                // Close the turn in the transcript. Without this the session
+                // ends on a user message nobody replied to, so the NEXT turn's
+                // agent sees an unanswered question and may answer that one
+                // instead — and a replay renders the prompt with nothing after
+                // it, which reads as a lost answer rather than a failed turn.
+                turnEntries.push({ role: 'assistant', content: output });
                 break;
             }
 
             const agent = rw.agents[active];
             const node = this.editor.getNodeFromId(active);
             // The agent's own node, carrying the instructions the rewrite composed:
-            // its system prompt plus the handoff guide built from the dispatcher's.
+            // its system prompt plus the colleague list the rewrite composed,
+            // each line taken from that colleague's own role summary.
             const swarmNode = { ...node, data: { ...node.data, instructions: agent.instructions } };
             const targets = agent.handoffs.map(id => ({ id, name: rw.agents[id].name }));
 
@@ -13614,6 +13633,9 @@ class WorkflowEditor {
             if (res && res.success === false) {
                 status = 'error';
                 output = res.output || 'The swarm stopped on an error.';
+                // Same reason as the budget case: every user entry must be
+                // answered by something, even a failure.
+                turnEntries.push({ role: 'assistant', content: output });
                 break;
             }
 

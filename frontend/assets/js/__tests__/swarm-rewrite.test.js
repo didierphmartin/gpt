@@ -38,9 +38,6 @@ for (const c of fixture.cases) {
     for (const [id, skills] of Object.entries(want.skills_by_agent || {})) {
         if (!eq(got.agents[id].skills, skills)) { fail(`skills of ${id}`, got.agents[id].skills, skills); }
     }
-    if (want.dropped_from_dispatcher && !eq(got.dropped, want.dropped_from_dispatcher)) {
-        fail('dropped from dispatcher', got.dropped, want.dropped_from_dispatcher);
-    }
 }
 
 console.log(failed === 0

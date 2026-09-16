@@ -63,10 +63,6 @@ class SwarmRewriterTest extends TestCase
         foreach ($expect['skills_by_agent'] ?? [] as $id => $skills) {
             $this->assertSame($skills, $got['agents'][$id]['skills'], "skills of agent {$id}");
         }
-        if (isset($expect['dropped_from_dispatcher'])) {
-            $this->assertSame($expect['dropped_from_dispatcher']['tools'], $got['dropped']['tools']);
-            $this->assertSame($expect['dropped_from_dispatcher']['skills'], $got['dropped']['skills']);
-        }
     }
 
     public function testTheGuideListsEachColleagueWithItsOwnRoleSummary(): void

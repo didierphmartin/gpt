@@ -1,6 +1,6 @@
 #!/bin/sh
-# Fail a commit that changes a browser-loaded asset without moving its ?v= in
-# frontend/index.html.
+# Fail a commit that changes a browser-loaded asset (JS or CSS) without moving
+# its ?v= in frontend/index.html.
 #
 # Why this exists: on 2026-09-15 swarm-rewrite.js was rewritten three times
 # while its ?v= stayed put. Browsers kept serving the original, so the editor
@@ -15,7 +15,11 @@
 INDEX="frontend/index.html"
 [ -f "$INDEX" ] || exit 0
 
-staged=$(git diff --cached --name-only --diff-filter=ACM | grep '^frontend/assets/js/.*\.js$')
+# CSS is browser-loaded with a ?v= exactly as JS is, and was invisible here —
+# workflow-editor.css had to be bumped by hand. Anything index.html does not
+# reference is skipped below by the "$base?v=" test, so widening is safe:
+# test files and unreferenced modules still pass without a bump.
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^frontend/assets/.*\.(js|css)$')
 [ -n "$staged" ] || exit 0
 
 # The version of index.html this commit will produce.
