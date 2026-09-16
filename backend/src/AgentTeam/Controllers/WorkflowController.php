@@ -799,6 +799,21 @@ class WorkflowController
                 ];
             }
 
+            // A swarm is a conversation, not a run: one active agent at a time,
+            // control moving by handoff, and state held between prompts. This
+            // endpoint walks the graph topologically, so it would execute Start's
+            // fan-out concurrently — the DAG reading of a canvas that means
+            // something else entirely. v1(a) implements the swarm in the editor's
+            // interpreter only, so refuse here rather than silently running the
+            // wrong architecture.
+            if ($workflow->getOrchestration() === 'swarm') {
+                return [
+                    'success' => false,
+                    'error' => 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.',
+                    'status_code' => 400
+                ];
+            }
+
             // Get input variables from request
             $inputVariables = $body['variables'] ?? $body['inputs'] ?? [];
 
@@ -938,6 +953,16 @@ class WorkflowController
 
             if (!$workflow->isEnabled()) {
                 $sseCallback(['type' => 'error', 'error' => 'Workflow is disabled']);
+                echo "data: [DONE]\n\n";
+                flush();
+                return;
+            }
+
+            // See run(): a swarm cannot be walked topologically, and running it
+            // as a DAG would execute Start's fan-out concurrently instead of
+            // handing one conversation between agents.
+            if ($workflow->getOrchestration() === 'swarm') {
+                $sseCallback(['type' => 'error', 'error' => 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.']);
                 echo "data: [DONE]\n\n";
                 flush();
                 return;
