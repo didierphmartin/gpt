@@ -934,6 +934,7 @@
       "codegenModularHelp": "A Python package: workflow.py + common.py + one importable module per agent, linked by imports.",
       "codegenA2A": "A2A",
       "codegenA2AHelp": "Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.",
+      "codegenSwarmOnly": "Not available for a swarm — v1 supports only the modular layout.",
       "codegenGenerate": "Generate",
       "runPromptTitle": "Run workflow",
       "runnerDownTitle": "Start the local runner first",

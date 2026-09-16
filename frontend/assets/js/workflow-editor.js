@@ -4837,9 +4837,17 @@ class WorkflowEditor {
     _showCodegenOptionsModal() {
         return new Promise((resolve) => {
             const cur = this._codegenOptions();
+            const swarm = this._isSwarm();
             // The three layouts are mutually exclusive: A2A already produces one
             // file per node, so "agents in separate files" only means something
             // for the single-process target.
+            //
+            // A swarm supports only the modular layout in v1 (single-file and
+            // A2A swarm packaging are deferred — A2A especially, since handoffs
+            // crossing a network between agent servers is a different design).
+            // Those two stay visible but disabled, with a reason, rather than
+            // hidden (which would make the feature look absent) or refused only
+            // at Generate (which would tell the user after they had chosen).
             const choices = [
                 ['single', this.t('workflow.output.codegenSingle') || 'Single file',
                     this.t('workflow.output.codegenSingleHelp') || 'One .py file containing the whole workflow.'],
@@ -4847,19 +4855,25 @@ class WorkflowEditor {
                     this.t('workflow.output.codegenModularHelp') || 'A Python package: workflow.py + common.py + one importable module per agent, linked by imports.'],
                 ['a2a', this.t('workflow.output.codegenA2A') || 'A2A',
                     this.t('workflow.output.codegenA2AHelp') || 'Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.'],
-            ];
+            ].map(([value, label, help]) => {
+                const disabled = swarm && value !== 'modular';
+                if (disabled) {
+                    help = `${help} ${this.t('workflow.output.codegenSwarmOnly') || 'Not available for a swarm — v1 supports only the modular layout.'}`;
+                }
+                return [value, label, help, disabled];
+            });
             const backdrop = document.createElement('div');
             backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
             backdrop.innerHTML = `
                 <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md" role="dialog" aria-modal="true">
                     <h3 class="text-lg font-semibold text-gray-900 mb-4">${this.escapeHtml(this.t('workflow.output.codegenTitle') || 'Code generation options')}</h3>
                     <div class="space-y-3">
-                        ${choices.map(([value, label, help]) => `
-                            <label class="flex items-start gap-3 cursor-pointer">
-                                <input type="radio" name="codegen-mode" value="${value}" class="codegen-mode mt-1 h-4 w-4" ${cur.mode === value ? 'checked' : ''}>
+                        ${choices.map(([value, label, help, disabled]) => `
+                            <label class="flex items-start gap-3 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}">
+                                <input type="radio" name="codegen-mode" value="${value}" class="codegen-mode mt-1 h-4 w-4" ${(swarm ? value === 'modular' : cur.mode === value) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
                                 <span>
-                                    <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(label)}</span>
-                                    <span class="block text-xs text-gray-500">${this.escapeHtml(help)}</span>
+                                    <span class="block text-sm font-medium ${disabled ? 'text-gray-400' : 'text-gray-900'}">${this.escapeHtml(label)}</span>
+                                    <span class="block text-xs ${disabled ? 'text-gray-400' : 'text-gray-500'}">${this.escapeHtml(help)}</span>
                                 </span>
                             </label>`).join('')}
                     </div>
@@ -4873,7 +4887,10 @@ class WorkflowEditor {
             backdrop.querySelector('.codegen-cancel').addEventListener('click', () => done(null));
             backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
             backdrop.querySelector('.codegen-go').addEventListener('click', () => {
-                const opts = { mode: backdrop.querySelector('.codegen-mode:checked')?.value || 'single' };
+                // Swarm forces modular regardless of what is checked: the other
+                // two are disabled in the DOM, but this keeps the returned mode
+                // correct even if that ever drifts.
+                const opts = { mode: swarm ? 'modular' : (backdrop.querySelector('.codegen-mode:checked')?.value || 'single') };
                 this._saveCodegenOptions(opts);
                 done(opts);
             });
