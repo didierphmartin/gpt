@@ -1477,6 +1477,9 @@ class WorkflowEditor {
             this._swarmSessionEnd();
             this._workflowDirty = true;
             this._applyOrchestrationToCanvas();
+            // Refresh the Start node's hint/play-button label for the mode
+            // just entered (swarm ignores the hasPrompt arg entirely).
+            this.updateStartNodeIndicator(!!(this.lastUserPrompt && String(this.lastUserPrompt).trim()));
         });
 
         saveBtn.addEventListener('click', async () => {
@@ -2673,6 +2676,10 @@ class WorkflowEditor {
                     // it drives the loader node round-by-round (one file at a
                     // time), the same loop the store will later clock.
                     this._runIngestionFromStart();
+                } else if (this._isSwarm()) {
+                    // Run and a Start-node click are the same door in swarm
+                    // mode: this button opens the conversation, not a run.
+                    this._openSwarmSession();
                 } else if (this.lastUserPrompt) {
                     this.executeWorkflow(this.lastUserPrompt);
                 } else {
@@ -2693,7 +2700,13 @@ class WorkflowEditor {
                     e.target.closest('.doc-remove')) {
                     return;
                 }
-                this.showPromptForm();
+                if (this._isSwarm()) {
+                    // Start is the door into a swarm, not a prompt to fill in
+                    // once: clicking it opens the conversation (spec §3b).
+                    this._openSwarmSession();
+                } else {
+                    this.showPromptForm();
+                }
             }
         });
 
@@ -2850,6 +2863,23 @@ class WorkflowEditor {
             // and skip the prompt-text indicator entirely.
             if (node.classList.contains('ingestion-start')) {
                 if (playBtn) playBtn.style.display = 'flex';
+                return;
+            }
+
+            // A swarm has no stored prompt to indicate — Start is the door
+            // into a session, not a field filled in once (spec §3b, §10).
+            // The has-a-prompt styling means nothing here, so skip it; the
+            // play button stays visible and relabeled to say what it opens.
+            if (this._isSwarm()) {
+                node.classList.remove('has-prompt');
+                if (small) {
+                    small.textContent = this.t('workflow.swarmSession.startHint');
+                    small.style.color = '';
+                }
+                if (playBtn) {
+                    playBtn.style.display = 'flex';
+                    playBtn.title = this.t('workflow.swarmSession.openSession');
+                }
                 return;
             }
 
@@ -12541,7 +12571,7 @@ class WorkflowEditor {
     // when a playbook node starts; closing it never stops the run (the node
     // activity log keeps recording).
 
-    _pbOverlayOpen(dfId, name, servers, prompt) {
+    _pbOverlayOpen(dfId, name, servers, prompt, { session = false } = {}) {
         document.getElementById('playbook-run-overlay')?.remove();
         this._pbCurrentName = name || 'Playbook';
         const badges = (servers || []).map(n =>
@@ -12553,26 +12583,91 @@ class WorkflowEditor {
         const target = this._runTarget
             ? `${this.t('workflow.output.runTargetCompiled') || 'compiled'} · ${this._runTarget.base.replace(/^https?:\/\//, '')}`
             : (this.t('workflow.output.runTargetLive') || 'live interpreter');
+        // A swarm session isn't "running" toward one finish line the way a
+        // playbook run is — it's a standing conversation — so the header
+        // reads differently from the start.
+        const titleSuffix = session ? ` — ${this.t('workflow.swarmSession.overlayTitle')}` : ' — running…';
+        // The composer only exists in session mode: a playbook/compiled run
+        // has one prompt, replayed at open, and nothing more to type.
+        const composerHtml = session ? `
+                        <div id="pb-ov-composer" style="display:flex;gap:8px;flex-basis:100%;order:-1;margin-bottom:8px;">
+                            <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t('workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+                            <button class="storage-config-btn" id="pb-ov-send">${this.escapeHtml(this.t('workflow.swarmSession.send'))}</button>
+                        </div>` : '';
         const html = `
             <div id="playbook-run-overlay" class="storage-config-overlay">
                 <div class="storage-config-modal" style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;">
                     <div class="storage-config-header" style="flex-wrap:wrap;">
-                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')} — running…</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
+                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
                         ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
                     <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
-                    <div class="storage-config-footer">
+                    <div class="storage-config-footer" style="flex-wrap:wrap;">
+                        ${composerHtml}
                         <span id="pb-ov-status" style="margin-right:auto;color:#9ca3af;font-size:12px;">running…</span>
                         <button class="storage-config-btn cancel" id="pb-ov-hide">Hide</button>
                     </div>
                 </div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
-        const hide = () => document.getElementById('playbook-run-overlay')?.remove();
+        const hide = () => {
+            // A closed session starts fresh — the next Start click or Run
+            // begins a new conversation rather than resuming this one.
+            if (session) this._swarmSessionEnd();
+            document.getElementById('playbook-run-overlay')?.remove();
+        };
         document.getElementById('pb-ov-close')?.addEventListener('click', hide);
         document.getElementById('pb-ov-hide')?.addEventListener('click', hide);
-        this._pbBubble('you', prompt);
+        // The session opens empty, with nothing typed yet — there is no
+        // first prompt to seed the feed with, so skip the bubble rather than
+        // rendering one for a null/undefined prompt.
+        if (prompt != null) this._pbBubble('you', prompt);
+
+        if (session) {
+            const input = document.getElementById('pb-ov-input');
+            const sendBtn = document.getElementById('pb-ov-send');
+            // Each prompt is a turn. The overlay stays open; the session
+            // decides which agent receives this one (spec §3b).
+            const send = async () => {
+                const text = input.value.trim();
+                if (!text || this._swarmBusy) return;
+                input.value = '';
+                this._swarmBusy = true;
+                input.disabled = true;
+                if (sendBtn) sendBtn.disabled = true;
+                this._pbBubble('you', text);
+                try {
+                    await this._swarmTurn(text, null);
+                } finally {
+                    this._swarmBusy = false;
+                    input.disabled = false;
+                    if (sendBtn) sendBtn.disabled = false;
+                    input.focus();
+                    this._pbUpdateSwarmStatus();
+                }
+            };
+            sendBtn?.addEventListener('click', send);
+            input?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); send(); }
+            });
+            this._pbUpdateSwarmStatus();
+            input?.focus();
+        }
+    }
+
+    /**
+     * The status line names whoever is about to receive the next prompt —
+     * the one question a swarm raises that a DAG never does (spec §3b).
+     */
+    _pbUpdateSwarmStatus() {
+        const st = document.getElementById('pb-ov-status');
+        if (!st) return;
+        const s = this._swarmSession;
+        if (!s) { st.textContent = this.t('workflow.swarmSession.noSession'); return; }
+        const activeId = s.activeAgent || s.rewrite.entry;
+        const name = s.rewrite.agents[activeId]?.name || activeId;
+        st.textContent = this.t('workflow.swarmSession.holding', { name });
     }
 
     _pbOverlayEl() { return document.getElementById('pb-ov-feed'); }
@@ -13142,6 +13237,20 @@ class WorkflowEditor {
     }
 
     /**
+     * Open the swarm's conversation. A refused canvas is reported here rather
+     * than at the first prompt, so the user finds out while looking at the
+     * graph. Re-opening while a session is live just re-shows the overlay —
+     * it must not silently discard the transcript.
+     */
+    async _openSwarmSession() {
+        if (!this._swarmSession || this._swarmSession.workflowId !== this.currentWorkflowId) {
+            const started = this._swarmSessionStart();
+            if (!started.ok) { this._showSwarmRefusalModal(started); return; }
+        }
+        this._pbOverlayOpen('swarm', this.currentWorkflowName || 'Swarm', [], null, { session: true });
+    }
+
+    /**
      * Run ONE turn of the swarm session: the session's active agent holds the
      * turn, and control passes on each handoff until an agent answers without
      * handing off, or the hop budget is spent. The agent that ends the turn
@@ -13340,10 +13449,12 @@ class WorkflowEditor {
     async executeWorkflowInBrowser(userPrompt, { onProgress } = {}) {
         this.lastUserPrompt = userPrompt;
         if (this._isSwarm()) {
-            // A swarm has no topological order: control moves by handoff. And
-            // it is a session, so this is one turn of an ongoing conversation,
-            // not a run from the top (§3b).
-            return await this._swarmTurn(userPrompt, onProgress);
+            // Run and a Start-node click are the same door. Returning an empty
+            // success keeps the DAG callers' contract satisfied without
+            // claiming a run happened — a session produces turns, not a
+            // result (§3b, §10).
+            await this._openSwarmSession();
+            return { output: '', success: true, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 };
         }
         // Clear any artifact from a prior run so the Output node never shows a
         // stale file (the SSE path resets this on 'workflow_start'; the

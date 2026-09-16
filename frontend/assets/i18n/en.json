@@ -1104,6 +1104,15 @@
     "swarmForm": {
       "guideLabel": "Handoff guide — which subjects belong to which agent. Every member of the swarm receives this.",
       "guideTab": "Handoff guide"
+    },
+    "swarmSession": {
+      "startHint": "Click to open the swarm conversation",
+      "openSession": "Open swarm session",
+      "overlayTitle": "swarm session",
+      "placeholder": "Type a message…",
+      "send": "Send",
+      "noSession": "no session",
+      "holding": "{{name}} is holding the turn"
     }
   }
 }

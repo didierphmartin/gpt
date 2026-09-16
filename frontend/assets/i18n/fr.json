@@ -1104,6 +1104,15 @@
     "swarmForm": {
       "guideLabel": "Guide de transmission — quels sujets appartiennent à quel agent. Chaque membre de l'essaim le reçoit.",
       "guideTab": "Guide de transmission"
+    },
+    "swarmSession": {
+      "startHint": "Cliquez pour ouvrir la conversation de l'essaim",
+      "openSession": "Ouvrir la session d'essaim",
+      "overlayTitle": "session d'essaim",
+      "placeholder": "Tapez un message…",
+      "send": "Envoyer",
+      "noSession": "aucune session",
+      "holding": "{{name}} a la parole"
     }
   }
 }

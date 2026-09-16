@@ -1104,6 +1104,15 @@
     "swarmForm": {
       "guideLabel": "Guía de traspaso — qué temas pertenecen a qué agente. Todos los miembros del enjambre la reciben.",
       "guideTab": "Guía de traspaso"
+    },
+    "swarmSession": {
+      "startHint": "Haz clic para abrir la conversación del enjambre",
+      "openSession": "Abrir sesión de enjambre",
+      "overlayTitle": "sesión de enjambre",
+      "placeholder": "Escribe un mensaje…",
+      "send": "Enviar",
+      "noSession": "sin sesión",
+      "holding": "{{name}} tiene el turno"
     }
   }
 }
