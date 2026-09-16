@@ -601,6 +601,14 @@
   },
   "workflow": {
     "loadingWorkflow": "Chargement du workflow…",
+    "toolbar": {
+      "compile": "Compiler le workflow",
+      "compileTitle": "Compiler ce workflow en Python…",
+      "compileLangGraph": "LangGraph",
+      "compileAdk": "ADK (Google)",
+      "compileMaf": "MAF (Microsoft)",
+      "compileNooa": "NOOA (NVIDIA)"
+    },
     "dialogs": {
       "renameWorkflowTitle": "Renommer le workflow",
       "renameWorkflowPrompt": "Saisissez un nouveau nom pour ce workflow :",

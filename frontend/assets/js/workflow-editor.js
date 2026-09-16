@@ -509,6 +509,23 @@ class WorkflowEditor {
             });
         }
 
+        // Top-left "Compile workflow" button (beside Reset/Save/Promote to
+        // skill): a second entry point into the same four framework menus
+        // the Output node already opens — this button never talks to the
+        // generation endpoints itself, it only anchors the existing
+        // _show<X>Menu methods to itself.
+        const compileBtn = document.getElementById('wf-compile');
+        if (compileBtn && !compileBtn.dataset.compileBound) {
+            compileBtn.dataset.compileBound = '1';
+            compileBtn.addEventListener('click', () => {
+                if (!this.currentWorkflowId) {
+                    this.showToast(this.t('workflow.messages.saveFirst'), 'warning');
+                    return;
+                }
+                this._showCompileMenu(compileBtn);
+            });
+        }
+
         // Shared genesis on-ramp used by both the toolbar button above and the
         // sidebar workflow ⋮ menu: one reflection call → approval overlay.
         // Callers own any button busy-state; this method owns the in-flight
@@ -3266,6 +3283,81 @@ class WorkflowEditor {
         const d = new Date();
         const p = n => String(n).padStart(2, '0');
         return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    }
+
+    /**
+     * Dropdown shown when the "Compile workflow" toolbar button (beside
+     * Reset/Save/Promote to skill) is clicked. Lists the four frameworks a
+     * workflow can be compiled to; picking one delegates straight to that
+     * framework's own action menu (_showLangGraphMenu / _showAdkMenu /
+     * _showMafMenu / _showNooaMenu), anchored to this same toolbar button.
+     * This is a second entry point only — it never talks to the
+     * generate-* endpoints itself, and the Output node's four buttons keep
+     * working exactly as they do today.
+     */
+    _showCompileMenu(buttonEl) {
+        // Close any existing instance — clicking the button again should toggle.
+        const existing = document.querySelector('.wf-compile-menu');
+        if (existing) {
+            existing.remove();
+            return;
+        }
+        // Opening this menu closes any framework action menu left open
+        // (e.g. from the Output node) so only one menu is visible at a time.
+        document.querySelector('.langgraph-menu')?.remove();
+
+        const menu = document.createElement('div');
+        menu.className = 'langgraph-menu wf-compile-menu';
+        menu.innerHTML = `
+            <button type="button" class="langgraph-menu-item" data-action="langgraph">
+                ${this.escapeHtml(this.t('workflow.toolbar.compileLangGraph'))}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk">
+                ${this.escapeHtml(this.t('workflow.toolbar.compileAdk'))}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf">
+                ${this.escapeHtml(this.t('workflow.toolbar.compileMaf'))}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa">
+                ${this.escapeHtml(this.t('workflow.toolbar.compileNooa'))}
+            </button>
+        `;
+        document.body.appendChild(menu);
+
+        const r = buttonEl.getBoundingClientRect();
+        // Anchor below the button, left-aligned. Clamp inside the viewport.
+        const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${r.bottom + 4}px`;
+
+        menu.querySelector('[data-action="langgraph"]').addEventListener('click', () => {
+            menu.remove();
+            this._showLangGraphMenu(buttonEl);
+        });
+        menu.querySelector('[data-action="adk"]').addEventListener('click', () => {
+            menu.remove();
+            this._showAdkMenu(buttonEl);
+        });
+        menu.querySelector('[data-action="maf"]').addEventListener('click', () => {
+            menu.remove();
+            this._showMafMenu(buttonEl);
+        });
+        menu.querySelector('[data-action="nooa"]').addEventListener('click', () => {
+            menu.remove();
+            this._showNooaMenu(buttonEl);
+        });
+
+        // Dismiss on any outside click. Schedule on next tick so the
+        // current click event (which opened the menu) doesn't close it.
+        setTimeout(() => {
+            const onDocClick = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', onDocClick, true);
+                }
+            };
+            document.addEventListener('click', onDocClick, true);
+        }, 0);
     }
 
     /**
