@@ -11887,7 +11887,7 @@ class WorkflowEditor {
         // pool workers need readwrite on skills/ and outputs/.
         await this._ensureLocalFsPermission();
         try { onProgress?.({ type: 'workflow_start', workflow_id: workflowId }); } catch (_) {}
-        const runResult = await this.executeWorkflowInBrowser(userPrompt, { onProgress });
+        const runResult = await this.executeWorkflowInBrowser(userPrompt, { onProgress, headless: true });
         try { onProgress?.({ type: 'workflow_complete', ...runResult }); } catch (_) {}
         return { result: runResult, outputs: runResult?.node_outputs ?? null };
     }
@@ -13420,6 +13420,11 @@ class WorkflowEditor {
             });
         }
         this._swarmSession = null;
+        // A session with no window is a composer that still accepts prompts for
+        // a swarm that no longer exists — unticking the mode or opening another
+        // workflow would leave one live over the new canvas.
+        document.getElementById('playbook-run-overlay')?.classList.contains('pb-overlay-window')
+            && document.getElementById('playbook-run-overlay').remove();
         // No session means nobody holds the turn — clear the canvas mark.
         // Optional chaining: the transcript-harness stubs this class without
         // _applyOrchestrationToCanvas, and this method must still run clean.
@@ -13478,6 +13483,13 @@ class WorkflowEditor {
      * that the turn can move any number of times.
      */
     async _swarmTurn(userPrompt, onProgress) {
+        // Guard the mode as well as the session. A composer left open when the
+        // user unticks "Run as a swarm" would otherwise keep driving turns
+        // against a workflow that is no longer interpreted as a swarm.
+        if (!this._isSwarm()) {
+            return { output: '', node_outputs: {}, success: false, nodes_executed: 0,
+                     response_time_ms: 0, handoffs: [], status: 'not_a_swarm', history: [] };
+        }
         // A session belongs to one workflow: opening another one leaves a
         // session whose agent ids and transcript describe a canvas that is no
         // longer on screen.
@@ -13671,14 +13683,34 @@ class WorkflowEditor {
         return runResult;
     }
 
-    async executeWorkflowInBrowser(userPrompt, { onProgress } = {}) {
+    async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false } = {}) {
         this.lastUserPrompt = userPrompt;
         if (this._isSwarm()) {
-            // Run and a Start-node click are the same door. Returning an empty
-            // success keeps the DAG callers' contract satisfied without
-            // claiming a run happened — a session produces turns, not a
-            // result (§3b, §10).
+            // A swarm has no topological order, so neither caller can walk it —
+            // but they want different things from it.
+            //
+            // Headless (runHeadless, used by chat.js and genesis-panel.js) has
+            // no one to type a second prompt: it hands over one prompt and
+            // needs the answer back. That is exactly one turn. Opening an
+            // interactive overlay for it, or returning an empty success,
+            // silently loses the caller's request.
+            if (headless) {
+                const started = this._swarmSessionStart();
+                if (!started.ok) {
+                    return { output: `This workflow cannot run as a swarm (${started.error}).`,
+                             success: false, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 };
+                }
+                const res = await this._swarmTurn(userPrompt, onProgress);
+                this._swarmSessionEnd();       // one prompt, no session to keep
+                return res;
+            }
+            // Interactive: open the conversation. A prompt supplied by the Run
+            // path is the session's first turn — it must not be thrown away.
             await this._openSwarmSession();
+            if (typeof userPrompt === 'string' && userPrompt.trim()) {
+                this._pbBubble('you', userPrompt);
+                return await this._swarmTurn(userPrompt, onProgress);
+            }
             return { output: '', success: true, node_outputs: {}, nodes_executed: 0, response_time_ms: 0 };
         }
         // Clear any artifact from a prior run so the Output node never shows a
@@ -14175,6 +14207,11 @@ class WorkflowEditor {
         }
 
         this.editor.clear();
+        // Before currentWorkflowId is cleared: ending a session saves its last
+        // answer, and _saveWorkflowOutput names the file from the workflow it
+        // belonged to. Cleared first, every session's answer lands as
+        // wf-workflow_<timestamp>.md with no idea which workflow produced it.
+        this._swarmSessionEnd();
         this.currentWorkflowId = null;
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
@@ -14196,7 +14233,6 @@ class WorkflowEditor {
         this.orchestration = 'workflow';
         // A swarm session belongs to one workflow (§3b): its active agent and
         // transcript mean nothing on the next canvas.
-        this._swarmSessionEnd();
 
         // Reset schedule setting
         this.scheduleEnabled = false;
