@@ -1076,7 +1076,7 @@
     },
     "orchestration": {
       "swarm": "Run as a swarm",
-      "swarmHelp": "Agents hand the conversation to one another instead of running in a fixed order. Requires a Dispatcher connected to two or more agents."
+      "swarmHelp": "Agents hand the conversation to one another instead of running in a fixed order. Connect two or more agents to Start — each can hand off to the others."
     },
     "swarmAttachWarn": "Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.",
     "swarmCanvas": {

@@ -1143,7 +1143,7 @@ class WorkflowEditor {
                 <input type="checkbox" class="wf-swarm-toggle mt-1 h-4 w-4">
                 <span>
                     <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(this.t('workflow.orchestration.swarm') || 'Run as a swarm')}</span>
-                    <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.orchestration.swarmHelp') || 'Agents hand the conversation to one another instead of running in a fixed order. Requires a Dispatcher connected to two or more agents.')}</span>
+                    <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.orchestration.swarmHelp') || 'Agents hand the conversation to one another instead of running in a fixed order. Connect two or more agents to Start — each can hand off to the others.')}</span>
                 </span>
             </label>
             <div class="workflow-btn-group">

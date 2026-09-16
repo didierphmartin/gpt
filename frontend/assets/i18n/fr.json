@@ -1076,7 +1076,7 @@
     },
     "orchestration": {
       "swarm": "Exécuter en essaim",
-      "swarmHelp": "Les agents se transmettent la conversation au lieu de s'exécuter dans un ordre fixe. Nécessite un Dispatcher connecté à au moins deux agents."
+      "swarmHelp": "Les agents se transmettent la conversation au lieu de s'exécuter dans un ordre fixe. Reliez au moins deux agents à Start ; chacun peut passer la main aux autres."
     },
     "swarmAttachWarn": "Les documents attachés à Start ne sont pas encore transmis aux agents de l'essaim — mettez ce dont ils ont besoin dans le prompt.",
     "swarmCanvas": {
