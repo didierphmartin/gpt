@@ -338,6 +338,19 @@ sees the other's messages.
 - **Single-file and A2A packaging.** A2A swarm is genuinely interesting — handoffs crossing the network between agent servers — and genuinely novel; it waits until the in-process semantics are proved.
 - **Multi-user.** Its own spec, which this one is deliberately compatible with: the checkpointer key already begins with the owner.
 - **Summarisation of long threads** (§5).
+- **Authoring a swarm from chat.** The `workflow-compile` skill emits a DSL whose top-level
+  fields are `name`, `description`, `definition`, `triggers`, `output_folder` and
+  `output_storage_enabled` — there is no `orchestration`, and neither the skill nor `chat.js`
+  mentions swarm. So a workflow authored from the conversation interface always lands as
+  `orchestration = "workflow"`; making it a swarm means opening the editor and flipping the
+  toggle. The backend is already ready — `WorkflowController::create` accepts `orchestration`
+  exactly as it accepts `output_storage_enabled` — so the missing piece is only that nothing
+  upstream sends it.
+
+  Deferred deliberately, and to be taken up **after the compiler (§10 v1(b))**. Note it is
+  not merely a field: the skill would be authoring a canvas that must satisfy every refusal
+  in §3a — fan out from Start, no Dispatcher tag, every agent on Start — so it needs the
+  *shape* rule, not just somewhere to put the value. Specify it rather than bolting it on.
 
 ## 8. Tests
 
