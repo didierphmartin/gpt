@@ -611,7 +611,8 @@
     },
     "compiledScrim": {
       "running": "Exécution du code Python compilé {{framework}}",
-      "starting": "Démarrage du serveur d'exécution {{framework}} — cela peut prendre quelques secondes…"
+      "starting": "Démarrage du serveur d'exécution {{framework}} — cela peut prendre quelques secondes…",
+      "preparing": "Génération du paquet {{framework}}…"
     },
     "dialogs": {
       "renameWorkflowTitle": "Renommer le workflow",

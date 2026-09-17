@@ -5562,8 +5562,17 @@ class WorkflowEditor {
      *   POST /api/run-file  body={ filename, args }
      */
     async _runLangGraphScript() {
+        // Up SYNCHRONOUSLY, in the same tick as the click, before the first
+        // await. Everything below -- saving the workflow, regenerating the
+        // whole Python package, writing it to disk, probing the runner --
+        // runs before _runCompiled is even called, and none of it was on
+        // screen. Showing the wait when the run server starts was showing it
+        // near the END of the wait. Swarm only: a compiled DAG run's timing
+        // is left exactly as it was.
+        if (this._isSwarm()) this._showCompiledScrim(this.t('workflow.toolbar.compileLangGraph'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
+            this._hideCompiledScrim();
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
@@ -5577,7 +5586,7 @@ class WorkflowEditor {
             // (api.py); the overlay drives it the same way for either one.
             let data;
             try { data = await this._writeManifest(codegenMode); }
-            catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+            catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
             return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileLangGraph'));
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
@@ -12818,11 +12827,16 @@ class WorkflowEditor {
         // 'starting' covers the wait while the runner spawns the generated
         // package's uvicorn process — several seconds during which nothing was
         // on screen at all, so the editor looked hung rather than busy.
-        const starting = phase === 'starting';
-        const key = starting ? 'workflow.compiledScrim.starting' : 'workflow.compiledScrim.running';
+        // Three phases, because the wait has three distinct parts and the first
+        // two are the long ones: generating the package, then starting its
+        // server, then running.
+        const busy = phase === 'preparing' || phase === 'starting';
+        const key = phase === 'preparing' ? 'workflow.compiledScrim.preparing'
+            : phase === 'starting' ? 'workflow.compiledScrim.starting'
+            : 'workflow.compiledScrim.running';
         msg.textContent = this.t(key, { framework: framework || 'compiled' });
         const spin = document.getElementById('workflow-compiled-scrim-spinner');
-        if (spin) spin.style.display = starting ? 'inline-block' : 'none';
+        if (spin) spin.style.display = busy ? 'inline-block' : 'none';
         scrim.style.display = 'flex';
     }
 
