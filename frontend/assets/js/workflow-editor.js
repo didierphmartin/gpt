@@ -99,6 +99,16 @@ class WorkflowEditor {
         // What that in-flight run is, so the refusal can name it:
         // {name, base, runId}.
         this._runCompiledWhat = null;
+        // A compiled swarm's conversation, in the same spirit as
+        // _swarmSession but for a compiled run server instead of the
+        // interpreter: {target, session} where `session` is minted ONCE when
+        // the overlay opens (see _runCompiled) and sent on every prompt of
+        // the conversation — that repetition is the entire mechanism by
+        // which POST /runs resumes this conversation instead of starting a
+        // fresh one-shot run each time. null when no compiled session is
+        // open; cleared in _pbOverlayOpen's hide(), as the interpreter's
+        // session is cleared by _swarmSessionEnd.
+        this._compiledSession = null;
     }
 
     /**
@@ -5145,10 +5155,38 @@ class WorkflowEditor {
             }
         }
 
+        const dfId = 'compiled';
+
+        // A swarm's prompts are typed into the overlay's composer, one per
+        // turn — there is no single up-front prompt to ask for. Everything
+        // below this branch (_showRunPromptModal onward) is the DAG path,
+        // untouched, so a compiled DAG run stays byte-for-byte what it was.
+        if (this._isSwarm()) {
+            this.nodeExecutionData[dfId] = { pbEvents: [] };
+            let target;
+            try {
+                target = verified || await this._acquireRunTarget(root);
+                this._runTarget = target;
+            } catch (e) {
+                alert(`Could not start the workflow server: ${e?.message || e}`);
+                this._runTarget = null;
+                return;
+            }
+            // Minted ONCE, here, when the overlay opens — never regenerated
+            // per prompt. The composer's send() (in _pbOverlayOpen) rereads
+            // this same this._compiledSession.session on every turn, which
+            // is the entire mechanism by which POST /runs resumes this
+            // conversation on the run server instead of starting a fresh
+            // one-shot run each time (spec §10).
+            const sessionId = crypto.randomUUID?.() || `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            this._compiledSession = { target, session: sessionId };
+            this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], null, { session: true });
+            return;
+        }
+
         const prompt = await this._showRunPromptModal(this._startNodePrompt());
         if (prompt === null) return;
 
-        const dfId = 'compiled';
         this.nodeExecutionData[dfId] = { pbEvents: [] };
         let target;
         try {
@@ -5165,12 +5203,45 @@ class WorkflowEditor {
         }
 
         this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], prompt);
+        try {
+            await this._compiledTurn(target, prompt);
+        } finally {
+            this._runTarget = null;
+        }
+    }
+
+    /**
+     * One turn against a compiled run server: POST /runs, stream its events
+     * into the feed exactly as the DAG path always has (via
+     * _handlePlaybookEvent), and settle when a terminal frame arrives.
+     *
+     * This is steps 5-7 of what used to be _runCompiled's single inline run:
+     * POST the run, stream it, finish. Extracted so a conversation (§10) can
+     * call it once per prompt instead of once per workflow run.
+     *
+     * `session` is included in the POST body ONLY when non-null, so the DAG
+     * path (which never passes one) sends the exact same request body as
+     * before — a compiled DAG run must remain byte-for-byte what it was.
+     *
+     * Never rejects: a failure is reported into the overlay via
+     * _pbOverlayFinish(false, …), same as the DAG path always did, so a
+     * conversation turn that fails doesn't throw out of the composer.
+     */
+    async _compiledTurn(target, prompt, session = null) {
+        // Re-sync this._runTarget to the target this turn is actually
+        // running against — _handlePlaybookGate posts a gate answer to
+        // `${this._runTarget.base}/runs/${this._runTarget.runId}/tool-result`,
+        // so it must point at THIS turn's server and run id for the
+        // duration of the turn, even for a session's 2nd/3rd/... prompt.
+        this._runTarget = target;
+        const dfId = 'compiled';
         let es;
         try {
+            const body = session != null ? { prompt, session } : { prompt };
             const started = await fetch(`${target.base}/runs`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt }),
+                body: JSON.stringify(body),
             });
             if (!started.ok) throw new Error((await started.text()) || `HTTP ${started.status}`);
             const { run_id: runId } = await started.json();
@@ -5234,7 +5305,6 @@ class WorkflowEditor {
             try { es?.close(); } catch (_) { /* already closed */ }
             if (this._runCompiledEs === es) this._runCompiledEs = null;
             this._runCompiledWhat = null;
-            this._runTarget = null;
         }
     }
 
@@ -12745,6 +12815,13 @@ class WorkflowEditor {
             // A closed session starts fresh — the next Start click or Run
             // begins a new conversation rather than resuming this one.
             if (session) this._swarmSessionEnd();
+            // A compiled session belongs to this overlay, not to the
+            // interpreter's _swarmSession, so it is cleared independently —
+            // the same "closing starts fresh" rule, for the other transport.
+            if (this._compiledSession) {
+                this._compiledSession = null;
+                this._runTarget = null;
+            }
             windowCleanup?.();
             this._pbOverlayTeardown = null;
             document.getElementById('playbook-run-overlay')?.remove();
@@ -12778,7 +12855,10 @@ class WorkflowEditor {
             const input = document.getElementById('pb-ov-input');
             const sendBtn = document.getElementById('pb-ov-send');
             // Each prompt is a turn. The overlay stays open; the session
-            // decides which agent receives this one (spec §3b).
+            // decides which agent receives this one (spec §3b) — OR, when
+            // this overlay is driving a compiled run server instead of the
+            // interpreter, the transport is a POST to that server carrying
+            // the one session id minted when the overlay opened (§10).
             const send = async () => {
                 const text = input.value.trim();
                 if (!text || this._swarmBusy) return;
@@ -12788,7 +12868,12 @@ class WorkflowEditor {
                 if (sendBtn) sendBtn.disabled = true;
                 this._pbBubble('you', text);
                 try {
-                    await this._swarmTurn(text, null);
+                    const cs = this._compiledSession;
+                    if (cs) {
+                        await this._compiledTurn(cs.target, text, cs.session);
+                    } else {
+                        await this._swarmTurn(text, null);
+                    }
                 } finally {
                     this._swarmBusy = false;
                     input.disabled = false;
