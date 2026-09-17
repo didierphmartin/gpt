@@ -1112,7 +1112,8 @@
       "placeholder": "Escribe un mensaje…",
       "send": "Enviar",
       "noSession": "sin sesión",
-      "holding": "{{name}} tiene el turno"
+      "holding": "{{name}} tiene el turno",
+      "compiled": "Servidor de ejecución compilado: tu próximo mensaje continúa esta conversación."
     }
   }
 }

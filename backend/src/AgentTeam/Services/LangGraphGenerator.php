@@ -2699,7 +2699,14 @@ PY;
         // _PROMPT_KW to match; passing the wrong name is a TypeError on every
         // call, which is what the compile probe caught.
         $L[] = '        **{_PROMPT_KW: inject_datetime(INSTRUCTIONS)},';
-        $L[] = '        name=NODE["display"],';
+        // The rewrite's name, NOT NODE["display"]. create_swarm() matches
+        // agents BY NAME, and every handoff tool and DEFAULT_ACTIVE_AGENT are
+        // already emitted from SwarmRewriter's names. The two name functions
+        // differ on empty strings, non-string values and the unnamed fallback,
+        // so taking one from each source emits a graph whose handoffs point at
+        // an agent that is not in it -- a package that builds and then dies at
+        // the first hand-off.
+        $L[] = '        name=' . PythonEmitHelpers::pyStr((string) $member['name']) . ',';
         $L[] = '    )';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
@@ -2788,7 +2795,19 @@ PY;
         $L[] = 'DEFAULT_ACTIVE_AGENT = ' . PythonEmitHelpers::pyStr($entryName) . '   # the member wired to Start';
         $L[] = '# Every valid create_swarm() active_agent value -- each member\'s NODE["display"],';
         $L[] = '# the same text create_react_agent(name=...) and every HANDOFFS agent_name= use.';
-        $L[] = 'MEMBER_NAMES = {' . implode(', ', array_map(fn($e) => PythonEmitHelpers::pyStr((string) $e['display']), $members)) . '}';
+        // One source for every name in this graph: the rewrite's. See the
+        // agent emitter -- create_swarm() matches by name, so MEMBER_NAMES,
+        // DEFAULT_ACTIVE_AGENT, every agent_name= and every create_react_agent
+        // name= must all be the same strings.
+        // $members is keyed by node id and the layout entry carries NO 'id', so
+        // this must read the key, not the entry -- an $e['id'] lookup is
+        // undefined and silently falls back to the generator's own display name,
+        // which is the source this exists to stop using.
+        $memberNames = [];
+        foreach ($members as $nid => $e) {
+            $memberNames[] = PythonEmitHelpers::pyStr((string) $rw['agents'][$nid]['name']);
+        }
+        $L[] = 'MEMBER_NAMES = {' . implode(', ', $memberNames) . '}';
         $L[] = '';
         $L[] = $sep;
         $L[] = '# GRAPH -- create_swarm() returns an UNCOMPILED StateGraph; .compile() is ours.';

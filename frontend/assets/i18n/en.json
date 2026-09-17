@@ -1112,7 +1112,8 @@
       "placeholder": "Type a message…",
       "send": "Send",
       "noSession": "no session",
-      "holding": "{{name}} is holding the turn"
+      "holding": "{{name}} is holding the turn",
+      "compiled": "Compiled run server — your next message continues this conversation."
     }
   }
 }

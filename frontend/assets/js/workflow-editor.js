@@ -5084,7 +5084,13 @@ class WorkflowEditor {
      */
     _compiledRootName() {
         const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-        return `${safe}_${this._codegenOptions().mode === 'a2a' ? 'a2a' : 'modular'}`;
+        const mode = this._codegenOptions().mode === 'a2a' ? 'a2a' : 'modular';
+        // generateSwarm() returns modularLayout()'s root with '_swarm' appended,
+        // so a swarm's folder is <safe>_modular_swarm. Without this suffix the
+        // "Stop the run server" menu item posted <safe>_modular, the runner found
+        // nothing there, and a swarm's server could never be stopped -- which is
+        // the documented escape hatch out of the re-entrancy guard.
+        return this._isSwarm() ? `${safe}_${mode}_swarm` : `${safe}_${mode}`;
     }
 
     /** The Start node's saved prompt, or '' when the graph has none. */
@@ -13062,6 +13068,15 @@ class WorkflowEditor {
     _pbUpdateSwarmStatus() {
         const st = document.getElementById('pb-ov-status');
         if (!st) return;
+        // A compiled conversation is driven by the run server, so there is no
+        // _swarmSession to read an active agent from -- and reading the
+        // interpreter's would be worse than saying nothing, since it describes a
+        // different engine's state. Say where the conversation is running and
+        // stop, rather than reporting "no session" underneath a live one.
+        if (this._compiledSession) {
+            st.textContent = this.t('workflow.swarmSession.compiled');
+            return;
+        }
         const s = this._swarmSession;
         if (!s) { st.textContent = this.t('workflow.swarmSession.noSession'); return; }
         const activeId = s.activeAgent || s.rewrite.entry;
@@ -13363,14 +13378,22 @@ class WorkflowEditor {
         this.nodeExecutionData[dfId]?.pbEvents?.push(ev);
         // Compiled CONVERSATION only (this._compiledSession is set): the feed
         // whitelists message/gate_request/errors (spec: task 9). Every case
-        // below still calls _wfNodeLog unconditionally -- the node's
-        // Activity/Logs panes keep the full trace regardless of mode -- this
-        // flag only gates the extra calls that ALSO post into the overlay
+        // below still calls _wfNodeLog unconditionally -- this flag only gates
+        // the extra calls that ALSO post into the overlay
         // FEED (_pbActivity/_pbActivityDone). A one-shot compiled run and the
         // playbook-node runner never set _compiledSession, so they are
         // provably unaffected. A new event type added later gets only the
         // _wfNodeLog its `default:` case already provides -- silent in the
         // feed without needing to be added to any hide-list.
+        //
+        // Honest caveat, because the sentence removed above claimed otherwise:
+        // for a COMPILED run those _wfNodeLog calls go to
+        // nodeExecutionData['compiled'], a synthetic key with no Drawflow node
+        // behind it, so there is no Activity/Logs pane to open them in. Nothing
+        // is being hidden today -- a compiled swarm emits no
+        // tool_call/tool_result at all, since those come from the playbook
+        // runtime and a swarm canvas refuses playbook nodes -- but if this guard
+        // ever suppresses something real, that something has no reader.
         const traceInFeedOk = !this._compiledSession;
         switch (ev?.type) {
             case 'round':
@@ -13682,6 +13705,16 @@ class WorkflowEditor {
             });
         }
         this._swarmSession = null;
+        // A compiled conversation's target and session die with it too. This is
+        // the single place a conversation ends -- reached from clearWorkflow, the
+        // orchestration toggle and _openSwarmSession -- and it removes the overlay
+        // below WITHOUT going through the overlay's own hide(). Clearing
+        // _compiledSession only in hide() left it alive across a workflow switch,
+        // so the next conversation (the live interpreter's included) posted its
+        // prompts to the previous workflow's compiled run server, under the
+        // previous session id.
+        this._compiledSession = null;
+        this._runTarget = null;
         // A session with no window is a composer that still accepts prompts for
         // a swarm that no longer exists — unticking the mode or opening another
         // workflow would leave one live over the new canvas.
