@@ -636,6 +636,25 @@ Two consequences follow, and both contradict how a DAG run ends:
 - **"Run" is the wrong verb.** In swarm mode the control opens a session. The Run menu item
   reads accordingly.
 
+**The conversation surface serves compiled code too.** A compiled swarm holds a session
+(§5): its server keeps the graph and the checkpointer alive, and `POST /runs` resumes a
+conversation when it is given the same `session`. What it has no client for is a *second
+prompt* — the compiled run path asks for one prompt up front, streams one run and finishes.
+
+So the same overlay becomes the client for both. It already is, structurally: the compiled
+run path opens the very same overlay and streams the server's events into the same feed. What
+changes is that the compiled path opens it **with the composer**, mints one session id when
+the overlay opens, and sends that id with every prompt. The interpreter and the compiled
+server then differ only in transport — one calls the node executor, the other posts to a run
+server — and the user sees one conversation either way.
+
+This matters beyond convenience: the compiled session is otherwise proven only by a test
+probe. A person cannot reach it at all, which is how the interpreter shipped without a working
+session the first time.
+
+Out of scope here: **whose** session it is. The id is per-overlay, not per-user; real identity
+belongs to the multi-user spec, which is sequenced after this one and already carries it.
+
 **What v1(a) must not make harder.** Two obligations toward the compiler in v1(b):
 
 1. `orchestration` is stored on the workflow row, so both paths read one value.
