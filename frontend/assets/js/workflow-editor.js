@@ -13384,10 +13384,24 @@ class WorkflowEditor {
                 this._wfNodeLog(dfId, 'skill', `${ev.name} → ${JSON.stringify(ev.result ?? {}).slice(0, 200)}`);
                 if (traceInFeedOk) this._pbActivityDone(ev.name, (ev.result?.ok) !== false);
                 return;
-            case 'message':
+            case 'message': {
                 this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));
-                this._pbBubble('playbook', String(ev.text || ''), { sensitive: !!ev.sensitive });
+                // In a conversation the bubble is labelled with the agent that
+                // spoke (ev.agent, emitted by the swarm's run()). Without it the
+                // header reads "Playbook" over an answer from "Human resources",
+                // which contradicts the one thing the label is for. The emitter
+                // also prefixes the text with **Name** for the saved transcript
+                // and the one-shot trace, so drop that prefix here rather than
+                // showing the name twice.
+                let text = String(ev.text || '');
+                const agent = this._compiledSession ? String(ev.agent || '').trim() : '';
+                if (agent) {
+                    const prefix = `**${agent}**\n\n`;
+                    if (text.startsWith(prefix)) text = text.slice(prefix.length);
+                }
+                this._pbBubble('playbook', text, { sensitive: !!ev.sensitive, ...(agent ? { channel: agent } : {}) });
                 return;
+            }
             case 'final':
                 this._wfNodeLog(dfId, 'done', `leg ${ev.leg} ${ev.status}`);
                 return;
