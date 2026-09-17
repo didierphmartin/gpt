@@ -21,8 +21,9 @@ Three decisions, taken with the owner, define it:
 1. **A prompt re-runs the whole graph.** Not the routed branch, not from the dispatcher down —
    the whole graph, every time. The dispatcher routes afresh on each prompt, so a second prompt
    about a different subject reaches a different branch.
-2. **One bubble per turn, carrying what the end node produced.** Text, or a document plus text.
-   Not one bubble per agent: the per-node trace stays in the node panes where it already lives.
+2. **One bubble per turn, carrying what the end node produced** — verbatim. When the result is a
+   document the end node simply says it produced one. Not one bubble per agent: the per-node
+   trace stays in the node panes where it already lives.
 3. **A document opens in its own overlay**, the viewer that exists today, lifted out of the
    results modal.
 
@@ -89,7 +90,7 @@ one-shot run and wrong for a conversation:
 | shown | |
 |---|---|
 | the turn's reply | one bubble, the end node's output |
-| a document produced | named in the bubble; the document itself opens in its own overlay |
+| a document produced | the end node's own words say so; the document opens in its own overlay |
 | gate requests | a playbook node asking a human; hiding it would deadlock the turn |
 | errors | a failed turn says so |
 
@@ -151,6 +152,12 @@ there is nothing for the server to remember, and keeping the transcript client-s
 simpler and truer to what a DAG is. `MemorySaver` and `active_agent` have no role here.
 
 ## 7. What is shared with the swarm, and what differs
+
+**One overlay serves all three modes**, and the client-owned transcript is what makes that
+possible: the interpreter, a compiled swarm and a compiled batch workflow all speak the same
+`POST /runs` + SSE protocol, so the surface does not need to know which is behind it. A
+server-side transcript for one mode and a client-side one for another would have forced the
+overlay to branch on transport, and a surface that branches is a surface that drifts.
 
 Shared, and must stay shared rather than forked:
 
