@@ -10772,7 +10772,6 @@ class WorkflowEditor {
                 <div class="node-body">
                     <span class="node-timer">0:00</span>
                     ${providerDisplay}
-                    <span class="node-fork-badge" style="display:none;"></span>
                 </div>
                 <div class="node-documents-zone">
                     <div class="documents-list"></div>
@@ -11670,6 +11669,12 @@ class WorkflowEditor {
 
         // Render any existing documents attached to nodes
         this.renderAllNodeDocuments(nodes, idMap);
+
+        // Badges LAST, once the edges exist. Every node arrives before any
+        // connection does, so the nodeCreated recompute sees an out-degree of
+        // zero for all of them and hides every badge; without this pass a
+        // loaded workflow shows no fork markers at all.
+        this._updateForkBadges();
     }
 
     /**
@@ -11713,7 +11718,6 @@ class WorkflowEditor {
                 </div>
                 <div class="node-body">
                     <small>${this.t('workflow.messages.userPromptInput')}</small>
-                    <span class="node-fork-badge" style="display:none;"></span>
                     <button class="node-play-btn" title="${this.t('workflow.runWorkflow')}">▶</button>
                 </div>
                 <div class="node-documents-zone">
@@ -13910,8 +13914,22 @@ class WorkflowEditor {
         const nodes = this.editor?.drawflow?.drawflow?.Home?.data;
         if (!nodes) return;
         for (const id of Object.keys(nodes)) {
-            const el = this.container?.querySelector(`#node-${id} .node-fork-badge`);
-            if (!el) continue;
+            const host = this.container?.querySelector(`#node-${id}`);
+            if (!host) continue;
+            // This method OWNS the element rather than every node template
+            // carrying one. There are several builders — the palette drag, the
+            // shared body helper, the load path's own markup, templates,
+            // playbook and ingestion variants — and the first cut of this
+            // feature put the span in two of them, so a workflow loaded from
+            // the database showed no badge at all. Creating it here means a
+            // template added later cannot forget it.
+            let el = host.querySelector('.node-fork-badge');
+            if (!el) {
+                el = document.createElement('span');
+                el.className = 'node-fork-badge';
+                el.style.display = 'none';
+                (host.querySelector('.node-body') || host).appendChild(el);
+            }
             const badge = this._forkBadgeFor(id, nodes);
             if (!badge) { el.style.display = 'none'; continue; }
             el.style.display = 'inline-flex';
