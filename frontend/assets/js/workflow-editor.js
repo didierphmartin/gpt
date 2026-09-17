@@ -14184,7 +14184,17 @@ class WorkflowEditor {
         return runResult;
     }
 
-    async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false } = {}) {
+    /**
+     * `conversation` (spec §3a): the run's answer is going into the
+     * conversation overlay as one bubble, so the results modal must not also
+     * pop. Everything else about the walk is identical — a batch turn IS an
+     * ordinary batch run; the only difference is where its answer is rendered.
+     *
+     * lastWorkflowResults is still set either way: clicking the Output node
+     * re-opens the full per-node trace in the modal, and that door stays open
+     * in conversation mode (the bubble is the answer, not the trace).
+     */
+    async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false, conversation = false } = {}) {
         this.lastUserPrompt = userPrompt;
         if (this._isSwarm()) {
             // A swarm has no topological order, so neither caller can walk it —
@@ -14265,6 +14275,21 @@ class WorkflowEditor {
                         // with no output so a downstream merge is not blocked.
                         if (res?.route && dispatchTargets?.length) {
                             this._wfRoutedBy[String(res.route.id)] = { from: agentName, notes: res.route.notes || '' };
+                            // §3c — a dispatcher choosing a branch is why this
+                            // answer and not another. The conversation overlay
+                            // renders it as one thin line; every other caller
+                            // ignores an event type it does not know.
+                            try {
+                                onProgress?.({
+                                    type: 'route',
+                                    node_id: String(res.route.id),
+                                    to: nodes[res.route.id]?.data?.agent_name
+                                        || nodes[res.route.id]?.data?.name
+                                        || `node ${res.route.id}`,
+                                    from: agentName,
+                                    notes: res.route.notes || '',
+                                });
+                            } catch (_) {}
                             const unchosen = this._wfDownstreamIds(id, nodes).filter(d => String(d) !== String(res.route.id));
                             for (const s of this._wfSkipSet(unchosen, nodes)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
@@ -14313,7 +14338,8 @@ class WorkflowEditor {
             nodes_executed: done.size,
             response_time_ms: Date.now() - _wfStartedAt,
         };
-        if (typeof this.showWorkflowResults === 'function' && finalOutput) {
+        this.lastWorkflowResults = runResult;
+        if (!conversation && typeof this.showWorkflowResults === 'function' && finalOutput) {
             // Pass real run metadata — without success/nodes_executed/response_time_ms
             // the results modal defaulted to "❌ Workflow Failed / 0 nodes / 0.0s"
             // even though the run finished and produced this output.
