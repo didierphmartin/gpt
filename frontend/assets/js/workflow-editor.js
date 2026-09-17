@@ -5177,11 +5177,13 @@ class WorkflowEditor {
 
         const dfId = 'compiled';
 
-        // A swarm's prompts are typed into the overlay's composer, one per
-        // turn — there is no single up-front prompt to ask for. Everything
-        // below this branch (_showRunPromptModal onward) is the DAG path,
-        // untouched, so a compiled DAG run stays byte-for-byte what it was.
-        if (this._isSwarm()) {
+        // Every compiled run is a conversation (spec §5): a compiled swarm and
+        // a compiled batch workflow open the same window over the same scrim
+        // and talk to the same POST /runs + SSE server. What differs is one
+        // field on the session (`mode`), read by the feed filter and by the
+        // turn's terminal frame. There is no second path below any more — see
+        // the plan's ruling; the prompt modal is the composer now.
+        {
             this.nodeExecutionData[dfId] = { pbEvents: [] };
             let target;
             // Up FIRST, before the await. _acquireRunTarget spawns the generated
@@ -5216,50 +5218,26 @@ class WorkflowEditor {
             // button's own tooltip has always said "run continues"), so Run and
             // the Start node must resume it — a new id here would strand the
             // thread the run server is still holding under the old one.
+            const convMode = this._isSwarm() ? 'swarm' : 'batch';
             const live = this._compiledSession;
             if (!live || live.workflowId !== this.currentWorkflowId) {
                 this._compiledSession = {
                     target, session: sessionId, framework: frameworkLabel,
-                    workflowId: this.currentWorkflowId,
-                    // The server owns the conversation; this is the client's
-                    // copy, kept only so a reopened overlay can show what was
-                    // already said rather than an empty feed.
-                    transcript: [],
+                    workflowId: this.currentWorkflowId, mode: convMode,
+                    // Swarm only: the server owns the conversation and this is
+                    // the client's copy, kept so a reopened overlay shows what
+                    // was already said. A batch conversation has NO transcript
+                    // — nothing survives a turn (spec §1) — so the field is
+                    // absent, and send()'s optional-chained push records
+                    // nothing rather than needing a second branch.
+                    ...(convMode === 'swarm' ? { transcript: [] } : {}),
                 };
             } else {
                 live.target = target;          // the port can change between runs
             }
             this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], null,
-                { session: true, replay: this._compiledSession.transcript });
+                { session: true, mode: convMode, replay: this._compiledSession.transcript || null });
             return;
-        }
-
-        const prompt = await this._showRunPromptModal(this._startNodePrompt());
-        if (prompt === null) return;
-
-        this.nodeExecutionData[dfId] = { pbEvents: [] };
-        let target;
-        try {
-            // The override's target was verified before the prompt modal
-            // opened; re-reading this._runTarget here instead would see the
-            // null this method leaves behind and fall through to
-            // _acquireRunTarget(null), which alerts "Invalid workflow folder".
-            target = verified || await this._acquireRunTarget(root);
-            this._runTarget = target;
-            // `framework` (Task 10): a one-shot DAG run has no _compiledSession,
-            // so the scrim reads this straight off this._runTarget instead.
-            target.framework = frameworkLabel;
-        } catch (e) {
-            alert(`Could not start the workflow server: ${e?.message || e}`);
-            this._runTarget = null;
-            return;
-        }
-
-        this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], prompt);
-        try {
-            await this._compiledTurn(target, prompt);
-        } finally {
-            this._runTarget = null;
         }
     }
 
@@ -5327,8 +5305,17 @@ class WorkflowEditor {
                         // status-line-as-answer this task removes. Same rule the
                         // interpreter's _swarmTurn already follows: a turn ending
                         // renders a bubble, not a run-finished banner.
-                        if (!this._compiledSession) {
+                        const cs = this._compiledSession;
+                        if (!cs) {
                             this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
+                        } else if (cs.mode === 'batch') {
+                            // The whole answer, verbatim, in one bubble — this
+                            // frame's `output` is run_workflow()'s return, i.e.
+                            // the end node's output (spec §3c). A compiled
+                            // swarm instead got its answer as a labelled
+                            // `message` bubble on the way past, so it wants
+                            // nothing here.
+                            this._pbBubble('agent', String(ev.output || this.t('workflow.batchSession.failed')));
                         }
                         resolve();
                     } catch (e) { reject(e); }
@@ -5574,9 +5561,12 @@ class WorkflowEditor {
         // whole Python package, writing it to disk, probing the runner --
         // runs before _runCompiled is even called, and none of it was on
         // screen. Showing the wait when the run server starts was showing it
-        // near the END of the wait. Swarm only: a compiled DAG run's timing
-        // is left exactly as it was.
-        if (this._isSwarm()) this._showCompiledScrim(this.t('workflow.toolbar.compileLangGraph'), 'preparing');
+        // near the END of the wait.
+        // Both conversational modes get the wait on screen from the click.
+        // Everything below — persisting, regenerating the whole package,
+        // writing it to disk, probing the runner — happens before _runCompiled
+        // is even called, and none of it used to be visible.
+        this._showCompiledScrim(this.t('workflow.toolbar.compileLangGraph'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             this._hideCompiledScrim();
@@ -5598,11 +5588,12 @@ class WorkflowEditor {
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }
-        if (!filename) return;
+        if (!filename) { this._hideCompiledScrim(); return; }
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
             if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
         } catch (e) {
+            this._hideCompiledScrim();
             this._showRunnerNotRunningModal();
             return;
         }
@@ -13024,10 +13015,18 @@ class WorkflowEditor {
                 this._swarmBusy = true;
                 input.disabled = true;
                 if (sendBtn) sendBtn.disabled = true;
-                // In batch mode the TURN owns the feed: _batchTurn clears it
-                // and renders the prompt itself, so rendering one here would
-                // be erased a moment later (spec §3a).
-                if (this._pbSessionMode !== 'batch') this._pbBubble('you', text);
+                // In batch mode the TURN owns the feed: the interpreter's
+                // _batchTurn clears it and renders the prompt itself, so
+                // rendering one here would be erased a moment later (spec
+                // §3a). A COMPILED batch turn goes through _compiledTurn
+                // instead, which does not clear-and-render — so do it here
+                // for that path only. Both end up with the same feed: the
+                // prompt, then one answer.
+                if (this._pbSessionMode === 'batch') {
+                    if (this._compiledSession) { this._pbClearFeed(); this._pbBubble('you', text); }
+                } else {
+                    this._pbBubble('you', text);
+                }
                 // The compiled session's client-side copy: without it a hidden
                 // and reopened conversation shows an empty feed while the server
                 // happily continues the thread. A batch conversation has no
@@ -13636,6 +13635,13 @@ class WorkflowEditor {
                 return;
             case 'message': {
                 this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));
+                // Spec §3c — a compiled DAG emits one `message` per node
+                // (the generated workflow.py does this for the one-shot
+                // trace). In a batch CONVERSATION the feed shows one bubble:
+                // the end node's output, rendered from the terminal frame in
+                // _compiledTurn. The per-node text is still logged above, so
+                // nothing is lost — only the feed is quiet.
+                if (this._compiledSession?.mode === 'batch') return;
                 // In a conversation the bubble is labelled with the agent that
                 // spoke (ev.agent, emitted by the swarm's run()). Without it the
                 // header reads "Playbook" over an answer from "Human resources",
@@ -13948,6 +13954,12 @@ class WorkflowEditor {
         // previous session id.
         this._compiledSession = null;
         this._runTarget = null;
+        // Stale-state guard: this teardown already nulls _swarmSession and
+        // _compiledSession, but left _pbSessionMode behind — the same class
+        // of bug _compiledSession itself had earlier. Not exploitable today
+        // (a fresh _pbOverlayOpen always sets it before it's read), but it
+        // belongs with the other session fields this method clears.
+        this._pbSessionMode = null;
         // Task 10: this is the ONLY teardown for a compiled-session overlay
         // that ends up here WITHOUT going through the overlay's own hide()
         // (clearWorkflow, the orchestration toggle, _openSwarmSession
