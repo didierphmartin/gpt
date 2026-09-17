@@ -3504,7 +3504,7 @@ class WorkflowEditor {
             // Hand the verified target over explicitly: _runCompiled clears
             // this._runTarget on its own early exits, so re-reading the field
             // there would find null and try to spawn the folder `null`.
-            await this._runCompiled(null, target);
+            await this._runCompiled(null, target, this.t('workflow.toolbar.compileLangGraph'));
         });
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
@@ -5124,8 +5124,15 @@ class WorkflowEditor {
      * playbook run can never inherit a stale compiled target (which would
      * both mislabel its overlay badge and send its gate answers to a
      * `{staleBase}/runs/undefined/tool-result` 404, hanging the run).
+     *
+     * `framework` (Task 10) is the display label for the compile-menu entry
+     * that led here (e.g. the `workflow.toolbar.compileLangGraph` string,
+     * "LangGraph") — the compiled-run scrim names it in "Running {framework}
+     * compiled code". Every call site today comes from the LangGraph menu,
+     * so a caller that omits it still gets that label rather than "null".
      */
-    async _runCompiled(root, verified = null) {
+    async _runCompiled(root, verified = null, framework = null) {
+        const frameworkLabel = framework || this.t('workflow.toolbar.compileLangGraph') || 'LangGraph';
         // Re-entrancy guard (a second Run while one is in flight). There is no
         // cancel route on the run server, so closing run 1's EventSource would
         // NOT stop run 1: it keeps making LLM calls, and run 2 then blocks on
@@ -5173,6 +5180,7 @@ class WorkflowEditor {
             try {
                 target = verified || await this._acquireRunTarget(root);
                 this._runTarget = target;
+                target.framework = frameworkLabel;
             } catch (e) {
                 alert(`Could not start the workflow server: ${e?.message || e}`);
                 this._runTarget = null;
@@ -5185,7 +5193,10 @@ class WorkflowEditor {
             // conversation on the run server instead of starting a fresh
             // one-shot run each time (spec §10).
             const sessionId = crypto.randomUUID?.() || `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            this._compiledSession = { target, session: sessionId };
+            // `framework` (Task 10): the compiled-run scrim's label. Carried
+            // on the session (not just this._runTarget) so it survives a
+            // later turn re-reading cs.framework off _compiledSession alone.
+            this._compiledSession = { target, session: sessionId, framework: frameworkLabel };
             this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], null, { session: true });
             return;
         }
@@ -5202,6 +5213,9 @@ class WorkflowEditor {
             // _acquireRunTarget(null), which alerts "Invalid workflow folder".
             target = verified || await this._acquireRunTarget(root);
             this._runTarget = target;
+            // `framework` (Task 10): a one-shot DAG run has no _compiledSession,
+            // so the scrim reads this straight off this._runTarget instead.
+            target.framework = frameworkLabel;
         } catch (e) {
             alert(`Could not start the workflow server: ${e?.message || e}`);
             this._runTarget = null;
@@ -5538,7 +5552,7 @@ class WorkflowEditor {
             let data;
             try { data = await this._writeManifest(codegenMode); }
             catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
-            return this._runCompiled(data.root);
+            return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileLangGraph'));
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }
@@ -5674,7 +5688,7 @@ class WorkflowEditor {
                 return;
             }
             close();
-            this._runCompiled(root);
+            this._runCompiled(root, null, this.t('workflow.toolbar.compileLangGraph'));
         });
     }
 
@@ -12761,6 +12775,35 @@ class WorkflowEditor {
         }
     }
 
+    /**
+     * Task 10 — the "canvas is inert" scrim shown ONLY while compiled code is
+     * running (a separate Python process; no node here will ever light up).
+     * Never shown for a live-interpreter run, where the canvas DOES react
+     * (node highlights, the turn-holder chip) and dimming it would hide that
+     * feedback. Covers #workflow-canvas only, not the viewport, so the app's
+     * own tab bar above it stays usable; z-index sits above the canvas
+     * content and below .storage-config-overlay (10000) so the conversation
+     * overlay stays fully on top and fully draggable/resizable over it.
+     */
+    _showCompiledScrim(framework) {
+        const scrim = document.getElementById('workflow-compiled-scrim');
+        const msg = document.getElementById('workflow-compiled-scrim-message');
+        if (!scrim || !msg) return;
+        msg.textContent = this.t('workflow.compiledScrim.running', { framework: framework || 'compiled' });
+        scrim.style.display = 'flex';
+    }
+
+    /**
+     * Idempotent by design (safe to call when the scrim was never shown) so
+     * every teardown path — the overlay's own hide() and _swarmSessionEnd(),
+     * the single choke point for ending a conversation — can call this
+     * unconditionally rather than each having to know whether a scrim is up.
+     */
+    _hideCompiledScrim() {
+        const scrim = document.getElementById('workflow-compiled-scrim');
+        if (scrim) scrim.style.display = 'none';
+    }
+
     // ---- Playbook conversation overlay ------------------------------------
     // Live chat-style feed of a playbook run (user request, tool activity,
     // playbook messages, inline gates, final resolution). Opens by default
@@ -12824,6 +12867,18 @@ class WorkflowEditor {
                 </div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
+        // Task 10 — the compiled-only scrim. this._runTarget is set for BOTH
+        // compiled paths that reach this method (the swarm-session branch and
+        // the one-shot DAG branch of _runCompiled) and stays null for every
+        // live-interpreter call (this method, the playbook-node runner, and
+        // _openSwarmSession never touch it) — so it is the one signal that
+        // already means exactly "compiled code is running", with no new state
+        // needed. The framework label rides on whichever object actually
+        // carries it: the session for a compiled conversation, the target
+        // itself for a one-shot compiled run.
+        if (this._runTarget) {
+            this._showCompiledScrim(this._compiledSession?.framework || this._runTarget?.framework);
+        }
         // Set by _pbInitOverlayWindow() below (session only) — hide() must
         // tear down its listeners/observer before the overlay is removed,
         // or they leak across sessions.
@@ -12839,6 +12894,15 @@ class WorkflowEditor {
                 this._compiledSession = null;
                 this._runTarget = null;
             }
+            // Task 10: the × and the Hide button both route here, and this is
+            // the ONLY teardown for a one-shot compiled DAG run's overlay (it
+            // has no session, so the branch above never runs for it) — so the
+            // scrim is cleared unconditionally, not just when a session ends.
+            // Idempotent: a no-op when the scrim was never shown (a live
+            // interpreter overlay). Deliberately fires even while the run is
+            // still in flight server-side — the scrim describes the canvas
+            // being inactive, not the run being finished.
+            this._hideCompiledScrim();
             windowCleanup?.();
             this._pbOverlayTeardown = null;
             document.getElementById('playbook-run-overlay')?.remove();
@@ -13715,6 +13779,16 @@ class WorkflowEditor {
         // previous session id.
         this._compiledSession = null;
         this._runTarget = null;
+        // Task 10: this is the ONLY teardown for a compiled-session overlay
+        // that ends up here WITHOUT going through the overlay's own hide()
+        // (clearWorkflow, the orchestration toggle, _openSwarmSession
+        // replacing a stale session) — so the scrim must be cleared here too,
+        // not just in hide(), or one of those paths would leave it dimming a
+        // canvas whose overlay is already gone. Idempotent: a no-op when the
+        // scrim was never shown. Optional chaining: the transcript-harness
+        // stubs this class without _hideCompiledScrim, and this method must
+        // still run clean (same rule as _applyOrchestrationToCanvas below).
+        this._hideCompiledScrim?.();
         // A session with no window is a composer that still accepts prompts for
         // a swarm that no longer exists — unticking the mode or opening another
         // workflow would leave one live over the new canvas.

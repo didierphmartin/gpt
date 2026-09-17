@@ -609,6 +609,9 @@
       "compileMaf": "MAF (Microsoft)",
       "compileNooa": "NOOA (NVIDIA)"
     },
+    "compiledScrim": {
+      "running": "Running {{framework}} Python compiled code"
+    },
     "dialogs": {
       "renameWorkflowTitle": "Rename workflow",
       "renameWorkflowPrompt": "Enter a new name for this workflow:",
