@@ -14105,6 +14105,34 @@ class WorkflowEditor {
         return 'agent';
     }
 
+    /**
+     * The Output node's value: the workflow's answer.
+     *
+     * NOT _wfBuildContext(). That builds an agent's INPUT, where labelling each
+     * parent "## Name" is right — the agent is being told where each piece came
+     * from. The Output node is the workflow's result, and a lone parent's text
+     * is the result, verbatim. Labelling it there put a "## Journalist" heading
+     * in front of every single-agent workflow's answer, and in front of a
+     * produced HTML document, which is how "my newspaper journal" ended up
+     * rendering markup into the conversation.
+     *
+     * The compiled engine has always had this rule (LangGraphGenerator's output
+     * node: one parent verbatim, several as "## source" blocks joined by ---).
+     * The interpreter was the odd one out, so the two engines disagreed about
+     * the ANSWER, not merely its formatting. This is the compiled behaviour,
+     * matched exactly — including the blank line after each heading and the
+     * "---" separator.
+     */
+    _wfOutputValue(nodeId, nodes) {
+        const ups = this._wfUpstreamIds(nodeId, nodes)
+            .filter(u => { const o = this._wfOutputs?.[u]; return o != null && o !== ''; });
+        if (ups.length === 1) return String(this._wfOutputs[ups[0]]);
+        return ups.map(u => {
+            const name = nodes[u]?.data?.agent_name || nodes[u]?.data?.name || `node ${u}`;
+            return `## ${name}\n\n${this._wfOutputs[u]}`;
+        }).join('\n\n---\n\n');
+    }
+
     _wfBuildContext(nodeId, nodes) {
         const ups = this._wfUpstreamIds(nodeId, nodes);
         const parts = [];
@@ -14707,7 +14735,7 @@ class WorkflowEditor {
                         this._wfOutputs[id] = 'disabled node';
                         this.highlightNode(id, 'completed', id, 'agent');
                     } else if (this._wfNodeKind(id, nodes) === 'output') {
-                        this._wfOutputs[id] = this._wfBuildContext(id, nodes);
+                        this._wfOutputs[id] = this._wfOutputValue(id, nodes);
                     } else {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;

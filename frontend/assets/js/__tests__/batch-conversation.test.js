@@ -41,7 +41,12 @@ const NODES = {
     '5': { data: {} },
 };
 
-const methodSrc = [extract('    async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false')].join(',\n');
+const methodSrc = [
+    extract('    async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false'),
+    // The REAL output-node rule: the run's answer depends on it, so a harness
+    // copy would pin the harness rather than the product.
+    extract('    _wfOutputValue(nodeId, nodes) {'),
+].join(',\n');
 
 global.window = {};
 if (typeof globalThis.document === 'undefined') globalThis.document = { getElementById: () => null };
@@ -621,6 +626,42 @@ asyncCheck('prose naming an html tag is still an answer, not a document', async 
     await ed._batchTurn('how do I embed it');
     assert.strictEqual(ed.opened.length, 0, 'prose opened the viewer');
     assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, prose);
+});
+
+// ---- the Output node aggregates; it does not label a lone parent --------
+// The compiled engine has always done this (LangGraphGenerator: one parent ->
+// verbatim, several -> "## source" blocks joined by ---). The interpreter used
+// _wfBuildContext for the output node too, which labels EVERY agent parent —
+// so every single-agent workflow's answer carried a spurious "## Name"
+// heading the compiled build did not, and an HTML document arrived behind it.
+const outSrc = extract('    _wfOutputValue(nodeId, nodes) {');
+
+function makeOutputEditor(outputs) {
+    const obj = eval('({ ' + outSrc + ' })');
+    Object.assign(obj, {
+        _wfOutputs: outputs,
+        _wfUpstreamIds(id) { return Object.keys(EDGES).filter(k => EDGES[k].includes(String(id))); },
+        _wfNodeKind: (id) => KIND[String(id)],
+    });
+    return obj;
+}
+
+asyncCheck('one parent reaches the output verbatim, unlabelled', () => {
+    const html = '<!DOCTYPE html>\n<html><body>hi</body></html>';
+    // Node 5 (output) has parents 3 and 4; give only 3 an output.
+    const ed = makeOutputEditor({ '3': html });
+    assert.strictEqual(ed._wfOutputValue('5', NODES), html);
+});
+
+asyncCheck('several parents are labelled and separated, as the compiler does', () => {
+    const ed = makeOutputEditor({ '3': 'alpha', '4': 'beta' });
+    assert.strictEqual(ed._wfOutputValue('5', NODES),
+        '## IT claims\n\nalpha\n\n---\n\n## HR claims\n\nbeta');
+});
+
+asyncCheck('no parent produced anything', () => {
+    const ed = makeOutputEditor({});
+    assert.strictEqual(ed._wfOutputValue('5', NODES), '');
 });
 
 (async () => {
