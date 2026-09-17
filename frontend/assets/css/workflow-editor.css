@@ -2732,6 +2732,20 @@ svg.connection.wf-edge-chosen .main-path {
     height: 84vh;
     max-width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
+    /* A document window is read beside the conversation, so it moves and
+       resizes exactly as that one does — same machinery, its own remembered
+       place. A lower floor than the conversation's 420px: a document is often
+       read in a short wide strip, where a transcript is not. */
+    min-height: 240px;
+    resize: both;
+    overflow: hidden;
+}
+
+/* Grab handle, matching the conversation window. The close button keeps
+   working — _pbInitOverlayWindow's pointerdown handler ignores buttons. */
+.wf-document-window .storage-config-header {
+    cursor: move;
+    user-select: none;
 }
 
 /* ============================================

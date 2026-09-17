@@ -13135,8 +13135,13 @@ class WorkflowEditor {
      * must call it before removing the overlay so the window-resize
      * listener and the ResizeObserver don't outlive it.
      */
-    _pbInitOverlayWindow() {
-        const overlay = document.getElementById('playbook-run-overlay');
+    _pbInitOverlayWindow({
+        overlayId = 'playbook-run-overlay',
+        storageKey = 'wf:swarm-overlay:rect:v5',
+        minW = 320,
+        minH = 420,
+    } = {}) {
+        const overlay = document.getElementById(overlayId);
         const modal = overlay?.querySelector('.storage-config-modal');
         const header = overlay?.querySelector('.storage-config-header');
         if (!overlay || !modal || !header) return () => {};
@@ -13145,7 +13150,9 @@ class WorkflowEditor {
         // conversation), and a rect saved under the old default would silently
         // win over it forever. Bumping the key retires those once; everything
         // the user sizes from here on is remembered as before.
-        const STORAGE_KEY = 'wf:swarm-overlay:rect:v5'; // per-viewer, per-purpose
+        // Per viewer, per WINDOW: the conversation and the document viewer are
+        // two windows on the same canvas and must remember their own places.
+        const STORAGE_KEY = storageKey;
 
         // Private windows, cleared site data, and storage blocked by browser
         // policy all make localStorage fail — sometimes by throwing on the
@@ -13194,7 +13201,7 @@ class WorkflowEditor {
         // The CSS floor, mirrored here. A measurement below it is never a size
         // the user chose — `resize: both` cannot go under min-width/min-height
         // — so it can only have come from a transient layout state.
-        const MIN_W = 320, MIN_H = 420;
+        const MIN_W = minW, MIN_H = minH;
 
         const persist = () => {
             // A detached element reports 0x0, and Chrome fires exactly that at a
@@ -15504,6 +15511,9 @@ class WorkflowEditor {
      */
     _openDocumentOverlay(artifact) {
         if (!artifact) return;
+        // A later turn replaces this window; its listeners must not outlive it.
+        this._documentWindowCleanup?.();
+        this._documentWindowCleanup = null;
         document.getElementById('workflow-document-overlay')?.remove();
         const rootName = window.chatApp?._fsaRootName || 'storage';
         const rel = artifact.relPath || '';
@@ -15523,9 +15533,30 @@ class WorkflowEditor {
             </div>`);
         const host = document.getElementById('workflow-document-content');
         this._renderArtifactInto(host, artifact);
-        document.getElementById('workflow-document-close')?.addEventListener('click', () => {
-            document.getElementById('workflow-document-overlay')?.remove();
+
+        // Same window machinery as the conversation — drag by the header,
+        // native resize grip, clamped into the viewport, geometry remembered.
+        // Its own storage key, because the two windows sit side by side and
+        // each has its own place. A lower height floor than the conversation's:
+        // a document is often read in a short wide strip, where a transcript is
+        // not.
+        this._documentWindowCleanup?.();
+        this._documentWindowCleanup = this._pbInitOverlayWindow({
+            overlayId: 'workflow-document-overlay',
+            storageKey: 'wf:document-overlay:rect:v1',
+            minW: 320,
+            minH: 240,
         });
+
+        const close = () => {
+            // Tear the listeners and the ResizeObserver down BEFORE removing the
+            // element: they are bound to a modal that is about to detach, and
+            // leaving them alive leaked one set per document a run produced.
+            this._documentWindowCleanup?.();
+            this._documentWindowCleanup = null;
+            document.getElementById('workflow-document-overlay')?.remove();
+        };
+        document.getElementById('workflow-document-close')?.addEventListener('click', close);
     }
 
     /**
