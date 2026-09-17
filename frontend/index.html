@@ -3643,9 +3643,12 @@
 
                         <!-- Persistent Reset control, pinned top-left of the canvas.
                              Clears run state (node highlights, timers, captured
-                             results) without deleting nodes. z-20 keeps it above
-                             the help overlay (z-10). -->
-                        <div class="absolute top-3 left-3 z-20 flex items-center gap-2">
+                             results) without deleting nodes. z-[600] keeps it
+                             above the help overlay (z-10) AND above the
+                             compiled-run scrim (z-[500]): the canvas is dimmed
+                             and inert while compiled code runs, but this strip
+                             stays operable. -->
+                        <div class="absolute top-3 left-3 z-[600] flex items-center gap-2">
                             <button id="workflow-reset-top-btn"
                                     class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 active:translate-y-px active:scale-95 transition flex items-center gap-1"
                                     title="Reset run state — clears node highlights, timers, and last results (keeps your nodes)">
@@ -3682,7 +3685,12 @@
                              pointer-events-none), this one must swallow canvas clicks, so it
                              keeps the default pointer-events: auto. -->
                         <div id="workflow-compiled-scrim" class="absolute inset-0 z-[500] items-center justify-center bg-black/50" style="display:none;">
-                            <p id="workflow-compiled-scrim-message" class="text-white text-sm font-semibold bg-gray-900/90 px-4 py-2 rounded-lg shadow-lg"></p>
+                            <div class="flex items-center gap-3 bg-gray-900/90 px-4 py-2 rounded-lg shadow-lg">
+                                <span id="workflow-compiled-scrim-spinner"
+                                      class="inline-block h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin"
+                                      style="display:none;"></span>
+                                <p id="workflow-compiled-scrim-message" class="text-white text-sm font-semibold"></p>
+                            </div>
                         </div>
 
                         <!-- Help overlay (disappears when nodes are added) -->
@@ -4226,7 +4234,7 @@
     <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
-    <script src="assets/js/workflow-editor.js?v=20260917-height3"></script>
+    <script src="assets/js/workflow-editor.js?v=20260917-scrimphase"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>

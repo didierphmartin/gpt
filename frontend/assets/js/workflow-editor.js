@@ -5177,11 +5177,19 @@ class WorkflowEditor {
         if (this._isSwarm()) {
             this.nodeExecutionData[dfId] = { pbEvents: [] };
             let target;
+            // Up FIRST, before the await. _acquireRunTarget spawns the generated
+            // package's uvicorn process and waits for it to answer, which is
+            // seconds — and until now nothing appeared on screen for all of it,
+            // so the editor looked hung rather than busy. The scrim doubles as
+            // the progress indicator: same surface, two phases.
+            this._showCompiledScrim(frameworkLabel, 'starting');
             try {
                 target = verified || await this._acquireRunTarget(root);
                 this._runTarget = target;
                 target.framework = frameworkLabel;
             } catch (e) {
+                // Take the scrim back down: the canvas never became inert.
+                this._hideCompiledScrim();
                 alert(`Could not start the workflow server: ${e?.message || e}`);
                 this._runTarget = null;
                 return;
@@ -12803,11 +12811,18 @@ class WorkflowEditor {
      * content and below .storage-config-overlay (10000) so the conversation
      * overlay stays fully on top and fully draggable/resizable over it.
      */
-    _showCompiledScrim(framework) {
+    _showCompiledScrim(framework, phase = 'running') {
         const scrim = document.getElementById('workflow-compiled-scrim');
         const msg = document.getElementById('workflow-compiled-scrim-message');
         if (!scrim || !msg) return;
-        msg.textContent = this.t('workflow.compiledScrim.running', { framework: framework || 'compiled' });
+        // 'starting' covers the wait while the runner spawns the generated
+        // package's uvicorn process — several seconds during which nothing was
+        // on screen at all, so the editor looked hung rather than busy.
+        const starting = phase === 'starting';
+        const key = starting ? 'workflow.compiledScrim.starting' : 'workflow.compiledScrim.running';
+        msg.textContent = this.t(key, { framework: framework || 'compiled' });
+        const spin = document.getElementById('workflow-compiled-scrim-spinner');
+        if (spin) spin.style.display = starting ? 'inline-block' : 'none';
         scrim.style.display = 'flex';
     }
 

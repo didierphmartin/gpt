@@ -610,7 +610,8 @@
       "compileNooa": "NOOA (NVIDIA)"
     },
     "compiledScrim": {
-      "running": "Running {{framework}} Python compiled code"
+      "running": "Running {{framework}} Python compiled code",
+      "starting": "Starting the {{framework}} run server — this can take a few seconds…"
     },
     "dialogs": {
       "renameWorkflowTitle": "Rename workflow",
