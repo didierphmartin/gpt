@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AgentTeam\Services;
 
+use RuntimeException;
 use PDO;
 
 /**
@@ -34,6 +35,18 @@ class ADKGenerator
      */
     public function generate(int $workflowId, ?string $userId = null): array
     {
+        // A swarm is a different architecture, not a packaging choice: one active
+        // agent at a time with control moving by hand-off, against this target's
+        // topological walk. Compiling it here would silently emit Start's fan-out
+        // as concurrent execution -- the DAG reading of a canvas that means
+        // something else. ADK can express a swarm and is planned (spec §9); it is not built yet.
+        $wfForArch = $this->workflowRepo->findById($workflowId);
+        if ($wfForArch && $wfForArch->getOrchestration() === 'swarm') {
+            throw new RuntimeException(
+                'This workflow is set to swarm orchestration, which ADK cannot compile. '
+                . 'Compile it with LangGraph, or switch the workflow to "workflow" orchestration.'
+            );
+        }
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
 
