@@ -61,6 +61,11 @@ class Workflow:
         self.outputStorageEnabled: bool = False
         self.outputFolder: str | None = None
 
+        # How the graph is interpreted: a DAG ('workflow') or a swarm of
+        # agents handing control to one another ('swarm'). Anything else
+        # falls back — an unknown value must not change how a graph runs.
+        self.orchestration: str = 'workflow'
+
         # Graph structure (normalized nodes/edges from database)
         self.graph: dict | None = None
 
@@ -89,6 +94,12 @@ class Workflow:
         self.outputStorageEnabled = php_bool(output_storage_enabled if output_storage_enabled is not None else False)
         self.outputFolder = data.get('output_folder') if data.get('output_folder') is not None else None
 
+        # How the graph is interpreted: a DAG ('workflow') or a swarm of
+        # agents handing control to one another ('swarm'). Anything else
+        # falls back — an unknown value must not change how a graph runs.
+        o = php_strval(data.get('orchestration') if data.get('orchestration') is not None else 'workflow')
+        self.orchestration = o if o in ('workflow', 'swarm') else 'workflow'
+
         return self
 
     def toArray(self) -> dict:
@@ -106,6 +117,7 @@ class Workflow:
             'updated_at': self.updatedAt,
             'output_storage_enabled': self.outputStorageEnabled,
             'output_folder': self.outputFolder,
+            'orchestration': self.orchestration,
         }
 
         # Include graph if available
@@ -126,6 +138,7 @@ class Workflow:
             'created_at': self.createdAt,
             'output_storage_enabled': self.outputStorageEnabled,
             'output_folder': self.outputFolder,
+            'orchestration': self.orchestration,
             'schedule_enabled': self.isScheduleEnabled(),  # Computed from triggers
             'runtime_mode': self._detectRuntimeMode(),
         }
@@ -261,6 +274,9 @@ class Workflow:
     def getOutputFolder(self) -> str | None:
         return self.outputFolder
 
+    def getOrchestration(self) -> str:
+        return self.orchestration
+
     def isScheduleEnabled(self) -> bool:
         """Check if workflow has scheduling enabled (from triggers JSON).
         When schedule is enabled, document attachments must use remote storage."""
@@ -319,6 +335,10 @@ class Workflow:
 
     def setOutputFolder(self, folder: str | None) -> 'Workflow':
         self.outputFolder = folder
+        return self
+
+    def setOrchestration(self, o: str) -> 'Workflow':
+        self.orchestration = o if o in ('workflow', 'swarm') else 'workflow'
         return self
 
     # ========================================

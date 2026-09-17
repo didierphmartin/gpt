@@ -908,13 +908,14 @@ def test_workflow_create():
     insert_call = [c for c in db.calls if c[0] == 'insert'][0]
     assert norm(insert_call[1]) == norm(
         "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers,"
-        " variables, enabled, output_storage_enabled, output_folder)"
+        " variables, enabled, output_storage_enabled, output_folder, orchestration)"
         " VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers,"
-        " :variables, :enabled, :output_storage_enabled, :output_folder)"
+        " :variables, :enabled, :output_storage_enabled, :output_folder, :orchestration)"
     )
     assert insert_call[2]['steps'] == '[]'
     assert insert_call[2]['enabled'] == 1
     assert insert_call[2]['output_storage_enabled'] == 0
+    assert insert_call[2]['orchestration'] == 'workflow'
 
 
 def test_workflow_update():
@@ -926,9 +927,10 @@ def test_workflow_update():
         "UPDATE agent_workflows SET name = :name, description = :description, steps = :steps,"
         " triggers = :triggers, variables = :variables, enabled = :enabled,"
         " workspace_id = :workspace_id, output_storage_enabled = :output_storage_enabled,"
-        " output_folder = :output_folder WHERE id = :id"
+        " output_folder = :output_folder, orchestration = :orchestration WHERE id = :id"
     )
     assert update_call[2]['id'] == 1
+    assert update_call[2]['orchestration'] == 'workflow'
 
 
 def test_workflow_delete():

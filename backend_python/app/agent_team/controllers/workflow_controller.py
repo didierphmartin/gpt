@@ -240,7 +240,8 @@ class WorkflowController:
                     .setEnabled(body['enabled'] if body.get('enabled') is not None else True) \
                     .setWorkspaceId(body.get('workspace_id')) \
                     .setOutputStorageEnabled(php_bool(body.get('output_storage_enabled'))) \
-                    .setOutputFolder(body.get('output_folder'))
+                    .setOutputFolder(body.get('output_folder')) \
+                    .setOrchestration(php_strval(body['orchestration'] if body.get('orchestration') is not None else 'workflow'))
 
             if hasSteps:
                 workflow.setSteps(body['steps'])
@@ -538,6 +539,10 @@ class WorkflowController:
                 workflow.setOutputStorageEnabled(php_bool(body['output_storage_enabled']))
             if 'output_folder' in body:
                 workflow.setOutputFolder(body['output_folder'])
+            # Orchestration is a property of the workflow, not of a build:
+            # the live interpreter and every compile target read the same value.
+            if body.get('orchestration') is not None:
+                workflow.setOrchestration(php_strval(body['orchestration']))
 
             hasGraph = (not php_empty(_nested_get(body, 'definition', 'nodes'))
                         or not php_empty(_nested_get(body, 'graph', 'nodes')))
@@ -659,6 +664,20 @@ class WorkflowController:
 
                 if not workflow.isEnabled():
                     return {'success': False, 'error': 'Workflow is disabled', 'status_code': 400}
+
+                # A swarm is a conversation, not a run: one active agent at a time,
+                # control moving by handoff, and state held between prompts. This
+                # endpoint walks the graph topologically, so it would execute Start's
+                # fan-out concurrently — the DAG reading of a canvas that means
+                # something else entirely. v1(a) implements the swarm in the editor's
+                # interpreter only, so refuse here rather than silently running the
+                # wrong architecture.
+                if workflow.getOrchestration() == 'swarm':
+                    return {
+                        'success': False,
+                        'error': 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.',
+                        'status_code': 400,
+                    }
 
                 inputVariables = body.get('variables') if body.get('variables') is not None else (
                     body.get('inputs') if body.get('inputs') is not None else {})
@@ -783,6 +802,14 @@ class WorkflowController:
 
             if not workflow.isEnabled():
                 sseCallback({'type': 'error', 'error': 'Workflow is disabled'})
+                sse.send_data('[DONE]')
+                return None
+
+            # See run(): a swarm cannot be walked topologically, and running it
+            # as a DAG would execute Start's fan-out concurrently instead of
+            # handing one conversation between agents.
+            if workflow.getOrchestration() == 'swarm':
+                sseCallback({'type': 'error', 'error': 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.'})
                 sse.send_data('[DONE]')
                 return None
 

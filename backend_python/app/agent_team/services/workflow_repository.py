@@ -72,8 +72,8 @@ class WorkflowRepository:
     def create(self, workflow: Workflow) -> Workflow:
         """PHP 123-146."""
         sql = (
-            "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder)\n"
-            "                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder)"
+            "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration)\n"
+            "                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder, :orchestration)"
         )
 
         data = workflow.toArray()
@@ -89,6 +89,7 @@ class WorkflowRepository:
             'enabled': 1 if data['enabled'] else 0,
             'output_storage_enabled': 1 if data['output_storage_enabled'] else 0,
             'output_folder': data['output_folder'],
+            'orchestration': data['orchestration'] if data.get('orchestration') is not None else 'workflow',
         })
 
         return self.findById(new_id)
@@ -105,7 +106,8 @@ class WorkflowRepository:
             "                enabled = :enabled,\n"
             "                workspace_id = :workspace_id,\n"
             "                output_storage_enabled = :output_storage_enabled,\n"
-            "                output_folder = :output_folder\n"
+            "                output_folder = :output_folder,\n"
+            "                orchestration = :orchestration\n"
             "                WHERE id = :id"
         )
 
@@ -122,6 +124,7 @@ class WorkflowRepository:
             'workspace_id': data['workspace_id'],
             'output_storage_enabled': 1 if data['output_storage_enabled'] else 0,
             'output_folder': data['output_folder'],
+            'orchestration': data['orchestration'] if data.get('orchestration') is not None else 'workflow',
         })
 
         return self.findById(workflow.getId())
