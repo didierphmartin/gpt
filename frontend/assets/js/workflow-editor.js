@@ -13928,7 +13928,13 @@ class WorkflowEditor {
                 el = document.createElement('span');
                 el.className = 'node-fork-badge';
                 el.style.display = 'none';
-                (host.querySelector('.node-body') || host).appendChild(el);
+                // Attached to the Drawflow wrapper, NOT to .workflow-node: that
+                // box has overflow:hidden, so a badge sitting past its right
+                // edge would be clipped. The wrapper is the same element the
+                // output connector positions against (.outputs is right:-8px,
+                // top:50% on it), which is what puts the badge AT the split
+                // rather than inside the agent box.
+                host.appendChild(el);
             }
             const badge = this._forkBadgeFor(id, nodes);
             if (!badge) { el.style.display = 'none'; continue; }

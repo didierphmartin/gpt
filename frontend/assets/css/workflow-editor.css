@@ -942,17 +942,26 @@ svg.connection.selected .main-path,
    zooms with it and needs no positioning maths. */
 .node-fork-badge {
     display: none;
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 15px;
+    z-index: 11;
     align-items: center;
-    margin-left: auto;
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.06em;
     white-space: nowrap;
+    /* The split is where edges are dragged from and clicked; the badge must
+       never sit between the user and the connector or the edge beneath it. */
+    pointer-events: none;
     background: #eef4ee;
     color: #15803d;
     border: 1px solid rgba(21, 128, 61, 0.35);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 .node-fork-badge.is-dispatch {
