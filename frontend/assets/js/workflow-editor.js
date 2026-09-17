@@ -5196,8 +5196,26 @@ class WorkflowEditor {
             // `framework` (Task 10): the compiled-run scrim's label. Carried
             // on the session (not just this._runTarget) so it survives a
             // later turn re-reading cs.framework off _compiledSession alone.
-            this._compiledSession = { target, session: sessionId, framework: frameworkLabel };
-            this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], null, { session: true });
+            // Reuse a live session for THIS workflow instead of minting a second
+            // one. Hiding the overlay no longer ends a conversation (the close
+            // button's own tooltip has always said "run continues"), so Run and
+            // the Start node must resume it — a new id here would strand the
+            // thread the run server is still holding under the old one.
+            const live = this._compiledSession;
+            if (!live || live.workflowId !== this.currentWorkflowId) {
+                this._compiledSession = {
+                    target, session: sessionId, framework: frameworkLabel,
+                    workflowId: this.currentWorkflowId,
+                    // The server owns the conversation; this is the client's
+                    // copy, kept only so a reopened overlay can show what was
+                    // already said rather than an empty feed.
+                    transcript: [],
+                };
+            } else {
+                live.target = target;          // the port can change between runs
+            }
+            this._pbOverlayOpen(dfId, this.currentWorkflowName || 'Workflow', [], null,
+                { session: true, replay: this._compiledSession.transcript });
             return;
         }
 
@@ -12886,14 +12904,17 @@ class WorkflowEditor {
         const hide = () => {
             // A closed session starts fresh — the next Start click or Run
             // begins a new conversation rather than resuming this one.
-            if (session) this._swarmSessionEnd();
+            // Hide means hide. Ending a conversation here threw away the
+            // session id while the run server was still holding that thread
+            // alive in its checkpointer — the conversation survived on the
+            // server and became unreachable from the UI, which is exactly what
+            // the × button's "run continues" tooltip promised would not happen.
+            // A conversation ends on a workflow change, a mode flip, or
+            // _openSwarmSession replacing a stale one — all via
+            // _swarmSessionEnd(), none of them here.
             // A compiled session belongs to this overlay, not to the
             // interpreter's _swarmSession, so it is cleared independently —
             // the same "closing starts fresh" rule, for the other transport.
-            if (this._compiledSession) {
-                this._compiledSession = null;
-                this._runTarget = null;
-            }
             // Task 10: the × and the Hide button both route here, and this is
             // the ONLY teardown for a one-shot compiled DAG run's overlay (it
             // has no session, so the branch above never runs for it) — so the
@@ -12948,6 +12969,10 @@ class WorkflowEditor {
                 input.disabled = true;
                 if (sendBtn) sendBtn.disabled = true;
                 this._pbBubble('you', text);
+                // The compiled session's client-side copy: without it a hidden
+                // and reopened conversation shows an empty feed while the server
+                // happily continues the thread.
+                this._compiledSession?.transcript?.push({ role: 'user', content: text });
                 try {
                     const cs = this._compiledSession;
                     if (cs) {
@@ -13487,6 +13512,12 @@ class WorkflowEditor {
                     if (text.startsWith(prefix)) text = text.slice(prefix.length);
                 }
                 this._pbBubble('playbook', text, { sensitive: !!ev.sensitive, ...(agent ? { channel: agent } : {}) });
+                if (agent) {
+                    // Store what the bubble shows, prefixed with the speaker, so
+                    // a replay after a hide still says who answered — the replay
+                    // path renders assistant entries without a channel label.
+                    this._compiledSession?.transcript?.push({ role: 'assistant', content: `**${agent}**\n\n${text}` });
+                }
                 return;
             }
             case 'final':

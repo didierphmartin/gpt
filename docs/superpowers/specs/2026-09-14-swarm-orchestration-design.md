@@ -187,7 +187,17 @@ only *within* one turn buys none of that — it is the session that matters.
 - **The first prompt of a session** has no previously active agent, so it goes to the first
   agent connected to Start. The order is the canvas order, so it is stable and visible.
 - **Every later prompt** goes to the agent that ended the previous turn.
-- **Closing the session** discards both. Reopening starts a fresh conversation.
+- **Hiding the overlay does not end the session.** Both survive; reopening resumes the same
+  conversation, and the feed replays what was already said. This was learned the hard way: for
+  a compiled swarm the run server holds the thread in its checkpointer under the session id, so
+  discarding that id on hide left the conversation alive on the server and unreachable from the
+  UI — while the close button's own tooltip read "run continues". A hide that ends a
+  conversation is a hide that lies.
+- **A session ends** on a workflow change, an orchestration flip, or a stale session being
+  replaced — all through one teardown. Ending discards the active agent and the transcript; the
+  next prompt starts a fresh conversation at the first agent.
+- **None of this applies to a one-shot compiled DAG run**, which has no session: one prompt,
+  one run, finished.
 
 **v1(a) needs no storage for this.** The session lives in the editor, in memory, for as
 long as it is open — the same place the rest of the run state lives. Persisting a session
