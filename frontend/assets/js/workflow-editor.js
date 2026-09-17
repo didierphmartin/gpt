@@ -13048,7 +13048,7 @@ class WorkflowEditor {
         // conversation), and a rect saved under the old default would silently
         // win over it forever. Bumping the key retires those once; everything
         // the user sizes from here on is remembered as before.
-        const STORAGE_KEY = 'wf:swarm-overlay:rect:v3'; // per-viewer, per-purpose
+        const STORAGE_KEY = 'wf:swarm-overlay:rect:v4'; // per-viewer, per-purpose
 
         // Private windows, cleared site data, and storage blocked by browser
         // policy all make localStorage fail — sometimes by throwing on the
@@ -13154,8 +13154,27 @@ class WorkflowEditor {
         // browser resizes the element itself with no event of its own. A
         // pointerdown anywhere on the modal is the one signal that the size
         // about to change is the user's doing rather than the layout's.
-        const onModalPointerDown = () => { userSized = true; };
+        // A pointerdown ANYWHERE in the modal used to mark the geometry as the
+        // user's — which meant clicking the composer to type a prompt did it.
+        // From then on the ResizeObserver pinned whatever size the window
+        // happened to be as an inline style, and the responsive CSS height
+        // never applied again. Only a real resize counts, so measure across the
+        // gesture and compare: typing changes nothing, dragging the grip does.
+        let sizeAtDown = null;
+        const onModalPointerDown = () => {
+            const r = modal.getBoundingClientRect();
+            sizeAtDown = { w: r.width, h: r.height };
+        };
+        const onModalPointerUp = () => {
+            if (!sizeAtDown) return;
+            const r = modal.getBoundingClientRect();
+            const resized = Math.abs(r.width - sizeAtDown.w) > 1 || Math.abs(r.height - sizeAtDown.h) > 1;
+            sizeAtDown = null;
+            if (resized) { userSized = true; persist(); }
+        };
         modal.addEventListener('pointerdown', onModalPointerDown, true);
+        // On window: the pointer routinely leaves the modal during a resize drag.
+        window.addEventListener('pointerup', onModalPointerUp, true);
         header.addEventListener('pointerdown', onPointerDown);
         header.addEventListener('pointermove', onPointerMove);
         header.addEventListener('pointerup', onPointerUp);
@@ -13179,6 +13198,13 @@ class WorkflowEditor {
         // restored at open — otherwise shrinking the viewport while the
         // overlay is open can strand it partly unreachable.
         const onViewportResize = () => {
+            // Only when the geometry is already the user's. This exists to keep
+            // a window they placed from ending up off-screen on a smaller
+            // viewport — but apply() writes inline left/top/width/height, so
+            // running it over a CSS-sized window pinned that measurement and
+            // killed the responsive height for good. CSS already handles the
+            // untouched case: the rule is min(82vh, 860px) with vh maxima.
+            if (!userSized) return;
             const r = modal.getBoundingClientRect();
             apply(clamp({ left: r.left, top: r.top, width: r.width, height: r.height }));
         };
@@ -13188,6 +13214,7 @@ class WorkflowEditor {
             ro?.disconnect();
             window.removeEventListener('resize', onViewportResize);
             modal.removeEventListener('pointerdown', onModalPointerDown, true);
+            window.removeEventListener('pointerup', onModalPointerUp, true);
             header.removeEventListener('pointerdown', onPointerDown);
             header.removeEventListener('pointermove', onPointerMove);
             header.removeEventListener('pointerup', onPointerUp);
