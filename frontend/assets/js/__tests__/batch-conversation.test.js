@@ -167,6 +167,82 @@ asyncCheck('the returned output is the output node\'s output', async () => {
     assert.strictEqual(res.success, true);
 });
 
+// ---- _batchTurn: one turn owns the feed --------------------------------
+const batchSrc = extract('    async _batchTurn(userPrompt) {');
+
+function makeBatchEditor(respond, { throws = false } = {}) {
+    const feed = [];
+    const cleared = [];
+    const routes = [];
+    const obj = eval('({ ' + batchSrc + ' })');
+    Object.assign(obj, {
+        feed, cleared, routes,
+        lastProducedArtifact: null,
+        t: (key) => key,
+        _pbClearFeed() { cleared.push(feed.length); feed.length = 0; },
+        _pbBubble(who, text) { feed.push({ who, text }); },
+        _pbRouteLine(to, notes) { routes.push({ to, notes }); feed.push({ who: 'route', text: to }); },
+        async executeWorkflowInBrowser(prompt, opts) {
+            if (throws) throw new Error('runner exploded');
+            opts?.onProgress?.({ type: 'route', node_id: '3', to: 'IT claims', from: 'Dispatcher', notes: 'password reset' });
+            return respond(prompt);
+        },
+    });
+    return obj;
+}
+
+asyncCheck('_batchTurn renders exactly one answer bubble, verbatim', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'Your password was reset.', success: true }));
+    await ed._batchTurn('reset my password');
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.strictEqual(answers.length, 1, 'expected one answer bubble, got ' + answers.length);
+    assert.strictEqual(answers[0].text, 'Your password was reset.');
+});
+
+asyncCheck('_batchTurn clears the feed before the turn', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'first', success: true }));
+    await ed._batchTurn('one');
+    await ed._batchTurn('two');
+    assert.strictEqual(ed.cleared.length, 2, 'the feed was not cleared once per turn');
+    // Turn 2 cleared a non-empty feed: turn 1's answer really was erased.
+    assert.ok(ed.cleared[1] > 0, 'turn 2 cleared an already-empty feed');
+    assert.deepStrictEqual(ed.feed.map(f => f.who), ['you', 'route', 'agent']);
+    assert.strictEqual(ed.feed[0].text, 'two');
+});
+
+asyncCheck('_batchTurn renders the routing line', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
+    await ed._batchTurn('reset my password');
+    assert.deepStrictEqual(ed.routes, [{ to: 'IT claims', notes: 'password reset' }]);
+});
+
+asyncCheck('a failed run still answers', async () => {
+    const ed = makeBatchEditor(() => ({}), { throws: true });
+    const res = await ed._batchTurn('reset my password');
+    assert.strictEqual(res.success, false);
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.strictEqual(answers.length, 1, 'a failed run rendered no bubble');
+    assert.ok(answers[0].text.includes('runner exploded'), 'the failure was not reported: ' + answers[0].text);
+});
+
+asyncCheck('a run with no output still answers', async () => {
+    const ed = makeBatchEditor(() => ({ output: '', success: false }));
+    await ed._batchTurn('reset my password');
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.strictEqual(answers.length, 1, 'an empty run rendered no bubble');
+});
+
+// ---- extra: a throwing onProgress handler cannot break a run ----------
+asyncCheck('a throwing onProgress handler cannot break the run', async () => {
+    const ed = makeEditor(answersRoutingTo3);
+    const res = await ed.executeWorkflowInBrowser('reset my password', {
+        conversation: true,
+        onProgress: () => { throw new Error('onProgress boom'); },
+    });
+    assert.strictEqual(res.output, 'answer from IT claims');
+    assert.strictEqual(res.success, true);
+});
+
 (async () => {
     for (const [name, fn] of checks) {
         try { await fn(); console.log('ok   ' + name); }

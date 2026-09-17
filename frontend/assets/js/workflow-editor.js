@@ -2692,11 +2692,14 @@ class WorkflowEditor {
                     // Run and a Start-node click are the same door in swarm
                     // mode: this button opens the conversation, not a run.
                     this._openSwarmSession().catch(err => console.error('[WorkflowEditor] could not open the swarm session:', err));
-                } else if (this.lastUserPrompt) {
-                    this.executeWorkflow(this.lastUserPrompt);
                 } else {
-                    // No prompt yet - show prompt form
-                    this.showPromptForm();
+                    // Spec §1 — one door. The Start node's ▶ opens the same
+                    // conversation Run does; a stored prompt is no longer
+                    // replayed silently, because the composer is where a
+                    // prompt is typed now and the feed is where its answer
+                    // appears.
+                    this._openBatchSession().catch(err =>
+                        console.error('[WorkflowEditor] could not open the workflow conversation:', err));
                 }
                 return;
             }
@@ -2716,8 +2719,12 @@ class WorkflowEditor {
                     // Start is the door into a swarm, not a prompt to fill in
                     // once: clicking it opens the conversation (spec §3b).
                     this._openSwarmSession().catch(err => console.error('[WorkflowEditor] could not open the swarm session:', err));
-                } else {
+                } else if (this._isIngestionWorkflow()) {
+                    // Ingestion keeps its stored prompt and its own form.
                     this.showPromptForm();
+                } else {
+                    this._openBatchSession().catch(err =>
+                        console.error('[WorkflowEditor] could not open the workflow conversation:', err));
                 }
             }
         });
@@ -12024,10 +12031,21 @@ class WorkflowEditor {
             return;
         }
 
-        // Show prompt form and execute when submitted
-        this.showPromptForm((userPrompt) => {
-            this.executeWorkflow(userPrompt);
-        });
+        // Ingestion graphs are not agent workflows — they compile to Python and
+        // run a loader/splitter/vectorstore pipeline with no conversational
+        // answer to show. They keep the prompt form and their own runner.
+        if (this._isIngestionWorkflow()) {
+            this.showPromptForm((userPrompt) => {
+                this.executeWorkflow(userPrompt);
+            });
+            return;
+        }
+
+        // Spec §1 — Run opens the conversation for a batch workflow too. It is
+        // still a one-shot: each prompt clears the last answer and re-runs the
+        // whole graph. The prompt form is gone from this path because the
+        // composer IS the prompt form now, in the surface that shows the reply.
+        await this._openBatchSession();
     }
 
     /**
@@ -12857,7 +12875,7 @@ class WorkflowEditor {
     // when a playbook node starts; closing it never stops the run (the node
     // activity log keeps recording).
 
-    _pbOverlayOpen(dfId, name, servers, prompt, { session = false, replay = null } = {}) {
+    _pbOverlayOpen(dfId, name, servers, prompt, { session = false, replay = null, mode = 'swarm' } = {}) {
         // Tear the previous overlay down through its own cleanup, not by yanking
         // the element. hide() is the only caller of windowCleanup, so removing
         // the node directly left the resize listener and the ResizeObserver
@@ -12867,6 +12885,12 @@ class WorkflowEditor {
         this._pbOverlayTeardown = null;
         document.getElementById('playbook-run-overlay')?.remove();
         this._pbCurrentName = name || 'Playbook';
+        // Which conversation this is (spec §6). Both modes share this window;
+        // they differ in what a turn means, so the mode selects the composer
+        // copy, whether the feed is cleared on send, and which turn function
+        // send() calls. Null for a non-session overlay (a playbook node's run,
+        // a one-shot compiled run) so nothing below can mistake it for either.
+        this._pbSessionMode = session ? mode : null;
         const badges = (servers || []).map(n =>
             `<span style="display:inline-block;padding:1px 8px;margin-left:6px;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;">${this.escapeHtml(n)}</span>`
         ).join('');
@@ -12879,12 +12903,14 @@ class WorkflowEditor {
         // A swarm session isn't "running" toward one finish line the way a
         // playbook run is — it's a standing conversation — so the header
         // reads differently from the start.
-        const titleSuffix = session ? ` — ${this.t('workflow.swarmSession.overlayTitle')}` : ' — running…';
+        const titleSuffix = session
+            ? ` — ${this.t(mode === 'batch' ? 'workflow.batchSession.overlayTitle' : 'workflow.swarmSession.overlayTitle')}`
+            : ' — running…';
         // The composer only exists in session mode: a playbook/compiled run
         // has one prompt, replayed at open, and nothing more to type.
         const composerHtml = session ? `
                         <div id="pb-ov-composer" style="display:flex;gap:8px;flex-basis:100%;order:-1;margin-bottom:8px;">
-                            <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t('workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+                            <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t(mode === 'batch' ? 'workflow.batchSession.placeholder' : 'workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
                             <button class="storage-config-btn" id="pb-ov-send">${this.escapeHtml(this.t('workflow.swarmSession.send'))}</button>
                         </div>` : '';
         // Session variant (Task 6): the swarm overlay is a movable window
@@ -12953,6 +12979,7 @@ class WorkflowEditor {
             // still in flight server-side — the scrim describes the canvas
             // being inactive, not the run being finished.
             this._hideCompiledScrim();
+            this._pbSessionMode = null;
             windowCleanup?.();
             this._pbOverlayTeardown = null;
             document.getElementById('playbook-run-overlay')?.remove();
@@ -12997,14 +13024,21 @@ class WorkflowEditor {
                 this._swarmBusy = true;
                 input.disabled = true;
                 if (sendBtn) sendBtn.disabled = true;
-                this._pbBubble('you', text);
+                // In batch mode the TURN owns the feed: _batchTurn clears it
+                // and renders the prompt itself, so rendering one here would
+                // be erased a moment later (spec §3a).
+                if (this._pbSessionMode !== 'batch') this._pbBubble('you', text);
                 // The compiled session's client-side copy: without it a hidden
                 // and reopened conversation shows an empty feed while the server
-                // happily continues the thread.
+                // happily continues the thread. A batch conversation has no
+                // transcript at all — nothing survives a turn — so it never
+                // reaches this push (its session is created without one).
                 this._compiledSession?.transcript?.push({ role: 'user', content: text });
                 try {
                     const cs = this._compiledSession;
-                    if (cs) {
+                    if (this._pbSessionMode === 'batch' && !cs) {
+                        await this._batchTurn(text);
+                    } else if (cs) {
                         await this._compiledTurn(cs.target, text, cs.session);
                     } else {
                         await this._swarmTurn(text, null);
@@ -13229,6 +13263,15 @@ class WorkflowEditor {
     _pbUpdateSwarmStatus() {
         const st = document.getElementById('pb-ov-status');
         if (!st) return;
+        // A batch conversation has no active agent and no session — the one
+        // thing worth saying here is the rule the surface otherwise hides
+        // (spec §3b): the next prompt replaces this answer. Checked before the
+        // compiled branch so a COMPILED batch conversation says it too.
+        if (this._pbSessionMode === 'batch') {
+            st.textContent = this.t('workflow.batchSession.status');
+            st.style.color = '#9ca3af';
+            return;
+        }
         // A compiled conversation is driven by the run server, so there is no
         // _swarmSession to read an active agent from -- and reading the
         // interpreter's would be worse than saying nothing, since it describes a
@@ -13253,6 +13296,29 @@ class WorkflowEditor {
         feed.insertAdjacentHTML('beforeend', html);
         feed.scrollTop = feed.scrollHeight;
         return feed.lastElementChild;
+    }
+
+    /**
+     * Spec §3a — a batch turn starts by erasing the previous one. The erase is
+     * deliberate and must be VISIBLE: this overlay looks exactly like the
+     * swarm's conversation, and a user who assumes continuity will type a
+     * follow-up the dispatcher cannot understand. Emptying the feed is the
+     * cheapest honest signal that the previous turn is gone.
+     */
+    _pbClearFeed() {
+        const feed = this._pbOverlayEl();
+        if (feed) feed.replaceChildren();
+    }
+
+    /**
+     * Spec §3c — one thin line saying which branch a dispatcher chose. Not a
+     * bubble: it is the reason for the answer, not part of it.
+     */
+    _pbRouteLine(to, notes) {
+        const label = this.t('workflow.batchSession.routed', { name: to });
+        const tail = notes ? ` — ${notes}` : '';
+        return this._pbAppend(`
+            <div style="align-self:flex-start;font-size:11px;color:#9ca3af;padding:0 4px;">↳ ${this.escapeHtml(label + tail)}</div>`);
     }
 
     /**
@@ -13901,6 +13967,58 @@ class WorkflowEditor {
         // Optional chaining: the transcript-harness stubs this class without
         // _applyOrchestrationToCanvas, and this method must still run clean.
         this._applyOrchestrationToCanvas?.();
+    }
+
+    /**
+     * ONE batch turn (spec §3a). A batch workflow terminates, so a turn is a
+     * whole run: clear the previous answer, run the entire graph on this
+     * prompt and nothing else, render exactly one bubble.
+     *
+     * This method owns the feed for the duration of the turn — including the
+     * user's own bubble, which is why _pbOverlayOpen's send() does NOT render
+     * one in batch mode. Rendering it there and clearing here would erase the
+     * prompt the user just typed.
+     *
+     * Nothing is carried from the previous turn: no transcript, no history, no
+     * session. The dispatcher routes on these words alone. That is not an
+     * omission — it is the contract, pinned by
+     * frontend/assets/js/__tests__/batch-conversation.test.js.
+     */
+    async _batchTurn(userPrompt) {
+        this._pbClearFeed();
+        this._pbBubble('you', userPrompt);
+        const st = document.getElementById('pb-ov-status');
+        if (st) { st.textContent = this.t('workflow.batchSession.running'); st.style.color = '#9ca3af'; }
+        let res;
+        try {
+            res = await this.executeWorkflowInBrowser(userPrompt, {
+                conversation: true,
+                onProgress: (ev) => {
+                    if (ev?.type === 'route') this._pbRouteLine(ev.to, ev.notes);
+                },
+            });
+        } catch (e) {
+            this._pbBubble('agent', `${this.t('workflow.batchSession.failed')} ${e?.message || e}`);
+            return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0 };
+        }
+        // One bubble, the end node's output, VERBATIM (§4). When the run
+        // produced a document the end node says so in its own words — the UI
+        // composes no sentence of its own about files.
+        this._pbBubble('agent', res?.output || this.t('workflow.batchSession.failed'));
+        return res;
+    }
+
+    /**
+     * Open the batch conversation. Unlike a swarm there is no session to mint
+     * and no canvas rewrite to refuse — a batch workflow is validated by the
+     * ordinary Run checks — so this only flushes pending node edits (the
+     * overlay bypasses the Generate/Run path that normally does it) and shows
+     * the window.
+     */
+    async _openBatchSession() {
+        await this._persistIfDirty();
+        this._pbOverlayOpen('batch', this.currentWorkflowName || 'Workflow', [], null,
+            { session: true, mode: 'batch' });
     }
 
     /**

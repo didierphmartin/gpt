@@ -1119,6 +1119,14 @@
       "noSession": "aucune session",
       "holding": "{{name}} a la parole",
       "compiled": "Serveur d'exécution compilé — votre prochain message poursuit cette conversation."
+    },
+    "batchSession": {
+      "overlayTitle": "exécution du flux",
+      "placeholder": "Saisissez une demande — chacune relance le flux à zéro…",
+      "status": "Une demande à la fois — en envoyer une autre remplace cette réponse.",
+      "running": "Exécution du flux…",
+      "routed": "dirigé vers {{name}}",
+      "failed": "Le flux ne s'est pas terminé."
     }
   }
 }

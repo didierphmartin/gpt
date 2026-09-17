@@ -1119,6 +1119,14 @@
       "noSession": "sin sesión",
       "holding": "{{name}} tiene el turno",
       "compiled": "Servidor de ejecución compilado: tu próximo mensaje continúa esta conversación."
+    },
+    "batchSession": {
+      "overlayTitle": "ejecución del flujo",
+      "placeholder": "Escribe una consulta: cada una ejecuta el flujo desde cero…",
+      "status": "Una consulta a la vez: enviar otra sustituye esta respuesta.",
+      "running": "Ejecutando el flujo…",
+      "routed": "dirigido a {{name}}",
+      "failed": "El flujo no se completó."
     }
   }
 }

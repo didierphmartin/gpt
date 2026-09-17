@@ -1119,6 +1119,14 @@
       "noSession": "no session",
       "holding": "{{name}} is holding the turn",
       "compiled": "Compiled run server — your next message continues this conversation."
+    },
+    "batchSession": {
+      "overlayTitle": "workflow run",
+      "placeholder": "Type a prompt — each one runs the workflow fresh…",
+      "status": "One prompt at a time — sending a new one replaces this answer.",
+      "running": "Running the workflow…",
+      "routed": "routed to {{name}}",
+      "failed": "The workflow did not finish."
     }
   }
 }
