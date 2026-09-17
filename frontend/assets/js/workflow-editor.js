@@ -13019,7 +13019,7 @@ class WorkflowEditor {
         // conversation), and a rect saved under the old default would silently
         // win over it forever. Bumping the key retires those once; everything
         // the user sizes from here on is remembered as before.
-        const STORAGE_KEY = 'wf:swarm-overlay:rect:v2'; // per-viewer, per-purpose
+        const STORAGE_KEY = 'wf:swarm-overlay:rect:v3'; // per-viewer, per-purpose
 
         // Private windows, cleared site data, and storage blocked by browser
         // policy all make localStorage fail — sometimes by throwing on the
@@ -13076,17 +13076,22 @@ class WorkflowEditor {
             writeRect({ left: r.left, top: r.top, width: r.width, height: r.height });
         };
 
+        // Has the USER taken control of this window's geometry? Only then is it
+        // worth persisting. Measuring the modal on first open and writing that
+        // back as inline pixels froze whatever height happened to be laid out at
+        // that instant -- and an inline height defeats the responsive
+        // `min(82vh, 860px)` for good, so the window could only ever get
+        // smaller, never grow back with the viewport.
+        let userSized = false;
+
         const saved = readRect();
         if (saved) {
             apply(clamp(saved));
-        } else {
-            // Nothing stored (or the read failed) — pin the CSS variant's
-            // own resting place (bottom-right, see .pb-overlay-window in
-            // workflow-editor.css) as a fixed-position rect, so the first
-            // drag has real pixel coordinates to start from.
-            const r = modal.getBoundingClientRect();
-            apply(clamp({ left: r.left, top: r.top, width: r.width, height: r.height }));
+            userSized = true;      // a stored rect IS a past user gesture
         }
+        // Nothing stored: leave the CSS to size and place it. The drag handler
+        // reads getBoundingClientRect() when a drag starts, so it still has real
+        // pixel coordinates to work from without us pinning any beforehand.
 
         // ---- Draggable by the header --------------------------------------
         // Pointer events (not mouse events) so trackpad/touch/pen drags all
@@ -13097,6 +13102,7 @@ class WorkflowEditor {
             // hide have to keep working as clicks.
             if (e.target.closest('button')) return;
             const r = modal.getBoundingClientRect();
+            userSized = true;      // moving it counts: geometry is now theirs
             drag = { x: e.clientX, y: e.clientY, left: r.left, top: r.top, width: r.width, height: r.height };
             try { header.setPointerCapture(e.pointerId); } catch (_) {}
         };
@@ -13115,6 +13121,12 @@ class WorkflowEditor {
             try { header.releasePointerCapture(e.pointerId); } catch (_) {}
             persist();
         };
+        // The `resize: both` grip is part of the modal, not the header, and the
+        // browser resizes the element itself with no event of its own. A
+        // pointerdown anywhere on the modal is the one signal that the size
+        // about to change is the user's doing rather than the layout's.
+        const onModalPointerDown = () => { userSized = true; };
+        modal.addEventListener('pointerdown', onModalPointerDown, true);
         header.addEventListener('pointerdown', onPointerDown);
         header.addEventListener('pointermove', onPointerMove);
         header.addEventListener('pointerup', onPointerUp);
@@ -13126,7 +13138,10 @@ class WorkflowEditor {
         // size the user settles on.
         let ro = null;
         if (typeof ResizeObserver === 'function') {
-            ro = new ResizeObserver(() => { if (!drag) persist(); });
+            // Only a resize the user performed. The observer also fires for
+            // layout settling and viewport changes, and persisting those is how
+            // a transient small measurement became permanent.
+            ro = new ResizeObserver(() => { if (!drag && userSized) persist(); });
             ro.observe(modal);
         }
 
@@ -13143,6 +13158,7 @@ class WorkflowEditor {
         return () => {
             ro?.disconnect();
             window.removeEventListener('resize', onViewportResize);
+            modal.removeEventListener('pointerdown', onModalPointerDown, true);
             header.removeEventListener('pointerdown', onPointerDown);
             header.removeEventListener('pointermove', onPointerMove);
             header.removeEventListener('pointerup', onPointerUp);
