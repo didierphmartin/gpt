@@ -99,15 +99,17 @@ class WorkflowEditor {
         // What that in-flight run is, so the refusal can name it:
         // {name, base, runId}.
         this._runCompiledWhat = null;
-        // A compiled swarm's conversation, in the same spirit as
-        // _swarmSession but for a compiled run server instead of the
-        // interpreter: {target, session} where `session` is minted ONCE when
-        // the overlay opens (see _runCompiled) and sent on every prompt of
-        // the conversation — that repetition is the entire mechanism by
-        // which POST /runs resumes this conversation instead of starting a
-        // fresh one-shot run each time. null when no compiled session is
-        // open; cleared in _pbOverlayOpen's hide(), as the interpreter's
-        // session is cleared by _swarmSessionEnd.
+        // A compiled run's conversation — swarm or batch, distinguished by
+        // `mode` — in the same spirit as _swarmSession but for a compiled run
+        // server instead of the interpreter: {target, session, mode, ...}
+        // where `session` is minted ONCE when the overlay opens (see
+        // _runCompiled) and sent on every prompt of the conversation — that
+        // repetition is the entire mechanism by which POST /runs resumes this
+        // conversation instead of starting a fresh one-shot run each time (a
+        // batch session carries no `transcript`, since nothing survives a
+        // batch turn). null when no compiled session is open; cleared in
+        // _pbOverlayOpen's hide() and in _swarmSessionEnd (the same place the
+        // interpreter's _swarmSession is cleared).
         this._compiledSession = null;
     }
 
@@ -5055,35 +5057,6 @@ class WorkflowEditor {
     }
 
     /**
-     * "Run workflow" — the prompt for this run, pre-filled from the Start node.
-     * Resolves with the text, or null when cancelled.
-     */
-    _showRunPromptModal(defaultPrompt) {
-        return new Promise((resolve) => {
-            const backdrop = document.createElement('div');
-            backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-            backdrop.innerHTML = `
-                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                    <h3 class="text-lg font-semibold text-gray-900 mb-1">${this.escapeHtml(this.t('workflow.output.runPromptTitle') || 'Run workflow')}</h3>
-                    <p class="text-xs text-gray-500 mb-3">${this.escapeHtml(this.t('workflow.output.runPromptHelp') || "This run only — the Start node's saved prompt is unchanged.")}</p>
-                    <textarea class="run-prompt w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" rows="6"></textarea>
-                    <div class="flex justify-end gap-2 mt-4">
-                        <button class="run-cancel px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.cancel') || 'Cancel')}</button>
-                        <button class="run-go px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('workflow.output.runPromptRun') || 'Run')}</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(backdrop);
-            const ta = backdrop.querySelector('.run-prompt');
-            ta.value = defaultPrompt || '';
-            ta.focus();
-            const done = (v) => { backdrop.remove(); resolve(v); };
-            backdrop.querySelector('.run-cancel').addEventListener('click', () => done(null));
-            backdrop.addEventListener('click', (e) => { if (e.target === backdrop) done(null); });
-            backdrop.querySelector('.run-go').addEventListener('click', () => done(ta.value));
-        });
-    }
-
-    /**
      * The compiled package folder for this workflow, derived the same way the
      * generator names it: the sanitised workflow name plus the mode suffix.
      * Used by "Stop the run server", which must name the folder without
@@ -5098,18 +5071,6 @@ class WorkflowEditor {
         // nothing there, and a swarm's server could never be stopped -- which is
         // the documented escape hatch out of the re-entrancy guard.
         return this._isSwarm() ? `${safe}_${mode}_swarm` : `${safe}_${mode}`;
-    }
-
-    /** The Start node's saved prompt, or '' when the graph has none. */
-    _startNodePrompt() {
-        try {
-            const data = this.editor?.drawflow?.drawflow?.Home?.data || {};
-            for (const id of Object.keys(data)) {
-                const nd = data[id]?.data || {};
-                if (nd.type === 'start') return String(nd.prompt || '');
-            }
-        } catch (_) { /* unsaved canvas */ }
-        return '';
     }
 
     /**
@@ -5296,15 +5257,20 @@ class WorkflowEditor {
                     // where nothing outside can see it.
                     try {
                         const ev = JSON.parse(m.data);
-                        // A one-shot compiled run (this._compiledSession unset) has no
-                        // other delivery for its answer, so it keeps this banner
-                        // exactly as before. A compiled CONVERSATION turn already got
-                        // its answer as a labelled `message` bubble (the swarm's
-                        // run() now emits one before returning) -- repeating it here,
-                        // truncated to 300 chars and unlabelled, is the redundant
-                        // status-line-as-answer this task removes. Same rule the
-                        // interpreter's _swarmTurn already follows: a turn ending
-                        // renders a bubble, not a run-finished banner.
+                        // this._compiledSession is unset here only via a narrow async
+                        // race, not a one-shot run path (every _runCompiled call is a
+                        // conversation now): switching workflows or toggling swarm
+                        // mode mid-turn calls _swarmSessionEnd(), which nulls
+                        // _compiledSession while this turn's fetch/EventSource is
+                        // still in flight. That race has no other delivery for the
+                        // answer, so it keeps this banner. A normal CONVERSATION turn
+                        // (cs set) instead gets its answer as a labelled `message`
+                        // bubble (swarm) or the dedicated batch bubble below (batch) --
+                        // repeating it here, truncated to 300 chars and unlabelled,
+                        // would be the redundant status-line-as-answer this task
+                        // removes. Same rule the interpreter's _swarmTurn already
+                        // follows: a turn ending renders a bubble, not a run-finished
+                        // banner.
                         const cs = this._compiledSession;
                         if (!cs) {
                             this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
@@ -5615,6 +5581,7 @@ class WorkflowEditor {
             if (!resp.ok) {
                 const text = await resp.text();
                 append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
+                this._hideCompiledScrim();
                 return;
             }
             // Stream the SSE body. We don't parse event types — just append
@@ -5631,8 +5598,10 @@ class WorkflowEditor {
                 append(_chunk);
             }
             showDiagnostic(this._diagnoseRunError(_runOut));
+            this._hideCompiledScrim();
         } catch (e) {
             append(`\n[fetch failed: ${e?.message || e}]\n`);
+            this._hideCompiledScrim();
         }
     }
 
@@ -12879,8 +12848,9 @@ class WorkflowEditor {
         // Which conversation this is (spec §6). Both modes share this window;
         // they differ in what a turn means, so the mode selects the composer
         // copy, whether the feed is cleared on send, and which turn function
-        // send() calls. Null for a non-session overlay (a playbook node's run,
-        // a one-shot compiled run) so nothing below can mistake it for either.
+        // send() calls. Null for a non-session overlay -- a playbook node's
+        // run is the only caller left that opens one; every compiled run
+        // (swarm or batch) is a conversation now and always passes session.
         this._pbSessionMode = session ? mode : null;
         const badges = (servers || []).map(n =>
             `<span style="display:inline-block;padding:1px 8px;margin-left:6px;border-radius:999px;background:rgba(59,130,246,0.15);color:#2563eb;font-size:10px;font-weight:600;">${this.escapeHtml(n)}</span>`
@@ -12931,15 +12901,18 @@ class WorkflowEditor {
                 </div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
-        // Task 10 — the compiled-only scrim. this._runTarget is set for BOTH
-        // compiled paths that reach this method (the swarm-session branch and
-        // the one-shot DAG branch of _runCompiled) and stays null for every
-        // live-interpreter call (this method, the playbook-node runner, and
-        // _openSwarmSession never touch it) — so it is the one signal that
-        // already means exactly "compiled code is running", with no new state
-        // needed. The framework label rides on whichever object actually
-        // carries it: the session for a compiled conversation, the target
-        // itself for a one-shot compiled run.
+        // Task 10 — the compiled-only scrim. this._runTarget is set by
+        // _runCompiled for every compiled run — a swarm conversation or a
+        // batch conversation, its one branch now covers both — and stays
+        // null for every live-interpreter call (this method, the
+        // playbook-node runner, and _openSwarmSession never touch it) — so
+        // it is the one signal that already means exactly "compiled code is
+        // running", with no new state needed. The framework label rides on
+        // the session, which _runCompiled always creates or reuses in the
+        // same synchronous stretch that sets this._runTarget, just before
+        // calling this method; this._runTarget?.framework is kept only as a
+        // defensive fallback for a caller that somehow reaches here with a
+        // target and no session (none exists today).
         if (this._runTarget) {
             this._showCompiledScrim(this._compiledSession?.framework || this._runTarget?.framework);
         }
@@ -12961,10 +12934,11 @@ class WorkflowEditor {
             // A compiled session belongs to this overlay, not to the
             // interpreter's _swarmSession, so it is cleared independently —
             // the same "closing starts fresh" rule, for the other transport.
-            // Task 10: the × and the Hide button both route here, and this is
-            // the ONLY teardown for a one-shot compiled DAG run's overlay (it
-            // has no session, so the branch above never runs for it) — so the
-            // scrim is cleared unconditionally, not just when a session ends.
+            // Task 10: the × and the Hide button both route here. Hiding a
+            // compiled conversation's overlay (swarm or batch) does not end
+            // it — only _swarmSessionEnd() does that, per the comment above —
+            // so this unconditional call is what actually takes the scrim
+            // down when the user hides the window without ending the run.
             // Idempotent: a no-op when the scrim was never shown (a live
             // interpreter overlay). Deliberately fires even while the run is
             // still in flight server-side — the scrim describes the canvas
@@ -13606,9 +13580,11 @@ class WorkflowEditor {
         // whitelists message/gate_request/errors (spec: task 9). Every case
         // below still calls _wfNodeLog unconditionally -- this flag only gates
         // the extra calls that ALSO post into the overlay
-        // FEED (_pbActivity/_pbActivityDone). A one-shot compiled run and the
-        // playbook-node runner never set _compiledSession, so they are
-        // provably unaffected. A new event type added later gets only the
+        // FEED (_pbActivity/_pbActivityDone). The playbook-node runner never
+        // sets _compiledSession, so it is provably unaffected; every
+        // _runCompiled call does set it now (swarm or batch), except during
+        // the narrow _swarmSessionEnd() race described in _compiledTurn's
+        // `done` listener. A new event type added later gets only the
         // _wfNodeLog its `default:` case already provides -- silent in the
         // feed without needing to be added to any hide-list.
         //
