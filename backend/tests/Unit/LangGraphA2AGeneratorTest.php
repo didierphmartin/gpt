@@ -212,7 +212,11 @@ class LangGraphA2AGeneratorTest extends TestCase
             array_column($m['files'], 'path'));
         foreach ($m['files'] as $f) {
             $this->assertStringContainsString('PROVENANCE', $f['code'], $f['path']);
-            $this->assertStringContainsString('GRAPH EDGES', $f['code'], $f['path']);
+            if ($f['path'] !== 'api.py') {
+                // api.py has no graph -- apiPyDocBody() replaces the GRAPH EDGES dump
+                // with the run server's own HTTP surface; see the api.py block below.
+                $this->assertStringContainsString('GRAPH EDGES', $f['code'], $f['path']);
+            }
             $this->assertCompiles($f['code'], $f['path']);
         }
         $this->assertStringContainsString('<== this agent', $m['files'][2]['code']);

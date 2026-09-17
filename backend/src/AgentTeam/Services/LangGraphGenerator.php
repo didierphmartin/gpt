@@ -1418,21 +1418,6 @@ that child runs. Start and Output nodes are local (no LLM).
 TXT;
     }
 
-    /** DATA FLOW text for api.py (A2A). */
-    private static function a2aApiDataFlowDoc(): string
-    {
-        return <<<'TXT'
-api.py is the same run server the modular package serves (see modularApiBlock
-in the compiler): POST /runs starts a run, GET /runs/<id>/events streams it
-over SSE, POST /runs/<id>/tool-result answers a gate. The graph itself still
-runs in orchestrator.py exactly as the CLI entry point runs it -- api.py only
-drives it (run_workflow = orchestrator.run) and observes it (set_event_sink).
-The one A2A-specific addition is _ensure_agents(): the agent servers are
-spawned on the first run (via AgentSupervisor) instead of orchestrator.py's
-own __main__ block, since that block is never reached here.
-TXT;
-    }
-
     /** api.py for the A2A folder: the same run contract as the modular package (see modularApiBlock),
      *  plus the agent supervisor's lifecycle -- the agent servers start on the first run. */
     private function emitA2AApi(array $facts, array $layout): string
@@ -1441,24 +1426,13 @@ TXT;
         $L = [];
         $L[] = '"""Run server for workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' (A2A)';
         $L[] = '';
-        $body = PythonEmitHelpers::workflowDocBlock([
-            'target' => 'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            'dispatch_supported' => true,
-            'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
-            'nodes' => $this->a2aDocNodes($facts, $layout), 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
-            'data_flow' => self::a2aApiDataFlowDoc(),
-            'run' => ['deps' => ['pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv'],
-                      'usage' => 'python api.py --port 8710        # then open the workflow from the editor',
-                      'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
-                                  '#         GET /.well-known/workflow.json (identity)',
-                                  '# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
-                                  '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
-                                  '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
-                                  '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'],
-                      // This file lives at <root>/api.py; python/.env is two levels up (same as orchestrator.py).
-                      'env_path' => '../../.env'],
-            'storage' => ['enabled' => false, 'folder' => null],
-        ]);
+        $body = $this->apiPyDocBody($facts,
+            'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+            'pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv',
+            ['# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
+             '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
+             '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
+             '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)']);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
         }
@@ -3082,6 +3056,178 @@ PY;
     }
 
     /**
+     * "# API keys read from <envPath> for the providers this workflow uses"
+     * lines shared by commonPyDocBody() and apiPyDocBody() -- both files list
+     * the same providers because both are shared across every node. Reads
+     * provider straight off agentData/playbookData rather than through
+     * a2aDocNodes()/modularDocNodes(): every entry in either array is by
+     * construction a node with a provider (Start/Output never appear there),
+     * so there is no "supported" filter to reapply.
+     */
+    private static function providerKeyLines(array $facts, string $envPath): array
+    {
+        $keys = [];
+        foreach ($facts['agentData'] as $ad) {
+            if (($ad['provider'] ?? '') === '') continue;
+            $k = PythonEmitHelpers::providerKeyEnv($ad['provider']);
+            if ($k !== null) $keys[$k][] = strtolower($ad['provider']);
+        }
+        foreach ($facts['playbookData'] as $pd) {
+            if (($pd['provider'] ?? '') === '') continue;
+            $k = PythonEmitHelpers::providerKeyEnv($pd['provider']);
+            if ($k !== null) $keys[$k][] = strtolower($pd['provider']);
+        }
+        if (!$keys) {
+            return ['  # No LLM provider is used by a runnable node of this workflow.'];
+        }
+        $L = ["  # API keys read from {$envPath} for the providers this workflow uses:"];
+        foreach ($keys as $k => $provs) $L[] = "  #   {$k} (" . implode(', ', array_unique($provs)) . ')';
+        return $L;
+    }
+
+    /**
+     * common.py's own module-docstring body. This file has no graph and no
+     * nodes -- it is the shared runtime imported by workflow.py and every
+     * agent module -- so workflowDocBlock()'s GRAPH NODES/EDGES/EXECUTION
+     * ORDER dump described nothing that lives here. PROVENANCE keeps the
+     * exact shape every generated file's docstring opens with
+     * (workflowDocBlock()'s); PROVIDES is read off the blocks emitted below
+     * by emitModularCommon(), not invented -- if a name is added or removed
+     * down there, update this list to match.
+     */
+    private function commonPyDocBody(array $facts): string
+    {
+        $L = [];
+        $L[] = 'PROVENANCE';
+        $L[] = '==========';
+        $L[] = "  Workflow:   {$facts['wfName']} (id {$facts['workflowId']})";
+        $L[] = '  Target:     LangGraph modular shared runtime (Python) -- imported by workflow.py and every agent module';
+        $L[] = '  Generated:  ' . date('Y-m-d H:i:s T') . ' by the SynergyAI workflow editor';
+        $L[] = '  This file is a frozen snapshot of the workflow. Edits made here are';
+        $L[] = '  overwritten by the next Generate: change the workflow in the editor and';
+        $L[] = '  re-generate instead.';
+        $L[] = '';
+        $L[] = 'SHARED RUNTIME  (no graph, no nodes -- this is a library, not a workflow file)';
+        $L[] = '==============';
+        $L[] = '  Imported by workflow.py and every module under agents/. Emitted byte-';
+        $L[] = '  identical for the DAG (modular) and swarm packages -- both import this';
+        $L[] = '  exact file, so a change here reaches every node of either shape at the';
+        $L[] = '  next Generate. (The A2A package does not import it: an A2A agent file';
+        $L[] = '  copies what it needs into its own process instead.)';
+        $L[] = '';
+        $L[] = 'PROVIDES  (top-level names this file defines, in source order)';
+        $L[] = '========';
+        $L[] = '  _make_llm()                     provider/model -> LangChain chat model';
+        $L[] = '                                   (claude, openai, gemini, grok, deepseek, kimi, glm)';
+        $L[] = '  MCP_SERVERS, TOOL_CATALOG       this workflow\'s MCP servers + tool schemas, baked at generation time';
+        $L[] = '  build_tools_from_catalog()      TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC';
+        $L[] = '  RUN_SKILL_SCRIPT_TOOL,';
+        $L[] = '  _make_skill_tool()              the skill runner tool + the per-skill tool builder';
+        $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
+        $L[] = '  open_gate(), resolve_gate(),';
+        $L[] = '  take_gate_answer()              the human-gate rendezvous a playbook node\'s tools wait on';
+        $L[] = '  _run_dispatcher()                forces one route_to tool call, used by a DISPATCHER node\'s agent module';
+        if ($facts['playbookData'] !== []) {
+            $L[] = '  PLAYBOOK_SYSTEM_PROMPT, _PlaybookRun,';
+            $L[] = '  build_playbook_tools(),';
+            $L[] = '  render_playbook_transcript()    the playbook interpreter (this workflow has playbook nodes)';
+        }
+        $L[] = '  inject_datetime()               prepends a dated header, resolves [date]/[weekday]/[year]/[time] in a system prompt';
+        $L[] = '  WFState, build_context()        the graph state type and per-node input builder (workflow.py only)';
+        $L[] = '  _convert_doc_to_markdown()      Start-node attachment -> Markdown (office/PDF formats via lazy imports, text formats verbatim)';
+        $L[] = '';
+        $L[] = 'CONFIGURATION';
+        $L[] = '=============';
+        $L[] = '  load_dotenv() resolves python/.env -- two directories above this file --';
+        $L[] = '  at import time, before workflow.py or any agent module reads a provider';
+        $L[] = '  key, so importing this module alone (a test, a REPL) still finds them. No';
+        $L[] = '  key is checked here: building a chat model succeeds either way, and the';
+        $L[] = '  underlying provider SDK raises at the first real request if a required key';
+        $L[] = '  is missing or empty.';
+        $L[] = '';
+        $L[] = 'TO RUN';
+        $L[] = '======';
+        $L[] = '  pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv';
+        $L = array_merge($L, self::providerKeyLines($facts, '../../.env'));
+        $L[] = '  imported, not run directly -- see workflow.py';
+        $L[] = '  # Everything here is shared: change it once and every node of this workflow follows.';
+        $L[] = '  # Output storage (Output node setting): OFF (the result is printed, not saved)';
+        return implode("\n", $L);
+    }
+
+    /**
+     * api.py's own module-docstring body, shared by the modular/swarm run
+     * server (emitModularApi()) and the A2A one (emitA2AApi()) -- both speak
+     * the exact same run protocol (modularApiBlock()), so both get the same
+     * HTTP SURFACE / SSE FRAMES / RECONNECT / SESSION sections; only the
+     * PROVENANCE target line and the TO RUN deps/extra notes differ, which
+     * callers pass in. Content here (routes, frame shape, event names) is
+     * read off modularApiBlock()'s emitted code, not invented.
+     */
+    private function apiPyDocBody(array $facts, string $target, string $deps, array $extraNotes): string
+    {
+        $L = [];
+        $L[] = 'PROVENANCE';
+        $L[] = '==========';
+        $L[] = "  Workflow:   {$facts['wfName']} (id {$facts['workflowId']})";
+        $L[] = "  Target:     {$target}";
+        $L[] = '  Generated:  ' . date('Y-m-d H:i:s T') . ' by the SynergyAI workflow editor';
+        $L[] = '  This file is a frozen snapshot of the workflow. Edits made here are';
+        $L[] = '  overwritten by the next Generate: change the workflow in the editor and';
+        $L[] = '  re-generate instead.';
+        $L[] = '';
+        $L[] = 'RUN SERVER  (no graph, no nodes -- it has never heard of either)';
+        $L[] = '==========';
+        $L[] = '  Speaks the run protocol the SynergyAI workflow editor uses to start a run';
+        $L[] = '  and stream its progress. The graph itself lives elsewhere -- workflow.py';
+        $L[] = '  (modular/swarm) or orchestrator.py (A2A) -- this file only drives and';
+        $L[] = '  observes it (set_event_sink) over HTTP.';
+        $L[] = '';
+        $L[] = 'HTTP SURFACE';
+        $L[] = '============';
+        $L[] = '  GET  /.well-known/workflow.json     identity: {workflow_id, name, version, protocol}';
+        $L[] = '  POST /runs                          {prompt, session} -> {run_id, status}; starts the run';
+        $L[] = '                                       as a background task -- does not itself stream';
+        $L[] = '  GET  /runs/{run_id}/events           text/event-stream -- see SSE FRAMES below';
+        $L[] = '  POST /runs/{run_id}/tool-result      {tool_call_id, ...answer} -- answers a playbook\'s human gate';
+        $L[] = '';
+        $L[] = 'SSE FRAMES';
+        $L[] = '==========';
+        $L[] = '  Each frame is  id: <seq>\\nevent: <name>\\ndata: <json>\\n\\n .  `id:` is the';
+        $L[] = '  sequence number a reconnecting client echoes back as Last-Event-ID.';
+        $L[] = '  Event names: "message" (one run event forwarded from the graph\'s sink --';
+        $L[] = '  its payload can itself be {"type": "truncated", ...} instead of a real';
+        $L[] = '  event; see RECONNECT), "done" (terminal -- carries output + seconds) and';
+        $L[] = '  "error" (terminal -- carries the exception text).';
+        $L[] = '';
+        $L[] = 'RECONNECT';
+        $L[] = '=========';
+        $L[] = '  Every published frame is kept in a per-run ring buffer (500 frames) for';
+        $L[] = '  replay. A client that reconnects sends Last-Event-ID; the stream replays';
+        $L[] = '  everything after it -- or, if the gap outran the ring, one "truncated"';
+        $L[] = '  message first -- before resuming live. That is what lets a dropped client';
+        $L[] = '  pick a run back up instead of losing it.';
+        $L[] = '';
+        $L[] = 'SESSION';
+        $L[] = '=======';
+        $L[] = '  The `session` field on POST /runs is forwarded to run_workflow() as the';
+        $L[] = '  conversation to resume: the same value on a later POST /runs continues';
+        $L[] = '  that thread on the checkpointer; omitting it starts a fresh one. Only the';
+        $L[] = '  swarm target\'s run() actually reads it -- a DAG run() (modular or A2A)';
+        $L[] = '  accepts the parameter and ignores it, so a caller can pass the same';
+        $L[] = '  session to any target without knowing which one is behind this server.';
+        $L[] = '';
+        $L[] = 'TO RUN';
+        $L[] = '======';
+        $L[] = '  ' . $deps;
+        $L = array_merge($L, self::providerKeyLines($facts, '../../.env'));
+        $L[] = '  python api.py --port 8710        # then open the workflow from the editor';
+        foreach ($extraNotes as $n) $L[] = '  ' . $n;
+        $L[] = '  # Output storage (Output node setting): OFF (the result is printed, not saved)';
+        return implode("\n", $L);
+    }
+
+    /**
      * Module-docstring body shared by the three file kinds. $nid marks one node
      * as "<== this module" (agent modules); pass null for workflow.py/common.py.
      */
@@ -3137,13 +3283,7 @@ TXT;
         $L = [];
         $L[] = '"""Shared runtime for workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $L[] = '';
-        $body = $this->modularDocBody($facts, $layout,
-            'LangGraph modular shared runtime (Python) -- imported by workflow.py and every agent module',
-            ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
-             'usage' => 'imported, not run directly -- see workflow.py',
-             'extra' => ['# Everything here is shared: change it once and every node of this workflow follows.'],
-             // This file lives at <root>/common.py; python/.env is two levels up.
-             'env_path' => '../../.env']);
+        $body = $this->commonPyDocBody($facts);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
         }
@@ -3245,16 +3385,12 @@ TXT;
         $L = [];
         $L[] = '"""Run server for workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $L[] = '';
-        $body = $this->modularDocBody($facts, $layout,
+        $body = $this->apiPyDocBody($facts,
             'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            ['deps' => ['pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
-             'usage' => 'python api.py --port 8710        # then open the workflow from the editor',
-             'extra' => ['# Routes: POST /runs | GET /runs/<id>/events (SSE) | POST /runs/<id>/tool-result',
-                         '#         GET /.well-known/workflow.json (identity)',
-                         '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
-                         '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
-                         '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'],
-             'env_path' => '../../.env']);
+            'pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
+            ['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
+             '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
+             '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)']);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
         }

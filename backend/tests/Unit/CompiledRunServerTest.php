@@ -103,7 +103,7 @@ class CompiledRunServerTest extends TestCase
             'agents/techbuddy.py', 'agents/it_claims.py', 'agents/human_resources.py', 'agents/playbook_hr.py',
         ], array_column($m['files'], 'path'));
         $api = $m['files'][2]['code'];
-        foreach (['"""Run server for workflow "Dispatcher demo"', 'PROVENANCE', 'GRAPH EDGES',
+        foreach (['"""Run server for workflow "Dispatcher demo"', 'PROVENANCE', 'HTTP SURFACE',
                   'from fastapi import FastAPI', 'from workflow import run as run_workflow',
                   'from common import set_event_sink, resolve_gate', 'class RunState',
                   '@app.post("/runs")', '@app.get("/runs/{run_id}/events")',

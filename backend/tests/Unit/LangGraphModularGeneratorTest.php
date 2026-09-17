@@ -128,6 +128,12 @@ class LangGraphModularGeneratorTest extends TestCase
                 continue;   // package marker: docstring only
             }
             $this->assertStringContainsString('PROVENANCE', $f['code'], $f['path']);
+            if ($f['path'] === 'common.py' || $f['path'] === 'api.py') {
+                // These two carry no graph -- their own doc body (commonPyDocBody()/
+                // apiPyDocBody()) replaces the GRAPH EDGES dump with what the file
+                // actually is; see their dedicated content assertions below.
+                continue;
+            }
             $this->assertStringContainsString('GRAPH EDGES', $f['code'], $f['path']);
         }
     }
