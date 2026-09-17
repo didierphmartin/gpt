@@ -5265,7 +5265,18 @@ class WorkflowEditor {
                     // where nothing outside can see it.
                     try {
                         const ev = JSON.parse(m.data);
-                        this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
+                        // A one-shot compiled run (this._compiledSession unset) has no
+                        // other delivery for its answer, so it keeps this banner
+                        // exactly as before. A compiled CONVERSATION turn already got
+                        // its answer as a labelled `message` bubble (the swarm's
+                        // run() now emits one before returning) -- repeating it here,
+                        // truncated to 300 chars and unlabelled, is the redundant
+                        // status-line-as-answer this task removes. Same rule the
+                        // interpreter's _swarmTurn already follows: a turn ending
+                        // renders a bubble, not a run-finished banner.
+                        if (!this._compiledSession) {
+                            this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
+                        }
                         resolve();
                     } catch (e) { reject(e); }
                 });
@@ -13350,17 +13361,28 @@ class WorkflowEditor {
 
     async _handlePlaybookEvent(dfId, ev) {
         this.nodeExecutionData[dfId]?.pbEvents?.push(ev);
+        // Compiled CONVERSATION only (this._compiledSession is set): the feed
+        // whitelists message/gate_request/errors (spec: task 9). Every case
+        // below still calls _wfNodeLog unconditionally -- the node's
+        // Activity/Logs panes keep the full trace regardless of mode -- this
+        // flag only gates the extra calls that ALSO post into the overlay
+        // FEED (_pbActivity/_pbActivityDone). A one-shot compiled run and the
+        // playbook-node runner never set _compiledSession, so they are
+        // provably unaffected. A new event type added later gets only the
+        // _wfNodeLog its `default:` case already provides -- silent in the
+        // feed without needing to be added to any hide-list.
+        const traceInFeedOk = !this._compiledSession;
         switch (ev?.type) {
             case 'round':
                 this._wfNodeLog(dfId, 'llm', `round ${ev.round}`);
                 return;
             case 'tool_call':
                 this._wfNodeLog(dfId, 'skill', `${ev.name}(${JSON.stringify(ev.args || {}).slice(0, 200)})`);
-                this._pbActivity(ev.name);
+                if (traceInFeedOk) this._pbActivity(ev.name);
                 return;
             case 'tool_result':
                 this._wfNodeLog(dfId, 'skill', `${ev.name} → ${JSON.stringify(ev.result ?? {}).slice(0, 200)}`);
-                this._pbActivityDone(ev.name, (ev.result?.ok) !== false);
+                if (traceInFeedOk) this._pbActivityDone(ev.name, (ev.result?.ok) !== false);
                 return;
             case 'message':
                 this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));

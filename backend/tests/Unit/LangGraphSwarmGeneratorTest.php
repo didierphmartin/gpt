@@ -275,6 +275,54 @@ class LangGraphSwarmGeneratorTest extends TestCase
         );
     }
 
+    /**
+     * Task 9: the overlay cannot show "the response from the right agent"
+     * until run() actually emits one. `active_agent` is the member holding
+     * the turn when it ended -- resolved against MEMBER_NAMES (every valid
+     * create_swarm() identity) with the entry agent as the fallback -- and
+     * follows the DAG path's own emit_event(type="message", ...) convention
+     * (LangGraphGenerator.php:1776, :3387) rather than inventing a new one.
+     */
+    public function testRunEmitsTheAnswerAsAMessageEventNamingTheAnsweringMember(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $workflow = $files['workflow.py'];
+
+        $this->assertStringContainsString('from common import emit_event', $workflow);
+        $this->assertStringContainsString('MEMBER_NAMES = {"Alice", "Bob"}', $workflow);
+        $this->assertStringContainsString('active = result.get("active_agent")', $workflow);
+        $this->assertStringContainsString(
+            'display = active if isinstance(active, str) and active in MEMBER_NAMES else DEFAULT_ACTIVE_AGENT',
+            $workflow
+        );
+        // The literal f-string source, byte for byte -- same shape the DAG path emits.
+        $this->assertStringContainsString(
+            'emit_event(type="message", text=f"**{display}**\n\n{text}", sensitive=False)',
+            $workflow
+        );
+        // emit_event() runs before the function returns, so the answer reaches the
+        // sink (and therefore SSE) even though api.py never reads run()'s return
+        // value for anything but the terminal `done` frame's `output` field.
+        $this->assertLessThan(
+            strpos($workflow, 'return text'),
+            strpos($workflow, 'emit_event(type="message"'),
+            'the message event must be emitted before run() returns'
+        );
+    }
+
+    /** The added emit_event()/active_agent lines are still syntactically valid Python. */
+    public function testWorkflowStillCompilesAfterEmittingTheAnswerEvent(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $base = tempnam(sys_get_temp_dir(), 'swarmwf');
+        $tmp = $base . '.py';
+        file_put_contents($tmp, $files['workflow.py']);
+        exec('python3 -m py_compile ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
+        @unlink($tmp);
+        @unlink($base);
+        $this->assertSame(0, $rc, implode("\n", $out));
+    }
+
     public function testSingleFileIsRefusedForASwarm(): void
     {
         $this->expectException(\RuntimeException::class);
