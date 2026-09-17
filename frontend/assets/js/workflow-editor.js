@@ -5317,13 +5317,24 @@ class WorkflowEditor {
                         if (!cs) {
                             this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
                         } else if (cs.mode === 'batch') {
-                            // The whole answer, verbatim, in one bubble — this
-                            // frame's `output` is run_workflow()'s return, i.e.
-                            // the end node's output (spec §3c). A compiled
-                            // swarm instead got its answer as a labelled
-                            // `message` bubble on the way past, so it wants
-                            // nothing here.
-                            this._pbBubble('agent', String(ev.output || this.t('workflow.batchSession.failed')));
+                            // One bubble from the terminal frame — `output` is
+                            // run_workflow()'s return, i.e. the end node's
+                            // output. A compiled swarm instead got its answer as
+                            // a labelled `message` bubble on the way past, so it
+                            // wants nothing here.
+                            //
+                            // Same rule as the interpreter: only TEXT in the
+                            // feed. A compiled run produces no browser-side
+                            // artifact, so a document can only arrive inside
+                            // this text.
+                            const _out = String(ev.output || '');
+                            const _doc = this._extractDocument(_out);
+                            if (_doc) {
+                                this._openDocumentOverlay({ kind: 'html', content: _doc, relPath: '', dirName: '' });
+                            }
+                            this._pbBubble('agent', _doc
+                                ? this.t('workflow.batchSession.document')
+                                : (_out || this.t('workflow.batchSession.failed')));
                         }
                         resolve();
                     } catch (e) { reject(e); }
@@ -13134,7 +13145,7 @@ class WorkflowEditor {
         // conversation), and a rect saved under the old default would silently
         // win over it forever. Bumping the key retires those once; everything
         // the user sizes from here on is remembered as before.
-        const STORAGE_KEY = 'wf:swarm-overlay:rect:v4'; // per-viewer, per-purpose
+        const STORAGE_KEY = 'wf:swarm-overlay:rect:v5'; // per-viewer, per-purpose
 
         // Private windows, cleared site data, and storage blocked by browser
         // policy all make localStorage fail — sometimes by throwing on the
@@ -13180,6 +13191,11 @@ class WorkflowEditor {
             modal.style.height = r.height + 'px';
         };
 
+        // The CSS floor, mirrored here. A measurement below it is never a size
+        // the user chose — `resize: both` cannot go under min-width/min-height
+        // — so it can only have come from a transient layout state.
+        const MIN_W = 320, MIN_H = 420;
+
         const persist = () => {
             // A detached element reports 0x0, and Chrome fires exactly that at a
             // ResizeObserver when the observed node leaves the document. Writing
@@ -13188,6 +13204,15 @@ class WorkflowEditor {
             if (!modal.isConnected) return;
             const r = modal.getBoundingClientRect();
             if (r.width < 1 || r.height < 1) return;
+            // Refuse anything under the floor. Restoring a rect sets userSized,
+            // which arms the ResizeObserver for EVERY later measurement — so a
+            // single transient reading taken mid-layout used to be written as
+            // the remembered geometry. It did not look broken afterwards,
+            // because min-height re-inflated the window to 420px; it looked
+            // like the conversation had quietly shrunk, which is exactly the
+            // report this guard answers. A gesture cannot produce these values,
+            // so nothing the user actually did is being discarded.
+            if (r.width < MIN_W || r.height < MIN_H) return;
             writeRect({ left: r.left, top: r.top, width: r.width, height: r.height });
         };
 
@@ -13200,10 +13225,14 @@ class WorkflowEditor {
         let userSized = false;
 
         const saved = readRect();
-        if (saved) {
+        if (saved && saved.width >= MIN_W && saved.height >= MIN_H) {
             apply(clamp(saved));
             userSized = true;      // a stored rect IS a past user gesture
         }
+        // A stored rect under the floor is not a past gesture — it is the bug
+        // above, already written. Ignore it and let the CSS size the window, so
+        // one bad write cannot outlive itself.
+        
         // Nothing stored: leave the CSS to size and place it. The drag handler
         // reads getBoundingClientRect() when a drag starts, so it still has real
         // pixel coordinates to work from without us pinning any beforehand.
@@ -14238,8 +14267,9 @@ class WorkflowEditor {
         // and the real bytes, where the text is only the end node's copy of it.
         const out = String(res?.output ?? '');
         let artifact = this.lastProducedArtifact;
-        if (!artifact && this._looksLikeDocument(out)) {
-            artifact = { kind: 'html', content: out, relPath: '', dirName: '' };
+        if (!artifact) {
+            const doc = this._extractDocument(out);
+            if (doc) artifact = { kind: 'html', content: doc, relPath: '', dirName: '' };
         }
         if (artifact) {
             const name = (artifact.relPath || '').split('/').pop();
@@ -14258,17 +14288,26 @@ class WorkflowEditor {
     }
 
     /**
-     * Is this end-node output a document rather than an answer?
+     * Pull an HTML document out of an end-node output, or null if there is none.
      *
-     * Deliberately narrow: the string must START (after whitespace) with a
-     * doctype or an <html> tag. Prose that merely discusses HTML — a fenced
-     * snippet, an instruction to "wrap it in <html> tags" — is an answer and
-     * belongs in the feed. A false negative costs a document rendered as text;
-     * a false positive HIDES a real answer behind a viewer, which is worse, so
-     * this errs toward leaving things in the conversation.
+     * EXTRACTS rather than tests, because the output is never bare markup. The
+     * Output node's value is _wfBuildContext(), which prefixes every agent
+     * parent with "## <name>\n" — so a real document always arrives behind a
+     * heading, and often inside a ```html fence as well. The first version of
+     * this anchored at the start of the string and therefore never matched a
+     * single real run.
+     *
+     * The guard against prose is the CLOSING tag, not the position: a sentence
+     * telling you to "wrap it in <html> tags" has no </html>, while a document
+     * always does. A false negative shows a document as text; a false positive
+     * hides a real answer behind a viewer, which is worse — so the closing tag
+     * is required, and nothing is inferred from an opening tag alone.
      */
-    _looksLikeDocument(text) {
-        return /^\s*(<!doctype\s+html|<html[\s>])/i.test(String(text || ''));
+    _extractDocument(text) {
+        const s = String(text || '');
+        const m = s.match(/<!doctype\s+html[\s\S]*?<\/html\s*>/i)
+            || s.match(/<html[\s>][\s\S]*?<\/html\s*>/i);
+        return m ? m[0].trim() : null;
     }
 
     /**

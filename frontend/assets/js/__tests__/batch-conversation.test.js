@@ -179,7 +179,7 @@ const batchSrc = [
     extract('    _batchAnswerLabel() {'),
     // The REAL detector, not a stub — the routing decision is what these
     // cases exist to pin, so a harness copy of it would prove nothing.
-    extract('    _looksLikeDocument(text) {'),
+    extract('    _extractDocument(text) {'),
 ].join(',\n');
 
 function makeBatchEditor(respond, { throws = false } = {}) {
@@ -587,6 +587,39 @@ asyncCheck('an answer that merely mentions html is not treated as a document', a
     const ed = makeBatchEditor(() => ({ output: prose, success: true }));
     await ed._batchTurn('how do I embed it');
     assert.strictEqual(ed.opened.length, 0, 'prose about HTML opened the viewer');
+    assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, prose);
+});
+
+// The shape a REAL run produces: the Output node's value is
+// _wfBuildContext(), which prefixes every agent parent with "## <name>\n".
+// The first fix anchored its test at the start of the string, so it never
+// matched and "my newspaper journal" kept rendering HTML into the feed.
+const REAL_OUTPUT = '## Journal\n<!DOCTYPE html>\n<html><body><h1>The Journal</h1></body></html>';
+
+asyncCheck('an HTML document behind a node heading still reaches the viewer', async () => {
+    const ed = makeBatchEditor(() => ({ output: REAL_OUTPUT, success: true }));
+    await ed._batchTurn('write my newspaper');
+    assert.strictEqual(ed.opened.length, 1, 'the viewer did not open for a real output shape');
+    assert.ok(ed.opened[0].content.startsWith('<!DOCTYPE html>'),
+        'the viewer got the heading too: ' + ed.opened[0].content.slice(0, 40));
+    assert.ok(ed.opened[0].content.trim().endsWith('</html>'), 'the document was truncated');
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.ok(!answers[0].text.includes('<'), 'markup reached the feed: ' + answers[0].text);
+});
+
+asyncCheck('an HTML document inside a markdown fence reaches the viewer', async () => {
+    const fenced = '## Journal\n```html\n<html><body>hi</body></html>\n```';
+    const ed = makeBatchEditor(() => ({ output: fenced, success: true }));
+    await ed._batchTurn('write it');
+    assert.strictEqual(ed.opened.length, 1, 'a fenced document did not reach the viewer');
+    assert.ok(ed.opened[0].content.startsWith('<html'), ed.opened[0].content.slice(0, 40));
+});
+
+asyncCheck('prose naming an html tag is still an answer, not a document', async () => {
+    const prose = '## Helper\nTo embed it, wrap the fragment in `<html>` tags and serve it.';
+    const ed = makeBatchEditor(() => ({ output: prose, success: true }));
+    await ed._batchTurn('how do I embed it');
+    assert.strictEqual(ed.opened.length, 0, 'prose opened the viewer');
     assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, prose);
 });
 
