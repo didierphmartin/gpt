@@ -5103,9 +5103,14 @@ class WorkflowEditor {
      * conversation, and every later turn's _compiledTurn re-syncs the field to
      * the target it is running against so _handlePlaybookGate can post a gate
      * answer to `${base}/runs/${runId}/tool-result`. What this method still
-     * guarantees is the other half: it is cleared on every early exit that
-     * opens NO overlay (acquire failed), so a failed Run never leaves a target
-     * behind. Ending the compiled conversation is what clears it for good —
+     * guarantees is the other half: the ONE exit that acquires a target and
+     * then fails to open an overlay (the _acquireRunTarget catch) clears it
+     * again, so a failed Run never leaves a target behind. The two guard exits
+     * above it — the re-entrancy alert and the runner-down modal — return
+     * before a target is acquired, so they neither set nor clear one: the
+     * re-entrancy exit MUST leave the in-flight run's target alone, since that
+     * run is still answering gates against it. Ending the compiled
+     * conversation is what clears it for good —
      * _swarmSessionEnd() and _openBatchSession(), the latter because a
      * LIVE-interpreter run must never inherit a compiled target (it would both
      * mislabel the overlay badge and send gate answers to a
@@ -12742,9 +12747,11 @@ class WorkflowEditor {
         // ask a second question was to close it and click Run again.
         //
         // So when the conversation is already on screen, this node renders INTO
-        // it — _handlePlaybookEvent and the gate modal already write to
-        // whatever feed is open, so there is nothing else to redirect. The
-        // standalone case (no conversation) is untouched.
+        // it: the gate modal already goes to whatever feed is open, and
+        // _handlePlaybookEvent applies §3c's whitelist to that feed (the
+        // per-node trace and this node's own answer stay out of it, so the turn
+        // still ends in exactly one bubble). The standalone case — no
+        // conversation on screen — is untouched.
         const inConversation = this._pbSessionMode === 'batch' && !!this._pbOverlayEl();
         if (!inConversation) {
             // Conversation overlay (default feedback surface for playbook runs).
@@ -13645,17 +13652,34 @@ class WorkflowEditor {
 
     async _handlePlaybookEvent(dfId, ev) {
         this.nodeExecutionData[dfId]?.pbEvents?.push(ev);
-        // Compiled CONVERSATION only (this._compiledSession is set): the feed
-        // whitelists message/gate_request/errors (spec: task 9). Every case
-        // below still calls _wfNodeLog unconditionally -- this flag only gates
-        // the extra calls that ALSO post into the overlay
-        // FEED (_pbActivity/_pbActivityDone). The playbook-node runner never
-        // sets _compiledSession, so it is provably unaffected; every
-        // _runCompiled call does set it now (swarm or batch), except during
-        // the narrow _swarmSessionEnd() race described in _compiledTurn's
-        // `done` listener. A new event type added later gets only the
-        // _wfNodeLog its `default:` case already provides -- silent in the
-        // feed without needing to be added to any hide-list.
+        // CONVERSATIONS only: the feed whitelists message/gate_request/errors
+        // (spec §3c). Every case below still calls _wfNodeLog unconditionally
+        // -- this flag only gates the extra calls that ALSO post into the
+        // overlay FEED (_pbActivity/_pbActivityDone). Two conversations are
+        // covered, for the same reason from two directions:
+        //
+        // - `_compiledSession` — any compiled run (swarm or batch); every
+        //   _runCompiled call sets it, except during the narrow
+        //   _swarmSessionEnd() race described in _compiledTurn's `done`
+        //   listener.
+        // - `_pbSessionMode !== 'batch'` — a LIVE-interpreter batch
+        //   conversation, which sets no _compiledSession. A playbook node
+        //   inside a batch graph now renders into that conversation's feed
+        //   rather than replacing the window (see _runNodeAsPlaybookUnit), and
+        //   without this term its per-node trace landed in a feed §3c says
+        //   shows four things, none of which is a trace.
+        //
+        // Neither term can reach the two paths that must not change: the
+        // standalone playbook-node run has _pbSessionMode === null and no
+        // compiled session (so the flag stays true, as it always was), and a
+        // swarm conversation has _pbSessionMode === 'swarm' (so the new term
+        // is true and the compiled term decides, exactly as before).
+        //
+        // A new event type added later gets only the _wfNodeLog its `default:`
+        // case already provides -- silent in the feed without needing to be
+        // added to any hide-list. gate_request is deliberately NOT gated by
+        // this flag: §3c keeps gates in the feed because hiding one would
+        // deadlock the run.
         //
         // Honest caveat, because the sentence removed above claimed otherwise:
         // for a COMPILED run those _wfNodeLog calls go to
@@ -13665,7 +13689,7 @@ class WorkflowEditor {
         // tool_call/tool_result at all, since those come from the playbook
         // runtime and a swarm canvas refuses playbook nodes -- but if this guard
         // ever suppresses something real, that something has no reader.
-        const traceInFeedOk = !this._compiledSession;
+        const traceInFeedOk = !this._compiledSession && this._pbSessionMode !== 'batch';
         switch (ev?.type) {
             case 'round':
                 this._wfNodeLog(dfId, 'llm', `round ${ev.round}`);
@@ -13680,13 +13704,22 @@ class WorkflowEditor {
                 return;
             case 'message': {
                 this._wfNodeLog(dfId, 'llm', ev.sensitive ? '(message redacted)' : String(ev.text || ''));
-                // Spec §3c — a compiled DAG emits one `message` per node
-                // (the generated workflow.py does this for the one-shot
-                // trace). In a batch CONVERSATION the feed shows one bubble:
-                // the end node's output, rendered from the terminal frame in
-                // _compiledTurn. The per-node text is still logged above, so
-                // nothing is lost — only the feed is quiet.
-                if (this._compiledSession?.mode === 'batch') return;
+                // Spec §3a — a batch conversation shows ONE bubble per turn,
+                // the end node's output. Both transports emit per-node text on
+                // the way there: a compiled DAG emits one `message` per node
+                // (the generated workflow.py does this for the one-shot trace),
+                // and a live playbook node inside a batch graph emits its own
+                // answer here. Either one, rendered, is a second answer bubble
+                // captioned "📖 Playbook" beside the turn's real one — the same
+                // words twice under two different names.
+                //
+                // Both conditions are kept rather than collapsed into the
+                // _pbSessionMode one: hiding the overlay mid-run sets
+                // _pbSessionMode to null while a compiled batch run carries on,
+                // and the turn that follows must still be a single bubble.
+                // The per-node text is logged above either way, so nothing is
+                // lost — only the feed is quiet.
+                if (this._pbSessionMode === 'batch' || this._compiledSession?.mode === 'batch') return;
                 // In a conversation the bubble is labelled with the agent that
                 // spoke (ev.agent, emitted by the swarm's run()). Without it the
                 // header reads "Playbook" over an answer from "Human resources",

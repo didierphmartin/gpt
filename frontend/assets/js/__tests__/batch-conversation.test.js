@@ -388,6 +388,83 @@ asyncCheck('a swarm prompt is unaffected by either field', async () => {
     assert.strictEqual(compiled.dispatched[0].compiled.session, 'old-session');
 });
 
+// ---- the feed whitelist (spec §3c) -------------------------------------
+//
+// §3c lists FOUR things a batch feed shows: the turn's reply, a document
+// produced, gate requests, errors. Per-node trace is explicitly excluded —
+// "it is simply not the answer". A playbook node inside a batch graph runs
+// against the live conversation now, so its events arrive here, and without
+// the whitelist the user sees the answer twice: once as the turn's bubble and
+// once as a 📖 Playbook bubble, with the tool lines in between.
+const eventSrc = extract('    async _handlePlaybookEvent(dfId, ev) {');
+
+function makeEventEditor({ mode = null, compiled = null } = {}) {
+    const obj = eval('({ ' + eventSrc + ' })');
+    Object.assign(obj, {
+        feed: [], logs: [], gates: [],
+        _pbSessionMode: mode,
+        _compiledSession: compiled,
+        nodeExecutionData: { '3': { pbEvents: [] } },
+        _wfNodeLog(dfId, kind, text) { this.logs.push({ kind, text }); },
+        _pbActivity(name) { this.feed.push({ kind: 'activity', name }); },
+        _pbActivityDone(name, ok) { this.feed.push({ kind: 'activityDone', name, ok }); },
+        _pbBubble(who, text) { this.feed.push({ kind: 'bubble', who, text }); },
+        async _handlePlaybookGate(dfId, ev) { this.gates.push(ev); },
+    });
+    return obj;
+}
+
+const PLAYBOOK_TURN = [
+    { type: 'round', round: 1 },
+    { type: 'tool_call', name: 'jira.create', args: {} },
+    { type: 'tool_result', name: 'jira.create', result: { ok: true } },
+    { type: 'message', text: 'I opened ticket INC-42.' },
+];
+
+asyncCheck('a playbook node in a batch conversation writes nothing to the feed', async () => {
+    const ed = makeEventEditor({ mode: 'batch' });
+    for (const ev of PLAYBOOK_TURN) await ed._handlePlaybookEvent('3', ev);
+    assert.deepStrictEqual(ed.feed, [],
+        'the trace/answer leaked into the batch feed: ' + JSON.stringify(ed.feed));
+    // Excluded from the FEED, never from the node's own Activity/Logs pane.
+    assert.ok(ed.logs.length >= 4, 'the trace stopped reaching the node log');
+    assert.ok(ed.logs.some(l => l.text.includes('INC-42')), 'the answer was not logged');
+});
+
+asyncCheck('a gate request still reaches a batch conversation', async () => {
+    const ed = makeEventEditor({ mode: 'batch' });
+    await ed._handlePlaybookEvent('3', { type: 'gate_request', kind: 'approval', tool_call_id: 't1' });
+    assert.strictEqual(ed.gates.length, 1, 'the gate was swallowed — the run would deadlock');
+});
+
+asyncCheck('a compiled batch conversation is unchanged', async () => {
+    const ed = makeEventEditor({ mode: 'batch', compiled: { mode: 'batch' } });
+    for (const ev of PLAYBOOK_TURN) await ed._handlePlaybookEvent('3', ev);
+    assert.deepStrictEqual(ed.feed, []);
+    // …including after the overlay is hidden mid-run, which drops _pbSessionMode.
+    const hidden = makeEventEditor({ mode: null, compiled: { mode: 'batch' } });
+    for (const ev of PLAYBOOK_TURN) await hidden._handlePlaybookEvent('3', ev);
+    assert.deepStrictEqual(hidden.feed, []);
+});
+
+asyncCheck('a standalone playbook run still shows its trace and its answer', async () => {
+    const ed = makeEventEditor();                       // no session at all
+    for (const ev of PLAYBOOK_TURN) await ed._handlePlaybookEvent('3', ev);
+    assert.deepStrictEqual(ed.feed.map(f => f.kind), ['activity', 'activityDone', 'bubble']);
+    assert.strictEqual(ed.feed[2].text, 'I opened ticket INC-42.');
+});
+
+asyncCheck('a swarm conversation is unaffected by the batch term', async () => {
+    const live = makeEventEditor({ mode: 'swarm' });     // interpreter swarm
+    for (const ev of PLAYBOOK_TURN) await live._handlePlaybookEvent('3', ev);
+    assert.deepStrictEqual(live.feed.map(f => f.kind), ['activity', 'activityDone', 'bubble']);
+
+    const compiled = makeEventEditor({ mode: 'swarm', compiled: { mode: 'swarm' } });
+    for (const ev of PLAYBOOK_TURN) await compiled._handlePlaybookEvent('3', ev);
+    // Trace suppressed, answer shown — exactly what a compiled swarm did before.
+    assert.deepStrictEqual(compiled.feed.map(f => f.kind), ['bubble']);
+});
+
 (async () => {
     for (const [name, fn] of checks) {
         try { await fn(); console.log('ok   ' + name); }
