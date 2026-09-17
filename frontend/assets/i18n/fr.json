@@ -1130,7 +1130,9 @@
       "startHint": "Cliquez pour ouvrir la conversation",
       "openSession": "Ouvrir la conversation du flux",
       "configure": "Modifier la demande initiale et la planification",
-      "configureLabel": "Demande et planification"
+      "configureLabel": "Demande et planification",
+      "document": "Un document a été produit — ouverture dans la visionneuse.",
+      "documentNamed": "{{name}} a été produit — ouverture dans la visionneuse."
     },
     "fork": {
       "all": "LES {{total}}",

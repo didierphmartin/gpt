@@ -14228,16 +14228,47 @@ class WorkflowEditor {
             this.updateOutputNodeIndicator?.(false);
             return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0 };
         }
-        // One bubble, the end node's output, VERBATIM (§4). When the run
-        // produced a document the end node says so in its own words — the UI
-        // composes no sentence of its own about files.
-        this._pbBubble('agent', res?.output || this.t('workflow.batchSession.failed'),
-            { label: this._batchAnswerLabel() });
-        // The document goes to its own overlay (§4) — never into the bubble,
-        // and never as a line of UI prose about a file. A run that produced
-        // none leaves whatever is open alone.
-        if (this.lastProducedArtifact) this._openDocumentOverlay(this.lastProducedArtifact);
+        // Only TEXT reaches the feed. Spec §4 assumed an end node that produced
+        // a document would SAY so, leaving the UI nothing to compose — the
+        // "my newspaper journal" workflow disproved that: its end node emits the
+        // document itself, which landed in a bubble as rendered markup. So a
+        // document goes to the viewer and the bubble carries a line about it.
+        //
+        // A captured skill artifact wins over the raw text: it has a filename
+        // and the real bytes, where the text is only the end node's copy of it.
+        const out = String(res?.output ?? '');
+        let artifact = this.lastProducedArtifact;
+        if (!artifact && this._looksLikeDocument(out)) {
+            artifact = { kind: 'html', content: out, relPath: '', dirName: '' };
+        }
+        if (artifact) {
+            const name = (artifact.relPath || '').split('/').pop();
+            this._pbBubble('agent', name
+                ? this.t('workflow.batchSession.documentNamed', { name })
+                : this.t('workflow.batchSession.document'),
+                { label: this._batchAnswerLabel() });
+        } else {
+            this._pbBubble('agent', out || this.t('workflow.batchSession.failed'),
+                { label: this._batchAnswerLabel() });
+        }
+        // The document goes to its own overlay — never into the bubble. A run
+        // that produced none leaves whatever is open alone.
+        if (artifact) this._openDocumentOverlay(artifact);
         return res;
+    }
+
+    /**
+     * Is this end-node output a document rather than an answer?
+     *
+     * Deliberately narrow: the string must START (after whitespace) with a
+     * doctype or an <html> tag. Prose that merely discusses HTML — a fenced
+     * snippet, an instruction to "wrap it in <html> tags" — is an answer and
+     * belongs in the feed. A false negative costs a document rendered as text;
+     * a false positive HIDES a real answer behind a viewer, which is worse, so
+     * this errs toward leaving things in the conversation.
+     */
+    _looksLikeDocument(text) {
+        return /^\s*(<!doctype\s+html|<html[\s>])/i.test(String(text || ''));
     }
 
     /**

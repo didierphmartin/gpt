@@ -1130,7 +1130,9 @@
       "startHint": "Haz clic para abrir la conversación",
       "openSession": "Abrir la conversación del flujo",
       "configure": "Editar la consulta inicial y la programación",
-      "configureLabel": "Consulta y programación"
+      "configureLabel": "Consulta y programación",
+      "document": "Se generó un documento: abriéndolo en el visor.",
+      "documentNamed": "Se generó {{name}}: abriéndolo en el visor."
     },
     "fork": {
       "all": "LAS {{total}}",

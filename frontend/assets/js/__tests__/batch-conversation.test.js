@@ -177,6 +177,9 @@ asyncCheck('the returned output is the output node\'s output', async () => {
 const batchSrc = [
     extract('    async _batchTurn(userPrompt) {'),
     extract('    _batchAnswerLabel() {'),
+    // The REAL detector, not a stub — the routing decision is what these
+    // cases exist to pin, so a harness copy of it would prove nothing.
+    extract('    _looksLikeDocument(text) {'),
 ].join(',\n');
 
 function makeBatchEditor(respond, { throws = false } = {}) {
@@ -280,9 +283,14 @@ asyncCheck('a produced document opens its own overlay', async () => {
     await ed._batchTurn('write me a report');
     assert.strictEqual(ed.opened.length, 1, 'the document overlay was not opened');
     assert.strictEqual(ed.opened[0].kind, 'html');
-    // The bubble is the node's own words, not a composed sentence about a file.
+    // SUPERSEDED (owner, after "my newspaper journal"): this used to assert the
+    // node's own words reached the bubble verbatim, per spec §4's assumption
+    // that an end node producing a document would SAY so. Real workflows emit
+    // the document AS the output, so the feed is text-only now and the bubble
+    // carries a line about the document instead.
     const answers = ed.feed.filter(f => f.who === 'agent');
-    assert.strictEqual(answers[0].text, 'I produced a report.');
+    assert.strictEqual(answers[0].text, 'workflow.batchSession.documentNamed');
+    assert.ok(!answers[0].text.includes('<'), 'markup reached the feed');
 });
 
 asyncCheck('a run with no document opens nothing', async () => {
@@ -537,6 +545,49 @@ asyncCheck('each turn clears the previous turn\'s edge marks first', async () =>
     await ed.executeWorkflowInBrowser('two', { conversation: true });
     assert.strictEqual(ed.edgeMarks.filter(m => m === 'clear').length, 2);
     assert.strictEqual(ed.edgeMarks[0], 'clear');
+});
+
+// ---- only text reaches the feed -----------------------------------------
+// Owner's rule after "my newspaper journal" rendered its HTML into a bubble:
+// a document goes to the viewer, never into the conversation.
+asyncCheck('an HTML document answer goes to the viewer, not the bubble', async () => {
+    const html = '<!DOCTYPE html>\n<html><body><h1>The Journal</h1></body></html>';
+    const ed = makeBatchEditor(() => ({ output: html, success: true }));
+    await ed._batchTurn('write my newspaper');
+    assert.strictEqual(ed.opened.length, 1, 'the document viewer did not open');
+    assert.strictEqual(ed.opened[0].kind, 'html');
+    assert.strictEqual(ed.opened[0].content, html, 'the viewer got the wrong content');
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.strictEqual(answers.length, 1);
+    assert.ok(!answers[0].text.includes('<html'), 'raw HTML reached the feed: ' + answers[0].text);
+    assert.strictEqual(answers[0].text, 'workflow.batchSession.document');
+});
+
+asyncCheck('a captured artifact is not echoed into the bubble as well', async () => {
+    const ed = makeBatchEditor(() => ({ output: '<html><body>report</body></html>', success: true }));
+    ed.lastProducedArtifact = { kind: 'html', content: '<h1>report</h1>', relPath: 'out/r.html', dirName: 'html' };
+    await ed._batchTurn('write it');
+    assert.strictEqual(ed.opened.length, 1);
+    // The captured artifact wins over the raw output text.
+    assert.strictEqual(ed.opened[0].relPath, 'out/r.html');
+    assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, 'workflow.batchSession.documentNamed');
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.ok(!answers[0].text.includes('<html'), 'raw HTML reached the feed: ' + answers[0].text);
+});
+
+asyncCheck('an ordinary text answer is still rendered verbatim', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'Your password was reset.', success: true }));
+    await ed._batchTurn('reset it');
+    assert.strictEqual(ed.opened.length, 0, 'the viewer opened for a text answer');
+    assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, 'Your password was reset.');
+});
+
+asyncCheck('an answer that merely mentions html is not treated as a document', async () => {
+    const prose = 'To embed it, wrap the fragment in `<html>` tags and serve it.';
+    const ed = makeBatchEditor(() => ({ output: prose, success: true }));
+    await ed._batchTurn('how do I embed it');
+    assert.strictEqual(ed.opened.length, 0, 'prose about HTML opened the viewer');
+    assert.strictEqual(ed.feed.filter(f => f.who === 'agent')[0].text, prose);
 });
 
 (async () => {

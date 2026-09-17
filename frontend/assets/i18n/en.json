@@ -1130,7 +1130,9 @@
       "startHint": "Click to open the conversation",
       "openSession": "Open the workflow conversation",
       "configure": "Edit the start prompt and schedule",
-      "configureLabel": "Prompt & schedule"
+      "configureLabel": "Prompt & schedule",
+      "document": "A document was produced — opening it in the viewer.",
+      "documentNamed": "Produced {{name}} — opening it in the viewer."
     },
     "fork": {
       "all": "ALL {{total}}",
