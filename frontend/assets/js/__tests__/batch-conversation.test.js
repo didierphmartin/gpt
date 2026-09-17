@@ -205,7 +205,15 @@ function makeBatchEditor(respond, { throws = false } = {}) {
         // _pbBubble/_pbClearFeed push into and read, and ed.feed must stay the
         // SAME array object throughout the turn or a bubble pushed after the
         // clear (the agent's answer) would land somewhere ed.feed never sees.
-        _pbPending() { this.pending.push('show'); feed.push({ who: 'pending', text: '' }); },
+        //
+        // The guard mirrors the production check
+        // (`this._pbOverlayEl()?.querySelector('.pb-pending')`): a second call
+        // with one already showing must not push a second.
+        _pbPending() {
+            this.pending.push('show');
+            if (feed.some(f => f.who === 'pending')) return;
+            feed.push({ who: 'pending', text: '' });
+        },
         _pbPendingClear() {
             this.pending.push('clear');
             const i = feed.findIndex(f => f.who === 'pending');
@@ -702,6 +710,17 @@ asyncCheck('the dots appear before the answer, not after', async () => {
     ed._pbPending = () => { order.push('dots'); realPending(); };
     await ed._batchTurn('go');
     assert.deepStrictEqual(order, ['dots', 'ran']);
+});
+
+// Pins the contract stated in _pbPending's docblock: "a turn that somehow
+// calls it twice gets one indicator, not a row of them." Calls it directly
+// (not through a turn) so it fails if the dedupe guard is ever removed.
+asyncCheck('a second call to _pbPending does not add a second indicator', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
+    ed._pbPending();
+    ed._pbPending();
+    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 1,
+        'a second _pbPending() call added a second indicator');
 });
 
 (async () => {
