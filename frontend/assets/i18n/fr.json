@@ -948,13 +948,10 @@
       "codegenA2AHelp": "Génère un serveur d'agent A2A par nœud plus un orchestrateur, reliés par le protocole Agent2Agent.",
       "codegenSwarmOnly": "Non disponible pour un swarm — v1 ne prend en charge que la disposition modulaire.",
       "codegenGenerate": "Générer",
-      "runPromptTitle": "Exécuter le workflow",
       "runnerDownTitle": "Démarrez d’abord le runner local",
       "runnerDownHelp": "Ce workflow s’exécute sur votre machine. Le runner lance son serveur et vous permet de répondre à ses questions ici, dans le navigateur — le navigateur ne peut pas le démarrer à votre place.",
       "runnerDownDirect": "Ou lancez-le directement dans un terminal, sans le navigateur",
       "runnerDownSetup": "Environnement Python local jamais installé ? Cliquez d’abord sur Setup dans le menu LangGraph.",
-      "runPromptHelp": "Pour cette exécution seulement — le prompt enregistré du nœud Début est inchangé.",
-      "runPromptRun": "Exécuter",
       "runTargetCompiled": "compilé",
       "documentTitle": "Document",
       "runTargetLive": "interpréteur en direct",
@@ -1126,6 +1123,7 @@
       "placeholder": "Saisissez une demande — chacune relance le flux à zéro…",
       "status": "Une demande à la fois — en envoyer une autre remplace cette réponse.",
       "running": "Exécution du flux…",
+      "answerLabel": "réponse du flux",
       "routed": "dirigé vers {{name}}",
       "failed": "Le flux ne s'est pas terminé."
     }

@@ -107,9 +107,12 @@ class WorkflowEditor {
         // repetition is the entire mechanism by which POST /runs resumes this
         // conversation instead of starting a fresh one-shot run each time (a
         // batch session carries no `transcript`, since nothing survives a
-        // batch turn). null when no compiled session is open; cleared in
-        // _pbOverlayOpen's hide() and in _swarmSessionEnd (the same place the
-        // interpreter's _swarmSession is cleared).
+        // batch turn). null when no compiled session is open. Hiding the
+        // overlay does NOT clear it — hide means hide, and the run server is
+        // still holding that thread. It is cleared in _swarmSessionEnd (the
+        // same place the interpreter's _swarmSession is cleared) and in
+        // _openBatchSession, which means "run in the browser" and so must not
+        // inherit a compiled run's transport.
         this._compiledSession = null;
     }
 
@@ -2695,11 +2698,12 @@ class WorkflowEditor {
                     // mode: this button opens the conversation, not a run.
                     this._openSwarmSession().catch(err => console.error('[WorkflowEditor] could not open the swarm session:', err));
                 } else {
-                    // Spec §1 — one door. The Start node's ▶ opens the same
-                    // conversation Run does; a stored prompt is no longer
-                    // replayed silently, because the composer is where a
-                    // prompt is typed now and the feed is where its answer
-                    // appears.
+                    // Spec §1 — one RUN door. The Start node's ▶ opens the same
+                    // conversation the toolbar's Run does; the stored prompt is
+                    // no longer replayed silently, because the composer is where
+                    // a prompt is typed now and the feed is where its answer
+                    // appears. (The node's body is the other door, and it is not
+                    // a run: it opens the prompt/schedule form — see below.)
                     this._openBatchSession().catch(err =>
                         console.error('[WorkflowEditor] could not open the workflow conversation:', err));
                 }
@@ -2725,8 +2729,17 @@ class WorkflowEditor {
                     // Ingestion keeps its stored prompt and its own form.
                     this.showPromptForm();
                 } else {
-                    this._openBatchSession().catch(err =>
-                        console.error('[WorkflowEditor] could not open the workflow conversation:', err));
+                    // NOT a run door. showPromptForm() with no callback is the
+                    // SAVE variant, and it is the only way into two things a
+                    // batch workflow cannot live without: the Start node's
+                    // stored `data.prompt` (baked into every compiled target as
+                    // DEFAULT_PROMPT) and the schedule section — the whole
+                    // frontend's only caller of saveSchedule()/deleteSchedule().
+                    // Routing this click to the conversation stranded a saved
+                    // schedule: it kept firing server-side with no way to turn
+                    // it off. Running is the ▶ button and the toolbar's Run;
+                    // the body of the node is where you configure it.
+                    this.showPromptForm();
                 }
             }
         });
@@ -5086,11 +5099,16 @@ class WorkflowEditor {
      * touch _runTarget, so a stale pointer could otherwise run this workflow
      * against another workflow's server.
      *
-     * this._runTarget must never be left set once this call returns without
-     * a run in flight — it is cleared on every early exit (prompt cancelled,
-     * acquire failed) as well as at the end, so a later LIVE-interpreter
-     * playbook run can never inherit a stale compiled target (which would
-     * both mislabel its overlay badge and send its gate answers to a
+     * this._runTarget outlives this call ON PURPOSE: the overlay it opens is a
+     * conversation, and every later turn's _compiledTurn re-syncs the field to
+     * the target it is running against so _handlePlaybookGate can post a gate
+     * answer to `${base}/runs/${runId}/tool-result`. What this method still
+     * guarantees is the other half: it is cleared on every early exit that
+     * opens NO overlay (acquire failed), so a failed Run never leaves a target
+     * behind. Ending the compiled conversation is what clears it for good —
+     * _swarmSessionEnd() and _openBatchSession(), the latter because a
+     * LIVE-interpreter run must never inherit a compiled target (it would both
+     * mislabel the overlay badge and send gate answers to a
      * `{staleBase}/runs/undefined/tool-result` 404, hanging the run).
      *
      * `framework` (Task 10) is the display label for the compile-menu entry
@@ -5109,6 +5127,12 @@ class WorkflowEditor {
         // cancel route exists. (Hiding the overlay is still fine; it says
         // "run continues", and this message is how you find it again.)
         if (this._runCompiledEs) {
+            // Callers raise the scrim synchronously on the click, before this
+            // method is even reached (_runLangGraphScript, the ADK and MAF
+            // paths), so every early return here has to take it back down or
+            // the canvas stays dimmed and click-blocked with nothing left to
+            // dismiss. Idempotent — safe on the paths that never raised one.
+            this._hideCompiledScrim();
             const busy = this._runCompiledWhat || {};
             alert(
                 `A compiled run is already in flight: ${busy.name || 'this workflow'}`
@@ -5131,6 +5155,11 @@ class WorkflowEditor {
                 const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
                 if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
             } catch (_) {
+                // Same as the re-entrancy guard above: the scrim is already up
+                // from the click. The runner-down modal is a dead end for this
+                // run, so the canvas must come back — cancelling that modal
+                // used to leave a permanently dimmed graph.
+                this._hideCompiledScrim();
                 this._showCompiledRunnerNotRunningModal(root);
                 return;
             }
@@ -5211,9 +5240,15 @@ class WorkflowEditor {
      * POST the run, stream it, finish. Extracted so a conversation (§10) can
      * call it once per prompt instead of once per workflow run.
      *
-     * `session` is included in the POST body ONLY when non-null, so the DAG
-     * path (which never passes one) sends the exact same request body as
-     * before — a compiled DAG run must remain byte-for-byte what it was.
+     * `session` is included in the POST body ONLY when non-null. The ONE-SHOT
+     * compiled DAG run (spec §5b, the results-modal path) still passes none, so
+     * its request body is byte-for-byte what it always was. A conversation
+     * passes one for either mode now, batch included — and that is harmless
+     * rather than a lie about continuity, because the generated DAG `run()`
+     * accepts `session` and ignores it (§5a): nothing server-side resumes, so
+     * nothing crosses between a batch conversation's prompts. If cross-prompt
+     * continuity ever leaks into batch mode, it leaks HERE — via a generator
+     * that starts honouring the field — not via the client.
      *
      * Never rejects: a failure is reported into the overlay via
      * _pbOverlayFinish(false, …), same as the DAG path always did, so a
@@ -5523,15 +5558,11 @@ class WorkflowEditor {
      */
     async _runLangGraphScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click, before the first
-        // await. Everything below -- saving the workflow, regenerating the
-        // whole Python package, writing it to disk, probing the runner --
-        // runs before _runCompiled is even called, and none of it was on
-        // screen. Showing the wait when the run server starts was showing it
-        // near the END of the wait.
-        // Both conversational modes get the wait on screen from the click.
-        // Everything below — persisting, regenerating the whole package,
-        // writing it to disk, probing the runner — happens before _runCompiled
-        // is even called, and none of it used to be visible.
+        // await, for both conversational modes. Everything below — persisting
+        // the workflow, regenerating the whole Python package, writing it to
+        // disk, probing the runner — runs before _runCompiled is even called,
+        // and none of it used to be on screen: showing the wait when the run
+        // server starts was showing it near the END of the wait.
         this._showCompiledScrim(this.t('workflow.toolbar.compileLangGraph'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
@@ -12700,8 +12731,25 @@ class WorkflowEditor {
         this.highlightNode(dfId, 'active', dfId, 'agent');
         this.updateModalInputOutput(dfId);
         this._wfNodeLog(dfId, 'llm', 'starting playbook run');
-        // Conversation overlay (default feedback surface for playbook runs).
-        this._pbOverlayOpen(dfId, data.name || 'Playbook', this._playbookServerNames(data), inputText);
+        // Are we a node INSIDE a live batch conversation, or a standalone run?
+        //
+        // A playbook node in a batch graph is in scope by design — spec §3c
+        // puts its gate requests in the feed, because hiding them would
+        // deadlock the run. But opening the playbook's own modal overlay here
+        // tore the conversation window down mid-turn: the prompt bubble and the
+        // route line went with it, _pbSessionMode dropped to null, the answer
+        // landed in a modal whose status read "no session", and the only way to
+        // ask a second question was to close it and click Run again.
+        //
+        // So when the conversation is already on screen, this node renders INTO
+        // it — _handlePlaybookEvent and the gate modal already write to
+        // whatever feed is open, so there is nothing else to redirect. The
+        // standalone case (no conversation) is untouched.
+        const inConversation = this._pbSessionMode === 'batch' && !!this._pbOverlayEl();
+        if (!inConversation) {
+            // Conversation overlay (default feedback surface for playbook runs).
+            this._pbOverlayOpen(dfId, data.name || 'Playbook', this._playbookServerNames(data), inputText);
+        }
 
         const nodeConfig = {
             playbook: data.playbook,
@@ -12769,7 +12817,13 @@ class WorkflowEditor {
             nd.executionTime = Date.now() - _startedAt;
             try { this.stopNodeTimer(dfId); } catch (_) {}
             this._wfNodeLog(dfId, 'done', `playbook run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? ''}`.trim());
-            this._pbOverlayFinish(true, `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
+            // Only the standalone overlay has a finish line to draw. Inside a
+            // conversation this node is one step of a turn, not the end of
+            // anything: stamping "finished" on the window and renaming Hide to
+            // Close would announce a run that is still walking the graph.
+            if (!inConversation) {
+                this._pbOverlayFinish(true, `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
+            }
             this.highlightNode(dfId, 'completed', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             return { success: true, output };
@@ -12781,7 +12835,10 @@ class WorkflowEditor {
             nd.executionTime = Date.now() - _startedAt;
             try { this.stopNodeTimer(dfId); } catch (_) {}
             this._wfNodeLog(dfId, 'error', msg, 'error');
-            this._pbOverlayFinish(false, msg);
+            // Same rule as the success path: inside a conversation the turn
+            // reports the failure in its own answer bubble (_batchTurn), and
+            // the walk may still have nodes to run.
+            if (!inConversation) this._pbOverlayFinish(false, msg);
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             return { success: false, output: 'Error: ' + msg };
@@ -12867,8 +12924,11 @@ class WorkflowEditor {
         const titleSuffix = session
             ? ` — ${this.t(mode === 'batch' ? 'workflow.batchSession.overlayTitle' : 'workflow.swarmSession.overlayTitle')}`
             : ' — running…';
-        // The composer only exists in session mode: a playbook/compiled run
-        // has one prompt, replayed at open, and nothing more to type.
+        // The composer only exists in session mode. The one overlay left that
+        // opens without it is a playbook NODE's own run (session=false): its
+        // prompt came from the graph, it is replayed at open, and there is
+        // nothing more to type. Every compiled run is a session now, so it
+        // gets the composer.
         const composerHtml = session ? `
                         <div id="pb-ov-composer" style="display:flex;gap:8px;flex-basis:100%;order:-1;margin-bottom:8px;">
                             <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t(mode === 'batch' ? 'workflow.batchSession.placeholder' : 'workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
@@ -12931,9 +12991,11 @@ class WorkflowEditor {
             // A conversation ends on a workflow change, a mode flip, or
             // _openSwarmSession replacing a stale one — all via
             // _swarmSessionEnd(), none of them here.
-            // A compiled session belongs to this overlay, not to the
-            // interpreter's _swarmSession, so it is cleared independently —
-            // the same "closing starts fresh" rule, for the other transport.
+            // That applies to _compiledSession too: a compiled conversation
+            // outlives its window, so hiding must NOT drop the session id the
+            // run server is still holding. It ends with the conversation —
+            // _swarmSessionEnd() — or when the interpreter door
+            // (_openBatchSession) explicitly takes the browser back.
             // Task 10: the × and the Hide button both route here. Hiding a
             // compiled conversation's overlay (swarm or batch) does not end
             // it — only _swarmSessionEnd() does that, per the comment above —
@@ -13334,7 +13396,14 @@ class WorkflowEditor {
         const you = who === 'you';
         const bg = you ? 'rgba(59,130,246,0.12)' : (opts.channel ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.12)');
         const align = you ? 'flex-end' : 'flex-start';
-        const label = you ? 'You' : (opts.channel ? `📢 ${opts.channel}` : '📖 Playbook');
+        // `who` only ever distinguishes 'you' from everyone else; what an
+        // agent bubble is CALLED comes from opts. `channel` is the swarm's
+        // answering agent; `label` is for a caller whose bubble is neither a
+        // swarm agent nor a playbook — a batch turn's answer, which belongs to
+        // the workflow and was being captioned "📖 Playbook" for want of a
+        // third option. Defaulting to the playbook caption stays right for the
+        // playbook-node overlay, which is the only caller that passes neither.
+        const label = you ? 'You' : (opts.label || (opts.channel ? `📢 ${opts.channel}` : '📖 Playbook'));
         let body;
         // The sensitive branch is plain escaped text — its only formatting
         // is its own newlines, so it needs white-space:pre-wrap to keep
@@ -13958,6 +14027,18 @@ class WorkflowEditor {
     }
 
     /**
+     * Caption for a batch turn's answer bubble. The answer is the whole
+     * graph's, so it is captioned with the workflow's name rather than with
+     * "📖 Playbook" (what _pbBubble falls back to) or with an agent name (the
+     * swarm's `channel`, which would be a lie here — no single node answered).
+     */
+    _batchAnswerLabel() {
+        const name = String(this.currentWorkflowName || '').trim();
+        const what = this.t('workflow.batchSession.answerLabel');
+        return name ? `⚙️ ${name} — ${what}` : `⚙️ ${what}`;
+    }
+
+    /**
      * ONE batch turn (spec §3a). A batch workflow terminates, so a turn is a
      * whole run: clear the previous answer, run the entire graph on this
      * prompt and nothing else, render exactly one bubble.
@@ -13986,13 +14067,21 @@ class WorkflowEditor {
                 },
             });
         } catch (e) {
-            this._pbBubble('agent', `${this.t('workflow.batchSession.failed')} ${e?.message || e}`);
+            this._pbBubble('agent', `${this.t('workflow.batchSession.failed')} ${e?.message || e}`,
+                { label: this._batchAnswerLabel() });
+            // The walk threw before it could record a result, so whatever
+            // lastWorkflowResults holds is the PREVIOUS turn's — and the Output
+            // node would have offered that successful trace as if it belonged
+            // to the run that just failed. Nothing ran; there is no trace.
+            this.lastWorkflowResults = null;
+            this.updateOutputNodeIndicator?.(false);
             return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0 };
         }
         // One bubble, the end node's output, VERBATIM (§4). When the run
         // produced a document the end node says so in its own words — the UI
         // composes no sentence of its own about files.
-        this._pbBubble('agent', res?.output || this.t('workflow.batchSession.failed'));
+        this._pbBubble('agent', res?.output || this.t('workflow.batchSession.failed'),
+            { label: this._batchAnswerLabel() });
         // The document goes to its own overlay (§4) — never into the bubble,
         // and never as a line of UI prose about a file. A run that produced
         // none leaves whatever is open alone.
@@ -14006,9 +14095,33 @@ class WorkflowEditor {
      * ordinary Run checks — so this only flushes pending node edits (the
      * overlay bypasses the Generate/Run path that normally does it) and shows
      * the window.
+     *
+     * This is the INTERPRETER door, and it means "run this graph in the
+     * browser". So it drops any compiled run's leftovers first:
+     *
+     * - `_compiledSession`, or send() takes its `else if (cs)` branch and posts
+     *   the prompt to the run server holding the PRE-EDIT package — the walk
+     *   never runs, no node lights up, no document overlay opens, and there is
+     *   no way back short of switching workflows;
+     * - `_runTarget`, which _runCompiled used to clear in a `finally` that no
+     *   longer exists. _handlePlaybookGate posts a gate answer to
+     *   `${this._runTarget.base}/runs/${this._runTarget.runId}/tool-result`
+     *   whenever the field is truthy, so a stale one sends this run's gate
+     *   answers to a dead server and hangs the run.
+     *
+     * A batch conversation is a one-shot with no server-side thread worth
+     * resuming, so the swarm's deliberate session stickiness (hide, reopen,
+     * continue) has no counterpart here and _openSwarmSession keeps it.
      */
     async _openBatchSession() {
         await this._persistIfDirty();
+        this._compiledSession = null;
+        this._runTarget = null;
+        // The scrim describes "compiled code is running, the canvas is inert".
+        // Neither is true of an interpreter run, and _pbOverlayOpen's teardown
+        // of a previous overlay does not go through hide(), so take it down
+        // here. Idempotent — a no-op when no scrim was ever raised.
+        this._hideCompiledScrim();
         this._pbOverlayOpen('batch', this.currentWorkflowName || 'Workflow', [], null,
             { session: true, mode: 'batch' });
     }
@@ -14300,9 +14413,12 @@ class WorkflowEditor {
      * pop. Everything else about the walk is identical — a batch turn IS an
      * ordinary batch run; the only difference is where its answer is rendered.
      *
-     * lastWorkflowResults is still set either way: clicking the Output node
-     * re-opens the full per-node trace in the modal, and that door stays open
-     * in conversation mode (the bubble is the answer, not the trace).
+     * lastWorkflowResults is still recorded either way — clicking the Output
+     * node re-opens the full per-node trace in the modal, and that door stays
+     * open in conversation mode (the bubble is the answer, not the trace) — but
+     * only for a run that produced an output, which is the rule this code had
+     * before conversation mode existed. The Output node's indicator follows it,
+     * so the door is visible in both modes and honest in both.
      */
     async executeWorkflowInBrowser(userPrompt, { onProgress, headless = false, conversation = false } = {}) {
         this.lastUserPrompt = userPrompt;
@@ -14448,7 +14564,18 @@ class WorkflowEditor {
             nodes_executed: done.size,
             response_time_ms: Date.now() - _wfStartedAt,
         };
-        this.lastWorkflowResults = runResult;
+        // Only a run that produced something is worth re-opening. Before
+        // conversation mode this was set by showWorkflowResults alone, and so
+        // only for a non-empty output; setting it unconditionally made
+        // showNoResultsMessage() unreachable after any run and let an empty run
+        // open an empty results modal. Conversation mode keeps the old rule
+        // rather than relaxing it — and an empty run must also RETRACT the
+        // previous run's trace, or the Output node offers it as this one's.
+        this.lastWorkflowResults = finalOutput ? runResult : null;
+        // The Output node is the door to the full per-node trace, and in
+        // conversation mode nothing else was advertising it: the indicator
+        // lived only inside showWorkflowResults, which this mode skips.
+        this.updateOutputNodeIndicator?.(!!finalOutput);
         if (!conversation && typeof this.showWorkflowResults === 'function' && finalOutput) {
             // Pass real run metadata — without success/nodes_executed/response_time_ms
             // the results modal defaulted to "❌ Workflow Failed / 0 nodes / 0.0s"
@@ -15112,6 +15239,15 @@ class WorkflowEditor {
      *
      * One document at a time, by design: a later turn replaces what this shows.
      * Closing it does not end anything — the conversation keeps going.
+     *
+     * Which is why it is NOT modal. The bare .storage-config-overlay class is a
+     * full-viewport dimmed, blurred, click-eating backdrop at z-index 10000 —
+     * the same layer the conversation window sits on, and inserted after it, so
+     * it painted straight over the answer the document belongs to. The
+     * .wf-document-window variant (see workflow-editor.css, twin of
+     * .pb-overlay-window) drops the backdrop and anchors the panel left, so the
+     * answer and the document can be read together — the whole reason §2 lifted
+     * this viewer out of the results modal.
      */
     _openDocumentOverlay(artifact) {
         if (!artifact) return;
@@ -15122,8 +15258,8 @@ class WorkflowEditor {
             ? `${rootName}${rel}`
             : `${rootName}/skills/${artifact.dirName}/${rel}`;
         document.body.insertAdjacentHTML('beforeend', `
-            <div id="workflow-document-overlay" class="storage-config-overlay">
-                <div class="storage-config-modal" style="max-width:900px;width:92%;height:88vh;display:flex;flex-direction:column;">
+            <div id="workflow-document-overlay" class="storage-config-overlay wf-document-window">
+                <div class="storage-config-modal" style="display:flex;flex-direction:column;">
                     <div class="storage-config-header">
                         <h3 style="margin:0;"><span>📄</span> <span>${this.escapeHtml(this.t('workflow.output.documentTitle') || 'Document')}</span>
                             <span class="text-xs text-gray-400" title="${this.escapeHtml(shownPath)}">${this.escapeHtml(shownPath)}</span></h3>

@@ -2648,6 +2648,38 @@ svg.connection.selected .main-path,
 }
 
 /* ============================================
+   Document viewer window (spec §4)
+   ============================================
+   Same reasoning as .pb-overlay-window, for the other window on screen: a
+   produced document opens BESIDE the conversation, not over it. As a bare
+   .storage-config-overlay it was a dimmed, blurred, click-swallowing
+   backdrop sharing z-index 10000 with the conversation and inserted after
+   it — so it blanketed the answer it was meant to accompany, which is the
+   opposite of why the viewer was lifted out of the results modal. Scoped
+   under the variant class, so a bare .storage-config-overlay elsewhere is
+   untouched. */
+.storage-config-overlay.wf-document-window {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+/* Anchored top-left, opposite the conversation's bottom-right resting
+   place, and narrow enough to leave that 440px column (plus its margins)
+   free on an ordinary display. The panel itself stays interactive. */
+.wf-document-window .storage-config-modal {
+    pointer-events: auto;
+    margin: 12px;
+    width: min(900px, calc(100vw - 480px));
+    min-width: 320px;
+    height: 84vh;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+}
+
+/* ============================================
    Node Delete Button (X)
    ============================================ */
 

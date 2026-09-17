@@ -168,7 +168,10 @@ asyncCheck('the returned output is the output node\'s output', async () => {
 });
 
 // ---- _batchTurn: one turn owns the feed --------------------------------
-const batchSrc = extract('    async _batchTurn(userPrompt) {');
+const batchSrc = [
+    extract('    async _batchTurn(userPrompt) {'),
+    extract('    _batchAnswerLabel() {'),
+].join(',\n');
 
 function makeBatchEditor(respond, { throws = false } = {}) {
     const feed = [];
@@ -178,10 +181,14 @@ function makeBatchEditor(respond, { throws = false } = {}) {
     Object.assign(obj, {
         feed, cleared, routes,
         lastProducedArtifact: null,
+        lastWorkflowResults: { output: 'a previous turn', success: true, node_outputs: { 5: 'x' } },
+        indicator: [],
+        currentWorkflowName: 'Claims',
         opened: [],
         t: (key) => key,
+        updateOutputNodeIndicator(on) { this.indicator.push(on); },
         _pbClearFeed() { cleared.push(feed.length); feed.length = 0; },
-        _pbBubble(who, text) { feed.push({ who, text }); },
+        _pbBubble(who, text, opts = {}) { feed.push({ who, text, label: opts.label }); },
         _pbRouteLine(to, notes) { routes.push({ to, notes }); feed.push({ who: 'route', text: to }); },
         _openDocumentOverlay(a) { this.opened.push(a); },
         async executeWorkflowInBrowser(prompt, opts) {
@@ -218,6 +225,14 @@ asyncCheck('_batchTurn renders the routing line', async () => {
     assert.deepStrictEqual(ed.routes, [{ to: 'IT claims', notes: 'password reset' }]);
 });
 
+asyncCheck('the answer bubble is captioned as the workflow, not as a playbook', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
+    await ed._batchTurn('reset my password');
+    const answer = ed.feed.find(f => f.who === 'agent');
+    assert.ok(answer.label, 'the answer bubble carried no label, so _pbBubble captions it "📖 Playbook"');
+    assert.ok(answer.label.includes('Claims'), 'the label does not name the workflow: ' + answer.label);
+});
+
 asyncCheck('a failed run still answers', async () => {
     const ed = makeBatchEditor(() => ({}), { throws: true });
     const res = await ed._batchTurn('reset my password');
@@ -225,6 +240,14 @@ asyncCheck('a failed run still answers', async () => {
     const answers = ed.feed.filter(f => f.who === 'agent');
     assert.strictEqual(answers.length, 1, 'a failed run rendered no bubble');
     assert.ok(answers[0].text.includes('runner exploded'), 'the failure was not reported: ' + answers[0].text);
+});
+
+asyncCheck('a failed run retracts the previous turn\'s trace', async () => {
+    const ed = makeBatchEditor(() => ({}), { throws: true });
+    await ed._batchTurn('reset my password');
+    assert.strictEqual(ed.lastWorkflowResults, null,
+        'the Output node still offers the previous turn\'s successful trace');
+    assert.deepStrictEqual(ed.indicator, [false]);
 });
 
 asyncCheck('a run with no output still answers', async () => {
@@ -260,6 +283,109 @@ asyncCheck('a run with no document opens nothing', async () => {
     const ed = makeBatchEditor(() => ({ output: 'no file here', success: true }));
     await ed._batchTurn('just answer');
     assert.strictEqual(ed.opened.length, 0, 'the document overlay opened with no artifact');
+});
+
+// ---- send(): which transport a prompt goes to --------------------------
+//
+// send() is the composer's dispatcher, and it is pure branch logic over two
+// fields: _pbSessionMode and _compiledSession. Getting it wrong is invisible —
+// a stale _compiledSession from an earlier COMPILED run made the interpreter
+// door silently post to the run server holding the pre-edit package, so the
+// browser walk never ran, no node lit up, and no document overlay opened.
+// Nothing about that looks like a bug from the outside; it looks like a slow
+// workflow that answers oddly. Hence this test.
+//
+// send() is a closure inside _pbOverlayOpen, not a method, so it cannot go
+// through extract(). It is sliced out by its own `const send = async () => {`
+// … `};` bounds and re-bound to a stub editor — the real source either way.
+const SEND_HEAD = '            const send = async () => {';
+const SEND_TAIL = '\n            };\n';
+function extractSend() {
+    const start = file.indexOf(SEND_HEAD);
+    if (start < 0) throw new Error('could not find send() in _pbOverlayOpen');
+    const end = file.indexOf(SEND_TAIL, start);
+    if (end < 0) throw new Error('could not find the end of send()');
+    const src = file.slice(start, end + SEND_TAIL.length).trim();
+    return src.slice(src.indexOf('=') + 1).replace(/;$/, '').trim();   // the arrow function itself
+}
+const sendSrc = extractSend();
+// A normal function so `.call(editor)` fixes what the arrow captures as `this`.
+const makeSend = new Function('input', 'sendBtn',
+    'return function () { const send = ' + sendSrc + '; return send; };');
+
+const openBatchSrc = extract('    async _openBatchSession() {');
+
+function makeSessionEditor(mode) {
+    const input = { value: '', disabled: false, focus() {} };
+    const obj = eval('({ ' + openBatchSrc + ' })');
+    Object.assign(obj, {
+        dispatched: [],
+        input,
+        currentWorkflowId: 7,
+        currentWorkflowName: 'Claims',
+        _pbSessionMode: mode,
+        _compiledSession: null,
+        _runTarget: null,
+        _swarmBusy: false,
+        opened: [],
+        _persistIfDirty: async () => {},
+        _hideCompiledScrim() {},
+        _pbOverlayOpen(dfId, name, servers, prompt, opts) { this.opened.push({ dfId, opts }); },
+        _pbClearFeed() {},
+        _pbBubble() {},
+        _pbUpdateSwarmStatus() {},
+        async _batchTurn() { this.dispatched.push('batch'); },
+        async _compiledTurn(target, text, session) { this.dispatched.push({ compiled: { target, session } }); },
+        async _swarmTurn() { this.dispatched.push('swarm'); },
+    });
+    obj.send = makeSend(input, null).call(obj);
+    return obj;
+}
+
+const STALE = { target: { base: 'http://127.0.0.1:9001' }, session: 'old-session', mode: 'batch', workflowId: 7 };
+
+asyncCheck('the interpreter door drops a stale compiled session', async () => {
+    const ed = makeSessionEditor('batch');
+    ed._compiledSession = { ...STALE };
+    ed._runTarget = { base: 'http://127.0.0.1:9001', runId: 'r-1' };
+    await ed._openBatchSession();
+    assert.strictEqual(ed._compiledSession, null, '_openBatchSession left a compiled session behind');
+    assert.strictEqual(ed._runTarget, null,
+        '_openBatchSession left _runTarget set — a playbook gate would post its answer to a dead run server');
+});
+
+asyncCheck('a prompt typed at the interpreter door runs the browser walk', async () => {
+    const ed = makeSessionEditor('batch');
+    ed._compiledSession = { ...STALE };        // left over from an earlier compiled run
+    ed._runTarget = { base: 'http://127.0.0.1:9001', runId: 'r-1' };
+    await ed._openBatchSession();
+    ed.input.value = 'reset my password';
+    await ed.send();
+    assert.deepStrictEqual(ed.dispatched, ['batch'],
+        'the prompt went to the compiled run server instead of the browser walk');
+});
+
+asyncCheck('the compiled door still posts to its run server', async () => {
+    const ed = makeSessionEditor('batch');
+    ed._compiledSession = { ...STALE };        // set by _runCompiled, overlay opened by it
+    ed.input.value = 'reset my password';
+    await ed.send();
+    assert.strictEqual(ed.dispatched.length, 1);
+    assert.strictEqual(ed.dispatched[0].compiled.session, 'old-session');
+    assert.strictEqual(ed.dispatched[0].compiled.target.base, 'http://127.0.0.1:9001');
+});
+
+asyncCheck('a swarm prompt is unaffected by either field', async () => {
+    const live = makeSessionEditor('swarm');
+    live.input.value = 'hello';
+    await live.send();
+    assert.deepStrictEqual(live.dispatched, ['swarm']);
+
+    const compiled = makeSessionEditor('swarm');
+    compiled._compiledSession = { ...STALE, mode: 'swarm', transcript: [] };
+    compiled.input.value = 'hello';
+    await compiled.send();
+    assert.strictEqual(compiled.dispatched[0].compiled.session, 'old-session');
 });
 
 (async () => {

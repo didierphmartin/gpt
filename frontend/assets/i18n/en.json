@@ -948,13 +948,10 @@
       "codegenA2AHelp": "Generate one A2A agent server per node plus an orchestrator, linked over the Agent2Agent protocol.",
       "codegenSwarmOnly": "Not available for a swarm — v1 supports only the modular layout.",
       "codegenGenerate": "Generate",
-      "runPromptTitle": "Run workflow",
       "runnerDownTitle": "Start the local runner first",
       "runnerDownHelp": "This workflow runs on your machine. The runner launches its server and is what lets you answer the workflow’s questions here in the browser — the browser cannot start it for you.",
       "runnerDownDirect": "Or skip the browser entirely and run it in the terminal",
       "runnerDownSetup": "Never installed the local Python environment? Click Setup in the LangGraph menu first.",
-      "runPromptHelp": "This run only — the Start node's saved prompt is unchanged.",
-      "runPromptRun": "Run",
       "runTargetCompiled": "compiled",
       "documentTitle": "Document",
       "runTargetLive": "live interpreter",
@@ -1126,6 +1123,7 @@
       "placeholder": "Type a prompt — each one runs the workflow fresh…",
       "status": "One prompt at a time — sending a new one replaces this answer.",
       "running": "Running the workflow…",
+      "answerLabel": "workflow answer",
       "routed": "routed to {{name}}",
       "failed": "The workflow did not finish."
     }
