@@ -1,242 +1,189 @@
-# Batch workflows hold a conversation — design
+# Batch workflows in the conversation overlay — design
 
 Date: 2026-09-17. Branch: feat/backend-python. Status: draft for review.
 
-Ports the swarm's conversational surface to **batch (DAG) workflows**, and builds the piece
-that makes it more than a surface: a shared conversation every agent can see. Scope: the
-editor's interpreter **and** the LangGraph compiled target, for `orchestration = "workflow"`.
+Gives **batch (DAG) workflows** the surface the swarm uses — the movable conversation overlay,
+the canvas scrim, the progress phases, a document overlay — **without** giving them a
+conversation, because a batch workflow does not have one. Scope: the editor's interpreter and the
+LangGraph compiled target, for `orchestration = "workflow"`.
 
-## 1. What we are building
+## 1. What we are building, and what we are deliberately not
 
-Today a batch workflow is a one-shot. You press Run, fill in a prompt, the graph executes
-Start → … → Output, a results modal shows the output and any document, and it is over. A second
-prompt is a second, unrelated run: nothing of the first survives.
+A batch workflow runs Start → … → Output and terminates. It is a one-shot, which is why it has
+always been called batch.
 
-After this, a batch workflow is a **dialogue**. You type into the same conversation overlay the
-swarm uses, the workflow runs, its answer comes back as one bubble, and you type again — with
-every agent, the dispatcher included, seeing what was said before.
+**We are porting the surface, not the semantics.** After this:
 
-Three decisions, taken with the owner, define it:
+- Run opens the conversation overlay instead of the results modal.
+- You type a prompt; the whole graph runs; **one bubble** shows what the end node produced.
+- You type another prompt: **the previous response is cleared**, the new prompt goes into the
+  workflow, and a new result replaces it.
+- A document opens in its own overlay, the viewer that exists today.
+- Compiled runs get the scrim, the operable toolbar and the three progress phases already built
+  for the swarm.
 
-1. **A prompt re-runs the whole graph.** Not the routed branch, not from the dispatcher down —
-   the whole graph, every time. The dispatcher routes afresh on each prompt, so a second prompt
-   about a different subject reaches a different branch.
-2. **One bubble per turn, carrying what the end node produced** — verbatim. When the result is a
-   document the end node simply says it produced one. Not one bubble per agent: the per-node
-   trace stays in the node panes where it already lives.
-3. **A document opens in its own overlay**, the viewer that exists today, lifted out of the
-   results modal.
+**There is no transcript, and no conversation history.** An earlier draft of this spec designed
+one — re-running the graph with every prior turn injected into every agent. The owner rejected
+it, correctly: it would have meant a client-side transcript, a generator change threading it
+through every node's model call, and the context-length question, all to simulate a continuity a
+DAG cannot use. Each prompt stands alone.
 
-## 2. Why this is not just a UI port
+This is recorded rather than deleted, because "why doesn't batch mode remember?" is a question
+someone will ask, and the answer is that it was considered and declined.
 
-The overlay is the easy half. The half that does not exist is the **conversation itself**.
+## 2. Why the overlay is still worth it
 
-A DAG terminates. There is no active node to resume, so "continue the conversation" can only
-mean "run it again, knowing what was said". Without a shared transcript, a second prompt is
-indistinguishable from a fresh run — the dispatcher would route *"make it 5 days"* on those four
-words alone, with no idea what five days refers to.
+If each prompt is independent, the overlay buys nothing a modal could not — except the things the
+owner actually asked for, which the modal cannot give:
 
-This is the workflow-mode conversation history deferred during the swarm work, and the owner
-described it then: *"a file that contains the whole conversation and use that as a context so
-that the llms can understand even implicit prompts."* It is the same property a swarm gets free
-from `langgraph-swarm`'s shared `messages` channel, built by hand for a graph that has no such
-channel.
+- **one surface for every mode**: interpreter swarm, compiled swarm, batch. A user learns it once;
+- the window is **movable and resizable**, so the canvas stays visible behind it — which matters
+  more here than for a swarm, because a batch run lights up nodes as it walks the graph;
+- the **scrim** says the canvas is inert while compiled code runs, with the toolbar still live;
+- the **progress phases** explain the wait from the moment of the click;
+- the **document overlay** replaces a column crammed into a results modal.
 
-## 3. The conversation
+## 3. The interaction
 
-### 3a. What the transcript holds
+### 3a. One turn at a time
 
-`[{role, content}]` — the same shape the backend's `conversation_history` already takes, and the
-same shape the swarm session uses.
+Each prompt:
 
-- **the user's prompt**, on every turn;
-- **the end node's output** for that turn, as the assistant's reply.
+1. **clears the previous response** from the feed;
+2. runs the whole graph, the dispatcher routing on this prompt alone;
+3. renders **one bubble**: the end node's output, verbatim.
 
-**Not** every node's output. A batch workflow's internal data flow — node A's text becoming node
-B's input — is the graph's plumbing, not the conversation. Putting it in the transcript would
-balloon it, repeat the same content under several speakers, and teach the dispatcher to route on
-intermediate artefacts it should not see. One turn in, one turn out.
+Clearing is deliberate, and must be **visible**. Silently replacing one answer with another, in a
+surface that looks exactly like the swarm's conversation, invites the user to type a follow-up and
+receive a non-sequitur — the dispatcher having seen four words with no referent.
 
-### 3b. History is additional context, never a replacement for the graph's data flow
+### 3b. Say so, in the surface
 
-Each node still receives what the graph gives it: Start's prompt, or its parents' outputs. The
-transcript is passed **alongside** that, as conversation history, exactly as
-`_runNodeAsChatUnit(node, inputText, { history })` already supports for the swarm.
+The overlay must make the one-shot rule evident rather than leave it to be discovered:
 
-This distinction matters and is easy to get wrong: a node's `inputText` is what the graph routed
-to it *this turn*; `history` is what the conversation said *before* this turn. Collapsing the two
-would make a fan-in node read its siblings' work as dialogue.
+- the composer says what it does — that each prompt runs the workflow fresh;
+- the feed visibly clears on send, rather than the old answer quietly vanishing under a new one.
 
-### 3c. Every agent sees it, including the dispatcher
+This is the one place the batch overlay should look *different* from the swarm's, and it should,
+because it behaves differently. A surface that is identical but does not behave identically is
+worse than one that is visibly its own thing.
 
-The dispatcher especially. Routing is the decision that most needs the prior exchange, and it is
-the decision made first in the turn.
+### 3c. What the feed shows
 
-### 3d. The session
-
-Mirrors the swarm's, because the owner has already tested that shape and it survived several
-rounds of correction:
-
-- a session id minted once when the conversation opens, sent with every prompt;
-- **hiding the overlay does not end the session** — it resumes, and the feed replays;
-- a session ends on a workflow change, an orchestration flip, or an explicit replacement;
-- closing and reopening starts fresh.
-
-## 4. What the overlay shows
-
-The same whitelist the swarm arrived at, for the same reason — a debug trace is right for a
-one-shot run and wrong for a conversation:
+The same whitelist the swarm arrived at:
 
 | shown | |
 |---|---|
-| the turn's reply | one bubble, the end node's output |
+| the turn's reply | one bubble, the end node's output, verbatim |
 | a document produced | the end node's own words say so; the document opens in its own overlay |
-| gate requests | a playbook node asking a human; hiding it would deadlock the turn |
-| errors | a failed turn says so |
+| gate requests | a playbook node asking a human; hiding it would deadlock the run |
+| errors | a failed run says so |
 
-Everything else — per-node rounds, tool calls, tool results, routing decisions — keeps flowing
-to the node Activity/Logs panes. That trace is valuable; it is simply not the dialogue.
+Per-node rounds, tool calls and tool results keep flowing to the node Activity/Logs panes. That
+trace is valuable — it is simply not the answer.
 
-**Routing is worth one line.** A dispatcher choosing a branch is the batch equivalent of a
-handoff, and the swarm renders handoffs as a thin inline line. The same treatment here — *"routed
-to IT claims — password reset"* — costs one line and answers "why did I get this answer".
+**Routing is worth one line.** A dispatcher choosing a branch is why you got this answer rather
+than another: *"routed to IT claims — password reset"*, rendered thin and inline, the way the
+swarm renders a handoff.
 
-## 5. Documents
+## 4. Documents
 
-When a turn produces an artifact, it opens in **its own overlay**, using the viewer that exists
+When a run produces an artifact, it opens in **its own overlay**, using the viewer that exists
 today.
 
-Today that viewer is not a separate thing: it is a second column inside the results modal,
+That viewer is currently not a separate thing: it is a second column inside the results modal,
 deliberately, because the chat layout's artifact pane is not visible from the editor. Lifting it
 out is part of this work.
 
-The bubble carries **the end node's output, verbatim** — and when the result is a document, the
-end node simply says it produced one. The UI does not compose a line naming the file, and does
-not need to: the node already speaks for itself. This keeps the bubble the node's voice rather
-than a mixture of the node's voice and the editor's.
+The bubble carries **the end node's output verbatim** — when the result is a document, the end
+node simply says it produced one. The UI composes nothing; the node speaks for itself.
 
-A later turn producing another document replaces what the viewer shows; the conversation keeps
-every turn's bubble, so the history of what was produced is in the dialogue even though the
-viewer holds one document at a time.
+## 5. Compiled mode
 
-## 6. Compiled mode
+Reuses what the swarm already has, pointed at the batch path:
 
-Identical to the swarm, and mostly already built:
-
-- the canvas dims behind a scrim while compiled code runs, with the toolbar above it and
-  operable;
+- the canvas dims behind the scrim, the toolbar stays above it and operable;
 - the conversation overlay on top, movable;
-- the three progress phases — generating the package, starting the run server, running — shown
-  from the moment of the click.
+- the three phases — generating the package, starting the run server, running — from the click.
 
-### 6a. The conversation is client-owned, and travels with the prompt
+### 5a. What the compiled path does *not* need
 
-**This is mainly client-side work.** The editor owns the transcript in both modes, and the
-compiled server stays stateless for it.
+**The generated DAG `run()` keeps ignoring `session`.** It accepts the parameter only so `api.py`
+stays byte-identical between the DAG and swarm packages, and with no conversation to resume there
+is nothing for it to do. No generator change, no server-side store, no `MemorySaver`.
 
-- **Interpreter**: the browser runs each node, so it injects the history directly. Nothing
-  leaves the client.
-- **Compiled**: the client sends the conversation **with the prompt**, over the transport that
-  already exists — `POST /runs` to start a turn, `GET /runs/{run_id}/events` streaming SSE back.
-  No new channel, no server-side store.
+The transport is unchanged and already built: `POST /runs` starts a turn, `GET /runs/{run_id}/events`
+streams the result back over SSE. One protocol, three modes, one overlay.
 
-So the generated DAG `run()` — which today accepts `session` and ignores it — gains the
-conversation as an argument and passes it into each node's model call. That is a real generator
-change but a contained one: threading a value through, not building and keying a store.
+### 5b. The one-shot compiled DAG run stays exactly as it is
 
-**This differs from the compiled swarm deliberately**, and the asymmetry is worth naming because
-it looks like an inconsistency. A compiled swarm's conversation lives on the server, in
-`langgraph-swarm`'s checkpointer, because the *active agent* has to persist between prompts and
-only the graph knows it. A batch workflow has no active agent — it terminates every turn — so
-there is nothing for the server to remember, and keeping the transcript client-side is both
-simpler and truer to what a DAG is. `MemorySaver` and `active_agent` have no role here.
+The owner has asked for this explicitly, twice. The results modal remains its terminus. It would
+be easy to delete once conversational mode stops using it, and wrong.
 
-## 7. What is shared with the swarm, and what differs
+## 6. What is shared, and the risk in sharing it
 
-**One overlay serves all three modes**, and the client-owned transcript is what makes that
-possible: the interpreter, a compiled swarm and a compiled batch workflow all speak the same
-`POST /runs` + SSE protocol, so the surface does not need to know which is behind it. A
-server-side transcript for one mode and a client-side one for another would have forced the
-overlay to branch on transport, and a surface that branches is a surface that drifts.
-
-Shared, and must stay shared rather than forked:
-
-- the conversation overlay, its composer, the movable window and its persisted geometry;
-- the scrim and its three phases;
-- the session lifecycle — mint once, hide does not end, end at one choke point;
-- the feed whitelist.
-
-Different, and the differences are the whole design:
+Shared **code**, not copies — the overlay and its composer, the movable window and its persisted
+geometry, the scrim and its phases, the feed whitelist, the document overlay.
 
 | | swarm | batch |
 |---|---|---|
 | a turn | one active agent, control moves by handoff | the whole graph runs |
 | the reply | whatever the answering agent said | what the end node produced |
-| between turns | the active agent persists | nothing persists but the transcript |
-| the transcript | the library's `messages` channel, server-side | client-owned, sent with each prompt |
-| documents | not addressed | a first-class outcome, own overlay |
+| between turns | active agent and transcript persist | **nothing persists** |
+| a new prompt | continues the conversation | clears the previous answer, starts fresh |
 
-**The risk this creates** is a second implementation of the same surface drifting from the first.
-Every shared item above is shared *code*, not a copy — if a change is worth making for one mode,
-it must land in the place both use. The whitelist and the session lifecycle are the two most
-likely to be duplicated by accident.
+**The risk is the surface drifting into two implementations.** The whitelist and the window
+lifecycle are the two most likely to be duplicated by accident. If a change is worth making for
+one mode it lands in the shared place, or the modes diverge by neglect rather than by decision.
 
-## 8. Out of scope
+**The second risk is the user, not the code**: the same window with different rules. §3b exists to
+answer it.
 
-- **Swarm mode.** Untouched by this work.
-- **The one-shot compiled DAG run.** The owner has asked for it to stay exactly as it is. The
-  results modal remains its terminus — do not delete it because conversational mode stopped using
-  it.
-- **ADK, MAF and NOOA.** LangGraph first, as with the swarm.
-- **Multi-user.** Its own spec; the session id here is per-overlay, not per-user.
-- **Summarising a long conversation.** Same deferral as the swarm: the transcript grows, and the
-  first complaint on a long dialogue will be context length.
+## 7. Out of scope
 
-## 9. Tests
+- **A conversation for batch workflows.** Considered, declined — see §1.
+- **Swarm mode.** Untouched.
+- **ADK, MAF, NOOA.** LangGraph first, as with the swarm.
+- **Multi-user.** Its own spec.
 
-### 9.1 The transcript, in the interpreter
+## 8. Tests
 
-Driven by a stubbed per-node executor, as the swarm's harness already is:
+### 8.1 The interaction, in the interpreter
 
-- a turn appends the user's prompt and the end node's output, in that order, and nothing else —
-  specifically **not** each node's output;
-- turn two's node calls carry turn one's exchange as `history`, and its `inputText` is still what
-  the graph routed, not the conversation;
-- **the dispatcher's call carries the history** — it is the decision that needs it most;
-- a turn that errors still closes the transcript, so the next turn does not see an unanswered
-  prompt (the swarm's finding 9, which will recur here if it is not designed out);
-- ending the session clears it; hiding does not.
+Drivable with a stubbed graph runner, as the swarm's harness is:
 
-### 9.2 Documents
+- a prompt renders exactly one bubble, carrying the end node's output;
+- a second prompt **clears the first response** before rendering its own;
+- **nothing is carried between prompts** — the second run's node calls receive no history, and the
+  dispatcher's call carries only the new prompt. This is the assertion that stops a transcript
+  creeping back in later "for consistency with the swarm";
+- a failed run renders an error in the feed;
+- hiding the overlay and reopening does not resurrect a previous answer.
 
-- a turn producing an artifact opens the viewer and names the document in the bubble;
-- a turn producing none leaves the viewer alone and the bubble carries text;
-- a second document replaces the viewer's content without disturbing earlier bubbles.
+### 8.2 Documents
 
-### 9.3 The compiled target
+- a run producing an artifact opens the viewer; a run producing none leaves it alone;
+- a later run replaces the viewer's content.
 
-- the emitted DAG `run()` accepts the conversation sent with the prompt and threads it into every
-  node's model call — and a node's own graph input is still what the graph routed, not the
-  conversation;
-- **workflow-mode output for a non-conversational run stays byte-identical** — this is a new
-  behaviour on an existing, heavily pinned emit path, and the existing generator pins are the
-  guard;
-- `api.py` and `common.py` stay byte-identical between the DAG and swarm packages.
+### 8.3 The compiled target
 
-### 9.4 Manual, by the owner
+- **workflow-mode generated output is byte-identical** — this spec changes no emitter, so the
+  existing generator pins are the whole test, and any movement in them means someone has changed a
+  shared path;
+- the scrim, phases and overlay behave as they do for a swarm.
 
-The test that decides it, as in the swarm: **send a second prompt that only makes sense given the
-first.** Then a third on a different subject, and confirm the dispatcher routes it elsewhere while
-still understanding the context. Then the same against compiled code.
+### 8.4 Manual, by the owner
 
-## 10. Sequencing
+Run a dispatcher workflow in the overlay. Send a prompt, read the bubble. Send a second prompt on
+a different subject and confirm the dispatcher routes elsewhere and the previous answer is gone.
+Produce a document and confirm it opens in its own overlay. Then the same against compiled code,
+watching the three phases and the dimmed canvas.
 
-1. **The transcript in the interpreter** — the conversation, with the existing overlay. The half
-   with no surface work and all the meaning.
-2. **Documents into their own overlay**, lifted out of the results modal.
-3. **The compiled target** — the client sending the conversation with each prompt, the emitted
-   `run()` threading it into node calls, then the scrim and phases, which are already built and
-   only need pointing at the batch path.
+## 9. Sequencing
 
-Taking the transcript first is deliberate: it is the part that can be wrong in a way nothing
-visible reveals, and the swarm shipped twice with exactly that defect.
+1. **The overlay for the batch interpreter** — Run opens it, one bubble per prompt, the feed
+   clearing visibly, the composer saying why.
+2. **The document overlay**, lifted out of the results modal.
+3. **Compiled mode** — pointing the existing scrim, phases and overlay at the batch path.
+
+No step needs the generator. That is the measure of how much simpler this became.
