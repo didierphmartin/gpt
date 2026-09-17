@@ -1129,7 +1129,8 @@
       "failed": "Le flux ne s'est pas terminé.",
       "startHint": "Cliquez pour ouvrir la conversation",
       "openSession": "Ouvrir la conversation du flux",
-      "configure": "Modifier la demande initiale et la planification"
+      "configure": "Modifier la demande initiale et la planification",
+      "configureLabel": "Demande et planification"
     }
   }
 }

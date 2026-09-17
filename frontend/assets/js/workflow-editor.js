@@ -1179,6 +1179,11 @@ class WorkflowEditor {
                 </span>
             </label>
             <div class="workflow-btn-group">
+                <button id="workflow-schedule-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.batchSession.configure'))}">
+                    ⏱ ${this.escapeHtml(this.t('workflow.batchSession.configureLabel'))}
+                </button>
+            </div>
+            <div class="workflow-btn-group">
                 <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
                     📥 Import
                 </button>
@@ -1477,6 +1482,13 @@ class WorkflowEditor {
             this.updateLocalStorageGroupState();
         });
 
+        // The start prompt and the schedule are workflow-level settings, not a
+        // node interaction: a scheduled run fires server-side with nobody at the
+        // keyboard, so it needs a prompt stored on the graph, and that same
+        // prompt is what every compiled package bakes in as DEFAULT_PROMPT.
+        // They live here beside "Run as a swarm" rather than on the Start node,
+        // whose clicks are for running.
+        document.getElementById('workflow-schedule-btn')?.addEventListener('click', () => this.showPromptForm());
         document.querySelector('.wf-swarm-toggle')?.addEventListener('change', (e) => {
             const wanted = e.target.checked ? 'swarm' : 'workflow';
             if (wanted === 'swarm') {
@@ -2682,20 +2694,6 @@ class WorkflowEditor {
                 return;
             }
 
-            // Start node ⚙ — the prompt/schedule form. This is the ONLY door to
-            // the Start node's stored `data.prompt` (baked into every compiled
-            // target as DEFAULT_PROMPT) and to the schedule section, which is the
-            // whole frontend's only caller of saveSchedule()/deleteSchedule().
-            // It used to be the node's body click; that now opens the
-            // conversation, so the form needs an affordance of its own or a
-            // saved schedule becomes impossible to turn off.
-            const cfgBtn = e.target.closest('.node-config-btn');
-            if (cfgBtn) {
-                e.stopPropagation();
-                this.showPromptForm();
-                return;
-            }
-
             // Handle Start node play button click to run workflow
             const playBtn = e.target.closest('.node-play-btn');
             if (playBtn) {
@@ -2902,7 +2900,6 @@ class WorkflowEditor {
         startNodes.forEach(node => {
             const small = node.querySelector('.node-body small');
             const playBtn = node.querySelector('.node-play-btn');
-            const cfgBtn = node.querySelector('.node-config-btn');
 
             // Ingestion start nodes need no prompt — always show the play button
             // and skip the prompt-text indicator entirely.
@@ -2925,7 +2922,6 @@ class WorkflowEditor {
                     playBtn.style.display = 'flex';
                     playBtn.title = this.t('workflow.swarmSession.openSession');
                 }
-                if (cfgBtn) cfgBtn.style.display = 'flex';
                 return;
             }
 
@@ -2938,7 +2934,6 @@ class WorkflowEditor {
                 playBtn.style.display = 'flex';
                 playBtn.title = this.t('workflow.batchSession.openSession');
             }
-            if (cfgBtn) cfgBtn.style.display = 'flex';
         });
     }
 
@@ -11711,7 +11706,6 @@ class WorkflowEditor {
                 </div>
                 <div class="node-body">
                     <small>${this.t('workflow.messages.userPromptInput')}</small>
-                    <button class="node-config-btn" title="${this.t('workflow.batchSession.configure')}">⚙</button>
                     <button class="node-play-btn" title="${this.t('workflow.runWorkflow')}">▶</button>
                 </div>
                 <div class="node-documents-zone">
