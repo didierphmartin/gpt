@@ -15083,6 +15083,14 @@ class WorkflowEditor {
      * Reset all node visual states
      */
     resetNodeStates() {
+        // A dispatcher's candidate/chosen edges are run state exactly as
+        // `node-skipped` is — the same routing decision, drawn on the arrows
+        // instead of the boxes. Clearing them HERE rather than in
+        // resetWorkflowRun() covers all three doors at once: the top Reset, the
+        // transient ↺ Reset, and Abort. Fixing only the caller that was
+        // reported would have left the other two still showing the last run's
+        // routing over a reset canvas.
+        this._clearDispatchEdges();
         document.querySelectorAll('.drawflow-node').forEach(node => {
             node.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped');
 
