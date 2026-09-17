@@ -193,7 +193,10 @@ class LangGraphSwarmGeneratorTest extends TestCase
             $this->assertStringNotContainsString('dispatcher', strtolower($path));
             $this->assertStringNotContainsString('router', strtolower($path));
         }
-        $this->assertArrayNotHasKey('agents/__init__.py', $files);
+        // agents/__init__.py IS expected: it makes agents/ a regular package so
+        // `import agents.<member>` cannot lose to an installed top-level `agents`
+        // (openai-agents ships one). A package marker, not a member module.
+        $this->assertArrayHasKey('agents/__init__.py', $files);
     }
 
     /** common.py, runs (api.py's POST/runs server) are the EXISTING modular emitters, called rather than duplicated. */
@@ -307,7 +310,11 @@ class LangGraphSwarmGeneratorTest extends TestCase
         // one module per member, none for anything else
         $this->assertSame(
             ['agents/agent_a.py', 'agents/agent_b.py', 'agents/agent_c.py'],
-            array_values(array_filter(array_keys($files), fn($f) => str_starts_with($f, 'agents/')))
+            // __init__.py excluded deliberately: the package marker, not a member.
+            array_values(array_filter(
+                array_keys($files),
+                fn($f) => str_starts_with($f, 'agents/') && $f !== 'agents/__init__.py'
+            ))
         );
     }
 

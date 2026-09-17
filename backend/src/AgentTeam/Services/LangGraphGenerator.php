@@ -2563,6 +2563,14 @@ PY;
             // verbatim with the modular workflow path.
             ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
             ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
+            // A REGULAR package, not a namespace portion. Without __init__.py,
+            // `import agents.<member>` loses to any installed top-level `agents`
+            // package -- openai-agents ships one, and PEP 420 lets a regular package
+            // elsewhere on sys.path beat a namespace portion here. generateModular()
+            // emits this for the same reason; the swarm path omitted it, so the
+            // emitted package did not import at all.
+            ['path' => 'agents/__init__.py', 'code' => '"""Agent modules of workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                . ' (swarm)."""' . "\n"],
         ];
         foreach ($rw['agents'] as $id => $agent) {
             $entry = $layout['agents'][$id] ?? null;
@@ -2612,8 +2620,10 @@ PY;
         $L[] = 'from langgraph_swarm import create_handoff_tool';
         $L[] = 'try:';
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
+        $L[] = '    _PROMPT_KW = "system_prompt"   # langchain >= 1.x renamed prompt=';
         $L[] = 'except ImportError:';
         $L[] = '    from langgraph.prebuilt import create_react_agent';
+        $L[] = '    _PROMPT_KW = "prompt"';
         $L[] = '';
         $L[] = '# The shared runtime lives in common.py, one directory up. Python puts the';
         $L[] = '# workflow folder on sys.path when workflow.py starts, so this resolves for';
@@ -2684,7 +2694,11 @@ PY;
         $L[] = '    return create_react_agent(';
         $L[] = '        _llm(),';
         $L[] = '        tools + HANDOFFS,';
-        $L[] = '        prompt=inject_datetime(INSTRUCTIONS),';
+        // langchain's create_agent takes system_prompt=, langgraph's
+        // create_react_agent takes prompt=. The import above picked one and set
+        // _PROMPT_KW to match; passing the wrong name is a TypeError on every
+        // call, which is what the compile probe caught.
+        $L[] = '        **{_PROMPT_KW: inject_datetime(INSTRUCTIONS)},';
         $L[] = '        name=NODE["display"],';
         $L[] = '    )';
         return rtrim(implode("\n", $L), "\n") . "\n";
