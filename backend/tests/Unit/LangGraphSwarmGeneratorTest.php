@@ -295,9 +295,12 @@ class LangGraphSwarmGeneratorTest extends TestCase
             'display = active if isinstance(active, str) and active in MEMBER_NAMES else DEFAULT_ACTIVE_AGENT',
             $workflow
         );
-        // The literal f-string source, byte for byte -- same shape the DAG path emits.
+        // The literal f-string source, byte for byte. `agent=` carries the name as
+        // its own field so the conversation UI can label the bubble with it --
+        // the text keeps the **{display}** prefix the DAG path emits and the
+        // saved transcript depends on.
         $this->assertStringContainsString(
-            'emit_event(type="message", text=f"**{display}**\n\n{text}", sensitive=False)',
+            'emit_event(type="message", text=f"**{display}**\n\n{text}", agent=display, sensitive=False)',
             $workflow
         );
         // emit_event() runs before the function returns, so the answer reaches the
