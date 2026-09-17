@@ -32,6 +32,7 @@ export interface Workflow {
   updatedAt: string | null;
   outputStorageEnabled: any;
   outputFolder: string | null;
+  orchestration: string;
   graph: any | null; // {nodes, edges} when loaded, else null
 }
 
@@ -133,8 +134,19 @@ export function hydrateWorkflow(data: any): Workflow {
     updatedAt: data.updated_at ?? null,
     outputStorageEnabled: phpBool(data.output_storage_enabled ?? false),
     outputFolder: data.output_folder ?? null,
+    // How the graph is interpreted: a DAG ('workflow') or a swarm of agents
+    // handing control to one another ('swarm'). Anything else falls back —
+    // an unknown value must not change how a graph runs.
+    orchestration: normalizeOrchestration(data.orchestration),
     graph: null,
   };
+}
+
+/** Mirrors the `in_array($o, ['workflow', 'swarm'], true) ? $o : 'workflow'` validation
+ * shared by Workflow::hydrate() and Workflow::setOrchestration(). */
+export function normalizeOrchestration(value: any): string {
+  const o = String(value ?? 'workflow');
+  return o === 'workflow' || o === 'swarm' ? o : 'workflow';
 }
 
 /** Mirrors Workflow::detectRuntimeMode(). */
@@ -175,6 +187,7 @@ export function workflowToArray(w: Workflow): Record<string, any> {
     updated_at: w.updatedAt,
     output_storage_enabled: w.outputStorageEnabled,
     output_folder: w.outputFolder,
+    orchestration: w.orchestration,
   };
   if (w.graph !== null) {
     data.graph = w.graph;
@@ -195,6 +208,7 @@ export function workflowToApiArray(w: Workflow): Record<string, any> {
     created_at: w.createdAt,
     output_storage_enabled: w.outputStorageEnabled,
     output_folder: w.outputFolder,
+    orchestration: w.orchestration,
     schedule_enabled: isScheduleEnabled(w),
     runtime_mode: detectRuntimeMode(w),
   };
@@ -578,11 +592,11 @@ export class WorkflowRepository {
     const data = workflowToArray(workflow);
     const res = await sql`
       INSERT INTO agent_workflows
-        (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder)
+        (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration)
       VALUES
         (${data.user_id}, ${data.workspace_id}, ${data.name}, ${data.description},
          ${JSON.stringify(data.steps)}, ${JSON.stringify(data.triggers)}, ${JSON.stringify(data.variables)},
-         ${data.enabled ? 1 : 0}, ${data.output_storage_enabled ? 1 : 0}, ${data.output_folder})
+         ${data.enabled ? 1 : 0}, ${data.output_storage_enabled ? 1 : 0}, ${data.output_folder}, ${data.orchestration ?? 'workflow'})
     `.execute(db);
 
     const id = Number(res.insertId);
@@ -602,7 +616,8 @@ export class WorkflowRepository {
         enabled = ${data.enabled ? 1 : 0},
         workspace_id = ${data.workspace_id},
         output_storage_enabled = ${data.output_storage_enabled ? 1 : 0},
-        output_folder = ${data.output_folder}
+        output_folder = ${data.output_folder},
+        orchestration = ${data.orchestration ?? 'workflow'}
       WHERE id = ${data.id}
     `.execute(db);
 

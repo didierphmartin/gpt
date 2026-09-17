@@ -15,6 +15,7 @@ import {
   phpBool,
   phpIsArray,
   phpIntval,
+  normalizeOrchestration,
 } from '../AgentTeam/WorkflowRepository';
 import { AgentRepository } from '../AgentTeam/AgentRepository';
 import { LangGraphGenerator } from '../AgentTeam/LangGraphGenerator';
@@ -111,6 +112,7 @@ export class WorkflowController {
       workflow.workspaceId = body.workspace_id ?? null;
       workflow.outputStorageEnabled = phpBool(body.output_storage_enabled ?? false);
       workflow.outputFolder = body.output_folder ?? null;
+      workflow.orchestration = normalizeOrchestration(body.orchestration ?? 'workflow');
 
       if (hasSteps) {
         workflow.steps = body.steps;
@@ -374,6 +376,9 @@ export class WorkflowController {
       if (isset('workspace_id')) workflow.workspaceId = body.workspace_id;
       if (isset('output_storage_enabled')) workflow.outputStorageEnabled = phpBool(body.output_storage_enabled);
       if (has('output_folder')) workflow.outputFolder = body.output_folder; // array_key_exists — null allowed
+      // Orchestration is a property of the workflow, not of a build: the live
+      // interpreter and every compile target read the same value.
+      if (isset('orchestration')) workflow.orchestration = normalizeOrchestration(body.orchestration);
 
       const hasGraph = !phpEmpty(body.definition?.nodes) || !phpEmpty(body.graph?.nodes);
 
@@ -695,6 +700,21 @@ export class WorkflowController {
         return { success: false, error: 'Workflow is disabled', status_code: 400 };
       }
 
+      // A swarm is a conversation, not a run: one active agent at a time,
+      // control moving by handoff, and state held between prompts. This
+      // endpoint walks the graph topologically, so it would execute Start's
+      // fan-out concurrently — the DAG reading of a canvas that means
+      // something else entirely. v1(a) implements the swarm in the editor's
+      // interpreter only, so refuse here rather than silently running the
+      // wrong architecture.
+      if (workflow.orchestration === 'swarm') {
+        return {
+          success: false,
+          error: 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.',
+          status_code: 400,
+        };
+      }
+
       const inputVariables = body.variables ?? body.inputs ?? {};
 
       const hasGraphNodes = await this.graphRepository.getNodes(workflowId);
@@ -771,6 +791,18 @@ export class WorkflowController {
       }
       if (!workflow.enabled) {
         sseCallback({ type: 'error', error: 'Workflow is disabled' });
+        done();
+        return;
+      }
+
+      // See run(): a swarm cannot be walked topologically, and running it
+      // as a DAG would execute Start's fan-out concurrently instead of
+      // handing one conversation between agents.
+      if (workflow.orchestration === 'swarm') {
+        sseCallback({
+          type: 'error',
+          error: 'This workflow is set to swarm orchestration, which runs as a conversation in the editor. Open it and click Start.',
+        });
         done();
         return;
       }
