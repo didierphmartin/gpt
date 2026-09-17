@@ -1126,7 +1126,10 @@
       "running": "Running the workflow…",
       "answerLabel": "workflow answer",
       "routed": "routed to {{name}}",
-      "failed": "The workflow did not finish."
+      "failed": "The workflow did not finish.",
+      "startHint": "Click to open the conversation",
+      "openSession": "Open the workflow conversation",
+      "configure": "Edit the start prompt and schedule"
     }
   }
 }

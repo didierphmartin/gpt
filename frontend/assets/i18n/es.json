@@ -1126,7 +1126,10 @@
       "running": "Ejecutando el flujo…",
       "answerLabel": "respuesta del flujo",
       "routed": "dirigido a {{name}}",
-      "failed": "El flujo no se completó."
+      "failed": "El flujo no se completó.",
+      "startHint": "Haz clic para abrir la conversación",
+      "openSession": "Abrir la conversación del flujo",
+      "configure": "Editar la consulta inicial y la programación"
     }
   }
 }

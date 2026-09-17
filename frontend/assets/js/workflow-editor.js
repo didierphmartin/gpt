@@ -2682,6 +2682,20 @@ class WorkflowEditor {
                 return;
             }
 
+            // Start node ⚙ — the prompt/schedule form. This is the ONLY door to
+            // the Start node's stored `data.prompt` (baked into every compiled
+            // target as DEFAULT_PROMPT) and to the schedule section, which is the
+            // whole frontend's only caller of saveSchedule()/deleteSchedule().
+            // It used to be the node's body click; that now opens the
+            // conversation, so the form needs an affordance of its own or a
+            // saved schedule becomes impossible to turn off.
+            const cfgBtn = e.target.closest('.node-config-btn');
+            if (cfgBtn) {
+                e.stopPropagation();
+                this.showPromptForm();
+                return;
+            }
+
             // Handle Start node play button click to run workflow
             const playBtn = e.target.closest('.node-play-btn');
             if (playBtn) {
@@ -2729,17 +2743,13 @@ class WorkflowEditor {
                     // Ingestion keeps its stored prompt and its own form.
                     this.showPromptForm();
                 } else {
-                    // NOT a run door. showPromptForm() with no callback is the
-                    // SAVE variant, and it is the only way into two things a
-                    // batch workflow cannot live without: the Start node's
-                    // stored `data.prompt` (baked into every compiled target as
-                    // DEFAULT_PROMPT) and the schedule section — the whole
-                    // frontend's only caller of saveSchedule()/deleteSchedule().
-                    // Routing this click to the conversation stranded a saved
-                    // schedule: it kept firing server-side with no way to turn
-                    // it off. Running is the ▶ button and the toolbar's Run;
-                    // the body of the node is where you configure it.
-                    this.showPromptForm();
+                    // Start is the door into the conversation, the same as in a
+                    // swarm — this is the click users reach for, and sending it
+                    // to a form instead was the regression that followed the
+                    // scheduling fix. The form did not go away: it moved to the
+                    // ⚙ button handled above.
+                    this._openBatchSession().catch(err =>
+                        console.error('[WorkflowEditor] could not open the workflow conversation:', err));
                 }
             }
         });
@@ -2892,6 +2902,7 @@ class WorkflowEditor {
         startNodes.forEach(node => {
             const small = node.querySelector('.node-body small');
             const playBtn = node.querySelector('.node-play-btn');
+            const cfgBtn = node.querySelector('.node-config-btn');
 
             // Ingestion start nodes need no prompt — always show the play button
             // and skip the prompt-text indicator entirely.
@@ -2914,28 +2925,20 @@ class WorkflowEditor {
                     playBtn.style.display = 'flex';
                     playBtn.title = this.t('workflow.swarmSession.openSession');
                 }
+                if (cfgBtn) cfgBtn.style.display = 'flex';
                 return;
             }
 
-            if (hasPrompt) {
-                node.classList.add('has-prompt');
-                if (small) {
-                    small.textContent = '📝 Click to edit';
-                    small.style.color = '#2563eb';
-                }
-                if (playBtn) {
-                    playBtn.style.display = 'flex';
-                }
-            } else {
-                node.classList.remove('has-prompt');
-                if (small) {
-                    small.textContent = 'User prompt input';
-                    small.style.color = '';
-                }
-                if (playBtn) {
-                    playBtn.style.display = 'none';
-                }
+            node.classList.toggle('has-prompt', !!hasPrompt);
+            if (small) {
+                small.textContent = this.t('workflow.batchSession.startHint');
+                small.style.color = hasPrompt ? '#2563eb' : '';
             }
+            if (playBtn) {
+                playBtn.style.display = 'flex';
+                playBtn.title = this.t('workflow.batchSession.openSession');
+            }
+            if (cfgBtn) cfgBtn.style.display = 'flex';
         });
     }
 
@@ -11708,6 +11711,7 @@ class WorkflowEditor {
                 </div>
                 <div class="node-body">
                     <small>${this.t('workflow.messages.userPromptInput')}</small>
+                    <button class="node-config-btn" title="${this.t('workflow.batchSession.configure')}">⚙</button>
                     <button class="node-play-btn" title="${this.t('workflow.runWorkflow')}">▶</button>
                 </div>
                 <div class="node-documents-zone">

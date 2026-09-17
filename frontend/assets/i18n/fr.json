@@ -1126,7 +1126,10 @@
       "running": "Exécution du flux…",
       "answerLabel": "réponse du flux",
       "routed": "dirigé vers {{name}}",
-      "failed": "Le flux ne s'est pas terminé."
+      "failed": "Le flux ne s'est pas terminé.",
+      "startHint": "Cliquez pour ouvrir la conversation",
+      "openSession": "Ouvrir la conversation du flux",
+      "configure": "Modifier la demande initiale et la planification"
     }
   }
 }
