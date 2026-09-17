@@ -185,12 +185,48 @@ const batchSrc = [
     // The REAL detector, not a stub — the routing decision is what these
     // cases exist to pin, so a harness copy of it would prove nothing.
     extract('    _extractDocument(text) {'),
+    // The REAL guard, not a stub — a mock that merely mirrors the production
+    // idempotence check would pass even if that check were deleted from the
+    // source. Only extracting it lets a removed guard fail this suite.
+    extract('    _pbPending() {'),
+    extract('    _pbPendingClear() {'),
 ].join(',\n');
+
+/**
+ * Just enough of a DOM for _pbPending/_pbPendingClear's real bodies to run
+ * against: `this._pbOverlayEl()` returns this element, `_pbAppend(html)`
+ * turns the HTML's `class="..."` attribute into a child with that class, and
+ * `.querySelector('.x')`/`.remove()` find and detach it — the exact surface
+ * those two methods use, nothing more.
+ */
+function makeFakeOverlay() {
+    const kids = [];
+    return {
+        kids,
+        querySelector(sel) {
+            const cls = sel.replace(/^\./, '');
+            return kids.find((k) => !k._removed && k.className.split(/\s+/).includes(cls)) || null;
+        },
+    };
+}
+
+function appendFakeChild(overlay, html) {
+    const m = /class="([^"]*)"/.exec(html);
+    const child = { className: m ? m[1] : '' };
+    child.remove = () => {
+        child._removed = true;
+        const i = overlay.kids.indexOf(child);
+        if (i !== -1) overlay.kids.splice(i, 1);
+    };
+    overlay.kids.push(child);
+    return child;
+}
 
 function makeBatchEditor(respond, { throws = false } = {}) {
     const feed = [];
     const cleared = [];
     const routes = [];
+    const overlay = makeFakeOverlay();
     const obj = eval('({ ' + batchSrc + ' })');
     Object.assign(obj, {
         feed, cleared, routes,
@@ -200,25 +236,9 @@ function makeBatchEditor(respond, { throws = false } = {}) {
         currentWorkflowName: 'Claims',
         opened: [],
         t: (key) => key,
-        pending: [],
-        // In-place splice, not a reassignment: `feed` (closure array) is what
-        // _pbBubble/_pbClearFeed push into and read, and ed.feed must stay the
-        // SAME array object throughout the turn or a bubble pushed after the
-        // clear (the agent's answer) would land somewhere ed.feed never sees.
-        //
-        // The guard mirrors the production check
-        // (`this._pbOverlayEl()?.querySelector('.pb-pending')`): a second call
-        // with one already showing must not push a second.
-        _pbPending() {
-            this.pending.push('show');
-            if (feed.some(f => f.who === 'pending')) return;
-            feed.push({ who: 'pending', text: '' });
-        },
-        _pbPendingClear() {
-            this.pending.push('clear');
-            const i = feed.findIndex(f => f.who === 'pending');
-            if (i !== -1) feed.splice(i, 1);
-        },
+        escapeHtml: (s) => s,
+        _pbOverlayEl() { return overlay; },
+        _pbAppend(html) { return appendFakeChild(overlay, html); },
         updateOutputNodeIndicator(on) { this.indicator.push(on); },
         _pbClearFeed() { cleared.push(feed.length); feed.length = 0; },
         _pbBubble(who, text, opts = {}) { feed.push({ who, text, label: opts.label }); },
@@ -687,20 +707,27 @@ asyncCheck('no parent produced anything', () => {
 // ---- the pending indicator ----------------------------------------------
 // Targets without an event stream (ADK, MAF, NOOA) say nothing between the
 // prompt and the answer. The dots are the only sign the run is alive.
+//
+// _pbPending/_pbPendingClear are extracted from the real source (batchSrc,
+// above) and driven against makeFakeOverlay — not hand-mocked — so a deleted
+// idempotence guard or a broken clear path fails these cases for real.
+const pendingCount = (ed) => ed._pbOverlayEl().kids.filter((k) => k.className.includes('pb-pending')).length;
+
 asyncCheck('a turn shows the dots and clears them when the answer lands', async () => {
-    const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
+    let duringRun = null;
+    const ed = makeBatchEditor(() => {
+        duringRun = pendingCount(ed);
+        return { output: 'done', success: true };
+    });
     await ed._batchTurn('go');
-    assert.deepStrictEqual(ed.pending, ['show', 'clear']);
-    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 0,
-        'the dots outlived the answer');
+    assert.strictEqual(duringRun, 1, 'the dots were not showing while the run was in flight');
+    assert.strictEqual(pendingCount(ed), 0, 'the dots outlived the answer');
 });
 
 asyncCheck('the dots are cleared when the run throws', async () => {
     const ed = makeBatchEditor(() => ({}), { throws: true });
     await ed._batchTurn('go');
-    assert.deepStrictEqual(ed.pending, ['show', 'clear']);
-    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 0,
-        'a failed run left the dots spinning forever');
+    assert.strictEqual(pendingCount(ed), 0, 'a failed run left the dots spinning forever');
 });
 
 asyncCheck('the dots appear before the answer, not after', async () => {
@@ -713,14 +740,14 @@ asyncCheck('the dots appear before the answer, not after', async () => {
 });
 
 // Pins the contract stated in _pbPending's docblock: "a turn that somehow
-// calls it twice gets one indicator, not a row of them." Calls it directly
-// (not through a turn) so it fails if the dedupe guard is ever removed.
+// calls it twice gets one indicator, not a row of them." Calls the REAL
+// method directly (not through a turn), so deleting the guard in
+// workflow-editor.js — not just in a mock — fails this case.
 asyncCheck('a second call to _pbPending does not add a second indicator', async () => {
     const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
     ed._pbPending();
     ed._pbPending();
-    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 1,
-        'a second _pbPending() call added a second indicator');
+    assert.strictEqual(pendingCount(ed), 1, 'a second _pbPending() call added a second indicator');
 });
 
 (async () => {
