@@ -200,6 +200,17 @@ function makeBatchEditor(respond, { throws = false } = {}) {
         currentWorkflowName: 'Claims',
         opened: [],
         t: (key) => key,
+        pending: [],
+        // In-place splice, not a reassignment: `feed` (closure array) is what
+        // _pbBubble/_pbClearFeed push into and read, and ed.feed must stay the
+        // SAME array object throughout the turn or a bubble pushed after the
+        // clear (the agent's answer) would land somewhere ed.feed never sees.
+        _pbPending() { this.pending.push('show'); feed.push({ who: 'pending', text: '' }); },
+        _pbPendingClear() {
+            this.pending.push('clear');
+            const i = feed.findIndex(f => f.who === 'pending');
+            if (i !== -1) feed.splice(i, 1);
+        },
         updateOutputNodeIndicator(on) { this.indicator.push(on); },
         _pbClearFeed() { cleared.push(feed.length); feed.length = 0; },
         _pbBubble(who, text, opts = {}) { feed.push({ who, text, label: opts.label }); },
@@ -352,6 +363,7 @@ function makeSessionEditor(mode) {
         _pbOverlayOpen(dfId, name, servers, prompt, opts) { this.opened.push({ dfId, opts }); },
         _pbClearFeed() {},
         _pbBubble() {},
+        _pbPending() {},
         _pbUpdateSwarmStatus() {},
         async _batchTurn() { this.dispatched.push('batch'); },
         async _compiledTurn(target, text, session) { this.dispatched.push({ compiled: { target, session } }); },
@@ -662,6 +674,34 @@ asyncCheck('several parents are labelled and separated, as the compiler does', (
 asyncCheck('no parent produced anything', () => {
     const ed = makeOutputEditor({});
     assert.strictEqual(ed._wfOutputValue('5', NODES), '');
+});
+
+// ---- the pending indicator ----------------------------------------------
+// Targets without an event stream (ADK, MAF, NOOA) say nothing between the
+// prompt and the answer. The dots are the only sign the run is alive.
+asyncCheck('a turn shows the dots and clears them when the answer lands', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'done', success: true }));
+    await ed._batchTurn('go');
+    assert.deepStrictEqual(ed.pending, ['show', 'clear']);
+    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 0,
+        'the dots outlived the answer');
+});
+
+asyncCheck('the dots are cleared when the run throws', async () => {
+    const ed = makeBatchEditor(() => ({}), { throws: true });
+    await ed._batchTurn('go');
+    assert.deepStrictEqual(ed.pending, ['show', 'clear']);
+    assert.strictEqual(ed.feed.filter(f => f.who === 'pending').length, 0,
+        'a failed run left the dots spinning forever');
+});
+
+asyncCheck('the dots appear before the answer, not after', async () => {
+    const order = [];
+    const ed = makeBatchEditor(() => { order.push('ran'); return { output: 'done', success: true }; });
+    const realPending = ed._pbPending.bind(ed);
+    ed._pbPending = () => { order.push('dots'); realPending(); };
+    await ed._batchTurn('go');
+    assert.deepStrictEqual(order, ['dots', 'ran']);
 });
 
 (async () => {

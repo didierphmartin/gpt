@@ -1124,6 +1124,7 @@
       "placeholder": "Escribe una consulta: cada una ejecuta el flujo desde cero…",
       "status": "Una consulta a la vez: enviar otra sustituye esta respuesta.",
       "running": "Ejecutando el flujo…",
+      "working": "Trabajando…",
       "answerLabel": "respuesta del flujo",
       "routed": "dirigido a {{name}}",
       "failed": "El flujo no se completó.",

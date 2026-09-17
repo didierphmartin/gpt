@@ -5317,6 +5317,7 @@ class WorkflowEditor {
                         if (!cs) {
                             this._pbOverlayFinish(true, `run ${ev.run_id} ${ev.status} — ${String(ev.output || '').slice(0, 300)}`);
                         } else if (cs.mode === 'batch') {
+                            this._pbPendingClear();
                             // One bubble from the terminal frame — `output` is
                             // run_workflow()'s return, i.e. the end node's
                             // output. A compiled swarm instead got its answer as
@@ -5370,6 +5371,7 @@ class WorkflowEditor {
                 };
             });
         } catch (e) {
+            this._pbPendingClear();
             this._pbOverlayFinish(false, String(e?.message || e));
         } finally {
             try { es?.close(); } catch (_) { /* already closed */ }
@@ -13087,7 +13089,7 @@ class WorkflowEditor {
                 // for that path only. Both end up with the same feed: the
                 // prompt, then one answer.
                 if (this._pbSessionMode === 'batch') {
-                    if (this._compiledSession) { this._pbClearFeed(); this._pbBubble('you', text); }
+                    if (this._compiledSession) { this._pbClearFeed(); this._pbBubble('you', text); this._pbPending(); }
                 } else {
                     this._pbBubble('you', text);
                 }
@@ -13396,6 +13398,33 @@ class WorkflowEditor {
     _pbClearFeed() {
         const feed = this._pbOverlayEl();
         if (feed) feed.replaceChildren();
+    }
+
+    /**
+     * A "still working" bubble, shown from the moment a prompt is sent until
+     * its answer arrives (spec §6).
+     *
+     * It exists because a target without an event stream says NOTHING between
+     * the two — ADK, MAF and NOOA print to stdout and emit no events, so the
+     * feed would sit empty for the whole run. The LangGraph targets do stream
+     * per-node events, but a batch conversation suppresses them from the feed
+     * anyway, so this is the only progress any batch turn shows.
+     *
+     * Idempotent: a turn that somehow calls it twice gets one indicator, not a
+     * row of them.
+     */
+    _pbPending() {
+        if (this._pbOverlayEl()?.querySelector('.pb-pending')) return;
+        this._pbAppend(`
+            <div class="pb-pending" role="status" aria-label="${this.escapeHtml(this.t('workflow.batchSession.working'))}"
+                 style="align-self:flex-start;background:rgba(148,163,184,0.12);border-radius:10px;padding:10px 14px;">
+                <span class="pb-dot"></span><span class="pb-dot"></span><span class="pb-dot"></span>
+            </div>`);
+    }
+
+    /** Remove it. Safe when none is showing — every exit from a turn calls this. */
+    _pbPendingClear() {
+        this._pbOverlayEl()?.querySelector('.pb-pending')?.remove();
     }
 
     /**
@@ -14271,6 +14300,7 @@ class WorkflowEditor {
     async _batchTurn(userPrompt) {
         this._pbClearFeed();
         this._pbBubble('you', userPrompt);
+        this._pbPending();
         const st = document.getElementById('pb-ov-status');
         if (st) { st.textContent = this.t('workflow.batchSession.running'); st.style.color = '#9ca3af'; }
         let res;
@@ -14282,6 +14312,7 @@ class WorkflowEditor {
                 },
             });
         } catch (e) {
+            this._pbPendingClear();
             this._pbBubble('agent', `${this.t('workflow.batchSession.failed')} ${e?.message || e}`,
                 { label: this._batchAnswerLabel() });
             // The walk threw before it could record a result, so whatever
@@ -14300,6 +14331,7 @@ class WorkflowEditor {
         //
         // A captured skill artifact wins over the raw text: it has a filename
         // and the real bytes, where the text is only the end node's copy of it.
+        this._pbPendingClear();
         const out = String(res?.output ?? '');
         let artifact = this.lastProducedArtifact;
         if (!artifact) {
