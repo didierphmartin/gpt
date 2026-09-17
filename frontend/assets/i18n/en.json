@@ -956,6 +956,7 @@
       "runPromptHelp": "This run only — the Start node's saved prompt is unchanged.",
       "runPromptRun": "Run",
       "runTargetCompiled": "compiled",
+      "documentTitle": "Document",
       "runTargetLive": "live interpreter",
       "runTargetUrl": "Run against a URL…",
       "runTargetPrompt": "Workflow server URL",

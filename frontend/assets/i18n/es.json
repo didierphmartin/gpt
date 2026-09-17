@@ -956,6 +956,7 @@
       "runPromptHelp": "Solo para esta ejecución: el prompt guardado en el nodo Inicio no cambia.",
       "runPromptRun": "Ejecutar",
       "runTargetCompiled": "compilado",
+      "documentTitle": "Documento",
       "runTargetLive": "intérprete en vivo",
       "runTargetUrl": "Ejecutar contra una URL…",
       "runTargetPrompt": "URL del servidor del flujo de trabajo",

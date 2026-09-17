@@ -14005,6 +14005,10 @@ class WorkflowEditor {
         // produced a document the end node says so in its own words — the UI
         // composes no sentence of its own about files.
         this._pbBubble('agent', res?.output || this.t('workflow.batchSession.failed'));
+        // The document goes to its own overlay (§4) — never into the bubble,
+        // and never as a line of UI prose about a file. A run that produced
+        // none leaves whatever is open alone.
+        if (this.lastProducedArtifact) this._openDocumentOverlay(this.lastProducedArtifact);
         return res;
     }
 
@@ -15030,6 +15034,124 @@ class WorkflowEditor {
     }
 
     /**
+     * Render one produced artifact into `host`. Extracted from
+     * showWorkflowResults so the results modal's column and the standalone
+     * document overlay (spec §4) are the SAME renderer rather than two that
+     * drift. Nothing about the rendering changed in the extraction: the HTML
+     * branch keeps sandbox="allow-scripts" WITHOUT allow-same-origin, so a
+     * generated report runs its own JS in an opaque origin and still cannot
+     * read this page, its cookies or its localStorage.
+     */
+    _renderArtifactInto(host, artifact) {
+        if (!host || !artifact) return;
+        host.replaceChildren();
+        if (artifact.kind === 'html') {
+            const iframe = document.createElement('iframe');
+            iframe.setAttribute('sandbox', 'allow-scripts');
+            iframe.style.cssText = 'width:100%; height:100%; border:0; background:white;';
+            iframe.srcdoc = artifact.content || '';
+            host.appendChild(iframe);
+        } else if (artifact.kind === 'markdown') {
+            const wrap = document.createElement('div');
+            wrap.className = 'markdown-content';
+            wrap.style.cssText = 'padding:16px; height:100%; overflow:auto; background:white;';
+            wrap.innerHTML = this.formatMarkdown(artifact.content || '');
+            host.appendChild(wrap);
+        } else if (artifact.kind === 'binary') {
+            // Binary formatter output (docx/pptx/xlsx/pdf): show a file
+            // header with a Download button, plus an inline preview
+            // produced by the existing attachment converter (mammoth et
+            // al., docx/pptx/xlsx/pdf → markdown). Browsers can't render
+            // these natively; converting to markdown is how claude.ai
+            // previews documents too. Formats the converter can't handle
+            // fall back to download-only.
+            const fileName = (artifact.relPath || 'file').split('/').pop();
+            const ext = (fileName.split('.').pop() || '').toLowerCase();
+            const dispPath = (artifact.relPath || '').replace(/^\//, '');
+            const sizeStr = artifact.size >= 1024 ? `${(artifact.size / 1024).toFixed(0)} KB` : `${artifact.size || 0} B`;
+            const esc = (s) => this.escapeHtml ? this.escapeHtml(String(s)) : String(s);
+            const PREVIEWABLE = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
+            const container = document.createElement('div');
+            container.style.cssText = 'height:100%; overflow:auto; background:white;';
+            container.innerHTML = `
+                <div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid #e5e7eb; position:sticky; top:0; background:white; z-index:1;">
+                    <div style="font-size:28px; line-height:1;">📄</div>
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; color:#111; word-break:break-all;">${esc(fileName)}</div>
+                        <div style="font-size:12px; color:#6b7280; word-break:break-all;">${sizeStr} · ${esc(ext.toUpperCase())} · ${esc(dispPath)}</div>
+                    </div>
+                    <button data-dl style="padding:8px 18px; background:#4F46E5; color:#fff; border:0; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; white-space:nowrap;">Download</button>
+                </div>
+                <div data-preview style="padding:16px;"></div>`;
+            host.appendChild(container);
+            const bytesOf = () => artifact.bytes instanceof Uint8Array ? artifact.bytes : new Uint8Array(artifact.bytes || []);
+            container.querySelector('[data-dl]')?.addEventListener('click', () => {
+                try {
+                    const blob = new Blob([bytesOf()], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = fileName;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 0);
+                } catch (e) { console.warn('[workflow] artifact download failed:', e); }
+            });
+            const preview = container.querySelector('[data-preview]');
+            if (PREVIEWABLE.has(ext) && window.attachmentConverter?.toMarkdown) {
+                preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Converting preview…</div>';
+                (async () => {
+                    try {
+                        const file = new File([bytesOf()], fileName);
+                        const res = await window.attachmentConverter.toMarkdown(file);
+                        const wrap = document.createElement('div');
+                        wrap.className = 'markdown-content';
+                        wrap.innerHTML = this.formatMarkdown(res?.markdown || '');
+                        preview.replaceChildren(wrap);
+                    } catch (e) {
+                        preview.innerHTML = `<div style="color:#9ca3af; font-size:13px;">Inline preview unavailable — use Download. (${esc(e?.message || e)})</div>`;
+                    }
+                })();
+            } else {
+                preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">No inline preview for this format — use Download.</div>';
+            }
+        }
+    }
+
+    /**
+     * Spec §4 — a produced document opens in its OWN overlay, not as a column
+     * inside the results modal. The column exists because the chat layout's
+     * artifact pane is not visible from the editor; a conversation has no
+     * results modal to put a column in, so the viewer becomes its own window.
+     *
+     * One document at a time, by design: a later turn replaces what this shows.
+     * Closing it does not end anything — the conversation keeps going.
+     */
+    _openDocumentOverlay(artifact) {
+        if (!artifact) return;
+        document.getElementById('workflow-document-overlay')?.remove();
+        const rootName = window.chatApp?._fsaRootName || 'storage';
+        const rel = artifact.relPath || '';
+        const shownPath = rel.startsWith('/')
+            ? `${rootName}${rel}`
+            : `${rootName}/skills/${artifact.dirName}/${rel}`;
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="workflow-document-overlay" class="storage-config-overlay">
+                <div class="storage-config-modal" style="max-width:900px;width:92%;height:88vh;display:flex;flex-direction:column;">
+                    <div class="storage-config-header">
+                        <h3 style="margin:0;"><span>📄</span> <span>${this.escapeHtml(this.t('workflow.output.documentTitle') || 'Document')}</span>
+                            <span class="text-xs text-gray-400" title="${this.escapeHtml(shownPath)}">${this.escapeHtml(shownPath)}</span></h3>
+                        <button class="storage-config-close" id="workflow-document-close">×</button>
+                    </div>
+                    <div class="storage-config-body" id="workflow-document-content" style="flex:1 1 auto;min-height:0;overflow:auto;padding:0;"></div>
+                </div>
+            </div>`);
+        const host = document.getElementById('workflow-document-content');
+        this._renderArtifactInto(host, artifact);
+        document.getElementById('workflow-document-close')?.addEventListener('click', () => {
+            document.getElementById('workflow-document-overlay')?.remove();
+        });
+    }
+
+    /**
      * Show workflow execution results in a modal overlay
      */
     showWorkflowResults(data) {
@@ -15570,77 +15692,7 @@ class WorkflowEditor {
         // hidden.) Markdown goes through the existing in-app renderer.
         if (artifact) {
             const artifactHost = document.getElementById('workflow-artifact-content');
-            if (artifactHost) {
-                if (artifact.kind === 'html') {
-                    const iframe = document.createElement('iframe');
-                    iframe.setAttribute('sandbox', 'allow-scripts');
-                    iframe.style.cssText = 'width:100%; height:100%; border:0; background:white;';
-                    iframe.srcdoc = artifact.content || '';
-                    artifactHost.appendChild(iframe);
-                } else if (artifact.kind === 'markdown') {
-                    const wrap = document.createElement('div');
-                    wrap.className = 'markdown-content';
-                    wrap.style.cssText = 'padding:16px; height:100%; overflow:auto; background:white;';
-                    wrap.innerHTML = this.formatMarkdown(artifact.content || '');
-                    artifactHost.appendChild(wrap);
-                } else if (artifact.kind === 'binary') {
-                    // Binary formatter output (docx/pptx/xlsx/pdf): show a file
-                    // header with a Download button, plus an inline preview
-                    // produced by the existing attachment converter (mammoth et
-                    // al., docx/pptx/xlsx/pdf → markdown). Browsers can't render
-                    // these natively; converting to markdown is how claude.ai
-                    // previews documents too. Formats the converter can't handle
-                    // fall back to download-only.
-                    const fileName = (artifact.relPath || 'file').split('/').pop();
-                    const ext = (fileName.split('.').pop() || '').toLowerCase();
-                    const dispPath = (artifact.relPath || '').replace(/^\//, '');
-                    const sizeStr = artifact.size >= 1024 ? `${(artifact.size / 1024).toFixed(0)} KB` : `${artifact.size || 0} B`;
-                    const esc = (s) => this.escapeHtml ? this.escapeHtml(String(s)) : String(s);
-                    const PREVIEWABLE = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
-                    const container = document.createElement('div');
-                    container.style.cssText = 'height:100%; overflow:auto; background:white;';
-                    container.innerHTML = `
-                        <div style="display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid #e5e7eb; position:sticky; top:0; background:white; z-index:1;">
-                            <div style="font-size:28px; line-height:1;">📄</div>
-                            <div style="flex:1; min-width:0;">
-                                <div style="font-weight:600; color:#111; word-break:break-all;">${esc(fileName)}</div>
-                                <div style="font-size:12px; color:#6b7280; word-break:break-all;">${sizeStr} · ${esc(ext.toUpperCase())} · ${esc(dispPath)}</div>
-                            </div>
-                            <button data-dl style="padding:8px 18px; background:#4F46E5; color:#fff; border:0; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; white-space:nowrap;">Download</button>
-                        </div>
-                        <div data-preview style="padding:16px;"></div>`;
-                    artifactHost.appendChild(container);
-                    const bytesOf = () => artifact.bytes instanceof Uint8Array ? artifact.bytes : new Uint8Array(artifact.bytes || []);
-                    container.querySelector('[data-dl]')?.addEventListener('click', () => {
-                        try {
-                            const blob = new Blob([bytesOf()], { type: 'application/octet-stream' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url; a.download = fileName;
-                            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                            setTimeout(() => URL.revokeObjectURL(url), 0);
-                        } catch (e) { console.warn('[workflow] artifact download failed:', e); }
-                    });
-                    const preview = container.querySelector('[data-preview]');
-                    if (PREVIEWABLE.has(ext) && window.attachmentConverter?.toMarkdown) {
-                        preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Converting preview…</div>';
-                        (async () => {
-                            try {
-                                const file = new File([bytesOf()], fileName);
-                                const res = await window.attachmentConverter.toMarkdown(file);
-                                const wrap = document.createElement('div');
-                                wrap.className = 'markdown-content';
-                                wrap.innerHTML = this.formatMarkdown(res?.markdown || '');
-                                preview.replaceChildren(wrap);
-                            } catch (e) {
-                                preview.innerHTML = `<div style="color:#9ca3af; font-size:13px;">Inline preview unavailable — use Download. (${esc(e?.message || e)})</div>`;
-                            }
-                        })();
-                    } else {
-                        preview.innerHTML = '<div style="color:#9ca3af; font-size:13px;">No inline preview for this format — use Download.</div>';
-                    }
-                }
-            }
+            if (artifactHost) this._renderArtifactInto(artifactHost, artifact);
         }
 
         // Add raw/rendered toggle handler

@@ -956,6 +956,7 @@
       "runPromptHelp": "Pour cette exécution seulement — le prompt enregistré du nœud Début est inchangé.",
       "runPromptRun": "Exécuter",
       "runTargetCompiled": "compilé",
+      "documentTitle": "Document",
       "runTargetLive": "interpréteur en direct",
       "runTargetUrl": "Exécuter sur une URL…",
       "runTargetPrompt": "URL du serveur de workflow",

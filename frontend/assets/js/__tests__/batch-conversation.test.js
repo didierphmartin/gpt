@@ -178,10 +178,12 @@ function makeBatchEditor(respond, { throws = false } = {}) {
     Object.assign(obj, {
         feed, cleared, routes,
         lastProducedArtifact: null,
+        opened: [],
         t: (key) => key,
         _pbClearFeed() { cleared.push(feed.length); feed.length = 0; },
         _pbBubble(who, text) { feed.push({ who, text }); },
         _pbRouteLine(to, notes) { routes.push({ to, notes }); feed.push({ who: 'route', text: to }); },
+        _openDocumentOverlay(a) { this.opened.push(a); },
         async executeWorkflowInBrowser(prompt, opts) {
             if (throws) throw new Error('runner exploded');
             opts?.onProgress?.({ type: 'route', node_id: '3', to: 'IT claims', from: 'Dispatcher', notes: 'password reset' });
@@ -241,6 +243,23 @@ asyncCheck('a throwing onProgress handler cannot break the run', async () => {
     });
     assert.strictEqual(res.output, 'answer from IT claims');
     assert.strictEqual(res.success, true);
+});
+
+asyncCheck('a produced document opens its own overlay', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'I produced a report.', success: true }));
+    ed.lastProducedArtifact = { kind: 'html', content: '<h1>Report</h1>', relPath: 'out/r.html', dirName: 'html' };
+    await ed._batchTurn('write me a report');
+    assert.strictEqual(ed.opened.length, 1, 'the document overlay was not opened');
+    assert.strictEqual(ed.opened[0].kind, 'html');
+    // The bubble is the node's own words, not a composed sentence about a file.
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.strictEqual(answers[0].text, 'I produced a report.');
+});
+
+asyncCheck('a run with no document opens nothing', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'no file here', success: true }));
+    await ed._batchTurn('just answer');
+    assert.strictEqual(ed.opened.length, 0, 'the document overlay opened with no artifact');
 });
 
 (async () => {
