@@ -2354,6 +2354,7 @@ class WorkflowEditor {
             // Graph changed — flip the Output node variant if needed.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._updateForkBadges();
             this._scheduleStructureSave();
         });
 
@@ -2362,6 +2363,7 @@ class WorkflowEditor {
             console.log('[WorkflowEditor] Connection removed:', connection);
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._updateForkBadges();
             this._scheduleStructureSave();
         });
 
@@ -2382,6 +2384,7 @@ class WorkflowEditor {
             // the agent variant.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._updateForkBadges();
             this._scheduleStructureSave();
         });
 
@@ -2397,6 +2400,7 @@ class WorkflowEditor {
             // A new node may make this an ingestion workflow — flip the variant.
             this.refreshOutputNodeVariant();
             this.refreshStartNodeVariant();
+            this._updateForkBadges();
             this._scheduleStructureSave();
         });
 
@@ -8634,6 +8638,7 @@ class WorkflowEditor {
         // ingestion node must immediately flip it to the ingestion variant.
         this.refreshOutputNodeVariant();
         this.refreshStartNodeVariant();
+        this._updateForkBadges();
 
         return drawflowId;
     }
@@ -10767,6 +10772,7 @@ class WorkflowEditor {
                 <div class="node-body">
                     <span class="node-timer">0:00</span>
                     ${providerDisplay}
+                    <span class="node-fork-badge" style="display:none;"></span>
                 </div>
                 <div class="node-documents-zone">
                     <div class="documents-list"></div>
@@ -10985,6 +10991,7 @@ class WorkflowEditor {
             // Reset node indicators
             this.updateOutputNodeIndicator(false);
             this.updateStartNodeIndicator(false);
+            this._updateForkBadges();
         } else {
             // TODO: Import from simplified format
             console.warn('[WorkflowEditor] Simplified import not yet implemented');
@@ -11706,6 +11713,7 @@ class WorkflowEditor {
                 </div>
                 <div class="node-body">
                     <small>${this.t('workflow.messages.userPromptInput')}</small>
+                    <span class="node-fork-badge" style="display:none;"></span>
                     <button class="node-play-btn" title="${this.t('workflow.runWorkflow')}">▶</button>
                 </div>
                 <div class="node-documents-zone">
@@ -13827,6 +13835,94 @@ class WorkflowEditor {
         return out;
     }
 
+    /**
+     * What the fork badge on `nodeId` should say, or null when it should not
+     * appear at all.
+     *
+     * Users asked for a marker at EVERY split, not only a dispatcher's: two
+     * arrows leaving a node mean "all of these run" or "one of these runs",
+     * and until now the canvas said neither. Marking only the dispatcher case
+     * would leave the reader inferring the other from an absence.
+     *
+     * Not a fork below two outgoing edges — with one child there is no choice
+     * to describe. Not in a swarm either: Start's fan-out there is the mesh of
+     * members, and "ALL 3" would be a lie, since one agent takes the prompt.
+     */
+    _forkBadgeFor(nodeId, nodes) {
+        if (this._isSwarm()) return null;
+        const outs = this._wfDownstreamIds(nodeId, nodes);
+        if (outs.length < 2) return null;
+        return {
+            dispatcher: (nodes[nodeId]?.data || {}).agent_type === 'dispatcher',
+            total: outs.length,
+        };
+    }
+
+    /**
+     * Mark a dispatcher's outgoing edges as candidates for this turn (spec:
+     * users' "candidates, until one is picked"). Drawflow stamps every
+     * connection's <svg> with `node_out_node-<from>` and `node_in_node-<to>`,
+     * which is what makes ONE edge addressable without any geometry.
+     *
+     * Static classes only — no keyframes. The canvas already animates every
+     * edge's dash offset, and that alone has been measured at hundreds of
+     * main-thread paints a second; a second animation on the same elements is
+     * not something this canvas can afford.
+     */
+    _markDispatchCandidates(fromId) {
+        if (!this.container) return;
+        for (const el of this.container.querySelectorAll(`svg.connection.node_out_node-${fromId}`)) {
+            el.classList.add('wf-edge-candidate');
+            el.classList.remove('wf-edge-chosen');
+        }
+    }
+
+    /** The model picked: that edge goes full strength, its siblings stay faint. */
+    _markDispatchChosen(fromId, toId) {
+        if (!this.container) return;
+        const el = this.container.querySelector(
+            `svg.connection.node_out_node-${fromId}.node_in_node-${toId}`);
+        if (!el) return;
+        el.classList.remove('wf-edge-candidate');
+        el.classList.add('wf-edge-chosen');
+    }
+
+    /**
+     * Clear every candidate/chosen mark. Called at the start of a turn rather
+     * than at the end of one, so the last run's routing stays on screen until
+     * the next prompt actually replaces it — the same rule the conversation
+     * feed follows.
+     */
+    _clearDispatchEdges() {
+        if (!this.container) return;
+        for (const el of this.container.querySelectorAll('svg.connection.wf-edge-candidate, svg.connection.wf-edge-chosen')) {
+            el.classList.remove('wf-edge-candidate', 'wf-edge-chosen');
+        }
+    }
+
+    /**
+     * Paint every fork badge from the current graph. Cheap enough to run whole
+     * rather than diff: it is one pass over the nodes, and the events that
+     * change a fan-out (an edge added or removed, a node deleted, an agent
+     * retyped) are all user actions, never a loop.
+     */
+    _updateForkBadges() {
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data;
+        if (!nodes) return;
+        for (const id of Object.keys(nodes)) {
+            const el = this.container?.querySelector(`#node-${id} .node-fork-badge`);
+            if (!el) continue;
+            const badge = this._forkBadgeFor(id, nodes);
+            if (!badge) { el.style.display = 'none'; continue; }
+            el.style.display = 'inline-flex';
+            el.classList.toggle('is-dispatch', badge.dispatcher);
+            el.textContent = this.t(
+                badge.dispatcher ? 'workflow.fork.one' : 'workflow.fork.all',
+                { total: badge.total }
+            );
+        }
+    }
+
     /** Dispatcher targets: downstream AGENT nodes as [{id, name}] (edge order). */
     _wfDispatchTargets(nodeId, nodes) {
         return this._wfDownstreamIds(nodeId, nodes)
@@ -14485,6 +14581,7 @@ class WorkflowEditor {
         // stale file (the SSE path resets this on 'workflow_start'; the
         // browser-driven path must do it here).
         this.lastProducedArtifact = null;
+        this._clearDispatchEdges();
         this.updateStartNodeIndicator(true);
         const _wfStartedAt = Date.now();
         let _wfHadError = false;
@@ -14523,6 +14620,8 @@ class WorkflowEditor {
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
                         const dispatchTargets = (node.data.agent_type === 'dispatcher')
                             ? this._wfDispatchTargets(id, nodes) : null;
+                        // Its branches are candidates from here until it answers.
+                        if (dispatchTargets?.length) this._markDispatchCandidates(id);
                         const res = this._wfNodeKind(id, nodes) === 'playbook'
                             ? await this._runNodeAsPlaybookUnit(node, ctx)
                             : await this._runNodeAsChatUnit(node, ctx, { dispatchTargets, routedBy: this._wfRoutedBy[String(id)] || null });
@@ -14532,6 +14631,7 @@ class WorkflowEditor {
                         // with no output so a downstream merge is not blocked.
                         if (res?.route && dispatchTargets?.length) {
                             this._wfRoutedBy[String(res.route.id)] = { from: agentName, notes: res.route.notes || '' };
+                            this._markDispatchChosen(id, String(res.route.id));
                             // §3c — a dispatcher choosing a branch is why this
                             // answer and not another. The conversation overlay
                             // renders it as one thin line; every other caller
@@ -18249,6 +18349,12 @@ Based on the analysis...
                         this.editor.updateNodeDataFromId(this.editingNodeId, newNodeData);
                         console.log('[WorkflowEditor] saveAgent - updated node data via updateNodeDataFromId (fallback)');
                     }
+
+                    // Retyping an agent to or from `dispatcher` changes what its
+                    // fan-out MEANS without changing the graph's shape, so no
+                    // connection event fires and the badge would keep the old
+                    // wording until the next unrelated edit.
+                    this._updateForkBadges();
 
                     // Update the visual display of the node
                     if (isPlaybookNode) {

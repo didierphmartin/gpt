@@ -1131,6 +1131,10 @@
       "openSession": "Open the workflow conversation",
       "configure": "Edit the start prompt and schedule",
       "configureLabel": "Prompt & schedule"
+    },
+    "fork": {
+      "all": "ALL {{total}}",
+      "one": "1 OF {{total}}"
     }
   }
 }

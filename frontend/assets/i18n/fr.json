@@ -1131,6 +1131,10 @@
       "openSession": "Ouvrir la conversation du flux",
       "configure": "Modifier la demande initiale et la planification",
       "configureLabel": "Demande et planification"
+    },
+    "fork": {
+      "all": "LES {{total}}",
+      "one": "1 SUR {{total}}"
     }
   }
 }

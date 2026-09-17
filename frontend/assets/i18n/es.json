@@ -1131,6 +1131,10 @@
       "openSession": "Abrir la conversación del flujo",
       "configure": "Editar la consulta inicial y la programación",
       "configureLabel": "Consulta y programación"
+    },
+    "fork": {
+      "all": "LAS {{total}}",
+      "one": "1 DE {{total}}"
     }
   }
 }

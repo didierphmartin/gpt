@@ -936,6 +936,51 @@ svg.connection.selected .main-path,
 
 /* Play button on Start node */
 
+/* Fork badge — what a fan-out does, stated at the split (user request: mark
+   EVERY split, not only a dispatcher's, so the reader never has to infer the
+   concurrent case from an absence). Lives inside the node, so it moves and
+   zooms with it and needs no positioning maths. */
+.node-fork-badge {
+    display: none;
+    align-items: center;
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    background: #eef4ee;
+    color: #15803d;
+    border: 1px solid rgba(21, 128, 61, 0.35);
+}
+
+.node-fork-badge.is-dispatch {
+    background: #fdf3e3;
+    color: #b45309;
+    border-color: rgba(180, 83, 9, 0.38);
+}
+
+/* Candidate / chosen edges — a dispatcher's branches during a run.
+   Static only: the canvas already animates every edge's dash offset, and that
+   alone has been measured at hundreds of main-thread paints per second, so a
+   second animation on the same elements is not affordable here.
+   These sit BELOW the hover and selected rules in the cascade on purpose —
+   pointing at an edge must still show you it is the edge you would select. */
+#drawflow .connection.wf-edge-candidate .main-path,
+.drawflow .connection.wf-edge-candidate .main-path,
+svg.connection.wf-edge-candidate .main-path {
+    stroke: #8899aa !important;
+    opacity: 0.32;
+}
+
+#drawflow .connection.wf-edge-chosen .main-path,
+.drawflow .connection.wf-edge-chosen .main-path,
+svg.connection.wf-edge-chosen .main-path {
+    stroke: #b45309 !important;
+    opacity: 1;
+}
+
 .node-play-btn {
     display: none;
     width: 28px;

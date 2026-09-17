@@ -77,6 +77,12 @@ function makeEditor(respond) {
         },
         updateStartNodeIndicator() {},
         highlightNode() {},
+        // Edge painting is DOM in production; here it records the calls so the
+        // decision sequence can be asserted without a canvas.
+        edgeMarks: [],
+        _clearDispatchEdges() { this.edgeMarks.push('clear'); },
+        _markDispatchCandidates(from) { this.edgeMarks.push(`candidates:${from}`); },
+        _markDispatchChosen(from, to) { this.edgeMarks.push(`chosen:${from}->${to}`); },
         _wfNodeLog() {},
         _pbBubble() {},
         _runNodeAsPlaybookUnit: async () => ({ output: 'playbook', success: true }),
@@ -463,6 +469,74 @@ asyncCheck('a swarm conversation is unaffected by the batch term', async () => {
     for (const ev of PLAYBOOK_TURN) await compiled._handlePlaybookEvent('3', ev);
     // Trace suppressed, answer shown — exactly what a compiled swarm did before.
     assert.deepStrictEqual(compiled.feed.map(f => f.kind), ['bubble']);
+});
+
+// ---- the fork badge: what a fan-out says about itself ------------------
+// Users asked for a marker at every split, so the badge is the one place the
+// canvas states how many of the drawn branches actually run. Pure logic, so
+// it is pinned here; the rendering itself is DOM and is verified by hand.
+const forkSrc = extract('    _forkBadgeFor(nodeId, nodes) {');
+
+function makeForkEditor({ swarm = false } = {}) {
+    const obj = eval('({ ' + forkSrc + ' })');
+    Object.assign(obj, {
+        _isSwarm: () => swarm,
+        _wfDownstreamIds(nodeId) { return [...(EDGES[String(nodeId)] || [])]; },
+    });
+    return obj;
+}
+
+asyncCheck('a plain fan-out says all of its branches run', () => {
+    const ed = makeForkEditor();
+    // node 2 fans out to 3 and 4; NODES['2'] is the dispatcher, so use a clone.
+    const plain = { ...NODES, '2': { data: { agent_name: 'Triage' } } };
+    assert.deepStrictEqual(ed._forkBadgeFor('2', plain), { dispatcher: false, total: 2 });
+});
+
+asyncCheck('a dispatcher fan-out says one of them runs', () => {
+    const ed = makeForkEditor();
+    assert.deepStrictEqual(ed._forkBadgeFor('2', NODES), { dispatcher: true, total: 2 });
+});
+
+asyncCheck('a single outgoing edge is not a fork', () => {
+    const ed = makeForkEditor();
+    // node 1 (start) has exactly one child.
+    assert.strictEqual(ed._forkBadgeFor('1', NODES), null);
+});
+
+asyncCheck('a node with no outgoing edges is not a fork', () => {
+    const ed = makeForkEditor();
+    assert.strictEqual(ed._forkBadgeFor('5', NODES), null);
+});
+
+asyncCheck('a swarm has no fork badges', () => {
+    // Start's fan-out in a swarm is the mesh, not a fan-out — "ALL 3" would be
+    // a lie there, since one agent takes the prompt.
+    const ed = makeForkEditor({ swarm: true });
+    assert.strictEqual(ed._forkBadgeFor('2', NODES), null);
+});
+
+asyncCheck('a dispatcher run marks its branches candidates, then marks the winner', async () => {
+    const ed = makeEditor(answersRoutingTo3);
+    await ed.executeWorkflowInBrowser('reset my password', { conversation: true });
+    assert.deepStrictEqual(ed.edgeMarks, ['clear', 'candidates:2', 'chosen:2->3'],
+        'got: ' + JSON.stringify(ed.edgeMarks));
+});
+
+asyncCheck('a run with no dispatcher marks no edges', async () => {
+    const ed = makeEditor(() => ({ output: 'plain', success: true }));
+    // Node 2 stops routing, so nothing downstream is a menu.
+    await ed.executeWorkflowInBrowser('hello', { conversation: true });
+    assert.deepStrictEqual(ed.edgeMarks.filter(m => m !== 'clear' && !m.startsWith('candidates')), [],
+        'no edge should be chosen without a route: ' + JSON.stringify(ed.edgeMarks));
+});
+
+asyncCheck('each turn clears the previous turn\'s edge marks first', async () => {
+    const ed = makeEditor(answersRoutingTo3);
+    await ed.executeWorkflowInBrowser('one', { conversation: true });
+    await ed.executeWorkflowInBrowser('two', { conversation: true });
+    assert.strictEqual(ed.edgeMarks.filter(m => m === 'clear').length, 2);
+    assert.strictEqual(ed.edgeMarks[0], 'clear');
 });
 
 (async () => {
