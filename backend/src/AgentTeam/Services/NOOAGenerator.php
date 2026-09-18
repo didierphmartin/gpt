@@ -80,6 +80,34 @@ class NOOAGenerator
         ];
     }
 
+    /**
+     * The compiled package: the same script, plus the run server that makes it
+     * conversational. The single-file generate() is unchanged and still the
+     * only way to run this outside the editor.
+     */
+    public function generatePackage(int $workflowId, ?string $userId = null): array
+    {
+        $single = $this->generate($workflowId, $userId);
+        $wf = $this->workflowRepo->findById($workflowId);
+        $name = $wf ? $wf->getName() : 'workflow';
+        $root = preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_nooa';
+
+        return [
+            'root' => $root,
+            'files' => [
+                ['path' => '__init__.py', 'code' => "\n"],
+                ['path' => 'workflow.py', 'code' => $single['code']],
+                ['path' => 'common.py',   'code' => \AgentTeam\Services\RunServerEmitter::commonBlock()],
+                ['path' => 'api.py',      'code' => \AgentTeam\Services\RunServerEmitter::emit(
+                    $name,
+                    'NOOA run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
+                    'WORKFLOW_VERSION = "1"'
+                )],
+            ],
+        ];
+    }
+
     public static function emitNooa(array $analyzed): string
     {
         // Web SAPI serialize_precision quirk — same guard as the other targets:
@@ -854,7 +882,7 @@ PY;
         $body[] = '    _parts = [t for _, t in ' . $refs($mergeIds) . ' if t]';
         $body[] = '    return _parts[0] if len(_parts) == 1 else "\n\n---\n\n".join(_parts)';
 
-        return "async def main(prompt: str = DEFAULT_PROMPT) -> str:\n" . implode("\n", $body);
+        return "async def run_workflow(prompt: str, session: str | None = None) -> str:\n" . implode("\n", $body);
     }
 
     // -------------------------------------------------------------------------
@@ -873,7 +901,7 @@ PY;
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
             Progress.begin(len(AGENTS), _prompt)
             try:
-                _text = asyncio.run(main(_prompt))
+                _text = asyncio.run(run_workflow(_prompt))
             except Exception as _err:
                 print("\n=== WORKFLOW STOPPED ===\n" + str(_err), file=sys.stderr)
                 sys.exit(1)

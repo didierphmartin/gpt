@@ -83,11 +83,11 @@ final class NooaGeneratorEmitTest extends TestCase
     public function testDriverAndGlobals(): void
     {
         $code = NOOAGenerator::emitNooa($this->analyzed());
-        $this->assertStringContainsString('async def main(', $code);
+        $this->assertStringContainsString('async def run_workflow(prompt: str, session: str | None = None) -> str:', $code);
         $this->assertStringContainsString('DEFAULT_PROMPT = "Analyze example.com"', $code);
         $this->assertStringContainsString('WORKFLOW_ID = 7', $code);
         $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = False', $code);
-        $this->assertStringContainsString('asyncio.run(main(', $code);
+        $this->assertStringContainsString('asyncio.run(run_workflow(', $code);
         // Linear graph: no parallel layer, no gather.
         $this->assertStringNotContainsString('asyncio.gather(', $code);
         // No MCP, no skills in this fixture.
