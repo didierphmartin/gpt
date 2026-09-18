@@ -3481,39 +3481,7 @@ class WorkflowEditor {
                 this._runLangGraphScript();
             }
         });
-        menu.querySelector('[data-action="stop-server"]')?.addEventListener('click', async () => {
-            menu.remove();
-            // The escape hatch for a run stuck on a gate nobody can answer (an
-            // overlay closed, a reloaded tab). Without this the re-entrancy
-            // guard blocks every later Run until the gate times out — and the
-            // guard's own message used to point at a menu item that did not
-            // exist.
-            const root = this._compiledRootName();
-            try {
-                const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/stop`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder: root }),
-                });
-                const out = resp.ok ? await resp.json() : null;
-                // Local state goes regardless: the point is to unblock this tab.
-                try { this._runCompiledEs && this._runCompiledEs.close(); } catch (_) { /* already closed */ }
-                try {
-                    this._runCompiledReject
-                        && this._runCompiledReject(Object.assign(new Error('run server stopped'), { superseded: true }));
-                } catch (_) { /* nothing awaiting */ }
-                this._runCompiledEs = null;
-                this._runCompiledReject = null;
-                this._runCompiledWhat = null;
-                this._runTarget = null;
-                alert(out && out.stopped
-                    ? (this.t('workflow.output.stopServerDone') || 'Run server stopped.') + ` (${root})`
-                    : (this.t('workflow.output.stopServerNone') || 'No run server was running for this workflow.')
-                      + ` (${root})`);
-            } catch (e) {
-                alert(`${this.t('workflow.output.stopServerFailed') || 'Could not reach the runner to stop the server:'} ${e?.message || e}`);
-            }
-        });
+        this._wireStopServerItem(menu, null);
         menu.querySelector('[data-action="run-url"]')?.addEventListener('click', async () => {
             menu.remove();
             const url = prompt(this.t('workflow.output.runTargetPrompt') || 'Workflow server URL', 'http://127.0.0.1:8710/');
@@ -3595,6 +3563,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="adk-run">
                 ${this.escapeHtml(this.t('workflow.output.adkRun') || 'Run')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="stop-server">
+                ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
+            </button>
             <button type="button" class="langgraph-menu-item" data-action="adk-display-code">
                 ${this.escapeHtml(this.t('workflow.output.adkDisplayCode') || 'Display Code')}
             </button>
@@ -3622,6 +3593,7 @@ class WorkflowEditor {
             menu.remove();
             this._runAdkScript();
         });
+        this._wireStopServerItem(menu, 'adk');
         menu.querySelector('[data-action="adk-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._showAdkCodeModal();
@@ -3809,14 +3781,6 @@ class WorkflowEditor {
     }
 
     /**
-     * Run the ADK script via the local runner.
-     * Mirrors _runLangGraphScript: liveness-probe /health, derive the ADK
-     * filename from generate-adk Content-Disposition, prompt for argv, stream
-     * output into a modal. Falls back to a "run manually" hint if the runner
-     * isn't reachable, same as the LangGraph path.
-     */
-
-    /**
      * Generate a target's script fresh and write it into python/scripts/ so
      * Run always executes the CURRENT workflow (and the runner-down modal's
      * command points at fresh code). Returns the filename, or null on failure
@@ -3851,6 +3815,14 @@ class WorkflowEditor {
         }
     }
 
+    /**
+     * Run the ADK workflow as a compiled package, exactly as _runLangGraphScript
+     * does for LangGraph's multi-file modes: write the manifest, then hand the
+     * folder to _runCompiled, which spawns the package's own run server and
+     * drives the conversation overlay over the run protocol. There is no
+     * liveness probe, no Content-Disposition filename and no output modal here
+     * — _runCompiled owns the whole run, and the scrim reports its phases.
+     */
     async _runAdkScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click — see
         // _runLangGraphScript. ADK now runs as a compiled package (server +
@@ -3866,45 +3838,6 @@ class WorkflowEditor {
         try { data = await this._writeManifest('modular', 'adk'); }
         catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
         return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileAdk'));
-    }
-
-    /**
-     * Modal shown when the runner liveness probe fails while trying to run
-     * an ADK script. Mirrors _showRunnerNotRunningModal with ADK-specific copy
-     * (install google-adk litellm httpx in the runner venv, or run directly).
-     */
-    _showAdkRunnerNotRunningModal() {
-        // One ready-to-run command with the REAL filename (same sanitize rule
-        // as the backend generator) — mirrors the MAF modal fix: the old
-        // layout's prominent command only started the runner SERVICE and
-        // users pasted it expecting the workflow to run.
-        const adkFile = ((this.currentWorkflowName || 'workflow')
-            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_adk.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${adkFile}`;
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal (ADK)</h3>
-                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-4">
-                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
-                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "google-adk>=2.3,<3" litellm httpx</code>
-                </p>
-                <div class="flex justify-end">
-                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), directCmd);
     }
 
     // -------------------------------------------------------------------------
@@ -3949,6 +3882,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="maf-run">
                 ${this.escapeHtml(this.t('workflow.output.mafRun') || 'Run')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="stop-server">
+                ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
+            </button>
             <button type="button" class="langgraph-menu-item" data-action="maf-display-code">
                 ${this.escapeHtml(this.t('workflow.output.mafDisplayCode') || 'Display Code')}
             </button>
@@ -3976,6 +3912,7 @@ class WorkflowEditor {
             menu.remove();
             this._runMafScript();
         });
+        this._wireStopServerItem(menu, 'maf');
         menu.querySelector('[data-action="maf-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._showMafCodeModal();
@@ -4235,10 +4172,10 @@ class WorkflowEditor {
     }
 
     /**
-     * Run the MAF script via the local runner.
-     * Mirrors _runAdkScript: liveness-probe /health, derive the MAF
-     * filename from generate-maf Content-Disposition, stream output into a modal.
-     * Falls back to a "run manually" hint if the runner isn't reachable.
+     * Run the MAF workflow as a compiled package — mirrors _runAdkScript:
+     * write the manifest, then let _runCompiled spawn the package's run server
+     * and drive the conversation overlay. No liveness probe, no
+     * Content-Disposition filename, no output modal.
      */
     async _runMafScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click — see
@@ -4255,47 +4192,6 @@ class WorkflowEditor {
         try { data = await this._writeManifest('modular', 'maf'); }
         catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
         return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileMaf'));
-    }
-
-    /**
-     * Modal shown when the runner liveness probe fails while trying to run
-     * a MAF script. Presents the two options explicitly — the old layout
-     * made the runner-start command the ONLY prominent copyable line, and
-     * users pasted it expecting to see the WORKFLOW run (it only starts the
-     * service; uvicorn logs look like "nothing happened"). Option A (direct
-     * terminal run, with the REAL filename and live progress) now comes
-     * first; Option B (start the service so the editor's Run streams here)
-     * second. Both get copy buttons.
-     */
-    _showMafRunnerNotRunningModal() {
-        // Same sanitize rule as MAFGenerator::generate (PHP): [^a-z0-9_]+ → _
-        const mafFile = ((this.currentWorkflowName || 'workflow')
-            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_maf.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${mafFile}`;
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal</h3>
-                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
-                    <button class="cmd-copy-direct absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-4">
-                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
-                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "agent-framework>=1.10,<2" httpx python-dotenv</code>
-                </p>
-                <div class="flex justify-end">
-                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-direct'), directCmd);
     }
 
     // -------------------------------------------------------------------------
@@ -4340,6 +4236,9 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="nooa-run">
                 ${this.escapeHtml(this.t('workflow.output.nooaRun') || 'Run')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="stop-server">
+                ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
+            </button>
             <button type="button" class="langgraph-menu-item" data-action="nooa-display-code">
                 ${this.escapeHtml(this.t('workflow.output.nooaDisplayCode') || 'Display Code')}
             </button>
@@ -4367,6 +4266,7 @@ class WorkflowEditor {
             menu.remove();
             this._runNooaScript();
         });
+        this._wireStopServerItem(menu, 'nooa');
         menu.querySelector('[data-action="nooa-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._showNooaCodeModal();
@@ -4630,10 +4530,10 @@ class WorkflowEditor {
     }
 
     /**
-     * Run the NOOA script via the local runner.
-     * Mirrors _runMafScript: liveness-probe /health, derive the NOOA
-     * filename from generate-nooa Content-Disposition, stream output into a modal.
-     * Falls back to a "run manually" hint if the runner isn't reachable.
+     * Run the NOOA workflow as a compiled package — mirrors _runMafScript:
+     * write the manifest, then let _runCompiled spawn the package's run server
+     * and drive the conversation overlay. No liveness probe, no
+     * Content-Disposition filename, no output modal.
      */
     async _runNooaScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click — see
@@ -4650,41 +4550,6 @@ class WorkflowEditor {
         try { data = await this._writeManifest('modular', 'nooa'); }
         catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
         return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileNooa'));
-    }
-
-    /**
-     * Modal shown when the runner liveness probe fails while trying to run
-     * a NOOA script. Same two-option layout as the MAF variant.
-     */
-    _showNooaRunnerNotRunningModal() {
-        // Same sanitize rule as NOOAGenerator::generate (PHP): [^a-z0-9_]+ → _
-        const nooaFile = ((this.currentWorkflowName || 'workflow')
-            .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_nooa.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${nooaFile}`;
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">Run the workflow from a terminal</h3>
-                <p class="text-sm text-gray-600 mb-3">Enter this command — the workflow runs with live progress:</p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(directCmd)}</pre>
-                    <button class="cmd-copy-direct absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="Copy command to clipboard">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-4">
-                    Uses the Start node's saved prompt; append <code class="text-xs bg-gray-100 px-1 rounded">"your prompt"</code> to override it.
-                    First run only: <code class="text-xs bg-gray-100 px-1 rounded">./.venv/bin/pip install "nooa[mcp]" "mcp&lt;2" python-dotenv</code>
-                </p>
-                <div class="flex justify-end">
-                    <button class="rnr-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.rnr-close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-direct'), directCmd);
     }
 
     /**
@@ -4959,13 +4824,63 @@ class WorkflowEditor {
     }
 
     /**
+     * Wire one menu's "Stop the run server" item. Shared by all four framework
+     * menus so the escape hatch behaves identically everywhere: the LangGraph
+     * menu passes null, the three single-script menus pass their target.
+     *
+     * This is the escape hatch for a run stuck on a gate nobody can answer (an
+     * overlay closed, a reloaded tab). Without it the re-entrancy guard blocks
+     * every later Run until the gate times out — and the guard's own message
+     * points the user here.
+     */
+    _wireStopServerItem(menu, target = null) {
+        menu.querySelector('[data-action="stop-server"]')?.addEventListener('click', async () => {
+            menu.remove();
+            const root = this._compiledRootName(target);
+            try {
+                const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/stop`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: root }),
+                });
+                const out = resp.ok ? await resp.json() : null;
+                // Local state goes regardless: the point is to unblock this tab.
+                try { this._runCompiledEs && this._runCompiledEs.close(); } catch (_) { /* already closed */ }
+                try {
+                    this._runCompiledReject
+                        && this._runCompiledReject(Object.assign(new Error('run server stopped'), { superseded: true }));
+                } catch (_) { /* nothing awaiting */ }
+                this._runCompiledEs = null;
+                this._runCompiledReject = null;
+                this._runCompiledWhat = null;
+                this._runTarget = null;
+                alert(out && out.stopped
+                    ? (this.t('workflow.output.stopServerDone') || 'Run server stopped.') + ` (${root})`
+                    : (this.t('workflow.output.stopServerNone') || 'No run server was running for this workflow.')
+                      + ` (${root})`);
+            } catch (e) {
+                alert(`${this.t('workflow.output.stopServerFailed') || 'Could not reach the runner to stop the server:'} ${e?.message || e}`);
+            }
+        });
+    }
+
+    /**
      * The compiled package folder for this workflow, derived the same way the
-     * generator names it: the sanitised workflow name plus the mode suffix.
+     * generator names it: the sanitised workflow name plus a suffix.
      * Used by "Stop the run server", which must name the folder without
      * regenerating anything first.
+     *
+     * `target` is 'adk' | 'maf' | 'nooa' for the three single-script targets,
+     * whose RunServerEmitter::package() names the folder <safe>_<target>.
+     * Omitted (null) it means LangGraph, whose suffix comes from the codegen
+     * mode instead. Without the argument every target's Stop item posted
+     * LangGraph's <safe>_modular, the runner found nothing there, and a stalled
+     * ADK/MAF/NOOA server could not be stopped at all — while _runCompiled's
+     * re-entrancy alert tells the user to use exactly that item.
      */
-    _compiledRootName() {
+    _compiledRootName(target = null) {
         const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+        if (target) return `${safe}_${target}`;
         const mode = this._codegenOptions().mode === 'a2a' ? 'a2a' : 'modular';
         // generateSwarm() returns modularLayout()'s root with '_swarm' appended,
         // so a swarm's folder is <safe>_modular_swarm. Without this suffix the
