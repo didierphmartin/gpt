@@ -156,6 +156,35 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('RUN_SKILL_SCRIPT_TOOL', $code);
     }
 
+    /**
+     * ADK treats every {name} in an instruction as a session-state placeholder
+     * and raises KeyError when the key is absent ("Context variable not found:
+     * `date`" on the My Newspaper journal workflow, whose prompt says
+     * "Today is {date} ({weekday})"). User prompt braces must be escaped as
+     * {{ }} (ADK's literal-brace form) while the generator's own {node_<id>}
+     * placeholders stay live.
+     */
+    public function testUserPromptBracesAreEscapedButNodePlaceholdersStayLive(): void
+    {
+        $a = $this->analyzed();
+        $a['agents']['2']['systemPrompt'] = "Today is {date} ({weekday}). The current year is {year}.";
+        $a['byId']['3'] = ['id' => '3', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'B']];
+        $a['agents']['3'] = $a['agents']['2'] + ['name' => 'B'];
+        $a['agents']['3']['systemPrompt'] = 'Summarise {topic} using the input.';
+        $a['order'] = ['1', '2', '3'];
+        $a['edges'][] = ['from' => '2', 'to' => '3'];
+        $a['parents']['3'] = ['2'];
+        $a['children']['2'] = ['3'];
+        $a['layers'] = [['1'], ['2'], ['3']];
+        $code = ADKGenerator::emitAdk($a);
+        // The prompt is passed VERBATIM to a callable instruction provider (ADK skips
+        // state templating for callables), and parents are read from state by key.
+        $this->assertStringContainsString('def _agent_instruction(prompt: str, parent_keys: list):', $code);
+        $this->assertStringContainsString('instruction=_agent_instruction("Today is {date} ({weekday}). The current year is {year}.", []),', $code);
+        $this->assertStringContainsString('instruction=_agent_instruction("Summarise {topic} using the input.", ["node_2"]),', $code);
+        $this->assertStringNotContainsString('{node_2}', $code, 'no string-templated placeholders remain');
+    }
+
     public function testAgentEmittedWithOutputKeyAndParentInjection(): void
     {
         $a = $this->analyzed();
@@ -571,7 +600,8 @@ class AdkGeneratorEmitTest extends TestCase
             ],
         ]);
         $code = ADKGenerator::emitAdk($a);
-        $this->assertStringContainsString('{node_2}', $code); // node 3 instruction injects parent 2
+        $this->assertStringContainsString('_agent_instruction(', $code); // node 3 reads parent 2 from state
+        $this->assertStringContainsString('["node_2"]', $code);
     }
 
     public function testSkillHelpersEmittedWhenAgentHasSkillsList(): void

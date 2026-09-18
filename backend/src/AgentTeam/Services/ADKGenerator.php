@@ -249,6 +249,26 @@ from google.genai import types
 
 # Runtime "today" for date-grounding every agent instruction (evaluated at import).
 _TODAY = time.strftime("%Y-%m-%d")
+
+
+def _agent_instruction(prompt: str, parent_keys: list):
+    """Return an ADK InstructionProvider (callable) for an agent node.
+
+    A callable instruction makes ADK use the text VERBATIM
+    (bypass_state_injection=True): a string instruction would be run through
+    session-state templating, where every {name} is a placeholder and an
+    unknown key raises KeyError -- so a prompt that says "Today is {date}"
+    would crash the run. The parents' outputs are appended here from
+    session.state (keys "node_<id>", written by each parent's output_key),
+    which is what the {node_<id>} string placeholders used to do.
+    """
+    def _instr(ctx):
+        text = ("Current date: " + _TODAY + ". Treat this as 'now'; "
+                "prefer your tools for current data over memory.\\n\\n" + prompt)
+        for key in parent_keys:
+            text += "\\n\\n## Input from " + key + "\\n" + str(ctx.state.get(key, ""))
+        return text
+    return _instr
 PY;
     }
 
@@ -632,19 +652,23 @@ TXT;
             $docById[$dn['id']] = $dn;
         }
         foreach ($analyzed['agents'] as $id => $ag) {
-            $instr = $ag['systemPrompt'];
+            $instr = (string) $ag['systemPrompt'];
             // NOTE: ## Skill / skill_content is NOT appended — skills are now
             // separate SequentialAgent steps, not prompt text.
 
-            // Only inject from parents that are themselves agent nodes.
+            // Parent outputs are read from session state by the instruction
+            // PROVIDER emitted below (_agent_instruction), not through ADK's
+            // {node_<id>} string templating: ADK templates EVERY {name} in a
+            // string instruction and raises KeyError on an unknown key — a
+            // prompt saying "Today is {date}" killed the My Newspaper journal
+            // workflow, and this ADK version has no literal-brace escape. A
+            // callable instruction bypasses injection (bypass_state_injection),
+            // the same route the skill steps already use.
             $agentParents = array_values(array_filter(
                 $analyzed['parents'][$id] ?? [],
                 fn($p) => isset($analyzed['agents'][$p])
             ));
-            foreach ($agentParents as $p) {
-                // PHP: {node_{$p}} → literal "{node_2}" (PHP only interpolates {$...}, not {word_{$...}}).
-                $instr .= "\n\n## Input from node {$p}\n{node_{$p}}";
-            }
+            $parentKeysPy = '[' . implode(', ', array_map(fn($p) => '"node_' . $p . '"', $agentParents)) . ']';
 
             $skills = $ag['skills'] ?? [];
             $hasSkills = count($skills) > 0;
@@ -717,9 +741,9 @@ TXT;
             $entry .= "    model={$model},\n";
             // Ground the model in TODAY (runtime date, evaluated at import) — without
             // it research agents anchor on their training era (see MAF fix).
-            $entry .= "    instruction=(\"Current date: \" + _TODAY + \". Treat this as 'now'; \"\n"
-                    . "                 \"prefer your tools for current data over memory.\\n\\n\"\n"
-                    . "                 + " . PythonEmitHelpers::pyStr($instr) . "),\n";
+            // Callable provider: the prompt is used VERBATIM (braces and all) and the
+            // parents' outputs are appended from state at call time.
+            $entry .= "    instruction=_agent_instruction(" . PythonEmitHelpers::pyStr($instr) . ", {$parentKeysPy}),\n";
             $entry .= "    tools={$toolsPy},\n";
             // Emit the agent-form values verbatim — never override a form-stated
             // parameter. If a value is invalid for a model (e.g. Kimi K2 requires
