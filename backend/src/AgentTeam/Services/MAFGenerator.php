@@ -61,6 +61,34 @@ class MAFGenerator
         ];
     }
 
+    /**
+     * The compiled package: the same script, plus the run server that makes it
+     * conversational. The single-file generate() is unchanged and still the
+     * only way to run this outside the editor.
+     */
+    public function generatePackage(int $workflowId, ?string $userId = null): array
+    {
+        $single = $this->generate($workflowId, $userId);
+        $wf = $this->workflowRepo->findById($workflowId);
+        $name = $wf ? $wf->getName() : 'workflow';
+        $root = preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_maf';
+
+        return [
+            'root' => $root,
+            'files' => [
+                ['path' => '__init__.py', 'code' => "\n"],
+                ['path' => 'workflow.py', 'code' => $single['code']],
+                ['path' => 'common.py',   'code' => \AgentTeam\Services\RunServerEmitter::commonBlock()],
+                ['path' => 'api.py',      'code' => \AgentTeam\Services\RunServerEmitter::emit(
+                    $name,
+                    'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
+                    'WORKFLOW_VERSION = "1"'
+                )],
+            ],
+        ];
+    }
+
     public static function emitMaf(array $analyzed): string
     {
         // The web SAPI's php.ini sets serialize_precision=100, which makes json_encode emit
@@ -142,6 +170,12 @@ class MAFGenerator
             'graph API: one executor per node, one add_edge per drawn',
             'connection. MAF schedules execution from this topology.');
         $parts[] = self::orchestrationBlock($analyzed);
+        $parts[] = self::banner('RUN WORKFLOW',
+            'The run-server contract: build the graph, run it once, return the',
+            'terminal output unmodified. The CLI entry below is the only',
+            'caller inside this file; api.py (the compiled package) is the',
+            'other.');
+        $parts[] = self::runWorkflowBlock();
         $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
@@ -1348,6 +1382,49 @@ PY;
         PY;
     }
 
+    /**
+     * run_workflow(): build the graph, run it once, return the terminal output
+     * UNMODIFIED. This is the run-server contract (spec §3) -- the same
+     * function every compiled target's api.py calls. `session` is accepted and
+     * ignored: a batch workflow terminates and has nothing to resume; the
+     * parameter exists only so this signature matches the shared contract.
+     *
+     * Returning the full, un-stripped text matters: the CLI entry below
+     * extracts a document (<!doctype html>..</html>) and saves it, and the
+     * editor's viewer performs the same extraction on the answer it receives.
+     * Pre-stripping here would drop any narration around the document and make
+     * the two disagree.
+     */
+    private static function runWorkflowBlock(): string
+    {
+        return <<<'PY'
+        async def run_workflow(prompt: str, session: str | None = None) -> str:
+            """Run the workflow once and return its terminal output.
+
+            `session` is accepted and ignored: a batch workflow terminates and has
+            nothing to resume. It exists so this signature matches the run server's
+            contract, which is what lets one api.py serve every target.
+
+            Returns the text UNMODIFIED. The caller decides what to do with it -- the
+            CLI entry below extracts a document and saves it; the editor's viewer does
+            its own extraction. Stripping here would make the two disagree.
+            """
+            # Banner + liveness heartbeat first, so the console shows signs of
+            # life even while the first LLM calls are still connecting.
+            ProgressReporter.begin(len(AGENTS), prompt)
+            # Build the graph, then hand the prompt to MAF: it enters at the
+            # Start executor and flows along the edges declared in
+            # create_workflow() until the Output executor yields.
+            _workflow = create_workflow()
+            _result = await _workflow.run(prompt)
+            # agent-framework's WorkflowRunResult exposes terminal outputs via
+            # get_outputs() (a list), NOT a .text attribute.
+            _outputs = _result.get_outputs()
+            _text = str(_outputs[0]) if _outputs else ""
+            return _text
+        PY;
+    }
+
     /** __main__ entry: read prompt from CLI args or DEFAULT_PROMPT, run, optionally save. */
     private static function entryBlock(): string
     {
@@ -1360,23 +1437,12 @@ PY;
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
             try:
-                # Banner + liveness heartbeat first, so the console shows signs of
-                # life even while the first LLM calls are still connecting.
-                ProgressReporter.begin(len(AGENTS), _prompt)
-                # Build the graph, then hand the prompt to MAF: it enters at the
-                # Start executor and flows along the edges declared in
-                # create_workflow() until the Output executor yields.
-                _workflow = create_workflow()
-                _result = asyncio.run(_workflow.run(_prompt))
+                _text = asyncio.run(run_workflow(_prompt))
             except Exception as _err:
                 # Fail-fast: a skill hit its retry cap (or a node raised) -- stop with a
                 # clear message and a non-zero exit instead of saving a garbage report.
                 print("\n=== WORKFLOW STOPPED ===\n" + str(_err), file=sys.stderr)
                 sys.exit(1)
-            # agent-framework's WorkflowRunResult exposes terminal outputs via
-            # get_outputs() (a list), NOT a .text attribute.
-            _outputs = _result.get_outputs()
-            _text = str(_outputs[0]) if _outputs else ""
             print("\n=== FINAL OUTPUT ===\n" + _text)
             _saved_path = None
             if OUTPUT_STORAGE_ENABLED:
