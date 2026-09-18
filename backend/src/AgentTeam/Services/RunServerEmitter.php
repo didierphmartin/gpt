@@ -63,7 +63,15 @@ final class RunServerEmitter
      */
     public static function commonBlock(): string
     {
-        return PythonEmitHelpers::eventSinkBlock();
+        // eventSinkBlock() uses threading.Lock()/threading.Event() but has never
+        // imported threading itself -- its only caller until now was LangGraph,
+        // whose own common.py header already imports threading for an unrelated
+        // reason, so the block could get away with assuming it. common.py here
+        // is a fresh standalone module with no such neighbour import, so the
+        // import has to be added at this call site, not inside the block itself
+        // (putting it in eventSinkBlock() would duplicate LangGraph's import and
+        // move its already-pinned emitted bytes).
+        return "import threading\n\n" . PythonEmitHelpers::eventSinkBlock();
     }
 
     /**
