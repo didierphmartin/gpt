@@ -3852,55 +3852,20 @@ class WorkflowEditor {
     }
 
     async _runAdkScript() {
+        // Up SYNCHRONOUSLY, in the same tick as the click — see
+        // _runLangGraphScript. ADK now runs as a compiled package (server +
+        // conversation overlay), same as LangGraph's multi-file modes.
+        this._showCompiledScrim(this.t('workflow.toolbar.compileAdk'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
+            this._hideCompiledScrim();
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        // Regenerate FIRST (self-contained Run: no stale-file trap; the
-        // runner-down modal's command then points at current code), THEN probe.
-        const filename = await this._generateAndWriteScript('generate-adk', 'workflow_adk.py');
-        if (!filename) return;
-        try {
-            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
-            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-        } catch (e) {
-            this._showAdkRunnerNotRunningModal();
-            return;
-        }
-
-        const { append, showDiagnostic } = this._openRunOutputModal(filename);
-
-        try {
-            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    filename,
-                    // No separate prompt entry: the script uses the workflow's Start-node
-                    // prompt, which the compiler bakes in as the default. Run with no argv.
-                    args: [],
-                }),
-            });
-            if (!resp.ok) {
-                const text = await resp.text();
-                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
-                return;
-            }
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let _runOut = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                const _chunk = decoder.decode(value, { stream: true });
-                _runOut += _chunk;
-                append(_chunk);
-            }
-            showDiagnostic(this._diagnoseRunError(_runOut));
-        } catch (e) {
-            append(`\n[fetch failed: ${e?.message || e}]\n`);
-        }
+        let data;
+        try { data = await this._writeManifest('modular', 'adk'); }
+        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileAdk'));
     }
 
     /**
@@ -4276,59 +4241,20 @@ class WorkflowEditor {
      * Falls back to a "run manually" hint if the runner isn't reachable.
      */
     async _runMafScript() {
+        // Up SYNCHRONOUSLY, in the same tick as the click — see
+        // _runLangGraphScript. MAF now runs as a compiled package (server +
+        // conversation overlay), same as LangGraph's multi-file modes.
+        this._showCompiledScrim(this.t('workflow.toolbar.compileMaf'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
+            this._hideCompiledScrim();
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-
-        // Run is SELF-CONTAINED: regenerate + write FIRST (shared helper —
-        // same behavior as the ADK/LangGraph Run actions), THEN probe.
-        const filename = await this._generateAndWriteScript('generate-maf', 'workflow_maf.py');
-        if (!filename) return;
-
-        // Runner up → execute here and stream the output. Runner down → the
-        // script is already fresh on disk; show the one-command modal.
-        try {
-            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
-            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-        } catch (e) {
-            this._showMafRunnerNotRunningModal();
-            return;
-        }
-
-        const { append, showDiagnostic } = this._openRunOutputModal(filename);
-
-        try {
-            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    filename,
-                    // No separate prompt entry: the script uses the workflow's Start-node
-                    // prompt, which the compiler bakes in as the default. Run with no argv.
-                    args: [],
-                }),
-            });
-            if (!resp.ok) {
-                const text = await resp.text();
-                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
-                return;
-            }
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let _runOut = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                const _chunk = decoder.decode(value, { stream: true });
-                _runOut += _chunk;
-                append(_chunk);
-            }
-            showDiagnostic(this._diagnoseRunError(_runOut));
-        } catch (e) {
-            append(`\n[fetch failed: ${e?.message || e}]\n`);
-        }
+        let data;
+        try { data = await this._writeManifest('modular', 'maf'); }
+        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileMaf'));
     }
 
     /**
@@ -4710,59 +4636,20 @@ class WorkflowEditor {
      * Falls back to a "run manually" hint if the runner isn't reachable.
      */
     async _runNooaScript() {
+        // Up SYNCHRONOUSLY, in the same tick as the click — see
+        // _runLangGraphScript. NOOA now runs as a compiled package (server +
+        // conversation overlay), same as LangGraph's multi-file modes.
+        this._showCompiledScrim(this.t('workflow.toolbar.compileNooa'), 'preparing');
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
+            this._hideCompiledScrim();
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-
-        // Run is SELF-CONTAINED: regenerate + write FIRST (shared helper —
-        // same behavior as the ADK/MAF/LangGraph Run actions), THEN probe.
-        const filename = await this._generateAndWriteScript('generate-nooa', 'workflow_nooa.py');
-        if (!filename) return;
-
-        // Runner up → execute here and stream the output. Runner down → the
-        // script is already fresh on disk; show the one-command modal.
-        try {
-            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
-            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-        } catch (e) {
-            this._showNooaRunnerNotRunningModal();
-            return;
-        }
-
-        const { append, showDiagnostic } = this._openRunOutputModal(filename);
-
-        try {
-            const resp = await fetch(`${this._langgraphRunnerBase}/api/run-file`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    filename,
-                    // No separate prompt entry: the script uses the workflow's Start-node
-                    // prompt, which the compiler bakes in as the default. Run with no argv.
-                    args: [],
-                }),
-            });
-            if (!resp.ok) {
-                const text = await resp.text();
-                append(`\n[runner returned HTTP ${resp.status}]\n${text}\n`);
-                return;
-            }
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let _runOut = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                const _chunk = decoder.decode(value, { stream: true });
-                _runOut += _chunk;
-                append(_chunk);
-            }
-            showDiagnostic(this._diagnoseRunError(_runOut));
-        } catch (e) {
-            append(`\n[fetch failed: ${e?.message || e}]\n`);
-        }
+        let data;
+        try { data = await this._writeManifest('modular', 'nooa'); }
+        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileNooa'));
     }
 
     /**
@@ -5386,9 +5273,15 @@ class WorkflowEditor {
      * explicit {success:false} response, or a malformed payload.
      * Returns { root, files }.
      */
-    async _fetchManifest(mode = 'a2a') {
-        const flag = mode === 'modular' ? 'modular=1' : 'a2a=1';
-        const resp = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?${flag}`, { headers: this.getAuthHeaders() });
+    async _fetchManifest(mode = 'a2a', target = 'langgraph') {
+        // LangGraph's two multi-file modes are selected by flag on one
+        // endpoint; the other targets have one package shape each, on their own
+        // endpoint. Same response shape either way — {root, files[]} — which is
+        // why _writeManifest below needs no knowledge of any of this.
+        const url = target === 'langgraph'
+            ? `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?${mode === 'modular' ? 'modular=1' : 'a2a=1'}`
+            : `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target}?package=1`;
+        const resp = await fetch(url, { headers: this.getAuthHeaders() });
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const j = await resp.json();
         if (j?.success === false) throw new Error(j.error || 'Manifest request failed');
@@ -5407,8 +5300,8 @@ class WorkflowEditor {
      * agents/*.py for modular) through the File System Access root.
      * Returns { root, files } or null.
      */
-    async _writeManifest(mode = 'a2a') {
-        const data = await this._fetchManifest(mode);
+    async _writeManifest(mode = 'a2a', target = 'langgraph') {
+        const data = await this._fetchManifest(mode, target);
         for (const f of data.files) {
             const rel = `python/scripts/${data.root}/${f.path}`;
             const dirPath = rel.slice(0, rel.lastIndexOf('/'));
