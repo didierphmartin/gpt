@@ -22,12 +22,15 @@ final class RunServerEmitter
      * @param string $workflowName For the docstring's first line.
      * @param string $docBody      Already composed AND escaped by the caller.
      * @param string $importLine   How this target's workflow module is imported.
-     * @param string $versionLine  Optional `WORKFLOW_VERSION = ...` statement the
-     *                             runtime block reads (LangGraph's A2A version
-     *                             literal); omitted entirely when the caller has
-     *                             none to give.
+     * @param string $versionLine  The `WORKFLOW_VERSION = ...` statement. REQUIRED,
+     *                             and not merely for the identity route: the
+     *                             `__main__` startup print reads WORKFLOW_VERSION
+     *                             before uvicorn.run, so a server emitted without
+     *                             it raises NameError and exits before binding.
+     *                             Targets with no version of their own pass
+     *                             `WORKFLOW_VERSION = "1"`.
      */
-    public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine = ''): string
+    public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine): string
     {
         $L = [];
         $L[] = '"""Run server for workflow ' . json_encode($workflowName, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -48,12 +51,52 @@ final class RunServerEmitter
         $L[] = 'from common import set_event_sink, resolve_gate';
         $L[] = $importLine;
         $L[] = '';
-        if ($versionLine !== '') {
-            $L[] = $versionLine;
-            $L[] = '';
-        }
+        $L[] = $versionLine;
+        $L[] = '';
         $L[] = self::runtimeBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    /**
+     * The whole compiled package for a single-script target: ADK, MAF and NOOA
+     * differ only in the folder suffix and one line of the api.py docstring.
+     *
+     * This lives here rather than being repeated in three generatePackage()
+     * methods because what they share is not just shape — it is the FILE SET,
+     * the `from workflow import …` line api.py depends on, and the version
+     * literal the runtime block reads. Any of those drifting in one target
+     * alone is a broken server, and nothing compared the three copies.
+     *
+     * LangGraph does not use this: its packages are multi-file with their own
+     * layout, and it calls emit() directly.
+     *
+     * @param array  $single  What generate() returned: at least ['code' => …].
+     * @param string $name    The workflow's display name (folder + docstring).
+     * @param string $suffix  Folder suffix: 'adk' | 'maf' | 'nooa'.
+     * @param string $docLine The api.py docstring's "what this is" line.
+     * @return array{root: string, files: list<array{path: string, code: string}>}
+     */
+    public static function package(array $single, string $name, string $suffix, string $docLine): array
+    {
+        return [
+            'root' => preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_' . $suffix,
+            'files' => [
+                // A regular `agents/` package elsewhere on sys.path (openai-agents)
+                // beats a local namespace portion under PEP 420. Without this
+                // marker the emitted package loses to an installed one.
+                ['path' => '__init__.py', 'code' => "\n"],
+                ['path' => 'workflow.py', 'code' => (string) ($single['code'] ?? '')],
+                ['path' => 'common.py',   'code' => self::commonBlock()],
+                ['path' => 'api.py',      'code' => self::emit(
+                    $name,
+                    $docLine,
+                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
+                    // These targets carry no version of their own; the identity
+                    // route and the startup print both need the name defined.
+                    'WORKFLOW_VERSION = "1"'
+                )],
+            ],
+        ];
     }
 
     /**

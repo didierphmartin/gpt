@@ -1418,7 +1418,8 @@ that child runs. Start and Output nodes are local (no LLM).
 TXT;
     }
 
-    /** api.py for the A2A folder: the same run contract as the modular package (see modularApiBlock),
+    /** api.py for the A2A folder: the same run contract as the modular package (see emitModularApi,
+     *  which composes the shared RunServerEmitter::runtimeBlock() used verbatim below),
      *  plus the agent supervisor's lifecycle -- the agent servers start on the first run. */
     private function emitA2AApi(array $facts, array $layout): string
     {

@@ -183,28 +183,15 @@ class ADKGenerator
      */
     public function generatePackage(int $workflowId, ?string $userId = null): array
     {
-        $single = $this->generate($workflowId, $userId);
         $wf = $this->workflowRepo->findById($workflowId);
         $name = $wf ? $wf->getName() : 'workflow';
-        $root = preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_adk';
 
-        return [
-            'root' => $root,
-            'files' => [
-                // A regular `agents/` package elsewhere on sys.path (openai-agents)
-                // beats a local namespace portion under PEP 420. Without this
-                // marker the emitted package loses to an installed one.
-                ['path' => '__init__.py', 'code' => "\n"],
-                ['path' => 'workflow.py', 'code' => $single['code']],
-                ['path' => 'common.py',   'code' => \AgentTeam\Services\RunServerEmitter::commonBlock()],
-                ['path' => 'api.py',      'code' => \AgentTeam\Services\RunServerEmitter::emit(
-                    $name,
-                    'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
-                    'WORKFLOW_VERSION = "1"'
-                )],
-            ],
-        ];
+        return RunServerEmitter::package(
+            $this->generate($workflowId, $userId),
+            $name,
+            'adk',
+            'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks'
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -919,6 +906,11 @@ PY;
      *    a types.Content message to runner.run_async().
      *  - `from google.genai import types` is already in the header; the local
      *    import here is harmless (re-importing a cached module is a no-op).
+     *  - run_workflow() RUNS and returns the answer un-stripped; document
+     *    extraction and saving belong to __main__ (a conversational turn
+     *    through api.py must not write a file per prompt, and the editor
+     *    performs the same extraction on the answer it receives). Same split
+     *    MAFGenerator::runWorkflowBlock()/entryBlock() makes.
      *
      * Uses explicit string concatenation (column 0, no heredoc ambiguity).
      */
@@ -970,14 +962,17 @@ PY;
             "    print(f\"[workflow] prompt: {prompt[:200]!r}\", flush=True)\n" .
             "    session_service = InMemorySessionService()\n" .
             "    runner = Runner(agent=root_agent, app_name=\"workflow\", session_service=session_service)\n" .
-            "    session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
+            // Named adk_session, not session: the contract's `session` parameter is
+            // in scope here, and a swarm port would need it (resume a conversation)
+            // at exactly the point the old local clobbered it.
+            "    adk_session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
             "    final = \"\"\n" .
             "    t0 = time.monotonic()\n" .
             "    seen = set()\n" .
             "    _t_first, _t_last = {}, {}  # per-node timing for the RUN SUMMARY\n" .
             "    content = types.Content(role=\"user\", parts=[types.Part(text=prompt)])\n" .
             "    try:\n" .
-            "        async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
+            "        async for event in runner.run_async(user_id=\"local\", session_id=adk_session.id, new_message=content):\n" .
             "            author = getattr(event, \"author\", \"?\")\n" .
             "            if isinstance(author, str) and author.startswith(\"node_\"):\n" .
             "                _nk = author.split(\"_\")[1] if \"_\" in author else author\n" .
@@ -1013,33 +1008,11 @@ PY;
             "        print(\"[workflow] ERROR:\", flush=True)\n" .
             "        traceback.print_exc()\n" .
             "        raise\n" .
-            "    import re as _re\n" .
-            "    _mm = _re.search(r\"(?is)<!doctype html.*?</html\\s*>\", final) or _re.search(r\"(?is)<html[\\s>].*?</html\\s*>\", final)\n" .
-            "    if _mm:\n" .
-            "        final = _mm.group(0)  # strip narration/fences around a full HTML doc\n" .
-            "        _ext = \"html\"\n" .
-            "    else:\n" .
-            "        _ext = \"md\"\n" .
-            "    _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
-            "    _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
-            "    # Honour the Output node's storage setting: when ON, persist the final result\n" .
-            "    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,\n" .
-            "    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.\n" .
-            "    _saved_path = None\n" .
-            "    if OUTPUT_STORAGE_ENABLED:\n" .
-            "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n" .
-            "        if OUTPUT_FOLDER:\n" .
-            "            _cf = os.path.expanduser(OUTPUT_FOLDER)\n" .
-            "            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)\n" .
-            "        else:\n" .
-            "            _save_dir = os.path.join(_root, \"workflow\")\n" .
-            "        os.makedirs(_save_dir, exist_ok=True)\n" .
-            "        _out = os.path.join(_save_dir, f\"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}\")\n" .
-            "        with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
-            "            _f.write(final)\n" .
-            "        _saved_path = os.path.abspath(_out)\n" .
             "    print(final)\n" .
-            "    # Closing RUN SUMMARY (printed LAST): time per node, total, document location.\n" .
+            "    # Closing RUN SUMMARY (printed LAST): time per node, total wall-clock.\n" .
+            "    # Where the document was saved is NOT part of this block: saving belongs\n" .
+            "    # to __main__ (see below), so the CLI entry prints that line itself right\n" .
+            "    # after this one.\n" .
             "    print(\"\\n\" + \"=\" * 74, flush=True)\n" .
             "    print(\"RUN SUMMARY\", flush=True)\n" .
             "    print(\"-\" * 74, flush=True)\n" .
@@ -1052,18 +1025,51 @@ PY;
             "            print(f\"    {_n:<{_w}}   {_s:7.1f}s\", flush=True)\n" .
             "    print(f\"  Total wall-clock: {time.monotonic() - t0:.1f}s\", flush=True)\n" .
             "    print(f\"  Final output: {len(final)} chars\", flush=True)\n" .
+            "    print(\"=\" * 74, flush=True)\n" .
+            "    return final\n" .
+            "\n" .
+            "# ============================== CLI ENTRY =================================\n" .
+            "# Extracting the deliverable and saving it both live HERE, not in\n" .
+            "# run_workflow(): the run server calls run_workflow() once per\n" .
+            "# conversational turn, and a turn must not write a file per prompt.\n" .
+            "# run_workflow() returns the answer UN-STRIPPED for the same reason --\n" .
+            "# the editor runs this same extraction on what it receives, so narration\n" .
+            "# wrapped around a document (or a second document, which the non-greedy\n" .
+            "# regex would discard) must still be there when the answer arrives.\n" .
+            "if __name__ == \"__main__\":\n" .
+            "    # argparse would fight the prompt's own spaces; the runner\n" .
+            "    # passes it space-split; sys.argv[1] alone would keep only the first word.\n" .
+            "    _text = asyncio.run(run_workflow(\" \".join(sys.argv[1:]) if len(sys.argv) > 1 else {$sp}))\n" .
+            "    # Honour the Output node's storage setting: when ON, persist the final result\n" .
+            "    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,\n" .
+            "    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.\n" .
+            "    _saved_path = None\n" .
+            "    if OUTPUT_STORAGE_ENABLED:\n" .
+            "        import re as _re\n" .
+            "        _mm = _re.search(r\"(?is)<!doctype html.*?</html\\s*>\", _text) or _re.search(r\"(?is)<html[\\s>].*?</html\\s*>\", _text)\n" .
+            "        if _mm:\n" .
+            "            _text = _mm.group(0)  # strip narration/fences around a full HTML doc\n" .
+            "            _ext = \"html\"\n" .
+            "        else:\n" .
+            "            _ext = \"md\"\n" .
+            "        _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
+            "        _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
+            "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n" .
+            "        if OUTPUT_FOLDER:\n" .
+            "            _cf = os.path.expanduser(OUTPUT_FOLDER)\n" .
+            "            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)\n" .
+            "        else:\n" .
+            "            _save_dir = os.path.join(_root, \"workflow\")\n" .
+            "        os.makedirs(_save_dir, exist_ok=True)\n" .
+            "        _out = os.path.join(_save_dir, f\"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}\")\n" .
+            "        with open(_out, \"w\", encoding=\"utf-8\") as _f:\n" .
+            "            _f.write(_text)\n" .
+            "        _saved_path = os.path.abspath(_out)\n" .
             "    if _saved_path:\n" .
             "        print(f\"  Document saved to: {_saved_path}\", flush=True)\n" .
             "    else:\n" .
             "        print(\"  Document not saved (output storage is OFF in the workflow settings) -- \"\n" .
-            "              \"the output is printed above.\", flush=True)\n" .
-            "    print(\"=\" * 74, flush=True)\n" .
-            "    return final\n" .
-            "\n" .
-            "if __name__ == \"__main__\":\n" .
-            "    # argparse would fight the prompt's own spaces; the runner\n" .
-            "    # passes it space-split; sys.argv[1] alone would keep only the first word.\n" .
-            "    asyncio.run(run_workflow(\" \".join(sys.argv[1:]) if len(sys.argv) > 1 else {$sp}))";
+            "              \"the output is printed above.\", flush=True)";
     }
 
     /**

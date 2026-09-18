@@ -68,25 +68,15 @@ class MAFGenerator
      */
     public function generatePackage(int $workflowId, ?string $userId = null): array
     {
-        $single = $this->generate($workflowId, $userId);
         $wf = $this->workflowRepo->findById($workflowId);
         $name = $wf ? $wf->getName() : 'workflow';
-        $root = preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_maf';
 
-        return [
-            'root' => $root,
-            'files' => [
-                ['path' => '__init__.py', 'code' => "\n"],
-                ['path' => 'workflow.py', 'code' => $single['code']],
-                ['path' => 'common.py',   'code' => \AgentTeam\Services\RunServerEmitter::commonBlock()],
-                ['path' => 'api.py',      'code' => \AgentTeam\Services\RunServerEmitter::emit(
-                    $name,
-                    'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
-                    'WORKFLOW_VERSION = "1"'
-                )],
-            ],
-        ];
+        return RunServerEmitter::package(
+            $this->generate($workflowId, $userId),
+            $name,
+            'maf',
+            'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks'
+        );
     }
 
     public static function emitMaf(array $analyzed): string

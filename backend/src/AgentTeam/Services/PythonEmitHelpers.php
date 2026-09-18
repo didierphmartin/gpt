@@ -434,6 +434,14 @@ PY;
      * playbook's gate tools are sync callables that LangChain runs in an
      * executor, so the server's event loop stays free to serve the POST that
      * answers them.
+     *
+     * THE CALLER MUST SUPPLY `import threading`. This block uses
+     * threading.Lock()/threading.Event() and imports nothing itself, so emitted
+     * on its own it dies at import with a NameError. The import is not in here
+     * because LangGraph's common.py header already imports threading for an
+     * unrelated reason: adding it to the block would duplicate that import and
+     * move LangGraph's pinned emitted bytes. RunServerEmitter::commonBlock() is
+     * the standalone caller and prepends the import — do the same in any new one.
      */
     public static function eventSinkBlock(): string
     {
