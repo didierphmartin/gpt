@@ -331,6 +331,12 @@ class WorkflowController
                 $this->graphRepository,
                 $agentRepo
             );
+
+            if (!empty($request['query']['package'])) {
+                $pkg = $gen->generatePackage($workflowId, (string) $userId);
+                return ['success' => true, 'data' => $pkg, 'status_code' => 200];
+            }
+
             $result = $gen->generate($workflowId, (string) $userId);
 
             if ($download) {

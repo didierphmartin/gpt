@@ -176,6 +176,37 @@ class ADKGenerator
         return implode("\n", $lines) . "\n";
     }
 
+    /**
+     * The compiled package: the same script, plus the run server that makes it
+     * conversational. The single-file generate() is unchanged and still the
+     * only way to run this outside the editor.
+     */
+    public function generatePackage(int $workflowId, ?string $userId = null): array
+    {
+        $single = $this->generate($workflowId, $userId);
+        $wf = $this->workflowRepo->findById($workflowId);
+        $name = $wf ? $wf->getName() : 'workflow';
+        $root = preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_adk';
+
+        return [
+            'root' => $root,
+            'files' => [
+                // A regular `agents/` package elsewhere on sys.path (openai-agents)
+                // beats a local namespace portion under PEP 420. Without this
+                // marker the emitted package loses to an installed one.
+                ['path' => '__init__.py', 'code' => "\n"],
+                ['path' => 'workflow.py', 'code' => $single['code']],
+                ['path' => 'common.py',   'code' => \AgentTeam\Services\RunServerEmitter::commonBlock()],
+                ['path' => 'api.py',      'code' => \AgentTeam\Services\RunServerEmitter::emit(
+                    $name,
+                    'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+                    'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
+                    'WORKFLOW_VERSION = "1"'
+                )],
+            ],
+        ];
+    }
+
     // -------------------------------------------------------------------------
     // Private emit helpers
     // -------------------------------------------------------------------------
@@ -588,7 +619,7 @@ HOW THIS FILE IS ORGANISED (top to bottom):
   6. root_agent = SequentialAgent  -- the graph as TOPOLOGICAL LAYERS: independent nodes
                                       at the same depth run together in a ParallelAgent;
                                       the layers themselves run in order.
-  7. main()                        -- seeds the prompt (plus attached documents), runs the
+  7. run_workflow()                -- seeds the prompt (plus attached documents), runs the
                                       graph via Runner, streams a [node]/[tool] trace,
                                       saves the result, and prints a RUN SUMMARY.
 
@@ -785,7 +816,7 @@ TXT;
      * The _PassThroughAgent class definition — a non-LLM fan-in used by output
      * nodes. Emitted once, before the output nodes that instantiate it. Verified
      * against google-adk 2.3.0: a custom BaseAgent yielding a content Event with
-     * turn_complete=True is captured by main()'s is_final_response() loop.
+     * turn_complete=True is captured by run_workflow()'s is_final_response() loop.
      */
     private static function passThroughAgentBlock(): string
     {
@@ -879,7 +910,7 @@ PY;
     }
 
     /**
-     * Emit `async def main(...)` + `if __name__ == "__main__"` block.
+     * Emit `async def run_workflow(...)` + `if __name__ == "__main__"` block.
      *
      * Key correctness points:
      *  - `await session_service.create_session(...)` — InMemorySessionService.create_session
@@ -907,11 +938,14 @@ PY;
         return
             "WORKFLOW_NAME = {$name}\n" .
             "WORKFLOW_ID = {$wfId}\n" .
+            // Named (not just inlined below) so the run server's api.py -- which has
+            // no argv of its own -- can import it as the fallback for an empty prompt.
+            "DEFAULT_PROMPT = {$sp}\n" .
             "OUTPUT_STORAGE_ENABLED = {$storageEnabled}\n" .
             "OUTPUT_FOLDER = {$folderPy}\n" .
             "NODE_NAMES = {$nodeNamesPy}  # node id -> human name (for readable logs)\n" .
             "\n" .
-            "async def main(user_prompt: str = {$sp}):\n" .
+            "async def run_workflow(prompt: str, session: str | None = None) -> str:\n" .
             "    if START_DOCUMENTS:\n" .
             "        doc_parts = []\n" .
             "        for doc in START_DOCUMENTS:\n" .
@@ -926,14 +960,14 @@ PY;
             "            except Exception as e:\n" .
             "                doc_parts.append(f\"### {name}\\n\\n_(conversion failed: {e})_\")\n" .
             "        if doc_parts:\n" .
-            "            user_prompt = (\n" .
+            "            prompt = (\n" .
             "                \"## Attached Documents\\n\\n\"\n" .
             "                + \"\\n\\n---\\n\\n\".join(doc_parts)\n" .
             "                + \"\\n\\n---\\n\\n\"\n" .
-            "                + user_prompt\n" .
+            "                + prompt\n" .
             "            )\n" .
             "    print(f\"[workflow] {WORKFLOW_NAME} starting\", flush=True)\n" .
-            "    print(f\"[workflow] prompt: {user_prompt[:200]!r}\", flush=True)\n" .
+            "    print(f\"[workflow] prompt: {prompt[:200]!r}\", flush=True)\n" .
             "    session_service = InMemorySessionService()\n" .
             "    runner = Runner(agent=root_agent, app_name=\"workflow\", session_service=session_service)\n" .
             "    session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
@@ -941,7 +975,7 @@ PY;
             "    t0 = time.monotonic()\n" .
             "    seen = set()\n" .
             "    _t_first, _t_last = {}, {}  # per-node timing for the RUN SUMMARY\n" .
-            "    content = types.Content(role=\"user\", parts=[types.Part(text=user_prompt)])\n" .
+            "    content = types.Content(role=\"user\", parts=[types.Part(text=prompt)])\n" .
             "    try:\n" .
             "        async for event in runner.run_async(user_id=\"local\", session_id=session.id, new_message=content):\n" .
             "            author = getattr(event, \"author\", \"?\")\n" .
@@ -1027,9 +1061,9 @@ PY;
             "    return final\n" .
             "\n" .
             "if __name__ == \"__main__\":\n" .
-            "    # Join ALL argv (a prompt is one string even with spaces) -- the runner\n" .
+            "    # argparse would fight the prompt's own spaces; the runner\n" .
             "    # passes it space-split; sys.argv[1] alone would keep only the first word.\n" .
-            "    asyncio.run(main(\" \".join(sys.argv[1:]) if len(sys.argv) > 1 else {$sp}))";
+            "    asyncio.run(run_workflow(\" \".join(sys.argv[1:]) if len(sys.argv) > 1 else {$sp}))";
     }
 
     /**

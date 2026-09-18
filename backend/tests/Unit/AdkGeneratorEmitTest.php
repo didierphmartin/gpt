@@ -228,11 +228,11 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('ParallelAgent(', $code);
         $this->assertStringContainsString('root_agent = SequentialAgent(', $code);
         $this->assertStringContainsString('node_4', $code);            // output consolidator
-        $this->assertStringContainsString('async def main(', $code);
+        $this->assertStringContainsString('async def run_workflow(', $code);
         $this->assertStringContainsString('Runner(', $code);
         // Entry joins ALL argv (a multi-word prompt is one string), not just sys.argv[1].
         $this->assertStringContainsString('" ".join(sys.argv[1:])', $code);
-        $this->assertStringNotContainsString('main(sys.argv[1] if', $code);
+        $this->assertStringNotContainsString('run_workflow(sys.argv[1] if', $code);
     }
 
     public function testMainHonorsOutputStorageSetting(): void
@@ -435,7 +435,7 @@ class AdkGeneratorEmitTest extends TestCase
 
     /**
      * I3: when startDocuments is non-empty, emitted code contains the baked list
-     * and the prepend block in main().
+     * and the prepend block in run_workflow().
      */
     public function testStartDocumentsNonEmptyBakedAndPrepended(): void
     {
@@ -455,13 +455,13 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('def _convert_doc_to_markdown(', $code,
             '_convert_doc_to_markdown must be emitted when docs exist');
 
-        // The prepend block must appear in main()
+        // The prepend block must appear in run_workflow()
         $this->assertStringContainsString('if START_DOCUMENTS:', $code,
-            'main() must check START_DOCUMENTS at runtime');
+            'run_workflow() must check START_DOCUMENTS at runtime');
         $this->assertStringContainsString('_convert_doc_to_markdown(path)', $code,
-            'main() must call _convert_doc_to_markdown for each doc');
+            'run_workflow() must call _convert_doc_to_markdown for each doc');
         $this->assertStringContainsString('"## Attached Documents\\n\\n"', $code,
-            'main() must prepend "## Attached Documents" header (mirrors LangGraph)');
+            'run_workflow() must prepend "## Attached Documents" header (mirrors LangGraph)');
     }
 
     /**
