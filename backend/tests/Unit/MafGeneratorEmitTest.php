@@ -40,6 +40,26 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('load_dotenv(', $code);
     }
 
+    /**
+     * DeepSeek V4 in thinking mode rejects a replayed assistant tool-call turn
+     * that lacks `reasoning_content` (400 "The reasoning_content in the thinking
+     * mode must be passed back to the API"). agent_framework's chat-completion
+     * client only round-trips OpenRouter-style `reasoning_details`, so the
+     * emitted script subclasses it to capture and replay `reasoning_content`
+     * (an empty string is accepted when the turn produced none).
+     */
+    public function testDeepSeekReasoningContentIsRoundTripped(): void
+    {
+        $code = MAFGenerator::emitMaf($this->analyzed());
+        $this->assertStringContainsString('class ReasoningRoundTripClient(OpenAIChatCompletionClient):', $code);
+        $this->assertStringContainsString('def _parse_response_from_openai(self, response, options):', $code);
+        $this->assertStringContainsString('def _prepare_message_for_openai(self, message):', $code);
+        $this->assertStringContainsString('"reasoning_content"', $code);
+        $this->assertMatchesRegularExpression('/if m\\.get\\("role"\\) == "assistant":\\s*m\\["reasoning_content"\\]/', $code);
+        $this->assertStringContainsString('return ReasoningRoundTripClient(**kwargs)', $code);
+        $this->assertStringNotContainsString('return OpenAIChatCompletionClient(**kwargs)', $code);
+    }
+
     public function testClientFactoryUsesChatCompletionAndBaseUrls(): void
     {
         $code = MAFGenerator::emitMaf($this->analyzed());

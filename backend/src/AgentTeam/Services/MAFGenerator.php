@@ -492,6 +492,53 @@ TXT;
     private static function clientFactoryBlock(): string
     {
         return <<<'PY'
+        class ReasoningRoundTripClient(OpenAIChatCompletionClient):
+            """OpenAIChatCompletionClient that round-trips DeepSeek's `reasoning_content`.
+
+            DeepSeek V4 in thinking mode returns its chain of thought in a
+            `reasoning_content` field on the assistant message and REQUIRES that
+            field to be sent back on every replayed assistant turn that carries
+            tool calls -- otherwise the second call fails with
+            400 "The reasoning_content in the thinking mode must be passed back".
+            agent_framework only round-trips the OpenRouter-style `reasoning_details`
+            key, so this subclass (1) captures `reasoning_content` from each
+            response into the message's additional_properties and (2) emits it on
+            every replayed assistant message. An EMPTY string is accepted by
+            the API when a turn produced no reasoning, so replays never omit the key.
+            Harmless for every other OpenAI-compatible provider (unknown keys are
+            ignored, and the key is only added when a tool call is being replayed).
+            """
+
+            def _parse_response_from_openai(self, response, options):
+                """Capture `reasoning_content` per choice, then defer to the base parser."""
+                parsed = super()._parse_response_from_openai(response, options)
+                for choice, message in zip(response.choices, parsed.messages):
+                    rc = getattr(choice.message, "reasoning_content", None)
+                    if rc is None:
+                        # openai's pydantic models keep unknown fields in model_extra.
+                        rc = (getattr(choice.message, "model_extra", None) or {}).get("reasoning_content")
+                    if message.additional_properties is None:
+                        message.additional_properties = {}
+                    message.additional_properties["reasoning_content"] = rc or ""
+                return parsed
+
+            def _prepare_message_for_openai(self, message):
+                """Replay `reasoning_content` on EVERY replayed assistant dict.
+
+                The base serialiser splits one assistant turn that has text AND tool
+                calls into two dicts (a text-only one, then a tool-calls one); DeepSeek
+                requires the key on each of them, so tag all assistant dicts, not only
+                the one carrying tool_calls (probed live: tagging only that one still 400s).
+                """
+                prepared = super()._prepare_message_for_openai(message)
+                if message.role == "assistant":
+                    rc = (message.additional_properties or {}).get("reasoning_content")
+                    for m in prepared:
+                        if m.get("role") == "assistant":
+                            m["reasoning_content"] = rc if rc is not None else ""
+                return prepared
+
+
         class ProviderClients:
             """Factory for Microsoft Agent Framework chat clients + per-call options.
 
@@ -541,7 +588,7 @@ TXT;
                     kwargs = {"model": model, "api_key": os.environ.get(env_key)}
                     if base_url:
                         kwargs["base_url"] = base_url
-                    return OpenAIChatCompletionClient(**kwargs)
+                    return ReasoningRoundTripClient(**kwargs)
                 raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")
 
             @staticmethod
