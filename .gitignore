@@ -54,6 +54,11 @@ frontend/driver.js/.git/
 
 # ───────────────── Logs / temp ─────────────────
 *.log
+# PHP's error_log has no extension, so *.log never caught it. It was
+# committed for months and carried real conversation content (user
+# prompts, assistant replies, user ids, per-call token cost) into a
+# PUBLIC repo. Any path, any depth.
+**/error_log
 *.tmp
 tmp/
 
