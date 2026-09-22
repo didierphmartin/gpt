@@ -70,3 +70,28 @@ langchain_runner/ingestion_*.py
 # ...but the vendored splitter is real source, not generated
 !langchain_runner/ingestion_splitter.py
 langchain_runner/ingestion.log
+
+# ───────────────── Not published ─────────────────
+# Kept local: working notes, the agent harness, and sub-projects that ship
+# from elsewhere. Adding a path here does nothing on its own — anything
+# already committed also needs `git rm -r --cached <path>`.
+
+# Claude Code's workspace (settings, agents, skills).
+.claude/
+
+# Docs and working notes, INCLUDING docs/superpowers (plans + specs).
+# EXCEPT run-protocol-v1.json: despite living in docs/, it is a contract the
+# test suite LOADS at run time (RunProtocolConformanceTest and three compiled
+# probes read it). Dropping it breaks a fresh clone's tests.
+docs/*
+!docs/run-protocol-v1.json
+
+# The local Python runner's source. setup.py copies it to
+# ~/Documents/synergyAI/python/; it is not part of the web app.
+langchain_runner/
+
+# Mobile PRD / scratch.
+mobile/
+
+# Anything checked out under an XAMPP path by accident.
+xampp/
