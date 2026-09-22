@@ -956,8 +956,6 @@
       "runTargetCompiled": "compilado",
       "documentTitle": "Documento",
       "runTargetLive": "intérprete en vivo",
-      "runTargetUrl": "Ejecutar contra una URL…",
-      "runTargetPrompt": "URL del servidor del flujo de trabajo",
       "adkSetup": "Instalar",
       "adkGenerate": "Generar",
       "adkInfo": "Info",
@@ -999,10 +997,7 @@
       "stopServer": "Detener el servidor de ejecución",
       "stopServerDone": "Servidor de ejecución detenido.",
       "stopServerNone": "No había ningún servidor de ejecución activo para este flujo de trabajo.",
-      "stopServerFailed": "No se pudo contactar con el runner para detener el servidor:",
-      "runModeSingle": "archivo único",
-      "runModeModular": "archivos separados",
-      "runModeA2A": "A2A"
+      "stopServerFailed": "No se pudo contactar con el runner para detener el servidor:"
     },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",

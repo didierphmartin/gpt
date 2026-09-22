@@ -3116,10 +3116,18 @@ class WorkflowEditor {
             const resp = await fetch(`${this.apiBase}/admin/llm-settings`, { headers: this.getAuthHeaders() });
             if (!resp.ok) return;
             const providers = (await resp.json())?.providers || [];
+            // MUST mirror PythonEmitHelpers::providerKeyEnv() — the generators
+            // emit os.environ.get(<that env var>) per provider, and this is the
+            // only thing that ever puts those variables in the runner's .env. A
+            // provider missing here compiles to a script that authenticates with
+            // None: 'glm' was, so a GLM node reached z.ai with no key and came
+            // back 401 "token expired or incorrect", which reads like a stale
+            // key rather than one that was never written.
             const MAP = {
                 claude: 'ANTHROPIC_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
                 openai: 'OPENAI_API_KEY', gemini: 'GOOGLE_API_KEY', google: 'GOOGLE_API_KEY',
-                grok: 'XAI_API_KEY', xai: 'XAI_API_KEY', kimi: 'KIMI_API_KEY', deepseek: 'DEEPSEEK_API_KEY',
+                grok: 'XAI_API_KEY', xai: 'XAI_API_KEY', kimi: 'KIMI_API_KEY', moonshot: 'KIMI_API_KEY',
+                deepseek: 'DEEPSEEK_API_KEY', glm: 'GLM_API_KEY',
             };
             const keys = {};
             for (const p of providers) {
@@ -3431,10 +3439,6 @@ class WorkflowEditor {
             </button>
             <button type="button" class="langgraph-menu-item" data-action="run">
                 ${this.escapeHtml(this.t('workflow.output.langgraphRun') || 'Run')}
-                <span class="text-xs text-gray-400">(${this.escapeHtml(this._codegenModeLabel())})</span>
-            </button>
-            <button type="button" class="langgraph-menu-item" data-action="run-url">
-                ${this.escapeHtml(this.t('workflow.output.runTargetUrl') || 'Run against a URL…')}
             </button>
             <button type="button" class="langgraph-menu-item" data-action="stop-server">
                 ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
@@ -3482,22 +3486,6 @@ class WorkflowEditor {
             }
         });
         this._wireStopServerItem(menu, null);
-        menu.querySelector('[data-action="run-url"]')?.addEventListener('click', async () => {
-            menu.remove();
-            const url = prompt(this.t('workflow.output.runTargetPrompt') || 'Workflow server URL', 'http://127.0.0.1:8710/');
-            if (!url) return;
-            let target;
-            try {
-                target = await this._verifyRunTarget(url);   // identity check only, no spawn
-            } catch (e) {
-                alert(`That server cannot run this workflow: ${e?.message || e}`);
-                return;
-            }
-            // Hand the verified target over explicitly: _runCompiled clears
-            // this._runTarget on its own early exits, so re-reading the field
-            // there would find null and try to spawn the folder `null`.
-            await this._runCompiled(null, target, this.t('workflow.toolbar.compileLangGraph'));
-        });
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
             const codegenMode = this._codegenOptions().mode;
@@ -4682,14 +4670,6 @@ class WorkflowEditor {
         } catch (_) { return { mode: 'modular' }; }
     }
 
-    /** Short human label for the active codegen mode, shown on the Run menu item. */
-    _codegenModeLabel() {
-        const mode = this._codegenOptions().mode;
-        if (mode === 'a2a') return this.t('workflow.output.runModeA2A') || 'A2A';
-        if (mode === 'single') return this.t('workflow.output.runModeSingle') || 'single file';
-        return this.t('workflow.output.runModeModular') || 'separate files';
-    }
-
     /** Persist code-generation options for the current workflow to `wf:<id>:codegen` in localStorage. Storage failures (e.g. private-browsing mode) are swallowed. */
     _saveCodegenOptions(opts) {
         try { localStorage.setItem(`wf:${this.currentWorkflowId}:codegen`, JSON.stringify({ mode: opts.mode })); } catch (_) { /* private mode */ }
@@ -4824,6 +4804,41 @@ class WorkflowEditor {
     }
 
     /**
+     * Stop letting a compiled run drive this browser.
+     *
+     * Hiding a conversation's window deliberately does NOT do this -- hide
+     * means hide, the run server keeps the thread, and reopening resumes it.
+     * LEAVING the conversation is different: the interpreter door
+     * (_openBatchSession) and _swarmSessionEnd both mean "this browser is not
+     * that conversation any more", and an EventSource that outlives them keeps
+     * delivering the old run's frames into the new one.
+     *
+     * That is not cosmetic. A `gate_request` arriving after the switch renders
+     * ITS form inline in the interpreter's conversation and awaits an answer --
+     * the composer sits there waiting on a run the user has left, which reads
+     * as a frozen overlay. And because those doors null _runTarget, answering
+     * it would POST the decision to the interpreter's endpoint instead of the
+     * run server's, so the compiled run would never be unblocked either.
+     *
+     * The run itself continues server-side (there is no cancel route); this
+     * only detaches the browser. Returns what was detached, or null.
+     */
+    _detachCompiledStream() {
+        const es = this._runCompiledEs;
+        const what = this._runCompiledWhat;
+        if (!es && !what) return null;
+        try { es && es.close(); } catch (_) { /* already closed */ }
+        try {
+            this._runCompiledReject
+                && this._runCompiledReject(Object.assign(new Error('left the compiled conversation'), { superseded: true }));
+        } catch (_) { /* nothing awaiting */ }
+        this._runCompiledEs = null;
+        this._runCompiledReject = null;
+        this._runCompiledWhat = null;
+        return what || {};
+    }
+
+    /**
      * Wire one menu's "Stop the run server" item. Shared by all four framework
      * menus so the escape hatch behaves identically everywhere: the LangGraph
      * menu passes null, the three single-script menus pass their target.
@@ -4845,14 +4860,7 @@ class WorkflowEditor {
                 });
                 const out = resp.ok ? await resp.json() : null;
                 // Local state goes regardless: the point is to unblock this tab.
-                try { this._runCompiledEs && this._runCompiledEs.close(); } catch (_) { /* already closed */ }
-                try {
-                    this._runCompiledReject
-                        && this._runCompiledReject(Object.assign(new Error('run server stopped'), { superseded: true }));
-                } catch (_) { /* nothing awaiting */ }
-                this._runCompiledEs = null;
-                this._runCompiledReject = null;
-                this._runCompiledWhat = null;
+                this._detachCompiledStream();
                 this._runTarget = null;
                 alert(out && out.stopped
                     ? (this.t('workflow.output.stopServerDone') || 'Run server stopped.') + ` (${root})`
@@ -4969,7 +4977,7 @@ class WorkflowEditor {
                 // run, so the canvas must come back — cancelling that modal
                 // used to leave a permanently dimmed graph.
                 this._hideCompiledScrim();
-                this._showCompiledRunnerNotRunningModal(root);
+                this._showCompiledRunnerNotRunningModal(root, frameworkLabel);
                 return;
             }
         }
@@ -5475,7 +5483,7 @@ class WorkflowEditor {
      * answerable in the browser, so the primary action is starting the runner.
      * The direct command is offered second, for a run without the UI.
      */
-    _showCompiledRunnerNotRunningModal(root) {
+    _showCompiledRunnerNotRunningModal(root, framework = null) {
         const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
         const directCmd = root
             ? `cd ~/Documents/synergyAI/python/scripts/${root} && ../../.venv/bin/python workflow.py`
@@ -5549,7 +5557,7 @@ class WorkflowEditor {
                 return;
             }
             close();
-            this._runCompiled(root, null, this.t('workflow.toolbar.compileLangGraph'));
+            this._runCompiled(root, null, framework || this.t('workflow.toolbar.compileLangGraph'));
         });
     }
 
@@ -12787,14 +12795,14 @@ class WorkflowEditor {
                 <div class="storage-config-modal"${modalStyleAttr}>
                     <div class="storage-config-header" style="flex-wrap:wrap;">
                         <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
-                        <button class="storage-config-close" id="pb-ov-close" title="Hide (run continues)">×</button>
+                        <button class="storage-config-close" id="pb-ov-close" title="Close (run continues)">×</button>
                         ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
                     <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
                     <div class="storage-config-footer" style="flex-wrap:wrap;">
                         ${composerHtml}
                         <span id="pb-ov-status" style="margin-right:auto;color:#9ca3af;font-size:12px;">running…</span>
-                        <button class="storage-config-btn cancel" id="pb-ov-hide">Hide</button>
+                        <button class="storage-config-btn cancel" id="pb-ov-hide" title="Close (run continues)">Close</button>
                     </div>
                 </div>
             </div>`;
@@ -12834,7 +12842,7 @@ class WorkflowEditor {
             // run server is still holding. It ends with the conversation —
             // _swarmSessionEnd() — or when the interpreter door
             // (_openBatchSession) explicitly takes the browser back.
-            // Task 10: the × and the Hide button both route here. Hiding a
+            // Task 10: the × and the Close button both route here. Closing a
             // compiled conversation's overlay (swarm or batch) does not end
             // it — only _swarmSessionEnd() does that, per the comment above —
             // so this unconditional call is what actually takes the scrim
@@ -12947,9 +12955,9 @@ class WorkflowEditor {
      */
     _pbInitOverlayWindow({
         overlayId = 'playbook-run-overlay',
-        storageKey = 'wf:swarm-overlay:rect:v5',
+        storageKey = 'wf:swarm-overlay:rect:v6',
         minW = 320,
-        minH = 420,
+        minH = 560,
     } = {}) {
         const overlay = document.getElementById(overlayId);
         const modal = overlay?.querySelector('.storage-config-modal');
@@ -13335,6 +13343,21 @@ class WorkflowEditor {
             <div data-pb-tool="${this.escapeHtml(name)}" style="align-self:flex-start;font-size:11px;color:#9ca3af;padding:0 4px;">🔧 ${this.escapeHtml(name)} <span class="pb-tool-state">…</span></div>`);
     }
 
+    /**
+     * One line of backend narration in the conversation feed.
+     *
+     * Quiet by design: this is what the run is DOING, not what it answered, so
+     * it must never look like a turn's answer (that is `_pbBubble`). A batch
+     * turn still shows exactly one answer bubble -- the whitelist that enforces
+     * that covers `message` events, and a trace is not one.
+     */
+    _pbTrace(text) {
+        const line = String(text || '').trim();
+        if (!line) return null;
+        return this._pbAppend(`
+            <div style="align-self:flex-start;font-size:11px;color:#9ca3af;padding:0 4px;white-space:pre-wrap;">${this.escapeHtml(line)}</div>`);
+    }
+
     _pbActivityDone(name, ok) {
         const feed = this._pbOverlayEl();
         if (!feed) return;
@@ -13625,6 +13648,17 @@ class WorkflowEditor {
                 }
                 return;
             }
+            case 'trace':
+                // Stdout of the compiled run, teed by the run server (see
+                // RunServerEmitter::_TraceTee). Every target narrates itself on
+                // stdout -- "[node] … done", "[tool] …" -- but only LangGraph
+                // also emitted those as protocol events, so ADK/MAF/NOOA
+                // conversations sat silent for minutes. Rendered in EVERY
+                // conversation, batch included: a trace is not an answer, so
+                // the one-bubble-per-turn rule is untouched.
+                this._wfNodeLog(dfId, 'llm', String(ev.text || ''));
+                this._pbTrace(ev.text);
+                return;
             case 'final':
                 this._wfNodeLog(dfId, 'done', `leg ${ev.leg} ${ev.status}`);
                 return;
@@ -14050,6 +14084,10 @@ class WorkflowEditor {
         // prompts to the previous workflow's compiled run server, under the
         // previous session id.
         this._compiledSession = null;
+        // ... and neither may its EVENT STREAM outlive it: frames from a run
+        // this browser has left drive gates and bubbles in whatever
+        // conversation opens next (see _detachCompiledStream).
+        this._detachCompiledStream();
         this._runTarget = null;
         // Stale-state guard: this teardown already nulls _swarmSession and
         // _compiledSession, but left _pbSessionMode behind — the same class
@@ -14211,6 +14249,11 @@ class WorkflowEditor {
      */
     async _openBatchSession() {
         await this._persistIfDirty();
+        // Leaving a compiled conversation: its stream must stop driving this
+        // browser before the interpreter's conversation opens (see
+        // _detachCompiledStream -- a gate arriving afterwards froze the new
+        // overlay on a run the user had already left).
+        const left = this._detachCompiledStream();
         this._compiledSession = null;
         this._runTarget = null;
         // The scrim describes "compiled code is running, the canvas is inert".
@@ -14220,6 +14263,18 @@ class WorkflowEditor {
         this._hideCompiledScrim();
         this._pbOverlayOpen('batch', this.currentWorkflowName || 'Workflow', [], null,
             { session: true, mode: 'batch' });
+        if (left) {
+            // The run server has no cancel, so that run is still going. Say it
+            // here rather than leaving the user to wonder why the next compiled
+            // Run waits: the server executes one run at a time.
+            // Built inline rather than through t(): the message interpolates the
+            // run's name and base, and t() returns the KEY when a translation is
+            // missing -- so a `t(...) || fallback` would print the key, never the
+            // fallback.
+            this._pbTrace(`Note: the compiled run${left.name ? ` of ${left.name}` : ''} is still running`
+                + ` on its run server${left.base ? ` (${left.base})` : ''}.`
+                + ` Use "Stop the run server" in that framework's menu to end it.`);
+        }
     }
 
     /**

@@ -956,8 +956,6 @@
       "runTargetCompiled": "compilé",
       "documentTitle": "Document",
       "runTargetLive": "interpréteur en direct",
-      "runTargetUrl": "Exécuter sur une URL…",
-      "runTargetPrompt": "URL du serveur de workflow",
       "adkSetup": "Installer",
       "adkGenerate": "Générer",
       "adkInfo": "Infos",
@@ -999,10 +997,7 @@
       "stopServer": "Arrêter le serveur d’exécution",
       "stopServerDone": "Serveur d’exécution arrêté.",
       "stopServerNone": "Aucun serveur d’exécution n’était actif pour ce workflow.",
-      "stopServerFailed": "Impossible de joindre le runner pour arrêter le serveur :",
-      "runModeSingle": "fichier unique",
-      "runModeModular": "fichiers séparés",
-      "runModeA2A": "A2A"
+      "stopServerFailed": "Impossible de joindre le runner pour arrêter le serveur :"
     },
     "runnerSetup": {
       "title": "Runtime Python non installé",

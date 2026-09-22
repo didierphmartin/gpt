@@ -956,8 +956,6 @@
       "runTargetCompiled": "compiled",
       "documentTitle": "Document",
       "runTargetLive": "live interpreter",
-      "runTargetUrl": "Run against a URL…",
-      "runTargetPrompt": "Workflow server URL",
       "adkSetup": "Setup",
       "adkGenerate": "Generate",
       "adkInfo": "Info",
@@ -999,10 +997,7 @@
       "stopServer": "Stop the run server",
       "stopServerDone": "Run server stopped.",
       "stopServerNone": "No run server was running for this workflow.",
-      "stopServerFailed": "Could not reach the runner to stop the server:",
-      "runModeSingle": "single file",
-      "runModeModular": "separate files",
-      "runModeA2A": "A2A"
+      "stopServerFailed": "Could not reach the runner to stop the server:"
     },
     "runnerSetup": {
       "title": "Python runtime not installed",

@@ -2704,12 +2704,17 @@ svg.connection.wf-edge-chosen .main-path {
     /* A conversation wants vertical room: take most of the viewport rather than
        a fixed 560px, but stay capped so it does not become unwieldy on a tall
        display. The user can still resize, and that choice is remembered. */
-    height: min(82vh, 860px);
+    height: min(88vh, 1000px);
     max-width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
     margin: 12px;
     min-width: 320px;
-    min-height: 420px;
+    /* Floor raised from 420px: 420 is tall enough to be a legal `resize: both`
+       result but too short to read a transcript in, so a window nudged down to
+       it was remembered as a deliberate size and reopened that short every
+       time. MUST stay in step with _pbInitOverlayWindow()'s minH, which
+       mirrors this value to decide which stored rects to honour. */
+    min-height: 560px;
     resize: both;
     overflow: hidden;
 }
