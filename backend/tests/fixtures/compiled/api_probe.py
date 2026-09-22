@@ -3,7 +3,7 @@
 The graph itself is replaced so no LLM or MCP server is needed: this asserts
 the SERVER contract (run id, event stream, gate answering, done frame), which
 is what the frontend depends on. It also validates the two terminal frames
-(done, error) it captures from a real run against docs/run-protocol-v1.json
+(done, error) it captures from a real run against backend/schema/run-protocol-v1.json
 (RunProtocolConformanceTest §8 drift control) -- this is the only probe that
 ever produces a real `done`/`error` SSE frame end to end, so it is the
 cheapest place to check them against the contract's `terminal` section.
@@ -16,12 +16,12 @@ sys.path.insert(0, sys.argv[1])
 common = importlib.import_module("common")
 workflow = importlib.import_module("workflow")
 
-# docs/run-protocol-v1.json lives at the repo root; this file is at
+# backend/schema/run-protocol-v1.json is the contract; this file is at
 # backend/tests/fixtures/compiled/. Hardcoded (not an argv) because
 # CompiledRunServerTest::probe() invokes every probe here with just the
 # package root -- see conformance_probe.py for the argv-based alternative.
 _CONTRACT_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "docs", "run-protocol-v1.json")
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "schema", "run-protocol-v1.json")
 _contract = json.load(open(_CONTRACT_PATH))
 
 

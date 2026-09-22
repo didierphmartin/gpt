@@ -11,7 +11,7 @@ tool_call/tool_result/message/note/gate_request are all produced this way,
 through the native send_direct_message/leave_internal_note/request_approval
 tools (no live MCP server needed -- those three are pure local closures in
 build_playbook_tools()). round and final are the one exception: they are the
-PHP interpreter's own vocabulary (see docs/run-protocol-v1.json's note) --
+PHP interpreter's own vocabulary (see backend/schema/run-protocol-v1.json's note) --
 grepping LangGraphGenerator.php's Python output finds no `emit(type="round"`
 or `type="final"` call site at all, so there is nothing real to drive. Those
 two stay hand-typed, only to prove the validation harness itself checks

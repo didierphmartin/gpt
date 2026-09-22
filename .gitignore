@@ -80,11 +80,10 @@ langchain_runner/ingestion.log
 .claude/
 
 # Docs and working notes, INCLUDING docs/superpowers (plans + specs).
-# EXCEPT run-protocol-v1.json: despite living in docs/, it is a contract the
-# test suite LOADS at run time (RunProtocolConformanceTest and three compiled
-# probes read it). Dropping it breaks a fresh clone's tests.
-docs/*
-!docs/run-protocol-v1.json
+# The run-protocol contract used to live here and had to be carved out; it now
+# sits at backend/schema/run-protocol-v1.json, where a file the test suite
+# LOADS at run time belongs. So this can exclude the whole folder.
+docs/
 
 # The local Python runner's source. setup.py copies it to
 # ~/Documents/synergyAI/python/; it is not part of the web app.

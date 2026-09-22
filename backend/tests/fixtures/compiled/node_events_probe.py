@@ -102,7 +102,7 @@ assert all(isinstance(t, str) and t == t.strip() and "\n" not in t for t in trac
 
 # Every frame must still be one the contract describes -- emitting per-node
 # progress is not a licence to invent event types.
-contract = json.load(open(__file__.rsplit("/", 1)[0] + "/../../../../docs/run-protocol-v1.json"))
+contract = json.load(open(__file__.rsplit("/", 1)[0] + "/../../../schema/run-protocol-v1.json"))
 for e in events:
     spec = contract["events"].get(e["type"])
     assert spec, f"undescribed event type {e['type']!r}"

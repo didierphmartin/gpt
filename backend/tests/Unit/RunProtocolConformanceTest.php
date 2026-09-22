@@ -13,7 +13,7 @@ class RunProtocolConformanceTest extends TestCase
 {
     private static function contract(): array
     {
-        return json_decode(file_get_contents(__DIR__ . '/../../../docs/run-protocol-v1.json'), true);
+        return json_decode(file_get_contents(__DIR__ . '/../../schema/run-protocol-v1.json'), true);
     }
 
     public function testTheCompiledServerEmitsOnlyContractEvents(): void
@@ -21,7 +21,7 @@ class RunProtocolConformanceTest extends TestCase
         $root = CompiledRunServerTest::writePackage();
         $probe = __DIR__ . '/../fixtures/compiled/conformance_probe.py';
         exec('python3 ' . escapeshellarg($probe) . ' ' . escapeshellarg($root)
-            . ' ' . escapeshellarg(__DIR__ . '/../../../docs/run-protocol-v1.json') . ' 2>&1', $out, $rc);
+            . ' ' . escapeshellarg(__DIR__ . '/../../schema/run-protocol-v1.json') . ' 2>&1', $out, $rc);
         $this->assertSame(0, $rc, implode("\n", $out));
     }
 
