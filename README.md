@@ -93,36 +93,131 @@ gpt/
   per‑user), resolved by `LLMProviderResolver` — never in committed files.
 - The backend uses **two MySQL connections**: a primary `chatbot` DB (auth, contexts,
   provider settings) and a residual `portfolio_manager` connection inherited from the app this was
-  derived from (see [`docs/HARDENING.md`](docs/HARDENING.md)).
+  derived from (documented in `docs/HARDENING.md`, which is not published — see *Documentation* below).
 
 ---
 
-## Quick start
+## Installation
 
-**Prerequisites:** PHP 8.1+, Composer, MySQL, and a web server (e.g. Apache / XAMPP). No Node build step.
+**Prerequisites**
+
+| | Needed for | Notes |
+|---|---|---|
+| PHP 8.1+ · Composer · MySQL | the backend | any of the three backends needs MySQL |
+| A web server | serving `frontend/` and the PHP backend | see *No Apache?* below |
+| Python 3.10+ | compiled workflows (LangGraph / ADK / MAF / NOOA) | optional, installed from the app |
+| Node.js 18+ | only for the TypeScript backend | optional |
+
+### No Apache? Install XAMPP
+
+XAMPP bundles Apache, MySQL (MariaDB) and PHP in one installer — the shortest path if you have none of them.
+
+1. Download it from [apachefriends.org](https://www.apachefriends.org/) and install.
+2. Start **Apache** and **MySQL** from the XAMPP control panel.
+3. Clone this repo into XAMPP's web root so it is served at `/gpt`:
 
 ```bash
-# 1. Backend dependencies
-cd backend && composer install
-
-# 2. Backend secrets
-cp .env.example .env          # then fill in DB credentials + service keys
-
-# 3. Database
-#    create a DB, then import the schema:
-mysql -u <user> -p <db> < backend/schema/chatbot.sql
-#    add your LLM provider keys to the system_llm_settings table
-
-# 4. Frontend config
-cp frontend/assets/js/config.example.js frontend/assets/js/config.js
-cp frontend/voice/config.example.json   frontend/voice/config.json
-#    fill in the keys in both
-
-# 5. Serve the repo with your web server and open frontend/index.html
+# macOS
+cd /Applications/XAMPP/xamppfiles/htdocs && git clone https://github.com/didierphmartin/gpt.git
+# Windows:  C:\xampp\htdocs      Linux:  /opt/lampp/htdocs
 ```
 
-Details: [`backend/README.md`](backend/README.md) (installation, API) and
-[`frontend/README.md`](frontend/README.md) (setup, usage).
+4. The app is then at `http://localhost/gpt/frontend/index.html`.
+
+Already have Apache/nginx? Serve the repo so the frontend reaches the backend at `/gpt/backend` (that
+default lives in `frontend/assets/js/api-config.js`), or point the app at a Node/Python backend instead — see
+*Other backends* below.
+
+### 1. Backend dependencies
+
+```bash
+cd backend && composer install
+```
+
+### 2. Databases
+
+gpt uses **two** MySQL connections. The schema dump creates the first:
+
+```bash
+mysql -u <user> -p < backend/schema/chatbot.sql     # creates netfo587_chatbot (41 tables)
+```
+
+- **Contexts DB** (`netfo587_chatbot`) — everything gpt owns: users, agents, workflows, playbooks,
+  app keys, `system_llm_settings`.
+- **Main DB** — gpt was derived from another product and still reads a few of its tables. That schema
+  is not included. Point `DB_*` at that database if you have it; otherwise point it at the contexts DB
+  so the app boots, and expect the handful of features reading those tables to be inert.
+  See [`backend/schema/README.md`](backend/schema/README.md).
+
+### 3. Backend secrets
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+`backend/config/load_env.php` **refuses to boot** until these ten are filled in:
+
+```
+DB_HOST  DB_NAME  DB_USER  DB_PASS
+CTX_DB_HOST  CTX_DB_NAME  CTX_DB_USER  CTX_DB_PASS
+JWT_SECRET  APP_KEY_SECRET          # openssl rand -hex 32
+```
+
+Everything else in that file is optional and documented inline — blank simply leaves the feature off.
+
+**LLM provider keys do not go here.** They are rows in `system_llm_settings` in the contexts DB, edited
+in the app under *Admin → LLM settings*.
+
+### 4. Frontend config
+
+```bash
+cp frontend/assets/js/config.example.js frontend/assets/js/config.js
+cp frontend/voice/config.example.json   frontend/voice/config.json
+```
+
+Fill in the Firebase web config (needed only for social login). Both files are gitignored. Note that
+anything placed here is **served to the browser** — it is not a secret store.
+
+### 5. First run
+
+Open `http://localhost/gpt/frontend/index.html` and sign in. A setup wizard asks for a **local folder**;
+everything the app reads or writes lives there (`skills/`, `outputs/`, `python/`).
+
+The wizard also installs the Python runner into `<your folder>/python/`. To finish it — a browser cannot
+create a virtual environment — run once, in that folder:
+
+```bash
+cd <your folder>/python
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+```
+
+Then start the runner from the same folder, and leave it running:
+
+```bash
+./.venv/bin/python main.py          # NOT bare python3 — the venv holds the frameworks
+```
+
+To have it start at login instead (macOS): `python3 setup.py --launchagent` from `langchain_runner/`.
+
+Compiled workflows need that runner: your machine executes them, not the web server. Browser-only
+storage (OPFS) therefore cannot host them — chat and browser-side Python skills still work.
+
+### Other backends (optional)
+
+The PHP backend is the reference implementation. Two ports exist and speak the same API; pick one in
+*Settings → Account*, which sets the base URL from `frontend/assets/js/api-config.js`.
+
+```bash
+# Node.js — http://localhost:3001
+cd backend_typescript && npm install && cp .env.example .env && npm run dev
+
+# Python — http://localhost:3002
+cd backend_python && python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+cp .env.example .env && ./run.sh
+```
+
+Both read the same two databases and must share `JWT_SECRET` and `APP_KEY_SECRET` with the PHP backend,
+or a session issued by one is rejected by the other.
 
 ---
 
@@ -138,28 +233,24 @@ document every key:
 | `frontend/voice/config.json` | `voice/config.example.json` | voice PWA config |
 
 LLM **chat** provider keys are stored in the **database**, not in any of these files. See
-[`docs/HARDENING.md`](docs/HARDENING.md) for known security follow‑ups (e.g. moving the browser‑side
+`docs/HARDENING.md` (not published) for known security follow‑ups (e.g. moving the browser‑side
 voice keys to backend brokering).
 
 ---
 
 ## Documentation
 
-**Component guides**
-- [`backend/README.md`](backend/README.md) — project structure, installation, API reference, tools & MCP architecture, LLM invocation paths, voice pricing
-- [`frontend/README.md`](frontend/README.md) — structure, setup, SSE streaming, browser‑side Python skills, workflow editor
+**In this repository**
+- [`backend/README.md`](backend/README.md) — structure, installation, API reference, tools & MCP architecture, LLM invocation paths
+- [`frontend/README.md`](frontend/README.md) — structure, setup, SSE streaming, browser-side Python skills, workflow editor
+- [`backend/schema/README.md`](backend/schema/README.md) — the database schema and the note on the second DB
+- [`backend/docs/architecture-chat.md`](backend/docs/architecture-chat.md) · [`backend/docs/agentDesign.md`](backend/docs/agentDesign.md) — backend internals
+- [`backend/schema/run-protocol-v1.json`](backend/schema/run-protocol-v1.json) — the run-protocol event contract a compiled workflow server speaks
+- [`HUME_TOOLS_SYNC_SETUP.md`](HUME_TOOLS_SYNC_SETUP.md) — Hume tool sync
 
-**Deep dives** (`docs/`)
-- **Auth:** [AUTHENTICATION_IMPLEMENTATION.md](docs/AUTHENTICATION_IMPLEMENTATION.md) · [USER_SUBSCRIPTION_PROCESS.md](docs/USER_SUBSCRIPTION_PROCESS.md)
-- **Tools & MCP:** [MCP_IMPLEMENTATION.md](docs/MCP_IMPLEMENTATION.md)
-- **Workflows:** [WORKFLOW_DOCUMENTATION.md](docs/WORKFLOW_DOCUMENTATION.md) · [WORKFLOW_SIMPLE_FORMAT.md](docs/WORKFLOW_SIMPLE_FORMAT.md) (LLM‑authored simple format → DSL compiler) · [REALTIME_WORKFLOW_DESIGN.md](docs/REALTIME_WORKFLOW_DESIGN.md) · [WORKFLOW_PYTHON_INTEGRATION.md](docs/WORKFLOW_PYTHON_INTEGRATION.md)
-- **Voice:** [voice-panel-implementation.md](docs/voice-panel-implementation.md) · [HUME_EVI_TOOLS_INTEGRATION.md](docs/HUME_EVI_TOOLS_INTEGRATION.md) · [HUME_TTS_GUIDE.md](docs/HUME_TTS_GUIDE.md) · [HUME_TOOLS_SYNC_SETUP.md](HUME_TOOLS_SYNC_SETUP.md)
-- **Context & memory:** [CONTEXT_MANAGEMENT_IMPLEMENTATION.md](docs/CONTEXT_MANAGEMENT_IMPLEMENTATION.md)
-- **Integrations:** [external-services-integration.md](docs/external-services-integration.md) · [GOOGLE_DRIVE_INTEGRATION.md](docs/GOOGLE_DRIVE_INTEGRATION.md) · [PUBMED_QUICKSTART.md](docs/PUBMED_QUICKSTART.md)
-- **i18n / Ops:** [I18N_GUIDE.md](docs/I18N_GUIDE.md) · [OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md)
-- **Security:** [HARDENING.md](docs/HARDENING.md)
-- **Database:** [backend/schema/README.md](backend/schema/README.md)
-- **Backend internals:** [architecture-chat.md](backend/docs/architecture-chat.md) · [agentDesign.md](backend/docs/agentDesign.md)
+**Not published.** The deep-dive guides and design notes (auth, MCP, workflows, voice, context
+management, i18n, hardening) live in `docs/` in the working tree, which is deliberately kept out of
+this repository. Ask the maintainer if you need them.
 
 ---
 
