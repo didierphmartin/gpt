@@ -641,4 +641,18 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8765, reload=True)
+    # The reloader is OPT-IN (`--reload`), not the default, because this
+    # process lives in an INSTALL, not a checkout: the editable source is
+    # the repo's langchain_runner/, and setup.py copies it here. Watching
+    # is therefore useless — and actively harmful. uvicorn's reloader
+    # watches the working directory recursively, and `scripts/` sits
+    # inside it: every compile the workflow editor writes there (a Run is
+    # a write of a whole package) restarted this server mid-click. That
+    # cost three things at once — the /health probe the editor fires right
+    # after writing could land in the restart window and report the runner
+    # down ("Start the local runner first" over a perfectly good runner),
+    # an in-flight run died with its server, and every workflow server
+    # already spawned was orphaned: the new process starts with an empty
+    # _SERVERS, so nothing can stop them and they hold their ports until
+    # killed by hand. Pass --reload only when editing main.py in place.
+    uvicorn.run("main:app", host="127.0.0.1", port=8765, reload="--reload" in sys.argv[1:])

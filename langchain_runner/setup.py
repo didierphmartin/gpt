@@ -93,6 +93,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip venv creation + pip install (just copy files).",
     )
+    parser.add_argument(
+        "--launchagent",
+        action="store_true",
+        help="Also install (and load) a macOS LaunchAgent that keeps the "
+             "runner alive at login, so the workflow editor never finds it down.",
+    )
+    parser.add_argument(
+        "--no-launchagent",
+        action="store_true",
+        help="Remove a previously installed LaunchAgent and exit.",
+    )
     return parser.parse_args()
 
 
@@ -194,10 +205,114 @@ def build_venv(dst_dir: Path) -> None:
         print(f"  no skill dependencies found under {skills_root}")
 
 
+
+# ---------------------------------------------------------------------------
+# macOS LaunchAgent
+# ---------------------------------------------------------------------------
+#
+# The workflow editor cannot start this runner itself -- no web page can spawn
+# a local process -- so a runner that is not running surfaces as a modal
+# telling the user to paste a command into a terminal. A LaunchAgent removes
+# that failure mode entirely: launchd starts the runner at login and restarts
+# it if it ever exits.
+
+LAUNCH_LABEL = "com.synergyai.runner"
+
+
+def _launchagent_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_LABEL}.plist"
+
+
+def _launchagent_plist(dst_dir: Path) -> str:
+    """The plist body. Absolute paths throughout -- launchd does not expand ~.
+
+    KeepAlive restarts the runner if it crashes or is killed; RunAtLoad starts
+    it at login. WorkingDirectory matters: the runner resolves scripts/ and
+    outputs/ relative to its own file, but the workflow servers it spawns
+    inherit this cwd.
+    """
+    python = dst_dir / ".venv" / "bin" / "python"
+    log = dst_dir / "runner.log"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCH_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python}</string>
+        <string>{dst_dir / "main.py"}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{dst_dir}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log}</string>
+    <key>StandardErrorPath</key>
+    <string>{log}</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+"""
+
+
+def _launchctl(*argv: str) -> subprocess.CompletedProcess:
+    """Run launchctl, never raising -- bootout on a service that is not loaded
+    exits non-zero and that is a normal, uninteresting outcome here.
+    """
+    return subprocess.run(["launchctl", *argv], capture_output=True, text=True)
+
+
+def remove_launchagent() -> int:
+    plist = _launchagent_plist_path()
+    _launchctl("bootout", f"gui/{os.getuid()}/{LAUNCH_LABEL}")
+    if plist.exists():
+        plist.unlink()
+        print(f"Removed {plist}")
+    else:
+        print(f"No LaunchAgent at {plist} -- nothing to remove.")
+    return 0
+
+
+def install_launchagent(dst_dir: Path) -> int:
+    """Write the plist and (re)load it. Idempotent: an already-loaded agent is
+    booted out first, so re-running picks up a changed path or python.
+    """
+    python = dst_dir / ".venv" / "bin" / "python"
+    if not python.is_file():
+        print(f"! No interpreter at {python} -- run setup.py without --skip-venv first.",
+              file=sys.stderr)
+        return 1
+
+    plist = _launchagent_plist_path()
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_text(_launchagent_plist(dst_dir), encoding="utf-8")
+    print(f"  wrote {plist}")
+
+    domain = f"gui/{os.getuid()}"
+    _launchctl("bootout", f"{domain}/{LAUNCH_LABEL}")  # ignore "not loaded"
+    res = _launchctl("bootstrap", domain, str(plist))
+    if res.returncode != 0:
+        print(f"! launchctl bootstrap failed: {res.stderr.strip() or res.returncode}",
+              file=sys.stderr)
+        return 1
+    print(f"  loaded {LAUNCH_LABEL} (log: {dst_dir / 'runner.log'})")
+    print("  stop it with:  launchctl bootout " + f"{domain}/{LAUNCH_LABEL}")
+    return 0
+
+
 def main() -> int:
     args = parse_args()
     src_dir = Path(__file__).resolve().parent
     dst_dir = Path(args.path).expanduser().resolve()
+
+    if args.no_launchagent:
+        return remove_launchagent()
 
     print(f"Installing langchain_runner")
     print(f"  source: {src_dir}")
@@ -221,8 +336,23 @@ def main() -> int:
             return 1
     print()
 
+    if args.launchagent:
+        print("Installing the LaunchAgent:")
+        rc = install_launchagent(dst_dir)
+        print()
+        if rc != 0:
+            return rc
+
     print("Done.")
     print()
+    if args.launchagent:
+        print("The runner starts at login and restarts if it exits -- nothing to")
+        print("start by hand. Fill in your keys, then reload it:")
+        print(f"  1. cd {dst_dir}")
+        print(f"  2. cp .env.example .env  # then fill in your API keys")
+        print(f"  3. launchctl kickstart -k gui/{os.getuid()}/{LAUNCH_LABEL}")
+        print()
+        return 0
     print("Next steps:")
     print(f"  1. cd {dst_dir}")
     print(f"  2. cp .env.example .env  # then fill in your API keys")
