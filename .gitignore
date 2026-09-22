@@ -85,9 +85,14 @@ langchain_runner/ingestion.log
 # LOADS at run time belongs. So this can exclude the whole folder.
 docs/
 
-# The local Python runner's source. setup.py copies it to
-# ~/Documents/synergyAI/python/; it is not part of the web app.
-langchain_runner/
+# The local Python runner. Its SOURCE is published -- setup.py is the installer
+# the editor's Setup item tells you to run, so a clone without it cannot run a
+# compiled workflow at all. Only the install artefacts are excluded (the venv,
+# caches and run output); langchain_runner/.gitignore covers .env, .venv,
+# __pycache__ and *_result_*.md, and these cover what it does not.
+langchain_runner/scripts/
+langchain_runner/outputs/
+langchain_runner/*.log
 
 # Mobile PRD / scratch.
 mobile/

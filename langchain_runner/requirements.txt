@@ -1,0 +1,34 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+langgraph>=0.2.50
+langchain>=0.3.0
+langchain-core>=0.3.0
+# Per-provider LangChain integrations. Each generated script imports
+# only the ones its agents actually use, but we install them all so
+# any workflow can run without a follow-up `pip install`.
+#  - anthropic    → Claude (default)
+#  - openai       → OpenAI, and via base_url overrides also Grok / DeepSeek / Kimi
+#  - google-genai → Gemini
+langchain-anthropic>=0.3.0
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0
+# Google ADK runtime — the second compiler target. ADK-compiled scripts
+# import google.adk; non-Gemini providers route through litellm; MCP tools
+# use httpx (already above). Installed into the same venv so both LangGraph
+# and ADK compiled scripts run without a follow-up install.
+google-adk>=2.3,<3
+litellm
+# Microsoft Agent Framework — the third compiler target. MAF-compiled scripts
+# import agent_framework; Claude → AnthropicClient, everything else (OpenAI +
+# Grok/Kimi/DeepSeek/Gemini via base_url) → OpenAIChatCompletionClient. Coexists
+# with langgraph + google-adk in the one venv (spike-verified 2026-07-05).
+agent-framework>=1.10,<2
+# MAF's anthropic client pulls anthropic ~0.80; langchain-anthropic warns it
+# wants >=0.96 but still works. Pin a floor both accept to keep the warning benign.
+anthropic>=0.80
+pydantic>=2.8.0
+python-dotenv>=1.0.0
+# A2A compile mode (LangGraph): each generated agent is an A2A server
+# (a2a-sdk + starlette/uvicorn); the orchestrator is an A2A client.
+a2a-sdk[http-server]>=1.1,<2

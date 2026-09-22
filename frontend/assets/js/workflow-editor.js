@@ -5773,11 +5773,15 @@ class WorkflowEditor {
      * them how to run setup.py once.
      */
     _showRunnerSetupModal() {
-        const setupPath = '/Applications/XAMPP/xamppfiles/htdocs/gpt/langchain_runner';
+        // Relative to the checkout, NOT absolute. This was hardcoded to one
+        // machine's XAMPP path, which is wrong for every other install and
+        // cannot be derived here -- a browser has no way to learn the server's
+        // filesystem path. Telling the user where to stand is honest; printing
+        // a path that does not exist on their disk is not.
         // --force re-copies requirements.txt + runtime files into the install so a
         // re-run picks up new deps (e.g. google-adk/litellm). Without it, an existing
         // install keeps the old requirements.txt and the setup is a no-op.
-        const cmd = `cd ${setupPath} && python3 setup.py --force`;
+        const cmd = `cd langchain_runner && python3 setup.py --force`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -5787,7 +5791,7 @@ class WorkflowEditor {
                 </h3>
                 <p class="text-sm text-gray-600 mb-3">
                     ${this.escapeHtml(this.t('workflow.runnerSetup.body')
-                        || 'Generated Python scripts are saved into ~/Documents/synergyAI/python/scripts/. The runtime needs to be installed there once. Open a terminal and run:')}
+                        || 'Generated Python scripts are saved into ~/Documents/synergyAI/python/scripts/. The runtime needs to be installed there once. Open a terminal IN YOUR gpt CHECKOUT (the folder holding langchain_runner/) and run:')}
                 </p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>

@@ -1,0 +1,11 @@
+# Secrets — never commit. Users create this from .env.example after install.
+.env
+
+# Python / venv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Test output artifacts (generated during runs)
+*_result_*.md
