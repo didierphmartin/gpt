@@ -2,10 +2,11 @@
 
 A self‑hostable **framework for building with many LLM providers**. It brings together three things:
 
-- 🧩 **A harness** — a backend runtime that brokers **Claude, OpenAI, Grok, Gemini, DeepSeek, and
-  Kimi** behind one API, with streaming, function/tool calling, MCP, agent teams, and LangGraph
-  workflows. It handles provider resolution, auth, tool execution, and orchestration so you don't
-  have to.
+- 🧩 **A harness** — a backend runtime that brokers **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi,
+  GLM and self-hosted (vLLM) models** behind one API, with streaming, function/tool calling, MCP,
+  agent teams and workflows. It handles provider resolution, auth, tool execution and orchestration
+  so you don't have to. The same runtime comes in three interchangeable implementations — PHP
+  (reference), TypeScript and Python.
 - 🗣️ **A human‑AI interface** — a frontend for *directing* and *conversing with* the AI: a chat UI,
   realtime voice, and a visual workflow editor.
 - 📦 **Packaged know‑how** — reusable capability built in: browser‑side **Skills** (Python), MCP tool
@@ -20,8 +21,9 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 ## What it does
 
-- **One chat API, many providers.** Talk to **Claude, OpenAI, Grok, Gemini, DeepSeek, and Kimi**
-  through a single endpoint. Provider keys are managed in the database (global + per‑user), not in code.
+- **One chat API, many providers.** Talk to **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi, GLM**
+  and any OpenAI-compatible endpoint you host yourself, through a single endpoint. Provider keys are
+  managed in the database (global + per‑user), not in code.
 - **Streaming.** Responses stream over **Server‑Sent Events (SSE)**, with progress, verifier, and
   compare events.
 - **Tools & MCP.** Function‑calling with a server‑side tool registry and **MCP** (Model Context
@@ -29,7 +31,12 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
   against the user's local folder via the File System Access API.
 - **Realtime voice.** A voice prompt‑builder backed by **Hume EVI**, **Grok realtime**, and
   **Gemini native audio**.
-- **Agents & workflows.** Agent teams and a **visual workflow editor** that **compiles to LangGraph**.
+- **Agents & workflows.** Agent teams and a **visual workflow editor** that compiles one canvas to
+  **four runtimes** — LangGraph, **Google ADK**, **Microsoft Agent Framework** and **NVIDIA NOOA** —
+  as self-contained Python you can read, keep and run without this app. Dispatcher nodes route to one
+  branch instead of fanning out, and playbook nodes run an interpreter loop with human gates (forms,
+  approvals, hand-offs) that surface in the conversation. Compiled workflows run on **your machine**
+  through a small local runner, not on the web server.
 - **Auth & accounts.** Firebase (Google/Facebook OAuth), app keys, per‑user API keys, plans/subscriptions.
 - **Integrations.** Web/search (SerpAPI, Brave, ScrapingDog), financial data (FMP), PubMed, Google Drive.
 
@@ -62,9 +69,10 @@ graph TD
         Integ["Integrations"]
     end
 
-    Providers["🤖 Claude · OpenAI · Grok<br/>Gemini · DeepSeek · Kimi"]
+    Providers["🤖 Claude · OpenAI · Grok · Gemini<br/>DeepSeek · Kimi · GLM · self-hosted"]
     Store[("🗄️ MySQL · keys, contexts")]
     Secrets["🔑 backend/.env"]
+    Runner["🐍 Local runner · 127.0.0.1:8765<br/>runs compiled workflows"]
 
     User --> UI
     UI -->|"SSE / REST"| Harness
@@ -73,20 +81,33 @@ graph TD
     Resolver -.->|keys| Store
     Auth -.-> Store
     Harness -.-> Secrets
+    Flow -->|"compiled package"| Runner
+    Runner --> Providers
 ```
+
+The harness has three interchangeable implementations behind the same `/api/v1` contract: **PHP**
+(the reference), **TypeScript** and **Python**. Compiled workflows do not run in any of them — the
+editor writes a self-contained Python package into your local folder and a **local runner** executes
+it as your user, which is what lets a workflow read your files and ask you questions mid-run.
 
 Repository layout:
 
 ```
 gpt/
-├── backend/     PHP 8.1+ API (front controller at /api/v1), Composer, MySQL
-│   ├── src/         controllers, services (LLMProviderResolver, …), AgentTeam, middleware
-│   ├── config/      ai_config.php (reads backend/.env), load_env.php
-│   ├── schema/      chatbot.sql — DB schema (no data)
-│   └── .env         secrets (gitignored; copy from .env.example)
-└── frontend/    static HTML/CSS/JS (no build step), served by any web server
-    ├── assets/js/   config.js (gitignored), chat, voice, workflow editor
-    └── voice/       voice PWA + config.json (gitignored)
+├── backend/            PHP 8.1+ API (front controller at /api/v1) — the reference implementation
+│   ├── src/                controllers, services (LLMProviderResolver, …), AgentTeam, middleware
+│   │   └── AgentTeam/      workflow compilers: LangGraph, ADK, MAF, NOOA + the shared
+│   │                       PlaybookEmit interpreter and RunServerEmitter
+│   ├── config/             ai_config.php (reads backend/.env), load_env.php
+│   ├── schema/             chatbot.sql, migrations, run-protocol-v1.json (event contract)
+│   └── .env                secrets (gitignored; copy from .env.example)
+├── backend_typescript/ Node/TypeScript port of the same API (port 3001)
+├── backend_python/     FastAPI port of the same API (port 3002)
+├── langchain_runner/   source of the local Python runner; installed into your chosen
+│                       folder by the setup wizard, or by `python3 setup.py`
+└── frontend/           static HTML/CSS/JS (no build step), served by any web server
+    ├── assets/js/          config.js (gitignored), chat, voice, workflow editor
+    └── voice/              voice PWA + config.json (gitignored)
 ```
 
 - **LLM provider keys live only in the database** (`system_llm_settings` global, `user_api_keys`
@@ -257,10 +278,21 @@ this repository. Ask the maintainer if you need them.
 ## Tech stack
 
 - **Backend:** PHP 8.1+, Composer (Guzzle, `firebase/php-jwt`, `nikic/fast-route`, PhpOffice,
-  `smalot/pdfparser`, `vlucas/phpdotenv`), MySQL.
+  `smalot/pdfparser`, `vlucas/phpdotenv`), MySQL. Two ports of the same API: **TypeScript** (Node 18+,
+  tsx/tsc) and **Python** (FastAPI + uvicorn).
+- **Compiled workflows:** Python 3.10+ — LangGraph, Google ADK, Microsoft Agent Framework, NVIDIA
+  NOOA — executed by a local FastAPI runner, never by the web server.
 - **Frontend:** vanilla HTML/CSS/JS, Tailwind CSS, Marked.js, Highlight.js, Firebase compat SDK,
   **Pyodide** (CPython→WebAssembly), File System Access API, Drawflow (workflow editor).
 
 ## License
 
-MIT — see [`backend/composer.json`](backend/composer.json).
+**[PolyForm Noncommercial 1.0.0](LICENSE)** — use it, change it, build on it and share it freely for
+any **noncommercial** purpose: personal projects, study, research, hobby work, and use by charities,
+schools, public research, health, environmental and government bodies. **Selling it, or using it to
+run a commercial product or service, is not permitted** without a separate licence — ask.
+
+This is source-available, not OSI "open source": the restriction on commercial use is exactly what
+that definition excludes. Third-party dependencies keep their own licences. Releases up to and
+including commit `3fff3e5` were published under MIT, and that grant cannot be withdrawn for copies
+already obtained under it; these terms apply from here on.

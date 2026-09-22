@@ -2,7 +2,7 @@
   "name": "gpt-backend-typescript",
   "version": "0.1.0",
   "description": "TypeScript/Node (Express) reimplementation of the gpt PHP backend. Same HTTP contract, same MySQL databases.",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

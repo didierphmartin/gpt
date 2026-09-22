@@ -2,7 +2,7 @@
     "name": "quantis/ai-portfolio-assistant",
     "description": "AI-powered portfolio analysis assistant with Claude integration, streaming SSE support, and extensible function calling",
     "type": "library",
-    "license": "MIT",
+    "license": "PolyForm-Noncommercial-1.0.0",
     "authors": [
         {
             "name": "Didier Martin",
