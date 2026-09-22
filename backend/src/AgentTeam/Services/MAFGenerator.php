@@ -54,6 +54,17 @@ class MAFGenerator
         }
         $analyzed['providerDefaultModels'] = $defaults;
 
+        // Playbook nodes: resolved once (the #Action bindings need the MCP
+        // catalog) and carried on $analyzed for the static emitters.
+        $analyzed['playbooks'] = [];
+        foreach ((array) ($analyzed['byId'] ?? []) as $pid => $pnode) {
+            if (WorkflowGraphAnalyzer::typeOf($pnode) !== 'playbook') {
+                continue;
+            }
+            $analyzed['playbooks'][(string) $pid] =
+                PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
+        }
+
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
             'filename' => strtolower($name) . '_maf.py',
@@ -138,6 +149,18 @@ class MAFGenerator
                 'skipped" — it can never destroy the node output.');
             $parts[] = PythonEmitHelpers::skillDepsBlock();   // SKILLS_DIR + _ensure_skill_deps
             $parts[] = self::skillRunnerBlock();
+        }
+        if (!empty($analyzed['playbooks'])) {
+            $parts[] = self::banner('PLAYBOOK NODES',
+                'A playbook node is an interpreter, not an agent: the model',
+                're-decides each round from the running transcript, with the',
+                'native verbs, the human gates, one tool per bound #Action and',
+                'a stub per unbound one. The node output is that transcript.');
+            // _call_mcp_tool comes from mcpClientBlock(), emitted above ONLY when
+            // the workflow uses MCP tools -- ask for it when it does not.
+            $parts[] = PlaybookEmit::supportBlock(empty($analyzed['usedCatalog']));
+            $parts[] = PlaybookEmit::runtimeBlock();
+            $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
         }
         $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
             'AGENTS: per-node settings verbatim from the editor forms.',
@@ -411,7 +434,11 @@ NODE-INTERNAL PIPELINE (fixed order, isolated contexts):
           replaces the node's output with a stub.
 The Output node is not an LLM: it merges its parents' text untouched and
 yields it as the workflow result.
-Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+A DISPATCHER node routes: it names one child from its menu and only that
+child runs -- the edges stay drawn, the choice travels in the message.
+A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
+round from the running transcript of tool calls, and that transcript travels
+downstream as this node's output.
 
 FILE MAP (in emission order)
   ProviderClients    -- class; builds the MAF chat client per provider and
@@ -438,13 +465,16 @@ TXT;
 
         $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
             'target' => 'Microsoft Agent Framework (Python) -- WorkflowBuilder graph, one Executor per node',
+            'dispatch_supported' => true,
             'workflow' => $analyzed['workflow'],
-            'nodes' => WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed),
+            'nodes' => PlaybookEmit::docNodes($analyzed),
             'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'],
+                'deps' => array_merge(
+                    ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'],
+                    PlaybookEmit::extraDeps($analyzed)),
                 'usage' => 'python this_file.py "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
@@ -995,7 +1025,7 @@ PY;
         $entries = [];
         $defaultModels = (array) ($analyzed['providerDefaultModels'] ?? []);
         $docById = [];
-        foreach (WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed) as $dn) {
+        foreach (PlaybookEmit::docNodes($analyzed) as $dn) {
             $docById[$dn['id']] = $dn;
         }
         foreach ($analyzed['agents'] as $id => $ag) {
@@ -1161,6 +1191,14 @@ PY;
             source_id: str      # editor node id of the producer
             source_name: str    # human-readable node name (for input framing/logs)
             text: str           # the producer's output
+            # DISPATCHER support. A dispatcher's outgoing edges are a MENU, not a
+            # fan-out: it broadcasts to every menu child (the graph's edges are
+            # fixed at build time) and names the one that should actually run.
+            # The others see a route_to that is not theirs and skip -- they still
+            # report downstream, which is what keeps the fan-in barriers of the
+            # nodes below them from waiting forever on a branch that never ran.
+            route_to: str = ""  # node id the dispatcher chose ("" = not a routed edge)
+            skipped: bool = False   # this branch was not chosen; text is empty
 
 
         # Run-scoped state shared by all executors. The Start executor records the
@@ -1220,6 +1258,16 @@ PY;
                     # Fan-in barrier still waiting — tell the user what's missing.
                     ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
                     return
+                # Not on the chosen branch: do not run the model, but DO report,
+                # so every fan-in barrier downstream still completes.
+                _msgs = list(self._inbox.values())
+                _routed = [m for m in _msgs if m.route_to]
+                _skip = (all(m.skipped for m in _msgs) and _msgs) or \
+                        (_routed and all(m.route_to != self.node_id for m in _routed))
+                if _skip:
+                    ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
+                    await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
+                    return
                 client = ProviderClients.make(ad["provider"], ad["model"])
                 # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
                 _tools = [t for t in ad["tools"] if t is not None]
@@ -1274,6 +1322,133 @@ PY;
                     for m in valid:
                         parts += ["", "### Input from " + m.source_name, "", m.text, "", "---"]
                 return "\n".join(parts)
+
+
+        class PlaybookNodeExecutor(Executor):
+            """A PLAYBOOK node as a MAF executor.
+
+            INTENT: schedule the shared interpreter in the right place in the
+            graph. The loop itself is NOT a MAF agent and must not be -- it runs
+            its own tools (native verbs, human gates, bound #Actions) and its
+            output is the Markdown transcript, which travels downstream as an
+            ordinary NodeMessage so the Output node merges it like any other.
+
+            Same fan-in barrier as AgentNodeExecutor, and the same skip
+            behaviour, so a playbook sitting on a dispatcher's branch is not run
+            when that branch was not chosen.
+            """
+
+            def __init__(self, node_id: str, parents: list, id: str):
+                super().__init__(id=id)
+                self.node_id = node_id
+                self.parents = [str(p) for p in parents]
+                self._inbox = {}
+
+            @handler
+            async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[NodeMessage]) -> None:
+                pb = PLAYBOOKS[self.node_id]
+                name = str(pb.get("display", "playbook"))
+                self._inbox[msg.source_id] = msg
+                if len(self._inbox) < max(1, len(self.parents)):
+                    ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
+                    return
+                _msgs = list(self._inbox.values())
+                _routed = [m for m in _msgs if m.route_to]
+                if (all(m.skipped for m in _msgs) and _msgs) or \
+                   (_routed and all(m.route_to != self.node_id for m in _routed)):
+                    ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
+                    await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
+                    return
+                if "_CURRENT_NODE" in globals():
+                    _CURRENT_NODE.set(name)
+                ProgressReporter.node_start(name, "playbook — interpreting…")
+                request = _pb_request_text([(m.source_name, m.text) for m in _msgs],
+                                           RUN_STATE["user_prompt"])
+                text = await run_playbook_node(pb, request)
+                ProgressReporter.node_done(name, len(text))
+                await ctx.send_message(NodeMessage(self.node_id, name, text))
+
+
+        class DispatcherNodeExecutor(AgentNodeExecutor):
+            """A DISPATCHER node: its outgoing edges are a MENU, not a fan-out.
+
+            INTENT: the twin of LangGraph's conditional edge and of
+            DispatchRouting in the PHP runner -- the node names ONE child and
+            only that child runs.
+
+            MAF's graph is fixed at build time, so the edges to every menu child
+            stay drawn; the choice travels in the message instead. This executor
+            broadcasts one NodeMessage carrying route_to=<chosen node id>, and
+            AgentNodeExecutor's skip path (above) turns that into "run" for the
+            chosen child and "report nothing" for the rest. The unchosen branches
+            still report, which is what keeps the Output node's fan-in barrier
+            from waiting forever on a branch that was never taken.
+            """
+
+            def __init__(self, node_id: str, parents: list, id: str, menu: list):
+                super().__init__(node_id=node_id, parents=parents, id=id)
+                self.menu = [(str(c), str(n)) for c, n in menu]   # (child node id, display name)
+
+            @handler
+            async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[NodeMessage]) -> None:
+                """Collect parents, choose exactly one child, broadcast the choice."""
+                ad = AGENTS[self.node_id]
+                name = str(ad["name"])
+                self._inbox[msg.source_id] = msg
+                if len(self._inbox) < max(1, len(self.parents)):
+                    ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
+                    return
+                names = [n for _, n in self.menu]
+                client = ProviderClients.make(ad["provider"], ad["model"])
+                _opts = ProviderClients.chat_options(ad["provider"], ad["model"],
+                                                     ad["max_tokens"], ad["temperature"],
+                                                     ad.get("thinking"))
+                _instr = (f"Current date: {time.strftime('%Y-%m-%d')}. Treat this as 'now'.\n\n"
+                          + ad["instructions"]
+                          + "\n\n## Dispatching\n\n"
+                          + "You are a DISPATCHER. Hand this request to EXACTLY ONE of these agents:\n\n"
+                          + "\n".join("  - " + n for n in names)
+                          + "\n\nReply with the chosen agent's name ALONE on the first line, copied "
+                            "exactly from the list above. Any notes for that agent go on the following "
+                            "lines. Do not answer the request yourself.")
+                # No tools: this turn decides a route, it does not do the work.
+                agent = Agent(client, instructions=_instr, name=self.id, tools=[], default_options=_opts)
+                ProgressReporter.node_start(name, "dispatcher — choosing one of: " + " | ".join(names))
+                if "_CURRENT_NODE" in globals():
+                    _CURRENT_NODE.set(name)
+                reply = (await agent.run(self._framed_input())).text or ""
+                lines = [ln.strip() for ln in reply.strip().splitlines()]
+                first = lines[0].strip(' "\'*`#:-').lower() if lines else ""
+                chosen = None
+                for cid, nm in self.menu:
+                    if nm.strip().lower() == first:
+                        chosen = (cid, nm)
+                        break
+                if chosen is None:
+                    # A name wrapped in prose still names a target; take the first
+                    # one that appears rather than failing the run over formatting.
+                    low = reply.lower()
+                    hits = [(low.index(nm.strip().lower()), cid, nm)
+                            for cid, nm in self.menu if nm.strip().lower() in low]
+                    if hits:
+                        _, cid, nm = min(hits)
+                        chosen = (cid, nm)
+                notes = "\n".join(lines[1:]).strip()
+                if chosen is None:
+                    msg_txt = (f"Error: dispatcher {name!r} did not route the request. "
+                               f"Expected one of: {', '.join(names)}.")
+                    ProgressReporter.note(msg_txt)
+                    # Nothing routed: every child skips and the error travels on as
+                    # this node's output, so the run ends with a readable reason.
+                    await ctx.send_message(NodeMessage(self.node_id, name, msg_txt, route_to="\u0000"))
+                    return
+                task = "\n\n".join(m.text for m in self._inbox.values()
+                                    if m.text and m.source_name != "Start") or RUN_STATE["user_prompt"]
+                text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
+                ProgressReporter.node_done(name, len(reply))
+                ProgressReporter.note(f"{name}: routed to {chosen[1]!r}"
+                                      + (f" — notes: {notes[:120]!r}" if notes else ""))
+                await ctx.send_message(NodeMessage(self.node_id, name, text, route_to=chosen[0]))
 
 
         class OutputNodeExecutor(Executor):
@@ -1337,6 +1512,7 @@ PY;
      */
     private static function orchestrationBlock(array $analyzed): string
     {
+        $menus   = WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'];
         $startId = (string) ($analyzed['startNodeId'] ?? '');
         // First node whose type == 'output' is the fan-in sink.
         $outId = '';
@@ -1350,7 +1526,14 @@ PY;
         $vars = [$startId => 'start_node', $outId => 'output_node'];
         $used = ['start_node' => true, 'output_node' => true];
         $displayName = [$startId => 'Start', $outId => 'Output'];
-        foreach ($analyzed['agents'] as $id => $ag) {
+        // Playbook nodes are executors too, so they need variables and display
+        // names alongside the agents -- a node missing from $vars is skipped by
+        // both the instantiation loop and the edge loop below.
+        $pbLabels = [];
+        foreach ((array) ($analyzed['playbooks'] ?? []) as $pid => $pd) {
+            $pbLabels[(string) $pid] = ['name' => (string) ($pd['display'] ?? ('playbook ' . $pid))];
+        }
+        foreach ($analyzed['agents'] + $pbLabels as $id => $ag) {
             $label = (string) ($ag['name'] ?? ('node ' . $id));
             $displayName[(string) $id] = $label;
             $v = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', $label), '_'));
@@ -1372,14 +1555,42 @@ PY;
             foreach ((array) $layer as $nid) {
                 $key = (string) $nid;
                 if ($key === $startId || !isset($vars[$key])) continue;
-                $pList = array_map(fn($p) => PythonEmitHelpers::pyStr((string) $p), (array) ($parents[$key] ?? $parents[$nid] ?? []));
+                // Only parents this target actually emits can ever report. A
+                // parent with no executor (a playbook node, which MAF skips)
+                // left in the list parked the fan-in barrier forever: the
+                // Output node waited on a message that nothing could send, and
+                // the run hung with no error. Counting only reachable parents
+                // is what makes a skipped branch -- dispatcher or unsupported
+                // node -- finish instead of stall.
+                $pAll  = (array) ($parents[$key] ?? $parents[$nid] ?? []);
+                $pKept = array_values(array_filter($pAll,
+                    fn($p) => (string) $p === $startId || isset($vars[(string) $p])));
+                $pList = array_map(fn($p) => PythonEmitHelpers::pyStr((string) $p), $pKept);
                 $pPy = '[' . implode(', ', $pList) . ']';
                 if ($key === $outId) {
                     $inst[] = '    output_node = OutputNodeExecutor(parents=' . $pPy . ')';
                 } else {
-                    $inst[] = '    ' . $vars[$key] . ' = AgentNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
-                        . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
-                        . '  # "' . str_replace('"', "'", $displayName[$key]) . '"';
+                    // A dispatcher gets the routing executor and its menu; every
+                    // other agent node stays an ordinary AgentNodeExecutor. The
+                    // edges are unchanged either way -- the choice travels in the
+                    // message, not in the topology (see DispatcherNodeExecutor).
+                    if (isset($analyzed['playbooks'][$key])) {
+                        $inst[] = '    ' . $vars[$key] . ' = PlaybookNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
+                            . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
+                            . '  # "' . str_replace('"', "'", $displayName[$key]) . '" -- PLAYBOOK';
+                    } elseif (isset($menus[$key])) {
+                        $menuPy = '[' . implode(', ', array_map(
+                            fn($t) => '(' . PythonEmitHelpers::pyStr((string) $t['id']) . ', '
+                                    . PythonEmitHelpers::pyStr((string) $t['name']) . ')', $menus[$key])) . ']';
+                        $inst[] = '    ' . $vars[$key] . ' = DispatcherNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
+                            . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key])
+                            . ', menu=' . $menuPy . ')'
+                            . '  # "' . str_replace('"', "'", $displayName[$key]) . '" -- DISPATCHER';
+                    } else {
+                        $inst[] = '    ' . $vars[$key] . ' = AgentNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
+                            . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
+                            . '  # "' . str_replace('"', "'", $displayName[$key]) . '"';
+                    }
                 }
             }
         }

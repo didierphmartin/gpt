@@ -73,6 +73,19 @@ class NOOAGenerator
             }
         }
 
+        // Playbook nodes: resolved ONCE here (the #Action bindings need the MCP
+        // catalog and the analyzer) and carried on $analyzed, so the static
+        // emitters below stay pure. PlaybookEmit is shared with every other
+        // target, so the same playbook binds to the same tools everywhere.
+        $analyzed['playbooks'] = [];
+        foreach ((array) ($analyzed['byId'] ?? []) as $pid => $pnode) {
+            if (WorkflowGraphAnalyzer::typeOf($pnode) !== 'playbook') {
+                continue;
+            }
+            $analyzed['playbooks'][(string) $pid] =
+                PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
+        }
+
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
             'filename' => strtolower($name) . '_nooa.py',
@@ -162,6 +175,25 @@ class NOOAGenerator
             'parent outputs, date-grounded), runs the node class, then applies',
             'each bound skill as a MANDATORY post-step.');
         $parts[] = self::runnerBlock($hasSkills);
+        if (WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'] !== []) {
+            $parts[] = self::banner('DISPATCHER',
+                'run_dispatcher(): a dispatcher node\'s outgoing edges are a MENU,',
+                'not a fan-out. The node names ONE child; only that child runs,',
+                'and it receives the incoming task plus the dispatcher\'s notes.');
+            $parts[] = self::dispatcherBlock();
+        }
+        if (!empty($analyzed['playbooks'])) {
+            $parts[] = self::banner('PLAYBOOK NODES',
+                'A playbook node is an interpreter, not an agent: the model',
+                're-decides each round from the running transcript, with the',
+                'native verbs, the human gates, one tool per bound #Action and',
+                'a stub per unbound one. The node output is that transcript.');
+            // NOOA emits its own MCP client (mcpBlock), but not the shared
+            // _call_mcp_tool the interpreter's bound actions call -- so ask for it.
+            $parts[] = PlaybookEmit::supportBlock(true);
+            $parts[] = PlaybookEmit::runtimeBlock();
+            $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
+        }
         $parts[] = self::banner('WORKFLOW GLOBALS',
             'Identity + the Start node prompt baked as DEFAULT_PROMPT',
             '(CLI args override it) + output storage settings.');
@@ -218,7 +250,12 @@ NODE-INTERNAL PIPELINE (fixed order):
           scripts via run_skill_script. A produced output file becomes the
           node output; a failed step keeps the pre-skill text.
 The Output node is not an LLM: it merges its parents' text untouched.
-Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+A DISPATCHER node routes: it names one child from its menu and only that
+child runs (the others are skipped, and so is anything hanging off them).
+A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
+round from the running transcript of tool calls, and that transcript IS
+the node output. Its gates are answered by the host, the console, or
+PLAYBOOK_GATE_MODE (see PLAYBOOK RUNTIME).
 TXT;
     }
 
@@ -229,14 +266,17 @@ TXT;
 
         $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
             'target' => 'NVIDIA OO Agents (Python) -- one NOOA Agent class per node, asyncio orchestration',
+            'dispatch_supported' => true,
             'workflow' => $analyzed['workflow'],
-            'nodes' => WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed),
+            'nodes' => PlaybookEmit::docNodes($analyzed),
             'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
-                           'pip install "nooa[mcp]" "mcp<2" python-dotenv'],
+                'deps' => array_merge(
+                    ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
+                     'pip install "nooa[mcp]" "mcp<2" python-dotenv'],
+                    PlaybookEmit::extraDeps($analyzed)),
                 'usage' => 'python this_file.py "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
@@ -597,7 +637,7 @@ PY;
         $catalog    = (array) ($analyzed['usedCatalog'] ?? []);
         $out        = [];
         $docById    = [];
-        foreach (WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed) as $dn) {
+        foreach (PlaybookEmit::docNodes($analyzed) as $dn) {
             $docById[$dn['id']] = $dn;
         }
 
@@ -737,6 +777,83 @@ PY;
     // Globals
     // -------------------------------------------------------------------------
 
+    /**
+     * DISPATCHER node runtime. Semantic twin of LangGraphGenerator's
+     * _run_dispatcher() and of DispatchRouting in the PHP runner: the node
+     * picks exactly ONE downstream agent and only that child runs.
+     *
+     * The choice is made by asking the dispatcher's own model for a bare
+     * target name rather than by a forced tool call (LangGraph's mechanism).
+     * NOOA agents expose one primitive here -- `cls().respond(text)` -- with
+     * no tool-choice hook to force, so the menu is put in the prompt and the
+     * reply is validated against it. Same observable behaviour: one child,
+     * notes carried forward, and an explicit failure when the model names
+     * nothing on the menu.
+     */
+    private static function dispatcherBlock(): string
+    {
+        return <<<'PY'
+        async def run_dispatcher(node_id, parent_texts, request, menu):
+            """Pick ONE child from `menu` ([(child_id, display_name), ...]).
+
+            Returns (chosen_id | None, text). `text` is this node's output --
+            the incoming task plus the dispatcher's notes -- and becomes the
+            chosen child's parent input, exactly as the other targets do it.
+            """
+            ad = AGENTS[node_id]
+            name = str(ad["name"])
+            names = [n for _, n in menu]
+            task = "\n\n".join(t for src, t in parent_texts if t and src != "Start") or str(request)
+            Progress.node_start(name, "dispatcher — choosing one of: " + " | ".join(names))
+            ask = "\n".join([
+                "Current date: " + time.strftime("%Y-%m-%d") + ".",
+                "",
+                'Original user request: "' + str(request) + '"',
+                "",
+                "Incoming task:",
+                "",
+                task,
+                "",
+                "You are a DISPATCHER. Hand this request to EXACTLY ONE of these agents:",
+                "",
+                *["  - " + n for n in names],
+                "",
+                "Reply with the chosen agent's name ALONE on the first line, copied"
+                " exactly from the list above. Any notes for that agent go on the",
+                "following lines. Do not answer the request yourself.",
+            ])
+            reply = str(await ad["cls"]().respond(ask) or "")
+            lines = [ln.strip() for ln in reply.strip().splitlines()]
+            first = lines[0].strip(' "\'*`#:-').lower() if lines else ""
+            chosen = None
+            for cid, nm in menu:
+                if nm.strip().lower() == first:
+                    chosen = (cid, nm)
+                    break
+            if chosen is None:
+                # The model wrapped the name in a sentence. Accept the first menu
+                # entry that appears anywhere in the reply before giving up -- a
+                # usable answer buried in prose is still an answer, and refusing
+                # it would end the run over formatting.
+                low = reply.lower()
+                hits = [(low.index(nm.strip().lower()), cid, nm)
+                        for cid, nm in menu if nm.strip().lower() in low]
+                if hits:
+                    _, cid, nm = min(hits)
+                    chosen = (cid, nm)
+            notes = "\n".join(lines[1:]).strip()
+            if chosen is None:
+                msg = (f"Error: dispatcher {name!r} did not route the request. "
+                       f"Expected one of: {', '.join(names)}.")
+                Progress.note(msg)
+                return None, msg
+            Progress.node_done(name, len(reply))
+            Progress.note(f"{name}: routed to {chosen[1]!r}"
+                          + (f" — notes: {notes[:120]!r}" if notes else ""))
+            return chosen[0], task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
+        PY;
+    }
+
     private static function globalsBlock(array $analyzed): string
     {
         $sp      = PythonEmitHelpers::pyStr((string) $analyzed['startPrompt']);
@@ -771,11 +888,15 @@ PY;
 
         // A node's effective parents: only ids that will exist in `out`
         // (start or agent nodes); a node left with none reads the Start entry.
-        $eff = function (string $id) use ($parents, $agents, $startId): array {
+        $playbooks = (array) ($analyzed['playbooks'] ?? []);
+        // A playbook node produces output like any other node, so it is both
+        // runnable and a legal parent to read from. Before playbook support it
+        // was neither, and its edges silently vanished from the driver.
+        $eff = function (string $id) use ($parents, $agents, $playbooks, $startId): array {
             $keep = [];
             foreach ((array) ($parents[$id] ?? []) as $p) {
                 $p = (string) $p;
-                if ($p === $startId || isset($agents[$p])) {
+                if ($p === $startId || isset($agents[$p]) || isset($playbooks[$p])) {
                     $keep[] = $p;
                 }
             }
@@ -784,8 +905,50 @@ PY;
             }
             return $keep;
         };
-        $refs = fn(array $ids): string =>
-            '[' . implode(', ', array_map(fn($p) => 'out[' . PythonEmitHelpers::pyStr($p) . ']', $ids)) . ']';
+        // A dispatcher means some `out` entries never exist: the children it did
+        // not choose never ran. Reads therefore go through out.get(...) with an
+        // empty (source, text) pair, so a skipped branch contributes nothing
+        // instead of raising KeyError on the first node that looks at it.
+        $dispatch = WorkflowGraphAnalyzer::dispatchMenus($analyzed);
+        $menus    = $dispatch['menus'];
+        $routedBy = $dispatch['routedBy'];
+        // Nodes that only run when a dispatcher picks their branch: the menu
+        // children plus everything downstream of them.
+        $conditional = [];
+        if ($menus !== []) {
+            $children = [];
+            foreach ((array) ($analyzed['edges'] ?? []) as $e) {
+                $children[(string) ($e['from'] ?? $e['from_node_id'] ?? '')][] = (string) ($e['to'] ?? $e['to_node_id'] ?? '');
+            }
+            $stack = array_keys($routedBy);
+            while ($stack) {
+                $nid = array_pop($stack);
+                if (isset($conditional[$nid])) continue;
+                $conditional[$nid] = true;
+                foreach ((array) ($children[$nid] ?? []) as $ch) {
+                    // The Output node is a sink for every branch -- it must still
+                    // run when a branch was skipped, merging whatever did run.
+                    if (isset($analyzed['byId'][$ch]) && WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$ch]) === 'output') continue;
+                    $stack[] = $ch;
+                }
+            }
+        }
+        $refs = fn(array $ids): string => $menus === []
+            ? '[' . implode(', ', array_map(fn($p) => 'out[' . PythonEmitHelpers::pyStr($p) . ']', $ids)) . ']'
+            : '[' . implode(', ', array_map(fn($p) => 'out.get(' . PythonEmitHelpers::pyStr($p) . ', ("", ""))', $ids)) . ']';
+
+        // How to call one node, whatever kind it is. Every emission site below
+        // goes through this, so an agent and a playbook can share a layer, a
+        // gather, or a dispatcher menu without a second code path.
+        $nodeName = fn(string $nid): string => (string) (
+            $playbooks[$nid]['display'] ?? $agents[$nid]['name'] ?? $nid);
+        $callExpr = function (string $nid) use ($playbooks, $refs, $eff): string {
+            $args = $refs($eff($nid));
+            return isset($playbooks[$nid])
+                ? 'run_playbook_node(PLAYBOOKS[' . PythonEmitHelpers::pyStr($nid) . '], '
+                    . '_pb_request_text(' . $args . ', prompt))'
+                : 'run_agent(' . PythonEmitHelpers::pyStr($nid) . ', ' . $args . ', prompt)';
+        };
 
         $body   = [];
         if ($hasDocs) {
@@ -818,7 +981,7 @@ PY;
             $runnable = [];
             foreach ((array) $layer as $nid) {
                 $nid = (string) $nid;
-                if (isset($agents[$nid])) {
+                if (isset($agents[$nid]) || isset($playbooks[$nid])) {
                     $runnable[] = $nid;
                 }
             }
@@ -826,25 +989,106 @@ PY;
                 continue;
             }
             $layerIdx++;
-            $names = array_map(fn($nid) => str_replace('"', "'", (string) ($agents[$nid]['name'] ?? $nid)), $runnable);
+            $names = array_map(fn($nid) => str_replace('"', "'", $nodeName($nid)), $runnable);
+
+            // Menu children run under their dispatcher's choice, not beside each
+            // other. Pull them out of the layer first; whatever is left is an
+            // ordinary (possibly parallel) layer and emits exactly as before.
+            $routed = [];
+            $plain  = [];
+            foreach ($runnable as $nid) {
+                if (isset($routedBy[$nid]) && isset($menus[$routedBy[$nid]])) {
+                    $routed[$routedBy[$nid]][] = $nid;
+                } else {
+                    $plain[] = $nid;
+                }
+            }
+            foreach ($routed as $did => $kids) {
+                $menuNames = array_map(fn($t) => str_replace('"', "'", $t['name']), $menus[$did]);
+                $body[] = "    # layer {$layerIdx}: dispatcher " . str_replace('"', "'", (string) ($agents[$did]['name'] ?? $did))
+                    . ' routes to EXACTLY ONE of: ' . implode(' | ', $menuNames);
+                $first = true;
+                foreach ($menus[$did] as $t) {
+                    $cid = (string) $t['id'];
+                    if (!in_array($cid, $kids, true)) {
+                        // On the menu but not runnable here (a playbook node this
+                        // target skips): routing to it runs nothing, which is the
+                        // same outcome the node itself would have produced.
+                        continue;
+                    }
+                    $body[] = '    ' . ($first ? 'if' : 'elif') . ' _route_' . preg_replace('/\W/', '_', (string) $did)
+                        . ' == ' . PythonEmitHelpers::pyStr($cid) . ':';
+                    $body[] = '        out[' . PythonEmitHelpers::pyStr($cid) . '] = ('
+                        . PythonEmitHelpers::pyStr($nodeName($cid))
+                        . ', await ' . $callExpr($cid) . ')';
+                    $first = false;
+                }
+            }
+            $runnable = $plain;
+            if (!$runnable) {
+                continue;
+            }
+            $names = array_map(fn($nid) => str_replace('"', "'", $nodeName($nid)), $runnable);
             if (count($runnable) === 1) {
                 $nid = $runnable[0];
-                $body[] = "    # layer {$layerIdx}: " . $names[0];
+                if (isset($menus[$nid])) {
+                    // DISPATCHER node: one call that returns the chosen child id;
+                    // the menu's `if/elif` chain above (next layer) reads it.
+                    $menuPy = '[' . implode(', ', array_map(
+                        fn($t) => '(' . PythonEmitHelpers::pyStr((string) $t['id']) . ', '
+                                . PythonEmitHelpers::pyStr((string) $t['name']) . ')', $menus[$nid])) . ']';
+                    $var = '_route_' . preg_replace('/\W/', '_', (string) $nid);
+                    $body[] = "    # layer {$layerIdx}: " . $names[0] . '   (DISPATCHER)';
+                    $body[] = '    ' . $var . ', _text = await run_dispatcher('
+                        . PythonEmitHelpers::pyStr($nid) . ', ' . $refs($eff($nid)) . ', prompt, ' . $menuPy . ')';
+                    $body[] = '    out[' . PythonEmitHelpers::pyStr($nid) . '] = ('
+                        . PythonEmitHelpers::pyStr((string) ($agents[$nid]['name'] ?? $nid)) . ', _text)';
+                    continue;
+                }
+                $body[] = "    # layer {$layerIdx}: " . $names[0]
+                    . (isset($playbooks[$nid]) ? '   (PLAYBOOK)' : '');
                 $body[] = '    out[' . PythonEmitHelpers::pyStr($nid) . '] = ('
-                    . PythonEmitHelpers::pyStr((string) ($agents[$nid]['name'] ?? $nid))
-                    . ', await run_agent(' . PythonEmitHelpers::pyStr($nid) . ', '
-                    . $refs($eff($nid)) . ', prompt))';
+                    . PythonEmitHelpers::pyStr($nodeName($nid))
+                    . ', await ' . $callExpr($nid) . ')';
             } else {
+                $solo = [];
+                foreach ($runnable as $nid) {
+                    if (isset($menus[$nid])) $solo[] = $nid;
+                }
+                foreach ($solo as $nid) {
+                    $menuPy = '[' . implode(', ', array_map(
+                        fn($t) => '(' . PythonEmitHelpers::pyStr((string) $t['id']) . ', '
+                                . PythonEmitHelpers::pyStr((string) $t['name']) . ')', $menus[$nid])) . ']';
+                    $var = '_route_' . preg_replace('/\W/', '_', (string) $nid);
+                    $body[] = "    # layer {$layerIdx}: " . str_replace('"', "'", (string) ($agents[$nid]['name'] ?? $nid)) . '   (DISPATCHER)';
+                    $body[] = '    ' . $var . ', _text = await run_dispatcher('
+                        . PythonEmitHelpers::pyStr($nid) . ', ' . $refs($eff($nid)) . ', prompt, ' . $menuPy . ')';
+                    $body[] = '    out[' . PythonEmitHelpers::pyStr($nid) . '] = ('
+                        . PythonEmitHelpers::pyStr((string) ($agents[$nid]['name'] ?? $nid)) . ', _text)';
+                }
+                if ($solo) {
+                    $runnable = array_values(array_diff($runnable, $solo));
+                    if (!$runnable) {
+                        continue;
+                    }
+                    if (count($runnable) === 1) {
+                        $nid = $runnable[0];
+                        $body[] = '    out[' . PythonEmitHelpers::pyStr($nid) . '] = ('
+                            . PythonEmitHelpers::pyStr($nodeName($nid))
+                            . ', await ' . $callExpr($nid) . ')';
+                        continue;
+                    }
+                    $names = array_map(fn($nid) => str_replace('"', "'", $nodeName($nid)), $runnable);
+                }
                 $body[] = "    # layer {$layerIdx}: " . implode('  ||  ', $names) . '   (run in PARALLEL)';
                 $body[] = "    _r{$layerIdx} = await asyncio.gather(";
                 foreach ($runnable as $nid) {
-                    $body[] = '        run_agent(' . PythonEmitHelpers::pyStr($nid) . ', '
-                        . $refs($eff($nid)) . ', prompt),';
+                    $body[] = '        ' . $callExpr($nid) . ',';
                 }
                 $body[] = '    )';
                 foreach ($runnable as $i => $nid) {
                     $body[] = '    out[' . PythonEmitHelpers::pyStr($nid) . '] = ('
-                        . PythonEmitHelpers::pyStr((string) ($agents[$nid]['name'] ?? $nid))
+                        . PythonEmitHelpers::pyStr($nodeName($nid))
                         . ", _r{$layerIdx}[{$i}])";
                 }
             }
@@ -859,7 +1103,7 @@ PY;
             foreach (array_reverse(array_values($analyzed['layers'])) as $layer) {
                 foreach ((array) $layer as $nid) {
                     $nid = (string) $nid;
-                    if (isset($agents[$nid])) {
+                    if (isset($agents[$nid]) || isset($playbooks[$nid])) {
                         $mergeIds[] = $nid;
                     }
                 }

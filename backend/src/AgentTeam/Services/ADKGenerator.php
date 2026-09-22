@@ -67,6 +67,18 @@ class ADKGenerator
         $analyzed['providerDefaultModels'] = $defaults;
 
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        // Playbook nodes: resolved once here (their #Action bindings need the MCP
+        // catalog) and carried on $analyzed for the static emitters below.
+        // PlaybookEmit is shared, so a playbook binds identically on every target.
+        $analyzed['playbooks'] = [];
+        foreach ((array) ($analyzed['byId'] ?? []) as $pid => $pnode) {
+            if (WorkflowGraphAnalyzer::typeOf($pnode) !== 'playbook') {
+                continue;
+            }
+            $analyzed['playbooks'][(string) $pid] =
+                PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
+        }
+
         return [
             'filename' => strtolower($name) . '_adk.py',
             'code'     => self::emitAdk($analyzed),
@@ -161,6 +173,30 @@ class ADKGenerator
             $lines[] = self::passThroughAgentBlock();
             $lines[] = $consolidators;
         }
+        if (!empty($analyzed['playbooks'])) {
+            $lines[] = self::banner('PLAYBOOK NODES',
+                'A playbook node is an interpreter, not an agent: the model',
+                're-decides each round from the running transcript, with the',
+                'native verbs, the human gates, one tool per bound #Action and',
+                'a stub per unbound one. The node output is that transcript.');
+            // ADK already emits PythonEmitHelpers::mcpClientBlock() above, so the
+            // interpreter's _call_mcp_tool is already defined -- do not re-emit it.
+            $lines[] = PlaybookEmit::supportBlock(false);
+            $lines[] = PlaybookEmit::runtimeBlock();
+            $lines[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
+            $lines[] = self::playbookAgentBlock();
+            $lines[] = self::playbookInstancesBlock($analyzed);
+        }
+        $dispatchers = self::dispatcherInstancesBlock($analyzed);
+        if ($dispatchers !== '') {
+            $lines[] = self::banner('DISPATCHER NODES',
+                'A dispatcher\'s outgoing edges are a MENU, not a fan-out: the',
+                'node names ONE child and only that child runs. Its menu is',
+                'nested here, which is why those children are absent from the',
+                'topological layers below.');
+            $lines[] = self::dispatcherAgentBlock();
+            $lines[] = $dispatchers;
+        }
         $lines[] = self::banner('ORCHESTRATION',
             'The workflow graph as TOPOLOGICAL LAYERS: independent nodes at',
             'the same depth run together in a ParallelAgent; the layers run',
@@ -211,13 +247,16 @@ class ADKGenerator
         $name = $esc((string) $analyzed['workflow']['name']);
         $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
             'target' => 'Google ADK (Python) -- LlmAgent per node, Sequential/Parallel layers',
+            'dispatch_supported' => true,
             'workflow' => $analyzed['workflow'],
             'nodes' => self::docNodes($analyzed),
             'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => ['pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported'],
+                'deps' => array_merge(
+                    ['pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported'],
+                    PlaybookEmit::extraDeps($analyzed)),
                 'usage' => 'python this_file.py "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
@@ -600,7 +639,7 @@ PY;
     /** Uniform node descriptors (shared documentation; see WorkflowGraphAnalyzer::docNodes). */
     private static function docNodes(array $analyzed): array
     {
-        return WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed);
+        return PlaybookEmit::docNodes($analyzed);
     }
 
     /** DATA FLOW section of the module docstring (ADK-specific mechanics). */
@@ -640,7 +679,11 @@ NODE-INTERNAL PIPELINE (fixed order):
           prompt is the skill's SKILL.md, then a capture agent that makes the
           node output the file the skill's script PRODUCED (else the LLM text).
     The Output node is a non-LLM pass-through: parents' text verbatim.
-Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+A DISPATCHER node routes: it names one child from its menu and only that
+child runs (its menu is nested under the dispatcher, not in a layer).
+A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
+round from the running transcript of tool calls, and that transcript IS the
+node output, published to session.state like any other node's result.
 TXT;
     }
 
@@ -651,10 +694,25 @@ TXT;
         foreach (self::docNodes($analyzed) as $dn) {
             $docById[$dn['id']] = $dn;
         }
+        $menus = WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'];
         foreach ($analyzed['agents'] as $id => $ag) {
             $instr = (string) $ag['systemPrompt'];
             // NOTE: ## Skill / skill_content is NOT appended — skills are now
             // separate SequentialAgent steps, not prompt text.
+
+            // DISPATCHER node: the prompt has to produce a ROUTE, not an answer.
+            // Appended here rather than baked into the form so the node keeps
+            // reading as itself in the editor, and so a node that stops being a
+            // dispatcher stops asking for a name on the next generate.
+            if (isset($menus[(string) $id])) {
+                $names = array_map(fn($t) => (string) $t['name'], $menus[(string) $id]);
+                $instr .= "\n\n## Dispatching\n\n"
+                    . "You are a DISPATCHER. Hand this request to EXACTLY ONE of these agents:\n\n"
+                    . '  - ' . implode("\n  - ", $names) . "\n\n"
+                    . "Reply with the chosen agent's name ALONE on the first line, copied exactly "
+                    . "from the list above. Any notes for that agent go on the following lines. "
+                    . "Do not answer the request yourself.";
+            }
 
             // Parent outputs are read from session state by the instruction
             // PROVIDER emitted below (_agent_instruction), not through ADK's
@@ -855,6 +913,140 @@ PY;
     }
 
     /**
+     * The _PlaybookAgent class definition — a playbook node inside ADK's graph.
+     *
+     * The interpreter is not an ADK agent and must not be one: it runs its own
+     * tool loop (native verbs, gates, bound #Actions). ADK's job is only to
+     * schedule it in the right place and to publish its transcript into
+     * session.state under the node's key, so downstream agents read it through
+     * the same {node_<id>} placeholder as any other parent.
+     */
+    private static function playbookAgentBlock(): string
+    {
+        return <<<'PY'
+class _PlaybookAgent(BaseAgent):
+    """Runs one playbook node and publishes its transcript as the node output."""
+    node_id: str = ""
+    source_keys: list = []     # parent state keys, in canvas order
+
+    async def _run_async_impl(self, ctx):
+        pb = PLAYBOOKS[self.node_id]
+        parents = [("parent", str(ctx.session.state.get(k, ""))) for k in self.source_keys]
+        request = _pb_request_text(parents, ctx.session.state.get("user_prompt", ""))
+        text = await run_playbook_node(pb, request)
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=text)]),
+            actions=EventActions(state_delta={"node_" + self.node_id: text}),
+            turn_complete=True,
+        )
+PY;
+    }
+
+    /** One `node_<id> = _PlaybookAgent(...)` per playbook node. */
+    private static function playbookInstancesBlock(array $analyzed): string
+    {
+        $out = [];
+        foreach ((array) ($analyzed['playbooks'] ?? []) as $pid => $pd) {
+            $pid  = (string) $pid;
+            $keys = [];
+            foreach ((array) ($analyzed['parents'][$pid] ?? []) as $p) {
+                $p = (string) $p;
+                // Only parents that actually write a state key can be read back.
+                if (isset($analyzed['agents'][$p]) || isset($analyzed['playbooks'][$p])) {
+                    $keys[] = '"node_' . $p . '"';
+                }
+            }
+            $entry  = "# Playbook node {$pid} -- " . str_replace(["\n", '"'], [' ', "'"], (string) $pd['display']) . "\n";
+            $entry .= "node_{$pid} = _PlaybookAgent(\n";
+            $entry .= "    name=\"node_{$pid}\",\n";
+            $entry .= "    node_id=\"{$pid}\",\n";
+            $entry .= '    source_keys=[' . implode(', ', $keys) . "],\n";
+            $entry .= ")";
+            $out[] = $entry;
+        }
+        return implode("\n\n", $out);
+    }
+
+    /**
+     * The _DispatcherAgent class definition — a DISPATCHER node's menu.
+     *
+     * A dispatcher's outgoing edges are a CHOICE, not a fan-out: the node names
+     * one child and only that child runs (twin of LangGraph's conditional edge
+     * and of DispatchRouting in the PHP runner). The menu children are nested as
+     * this agent's sub_agents rather than left in their topological layer, so
+     * ADK never schedules the ones that were not picked — an agent has exactly
+     * one parent in ADK, which is also why rootBlock() must drop them from the
+     * layer it would otherwise wrap in a ParallelAgent.
+     *
+     * sub_agents[0] is the dispatcher's own LlmAgent (the chooser); the rest are
+     * the menu, addressed by agent name.
+     */
+    private static function dispatcherAgentBlock(): string
+    {
+        return <<<'PY'
+class _DispatcherAgent(BaseAgent):
+    """DISPATCHER node: run the chooser, then run ONLY the child it named.
+
+    The chooser's instruction (see the node's prompt) asks for the target name
+    alone on the first line, with any notes after it. Its raw reply lands in
+    state[route_key]; this agent replaces that with what the chosen child should
+    actually read -- the incoming task plus those notes -- so the child's
+    {node_<dispatcher>} placeholder resolves to a task, never to a bare name.
+    """
+    route_key: str = ""
+    task_keys: list = []     # the dispatcher's own parent state keys, in canvas order
+    menu: list = []          # [[child_id, display_name, agent_name], ...] in edge order
+
+    async def _run_async_impl(self, ctx):
+        async for ev in self.sub_agents[0].run_async(ctx):
+            yield ev
+        reply = str(ctx.session.state.get(self.route_key, "") or "")
+        lines = [ln.strip() for ln in reply.strip().splitlines()]
+        first = lines[0].strip(' "\'*`#:-').lower() if lines else ""
+        chosen = None
+        for entry in self.menu:
+            if str(entry[1]).strip().lower() == first:
+                chosen = entry
+                break
+        if chosen is None:
+            # A name wrapped in a sentence still names a target; take the one that
+            # appears earliest rather than failing the run over formatting.
+            low = reply.lower()
+            hits = [(low.index(str(e[1]).strip().lower()), e)
+                    for e in self.menu if str(e[1]).strip().lower() in low]
+            if hits:
+                chosen = min(hits, key=lambda h: h[0])[1]
+        names = [str(e[1]) for e in self.menu]
+        if chosen is None:
+            msg = (f"Error: dispatcher {self.name!r} did not route the request. "
+                   f"Expected one of: {', '.join(names)}.")
+            print(f"[node] [{self.name}] \u26a0 {msg}", flush=True)
+            yield Event(
+                author=self.name,
+                content=types.Content(role="model", parts=[types.Part(text=msg)]),
+                actions=EventActions(state_delta={self.route_key: msg}),
+                turn_complete=True,
+            )
+            return
+        notes = "\n".join(lines[1:]).strip()
+        task = "\n\n".join(str(ctx.session.state.get(k, "")) for k in self.task_keys
+                           if str(ctx.session.state.get(k, "")).strip())
+        text = (task or reply) + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
+        print(f"[node] [{self.name}] routed to {str(chosen[1])!r}"
+              + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=text)]),
+            actions=EventActions(state_delta={self.route_key: text}),
+        )
+        picked = next(a for a in self.sub_agents[1:] if a.name == str(chosen[2]))
+        async for ev in picked.run_async(ctx):
+            yield ev
+PY;
+    }
+
+    /**
      * Emit each `output` node as a non-LLM _PassThroughAgent that forwards its
      * parent(s) output from session.state verbatim (single parent = pass-through,
      * multiple = joined), preserving formatting like HTML. Returns '' when the
@@ -884,6 +1076,57 @@ PY;
     }
 
     /**
+     * One `node_<id>__dispatch = _DispatcherAgent(...)` per dispatcher node: the
+     * chooser followed by its menu, all nested as sub_agents. Returns '' when
+     * the workflow has no dispatcher.
+     */
+    private static function dispatcherInstancesBlock(array $analyzed): string
+    {
+        $menus = WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'];
+        if ($menus === []) {
+            return '';
+        }
+        $out = [];
+        foreach ($menus as $did => $targets) {
+            $did = (string) $did;
+            // Only children this target actually emits can be nested: a playbook
+            // on the menu has no agent here, so routing to it runs nothing --
+            // the same outcome as the node being skipped anywhere else.
+            $entries = [];
+            $subs    = ["node_{$did}"];
+            foreach ($targets as $t) {
+                $cid = (string) $t['id'];
+                if (!isset($analyzed['agents'][$cid])) {
+                    continue;
+                }
+                $entries[] = '[' . PythonEmitHelpers::pyStr($cid) . ', '
+                    . PythonEmitHelpers::pyStr((string) $t['name']) . ', '
+                    . PythonEmitHelpers::pyStr("node_{$cid}") . ']';
+                $subs[] = "node_{$cid}";
+            }
+            if (count($subs) < 2) {
+                continue;   // nothing routable -- leave the node as a plain agent
+            }
+            $taskKeys = array_values(array_filter(
+                $analyzed['parents'][$did] ?? [],
+                fn($p) => isset($analyzed['agents'][$p])
+            ));
+            $taskKeysPy = '[' . implode(', ', array_map(fn($p) => '"node_' . $p . '"', $taskKeys)) . ']';
+            $entry  = "# DISPATCHER {$did}: the chooser plus its menu. Only the child it names runs;\n";
+            $entry .= "# the others are never scheduled (they are NOT in a layer of their own).\n";
+            $entry .= "node_{$did}__dispatch = _DispatcherAgent(\n";
+            $entry .= "    name=\"node_{$did}__dispatch\",\n";
+            $entry .= "    route_key=\"node_{$did}\",\n";
+            $entry .= "    task_keys={$taskKeysPy},\n";
+            $entry .= "    menu=[" . implode(', ', $entries) . "],\n";
+            $entry .= "    sub_agents=[" . implode(', ', $subs) . "],\n";
+            $entry .= ")";
+            $out[] = $entry;
+        }
+        return implode("\n\n", $out);
+    }
+
+    /**
      * Build `root_agent = SequentialAgent(...)` from the topological layers.
      *
      * Layer 0 (start node) is skipped because the start node only seeds state
@@ -897,14 +1140,34 @@ PY;
     {
         $isRunnable = function (string $id) use ($analyzed): bool {
             $t = WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$id]);
-            return in_array($t, ['agent', 'agent-template', 'output'], true);
+            // 'playbook' is here because the target runs playbook nodes now: a
+            // node missing from this list is silently dropped from root_agent.
+            return in_array($t, ['agent', 'agent-template', 'output', 'playbook'], true);
         };
+        // A dispatcher owns its menu (see dispatcherInstancesBlock): the wrapper
+        // stands in for the dispatcher node, and the children it may pick are
+        // NOT layer members -- ADK gives an agent exactly one parent, and
+        // leaving them in a ParallelAgent is precisely the fan-out a dispatcher
+        // is not.
+        $dispatch = WorkflowGraphAnalyzer::dispatchMenus($analyzed);
+        $nested = [];
+        foreach ($dispatch['menus'] as $did => $targets) {
+            foreach ($targets as $t) {
+                if (isset($analyzed['agents'][(string) $t['id']])) {
+                    $nested[(string) $t['id']] = true;
+                }
+            }
+        }
         $layerExprs = [];
         foreach ($analyzed['layers'] as $k => $layer) {
             $vars = [];
             foreach ($layer as $id) {
+                $id = (string) $id;
+                if (isset($nested[$id])) {
+                    continue;
+                }
                 if ($isRunnable($id)) {
-                    $vars[] = "node_{$id}";
+                    $vars[] = isset($dispatch['menus'][$id]) ? "node_{$id}__dispatch" : "node_{$id}";
                 }
             }
             if (!$vars) {
@@ -989,7 +1252,10 @@ PY;
             // Named adk_session, not session: the contract's `session` parameter is
             // in scope here, and a swarm port would need it (resume a conversation)
             // at exactly the point the old local clobbered it.
-            "    adk_session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={})\n" .
+            // Seed the request into state: a node whose only parent is Start has
+            // no {node_<id>} to read, and the playbook interpreter falls back to
+            // this key for the REQUEST it is asked to execute.
+            "    adk_session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={\"user_prompt\": prompt})\n" .
             "    final = \"\"\n" .
             "    t0 = time.monotonic()\n" .
             "    seen = set()\n" .

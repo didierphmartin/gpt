@@ -122,17 +122,109 @@ class GeneratedDocParityTest extends TestCase
         $lg = $all['LangGraph'];
         $this->assertStringContainsString('playbook "Time Off", 1 bound / 0 unbound action(s), writes ON', $lg);
         $this->assertStringContainsString('(dispatcher: only the chosen one runs)', $lg);
-        $this->assertStringContainsString('PLAYBOOK_GATE_MODE', $lg);
-        $this->assertStringContainsString('DEEPSEEK_API_KEY (deepseek)', $lg);
-        foreach (['ADK', 'MAF', 'NOOA'] as $t) {
+        // Both node kinds now run on every target, and none of them may still
+        // claim otherwise. Each target reaches them its own way -- nested
+        // sub_agents, a routed message, an if/elif -- but the interpreter and
+        // the menu semantics are one shared implementation, so the honest
+        // statement is the same everywhere.
+        foreach (['LangGraph', 'ADK', 'MAF', 'NOOA'] as $t) {
             $code = $all[$t];
-            $this->assertStringContainsString('NOT RUN BY THIS TARGET (playbook nodes are not supported here', $code, $t);
-            $this->assertStringContainsString('menu NOT honoured by this target: all children run', $code, $t);
-            $this->assertStringContainsString('(run in PARALLEL -- dispatcher menu not honoured by this target)', $code, $t);
-            $this->assertStringNotContainsString('PLAYBOOK_GATE_MODE', $code, $t);
-            $doc = substr($code, 0, strpos($code, '"""', 3));
-            $this->assertStringNotContainsString('DEEPSEEK_API_KEY', $doc, "{$t}: an unsupported node's provider key must not be listed");
+            $this->assertStringNotContainsString('NOT RUN BY THIS TARGET', $code, $t);
+            $this->assertStringNotContainsString('menu NOT honoured by this target', $code, $t);
+            $this->assertStringNotContainsString('dispatcher menu not honoured by this target', $code, $t);
+            $this->assertStringContainsString('PLAYBOOK_GATE_MODE', $code, "{$t}: the playbook gates must be reachable");
+            $this->assertStringContainsString('DEEPSEEK_API_KEY', $code, "{$t}: the playbook node's provider key belongs in the run notes");
         }
+        // The three ported targets carry the shared interpreter verbatim;
+        // LangGraph calls it through its own node machinery instead.
+        foreach (['ADK', 'MAF', 'NOOA'] as $t) {
+            $this->assertStringContainsString('async def run_playbook_node(', $all[$t], $t);
+            $this->assertStringContainsString('PLAYBOOKS = {', $all[$t], $t);
+            $this->assertStringContainsString('pip install langchain-core langgraph', $all[$t], "{$t}: the interpreter's requirement must be stated");
+        }
+    }
+
+    /**
+     * Every target ROUTES the menu: a dispatcher's children must be reachable
+     * only through the choice, never scheduled beside one another. Each target
+     * expresses that differently -- a conditional edge (LangGraph), nested
+     * sub_agents (ADK), a routed message (MAF), an if/elif chain (NOOA) -- so
+     * the assertions are per target, but the rule behind them is one rule.
+     */
+    public function testEveryTargetRoutesTheDispatcherMenu(): void
+    {
+        $all = $this->generateAll();
+        $this->assertStringContainsString('add_conditional_edges', $all['LangGraph']);
+        // ADK: the menu is nested under the dispatcher, so the children are NOT
+        // layer members -- a ParallelAgent over them would be the fan-out again.
+        $adk = $all['ADK'];
+        $this->assertStringContainsString('_DispatcherAgent(', $adk);
+        $this->assertStringContainsString('IT claims', $adk);
+        $this->assertStringNotContainsString('ParallelAgent(name="layer_2"', $adk);
+        // MAF: the edges stay drawn; the choice travels in the message.
+        $maf = $all['MAF'];
+        $this->assertStringContainsString('DispatcherNodeExecutor(', $maf);
+        $this->assertStringContainsString('route_to', $maf);
+        // NOOA: one explicit branch per menu entry, and no gather over them.
+        $nooa = $all['NOOA'];
+        $this->assertStringContainsString('run_dispatcher(', $nooa);
+        $this->assertStringContainsString('routes to EXACTLY ONE of', $nooa);
+    }
+
+    /**
+     * No target may reference a module global it never defines.
+     *
+     * py_compile does NOT catch this -- a NameError is a runtime failure, so a
+     * generated script imports and dies on the first call. It bit exactly once
+     * and in the way you would expect: the playbook interpreter reuses
+     * LangGraph's model factory, that factory reads MODEL_NAME_OVERRIDE, and
+     * the three ported targets had never defined it. A block moved between
+     * generators brings its globals with it or it breaks, and that is what this
+     * test pins.
+     *
+     * The allowlist is the set of names the runtime deliberately probes for and
+     * guards (try/except NameError, or "x in globals()"): the event sink and
+     * gate rendezvous exist only when a host installed them.
+     */
+    public function testNoTargetReferencesAnUndefinedGlobal(): void
+    {
+        $allowed = ['SkillRuntime', '_CURRENT_NODE', '_SINK', '__file__',
+                    'emit_event', 'open_gate', 'take_gate_answer'];
+        $checker = <<<'PYCODE'
+import ast, builtins, sys
+tree = ast.parse(open(sys.argv[1]).read())
+known = set(dir(builtins))
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        known.add(node.name)
+    elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        known.add(node.id)
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        for a in node.names:
+            known.add((a.asname or a.name).split(".")[0])
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        known.add(node.name)
+    elif isinstance(node, ast.arg):
+        known.add(node.arg)
+    elif isinstance(node, ast.Global):
+        known.update(node.names)
+used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+print(" ".join(sorted(used - known)))
+PYCODE;
+        $checkerPath = tempnam(sys_get_temp_dir(), 'chk') . '.py';
+        file_put_contents($checkerPath, $checker);
+        foreach ($this->generateAll() as $target => $code) {
+            $tmp = tempnam(sys_get_temp_dir(), 'gen') . '.py';
+            file_put_contents($tmp, $code);
+            $out = [];
+            exec('python3 ' . escapeshellarg($checkerPath) . ' ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
+            @unlink($tmp);
+            $this->assertSame(0, $rc, "{$target}: checker failed: " . implode("\n", $out));
+            $names = array_values(array_diff(preg_split('/\s+/', trim(implode(' ', $out)), -1, PREG_SPLIT_NO_EMPTY), $allowed));
+            $this->assertSame([], $names,
+                "{$target} references globals it never defines: " . implode(', ', $names));
+        }
+        @unlink($checkerPath);
     }
 
     public function testEveryTargetStillEmitsValidPython(): void

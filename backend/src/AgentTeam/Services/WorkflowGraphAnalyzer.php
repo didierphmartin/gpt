@@ -182,6 +182,79 @@ class WorkflowGraphAnalyzer
      * docNodes() over an analyze()-shaped array. Hand-built fixtures (tests)
      * may carry only 'agents': the graph is then reconstructed from them.
      */
+    /**
+     * Dispatcher menus over an analyze()-shaped array.
+     *
+     * A dispatcher agent's outgoing edges are a MENU, not a parallel fan-out:
+     * exactly ONE child runs, the one the dispatcher names (the compiled twin
+     * of DispatchRouting in the PHP runner, and of the voice stack's
+     * handoff_to). Every compile target needs the same three answers -- which
+     * nodes are dispatchers, what is on each menu and in what order, and which
+     * child is reachable only through a menu -- so they are resolved here
+     * rather than three times over, each subtly differently.
+     *
+     * Menu order is EDGE order, matching what the canvas draws. Only
+     * agent/agent-template/playbook children are menu entries; anything else
+     * a dispatcher points at (an Output node, say) stays an ordinary edge and
+     * always runs.
+     *
+     * @return array{menus: array<string, list<array{id: string, name: string}>>, routedBy: array<string, string>}
+     *         menus:    dispatcher node id => its menu, in edge order
+     *         routedBy: child node id => the dispatcher node id that owns it
+     */
+    public static function dispatchMenus(array $analyzed): array
+    {
+        $byId  = (array) ($analyzed['byId'] ?? []);
+        $order = (array) ($analyzed['order'] ?? array_keys($byId));
+        $menus = [];
+        $routedBy = [];
+        foreach ($order as $nid) {
+            $nid = (string) $nid;
+            $node = $byId[$nid] ?? null;
+            if (!is_array($node) || !in_array(self::typeOf($node), ['agent', 'agent-template'], true)) {
+                continue;
+            }
+            $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+            if ((string) ($cfg['agent_type'] ?? '') !== 'dispatcher') {
+                continue;
+            }
+            $targets = [];
+            foreach ((array) ($analyzed['edges'] ?? []) as $e) {
+                $from = (string) ($e['from'] ?? $e['from_node_id'] ?? '');
+                $to   = (string) ($e['to'] ?? $e['to_node_id'] ?? '');
+                if ($from !== $nid || $to === '') {
+                    continue;
+                }
+                $child = $byId[$to] ?? null;
+                if (!is_array($child) || !in_array(self::typeOf($child), ['agent', 'agent-template', 'playbook'], true)) {
+                    continue;
+                }
+                $targets[] = ['id' => $to, 'name' => self::displayNameOf($child, $analyzed, $to)];
+                $routedBy[$to] = $nid;
+            }
+            if ($targets !== []) {
+                $menus[$nid] = $targets;
+            }
+        }
+        return ['menus' => $menus, 'routedBy' => $routedBy];
+    }
+
+    /** Display name for a node: the agents map first (it carries the resolved name), then config. */
+    private static function displayNameOf(array $node, array $analyzed, string $id): string
+    {
+        $fromAgents = (string) (($analyzed['agents'][$id]['name'] ?? '') ?: '');
+        if ($fromAgents !== '') {
+            return $fromAgents;
+        }
+        $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        foreach (['agent_name', 'name', 'label'] as $k) {
+            if ((string) ($cfg[$k] ?? '') !== '') {
+                return (string) $cfg[$k];
+            }
+        }
+        return (string) ($node['name'] ?? $id);
+    }
+
     public static function docNodesFromAnalyzed(array $analyzed, array $extra = [],
                                                 array $runnable = ['start', 'agent', 'agent-template', 'output']): array
     {
@@ -421,6 +494,40 @@ class WorkflowGraphAnalyzer
      *
      * @return array<int, array<string,mixed>>
      */
+    /**
+     * Playbook binding ids ("<server slug>.<tool>") over the MCP registry,
+     * keyed the way LoaderMcpExecutor::availableTools() keys them -- which is
+     * what a playbook's #Action bindings are resolved against.
+     *
+     * Lifted out of LangGraphGenerator so every compile target resolves a
+     * playbook's actions from the same catalog. A target that builds this map
+     * differently would bind the same playbook to different tools, which is the
+     * one thing a "the same workflow on four runtimes" promise cannot allow.
+     */
+    public function availableToolsById(?string $userId = null): array
+    {
+        $out = [];
+        foreach ($this->loadMcpToolsWithServers($userId) as $t) {
+            $surl  = (string) ($t['server_url'] ?? '');
+            $tname = (string) ($t['tool_name'] ?? $t['name'] ?? '');
+            if ($surl === '' || $tname === '') {
+                continue;
+            }
+            // EXACTLY LangGraphGenerator::serverSlug() -- no trimming. A slug that
+            // differs by one underscore is a binding that resolves on one target
+            // and not on another.
+            $slug = strtolower((string) preg_replace('/[^a-z0-9]+/i', '_', (string) ($t['server_name'] ?? '')));
+            $schema = $t['input_schema'] ?? null;
+            $out[$slug . '.' . $tname] = [
+                'server_url'   => $surl,
+                'tool'         => $tname,
+                'description'  => (string) ($t['tool_description'] ?? $t['description'] ?? ''),
+                'input_schema' => $schema === null ? new \stdClass() : $schema,
+            ];
+        }
+        return $out;
+    }
+
     private function loadMcpToolsWithServers(?string $userId = null): array
     {
         // Global servers plus the caller's own registrations — the registry
