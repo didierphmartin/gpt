@@ -90,6 +90,16 @@ assert set(legs) == {"2", "3"}, f"expected a final per agent node, got legs {leg
 assert rounds == [workflow.ORDER.index("2"), workflow.ORDER.index("3")], \
     f"expected one round per node in ORDER order, got {rounds}"
 
+# The run's own narration reaches the stream. Every target prints "[node] ..."
+# lines; the run server tees stdout so a conversation can show what is
+# happening instead of sitting silent for minutes. Without this assertion the
+# tee could be dropped and only a human watching an overlay would notice.
+traces = [e.get("text") or "" for e in events if e.get("type") == "trace"]
+assert traces, f"no trace frames: the run server is not teeing stdout: {events}"
+assert any("[node]" in t for t in traces), f"traces carry no node narration: {traces}"
+assert all(isinstance(t, str) and t == t.strip() and "\n" not in t for t in traces), \
+    f"traces must be whole, stripped, single lines: {traces}"
+
 # Every frame must still be one the contract describes -- emitting per-node
 # progress is not a licence to invent event types.
 contract = json.load(open(__file__.rsplit("/", 1)[0] + "/../../../../docs/run-protocol-v1.json"))

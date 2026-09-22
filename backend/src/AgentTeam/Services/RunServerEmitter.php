@@ -41,7 +41,7 @@ final class RunServerEmitter
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, os, time, uuid';
+        $L[] = 'import argparse, asyncio, json, os, sys, time, uuid   # sys: _TraceTee swaps stdout for the run';
         $L[] = '';
         $L[] = 'from fastapi import FastAPI, HTTPException, Request';
         $L[] = 'from fastapi.middleware.cors import CORSMiddleware';
@@ -233,6 +233,81 @@ async def start_run(body: dict | None = None) -> dict:
     return {"run_id": state.id, "status": state.status}
 
 
+class _TraceTee:
+    """Mirror what the workflow PRINTS into the run's event stream.
+
+    Every compiled target already narrates itself on stdout -- "[node] 'IT
+    claims' done -- 812 chars (6.1s)", "[tool] okta__lookup_users", the
+    playbook's round-by-round lines. Only LangGraph also emits those as
+    protocol events, so on the other targets a conversation sat silent for
+    minutes with nothing to show that anything was happening. Teeing stdout
+    gives every target the same live feedback without asking four generators to
+    emit it four ways.
+
+    Writes still reach the real stdout, so the server's console log is
+    unchanged. Lines are published whole (partial writes are buffered until the
+    newline) and truncated, because a node that prints a whole document would
+    otherwise push it through the event stream a second time.
+    """
+    MAX = 400
+
+    def __init__(self, real, publish):
+        self._real = real
+        self._publish = publish
+        self._buf = ""
+
+    def write(self, s):
+        self._real.write(s)
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.strip()
+            if line:
+                try:
+                    self._publish(line[:self.MAX] + ("…" if len(line) > self.MAX else ""))
+                except Exception:
+                    pass   # a broken stream must never break the run
+        return len(s)
+
+    def flush(self):
+        self._real.flush()
+
+    def isatty(self):
+        return False   # a served run is never interactive; keep gates off the console
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _error_text(exc: BaseException) -> str:
+    """The failure a human can act on, not the wrapper it arrived in.
+
+    Frameworks that fan agents out concurrently (ADK's ParallelAgent, anyio
+    task groups) raise an ExceptionGroup, whose str() is "unhandled errors in
+    a TaskGroup (1 sub-exception)" -- true, useless, and the only thing the
+    browser overlay used to show for a run that died of an expired API key or
+    an exhausted quota. Flattening walks to the leaves and reports those
+    instead. Duck-typed on `.exceptions` rather than isinstance against
+    BaseExceptionGroup so it behaves the same on Python 3.10, where that name
+    does not exist.
+    """
+    parts: list[str] = []
+
+    def walk(e: BaseException) -> None:
+        subs = getattr(e, "exceptions", None)
+        if isinstance(subs, (list, tuple)) and subs:
+            for sub in subs:
+                walk(sub)
+            return
+        text = str(e).strip()
+        parts.append(f"{type(e).__name__}: {text}" if text else type(e).__name__)
+
+    walk(exc)
+    seen = set()
+    unique = [p for p in parts if not (p in seen or seen.add(p))]
+    return " | ".join(unique) if unique else str(exc)
+
+
 async def _drive(state: RunState) -> None:
     """Run the graph with the event sink installed, then publish the terminal frame.
 
@@ -265,6 +340,10 @@ async def _drive(state: RunState) -> None:
         if ensure_agents is not None:
             await asyncio.to_thread(ensure_agents)
         prev = set_event_sink(sink)
+        # Tee stdout for the duration of the run (runs are serialised by
+        # RUN_LOCK, so there is never a second run's output mixed in here).
+        _real_stdout = sys.stdout
+        sys.stdout = _TraceTee(_real_stdout, lambda ln: sink({"type": "trace", "text": ln}))
         t0 = time.monotonic()
         try:
             state.output = await run_workflow(state.prompt, state.session)
@@ -281,9 +360,10 @@ async def _drive(state: RunState) -> None:
                                    "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
         except Exception as e:
             state.status = "failed"
-            state.error = str(e)
+            state.error = _error_text(e)
             loop.call_soon_threadsafe(state.publish, "error", {"run_id": state.id, "error": state.error})
         finally:
+            sys.stdout = _real_stdout
             set_event_sink(prev)
 
 
