@@ -1,0 +1,15 @@
+{
+  "_comment": "What an install of the runner consists of. ONE source of truth, read by two installers: setup.py (CLI) and the browser wizard, which writes these files into <granted folder>/python/ through the File System Access API. A browser cannot learn the granted folder's absolute path, so it cannot tell setup.py where to install — it has to place the files itself, and then only the venv step is left to a terminal. Keep this in step with the files themselves; setup.py falls back to its built-in list if this file is missing.",
+  "runtime_files": [
+    "main.py",
+    "graph_builder.py",
+    "workflow_loader.py",
+    "mcp_tools.py",
+    "code_generator.py",
+    "script_io.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "subdirs": ["scripts", "outputs"],
+  "venv_command": "python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt"
+}

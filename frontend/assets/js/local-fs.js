@@ -215,11 +215,76 @@
         try {
             const skillsHandle  = await root.getDirectoryHandle('skills',  { create: true });
             const outputsHandle = await root.getDirectoryHandle('outputs', { create: true });
-            return { root, skills: skillsHandle, outputs: outputsHandle };
+            // `python/` is not optional decoration: the workflow editor writes
+            // every compiled package to python/scripts/<pkg>/ under THIS root,
+            // while the local runner reads them by real filesystem path from
+            // its own install dir. The two only address the same place when the
+            // install lives here — so the folder is created with the others.
+            const pythonHandle  = await root.getDirectoryHandle('python',  { create: true });
+            return { root, skills: skillsHandle, outputs: outputsHandle, python: pythonHandle };
         } catch (e) {
             console.warn('[local-fs] ensureStandardSubdirs failed:', e);
             return null;
         }
+    }
+
+    /**
+     * Install the local Python runner into <granted root>/python/.
+     *
+     * Why the browser does this at all: a page cannot learn the granted
+     * folder's absolute path, so it cannot tell setup.py where to install, and
+     * the user would have to get the two to agree by hand. Writing the files
+     * through the handle sidesteps that entirely — the folder the editor writes
+     * packages into IS the folder the runner is installed in, by construction.
+     *
+     * What is left for a terminal: the virtualenv and pip install, which need a
+     * process. That command is printed by the Setup modal.
+     *
+     * Idempotent, and safe to re-run to pick up a newer runner: each file is
+     * overwritten, nothing else in the folder is touched. `.env` is never
+     * written here — it holds provider keys and is synced separately.
+     *
+     * @returns {Promise<{written: string[], skipped: string[], error: string|null}>}
+     */
+    async function deployRunner(rootHandleOpt = null, baseUrl = null) {
+        const root = rootHandleOpt || await getRootHandle();
+        if (!root) return { written: [], skipped: [], error: 'no folder granted' };
+        const base = baseUrl || (window.APP_RUNNER_SOURCE_URL || 'langchain_runner');
+        const out = { written: [], skipped: [], error: null };
+        try {
+            const manRes = await fetch(`${base}/install-manifest.json`, { cache: 'no-store' });
+            if (!manRes.ok) throw new Error(`manifest HTTP ${manRes.status}`);
+            const man = await manRes.json();
+            const files = Array.isArray(man.runtime_files) ? man.runtime_files : [];
+            const subdirs = Array.isArray(man.subdirs) ? man.subdirs : [];
+            if (!files.length) throw new Error('manifest lists no runtime files');
+
+            const pyDir = await root.getDirectoryHandle('python', { create: true });
+            for (const d of subdirs) {
+                await pyDir.getDirectoryHandle(String(d), { create: true });
+            }
+            for (const name of files) {
+                // One failed file must not abort the install: a partial runner
+                // with a named gap is easier to finish than an opaque failure.
+                try {
+                    const res = await fetch(`${base}/${name}`, { cache: 'no-store' });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const text = await res.text();
+                    const fh = await pyDir.getFileHandle(String(name), { create: true });
+                    const w = await fh.createWritable();
+                    await w.write(text);
+                    await w.close();
+                    out.written.push(String(name));
+                } catch (e) {
+                    console.warn(`[local-fs] deployRunner could not write ${name}:`, e);
+                    out.skipped.push(String(name));
+                }
+            }
+        } catch (e) {
+            out.error = e?.message || String(e);
+            console.warn('[local-fs] deployRunner failed:', e);
+        }
+        return out;
     }
 
     window.localFs = {
@@ -230,5 +295,6 @@
         revoke,
         resolvePath,
         ensureStandardSubdirs,
+        deployRunner,
     };
 })();

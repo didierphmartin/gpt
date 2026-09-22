@@ -52,6 +52,30 @@ RUNTIME_FILES = [
 #                 can list and render them
 INSTALL_SUBDIRS = ["scripts", "outputs"]
 
+# install-manifest.json is the SHARED definition of what an install contains:
+# this script reads it, and so does the browser wizard, which writes the same
+# files into <granted folder>/python/ through the File System Access API. Two
+# installers, one list, so they cannot drift. The literals above remain the
+# fallback for a checkout without the manifest.
+def _load_manifest() -> None:
+    global RUNTIME_FILES, INSTALL_SUBDIRS
+    path = Path(__file__).resolve().parent / "install-manifest.json"
+    try:
+        import json
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"  note: install-manifest.json unreadable ({exc}); using the built-in list.")
+        return
+    files = data.get("runtime_files")
+    subdirs = data.get("subdirs")
+    if isinstance(files, list) and files:
+        RUNTIME_FILES = [str(f) for f in files]
+    if isinstance(subdirs, list) and subdirs:
+        INSTALL_SUBDIRS = [str(d) for d in subdirs]
+
+
+_load_manifest()
+
 # .env template — what the runner reads on startup. Generated scripts
 # pick a provider per agent based on the workflow editor's config and
 # read each provider's key from these variables. Fill in only the

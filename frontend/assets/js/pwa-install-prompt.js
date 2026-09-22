@@ -47,6 +47,10 @@
             'folder.desc':    'All files Synergy creates or reads will live inside this folder.',
             'folder.pick':    'Choose folder…',
             'folder.change':  'Change folder…',
+            'folder.runnerOk':      'Python runner installed in this folder. One step left — run this in a terminal, inside the folder you just picked:',
+            'folder.runnerVenvNote':'Needed once. It builds the virtual environment; a browser cannot do that part.',
+            'folder.runnerPartial': 'Some files could not be written:',
+            'folder.runnerFailed':  'Could not install the Python runner here. Compiled workflows will not run until it is installed; the workflow editor\'s Setup item explains how.',
             'folder.picked':  'Selected:',
             'folder.unsup':   "Your browser doesn't support folder selection. Try Chrome or Edge.",
             'folder.next':    'Next',
@@ -75,6 +79,10 @@
             'folder.desc':    'Tous les fichiers que Synergy crée ou lit se trouveront dans ce dossier.',
             'folder.pick':    'Choisir un dossier…',
             'folder.change':  'Changer de dossier…',
+            'folder.runnerOk':      'Runner Python installé dans ce dossier. Une étape reste — exécutez ceci dans un terminal, à l\'intérieur du dossier choisi :',
+            'folder.runnerVenvNote':'Une seule fois. Cela construit l\'environnement virtuel ; un navigateur ne peut pas le faire.',
+            'folder.runnerPartial': 'Certains fichiers n\'ont pas pu être écrits :',
+            'folder.runnerFailed':  'Impossible d\'installer le runner Python ici. Les workflows compilés ne fonctionneront pas tant qu\'il n\'est pas installé ; voir Setup dans l\'éditeur de workflow.',
             'folder.picked':  'Sélectionné :',
             'folder.unsup':   "Votre navigateur ne prend pas en charge la sélection de dossier. Essayez Chrome ou Edge.",
             'folder.next':    'Suivant',
@@ -103,6 +111,10 @@
             'folder.desc':    'Todos los archivos que Synergy cree o lea estarán dentro de esta carpeta.',
             'folder.pick':    'Elegir carpeta…',
             'folder.change':  'Cambiar carpeta…',
+            'folder.runnerOk':      'Runner de Python instalado en esta carpeta. Queda un paso — ejecute esto en un terminal, dentro de la carpeta elegida:',
+            'folder.runnerVenvNote':'Solo una vez. Crea el entorno virtual; un navegador no puede hacerlo.',
+            'folder.runnerPartial': 'No se pudieron escribir algunos archivos:',
+            'folder.runnerFailed':  'No se pudo instalar el runner de Python aquí. Los flujos compilados no se ejecutarán hasta instalarlo; vea Setup en el editor de flujos.',
             'folder.picked':  'Seleccionada:',
             'folder.unsup':   'Tu navegador no permite seleccionar carpetas. Prueba Chrome o Edge.',
             'folder.next':    'Siguiente',
@@ -224,7 +236,7 @@
     });
 
     // ---- wizard state + rendering ---------------------------------
-    let wizardState = { step: 'lang', rootHandle: null, rootName: null };
+    let wizardState = { step: 'lang', rootHandle: null, rootName: null, runner: null };
     let abortCtl = null;
 
     function buildShell() {
@@ -336,6 +348,36 @@
         `;
     }
 
+    /**
+     * What happened to the Python runner install, in one line.
+     *
+     * Reported rather than silent because the remaining step is manual: the
+     * browser can write the runner's files but cannot create a virtualenv, so
+     * the user has to run one command before a compiled workflow will run. A
+     * wizard that says nothing here leaves them to discover that at the first
+     * failed Run.
+     */
+    function renderRunnerStatus() {
+        const r = wizardState.runner;
+        if (!r) return '';
+        if (r.error || !r.written.length) {
+            return `
+                <div class="mt-3 rounded border-l-4 border-yellow-500 bg-yellow-50 p-2 text-xs text-yellow-900">
+                    ${esc(t('folder.runnerFailed'))}${r.error ? ` (${esc(r.error)})` : ''}
+                </div>`;
+        }
+        const partial = r.skipped.length
+            ? `<div class="mt-1 text-[11px] text-yellow-800">${esc(t('folder.runnerPartial'))} ${esc(r.skipped.join(', '))}</div>`
+            : '';
+        return `
+            <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
+                <p class="text-xs text-green-900">${esc(t('folder.runnerOk'))}</p>
+                <pre class="mt-1 bg-gray-900 text-green-200 text-[11px] rounded p-2 select-all overflow-auto">cd python &amp;&amp; python3 -m venv .venv &amp;&amp; ./.venv/bin/pip install -r requirements.txt</pre>
+                <p class="mt-1 text-[11px] text-green-900">${esc(t('folder.runnerVenvNote'))}</p>
+                ${partial}
+            </div>`;
+    }
+
     function renderFolder() {
         const supported = isFSASupported();
         const picked    = wizardState.rootName;
@@ -364,6 +406,7 @@
                     class="mt-2 text-xs font-medium text-blue-600 hover:text-blue-800 underline">
                     ${esc(t('folder.change'))}
                 </button>
+                ${renderRunnerStatus()}
             </div>
         `;
         } else {
@@ -519,6 +562,22 @@
                         await window.localFs.ensureStandardSubdirs(handle);
                     } catch (e) {
                         console.warn('[wizard] could not pre-create standard subdirs:', e);
+                    }
+                }
+                // Install the local Python runner into <this folder>/python/.
+                // Doing it HERE is what makes compiled workflows work at all: a
+                // page cannot learn this folder's absolute path, so it could
+                // never tell setup.py where to install, and the editor writes
+                // packages to python/scripts/ under this same handle. Writing
+                // the runner here makes both halves address one folder by
+                // construction. The venv step still needs a terminal; the
+                // Setup item in the workflow editor prints that command.
+                if (window.localFs && typeof window.localFs.deployRunner === 'function') {
+                    try {
+                        wizardState.runner = await window.localFs.deployRunner(handle);
+                    } catch (e) {
+                        console.warn('[wizard] could not deploy the python runner:', e);
+                        wizardState.runner = { written: [], skipped: [], error: e?.message || String(e) };
                     }
                 }
                 render();

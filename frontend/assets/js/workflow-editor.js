@@ -5773,15 +5773,16 @@ class WorkflowEditor {
      * them how to run setup.py once.
      */
     _showRunnerSetupModal() {
-        // Relative to the checkout, NOT absolute. This was hardcoded to one
-        // machine's XAMPP path, which is wrong for every other install and
-        // cannot be derived here -- a browser has no way to learn the server's
-        // filesystem path. Telling the user where to stand is honest; printing
-        // a path that does not exist on their disk is not.
-        // --force re-copies requirements.txt + runtime files into the install so a
-        // re-run picks up new deps (e.g. google-adk/litellm). Without it, an existing
-        // install keeps the old requirements.txt and the setup is a no-op.
-        const cmd = `cd langchain_runner && python3 setup.py --force`;
+        // The install wizard already wrote the runner into <granted folder>/python/
+        // (localFs.deployRunner), because a page cannot learn that folder's
+        // absolute path and so could never tell setup.py where to install. What
+        // is left needs a process, which a browser has none of: the virtualenv.
+        // So this prints the venv command, relative to the folder the user
+        // picked -- they know where that is, and nothing here can be wrong on
+        // their machine. The CLI route (setup.py --force, from a checkout)
+        // remains for anyone installing without the wizard.
+        const folder = this.localFolderName || (this.t('workflow.runnerSetup.yourFolder') || 'your Synergy folder');
+        const cmd = `cd python && python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -5791,7 +5792,7 @@ class WorkflowEditor {
                 </h3>
                 <p class="text-sm text-gray-600 mb-3">
                     ${this.escapeHtml(this.t('workflow.runnerSetup.body')
-                        || 'Generated Python scripts are saved into ~/Documents/synergyAI/python/scripts/. The runtime needs to be installed there once. Open a terminal IN YOUR gpt CHECKOUT (the folder holding langchain_runner/) and run:')}
+                        || `The install wizard put the runner in the "python" folder of ${folder}. It needs a virtual environment once — a browser cannot create one. Open a terminal in that folder and run:`)}
                 </p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
@@ -5799,7 +5800,7 @@ class WorkflowEditor {
                 </div>
                 <p class="text-xs text-gray-500 mb-4">
                     ${this.escapeHtml(this.t('workflow.runnerSetup.note')
-                        || 'This installs both the LangGraph and Google ADK runtimes into one shared venv at ~/Documents/synergyAI/python/.venv (plus the PyPI packages your skills declare, e.g. beautifulsoup4). Re-run any time to pick up new dependencies. After it finishes, click Generate again.')}
+                        || 'That builds one shared venv for the LangGraph, ADK, MAF and NOOA runtimes. Then start the runner from the same folder: ./.venv/bin/python main.py — not bare python3, or the generated scripts run without their packages. Compiled workflows need a real folder on disk: a local Python process runs them, so browser-only storage (OPFS) cannot host them — chat and Pyodide skills still work there.')}
                 </p>
                 <div class="flex justify-end">
                     <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
