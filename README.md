@@ -120,6 +120,63 @@ gpt/
 
 ## Installation
 
+### Quickest path: Docker
+
+Needs only Docker Desktop (or Docker Engine + Compose v2).
+
+```bash
+git clone https://github.com/didierphmartin/gpt.git && cd gpt
+docker compose up -d --build
+docker compose logs web | tail -20     # prints the generated admin password
+```
+
+Open **http://localhost:8080/gpt/** and sign in with the credentials from that
+log line. Then add an LLM key under *Settings → Admin → LLM settings* — the
+stack deliberately ships without one, and chat does nothing until you add yours.
+
+Copy `.env.example` to `.env` first if you want a different port, database
+credentials or admin email.
+
+**What the container does not include, on purpose:**
+
+- **The local Python runner.** Compiled workflows run as *you*, on *your*
+  machine, so they can read your files and ask you questions mid-run. Your
+  browser is on the host either way, so it still reaches the runner at
+  127.0.0.1:8765 — install it from the app's setup wizard exactly as described
+  below in *First run*.
+- **Browser Skills.** They execute as Python in your browser against a folder
+  you grant. Nothing server-side to package.
+- **LLM keys.** Yours, entered in the app, never in an image or an env var.
+
+**Handy commands**
+
+```bash
+docker compose logs -f web            # follow the backend log
+docker compose down                   # stop, keep the database
+docker compose down -v                # stop and DELETE the database
+docker compose --profile node up -d   # also start the TypeScript backend (3001)
+docker compose --profile python up -d # also start the FastAPI backend (3002)
+```
+
+The `node` and `python` profiles bind-mount `./backend_typescript` and
+`./backend_python` respectively, so — unlike the default `db`/`web` stack,
+which builds from self-contained images — they do require the clone to live
+somewhere Docker Desktop is allowed to share (on macOS, your home directory by
+default).
+
+> **The database is seeded only once.** `backend/schema/chatbot.sql` and
+> `docker/db/02-seed.sql` are baked into the `db` image at build time (see
+> `docker/db/Dockerfile`) and copied into `/docker-entrypoint-initdb.d/`, which
+> MySQL only runs on an empty data volume. So editing either file needs
+> `docker compose up -d --build` (to rebuild the image with the new file) *and*
+> `docker compose down -v` first (to clear the volume so the init scripts run
+> again) — either alone will appear to ignore your change.
+
+Run `./docker/tests/run-all.sh` to verify the whole stack end to end after a change.
+
+Prefer to install the pieces yourself, or already run Apache and MySQL? Carry on
+below.
+
 **Prerequisites**
 
 | | Needed for | Notes |
