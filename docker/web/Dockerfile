@@ -62,8 +62,14 @@ RUN chmod +x /usr/local/bin/gpt-entrypoint \
  && mkdir -p /run/gpt \
  && chown -R www-data:www-data /var/www/html/gpt /run/gpt
 
-# Public and file-backed (ModelCatalogController reads resources/model_catalog.json),
-# so this proves Apache + PHP + routing + .htaccess without credentials or a database.
+# backend/index.php opens a PDO connection and exit()s on failure before the
+# dispatcher that would route to ModelCatalogController even exists, so this
+# route returns HTTP 500 without a reachable database (see
+# docker/tests/image-test.sh, which asserts exactly that failure mode against
+# the image alone). Inside the compose stack that DB dependency is exactly
+# what we want a healthcheck to prove: not just that Apache/PHP answer
+# requests, but that the web container can reach its database too --
+# "healthy" should mean the app actually works, not just that Apache is up.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
   CMD curl -fsS http://localhost/gpt/backend/api/v1/models/catalog || exit 1
 

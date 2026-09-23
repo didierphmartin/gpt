@@ -71,6 +71,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # The only writer of /run/gpt/secrets.env is web's entrypoint, which
+      # itself waits on db:service_healthy -- without also waiting on web
+      # here, this container and web race to start on the very first `up`,
+      # and `. /run/gpt/secrets.env` fails against a file that doesn't exist
+      # yet.
+      web:
+        condition: service_healthy
     environment:
       DB_HOST: db
       CTX_DB_HOST: db
@@ -92,9 +99,20 @@ services:
     working_dir: /app
     command: >
       sh -c '. /run/gpt/secrets.env && export JWT_SECRET APP_KEY_SECRET &&
-             pip install -r requirements.txt && ./run.sh'
+             pip install -r requirements.txt &&
+             python -m uvicorn main:app --host 0.0.0.0 --port 3002'
+    # backend_python/run.sh is for a host checkout: it does
+    # `source .venv/bin/activate` first, and a fresh clone's .venv is
+    # gitignored -- it doesn't exist in this container, so run.sh itself
+    # would fail here. Start uvicorn directly instead (same module:app and
+    # port run.sh uses, minus the venv activation it needs and this
+    # container doesn't).
     depends_on:
       db:
+        condition: service_healthy
+      # See the same comment on backend-node above: web is the only writer
+      # of /run/gpt/secrets.env, and without this both containers race it.
+      web:
         condition: service_healthy
     environment:
       DB_HOST: db

@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Full verification. Destroys and rebuilds the stack -- do not run against
 # anything you care about.
+#
+# Runs in its own compose project on its own port (see stack-test.sh), so
+# even though this script (and stack-test.sh/admin-test.sh, which it calls)
+# runs `docker compose down -v`, it can never reach a real install's stack
+# or its gpt-db volume.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+
+export COMPOSE_PROJECT_NAME=gpt-test
+export GPT_PORT=18080
 
 echo "== static checks (no Docker needed) =="
 ./docker/tests/schema-test.sh

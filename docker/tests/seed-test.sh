@@ -94,8 +94,11 @@ if grep -E "^\(" "$SEED" | grep -qi "api.moonshot.cn"; then
   fail "seed must not use the moonshot.cn (China) endpoint for kimi"
 fi
 
-# Every row must be enabled, or the provider picker will look empty.
-if grep -qE ", *0, *[0-9]+\);" "$SEED"; then
+# Every row must be enabled, or the provider picker will look empty. Row
+# tuples end in "...enabled, sort_order)" followed by either ',' (every row
+# but the last) or ';' (only the last) -- anchoring on ");" alone would only
+# ever look at the last row and miss enabled=0 on any of the other seven.
+if grep -qE ", *0, *[0-9]+\)[,;]" "$SEED"; then
   fail "a row appears to have enabled=0"
 fi
 

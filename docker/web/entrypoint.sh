@@ -28,12 +28,17 @@ fi
 # so compose-level changes take effect and the file itself stays disposable.
 set_env() {
     local key="$1" value="$2"
-    if grep -qE "^${key}=" "$ENV_FILE"; then
-        # '|' delimiter: values may contain '/'. No value may contain '|'.
-        sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
-    else
-        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
-    fi
+    # '|' delimiter: values may contain '/'. No value may contain '|'.
+    # sed's REPLACEMENT text still treats '&' as "the whole match" and '\'
+    # as an escape, so a value containing either (e.g. a MySQL password like
+    # 'p&ss\w/rd') would silently corrupt the line instead of erroring --
+    # escape both before substituting. Every key this function writes
+    # (DB_*, CTX_DB_*, JWT_SECRET, APP_KEY_SECRET, STORAGE_PROVIDER) already
+    # exists in backend/.env.example, which is copied to $ENV_FILE above, so
+    # the grep always matches and there is no append path to fall back to.
+    value=${value//\\/\\\\}
+    value=${value//&/\\&}
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
 }
 
 log "rendering backend/.env"

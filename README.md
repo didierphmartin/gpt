@@ -172,7 +172,11 @@ default).
 > `docker compose down -v` first (to clear the volume so the init scripts run
 > again) — either alone will appear to ignore your change.
 
-Run `./docker/tests/run-all.sh` to verify the whole stack end to end after a change.
+Run `./docker/tests/run-all.sh` to verify the whole stack end to end after a
+change. It runs in its own `gpt-test` compose project on port 18080, so it
+never touches a real install's stack or its data -- but it does run
+`docker compose down -v` inside that project, so don't point `COMPOSE_PROJECT_NAME`
+or `GPT_PORT` at anything you care about when invoking it.
 
 Prefer to install the pieces yourself, or already run Apache and MySQL? Carry on
 below.

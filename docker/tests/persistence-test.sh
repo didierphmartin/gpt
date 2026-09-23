@@ -3,6 +3,12 @@
 set -euo pipefail
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
+# Isolated project name and port -- see stack-test.sh: this script runs
+# `docker compose down`/`up` against whatever compose project is in scope,
+# and must never be the user's own default-project stack.
+export COMPOSE_PROJECT_NAME=gpt-test
+export GPT_PORT=18080
+
 q() { docker compose exec -T db mysql -ugpt -pgpt gpt_chatbot -N -B -e "$1" 2>/dev/null; }
 wait_healthy() {
   for i in $(seq 1 60); do

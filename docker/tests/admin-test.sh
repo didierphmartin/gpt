@@ -2,6 +2,13 @@
 # The admin is created exactly once, is an admin, and its password verifies.
 set -euo pipefail
 fail() { echo "FAIL: $1" >&2; exit 1; }
+
+# Isolated project name and port -- see stack-test.sh: without this,
+# `docker compose down -v` targets the user's own default-project stack and
+# wipes their real database.
+export COMPOSE_PROJECT_NAME=gpt-test
+export GPT_PORT=18080
+
 cleanup() { docker compose down -v >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
@@ -39,7 +46,7 @@ docker compose exec -T web php /var/www/html/gpt/docker/bootstrap-admin.php >/de
 
 # End to end: the seeded admin can actually log in.
 code=$(curl -s -o /tmp/gpt-login.json -w '%{http_code}' \
-  -X POST "http://localhost:8080/gpt/backend/api/v1/auth/login" \
+  -X POST "http://localhost:${GPT_PORT}/gpt/backend/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@localhost","password":"test-password-123"}')
 [ "$code" = "200" ] || fail "login returned HTTP $code"
