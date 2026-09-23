@@ -1,25 +1,68 @@
-.git
-docs
-**/node_modules
+# Deny by default, then allow back exactly what the image needs.
+#
+# The old allow-by-default list kept losing this game. `COPY . .` sweeps in
+# whatever happens to be sitting in a developer's working tree, and the
+# dangerous files are precisely the ones git already hides -- so they never
+# show up in a diff, a review, or `git status`. Real examples caught here:
+#
+#   backend/storage/          524 files, 38MB of REAL USER chat uploads
+#   frontend/voice/assets/    untracked build output holding a Google API key
+#   backend/.env.bak-*        a backup of the secrets file
+#   langchain_runner/.env     where the workflow editor writes provider keys
+#
+# Each was gitignored (correctly kept off GitHub) and each would have been
+# baked into the image and served over HTTP. Enumerating offenders one by one
+# only fixes the ones someone thought of; denying everything and naming what
+# the app actually needs fails closed instead.
+#
+# Rule of thumb when editing: the image should contain what a FRESH CLONE
+# contains, plus what the build produces (vendor/). Nothing else.
+*
+
+# --- the application itself -------------------------------------------------
+!backend
+!frontend
+!docker
+!index.html
+!.htaccess
+!README.md
+!LICENSE
+
+# --- carve back out of the above -------------------------------------------
+# Secrets, runtime data and build artefacts that live inside those trees.
+#
+# `**/vendor`, not `backend/vendor`: backend/tests/, backend/database/,
+# backend/migrations/ and backend/examples/ each carry their own full PHPUnit
+# install, and naming only the top-level one silently added ~140MB back.
+# vendor/ is excluded from the context on purpose -- the Dockerfile runs
+# composer install at build time, so the image never depends on the host
+# having done so.
+#
+# Note there is deliberately no `!**/.env.example` here. Docker recreates a
+# parent directory in order to hold a re-included child, so that one negation
+# resurrected backend_python/ and backend_typescript/ (each just to carry its
+# own .env.example) after `*` had correctly excluded them. It is not needed
+# anyway: `.env.example` does not match the `.env` patterns below, so the
+# copies the entrypoint reads come through with their parent trees.
 **/vendor
+**/node_modules
+**/__pycache__
 **/.venv
-**/venv
-# Any real .env, anywhere in the tree -- not just backend/.env. This is what
-# keeps a developer's own langchain_runner/.env (which per backend/.env.example
-# is where the workflow editor writes the user's actual provider keys) out of
-# the image. .env.example files are templates with no real values, so they're
-# let back through -- the entrypoint needs backend/.env.example to render
-# backend/.env at boot.
+**/*.log
+**/logs
+**/.DS_Store
 **/.env
-!**/.env.example
+backend/storage
+backend/.env.bak*
+backend/.phpunit.result.cache
 frontend/assets/js/config.js
 frontend/voice/config.json
-**/__pycache__
-.scratch_parity
-# Logs anywhere in the tree (e.g. backend_typescript/logs/backend.log, which
-# Logger.ts mirrors all console output to) and any .env backup files.
-**/*.log
-**/logs/
-**/*.bak*
-.claude
-.superpowers
+frontend/voice/assets
+
+# Note on what is NOT allowed back in: backend_typescript/, backend_python/
+# and langchain_runner/ are absent on purpose. The web image is the PHP
+# backend; the optional node/python compose profiles BIND-MOUNT their source
+# at run time rather than baking it in, and the local runner is installed on
+# the host by the setup wizard. Leaving them out keeps a developer's
+# langchain_runner/.env out of the image by construction rather than by a
+# pattern someone has to remember to maintain.
