@@ -2,7 +2,10 @@
 # The image must build and serve the frontend without any database.
 set -euo pipefail
 fail() { echo "FAIL: $1" >&2; exit 1; }
-cleanup() { docker rm -f gpt-image-test >/dev/null 2>&1 || true; }
+cleanup() {
+  rm -f "${catalog_body:-}"
+  docker rm -f gpt-image-test >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 docker build -t gpt-web:test -f docker/web/Dockerfile . || fail "build failed"
@@ -58,7 +61,6 @@ catalog_status="$(curl -sS -o "$catalog_body" -w '%{http_code}' \
   || fail "catalog route: expected HTTP 500 with DB unreachable, got $catalog_status"
 grep -q "Database connection failed" "$catalog_body" \
   || fail "rewrite or PHP broken: catalog route did not reach index.php"
-rm -f "$catalog_body"
 
 for ext in pdo_mysql gd intl zip soap xsl sodium mbstring curl; do
   docker exec gpt-image-test php -m | grep -qix "$ext" || fail "missing ext: $ext"
