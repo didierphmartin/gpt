@@ -1,11 +1,11 @@
 -- phpMyAdmin SQL Dump
--- version 5.2.2
+-- version 5.2.3
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jun 08, 2026 at 08:19 PM
--- Server version: 8.4.8-cll-lve
--- PHP Version: 8.4.21
+-- Generation Time: Sep 22, 2026 at 08:50 PM
+-- Server version: 8.4.11-cll-lve
+-- PHP Version: 8.4.24
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;
@@ -20,8 +20,6 @@ SET time_zone = "+00:00";
 --
 -- Database: `netfo587_chatbot`
 --
-CREATE DATABASE IF NOT EXISTS `netfo587_chatbot` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-USE `netfo587_chatbot`;
 
 -- --------------------------------------------------------
 
@@ -107,7 +105,7 @@ CREATE TABLE `agents` (
   `category` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
-  `agent_type` enum('standard','manager','worker') COLLATE utf8mb4_unicode_ci DEFAULT 'standard',
+  `agent_type` enum('standard','manager','worker','dispatcher','playbook') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'standard',
   `parent_agent_id` int DEFAULT NULL,
   `can_delegate_to` json DEFAULT NULL,
   `display_order` int NOT NULL DEFAULT '0',
@@ -200,7 +198,8 @@ CREATE TABLE `agent_workflows` (
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `output_storage_enabled` tinyint(1) DEFAULT '0',
-  `output_folder` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+  `output_folder` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `orchestration` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'workflow'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -286,6 +285,47 @@ CREATE TABLE `exchange_rates` (
   `rate` decimal(10,6) NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `execution_traces`
+--
+
+CREATE TABLE `execution_traces` (
+  `id` bigint UNSIGNED NOT NULL,
+  `run_id` varchar(40) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `ts` datetime NOT NULL,
+  `env` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'workflow',
+  `invocation_mode` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'workflow_node',
+  `workflow_id` int DEFAULT NULL,
+  `node_id` int DEFAULT NULL,
+  `provider` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `skill_dir` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `success` tinyint(1) NOT NULL DEFAULT '0',
+  `error_class` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ok',
+  `error_text` text COLLATE utf8mb4_unicode_ci,
+  `outcome_quality` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'unknown',
+  `tokens_in` int NOT NULL DEFAULT '0',
+  `tokens_out` int NOT NULL DEFAULT '0',
+  `cost_usd` decimal(12,6) DEFAULT NULL,
+  `user_action` varchar(12) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',
+  `payload` longtext COLLATE utf8mb4_unicode_ci,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `heal_spend`
+--
+
+CREATE TABLE `heal_spend` (
+  `user_id` bigint UNSIGNED NOT NULL,
+  `day` date NOT NULL,
+  `spent_usd` decimal(10,4) NOT NULL DEFAULT '0.0000',
+  `kind` enum('heal','genesis') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'heal'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -423,12 +463,105 @@ CREATE TABLE `packages` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `playbook_runs`
+--
+
+CREATE TABLE `playbook_runs` (
+  `id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `playbook_title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `document` json NOT NULL,
+  `status` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `requester` json DEFAULT NULL,
+  `variables` json DEFAULT NULL,
+  `pending_gate` json DEFAULT NULL,
+  `current_leg` int NOT NULL DEFAULT '0',
+  `coverage` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `resolved_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playbook_run_gates`
+--
+
+CREATE TABLE `playbook_run_gates` (
+  `id` int NOT NULL,
+  `run_id` int NOT NULL,
+  `leg` int NOT NULL DEFAULT '0',
+  `kind` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `args` json DEFAULT NULL,
+  `asked_of` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `opened_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `closed_at` timestamp NULL DEFAULT NULL,
+  `decision` json DEFAULT NULL,
+  `actor` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playbook_run_ledger`
+--
+
+CREATE TABLE `playbook_run_ledger` (
+  `id` int NOT NULL,
+  `run_id` int NOT NULL,
+  `leg` int NOT NULL DEFAULT '0',
+  `seq` int NOT NULL,
+  `action_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tool` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `args` json DEFAULT NULL,
+  `outcome` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `result_summary` text COLLATE utf8mb4_unicode_ci,
+  `returned_ids` json DEFAULT NULL,
+  `sensitive` tinyint(1) NOT NULL DEFAULT '0',
+  `duration_ms` int DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playbook_run_messages`
+--
+
+CREATE TABLE `playbook_run_messages` (
+  `id` int NOT NULL,
+  `run_id` int NOT NULL,
+  `direction` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `audience` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `text` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `sensitive` tinyint NOT NULL DEFAULT '0',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playbook_run_notes`
+--
+
+CREATE TABLE `playbook_run_notes` (
+  `id` int NOT NULL,
+  `run_id` int NOT NULL,
+  `author` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'agent',
+  `text` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `prompt_library`
 --
 
 CREATE TABLE `prompt_library` (
   `id` int NOT NULL,
-  `user_id` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `user_id` int NOT NULL,
   `parent_id` int DEFAULT NULL COMMENT 'NULL = root level, otherwise references \r\n  parent folder',
   `type` enum('folder','prompt') COLLATE utf8mb4_unicode_ci NOT NULL,
   `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -476,6 +609,29 @@ CREATE TABLE `scheduled_workflows` (
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `error_message` text
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `skill_promotions`
+--
+
+CREATE TABLE `skill_promotions` (
+  `id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `class` tinyint NOT NULL,
+  `status` enum('proposed','approved','building','born','merged','dismissed','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'proposed',
+  `source_ref` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `skill_name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci NOT NULL,
+  `eval_queries` json NOT NULL,
+  `parameter_schema` json DEFAULT NULL,
+  `merge_target` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `est_cost_usd` decimal(8,4) DEFAULT NULL,
+  `born_skill_dir` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` datetime NOT NULL,
+  `decided_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -549,7 +705,20 @@ CREATE TABLE `users` (
   `storage_folder` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `app_key_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `app_key_prefix` char(12) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `app_key_created_at` timestamp NULL DEFAULT NULL
+  `app_key_created_at` timestamp NULL DEFAULT NULL,
+  `heal_mode` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT 'off',
+  `heal_daily_budget_usd` decimal(8,2) DEFAULT '5.00',
+  `heal_per_heal_ceiling_usd` decimal(8,2) DEFAULT '1.00',
+  `heal_eval_provider` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT 'kimi',
+  `heal_max_iterations` int DEFAULT '3',
+  `heal_runs_per_query` int DEFAULT '3',
+  `heal_proposer_provider` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT 'claude',
+  `heal_judge_provider` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT 'kimi',
+  `genesis_mode` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT 'off',
+  `genesis_daily_budget_usd` decimal(8,2) DEFAULT '3.00',
+  `genesis_per_skill_ceiling_usd` decimal(8,2) DEFAULT '1.50',
+  `genesis_max_skills_per_week` int DEFAULT '2',
+  `genesis_reflection_provider` varchar(40) COLLATE utf8mb4_unicode_ci DEFAULT 'kimi'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -620,6 +789,18 @@ CREATE TABLE `user_mcp_overrides` (
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `user_mcp_settings`
+--
+
+CREATE TABLE `user_mcp_settings` (
+  `user_id` bigint NOT NULL,
+  `mcp_enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -772,7 +953,7 @@ CREATE TABLE `workflow_executions` (
 CREATE TABLE `workflow_nodes` (
   `id` int NOT NULL,
   `workflow_id` int NOT NULL,
-  `node_type` enum('start','output','agent','parallel') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `node_type` enum('start','output','agent','parallel','playbook') COLLATE utf8mb4_unicode_ci NOT NULL,
   `agent_id` int DEFAULT NULL,
   `config` json DEFAULT NULL,
   `pos_x` int NOT NULL DEFAULT '0',
@@ -836,6 +1017,7 @@ ALTER TABLE `affiliate_sales`
 --
 ALTER TABLE `agents`
   ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_agents_user_name` (`user_id`,`name`),
   ADD KEY `idx_agents_user` (`user_id`),
   ADD KEY `idx_agents_visibility` (`visibility`),
   ADD KEY `idx_agents_type` (`agent_type`),
@@ -926,6 +1108,23 @@ ALTER TABLE `exchange_rates`
   ADD PRIMARY KEY (`currency`);
 
 --
+-- Indexes for table `execution_traces`
+--
+ALTER TABLE `execution_traces`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_skill_dir` (`skill_dir`),
+  ADD KEY `idx_workflow` (`workflow_id`,`node_id`),
+  ADD KEY `idx_error_class` (`error_class`),
+  ADD KEY `idx_run` (`run_id`),
+  ADD KEY `idx_ts` (`ts`);
+
+--
+-- Indexes for table `heal_spend`
+--
+ALTER TABLE `heal_spend`
+  ADD PRIMARY KEY (`user_id`,`day`,`kind`);
+
+--
 -- Indexes for table `hume_tool_mapping`
 --
 ALTER TABLE `hume_tool_mapping`
@@ -980,6 +1179,40 @@ ALTER TABLE `packages`
   ADD PRIMARY KEY (`role`);
 
 --
+-- Indexes for table `playbook_runs`
+--
+ALTER TABLE `playbook_runs`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indexes for table `playbook_run_gates`
+--
+ALTER TABLE `playbook_run_gates`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_pbg_run` (`run_id`);
+
+--
+-- Indexes for table `playbook_run_ledger`
+--
+ALTER TABLE `playbook_run_ledger`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_pbl_run` (`run_id`);
+
+--
+-- Indexes for table `playbook_run_messages`
+--
+ALTER TABLE `playbook_run_messages`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_pbm_run` (`run_id`);
+
+--
+-- Indexes for table `playbook_run_notes`
+--
+ALTER TABLE `playbook_run_notes`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_pbn_run` (`run_id`);
+
+--
 -- Indexes for table `prompt_library`
 --
 ALTER TABLE `prompt_library`
@@ -1002,6 +1235,13 @@ ALTER TABLE `scheduled_workflows`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_next_run` (`next_run`,`status`),
   ADD KEY `fk_scheduled_workflow` (`workflow_id`);
+
+--
+-- Indexes for table `skill_promotions`
+--
+ALTER TABLE `skill_promotions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_user_skill` (`user_id`,`skill_name`);
 
 --
 -- Indexes for table `students`
@@ -1060,6 +1300,12 @@ ALTER TABLE `user_mcp_overrides`
   ADD UNIQUE KEY `unique_user_server` (`user_id`,`server_id`),
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_server_id` (`server_id`);
+
+--
+-- Indexes for table `user_mcp_settings`
+--
+ALTER TABLE `user_mcp_settings`
+  ADD PRIMARY KEY (`user_id`);
 
 --
 -- Indexes for table `user_memories`
@@ -1151,31 +1397,31 @@ ALTER TABLE `workflow_schemas`
 -- AUTO_INCREMENT for table `affiliates`
 --
 ALTER TABLE `affiliates`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `affiliate_accounts`
 --
 ALTER TABLE `affiliate_accounts`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `affiliate_products`
 --
 ALTER TABLE `affiliate_products`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `affiliate_sales`
 --
 ALTER TABLE `affiliate_sales`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `agents`
 --
 ALTER TABLE `agents`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `agent_conversations`
@@ -1187,145 +1433,187 @@ ALTER TABLE `agent_conversations`
 -- AUTO_INCREMENT for table `agent_executions`
 --
 ALTER TABLE `agent_executions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `agent_teams`
 --
 ALTER TABLE `agent_teams`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `agent_workflows`
 --
 ALTER TABLE `agent_workflows`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `agent_workflow_executions`
 --
 ALTER TABLE `agent_workflow_executions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `app_keys`
 --
 ALTER TABLE `app_keys`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `chat_attachments`
 --
 ALTER TABLE `chat_attachments`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `conversation_contexts`
 --
 ALTER TABLE `conversation_contexts`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `execution_traces`
+--
+ALTER TABLE `execution_traces`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `hume_tool_mapping`
 --
 ALTER TABLE `hume_tool_mapping`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `llm_usage_transactions`
 --
 ALTER TABLE `llm_usage_transactions`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'Unique transaction ID';
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'Unique transaction ID', AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `mcp_servers`
 --
 ALTER TABLE `mcp_servers`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `mcp_server_tools`
 --
 ALTER TABLE `mcp_server_tools`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `playbook_runs`
+--
+ALTER TABLE `playbook_runs`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `playbook_run_gates`
+--
+ALTER TABLE `playbook_run_gates`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `playbook_run_ledger`
+--
+ALTER TABLE `playbook_run_ledger`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `playbook_run_messages`
+--
+ALTER TABLE `playbook_run_messages`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `playbook_run_notes`
+--
+ALTER TABLE `playbook_run_notes`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `prompt_library`
 --
 ALTER TABLE `prompt_library`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `provider_costs`
 --
 ALTER TABLE `provider_costs`
-  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `scheduled_workflows`
 --
 ALTER TABLE `scheduled_workflows`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `skill_promotions`
+--
+ALTER TABLE `skill_promotions`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `students`
 --
 ALTER TABLE `students`
-  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `system_llm_settings`
 --
 ALTER TABLE `system_llm_settings`
-  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `user_category_settings`
 --
 ALTER TABLE `user_category_settings`
-  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `user_fs_credentials`
 --
 ALTER TABLE `user_fs_credentials`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `user_mcp_overrides`
 --
 ALTER TABLE `user_mcp_overrides`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `user_memory_events`
 --
 ALTER TABLE `user_memory_events`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `user_provider_settings`
 --
 ALTER TABLE `user_provider_settings`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `webauthn_credentials`
 --
 ALTER TABLE `webauthn_credentials`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `workflow_edges`
 --
 ALTER TABLE `workflow_edges`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `workflow_executions`
@@ -1337,7 +1625,7 @@ ALTER TABLE `workflow_executions`
 -- AUTO_INCREMENT for table `workflow_nodes`
 --
 ALTER TABLE `workflow_nodes`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
 -- AUTO_INCREMENT for table `workflow_schemas`
