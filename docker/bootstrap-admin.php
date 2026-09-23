@@ -30,31 +30,41 @@ try {
     exit(0);   // never block Apache from starting
 }
 
-if ((int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() > 0) {
-    echo "[gpt] users table is not empty -- leaving it alone\n";
-    exit(0);
+try {
+    if ((int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() > 0) {
+        echo "[gpt] users table is not empty -- leaving it alone\n";
+        exit(0);
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, "[gpt] admin bootstrap: schema not ready ({$e->getMessage()}) -- skipping\n");
+    exit(0);   // never block Apache from starting
 }
 
 $email = getenv('GPT_ADMIN_EMAIL') ?: 'admin@localhost';
 $password = getenv('GPT_ADMIN_PASSWORD') ?: bin2hex(random_bytes(9));
 $generated = getenv('GPT_ADMIN_PASSWORD') === false || getenv('GPT_ADMIN_PASSWORD') === '';
 
-$stmt = $pdo->prepare(
-    'INSERT INTO users
-       (email, password, first_name, last_name, role, plan, provider,
-        email_verified, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
-);
-$stmt->execute([
-    $email,
-    password_hash($password, PASSWORD_BCRYPT),
-    'Admin',
-    'User',
-    'admin',     // required: the LLM-settings pane checks for exactly this
-    'free',      // admins bypass the plan gate (settings-panel.js:2221)
-    'email',
-    1,
-]);
+try {
+    $stmt = $pdo->prepare(
+        'INSERT INTO users
+           (email, password, first_name, last_name, role, plan, provider,
+            email_verified, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+    );
+    $stmt->execute([
+        $email,
+        password_hash($password, PASSWORD_BCRYPT),
+        'Admin',
+        'User',
+        'admin',     // required: the LLM-settings pane checks for exactly this
+        'free',      // admins bypass the plan gate (settings-panel.js:2221)
+        'email',
+        1,
+    ]);
+} catch (Throwable $e) {
+    fwrite(STDERR, '[gpt] admin bootstrap: could not create admin: ' . $e->getMessage() . "\n");
+    exit(0);   // never block Apache from starting
+}
 
 $line = str_repeat('=', 62);
 echo "\n$line\n";
