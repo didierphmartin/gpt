@@ -1,4 +1,10 @@
-Options +Indexes +FollowSymLinks
+# -Indexes, not +Indexes: with listings on, any directory without an index file
+# is browsable, so GET /gpt/docker/ (or /gpt/backend/src/... anywhere the
+# subdirectory has no .htaccess of its own) returns a full file listing. This
+# file sits at the app root and AllowOverride lets it win over the vhost, so
+# +Indexes here re-enabled listings even where a parent config had denied them.
+# DirectoryIndex below still serves index.html/index.php normally.
+Options -Indexes +FollowSymLinks
 DirectoryIndex index.html index.php
 <IfModule mod_headers.c>
     Header set Access-Control-Allow-Origin "*"

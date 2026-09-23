@@ -1,3 +1,19 @@
+# Deny every dotfile, .env above all.
+#
+# The RewriteCond !-f below routes only MISSING paths to index.php -- it is a
+# routing guard, not an access control. A dotfile that really exists on disk,
+# like backend/.env, never reaches it: Apache serves the file verbatim, secrets
+# and all. Apache's own built-in deny covers ^\.ht (.htaccess/.htpasswd) and
+# nothing else, and chmod 600 does not help either, because Apache runs as the
+# user that owns the file.
+#
+# Without this block, GET /gpt/backend/.env returns 200 with JWT_SECRET,
+# APP_KEY_SECRET and the database password in the body -- enough to forge a
+# session for any user, including an admin.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
 RewriteEngine On
 
 # Debug: Log rewrite activity

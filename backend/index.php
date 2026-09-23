@@ -52,7 +52,16 @@ try {
     $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES => false
+        PDO::ATTR_EMULATE_PREPARES => false,
+        // Every request enters through here, so an unbounded connect attempt is
+        // an unbounded request. A host that REFUSES fails instantly, but one
+        // that drops packets -- a failed failover, a firewall change, a dead
+        // route -- hangs until max_execution_time with no timeout set, tying up
+        // an Apache worker the whole time until the pool is exhausted and the
+        // whole site stops answering. Fail fast instead and return the 500
+        // below. Matches the other connection sites (LoginAdminController,
+        // VideoEditorController, AuthController), which already set this.
+        PDO::ATTR_TIMEOUT => 5,
     ]);
 } catch (PDOException $e) {
     error_log("[Backend] Database connection failed: " . $e->getMessage());
