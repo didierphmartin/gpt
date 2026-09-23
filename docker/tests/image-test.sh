@@ -11,18 +11,21 @@ trap cleanup EXIT
 docker build -t gpt-web:test -f docker/web/Dockerfile . || fail "build failed"
 
 # --entrypoint bypasses first-boot setup: this test is about the image only.
-docker run -d --name gpt-image-test -p 18080:80 \
+# Port 18081, not 18080: run-all.sh gives the isolated compose stack 18080, and
+# this standalone container would otherwise collide with it whenever a stack is
+# up -- failing with "port is already allocated" instead of with a real result.
+docker run -d --name gpt-image-test -p 18081:80 \
   --entrypoint apache2-foreground gpt-web:test >/dev/null
 
 for i in $(seq 1 30); do
   sleep 1
-  curl -fsS "http://localhost:18080/gpt/" >/dev/null 2>&1 && break
+  curl -fsS "http://localhost:18081/gpt/" >/dev/null 2>&1 && break
   [ "$i" -eq 30 ] && fail "server never came up"
 done
 
-curl -fsS "http://localhost:18080/gpt/" | grep -qi '<html' \
+curl -fsS "http://localhost:18081/gpt/" | grep -qi '<html' \
   || fail "/gpt/ did not serve HTML"
-curl -fsS "http://localhost:18080/gpt/frontend/index.html" >/dev/null \
+curl -fsS "http://localhost:18081/gpt/frontend/index.html" >/dev/null \
   || fail "frontend not served"
 
 # The success path for this route needs a real, reachable database, and this
@@ -56,7 +59,7 @@ rm -f "$env_file"
 
 catalog_body="$(mktemp)"
 catalog_status="$(curl -sS -o "$catalog_body" -w '%{http_code}' \
-  "http://localhost:18080/gpt/backend/api/v1/models/catalog")"
+  "http://localhost:18081/gpt/backend/api/v1/models/catalog")"
 [ "$catalog_status" = "500" ] \
   || fail "catalog route: expected HTTP 500 with DB unreachable, got $catalog_status"
 grep -q "Database connection failed" "$catalog_body" \

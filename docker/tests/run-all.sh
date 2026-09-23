@@ -12,6 +12,13 @@ cd "$(dirname "$0")/../.."
 export COMPOSE_PROJECT_NAME=gpt-test
 export GPT_PORT=18080
 
+# Always tear down, including on failure. Without this, `set -e` aborts the
+# run at the failing test and the final `down -v` at the bottom never executes
+# -- leaving the stack up and holding GPT_PORT, so the NEXT run dies at the
+# image test with "port is already allocated" rather than with whatever
+# actually broke. One failure then looks like two unrelated ones.
+trap 'docker compose down -v >/dev/null 2>&1 || true; docker rm -f gpt-image-test >/dev/null 2>&1 || true' EXIT
+
 echo "== static checks (no Docker needed) =="
 ./docker/tests/schema-test.sh
 ./docker/tests/seed-test.sh
