@@ -1,0 +1,116 @@
+# gpt -- evaluation stack.
+#
+# The local Python runner and browser Skills are deliberately NOT here: they run
+# as you, on your machine, against your files. Your browser is on the host
+# either way, so it still reaches the runner at 127.0.0.1:8765.
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: docker/db/Dockerfile
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_chatbot}
+      MYSQL_USER: ${MYSQL_USER:-gpt}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt}
+    volumes:
+      - gpt-db:/var/lib/mysql
+      # Schema and seed are baked into the image (see docker/db/Dockerfile),
+      # not bind-mounted -- Docker Desktop on macOS only shares an allowlist of
+      # host paths, and a clone outside it fails with a "mounts denied" error
+      # pointing at Docker settings rather than at this stack. Baking also
+      # removes the trap where a missing mount source is silently created as a
+      # directory, which MySQL then chokes on.
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1",
+             "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_chatbot}
+      MYSQL_USER: ${MYSQL_USER:-gpt}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt}
+      GPT_ADMIN_EMAIL: ${GPT_ADMIN_EMAIL:-admin@localhost}
+      GPT_ADMIN_PASSWORD: ${GPT_ADMIN_PASSWORD:-}
+      GPT_PORT: ${GPT_PORT:-8080}
+    ports:
+      - "${GPT_PORT:-8080}:80"
+    volumes:
+      # Per-install JWT_SECRET / APP_KEY_SECRET. Without this they would be
+      # re-rolled on every recreate, invalidating every session and app key.
+      - gpt-secrets:/run/gpt
+
+  # Optional: the other two backends. `docker compose --profile node up`
+  # Both must share the generated secrets, or a session from one is rejected
+  # by the other -- hence the same gpt-secrets volume, sourced into the
+  # environment below before the server starts. These two also bind-mount
+  # ./backend_typescript and ./backend_python respectively, so -- unlike db
+  # and web, which build from baked images -- they DO still depend on the
+  # clone living in a path Docker Desktop is allowed to share. They are
+  # opt-in and outside the test suite for that reason.
+  backend-node:
+    profiles: ["node"]
+    image: node:20-bookworm-slim
+    working_dir: /app
+    command: >
+      sh -c '. /run/gpt/secrets.env && export JWT_SECRET APP_KEY_SECRET &&
+             npm install && npm run dev'
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      CTX_DB_HOST: db
+      DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
+      CTX_DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
+      DB_USER: ${MYSQL_USER:-gpt}
+      CTX_DB_USER: ${MYSQL_USER:-gpt}
+      DB_PASS: ${MYSQL_PASSWORD:-gpt}
+      CTX_DB_PASS: ${MYSQL_PASSWORD:-gpt}
+    volumes:
+      - ./backend_typescript:/app
+      - gpt-secrets:/run/gpt
+    ports:
+      - "3001:3001"
+
+  backend-python:
+    profiles: ["python"]
+    image: python:3.12-slim
+    working_dir: /app
+    command: >
+      sh -c '. /run/gpt/secrets.env && export JWT_SECRET APP_KEY_SECRET &&
+             pip install -r requirements.txt && ./run.sh'
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      CTX_DB_HOST: db
+      DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
+      CTX_DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
+      DB_USER: ${MYSQL_USER:-gpt}
+      CTX_DB_USER: ${MYSQL_USER:-gpt}
+      DB_PASS: ${MYSQL_PASSWORD:-gpt}
+      CTX_DB_PASS: ${MYSQL_PASSWORD:-gpt}
+    volumes:
+      - ./backend_python:/app
+      - gpt-secrets:/run/gpt
+    ports:
+      - "3002:3002"
+
+volumes:
+  gpt-db:
+  gpt-secrets:
