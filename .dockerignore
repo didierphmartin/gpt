@@ -1,0 +1,12 @@
+.git
+docs
+**/node_modules
+**/vendor
+**/.venv
+**/venv
+backend/.env
+frontend/assets/js/config.js
+frontend/voice/config.json
+**/__pycache__
+.scratch_parity
+*.log
