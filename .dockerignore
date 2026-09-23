@@ -4,9 +4,22 @@ docs
 **/vendor
 **/.venv
 **/venv
-backend/.env
+# Any real .env, anywhere in the tree -- not just backend/.env. This is what
+# keeps a developer's own langchain_runner/.env (which per backend/.env.example
+# is where the workflow editor writes the user's actual provider keys) out of
+# the image. .env.example files are templates with no real values, so they're
+# let back through -- the entrypoint needs backend/.env.example to render
+# backend/.env at boot.
+**/.env
+!**/.env.example
 frontend/assets/js/config.js
 frontend/voice/config.json
 **/__pycache__
 .scratch_parity
-*.log
+# Logs anywhere in the tree (e.g. backend_typescript/logs/backend.log, which
+# Logger.ts mirrors all console output to) and any .env backup files.
+**/*.log
+**/logs/
+**/*.bak*
+.claude
+.superpowers
