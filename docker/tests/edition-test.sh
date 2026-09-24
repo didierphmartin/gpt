@@ -72,4 +72,13 @@ count=$(echo "$cfg2" | grep -cF "container-generated below this line" || true)
 count=$(echo "$cfg2" | grep -cF "gpt-auto-login" || true)
 [ "$count" -eq 1 ] || fail "after two restarts, the auto-login block appears $count times (expected 1)"
 
+# --- registration is unavailable off-hosted ---------------------------------
+login_html=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/login.html")
+echo "$login_html" | grep -q "gpt-edition-hide-register" \
+  || fail "login.html has no edition-aware register suppression"
+
+reg_html=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/register.html")
+echo "$reg_html" | grep -q "gpt-edition-guard" \
+  || fail "register.html has no edition guard"
+
 echo "PASS: the edition reaches the browser"

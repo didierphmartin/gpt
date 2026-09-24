@@ -198,8 +198,13 @@
                                 </div>
                             </div>
 
-                            <!-- Sign up link -->
-                            <div class="text-center mt-4">
+
+                            <!-- Sign up link. Hidden in self-hosted editions:
+                                 AuthController::register is gated on
+                                 ledger_user_id and answers "register through
+                                 synergyaichat.com", which is meaningless to
+                                 someone running this on their own machine. -->
+                            <div class="text-center mt-4" id="gpt-edition-hide-register">
                                 <span class="text-gray-600">Don't have an account? </span>
                                 <a href="register.html" class="text-blue-600 hover:text-blue-500 font-semibold">
                                     Sign Up
@@ -342,5 +347,16 @@
     <!-- Authentication Logic -->
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js?v=20260820-sso-login"></script>
+
+    <script>
+      /* gpt-edition-hide-register: self-hosted editions have no self-signup.
+         Guarded on GPT_EDITION being PRESENT, so the hosted deployment — which
+         never sets it — keeps the link and takes no new code path. */
+      (function () {
+        if (!window.APP_CONFIG || !window.APP_CONFIG.GPT_EDITION) { return; }
+        var el = document.getElementById('gpt-edition-hide-register');
+        if (el) { el.style.display = 'none'; }
+      })();
+    </script>
 </body>
 </html>
