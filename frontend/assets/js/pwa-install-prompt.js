@@ -33,6 +33,24 @@
     // Show on every session during the test period.
     const TEST_MODE = false;
 
+    // Hosted users rent LLM time; they have no keys to enter. The individual
+    // and corporate editions ship with no keys by design, so this is where
+    // the user supplies their own.
+    const SHOW_KEYS_STEP = !!(window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION);
+
+    // The eight providers the container seeds into system_llm_settings with an
+    // empty api_key. This step fills those rows in; it does not create them.
+    const KEY_PROVIDERS = [
+        { key: 'claude',   label: 'Claude',   where: 'console.anthropic.com' },
+        { key: 'openai',   label: 'OpenAI',   where: 'platform.openai.com/api-keys' },
+        { key: 'gemini',   label: 'Gemini',   where: 'aistudio.google.com/apikey' },
+        { key: 'grok',     label: 'Grok',     where: 'console.x.ai' },
+        { key: 'deepseek', label: 'DeepSeek', where: 'platform.deepseek.com' },
+        { key: 'kimi',     label: 'Kimi',     where: 'platform.moonshot.ai' },
+        { key: 'glm',      label: 'GLM 5.2',  where: 'z.ai' },
+        { key: 'gamma4',   label: 'Gamma4',   where: 'self-hosted' },
+    ];
+
     // ---- translations ---------------------------------------------
     const STRINGS = {
         en: {
@@ -63,6 +81,13 @@
             'install.iosStep1':'Tap the Share button',
             'install.iosStep2':"Choose 'Add to Home Screen'",
             'install.done':   'Done',
+            'keys.title':     'Add your AI provider keys',
+            'keys.intro':     'Add a key for each provider you want to use. You can skip this and add them later in Settings.',
+            'keys.where':     'Keys are stored in your own database and never leave this machine.',
+            'keys.skip':      'Skip for now',
+            'keys.save':      'Save and finish',
+            'keys.saved':     'Saved.',
+            'keys.failed':    'Could not save those keys — you can add them later in Settings.',
             'back':           'Back',
             'close':          'Close',
             'testBanner':     'Test mode — wizard shown every visit for iteration.'
@@ -95,6 +120,13 @@
             'install.iosStep1':'Appuyez sur le bouton Partager',
             'install.iosStep2':"Choisissez « Sur l'écran d'accueil »",
             'install.done':   'Terminé',
+            'keys.title':     'Ajoutez vos clés de fournisseur IA',
+            'keys.intro':     'Ajoutez une clé pour chaque fournisseur que vous souhaitez utiliser. Vous pouvez passer cette étape et les ajouter plus tard dans les Paramètres.',
+            'keys.where':     'Les clés sont enregistrées dans votre propre base de données et ne quittent jamais cette machine.',
+            'keys.skip':      'Passer pour l\'instant',
+            'keys.save':      'Enregistrer et terminer',
+            'keys.saved':     'Enregistré.',
+            'keys.failed':    'Impossible d\'enregistrer ces clés — vous pourrez les ajouter plus tard dans les Paramètres.',
             'back':           'Retour',
             'close':          'Fermer',
             'testBanner':     "Mode test — l'assistant s'affiche à chaque visite pour itération."
@@ -127,6 +159,13 @@
             'install.iosStep1':'Toca el botón Compartir',
             'install.iosStep2':'Selecciona «Añadir a pantalla de inicio»',
             'install.done':   'Listo',
+            'keys.title':     'Añade tus claves de proveedor de IA',
+            'keys.intro':     'Añade una clave para cada proveedor que quieras usar. Puedes omitir este paso y añadirlas más tarde en Ajustes.',
+            'keys.where':     'Las claves se guardan en tu propia base de datos y nunca salen de esta máquina.',
+            'keys.skip':      'Omitir por ahora',
+            'keys.save':      'Guardar y terminar',
+            'keys.saved':     'Guardado.',
+            'keys.failed':    'No se pudieron guardar esas claves — puedes añadirlas más tarde en Ajustes.',
             'back':           'Atrás',
             'close':          'Cerrar',
             'testBanner':     'Modo de prueba: el asistente se muestra en cada visita para iterar.'
@@ -274,6 +313,7 @@
         if      (step === 'lang')    card.innerHTML = renderLang();
         else if (step === 'welcome') card.innerHTML = renderWelcome();
         else if (step === 'folder')  card.innerHTML = renderFolder();
+        else if (step === 'keys')    card.innerHTML = renderKeys();
         else if (step === 'install') card.innerHTML = renderInstall();
 
         const banner = overlay.querySelector('[data-pwa-testbanner]');
@@ -439,6 +479,42 @@
         `;
     }
 
+    function renderKeys() {
+        const rows = KEY_PROVIDERS.map((p) => `
+            <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-700 mb-1">
+                    ${esc(p.label)} <span class="text-gray-400 font-normal">— ${esc(p.where)}</span>
+                </label>
+                <input type="password" autocomplete="off" spellcheck="false" data-provider="${esc(p.key)}"
+                    class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+        `).join('');
+
+        return `
+            ${header('keys.title')}
+            <p class="text-sm text-gray-700 mb-2">${esc(t('keys.intro'))}</p>
+            <p class="text-xs text-gray-500 mb-4">${esc(t('keys.where'))}</p>
+            <div class="max-h-64 overflow-y-auto pr-1 mb-2">${rows}</div>
+            <p class="text-xs mb-3 min-h-[1em]" data-pwa-keys-msg></p>
+            <div class="flex justify-between items-center">
+                <button data-pwa-action="back" data-from="keys"
+                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                    ${esc(t('back'))}
+                </button>
+                <div class="flex gap-2">
+                    <button data-pwa-action="next" data-from="keys"
+                        class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                        ${esc(t('keys.skip'))}
+                    </button>
+                    <button data-pwa-action="save-keys"
+                        class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition">
+                        ${esc(t('keys.save'))}
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
     function renderInstall() {
         const installed = isInstalled();
         const canInstall = !!deferredPrompt && !installed;
@@ -536,7 +612,8 @@
             const from = target.dataset.from;
             if      (from === 'lang')    wizardState.step = 'welcome';
             else if (from === 'welcome') wizardState.step = 'folder';
-            else if (from === 'folder')  wizardState.step = 'install';
+            else if (from === 'folder')  wizardState.step = SHOW_KEYS_STEP ? 'keys' : 'install';
+            else if (from === 'keys')    wizardState.step = 'install';
             render();
             return;
         }
@@ -544,7 +621,8 @@
             const from = target.dataset.from;
             if      (from === 'welcome') wizardState.step = 'lang';
             else if (from === 'folder')  wizardState.step = 'welcome';
-            else if (from === 'install') wizardState.step = 'folder';
+            else if (from === 'keys')    wizardState.step = 'folder';
+            else if (from === 'install') wizardState.step = SHOW_KEYS_STEP ? 'keys' : 'folder';
             render();
             return;
         }
@@ -584,6 +662,67 @@
             } catch (err) {
                 if (err && err.name !== 'AbortError') console.warn('[wizard] pick-folder failed:', err);
             }
+            return;
+        }
+        if (action === 'save-keys') {
+            const msgEl = e.currentTarget?.querySelector('[data-pwa-keys-msg]');
+            if (msgEl) msgEl.textContent = '…';
+
+            const inputs = document.querySelectorAll('#pwa-install-overlay input[data-provider]');
+            const pending = [];
+            inputs.forEach((el) => {
+                const v = (el.value || '').trim();
+                if (v) pending.push({ provider_key: el.dataset.provider, api_key: v });
+            });
+
+            if (!pending.length) {
+                wizardState.step = 'install';
+                render();
+                return;
+            }
+
+            const base = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
+            let token = '';
+            try { token = window.localStorage.getItem('token') || ''; } catch {}
+
+            // saveLLMProvider is a full upsert -- it 400s without a `model`
+            // and otherwise overwrites the row's other columns wholesale. The
+            // container already seeded every provider with a working model /
+            // base_url / etc., so read each row back first and send it
+            // straight through with only api_key replaced, instead of
+            // clobbering the seeded config down to just the key.
+            let ok = true;
+            try {
+                const results = await Promise.all(pending.map(async ({ provider_key, api_key }) => {
+                    try {
+                        const getRes = await fetch(`${base}/admin/llm-settings/${encodeURIComponent(provider_key)}`, {
+                            headers: { 'Authorization': `Bearer ${token}` },
+                        });
+                        if (!getRes.ok) return { ok: false };
+                        const got = await getRes.json();
+                        const provider = got && got.provider;
+                        if (!provider) return { ok: false };
+
+                        const putRes = await fetch(`${base}/admin/llm-settings`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`,
+                            },
+                            body: JSON.stringify({ ...provider, api_key }),
+                        });
+                        return { ok: putRes.ok };
+                    } catch {
+                        return { ok: false };
+                    }
+                }));
+                ok = results.every((r) => r && r.ok);
+            } catch {
+                ok = false;
+            }
+
+            if (msgEl) msgEl.textContent = ok ? t('keys.saved') : t('keys.failed');
+            setTimeout(() => { wizardState.step = 'install'; render(); }, ok ? 400 : 1600);
             return;
         }
         if (action === 'install') {
