@@ -1,0 +1,21 @@
+# Corporate overlay. Use with:
+#   docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
+#   docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+#   docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
+#
+# Adds gpt_admin to the web image and turns auto-login off, so users sign in.
+# Set GPT_ADMIN_EMAIL and GPT_ADMIN_PASSWORD in .env BEFORE the first `up`:
+# that account is created once, is the admin who signs into gpt_admin, and is
+# how every other user gets created.
+#
+# gpt_admin is a separate private repository, built beforehand into its own
+# image (gpt-admin-dist:latest, see docker/gptadmin/Dockerfile); this overlay
+# only needs Dockerfile.corporate, which copies that image's dist/ output in.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile.corporate
+    environment:
+      GPT_EDITION: corporate
