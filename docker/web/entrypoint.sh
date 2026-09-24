@@ -71,6 +71,20 @@ chmod 600 "$ENV_FILE"
     cp "$APP/frontend/voice/config.example.json" "$APP/frontend/voice/config.json"
 }
 
+# --- edition ---------------------------------------------------------------
+# config.js is generated here and gitignored, so the container can tell the
+# frontend which edition it is without touching any committed file. It loads
+# after api-config.js and before auth.js on every page that matters.
+if [ -n "${GPT_EDITION:-}" ]; then
+    log "edition: ${GPT_EDITION}"
+    cat >> "$APP/frontend/assets/js/config.js" <<EOF
+
+/* --- added by the container entrypoint: edition marker --- */
+window.APP_CONFIG = window.APP_CONFIG || {};
+window.APP_CONFIG.GPT_EDITION = '${GPT_EDITION}';
+EOF
+fi
+
 # --- admin account -----------------------------------------------------------
 if [ "${GPT_SKIP_ADMIN:-0}" != "1" ]; then
     php "$APP/docker/bootstrap-admin.php" || log "admin bootstrap skipped (database not ready)"

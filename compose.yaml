@@ -46,6 +46,10 @@ services:
       GPT_ADMIN_EMAIL: ${GPT_ADMIN_EMAIL:-admin@localhost}
       GPT_ADMIN_PASSWORD: ${GPT_ADMIN_PASSWORD:-}
       GPT_PORT: ${GPT_PORT:-8080}
+      # individual | corporate. UNSET means the hosted edition, whose behaviour
+      # must stay byte-identical -- every frontend branch tests for this being
+      # present, so production (which never sets it) takes no new code path.
+      GPT_EDITION: ${GPT_EDITION:-}
     ports:
       - "${GPT_PORT:-8080}:80"
     volumes:
