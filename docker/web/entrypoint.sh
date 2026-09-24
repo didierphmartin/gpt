@@ -71,15 +71,22 @@ chmod 600 "$ENV_FILE"
     cp "$APP/frontend/voice/config.example.json" "$APP/frontend/voice/config.json"
 }
 
-# --- edition ---------------------------------------------------------------
-# config.js is generated here and gitignored, so the container can tell the
-# frontend which edition it is without touching any committed file. It loads
-# after api-config.js and before auth.js on every page that matters.
+# --- container-generated config section (editions, auto-login, etc.) -------
+# config.js persists in the container's writable layer across restarts, so we
+# must regenerate this entire section on every boot to be idempotent. With
+# GPT_EDITION unset (hosted), nothing is appended and the file stays
+# byte-identical to the example.
+CONFIG_MARK='/* --- container-generated below this line; rebuilt on every boot --- */'
+
 if [ -n "${GPT_EDITION:-}" ]; then
     log "edition: ${GPT_EDITION}"
+    # Regenerate from example to eliminate any stale container-generated content.
+    # The container's config.js is generated anyway; the example is always in the image.
+    cp "$APP/frontend/assets/js/config.example.js" "$APP/frontend/assets/js/config.js"
+    # Append the container-generated section.
     cat >> "$APP/frontend/assets/js/config.js" <<EOF
 
-/* --- added by the container entrypoint: edition marker --- */
+${CONFIG_MARK}
 window.APP_CONFIG = window.APP_CONFIG || {};
 window.APP_CONFIG.GPT_EDITION = '${GPT_EDITION}';
 EOF
