@@ -34,7 +34,42 @@ done
 
 cfg=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/assets/js/config.js") \
   || fail "config.js not served after restart"
-count=$(echo "$cfg" | grep -c "GPT_EDITION" || true)
-[ "$count" -eq 1 ] || fail "after restart, GPT_EDITION appears $count times (expected 1)"
+# Match the block header, not any incidental "GPT_EDITION" text (the
+# auto-login script below also references the constant by name).
+count=$(echo "$cfg" | grep -cF "container-generated below this line" || true)
+[ "$count" -eq 1 ] || fail "after restart, the edition block appears $count times (expected 1)"
+
+# --- auto-login -------------------------------------------------------------
+echo "$cfg" | grep -q "gpt-auto-login" \
+  || fail "individual edition has no auto-login block"
+
+# The credential it uses must actually work against the API.
+email=$(echo "$cfg" | sed -n "s/.*autoEmail *= *'\([^']*\)'.*/\1/p" | head -1)
+pass=$(echo  "$cfg" | sed -n "s/.*autoPass *= *'\([^']*\)'.*/\1/p"  | head -1)
+[ -n "$email" ] && [ -n "$pass" ] || fail "auto-login credentials not found in config.js"
+
+code=$(curl -s -o /tmp/edition-login.json -w '%{http_code}' \
+  -X POST "http://localhost:${GPT_PORT}/gpt/backend/api/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$email\",\"password\":\"$pass\"}")
+[ "$code" = "200" ] || fail "auto-login credentials rejected by the API (HTTP $code)"
+grep -q access_token /tmp/edition-login.json || fail "login returned no token"
+rm -f /tmp/edition-login.json
+
+# And the password must survive a restart, or config.js and the DB row diverge.
+docker compose restart web >/dev/null 2>&1
+for i in $(seq 1 60); do
+  sleep 2
+  [ "$(docker compose ps --format '{{.Health}}' web 2>/dev/null)" = "healthy" ] && break
+done
+cfg2=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/assets/js/config.js")
+pass2=$(echo "$cfg2" | sed -n "s/.*autoPass *= *'\([^']*\)'.*/\1/p" | head -1)
+[ "$pass" = "$pass2" ] || fail "the auto-login password changed across a restart"
+
+# Two restarts now: neither block may have accumulated a second copy.
+count=$(echo "$cfg2" | grep -cF "container-generated below this line" || true)
+[ "$count" -eq 1 ] || fail "after two restarts, the edition block appears $count times (expected 1)"
+count=$(echo "$cfg2" | grep -cF "gpt-auto-login" || true)
+[ "$count" -eq 1 ] || fail "after two restarts, the auto-login block appears $count times (expected 1)"
 
 echo "PASS: the edition reaches the browser"

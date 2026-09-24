@@ -17,11 +17,20 @@ if [ ! -f "$SECRETS" ]; then
     {
         echo "JWT_SECRET=$(openssl rand -hex 32)"
         echo "APP_KEY_SECRET=$(openssl rand -hex 32)"
+        echo "GPT_AUTO_PASSWORD=$(openssl rand -hex 9)"
     } > "$SECRETS"
     chmod 600 "$SECRETS"
 fi
 # shellcheck disable=SC1090
 . "$SECRETS"
+
+# In the individual edition the browser signs in on the user's behalf, so the
+# entrypoint -- not bootstrap-admin.php -- owns the password: it has to embed
+# the same value in config.js. Persisted in secrets.env above, so a restart
+# cannot leave config.js holding a password the users row no longer has.
+if [ "${GPT_EDITION:-}" = "individual" ] && [ -z "${GPT_ADMIN_PASSWORD:-}" ]; then
+    export GPT_ADMIN_PASSWORD="$GPT_AUTO_PASSWORD"
+fi
 
 # --- backend/.env ------------------------------------------------------------
 # Re-rendered every boot from the committed example plus the persisted secrets,
@@ -90,6 +99,66 @@ ${CONFIG_MARK}
 window.APP_CONFIG = window.APP_CONFIG || {};
 window.APP_CONFIG.GPT_EDITION = '${GPT_EDITION}';
 EOF
+
+    if [ "${GPT_EDITION:-}" = "individual" ]; then
+        log "individual edition: enabling auto-login"
+        cat >> "$APP/frontend/assets/js/config.js" <<EOF
+
+/* --- added by the container entrypoint: gpt-auto-login ---
+ * The individual edition has one user and no sign-in screen. The backend is
+ * NOT relaxed: AuthMiddleware still demands a valid JWT on every non-public
+ * route. This simply performs the login the human would have performed, using
+ * the account the container seeded.
+ *
+ * Runs only when no session exists, so it costs one request on first visit and
+ * nothing afterwards. config.js loads after api-config.js (so API_BASE_URL is
+ * set) and before auth.js, so this settles before anything reads the session.
+ */
+(function () {
+    if (window.APP_CONFIG.GPT_EDITION !== 'individual') { return; }
+    try { if (localStorage.getItem('token')) { return; } } catch (e) { return; }
+
+    var autoEmail = '${GPT_ADMIN_EMAIL:-admin@localhost}';
+    var autoPass  = '${GPT_ADMIN_PASSWORD}';
+    var base = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', base + '/auth/login', false); // synchronous on purpose:
+    xhr.setRequestHeader('Content-Type', 'application/json'); // the page's own
+    try {                                                     // auth check runs
+        xhr.send(JSON.stringify({ email: autoEmail, password: autoPass }));
+    } catch (e) {
+        console.error('[gpt] auto-login request failed', e);
+        return;
+    }
+    if (xhr.status !== 200) {
+        console.error('[gpt] auto-login rejected:', xhr.status, xhr.responseText);
+        return;
+    }
+
+    var d = JSON.parse(xhr.responseText).data || {};
+    var u = d.user || {};
+    if (!d.access_token || !u.email) { return; }
+
+    // account-store.js is the canonical store (access / activeEmail / token /
+    // refresh_token) but loads AFTER this file, so write its keys directly.
+    // The root index.html predates it and still gates on token + user, so
+    // write that legacy key too; otherwise '/gpt/' bounces back to login.
+    var map = {};
+    try { map = JSON.parse(localStorage.getItem('access') || '{}'); } catch (e) { map = {}; }
+    map[String(u.email).toLowerCase()] = u;
+    localStorage.setItem('access', JSON.stringify(map));
+    localStorage.setItem('activeEmail', String(u.email).toLowerCase());
+    localStorage.setItem('token', d.access_token);
+    if (d.refresh_token) { localStorage.setItem('refresh_token', d.refresh_token); }
+    localStorage.setItem('user', JSON.stringify(u));
+
+    if (/\/login\.html|\/register\.html/.test(location.pathname)) {
+        location.replace('index.html');
+    }
+})();
+EOF
+    fi
 fi
 
 # --- admin account -----------------------------------------------------------
