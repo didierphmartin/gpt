@@ -18,6 +18,8 @@ use PDO;
  */
 class AffiliateController
 {
+    use RequiresAdmin;
+
     private PDO $db;
     private array $config;
     private AffiliateRepository $repo;
@@ -362,18 +364,6 @@ class AffiliateController
         ];
     }
 
-    private function requireAdmin(array $request): ?array
-    {
-        $userId = $request['user_id'] ?? null;
-        if (!$userId) return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
-        $stmt = $this->db->prepare('SELECT role FROM users WHERE id = :id LIMIT 1');
-        $stmt->execute([':id' => $userId]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
-            return ['success' => false, 'error' => 'Admin access required', 'status_code' => 403];
-        }
-        return null;
-    }
 
     /** Returns the affiliate row for the authenticated user, or an error array. */
     private function requireAffiliate(array $request): array

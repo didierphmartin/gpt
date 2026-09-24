@@ -18,6 +18,8 @@ use PDO;
  */
 class VideoEditorController
 {
+    use RequiresAdmin;
+
     /** App identifier stored in login.app_user_roles.app (must match video-edit's VE_APP). */
     private const APP = 'video-edit';
 
@@ -30,20 +32,6 @@ class VideoEditorController
         $this->db = $db; // chatbot DB — used only to verify the caller's admin role
     }
 
-    /** Gate an endpoint to admins. Returns an error array to short-circuit, or
-     *  null to proceed. Mirrors PackageController::requireAdmin. */
-    private function requireAdmin(array $request): ?array
-    {
-        $userId = $request['user_id'] ?? null;
-        if (!$userId) return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
-        $stmt = $this->db->prepare('SELECT role FROM users WHERE id = :id LIMIT 1');
-        $stmt->execute([':id' => $userId]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
-            return ['success' => false, 'error' => 'Admin access required', 'status_code' => 403];
-        }
-        return null;
-    }
 
     /** Open a PDO from a named config block, or null if unconfigured/unreachable. */
     private function connect(string $key): ?PDO
@@ -111,6 +99,10 @@ class VideoEditorController
     /** GET /api/v1/admin/video-editor/usage/stats?days=30 — totals, by model, daily trend. */
     public function getUsageStats(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $ve = $this->ve();
         if (!$ve) return ['success' => false, 'available' => false, 'message' => 'Video-edit usage DB not reachable'];
         [$days] = $this->range($request);
@@ -144,6 +136,10 @@ class VideoEditorController
     /** GET /api/v1/admin/video-editor/usage/by-user?days=30 — per-user consumption + names. */
     public function getUsageByUser(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $ve = $this->ve();
         if (!$ve) return ['success' => false, 'available' => false, 'users' => []];
         [$days] = $this->range($request);
@@ -223,6 +219,10 @@ class VideoEditorController
      *  panel. All money is USD; the client converts for display. */
     public function getUsageSummary(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $ve = $this->ve();
         if (!$ve) return ['success' => false, 'available' => false, 'message' => 'Video-edit usage DB not reachable'];
         $blank = static fn() => [
@@ -281,6 +281,10 @@ class VideoEditorController
     /** GET /api/v1/admin/video-editor/prices — the editable price table. */
     public function getPrices(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $ve = $this->ve();
         if (!$ve) return ['success' => false, 'prices' => []];
         try {
@@ -294,6 +298,10 @@ class VideoEditorController
     /** POST /api/v1/admin/video-editor/prices — upsert one model's rate. */
     public function savePrice(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $ve = $this->ve();
         if (!$ve) return ['success' => false, 'message' => 'DB not reachable'];
         $b = $request['body'] ?? [];

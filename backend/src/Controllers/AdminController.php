@@ -15,6 +15,8 @@ use Exception;
  */
 class AdminController
 {
+    use RequiresAdmin;
+
     private PDO $db;
     private array $config;
 
@@ -29,6 +31,10 @@ class AdminController
      */
     public function listUsers(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $sql = "SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users ORDER BY id";
         $stmt = $this->db->query($sql);
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -45,6 +51,10 @@ class AdminController
      */
     public function getUser(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -78,6 +88,10 @@ class AdminController
      */
     public function getUserAccount(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -165,6 +179,10 @@ class AdminController
      */
     public function createUser(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $firstName = trim($input['first_name'] ?? '');
@@ -215,6 +233,10 @@ class AdminController
      */
     public function updateUser(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -284,6 +306,10 @@ class AdminController
      */
     public function deleteUser(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -316,6 +342,10 @@ class AdminController
      */
     public function getProviderSettings(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -383,6 +413,10 @@ class AdminController
      */
     public function saveProvider(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -496,6 +530,10 @@ class AdminController
      */
     public function toggleCategoryEnabled(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -566,6 +604,10 @@ class AdminController
      */
     public function toggleProviderEnabled(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -647,6 +689,10 @@ class AdminController
      */
     public function deleteProvider(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -694,6 +740,10 @@ class AdminController
      */
     public function getApiKeys(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -807,6 +857,10 @@ class AdminController
      */
     public function saveApiKeys(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -927,6 +981,10 @@ class AdminController
      */
     public function deleteApiKey(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         $input = $request['body'];
 
         $userId = (int)($input['user_id'] ?? 0);
@@ -1059,6 +1117,10 @@ class AdminController
      */
     public function getUsageStats(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $period = $request['query']['period'] ?? 'month';
             $dateFrom = $request['query']['date_from'] ?? null;
@@ -1183,6 +1245,10 @@ class AdminController
      */
     public function getUsageByUser(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $period = $request['query']['period'] ?? 'month';
             $limit = min((int)($request['query']['limit'] ?? 50), 100);
@@ -1269,6 +1335,10 @@ class AdminController
      */
     public function getUserUsageDetail(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $period = $request['query']['period'] ?? 'month';
             $dateRange = $this->getDateRange($period);
@@ -1409,6 +1479,10 @@ class AdminController
      */
     public function getUsageTransactions(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $provider = $request['query']['provider'] ?? null;
             $userId = $request['query']['user_id'] ?? null;
@@ -1528,6 +1602,10 @@ class AdminController
      */
     public function getToolStats(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $period = $request['query']['period'] ?? 'month';
             $dateRange = $this->getDateRange($period);
@@ -1965,6 +2043,10 @@ class AdminController
      */
     public function listMCPServers(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureMCPSchema();
 
@@ -2133,6 +2215,10 @@ class AdminController
      */
     public function createMCPServer(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureMCPSchema();
 
@@ -2221,6 +2307,10 @@ class AdminController
      */
     public function updateMCPServer(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $input = $request['body'];
 
@@ -2307,6 +2397,10 @@ class AdminController
      */
     public function toggleMCPServer(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $input = $request['body'];
 
@@ -2353,6 +2447,10 @@ class AdminController
      */
     public function deleteMCPServer(array $request, int $serverId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             if (!$serverId) {
                 return [
@@ -2398,6 +2496,10 @@ class AdminController
      */
     public function refreshMCPServerTools(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $input = $request['body'];
             $serverId = (int)($input['server_id'] ?? 0);
@@ -2465,6 +2567,10 @@ class AdminController
      */
     public function getUserMCPServers(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             // 1. Resolve the user's package allowlist.
             $resolver = new PackageResolver($this->db);
@@ -2544,6 +2650,10 @@ class AdminController
      */
     public function setUserMCPOverride(array $request, int $userId, int $serverId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $body = $request['body'] ?? [];
             if (!array_key_exists('allowed', $body)) {
@@ -2590,6 +2700,10 @@ class AdminController
      */
     public function clearUserMCPOverride(array $request, int $userId, int $serverId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $stmt = $this->db->prepare("DELETE FROM user_mcp_overrides WHERE user_id = ? AND server_id = ?");
             $stmt->execute([$userId, $serverId]);
@@ -2614,6 +2728,10 @@ class AdminController
      */
     public function getCosts(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureCostsTableExists();
 
@@ -2674,6 +2792,10 @@ class AdminController
      */
     public function refreshAllCosts(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureCostsTableExists();
 
@@ -2745,6 +2867,10 @@ class AdminController
      */
     public function refreshProviderCosts(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $input = $request['body'];
             $category = $input['category'] ?? '';
@@ -2833,6 +2959,10 @@ class AdminController
      */
     public function getUserCosts(array $request, int $userId): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         if ($userId <= 0) {
             return [
                 'success' => false,
@@ -3217,6 +3347,10 @@ Return ONLY the JSON array, no explanation or markdown.";
      */
     public function getExchangeRates(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureExchangeRatesTableExists();
 
@@ -3258,6 +3392,10 @@ Return ONLY the JSON array, no explanation or markdown.";
      */
     public function refreshExchangeRates(array $request): array
     {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
         try {
             $this->ensureExchangeRatesTableExists();
 

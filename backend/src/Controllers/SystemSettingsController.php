@@ -17,6 +17,8 @@ use Exception;
  */
 class SystemSettingsController
 {
+    use RequiresAdmin;
+
     private PDO $db;
     private array $config;
 
@@ -53,37 +55,6 @@ class SystemSettingsController
         $this->priceColumnsEnsured = true;
     }
 
-    /**
-     * Verify that the current user has admin role
-     * Only admins can access system LLM settings
-     */
-    private function requireAdmin(array $request): ?array
-    {
-        $userId = $request['user_id'] ?? null;
-
-        if (!$userId) {
-            return [
-                'success' => false,
-                'error' => 'Authentication required',
-                'status_code' => 401
-            ];
-        }
-
-        $sql = "SELECT role FROM users WHERE id = :user_id";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([':user_id' => $userId]);
-        $user = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        if (!$user || $user['role'] !== 'admin') {
-            return [
-                'success' => false,
-                'error' => 'Admin access required',
-                'status_code' => 403
-            ];
-        }
-
-        return null;
-    }
 
     /**
      * Get all LLM providers
