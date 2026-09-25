@@ -29,6 +29,25 @@
     const KEY = 'ufs-root-handle';
     const DB_VERSION = 1;
 
+    // Where deployRunner fetches the runner's source from, derived from THIS
+    // script's own URL rather than written as a relative path.
+    //
+    // It used to be the bare string 'langchain_runner', which a browser
+    // resolves against the PAGE, not against this file. The wizard runs on
+    // /gpt/frontend/index.html, so that asked for
+    // /gpt/frontend/langchain_runner/install-manifest.json -- a 404 in every
+    // environment, reported to the user as "Could not install the Python
+    // runner here" with no hint that the path was wrong. This file is always
+    // at <app root>/frontend/assets/js/local-fs.js, so three levels up is the
+    // app root wherever the app is mounted.
+    const RUNNER_SOURCE_URL = (function () {
+        try {
+            const self = document.currentScript && document.currentScript.src;
+            if (self) return new URL('../../../langchain_runner', self).href;
+        } catch (e) { /* fall through */ }
+        return 'langchain_runner';
+    })();
+
     /**
      * Open (or create) the local IndexedDB used to persist the directory
      * handle. FileSystemDirectoryHandle is structured-clonable so we can
@@ -249,7 +268,7 @@
     async function deployRunner(rootHandleOpt = null, baseUrl = null) {
         const root = rootHandleOpt || await getRootHandle();
         if (!root) return { written: [], skipped: [], error: 'no folder granted' };
-        const base = baseUrl || (window.APP_RUNNER_SOURCE_URL || 'langchain_runner');
+        const base = baseUrl || (window.APP_RUNNER_SOURCE_URL || RUNNER_SOURCE_URL);
         const out = { written: [], skipped: [], error: null };
         try {
             const manRes = await fetch(`${base}/install-manifest.json`, { cache: 'no-store' });
