@@ -21,6 +21,13 @@ if [ ! -f "$SECRETS" ]; then
     } > "$SECRETS"
     chmod 600 "$SECRETS"
 fi
+
+# Backfill keys added after this volume was created. A volume from an earlier
+# version has only JWT_SECRET and APP_KEY_SECRET, and `set -u` turns the
+# missing one into a crash loop on upgrade rather than a clear error.
+grep -q '^GPT_AUTO_PASSWORD=' "$SECRETS" || \
+    echo "GPT_AUTO_PASSWORD=$(openssl rand -hex 9)" >> "$SECRETS"
+
 # shellcheck disable=SC1090
 . "$SECRETS"
 
@@ -102,6 +109,17 @@ EOF
 
     if [ "${GPT_EDITION:-}" = "individual" ]; then
         log "individual edition: enabling auto-login"
+        # Escape backslash first, then the single quote, before interpolating
+        # into the single-quoted JS string literals below. Unescaped, a
+        # password (or email) containing "'" produces invalid JavaScript --
+        # window.APP_CONFIG never gets defined and every guard silently
+        # no-ops -- and one containing "\" corrupts the value instead.
+        js_auto_email=${GPT_ADMIN_EMAIL:-admin@localhost}
+        js_auto_email=${js_auto_email//\\/\\\\}
+        js_auto_email=${js_auto_email//\'/\\\'}
+        js_auto_pass=$GPT_ADMIN_PASSWORD
+        js_auto_pass=${js_auto_pass//\\/\\\\}
+        js_auto_pass=${js_auto_pass//\'/\\\'}
         cat >> "$APP/frontend/assets/js/config.js" <<EOF
 
 /* --- added by the container entrypoint: gpt-auto-login ---
@@ -116,11 +134,39 @@ EOF
  */
 (function () {
     if (window.APP_CONFIG.GPT_EDITION !== 'individual') { return; }
-    try { if (localStorage.getItem('token')) { return; } } catch (e) { return; }
 
-    var autoEmail = '${GPT_ADMIN_EMAIL:-admin@localhost}';
-    var autoPass  = '${GPT_ADMIN_PASSWORD}';
     var base = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
+
+    // A token merely EXISTING is not enough: after a fresh install (new
+    // JWT_SECRET, new database) the browser can still hold an old one, which
+    // fails validation everywhere else in the app -- so treating its presence
+    // alone as "already signed in" strands the user on a login screen this
+    // edition is not supposed to have. Verify it first; only trust it if it
+    // verifies.
+    try {
+        var existingToken = localStorage.getItem('token');
+        if (existingToken) {
+            var vxhr = new XMLHttpRequest();
+            vxhr.open('POST', base + '/auth', false); // synchronous, same as the
+            vxhr.setRequestHeader('Content-Type', 'application/json'); // login
+            vxhr.setRequestHeader('Authorization', 'Bearer ' + existingToken); // call below
+            var stillValid = false;
+            try {
+                vxhr.send(JSON.stringify({ action: 'verify' }));
+                stillValid = vxhr.status === 200 && JSON.parse(vxhr.responseText).success;
+            } catch (e) { stillValid = false; }
+            if (stillValid) { return; }
+            // Stale -- clear it so the login below isn't shadowed by leftover keys.
+            localStorage.removeItem('token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user');
+            localStorage.removeItem('access');
+            localStorage.removeItem('activeEmail');
+        }
+    } catch (e) { return; }
+
+    var autoEmail = '${js_auto_email}';
+    var autoPass  = '${js_auto_pass}';
 
     var xhr = new XMLHttpRequest();
     xhr.open('POST', base + '/auth/login', false); // synchronous on purpose:
