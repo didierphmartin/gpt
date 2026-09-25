@@ -72,6 +72,37 @@ count=$(echo "$cfg2" | grep -cF "container-generated below this line" || true)
 count=$(echo "$cfg2" | grep -cF "gpt-auto-login" || true)
 [ "$count" -eq 1 ] || fail "after two restarts, the auto-login block appears $count times (expected 1)"
 
+# --- upgrade path: a volume from before GPT_AUTO_PASSWORD existed -----------
+# secrets.env on a volume created by an earlier version holds only
+# JWT_SECRET and APP_KEY_SECRET. `set -u` used to turn the missing
+# GPT_AUTO_PASSWORD into "unbound variable" -> exit 1 -> restart-loop, with
+# `down -v` at the top of every other test meaning nothing else in this suite
+# could ever see it. Strip the key back out of the running volume and reboot
+# to reproduce that exact shape, then require the container to reach healthy.
+web_cid=$(docker compose ps -q web)
+[ -n "$web_cid" ] || fail "web container not found for the upgrade-path check"
+docker compose exec -T web sh -c \
+  "grep -v '^GPT_AUTO_PASSWORD=' /run/gpt/secrets.env > /run/gpt/secrets.env.old && mv /run/gpt/secrets.env.old /run/gpt/secrets.env" \
+  || fail "could not roll back secrets.env to its pre-upgrade shape"
+docker compose exec -T web grep -q '^GPT_AUTO_PASSWORD=' /run/gpt/secrets.env \
+  && fail "secrets.env still has GPT_AUTO_PASSWORD after stripping it"
+
+docker compose restart web >/dev/null 2>&1 || fail "restart failed (upgrade-path check)"
+healthy=0
+for i in $(seq 1 60); do
+  sleep 2
+  [ "$(docker compose ps --format '{{.Health}}' web 2>/dev/null)" = "healthy" ] && { healthy=1; break; }
+done
+# A crash-looping container ("unbound variable" -> exit 1 -> restart:
+# unless-stopped) never reports a Health value at all -- it just keeps
+# restarting -- so failing to reach "healthy" within the loop above is
+# exactly the regression this test exists to catch.
+[ "$healthy" -eq 1 ] || fail "web did not reach healthy after an upgrade-shaped secrets.env (state: $(docker compose ps --format '{{.State}}' web 2>/dev/null))"
+docker compose exec -T web grep -q '^GPT_AUTO_PASSWORD=' /run/gpt/secrets.env \
+  || fail "GPT_AUTO_PASSWORD was not backfilled into secrets.env"
+
+echo "PASS: an upgrade-shaped secrets.env (no GPT_AUTO_PASSWORD) still boots healthy"
+
 # --- registration is unavailable off-hosted ---------------------------------
 login_html=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/login.html")
 echo "$login_html" | grep -q "gpt-edition-hide-register" \
@@ -82,3 +113,33 @@ echo "$reg_html" | grep -q "gpt-edition-guard" \
   || fail "register.html has no edition guard"
 
 echo "PASS: the edition reaches the browser"
+
+# --- hosted: GPT_EDITION unset must take NO new code path -------------------
+# Every frontend branch in this feature tests for GPT_EDITION being present,
+# so production (which never sets it) must serve a config.js byte-identical
+# to the example -- not merely "look right". A stray "individual" default
+# picked up from a leftover .env, or an edition block that renders even when
+# the variable is blank, both need to fail here.
+docker compose down -v >/dev/null 2>&1 || true
+GPT_EDITION= docker compose up -d --build >/dev/null 2>&1 \
+  || fail "compose up failed (hosted)"
+
+for i in $(seq 1 60); do
+  sleep 2
+  [ "$(docker compose ps --format '{{.Health}}' web 2>/dev/null)" = "healthy" ] && break
+done
+
+hosted_cfg=/tmp/edition-hosted-config.js
+curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/assets/js/config.js" -o "$hosted_cfg" \
+  || fail "config.js is not served (hosted)"
+
+cmp -s "$hosted_cfg" frontend/assets/js/config.example.js \
+  || fail "hosted config.js differs from config.example.js -- the edition path leaked into production"
+
+sentinel_count=$(grep -cF "container-generated below this line" "$hosted_cfg" || true)
+[ "$sentinel_count" -eq 0 ] \
+  || fail "hosted config.js carries the container-generated sentinel ($sentinel_count occurrences)"
+
+rm -f "$hosted_cfg"
+
+echo "PASS: hosted (GPT_EDITION unset) config.js is byte-identical to config.example.js"

@@ -11,6 +11,12 @@ cd "$(dirname "$0")/../.."
 
 export COMPOSE_PROJECT_NAME=gpt-test
 export GPT_PORT=18080
+# Override any GPT_EDITION a developer's own gitignored .env sets (the
+# .env.example this repo ships now defaults it to "individual"). Without
+# this, every phase below -- including no-keys-test.sh and
+# persistence-test.sh, whose whole point is the HOSTED behaviour -- silently
+# runs as individual instead, and nothing catches it.
+export GPT_EDITION=
 
 # Always tear down, including on failure. Without this, `set -e` aborts the
 # run at the failing test and the final `down -v` at the bottom never executes
