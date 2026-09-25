@@ -8,7 +8,13 @@ FROM node:20-bookworm-slim
 WORKDIR /admin
 COPY package.json package-lock.json ./
 RUN npm ci
+# gpt_admin has no .dockerignore, so this COPY brings in the host's
+# node_modules (and .git, and dist/) too -- Docker merges directories, so it
+# silently overlays npm ci's output with whatever platform-specific packages
+# happen to be on the host, defeating the lockfile. Remove it and reinstall
+# from the lockfile alone before building.
 COPY . .
+RUN rm -rf node_modules && npm ci && npm run build
 # base: './' in its vite config means the bundle works from any URL path, which
 # is what lets it be served at /gpt_admin/ beside gpt at /gpt/.
-RUN npm run build          # "tsc -b && vite build" -> /admin/dist
+# "npm run build" runs "tsc -b && vite build" -> /admin/dist
