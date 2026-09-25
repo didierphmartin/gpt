@@ -56,6 +56,7 @@ for i in $(seq 1 60); do
 done
 
 ./docker/tests/no-keys-test.sh
+./docker/tests/runner-source-test.sh
 ./docker/tests/persistence-test.sh
 
 echo
