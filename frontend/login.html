@@ -349,6 +349,30 @@
     <script src="assets/js/auth.js?v=20260820-sso-login"></script>
 
     <script>
+      /* gpt-already-signed-in: a token can be sitting in localStorage from a
+         previous session (in the individual edition, auto-login writes one
+         on every first visit). Without this, a user who is actually still
+         signed in sits on a sign-in form instead of going straight in --
+         register.html already redirects away when signed in; login.html did
+         not. Verify rather than trust the mere presence of a token: a stale
+         one (e.g. after the database was recreated) must not block a fresh
+         login. */
+      (function () {
+        var token;
+        try { token = window.accountStore && window.accountStore.getToken(); } catch (e) { token = null; }
+        if (!token) { return; }
+        var base = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
+        fetch(base + '/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ action: 'verify' })
+        }).then(function (r) { return r.ok ? r.json() : { success: false }; })
+          .then(function (data) { if (data && data.success) { location.replace('index.html'); } })
+          .catch(function () { /* network hiccup: let the user sign in normally */ });
+      })();
+    </script>
+
+    <script>
       /* gpt-edition-hide-register: self-hosted editions have no self-signup.
          Guarded on GPT_EDITION being PRESENT, so the hosted deployment — which
          never sets it — keeps the link and takes no new code path. */
