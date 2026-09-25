@@ -54,10 +54,19 @@
     // ---- translations ---------------------------------------------
     const STRINGS = {
         en: {
+            'welcome.what':   'Synergy brings two things together in one place: a chatbot that speaks to every major AI provider, and a visual workflow builder for the work that is too involved for a single conversation.',
+            'welcome.chat':   'Chat with Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi and more through one interface. Switch model mid-conversation, compare two answers side by side, attach documents, and talk to it out loud.',
+            'welcome.flows':  'Then go further: build multi-step workflows on a canvas, where agents use tools, search the web, read your files and hand work to one another. Compile any of them to Python and run it on your own machine.',
+            'welcome.bkeys':  'Add your own AI provider keys — nothing is shipped with this app.',
+            'step.lang':      'Language',
+            'step.welcome':   'Welcome',
+            'step.folder':    'Folder',
+            'step.keys':      'API keys',
+            'step.install':   'Install',
             'lang.title':     'Choose your language',
             'lang.continue':  'Continue',
             'welcome.title':  'Welcome to Synergy AI Chat',
-            'welcome.intro':  "Let's set up Synergy in two quick steps.",
+            'welcome.intro':  'A few quick steps and you are ready.',
             'welcome.b1':     'Pick a root folder where Synergy will read and write files.',
             'welcome.b2':     'Install Synergy as a local app on your device.',
             'welcome.next':   'Get started',
@@ -93,10 +102,19 @@
             'testBanner':     'Test mode — wizard shown every visit for iteration.'
         },
         fr: {
+            'welcome.what':   "Synergy réunit deux outils au même endroit : un agent conversationnel relié à tous les grands fournisseurs d'IA, et un constructeur visuel de workflows pour les tâches trop complexes pour une simple conversation.",
+            'welcome.chat':   "Discutez avec Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi et d'autres depuis une seule interface. Changez de modèle en cours de conversation, comparez deux réponses côte à côte, joignez des documents et parlez-lui à voix haute.",
+            'welcome.flows':  "Allez plus loin : construisez des workflows en plusieurs étapes sur un canevas, où des agents utilisent des outils, cherchent sur le web, lisent vos fichiers et se transmettent le travail. Compilez-les en Python et exécutez-les sur votre machine.",
+            'welcome.bkeys':  "Ajouter vos propres clés de fournisseur IA — aucune n'est fournie avec l'application.",
+            'step.lang':      'Langue',
+            'step.welcome':   'Bienvenue',
+            'step.folder':    'Dossier',
+            'step.keys':      'Clés API',
+            'step.install':   'Installation',
             'lang.title':     'Choisissez votre langue',
             'lang.continue':  'Continuer',
             'welcome.title':  'Bienvenue sur Synergy AI Chat',
-            'welcome.intro':  'Configurons Synergy en deux étapes rapides.',
+            'welcome.intro':  'Quelques étapes rapides et tout est prêt.',
             'welcome.b1':     'Choisir un dossier racine où Synergy lira et écrira des fichiers.',
             'welcome.b2':     'Installer Synergy comme une application locale sur votre appareil.',
             'welcome.next':   'Commencer',
@@ -132,10 +150,19 @@
             'testBanner':     "Mode test — l'assistant s'affiche à chaque visite pour itération."
         },
         es: {
+            'welcome.what':   'Synergy reúne dos herramientas en un mismo lugar: un chatbot conectado a los principales proveedores de IA y un constructor visual de flujos de trabajo para las tareas demasiado complejas para una sola conversación.',
+            'welcome.chat':   'Conversa con Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi y otros desde una sola interfaz. Cambia de modelo a mitad de conversación, compara dos respuestas lado a lado, adjunta documentos y háblale en voz alta.',
+            'welcome.flows':  'Y ve más lejos: crea flujos de trabajo de varios pasos en un lienzo, donde los agentes usan herramientas, buscan en la web, leen tus archivos y se pasan el trabajo entre sí. Compílalos a Python y ejecútalos en tu propia máquina.',
+            'welcome.bkeys':  'Añadir tus propias claves de proveedor de IA: la aplicación no incluye ninguna.',
+            'step.lang':      'Idioma',
+            'step.welcome':   'Bienvenida',
+            'step.folder':    'Carpeta',
+            'step.keys':      'Claves API',
+            'step.install':   'Instalación',
             'lang.title':     'Elige tu idioma',
             'lang.continue':  'Continuar',
             'welcome.title':  'Bienvenido a Synergy AI Chat',
-            'welcome.intro':  'Configuremos Synergy en dos pasos rápidos.',
+            'welcome.intro':  'Unos pocos pasos rápidos y estará listo.',
             'welcome.b1':     'Elegir una carpeta raíz donde Synergy leerá y escribirá archivos.',
             'welcome.b2':     'Instalar Synergy como una aplicación local en tu dispositivo.',
             'welcome.next':   'Empezar',
@@ -239,10 +266,23 @@
     const isFSASupported = () => 'showDirectoryPicker' in window;
 
     // ---- snooze ---------------------------------------------------
+    // In a self-hosted edition this overlay is not an install nag — it is the
+    // ONLY onboarding there is: it grants the local folder, installs the Python
+    // runner, and collects the user's own provider keys. Without it the app is
+    // unusable, so the install-prompt heuristics must not hide it. A 7-day
+    // snooze from a casual dismissal, or an already-installed PWA, would leave
+    // a first-time user staring at an app they cannot configure.
+    //
+    // Only an explicit "don't show me again" still suppresses it, and Settings
+    // can re-open it from there.
+    const isOnboardingEdition = () =>
+        !!(window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION);
+
     const isSnoozed = () => {
         if (TEST_MODE) return false;
         try {
             if (window.localStorage.getItem(NEVER_KEY) === '1') return true;
+            if (isOnboardingEdition()) return false;
             const ts = parseInt(window.localStorage.getItem(SNOOZE_KEY) || '0', 10);
             return ts > 0 && (Date.now() - ts) < SNOOZE_MS;
         } catch { return false; }
@@ -285,10 +325,21 @@
         const overlay = document.createElement('div');
         overlay.id = 'pwa-install-overlay';
         overlay.className = 'fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm';
+        // Two columns, modelled on video-edit's first-run wizard: the flow on
+        // the left, artwork on the right that drops away on narrow screens.
+        // min-h keeps the card from resizing as steps change length, which
+        // otherwise makes the whole dialog jump on every Next.
         overlay.innerHTML = `
-            <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-7">
-                <div data-pwa-content></div>
-                ${TEST_MODE ? '<p class="text-[10px] text-gray-400 mt-4 text-center" data-pwa-testbanner></p>' : ''}
+            <div class="bg-zinc-800 rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden text-gray-200">
+                <div class="px-7 pt-6" data-pwa-steps></div>
+                <div class="flex gap-7 px-7 pt-6 pb-7 min-h-[24rem]">
+                    <div class="flex-1 min-w-0 flex flex-col" data-pwa-content></div>
+                    <div class="hidden md:flex w-[38%] items-center" aria-hidden="true">
+                        <img src="assets/images/wizard_illustration.png" alt=""
+                             class="w-full rounded-xl shadow-lg">
+                    </div>
+                </div>
+                ${TEST_MODE ? '<p class="text-[10px] text-gray-500 pb-4 text-center" data-pwa-testbanner></p>' : ''}
             </div>
         `;
         document.body.appendChild(overlay);
@@ -304,10 +355,41 @@
         return overlay;
     }
 
+    // The ordered flow, so the step strip and the strip alone decides what the
+    // user is told the sequence is. `keys` only exists in a self-hosted
+    // edition — hosted users rent LLM time and have no keys to enter.
+    const stepOrder = () =>
+        SHOW_KEYS_STEP
+            ? ['lang', 'welcome', 'folder', 'keys', 'install']
+            : ['lang', 'welcome', 'folder', 'install'];
+
+    // A progress strip: one tab per step, underlined. Without it the wizard
+    // gives no sense of how long it is or how far in you are — the single
+    // biggest thing video-edit's version has that ours did not.
+    function renderSteps() {
+        const order = stepOrder();
+        const at    = order.indexOf(wizardState.step);
+
+        // Numbered, like video-edit's: "1. Welcome   2. Local storage   …".
+        // The number is what tells someone how long the flow is before they
+        // commit to starting it; an unnumbered strip does not.
+        return `<div class="flex">` + order.map((s, i) => {
+            const state = i === at
+                ? 'text-white border-blue-500'
+                : (i < at ? 'text-blue-300 border-blue-900' : 'text-gray-500 border-zinc-700');
+            return `<span class="flex-1 text-center text-xs pb-2.5 border-b-2 ${state}">
+                        ${i + 1}. ${esc(t('step.' + s))}
+                    </span>`;
+        }).join('') + `</div>`;
+    }
+
     function render() {
         const overlay = buildShell();
         const card    = overlay.querySelector('[data-pwa-content]');
         if (!card) return;
+
+        const strip = overlay.querySelector('[data-pwa-steps]');
+        if (strip) strip.innerHTML = renderSteps();
 
         const step = wizardState.step;
         if      (step === 'lang')    card.innerHTML = renderLang();
@@ -330,10 +412,10 @@
             <div class="flex items-start gap-4 mb-4">
                 <img src="assets/images/icon-192.png" alt="" class="w-14 h-14 rounded-xl shadow-sm flex-shrink-0" />
                 <div class="flex-1 min-w-0">
-                    <h2 class="text-lg font-semibold text-gray-900">${esc(t(titleKey))}</h2>
+                    <h2 class="text-lg font-semibold text-gray-100">${esc(t(titleKey))}</h2>
                 </div>
                 <button data-pwa-action="close" aria-label="${esc(t('close'))}"
-                    class="text-gray-400 hover:text-gray-600 flex-shrink-0">
+                    class="text-gray-400 hover:text-gray-400 flex-shrink-0">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
@@ -349,7 +431,7 @@
         const buttons = opts.map(o => `
             <button data-pwa-action="lang" data-lang="${o.code}"
                 class="w-full text-left px-4 py-3 text-sm font-medium border rounded-md transition
-                       ${currentLang === o.code ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-gray-200 hover:bg-gray-50 text-gray-900'}">
+                       ${currentLang === o.code ? 'border-blue-500 bg-blue-500/15 text-blue-100' : 'border-zinc-700 hover:bg-zinc-700 text-gray-100'}">
                 ${esc(o.label)}
             </button>
         `).join('');
@@ -370,14 +452,20 @@
         const num = (n) => `<span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-semibold flex items-center justify-center mt-0.5">${n}</span>`;
         return `
             ${header('welcome.title')}
-            <p class="text-sm text-gray-700 mb-4">${esc(t('welcome.intro'))}</p>
-            <ol class="space-y-2 text-sm text-gray-700 mb-5">
+
+            <p class="text-sm text-gray-300 leading-relaxed mb-3">${esc(t('welcome.what'))}</p>
+            <p class="text-sm text-gray-400 leading-relaxed mb-3">${esc(t('welcome.chat'))}</p>
+            <p class="text-sm text-gray-400 leading-relaxed mb-5">${esc(t('welcome.flows'))}</p>
+
+            <p class="text-sm text-gray-300 mb-2">${esc(t('welcome.intro'))}</p>
+            <ol class="space-y-2 text-sm text-gray-300 mb-5">
                 <li class="flex items-start gap-3">${num(1)}<span>${esc(t('welcome.b1'))}</span></li>
-                <li class="flex items-start gap-3">${num(2)}<span>${esc(t('welcome.b2'))}</span></li>
+                ${SHOW_KEYS_STEP ? `<li class="flex items-start gap-3">${num(2)}<span>${esc(t('welcome.bkeys'))}</span></li>` : ''}
+                <li class="flex items-start gap-3">${num(SHOW_KEYS_STEP ? 3 : 2)}<span>${esc(t('welcome.b2'))}</span></li>
             </ol>
             <div class="flex justify-between">
                 <button data-pwa-action="back" data-from="welcome"
-                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                    class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
                 <button data-pwa-action="next" data-from="welcome"
@@ -432,18 +520,18 @@
         } else if (picked) {
             // Folder chosen: drop the picker zone, show the selection prominently.
             body = `
-            <p class="text-sm text-gray-700 mb-4">${esc(t('folder.desc'))}</p>
+            <p class="text-sm text-gray-300 mb-4">${esc(t('folder.desc'))}</p>
             <div class="mb-5">
-                <div class="flex items-center gap-3 px-4 py-4 border-2 border-blue-500 bg-blue-50 rounded-lg">
-                    <svg class="w-8 h-8 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+                <div class="flex items-center gap-3 px-4 py-4 border-2 border-blue-500 bg-blue-500/15 rounded-lg">
+                    <svg class="w-8 h-8 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
                     <div class="flex-1 min-w-0">
-                        <p class="text-[11px] font-semibold uppercase tracking-wide text-blue-600">${esc(t('folder.picked'))}</p>
-                        <p class="text-lg font-semibold text-gray-900 truncate" title="${esc(picked)}">${esc(picked)}</p>
+                        <p class="text-[11px] font-semibold uppercase tracking-wide text-blue-400">${esc(t('folder.picked'))}</p>
+                        <p class="text-lg font-semibold text-gray-100 truncate" title="${esc(picked)}">${esc(picked)}</p>
                     </div>
                     <svg class="w-6 h-6 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 </div>
                 <button data-pwa-action="pick-folder"
-                    class="mt-2 text-xs font-medium text-blue-600 hover:text-blue-800 underline">
+                    class="mt-2 text-xs font-medium text-blue-400 hover:text-blue-200 underline">
                     ${esc(t('folder.change'))}
                 </button>
                 ${renderRunnerStatus()}
@@ -451,10 +539,10 @@
         `;
         } else {
             body = `
-            <p class="text-sm text-gray-700 mb-4">${esc(t('folder.desc'))}</p>
+            <p class="text-sm text-gray-300 mb-4">${esc(t('folder.desc'))}</p>
             <div class="mb-5">
                 <button data-pwa-action="pick-folder"
-                    class="w-full px-4 py-3 text-sm font-medium border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-blue-50 rounded-md transition text-gray-700">
+                    class="w-full px-4 py-3 text-sm font-medium border-2 border-dashed border-zinc-600 hover:border-blue-500 hover:bg-blue-500/10 rounded-md transition text-gray-300">
                     ${esc(t('folder.pick'))}
                 </button>
             </div>
@@ -467,7 +555,7 @@
             ${body}
             <div class="flex justify-between">
                 <button data-pwa-action="back" data-from="folder"
-                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                    class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
                 <button data-pwa-action="next" data-from="folder"
@@ -482,28 +570,28 @@
     function renderKeys() {
         const rows = KEY_PROVIDERS.map((p) => `
             <div class="mb-3">
-                <label class="block text-xs font-medium text-gray-700 mb-1">
+                <label class="block text-xs font-medium text-gray-300 mb-1">
                     ${esc(p.label)} <span class="text-gray-400 font-normal">— ${esc(p.where)}</span>
                 </label>
                 <input type="password" autocomplete="off" spellcheck="false" data-provider="${esc(p.key)}"
-                    class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    class="w-full px-3 py-2 text-sm border border-zinc-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
         `).join('');
 
         return `
             ${header('keys.title')}
-            <p class="text-sm text-gray-700 mb-2">${esc(t('keys.intro'))}</p>
-            <p class="text-xs text-gray-500 mb-4">${esc(t('keys.where'))}</p>
+            <p class="text-sm text-gray-300 mb-2">${esc(t('keys.intro'))}</p>
+            <p class="text-xs text-gray-400 mb-4">${esc(t('keys.where'))}</p>
             <div class="max-h-64 overflow-y-auto pr-1 mb-2">${rows}</div>
             <p class="text-xs mb-3 min-h-[1em]" data-pwa-keys-msg></p>
             <div class="flex justify-between items-center">
                 <button data-pwa-action="back" data-from="keys"
-                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                    class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
                 <div class="flex gap-2">
                     <button data-pwa-action="next" data-from="keys"
-                        class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                        class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                         ${esc(t('keys.skip'))}
                     </button>
                     <button data-pwa-action="save-keys"
@@ -520,8 +608,8 @@
         const canInstall = !!deferredPrompt && !installed;
 
         const body = `
-            <p class="text-sm text-gray-700 mb-3">${esc(t('install.desc'))}</p>
-            <p class="text-xs text-gray-500 mb-5">${esc(t('install.note'))}</p>
+            <p class="text-sm text-gray-300 mb-3">${esc(t('install.desc'))}</p>
+            <p class="text-xs text-gray-400 mb-5">${esc(t('install.note'))}</p>
             ${installed ? `
                 <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4 text-sm text-green-900 text-center font-medium">
                     ${esc(t('install.already'))}
@@ -545,7 +633,7 @@
             ${body}
             <div class="flex justify-between">
                 <button data-pwa-action="back" data-from="install"
-                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition">
+                    class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
                 ${primaryBtn}
@@ -561,20 +649,20 @@
         overlay.id = 'pwa-install-overlay';
         overlay.className = 'fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm';
         overlay.innerHTML = `
-            <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-7">
+            <div class="bg-zinc-800 rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-7">
                 <div class="flex items-start gap-4 mb-4">
                     <img src="assets/images/icon-192.png" alt="" class="w-14 h-14 rounded-xl shadow-sm flex-shrink-0" />
                     <div class="flex-1 min-w-0">
-                        <h2 class="text-lg font-semibold text-gray-900">${esc(t('welcome.title'))}</h2>
+                        <h2 class="text-lg font-semibold text-gray-100">${esc(t('welcome.title'))}</h2>
                     </div>
                     <button data-pwa-action="close" aria-label="${esc(t('close'))}"
-                        class="text-gray-400 hover:text-gray-600 flex-shrink-0">
+                        class="text-gray-400 hover:text-gray-400 flex-shrink-0">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
-                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-900">
+                <div class="bg-blue-500/15 border border-blue-500/40 rounded-lg p-3 mb-4 text-sm text-blue-100">
                     <p class="font-medium mb-1">${esc(t('install.iosTitle'))}:</p>
-                    <ol class="list-decimal list-inside space-y-0.5 text-blue-800">
+                    <ol class="list-decimal list-inside space-y-0.5 text-blue-200">
                         <li>${esc(t('install.iosStep1'))}</li>
                         <li>${esc(t('install.iosStep2'))}</li>
                     </ol>
@@ -758,7 +846,11 @@
 
     // ---- entry ----------------------------------------------------
     function maybeShow() {
-        if (!TEST_MODE && isInstalled()) return;
+        // isInstalled() suppresses the INSTALL nag, which is right for the
+        // hosted app. In a self-hosted edition the same overlay carries the
+        // folder / runner / API-key setup, and someone who installed the PWA
+        // first still needs all of it — so only the explicit never-flag applies.
+        if (!TEST_MODE && !isOnboardingEdition() && isInstalled()) return;
         if (isSnoozed()) return;
 
         loadStoredLang();
