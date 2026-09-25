@@ -79,6 +79,8 @@
             'folder.change':  'Change folder…',
             'folder.runnerOk':      'Python runner installed in this folder. One step left — run this in a terminal, inside the folder you just picked:',
             'folder.runnerVenvNote':'Needed once. It builds the virtual environment; a browser cannot do that part.',
+            'folder.runnerCopy':    'Copy',
+            'folder.runnerCopied':  'Copied',
             'folder.runnerPartial': 'Some files could not be written:',
             'folder.runnerFailed':  'Could not install the Python runner here. Compiled workflows will not run until it is installed; the workflow editor\'s Setup item explains how.',
             'folder.picked':  'Selected:',
@@ -127,6 +129,8 @@
             'folder.change':  'Changer de dossier…',
             'folder.runnerOk':      'Runner Python installé dans ce dossier. Une étape reste — exécutez ceci dans un terminal, à l\'intérieur du dossier choisi :',
             'folder.runnerVenvNote':'Une seule fois. Cela construit l\'environnement virtuel ; un navigateur ne peut pas le faire.',
+            'folder.runnerCopy':    'Copier',
+            'folder.runnerCopied':  'Copié',
             'folder.runnerPartial': 'Certains fichiers n\'ont pas pu être écrits :',
             'folder.runnerFailed':  'Impossible d\'installer le runner Python ici. Les workflows compilés ne fonctionneront pas tant qu\'il n\'est pas installé ; voir Setup dans l\'éditeur de workflow.',
             'folder.picked':  'Sélectionné :',
@@ -175,6 +179,8 @@
             'folder.change':  'Cambiar carpeta…',
             'folder.runnerOk':      'Runner de Python instalado en esta carpeta. Queda un paso — ejecute esto en un terminal, dentro de la carpeta elegida:',
             'folder.runnerVenvNote':'Solo una vez. Crea el entorno virtual; un navegador no puede hacerlo.',
+            'folder.runnerCopy':    'Copiar',
+            'folder.runnerCopied':  'Copiado',
             'folder.runnerPartial': 'No se pudieron escribir algunos archivos:',
             'folder.runnerFailed':  'No se pudo instalar el runner de Python aquí. Los flujos compilados no se ejecutarán hasta instalarlo; vea Setup en el editor de flujos.',
             'folder.picked':  'Seleccionada:',
@@ -488,6 +494,35 @@
      * wizard that says nothing here leaves them to discover that at the first
      * failed Run.
      */
+    /** Quote a folder name for use as a single-quoted shell argument. */
+    function shQuote(s) {
+        return "'" + String(s).replace(/'/g, "'\\''") + "'";
+    }
+
+    /**
+     * The one command the user still has to run, made self-locating.
+     *
+     * It used to be a bare `cd python && …`, which assumes the terminal is
+     * already inside the granted folder. A terminal opens in $HOME, so the
+     * paste produced `cd: no such file or directory: python` and the wizard
+     * looked broken when the install had in fact succeeded.
+     *
+     * We cannot print an absolute path: the File System Access API withholds
+     * it on purpose, and the directory handle exposes only a name. So the
+     * command searches for the folder by that name and cds into it, which
+     * makes it correct from any working directory. `-print -quit` stops at the
+     * first match instead of walking all of $HOME, and the `-not -path` filter
+     * skips dot-directories such as Library caches.
+     *
+     * Limitation worth knowing: a folder granted from outside $HOME (an
+     * external volume, say) is not found by this search.
+     */
+    function venvCommand(folderName) {
+        return 'cd "$(find ~ -maxdepth 6 -type d -name ' + shQuote(folderName || 'synergyAI') +
+               " -not -path '*/.*' -print -quit)/python\" && " +
+               'python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt';
+    }
+
     function renderRunnerStatus() {
         const r = wizardState.runner;
         if (!r) return '';
@@ -500,10 +535,17 @@
         const partial = r.skipped.length
             ? `<div class="mt-1 text-[11px] text-yellow-800">${esc(t('folder.runnerPartial'))} ${esc(r.skipped.join(', '))}</div>`
             : '';
+        const cmd = venvCommand(wizardState.rootName);
         return `
             <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
                 <p class="text-xs text-green-900">${esc(t('folder.runnerOk'))}</p>
-                <pre class="mt-1 bg-gray-900 text-green-200 text-[11px] rounded p-2 select-all overflow-auto">cd python &amp;&amp; python3 -m venv .venv &amp;&amp; ./.venv/bin/pip install -r requirements.txt</pre>
+                <div class="mt-1 flex items-start gap-2">
+                    <pre class="flex-1 min-w-0 bg-gray-900 text-green-200 text-[11px] rounded p-2 select-all overflow-auto">${esc(cmd)}</pre>
+                    <button type="button" data-pwa-action="copy-cmd" data-cmd="${esc(cmd)}"
+                        class="flex-shrink-0 px-2 py-1 text-[11px] font-medium text-green-900 bg-green-200 hover:bg-green-300 border border-green-500 rounded transition">
+                        ${esc(t('folder.runnerCopy'))}
+                    </button>
+                </div>
                 <p class="mt-1 text-[11px] text-green-900">${esc(t('folder.runnerVenvNote'))}</p>
                 ${partial}
             </div>`;
@@ -715,6 +757,43 @@
             else if (from === 'keys')    wizardState.step = 'folder';
             else if (from === 'install') wizardState.step = SHOW_KEYS_STEP ? 'keys' : 'folder';
             render();
+            return;
+        }
+        if (action === 'copy-cmd') {
+            const cmd = target.dataset.cmd || '';
+            let ok = false;
+            // navigator.clipboard exists only in a secure context. localhost
+            // qualifies, but a container reached over the LAN at
+            // http://192.168.x.x:8080 does not -- and that is a normal way to
+            // run this. Fall back to the execCommand trick there rather than
+            // silently doing nothing.
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(cmd);
+                    ok = true;
+                }
+            } catch (e) { /* fall through to the fallback */ }
+            if (!ok) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = cmd;
+                    ta.setAttribute('readonly', '');
+                    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    ok = document.execCommand('copy');
+                    ta.remove();
+                } catch (e) { ok = false; }
+            }
+            // Confirm on the button itself. Re-rendering the step would rebuild
+            // the card and lose the feedback immediately, so touch only this
+            // label; the text is restored whether or not the copy worked, so a
+            // failure leaves the button usable (and the <pre> is select-all).
+            if (ok) {
+                const original = target.textContent;
+                target.textContent = t('folder.runnerCopied');
+                setTimeout(() => { target.textContent = original; }, 1500);
+            }
             return;
         }
         if (action === 'pick-folder') {
