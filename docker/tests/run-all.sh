@@ -22,6 +22,7 @@ trap 'docker compose down -v >/dev/null 2>&1 || true; docker rm -f gpt-image-tes
 echo "== static checks (no Docker needed) =="
 ./docker/tests/schema-test.sh
 ./docker/tests/seed-test.sh
+./docker/tests/wizard-keys-test.sh
 
 echo
 echo "== image =="
@@ -50,6 +51,11 @@ done
 
 ./docker/tests/no-keys-test.sh
 ./docker/tests/persistence-test.sh
+
+echo
+echo "== editions =="
+./docker/tests/edition-test.sh
+./docker/tests/corporate-test.sh
 
 echo
 echo "== cleaning up =="

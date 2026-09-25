@@ -178,6 +178,73 @@ never touches a real install's stack or its data -- but it does run
 `docker compose down -v` inside that project, so don't point `COMPOSE_PROJECT_NAME`
 or `GPT_PORT` at anything you care about when invoking it.
 
+> **Editing `frontend/` needs a real rebuild, not just `up -d --build`.**
+> `frontend/` is `COPY`'d into the `web` image at build time. If the image
+> already exists, plain `docker compose up -d --build` can decide nothing
+> changed and keep serving the old files even after a hard refresh. Force it:
+> ```bash
+> docker compose build web && docker compose up -d --force-recreate web
+> ```
+
+### Editions
+
+The same stack runs three ways. `GPT_EDITION` in `.env` picks one.
+
+| | individual | corporate | hosted |
+|---|---|---|---|
+| Sign-in | none — the container signs you in, first-run wizard follows | yes | yes |
+| LLM keys | yours, entered in the wizard | yours | included |
+| User management | single user | gpt_admin | — |
+| Licence | free (PolyForm Noncommercial) | commercial — contact us | subscription |
+
+**Individual** — the default in the `.env` this repo ships with. No account,
+no password to copy from a log: the container signs you in and the first-run
+wizard asks for a folder, the Python runner, and your own provider keys.
+
+```bash
+docker compose up -d --build
+```
+
+**Corporate** — adds gpt_admin for user management, and everyone signs in.
+Set the first admin in `.env` **before** the first start; that account is
+created once and is how every other user gets created.
+
+```bash
+# in .env
+GPT_EDITION=corporate
+GPT_ADMIN_EMAIL=you@company.com
+GPT_ADMIN_PASSWORD=<choose one>
+GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
+```
+
+The build is **three commands, not one** — Docker cannot `COPY` from outside
+a build's own context, so gpt_admin (a separate checkout) has to be built
+into its own image first:
+
+```bash
+docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
+docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
+```
+
+gpt is served at `/gpt/` and gpt_admin at `/gpt_admin/` on the **same
+origin**, so signing in once covers both.
+
+> **`frontend/assets/js/config.js` is regenerated on every boot, in both
+> editions.** The entrypoint rewrites it from the committed example plus a
+> container-generated section (edition marker, auto-login) on every start
+> whenever `GPT_EDITION` is set. Any hand-edit made inside a running
+> container — including the voice and Firebase placeholders — is discarded
+> on the next restart. There is currently no supported way to set those keys
+> from inside an edition container; set them before building the image, or
+> accept that they reset.
+
+> The corporate edition needs the **gpt_admin** repository, which is **not
+> public** — so budget for that before trying to build it. Commercial use of
+> either edition requires a licence — see [LICENSE](LICENSE) and contact the
+> maintainer. Individuals using this for themselves need nothing beyond this
+> repository (PolyForm Noncommercial).
+
 Prefer to install the pieces yourself, or already run Apache and MySQL? Carry on
 below.
 
