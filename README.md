@@ -137,6 +137,15 @@ stack deliberately ships without one, and chat does nothing until you add yours.
 Copy `.env.example` to `.env` first if you want a different port, database
 credentials or admin email.
 
+> **Warning: that port is open to your whole network, not just this machine.**
+> `docker compose up` publishes on `0.0.0.0`, so anyone who can reach
+> `GPT_PORT` on your LAN — not only `localhost` — can open the same URL, and
+> in the individual edition (see *Editions* below) that means signing in as
+> admin with no password prompt at all. The admin password is also printed
+> in plain text to `docker compose logs web`. If this host is reachable by
+> people you don't trust, set `GPT_BIND=127.0.0.1` in `.env` to restrict it
+> to localhost.
+
 **What the container does not include, on purpose:**
 
 - **The local Python runner.** Compiled workflows run as *you*, on *your*
@@ -197,24 +206,35 @@ The same stack runs three ways. `GPT_EDITION` in `.env` picks one.
 | User management | single user | gpt_admin | — |
 | Licence | free (PolyForm Noncommercial) | commercial — contact us | subscription |
 
-**Individual** — the default in the `.env` this repo ships with. No account,
-no password to copy from a log: the container signs you in and the first-run
-wizard asks for a folder, the Python runner, and your own provider keys.
+**Individual** — this repo ships only `.env.example`; copy it to `.env` to get
+this edition (that file's `GPT_EDITION=individual` is the default it sets,
+but with no `.env` at all `GPT_EDITION` is empty and you get **hosted**
+instead — sign-in screen included). No account, no password to copy from a
+log: the container signs you in and the first-run wizard asks for a folder,
+the Python runner, and your own provider keys.
 
 ```bash
+cp .env.example .env
 docker compose up -d --build
 ```
 
 **Corporate** — adds gpt_admin for user management, and everyone signs in.
 Set the first admin in `.env` **before** the first start; that account is
-created once and is how every other user gets created.
+created once and is how every other user gets created. `GPT_ADMIN_SRC` also
+needs to be `export`ed in the shell below — it names a build **context** on
+disk, which only the shell (not `.env`, which docker compose reads, and not
+either compose file, neither of which reference it) can pass to `docker build`.
 
 ```bash
 # in .env
 GPT_EDITION=corporate
 GPT_ADMIN_EMAIL=you@company.com
 GPT_ADMIN_PASSWORD=<choose one>
-GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
+```
+
+```bash
+# in your shell
+export GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
 ```
 
 The build is **three commands, not one** — Docker cannot `COPY` from outside

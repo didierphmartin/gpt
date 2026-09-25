@@ -51,7 +51,10 @@ services:
       # present, so production (which never sets it) takes no new code path.
       GPT_EDITION: ${GPT_EDITION:-}
     ports:
-      - "${GPT_PORT:-8080}:80"
+      # GPT_BIND defaults to 0.0.0.0 (every interface) to match prior
+      # behaviour. Set GPT_BIND=127.0.0.1 in .env to restrict this to
+      # localhost -- see the warning in .env.example and the README.
+      - "${GPT_BIND:-0.0.0.0}:${GPT_PORT:-8080}:80"
     volumes:
       # Per-install JWT_SECRET / APP_KEY_SECRET. Without this they would be
       # re-rolled on every recreate, invalidating every session and app key.
