@@ -105,7 +105,13 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "default_backend": os.getenv("GPT_BACKEND_URL", "")}
+    # Reports liveness only. This used to also return a "default_backend" read
+    # from GPT_BACKEND_URL, which nothing consumed: every endpoint that needs a
+    # backend takes backend_url from the request, and the frontend only calls
+    # /api/run-file, /api/workflow-server/* and this. Its one effect was to
+    # advertise a stale URL that looked authoritative and sent a reader (me)
+    # chasing a nonexistent misconfiguration.
+    return {"ok": True}
 
 
 @app.post("/api/workflows/list")

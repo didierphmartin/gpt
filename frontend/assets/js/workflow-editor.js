@@ -4550,6 +4550,35 @@ class WorkflowEditor {
     get _langgraphRunnerBase() { return 'http://127.0.0.1:8765'; }
 
     /**
+     * A `cd` into the runner's folder that works on any machine.
+     *
+     * The commands in these modals used to hardcode ~/Documents/synergyAI,
+     * which is one developer's layout. Anyone who picked a different folder in
+     * the setup wizard got a command that fails with "no such file or
+     * directory" at the moment they were told to run it.
+     *
+     * We cannot print an absolute path -- the File System Access API withholds
+     * it and the handle exposes only a name -- so the command locates the
+     * folder by that name, which we do know (localFolderName, set from the
+     * handle and restored with it). The find stops at the first match rather
+     * than walking all of $HOME, and skips dot-directories such as Library
+     * caches.
+     *
+     * @param {string} subpath appended inside the python/ folder, e.g. 'scripts/foo'
+     */
+    _runnerCd(subpath = '') {
+        // 'Selected folder' is a display placeholder from _connectLocalFs, not
+        // a real directory name; fall back to the documented default.
+        const name = (this.localFolderName && this.localFolderName !== 'Selected folder')
+            ? this.localFolderName
+            : 'synergyAI';
+        const quoted = "'" + String(name).replace(/'/g, "'\\''") + "'";
+        const tail = subpath ? '/' + subpath : '';
+        return 'cd "$(find ~ -maxdepth 6 -type d -name ' + quoted +
+               " -not -path '*/.*' -print -quit)/python" + tail + '"';
+    }
+
+    /**
      * Info modal — explains where the runtime lives and how to use it.
      * Pure documentation, no side effects. Mirrors the layout used by
      * _showRunnerSetupModal for visual consistency.
@@ -4796,7 +4825,7 @@ class WorkflowEditor {
             // and uvicorn does not reload. Say so — a bare "Not Found" here sends
             // people looking for a bug in the workflow instead of restarting.
             throw new Error('the local runner is running an older version (no workflow-server route). '
-                + 'Restart it — stop the running runner, then: cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py');
+                + `Restart it — stop the running runner, then: ${this._runnerCd()} && ./.venv/bin/python main.py`);
         }
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
@@ -5484,9 +5513,9 @@ class WorkflowEditor {
      * The direct command is offered second, for a run without the UI.
      */
     _showCompiledRunnerNotRunningModal(root, framework = null) {
-        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const startCmd = `${this._runnerCd()} && ./.venv/bin/python main.py`;
         const directCmd = root
-            ? `cd ~/Documents/synergyAI/python/scripts/${root} && ../../.venv/bin/python workflow.py`
+            ? `${this._runnerCd(`scripts/${root}`)} && ../../.venv/bin/python workflow.py`
             : '';
         const t = (k, fallback) => this.escapeHtml(this.t(k) || fallback);
         const backdrop = document.createElement('div');
@@ -5574,7 +5603,7 @@ class WorkflowEditor {
         // as the backend generator) — mirrors the MAF modal fix.
         const lgFile = ((this.currentWorkflowName || 'workflow')
             .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_langgraph.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${lgFile}`;
+        const directCmd = `${this._runnerCd()} && ./.venv/bin/python scripts/${lgFile}`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
