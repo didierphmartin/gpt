@@ -34,9 +34,12 @@
     const TEST_MODE = false;
 
     // Hosted users rent LLM time; they have no keys to enter. The individual
-    // and corporate editions ship with no keys by design, so this is where
-    // the user supplies their own.
-    const SHOW_KEYS_STEP = !!(window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION);
+    // edition ships with no keys by design, so this is where its one user
+    // supplies their own. Corporate ships with no keys either, but both
+    // endpoints this step calls require admin -- an ordinary corporate user
+    // would get 403s and be told to do it in Settings, which is also
+    // admin-only -- so only the admin can add them there, not here.
+    const SHOW_KEYS_STEP = !!(window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION === 'individual');
 
     // The eight providers the container seeds into system_llm_settings with an
     // empty api_key. This step fills those rows in; it does not create them.
@@ -415,7 +418,7 @@
                     <h2 class="text-lg font-semibold text-gray-100">${esc(t(titleKey))}</h2>
                 </div>
                 <button data-pwa-action="close" aria-label="${esc(t('close'))}"
-                    class="text-gray-400 hover:text-gray-400 flex-shrink-0">
+                    class="text-gray-400 hover:text-gray-200 flex-shrink-0">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
@@ -570,11 +573,11 @@
     function renderKeys() {
         const rows = KEY_PROVIDERS.map((p) => `
             <div class="mb-3">
-                <label class="block text-xs font-medium text-gray-300 mb-1">
+                <label for="pwa-key-${esc(p.key)}" class="block text-xs font-medium text-gray-300 mb-1">
                     ${esc(p.label)} <span class="text-gray-400 font-normal">— ${esc(p.where)}</span>
                 </label>
-                <input type="password" autocomplete="off" spellcheck="false" data-provider="${esc(p.key)}"
-                    class="w-full px-3 py-2 text-sm border border-zinc-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input id="pwa-key-${esc(p.key)}" type="password" autocomplete="off" spellcheck="false" data-provider="${esc(p.key)}"
+                    class="w-full px-3 py-2 text-sm bg-zinc-900 text-gray-100 placeholder-gray-500 border border-zinc-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
         `).join('');
 
@@ -611,7 +614,7 @@
             <p class="text-sm text-gray-300 mb-3">${esc(t('install.desc'))}</p>
             <p class="text-xs text-gray-400 mb-5">${esc(t('install.note'))}</p>
             ${installed ? `
-                <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4 text-sm text-green-900 text-center font-medium">
+                <div class="bg-green-500/15 border border-green-500/40 rounded-lg p-3 mb-4 text-sm text-green-300 text-center font-medium">
                     ${esc(t('install.already'))}
                 </div>
             ` : ''}
@@ -656,7 +659,7 @@
                         <h2 class="text-lg font-semibold text-gray-100">${esc(t('welcome.title'))}</h2>
                     </div>
                     <button data-pwa-action="close" aria-label="${esc(t('close'))}"
-                        class="text-gray-400 hover:text-gray-400 flex-shrink-0">
+                        class="text-gray-400 hover:text-gray-200 flex-shrink-0">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
