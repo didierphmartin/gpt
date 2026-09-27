@@ -808,6 +808,7 @@
         "context": "Context",
         "playbook": "Playbook",
         "mcpServers": "MCP Servers",
+        "documentation": "Documentation",
         "outputResponse": "Output Response",
         "statistics": "Statistics",
         "skills": "Skills",

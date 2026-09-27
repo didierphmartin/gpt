@@ -16499,6 +16499,9 @@ class WorkflowEditor {
                             <button id="tab-system-prompt" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
                                 ${agent.agent_type === 'playbook' ? tf('tabs.playbook') : (tf('tabs.systemPrompt') || 'System Prompt')}
                             </button>
+                            <button id="tab-documentation" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent">
+                                ${tf('tabs.documentation')}
+                            </button>
                             <button id="tab-mcp-servers" class="agent-modal-tab px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent ${agent.agent_type === 'playbook' ? '' : 'hidden'}">
                                 ${tf('tabs.mcpServers')}
                             </button>
@@ -16700,6 +16703,15 @@ class WorkflowEditor {
                         </div>
 
                         <!-- MCP Servers tab (playbook agents): the servers whose functions the playbook binds to -->
+                        <!-- Documentation Tab Content. One section per agent type, only the
+                             selected one shown. Rendered for EVERY type rather than fetched,
+                             because this must work with no network and before a node is saved;
+                             _agentTypeDoc() owns the copy and _syncAgentTypeDoc() keeps the
+                             visible section in step with the Type dropdown. -->
+                        <div id="documentation-tab-content" class="tab-content hidden">
+                            ${this._agentTypeDocPanels(agent.agent_type || 'worker')}
+                        </div>
+
                         <div id="mcp-servers-tab-content" class="tab-content hidden">
                             <div id="agent-mcp-servers-display" class="border border-gray-200 rounded-lg bg-gray-50 p-4" style="min-height: 400px; max-height: 500px; overflow-y: auto;"></div>
                         </div>
@@ -16992,6 +17004,15 @@ class WorkflowEditor {
         document.getElementById('tab-mcp-servers')?.addEventListener('click', () => {
             this.switchAgentModalTab('mcp-servers');
         });
+        document.getElementById('tab-documentation')?.addEventListener('click', () => {
+            this.switchAgentModalTab('documentation');
+        });
+        // Keep the documentation honest when the type changes: the modal is not
+        // re-rendered on this select, so without this the tab would keep
+        // describing the type the user just moved away from.
+        document.getElementById('agent-type-select')?.addEventListener('change', () => {
+            this._syncAgentTypeDoc();
+        });
         this._wirePlaybookFacet();
         document.getElementById('tab-input')?.addEventListener('click', () => {
             this.switchAgentModalTab('input');
@@ -17141,6 +17162,131 @@ class WorkflowEditor {
      * Switch between tabs in the agent modal
      * @param {string} tabName - 'settings', 'schema', 'input', 'output', or 'statistics'
      */
+    /**
+     * Documentation for every agent type, as one panel per type.
+     *
+     * Why all of them, always: this tab has to work in the agent library before
+     * a node exists, with no network, and it has to stay correct when the user
+     * changes the Type dropdown without re-rendering the modal. So every
+     * section is emitted and _syncAgentTypeDoc() shows the selected one.
+     *
+     * Content rule: describe what the type DOES to a run, not what the fields
+     * are called. A reader opening this tab is asking "what will this node do
+     * when I press Run", and the form itself already names its inputs.
+     */
+    _agentTypeDocPanels(selected) {
+        const box = 'border border-gray-200 rounded-lg bg-white p-4 text-sm text-gray-700 leading-relaxed';
+        const h = 'font-semibold text-gray-900 mb-2';
+        const sub = 'font-semibold text-gray-900 mt-4 mb-1';
+        const note = 'mt-3 rounded border-l-4 border-blue-500 bg-blue-50 p-3 text-xs text-blue-900';
+        const docs = {
+            worker: `
+                <p class="${h}">⚙️ Worker</p>
+                <p>Does one job and passes its answer on. It receives the outputs of the nodes
+                wired into it, runs once with its own provider, model and system prompt, and its
+                reply becomes this node's output.</p>
+                <p class="${sub}">What it can use</p>
+                <p>Any MCP tools you attach, and any skills you bind. Skills are <b>not</b>
+                optional: each one runs as a mandatory step after the agent's own turn, in order,
+                each transforming the previous result. If a skill produces a file, that file
+                becomes the node output instead of the model's prose.</p>
+                <p class="${sub}">Where it runs</p>
+                <p>In the interpreter, by the backend. In a compiled workflow, by the Python
+                runner on your machine.</p>`,
+            standard: `
+                <p class="${h}">💬 Standard</p>
+                <p>The same single-turn agent as a Worker, without the workflow-specific framing.
+                Use it for a node that answers in its own voice rather than producing an artefact
+                for the next stage.</p>
+                <p class="${sub}">When to prefer Worker</p>
+                <p>If the node's output feeds another node, choose Worker: its input framing
+                labels each upstream contribution, which is what downstream agents rely on.</p>`,
+            dispatcher: `
+                <p class="${h}">🔀 Dispatcher</p>
+                <p>Routes instead of answering. Its outgoing edges are a <b>menu</b>, not a
+                fan-out: exactly one child runs — the one this node picks — and the others are
+                skipped along with everything hanging off them. The chosen child receives the
+                dispatcher's own input, not its prose.</p>
+                <p class="${sub}">Hybrid routing: Jev first, the model when needed</p>
+                <p>Picking one of N branches is a <i>closed</i> question, so it does not need a
+                text-generating model. When a TypeSafe key is configured, the choice is made by
+                <b>Jev</b> — a "System One" model that returns a probability distribution over
+                the options instead of text. Two consequences:</p>
+                <ul class="list-disc ml-5 mt-2 space-y-1">
+                    <li><b>It cannot invent a branch.</b> The answer is constrained to the
+                    branches you drew, so a name that does not exist is unrepresentable rather
+                    than merely unlikely.</li>
+                    <li><b>It is fast and nearly free.</b> Around 250&nbsp;ms instead of about
+                    5&nbsp;s, and billed on input only.</li>
+                </ul>
+                <p class="${sub}">When the model still decides</p>
+                <p>Jev is also asked whether it can tell at all, and how sure it is. It routes
+                only when it is confident:</p>
+                <ul class="list-disc ml-5 mt-2 space-y-1">
+                    <li><b>No signal</b> ("hello", "I have a question") — it says so, and the
+                    request is handed to the model rather than routed on a guess.</li>
+                    <li><b>Divided signal</b> — a branch is defensible but so is another
+                    ("upgrade me to the annual plan" splits between Sales and Billing). The model
+                    takes over, because it can both weigh the request <i>and</i> write the notes
+                    the chosen child receives. Jev writes nothing.</li>
+                </ul>
+                <div class="${note}">With no TypeSafe key, or if the call fails, the dispatcher
+                behaves exactly as it always did: the model routes. This can make routing cheap;
+                it cannot make it fail. Note that when Jev routes, this node's provider, model and
+                sampling settings apply only to that fallback turn.</div>`,
+            playbook: `
+                <p class="${h}">📖 Playbook</p>
+                <p>Not an agent: an interpreter. The model re-decides at every round from the
+                running transcript of what it has already done, instead of following a
+                pre-computed plan.</p>
+                <p class="${sub}">What it can call</p>
+                <p>The native verbs (messages, notes, approvals, hand-offs, resolve), one tool per
+                <code>#Action</code> that binds to an MCP tool, and a stub for every action that
+                does not bind — the stub tells it to follow the playbook's guidance instead of
+                guessing.</p>
+                <p class="${sub}">Human gates</p>
+                <p>A form, an approval or a hand-off pauses the run and asks <i>you</i>, in the
+                conversation. Unattended, the gate policy decides
+                (<code>PLAYBOOK_GATE_MODE</code>).</p>
+                <p class="${sub}">Its output</p>
+                <p>The Markdown transcript of the whole run, so a downstream node receives the
+                story rather than only the last sentence.</p>
+                <div class="${note}">An action that binds to nothing is not a failure: at run
+                time it becomes a human hand-off, which is why a playbook is still worth saving
+                with unbound actions in it.</div>`,
+        };
+        const order = ['worker', 'standard', 'dispatcher', 'playbook'];
+        const sel = docs[selected] ? selected : 'worker';
+        return order.map(k => `
+            <div data-agent-doc="${k}" class="${box}" style="display:${k === sel ? 'block' : 'none'};">
+                ${docs[k]}
+            </div>`).join('');
+    }
+
+    /**
+     * Show the documentation section matching the Type dropdown.
+     *
+     * Called on every tab open rather than only on change: the type can be
+     * edited while another tab is showing, and documentation that describes a
+     * type the user already moved away from is worse than none.
+     */
+    _syncAgentTypeDoc() {
+        const type = document.getElementById('agent-type-select')?.value || 'worker';
+        const panels = document.querySelectorAll('[data-agent-doc]');
+        if (!panels.length) return;
+        let shown = false;
+        panels.forEach((el) => {
+            const match = el.getAttribute('data-agent-doc') === type;
+            el.style.display = match ? 'block' : 'none';
+            shown = shown || match;
+        });
+        // An unknown type (a future one) must not leave the tab blank.
+        if (!shown) {
+            const fallback = document.querySelector('[data-agent-doc="worker"]');
+            if (fallback) fallback.style.display = 'block';
+        }
+    }
+
     switchAgentModalTab(tabName) {
         const settingsTab = document.getElementById('tab-settings');
         const systemPromptTab = document.getElementById('tab-system-prompt');
@@ -17154,6 +17300,8 @@ class WorkflowEditor {
         const contextContent = document.getElementById('context-tab-content');
         const mcpTab = document.getElementById('tab-mcp-servers');
         const mcpContent = document.getElementById('mcp-servers-tab-content');
+        const docTab = document.getElementById('tab-documentation');
+        const docContent = document.getElementById('documentation-tab-content');
         const settingsContent = document.getElementById('settings-tab-content');
         const systemPromptContent = document.getElementById('system-prompt-tab-content');
         const skillsContent = document.getElementById('skills-tab-content');
@@ -17168,13 +17316,13 @@ class WorkflowEditor {
         if (!settingsTab || !settingsContent) return;
 
         // Deactivate all tabs
-        [settingsTab, systemPromptTab, mcpTab, skillsTab, schemaTab, inputTab, outputTab, contextTab, statisticsTab, logsTab].filter(Boolean).forEach(tab => {
+        [settingsTab, systemPromptTab, docTab, mcpTab, skillsTab, schemaTab, inputTab, outputTab, contextTab, statisticsTab, logsTab].filter(Boolean).forEach(tab => {
             tab.classList.remove('text-blue-600', 'border-blue-600');
             tab.classList.add('text-gray-500', 'border-transparent');
         });
 
         // Hide all content
-        [settingsContent, systemPromptContent, mcpContent, skillsContent, schemaContent, inputContent, outputContent, contextContent, statisticsContent, logsContent].filter(Boolean).forEach(content => {
+        [settingsContent, systemPromptContent, docContent, mcpContent, skillsContent, schemaContent, inputContent, outputContent, contextContent, statisticsContent, logsContent].filter(Boolean).forEach(content => {
             content.classList.add('hidden');
         });
 
@@ -17187,6 +17335,13 @@ class WorkflowEditor {
             systemPromptTab.classList.add('text-blue-600', 'border-blue-600');
             systemPromptTab.classList.remove('text-gray-500', 'border-transparent');
             systemPromptContent.classList.remove('hidden');
+        } else if (tabName === 'documentation' && docTab && docContent) {
+            docTab.classList.add('text-blue-600', 'border-blue-600');
+            docTab.classList.remove('text-gray-500', 'border-transparent');
+            docContent.classList.remove('hidden');
+            // Re-sync on open, not only on change: the Type dropdown may have
+            // moved while another tab was showing.
+            this._syncAgentTypeDoc();
         } else if (tabName === 'skills' && skillsTab && skillsContent) {
             skillsTab.classList.add('text-blue-600', 'border-blue-600');
             skillsTab.classList.remove('text-gray-500', 'border-transparent');
