@@ -968,6 +968,55 @@ class GraphWorkflowRunner
             ];
         }
 
+        // Dispatcher, fast path: ask Jev before spending an LLM turn.
+        //
+        // A dispatcher answers a CLOSED question, which is the one thing a
+        // System One model does natively -- and does with a guarantee the LLM
+        // cannot give: the answer is constrained to the options supplied, so a
+        // branch that does not exist is unrepresentable rather than merely
+        // unlikely. Measured on this workflow: ~250ms against ~5s for the
+        // forced route_to turn.
+        //
+        // It decides ONLY when it is sure. 'unclear' means the request named no
+        // branch, so fall through to the LLM rather than routing on a guess --
+        // and 'low_confidence' means a branch is defensible but so is another
+        // ("upgrade to the annual plan": Sales 0.73 / Billing 0.27), which is
+        // exactly where an LLM turn earns its cost, because it can also WRITE
+        // the notes the chosen child receives. Jev cannot write anything.
+        //
+        // No key, an error, a timeout: every non-'routed' outcome lands in the
+        // untouched LLM path below. This can make routing cheap; it can never
+        // make it fail.
+        if ($dispatchTargets !== []) {
+            $jev = new JevRouter();
+            if ($jev->isAvailable()) {
+                $jevOut = $jev->route($task, $dispatchTargets,
+                    DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
+                $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
+                if ($jevOut['outcome'] === 'routed') {
+                    $target = $jevOut['target'];
+                    // Same shape the LLM path returns below, minus notes: Jev
+                    // produces no prose, so the child gets the task alone --
+                    // which the notes block already treats as optional.
+                    $this->nodeLog($node, 'info', 'routing',
+                        "Jev routed to {$target['name']} (confidence {$conf}, {$jevOut['ms']}ms, no LLM turn)");
+                    return [
+                        'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                        'output' => $task,
+                        'route' => ['id' => $target['id'], 'name' => $target['name'], 'notes' => ''],
+                        'success' => true,
+                        'usage' => ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
+                                    'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)],
+                        'provider' => 'jev',
+                    ];
+                }
+                // Say WHY the cheap path was declined, so a run that took five
+                // seconds is explainable after the fact rather than mysterious.
+                $this->nodeLog($node, 'info', 'routing',
+                    "Jev declined ({$jevOut['outcome']}: {$jevOut['reason']}, confidence {$conf}) — asking the model");
+            }
+        }
+
         // Dispatcher: declare route_to and force the call so the model cannot
         // answer in prose and skip the routing. Grok/DeepSeek ignore the
         // specific-function form, so they get bare 'required'.
