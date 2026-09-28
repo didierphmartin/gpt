@@ -8,6 +8,29 @@ SECRETS=/run/gpt/secrets.env
 
 log() { echo "[gpt] $*"; }
 
+# --- edition -----------------------------------------------------------------
+# Only exact values count. The rest of this script and the frontend test for
+# "individual" and for "set at all", so a typo ("Corporate", "corp") would
+# otherwise run silently as a corporate install. Empty is the hosted behaviour.
+case "${GPT_EDITION:-}" in
+    ''|individual) ;;
+    corporate)
+        # Corporate means users sign in and gpt_admin creates them. Without
+        # gpt_admin in the image nobody could ever create a user, so refuse
+        # rather than start an install that cannot be administered. It is
+        # only present when built with compose.corporate.yaml.
+        if [ ! -d /var/www/html/gpt_admin ]; then
+            log "ERROR: GPT_EDITION=corporate, but this image has no gpt_admin."
+            log "Build the corporate edition with compose.corporate.yaml (see README)."
+            exit 1
+        fi
+        ;;
+    *)
+        log "ERROR: GPT_EDITION='${GPT_EDITION}' is not an edition. Use individual or corporate."
+        exit 1
+        ;;
+esac
+
 # --- per-install secrets -----------------------------------------------------
 # Generated once and kept on a named volume. Regenerating them on every
 # container recreate would silently invalidate every session and every app key.

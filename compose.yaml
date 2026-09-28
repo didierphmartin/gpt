@@ -46,10 +46,16 @@ services:
       GPT_ADMIN_EMAIL: ${GPT_ADMIN_EMAIL:-admin@localhost}
       GPT_ADMIN_PASSWORD: ${GPT_ADMIN_PASSWORD:-}
       GPT_PORT: ${GPT_PORT:-8080}
-      # individual | corporate. UNSET means the hosted edition, whose behaviour
-      # must stay byte-identical -- every frontend branch tests for this being
-      # present, so production (which never sets it) takes no new code path.
-      GPT_EDITION: ${GPT_EDITION:-}
+      # The edition is chosen by the compose files, not by .env: this file is
+      # the individual edition, and compose.corporate.yaml overrides it with
+      # corporate (the only build that contains gpt_admin).
+      #
+      # No colon on purpose: UNSET gives individual, but an explicitly EMPTY
+      # value (GPT_EDITION= , as docker/tests/run-all.sh exports) still gives
+      # the hosted behaviour, which must stay byte-identical -- every frontend
+      # branch tests for this being present, so production (which never sets
+      # it) takes no new code path.
+      GPT_EDITION: ${GPT_EDITION-individual}
     ports:
       # GPT_BIND defaults to 0.0.0.0 (every interface) to match prior
       # behaviour. Set GPT_BIND=127.0.0.1 in .env to restrict this to

@@ -197,7 +197,10 @@ or `GPT_PORT` at anything you care about when invoking it.
 
 ### Editions
 
-The same stack runs three ways. `GPT_EDITION` in `.env` picks one.
+The same code runs three ways. The two Docker editions are chosen by which
+compose files you start, not by `.env`: `compose.yaml` alone is individual,
+and adding `compose.corporate.yaml` makes it corporate. Hosted is the manual
+install on Apache + PHP described below, not a container.
 
 | | individual | corporate | hosted |
 |---|---|---|---|
@@ -206,15 +209,12 @@ The same stack runs three ways. `GPT_EDITION` in `.env` picks one.
 | User management | single user | gpt_admin | — |
 | Licence | free (PolyForm Noncommercial) | commercial — contact us | subscription |
 
-**Individual** — this repo ships only `.env.example`; copy it to `.env` to get
-this edition (that file's `GPT_EDITION=individual` is the default it sets,
-but with no `.env` at all `GPT_EDITION` is empty and you get **hosted**
-instead — sign-in screen included). No account, no password to copy from a
-log: the container signs you in and the first-run wizard asks for a folder,
-the Python runner, and your own provider keys.
+**Individual** — no account, no password to copy from a log: the container
+signs you in and the first-run wizard asks for a folder, the Python runner,
+and your own provider keys. A `.env` is optional; copy `.env.example` only if
+you want to change the port or database settings.
 
 ```bash
-cp .env.example .env
 docker compose up -d --build
 ```
 
@@ -227,7 +227,6 @@ either compose file, neither of which reference it) can pass to `docker build`.
 
 ```bash
 # in .env
-GPT_EDITION=corporate
 GPT_ADMIN_EMAIL=you@company.com
 GPT_ADMIN_PASSWORD=<choose one>
 ```
