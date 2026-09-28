@@ -19,6 +19,22 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 ---
 
+## Three ways to use it
+
+| | **Individual** | **Corporate** | **Hosted service** |
+|---|---|---|---|
+| **Who it's for** | One person, noncommercial use | A company and its staff | Us, or anyone running a classic web host |
+| **How it's delivered** | Docker container on your own machine | Docker container on the company intranet | Apache + PHP + MySQL, no container |
+| **LLM access** | Your own provider keys | Your company's own provider keys, shared by all staff | Keys configured by whoever runs the server |
+| **Admin app** | Not included | Included (`gpt_admin`): manage users, roles, LLM settings, MCP servers and usage | — |
+| **Sign-in** | None: the container signs you in | One account per person, with one sign-in for the app and the admin app | Yes |
+| **Install guide** | [Individual install](#individual-install-docker) | [Corporate install](#corporate-install-docker-on-your-intranet) | [Manual install](#manual-install-apache--php) |
+
+Coming next: both Docker editions will also let you create an account with us
+to subscribe or buy credits, instead of bringing your own keys.
+
+---
+
 ## What it does
 
 - **One chat API, many providers.** Talk to **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi, GLM**
@@ -120,33 +136,134 @@ gpt/
 
 ## Installation
 
-### Quickest path: Docker
+Both Docker editions are the same stack. The **compose files you start choose
+the edition**, not a setting in `.env`: `compose.yaml` alone is the individual
+edition, and adding `compose.corporate.yaml` makes it corporate. The corporate
+build is the only one that contains the admin app, so the edition always
+matches what the image holds.
 
-Needs only Docker Desktop (or Docker Engine + Compose v2).
+### Individual install (Docker)
 
-```bash
-git clone https://github.com/didierphmartin/gpt.git && cd gpt
-docker compose up -d --build
-docker compose logs web | tail -20     # prints the generated admin password
-```
+For one person on their own computer. No account and no password: the
+container signs you in.
 
-Open **http://localhost:8080/gpt/** and sign in with the credentials from that
-log line. Then add an LLM key under *Settings → Admin → LLM settings* — the
-stack deliberately ships without one, and chat does nothing until you add yours.
+**You need:** Docker Desktop (or Docker Engine + Compose v2), and an API key
+from at least one LLM provider (Claude, OpenAI, Gemini, …).
 
-Copy `.env.example` to `.env` first if you want a different port, database
-credentials or admin email.
+1. **Get the files and start the app.**
+
+   ```bash
+   git clone https://github.com/didierphmartin/gpt.git && cd gpt
+   docker compose up -d --build
+   ```
+
+   A `.env` is optional. Copy `.env.example` to `.env` only if you want to
+   change the port or database settings.
+
+2. **Open http://localhost:8080/gpt/.** You are signed in automatically.
+
+3. **Run the setup wizard.** It starts on its own and asks for:
+   - **a local folder**: everything the app reads or writes lives there
+     (`skills/`, `outputs/`, `python/`);
+   - **the Python runner**, needed only to run compiled workflows (see
+     *First run* below);
+   - **your LLM keys**: one per provider you want to use. The container ships
+     without any keys, and chat does nothing until you add one.
 
 > **Warning: that port is open to your whole network, not just this machine.**
 > `docker compose up` publishes on `0.0.0.0`, so anyone who can reach
 > `GPT_PORT` on your LAN — not only `localhost` — can open the same URL, and
-> in the individual edition (see *Editions* below) that means signing in as
-> admin with no password prompt at all. The admin password is also printed
-> in plain text to `docker compose logs web`. If this host is reachable by
-> people you don't trust, set `GPT_BIND=127.0.0.1` in `.env` to restrict it
-> to localhost.
+> in the individual edition that means signing in as admin with no password
+> prompt at all. The admin password is also printed in plain text to
+> `docker compose logs web`. If this host is reachable by people you don't
+> trust, set `GPT_BIND=127.0.0.1` in `.env` to restrict it to localhost.
 
-**What the container does not include, on purpose:**
+### Corporate install (Docker on your intranet)
+
+For a company. The server runs on your intranet, and your staff use it from
+their browsers. Everyone signs in with their own account.
+
+The corporate package adds the **admin app** (`gpt_admin`). It is not part of
+this repository or the individual edition. The people who manage the
+installation use it to:
+- create and manage user accounts;
+- assign roles and control which features each role gets;
+- configure LLM providers and settings;
+- add MCP servers (connections to external tools) for everyone or for
+  particular users;
+- follow token usage and costs, per user and for the whole company.
+
+**Sign-in and access.**
+- **Every user signs in.** Each person has their own account, and nobody can
+  use the app without signing in, so every conversation, setting and token
+  counted belongs to a named user.
+- **One sign-in for both apps.** gpt is served at `/gpt/` and `gpt_admin` at
+  `/gpt_admin/` on the same address, so signing in once covers both.
+- **Only admins reach the admin app.** Other users who sign in get the app
+  only.
+
+**You need:**
+- An intranet server (Linux recommended) with Docker Engine + Compose v2.
+- A checkout of the `gpt_admin` repository, which we supply with the
+  corporate package (it is not public).
+- Your company's LLM provider keys.
+
+1. **Get the files and choose your settings.**
+
+   ```bash
+   git clone https://github.com/didierphmartin/gpt.git && cd gpt
+   cp .env.example .env
+   ```
+
+   Edit `.env` **before the first start**. The database passwords and the
+   first admin account are created from it, once:
+   - Replace `MYSQL_PASSWORD` and `MYSQL_ROOT_PASSWORD` with strong passwords.
+   - Set `GPT_ADMIN_EMAIL` and `GPT_ADMIN_PASSWORD` for the admin. That
+     account signs in to both gpt and `gpt_admin`, and it creates everyone
+     else's.
+   - Change `GPT_PORT` if 8080 is already in use on the server.
+
+2. **Build and start the app.** This takes three commands, not one: Docker
+   cannot copy files from outside the folder it is building, so `gpt_admin`
+   (a separate checkout) is built into its own image first. `GPT_ADMIN_SRC`
+   must be exported in the shell, because it names a folder on disk that only
+   the shell can pass to `docker build`.
+
+   ```bash
+   export GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
+   docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
+   docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+   docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
+   ```
+
+   The containers restart on their own when the server reboots.
+
+3. **Sign in as the admin** at `http://<server-name>:8080/gpt/`, from any
+   machine on the intranet.
+
+4. **Open `gpt_admin`** at `http://<server-name>:8080/gpt_admin/`. You are
+   already signed in there.
+
+5. **Add the company's LLM keys** in `gpt_admin`'s LLM settings. They apply to
+   every user on the server.
+
+6. **Create your staff's accounts** in `gpt_admin`, one per person.
+
+7. **Give your staff the address.** Each person signs in with their own
+   account from their own browser. Anyone who runs compiled workflows installs
+   the local runner on *their own* computer (see *First run* below), because
+   workflows run on the user's machine, not on the server.
+
+We recommend putting the server behind your company's HTTPS reverse proxy, so
+passwords and conversations are encrypted on the network.
+
+> **Coming next for the corporate edition:** the setup wizard will create the
+> admin account (email and password) instead of `.env`, and ask for LLM
+> access. Both editions will then offer a choice between your own keys and an
+> account with us, to **subscribe** (a monthly plan covering every LLM we
+> support, up to a token limit) or **buy credits** (pay as you go).
+
+### What the containers leave out, on purpose
 
 - **The local Python runner.** Compiled workflows run as *you*, on *your*
   machine, so they can read your files and ask you questions mid-run. Your
@@ -157,6 +274,8 @@ credentials or admin email.
   you grant. Nothing server-side to package.
 - **LLM keys.** Yours, entered in the app, never in an image or an env var.
 
+### Docker notes
+
 **Handy commands**
 
 ```bash
@@ -166,6 +285,9 @@ docker compose down -v                # stop and DELETE the database
 docker compose --profile node up -d   # also start the TypeScript backend (3001)
 docker compose --profile python up -d # also start the FastAPI backend (3002)
 ```
+
+For the corporate edition, pass both files to every command, for example
+`docker compose -f compose.yaml -f compose.corporate.yaml logs -f web`.
 
 The `node` and `python` profiles bind-mount `./backend_typescript` and
 `./backend_python` respectively, so — unlike the default `db`/`web` stack,
@@ -181,12 +303,6 @@ default).
 > `docker compose down -v` first (to clear the volume so the init scripts run
 > again) — either alone will appear to ignore your change.
 
-Run `./docker/tests/run-all.sh` to verify the whole stack end to end after a
-change. It runs in its own `gpt-test` compose project on port 18080, so it
-never touches a real install's stack or its data -- but it does run
-`docker compose down -v` inside that project, so don't point `COMPOSE_PROJECT_NAME`
-or `GPT_PORT` at anything you care about when invoking it.
-
 > **Editing `frontend/` needs a real rebuild, not just `up -d --build`.**
 > `frontend/` is `COPY`'d into the `web` image at build time. If the image
 > already exists, plain `docker compose up -d --build` can decide nothing
@@ -195,77 +311,25 @@ or `GPT_PORT` at anything you care about when invoking it.
 > docker compose build web && docker compose up -d --force-recreate web
 > ```
 
-### Editions
-
-The same code runs three ways. The two Docker editions are chosen by which
-compose files you start, not by `.env`: `compose.yaml` alone is individual,
-and adding `compose.corporate.yaml` makes it corporate. Hosted is the manual
-install on Apache + PHP described below, not a container.
-
-| | individual | corporate | hosted |
-|---|---|---|---|
-| Sign-in | none — the container signs you in, first-run wizard follows | yes | yes |
-| LLM keys | yours, entered in the wizard | yours | included |
-| User management | single user | gpt_admin | — |
-| Licence | free (PolyForm Noncommercial) | commercial — contact us | subscription |
-
-**Individual** — no account, no password to copy from a log: the container
-signs you in and the first-run wizard asks for a folder, the Python runner,
-and your own provider keys. A `.env` is optional; copy `.env.example` only if
-you want to change the port or database settings.
-
-```bash
-docker compose up -d --build
-```
-
-**Corporate** — adds gpt_admin for user management, and everyone signs in.
-Set the first admin in `.env` **before** the first start; that account is
-created once and is how every other user gets created. `GPT_ADMIN_SRC` also
-needs to be `export`ed in the shell below — it names a build **context** on
-disk, which only the shell (not `.env`, which docker compose reads, and not
-either compose file, neither of which reference it) can pass to `docker build`.
-
-```bash
-# in .env
-GPT_ADMIN_EMAIL=you@company.com
-GPT_ADMIN_PASSWORD=<choose one>
-```
-
-```bash
-# in your shell
-export GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
-```
-
-The build is **three commands, not one** — Docker cannot `COPY` from outside
-a build's own context, so gpt_admin (a separate checkout) has to be built
-into its own image first:
-
-```bash
-docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
-docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
-docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
-```
-
-gpt is served at `/gpt/` and gpt_admin at `/gpt_admin/` on the **same
-origin**, so signing in once covers both.
-
 > **`frontend/assets/js/config.js` is regenerated on every boot, in both
 > editions.** The entrypoint rewrites it from the committed example plus a
-> container-generated section (edition marker, auto-login) on every start
-> whenever `GPT_EDITION` is set. Any hand-edit made inside a running
-> container — including the voice and Firebase placeholders — is discarded
-> on the next restart. There is currently no supported way to set those keys
-> from inside an edition container; set them before building the image, or
-> accept that they reset.
+> container-generated section (edition marker, auto-login) on every start.
+> Any hand-edit made inside a running container — including the voice and
+> Firebase placeholders — is discarded on the next restart. There is currently
+> no supported way to set those keys from inside an edition container; set
+> them before building the image, or accept that they reset.
 
-> The corporate edition needs the **gpt_admin** repository, which is **not
-> public** — so budget for that before trying to build it. Commercial use of
-> either edition requires a licence — see [LICENSE](LICENSE) and contact the
-> maintainer. Individuals using this for themselves need nothing beyond this
-> repository (PolyForm Noncommercial).
+Run `./docker/tests/run-all.sh` to verify the whole stack end to end after a
+change. It runs in its own `gpt-test` compose project on port 18080, so it
+never touches a real install's stack or its data -- but it does run
+`docker compose down -v` inside that project, so don't point `COMPOSE_PROJECT_NAME`
+or `GPT_PORT` at anything you care about when invoking it.
 
-Prefer to install the pieces yourself, or already run Apache and MySQL? Carry on
-below.
+### Manual install (Apache + PHP)
+
+This is how our hosted service runs: directly on Apache + PHP + MySQL, with no
+container. Use it to install on a hosted web server, or if you already run
+Apache and MySQL and prefer to install the parts yourself.
 
 **Prerequisites**
 
@@ -434,12 +498,22 @@ this repository. Ask the maintainer if you need them.
 
 ## License
 
-**[PolyForm Noncommercial 1.0.0](LICENSE)** — use it, change it, build on it and share it freely for
-any **noncommercial** purpose: personal projects, study, research, hobby work, and use by charities,
-schools, public research, health, environmental and government bodies. **Selling it, or using it to
-run a commercial product or service, is not permitted** without a separate licence — ask.
+**[SynergyAI Software Licence](LICENSE)**. In short:
 
-This is source-available, not OSI "open source": the restriction on commercial use is exactly what
-that definition excludes. Third-party dependencies keep their own licences. Releases up to and
-including commit `3fff3e5` were published under MIT, and that grant cannot be withdrawn for copies
-already obtained under it; these terms apply from here on.
+- **Individual users** may use it free of charge for personal, noncommercial
+  purposes, with their own LLM keys or an account with us (subscription or
+  credits). They may not sell it, modify it or redistribute it without written
+  permission.
+- **Corporate users** may run it on their own intranet for their own staff,
+  with their own LLM keys or an account with us (subscription or credits).
+  Only the corporate package includes the admin app (`gpt_admin`).
+  They may not offer it outside the organisation, sell it, modify it or
+  redistribute it without written permission.
+- **Containers** (including the PHP backend inside them) may be run, but not
+  copied, extracted, modified or reverse engineered.
+
+The source is published so you can see what you're running. This is not open
+source. Third-party dependencies keep their own licences. Releases up to and
+including commit `3fff3e5` were published under MIT, and copies obtained under
+earlier terms keep those terms. The [LICENSE](LICENSE) file is the binding
+text; this summary is not.
