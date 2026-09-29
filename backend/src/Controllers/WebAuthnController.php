@@ -8,6 +8,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
  * WebAuthn Controller
@@ -227,6 +228,10 @@ class WebAuthnController
      */
     public function authenticate(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $credentialId = $request['body']['credential_id'] ?? '';
         $clientDataJson = $request['body']['client_data_json'] ?? '';
         $authenticatorData = $request['body']['authenticator_data'] ?? '';
