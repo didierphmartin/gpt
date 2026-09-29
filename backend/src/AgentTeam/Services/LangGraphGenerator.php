@@ -594,6 +594,8 @@ class LangGraphGenerator
                 // the chosen child runs (conditional edge in run()).
                 $lines[] = '        "dispatch": ' . self::dispatchMenuLiteral($ad['dispatch']) . ',';
                 $lines[] = '        "jev_question": ' . PythonEmitHelpers::pyStr((string) ($ad['jev_question'] ?? '')) . ',';
+                $lines[] = '        "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($ad['routing_mode'] ?? '')) . ',';
+                $lines[] = '        "jev_min_confidence": ' . self::pyFloor($ad) . ',';
             }
             $lines[] = '    },';
         }
@@ -915,6 +917,10 @@ class LangGraphGenerator
             // references a saved agent, use that record, else the node config.
             $jevName = self::displayName($node);
             $jevDesc = (string) ($cfg['description'] ?? '');
+            // Routing settings (routing_mode, jev_min_confidence): the interpreter
+            // reads $agent->getSettings(), i.e. the saved record when the node
+            // references one, else the node's own settings.
+            $routingSettings = is_array($cfg['settings'] ?? null) ? $cfg['settings'] : [];
             if ($agentId !== null && $agentId !== '') {
                 try {
                     $agent = $this->agentRepo->findById((int) $agentId);
@@ -926,6 +932,11 @@ class LangGraphGenerator
                         if (trim((string) ($agentArr['description'] ?? '')) !== '') {
                             $jevDesc = (string) $agentArr['description'];
                         }
+                        $recSettings = $agentArr['settings'] ?? [];
+                        if (is_string($recSettings)) {
+                            $recSettings = json_decode($recSettings, true);
+                        }
+                        $routingSettings = is_array($recSettings) ? $recSettings : [];
                         if ($systemPrompt === '') {
                             $systemPrompt = (string) (
                                 $agentArr['instructions']
@@ -1073,6 +1084,15 @@ class LangGraphGenerator
                 'jev_question' => $dispatch !== []
                     ? DispatchRouting::defaultInstructions($jevName, $jevDesc, $wfName)
                     : '',
+                // Routing mode, as GraphWorkflowRunner reads it: 'jev' (Jev only),
+                // 'llm' (model only), anything else '' = the hybrid (Jev first,
+                // the model when Jev declines).
+                'routing_mode' => in_array($routingSettings['routing_mode'] ?? null, ['jev', 'llm'], true)
+                    ? $routingSettings['routing_mode'] : '',
+                // Same clamp as the interpreter: numeric -> [0, 1], else the default floor.
+                'jev_min_confidence' => is_numeric($routingSettings['jev_min_confidence'] ?? null)
+                    ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
+                    : JevRouter::DEFAULT_CONFIDENCE_FLOOR,
             ];
         }
 
@@ -2064,6 +2084,8 @@ PY;
             $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
             $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
             $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
+            $L[] = '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
+            $L[] = '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
         }
         $L[] = '}';
         $L[] = '';
@@ -2200,7 +2222,8 @@ async def run_node(request_text: str, trace) -> dict:
 
 async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
     """Dispatcher: one forced route_to call; the chosen child id travels back as "route"."""
-    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", "")}
+    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", ""),
+          "routing_mode": NODE.get("routing_mode", ""), "jev_min_confidence": NODE.get("jev_min_confidence")}
     state = {"node_outputs": {}, "user_prompt": request_text}
     out = await _run_dispatcher("self", ad, state, msgs, _llm())
     route = out.get("routes", {}).get("self", "")
@@ -3533,6 +3556,8 @@ TXT;
             $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
             $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
             $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
+            $L[] = '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
+            $L[] = '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
         }
         $L[] = '}';
         return implode("\n", $L);
@@ -4029,20 +4054,44 @@ PY;
         )) . ']';
     }
 
+    /** A dispatcher's Jev floor as a Python float literal (0.6, 1.0, 0.85). */
+    private static function pyFloor(array $ad): string
+    {
+        return var_export((float) ($ad['jev_min_confidence'] ?? JevRouter::DEFAULT_CONFIDENCE_FLOOR), true);
+    }
+
     /**
-     * TO RUN note for TYPESAFE_API_KEY, only when the workflow has a dispatcher
-     * (nothing else reads it). LangGraph-only: the other compile targets still
-     * route every dispatcher with the model.
+     * TO RUN note for TYPESAFE_API_KEY, by the dispatchers' routing modes
+     * (nothing else reads it): required when a dispatcher is Jev-only, optional
+     * for the hybrid (no mode saved), not mentioned when every dispatcher routes
+     * with the model. LangGraph-only: the other compile targets still route
+     * every dispatcher with the model.
      */
     private static function jevDocLines(array $agentData): array
     {
+        $jevOnly = [];
+        $hybrid = false;
         foreach ($agentData as $ad) {
-            if (!empty($ad['dispatch'])) {
-                return ['# Optional: TYPESAFE_API_KEY (TypeSafe Jev) lets a dispatcher route without an LLM turn',
-                        '#   when Jev is sure (confidence >= 0.6); blank = dispatchers route with the model.'];
+            if (empty($ad['dispatch'])) {
+                continue;
+            }
+            $mode = $ad['routing_mode'] ?? '';
+            if ($mode === 'jev') {
+                $jevOnly[] = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));   // one comment line
+            } elseif ($mode !== 'llm') {
+                $hybrid = true;
             }
         }
-        return [];
+        $lines = [];
+        if ($jevOnly !== []) {
+            $lines[] = '# Required: TYPESAFE_API_KEY (TypeSafe Jev) for Jev-only dispatchers (' . implode(', ', $jevOnly) . ');';
+            $lines[] = '#   without it (or when Jev cannot decide) they do not route and the run stops there.';
+        }
+        if ($hybrid) {
+            $lines[] = '# Optional: TYPESAFE_API_KEY (TypeSafe Jev) lets a dispatcher route without an LLM turn';
+            $lines[] = '#   when Jev is sure (confidence >= 0.6); blank = dispatchers route with the model.';
+        }
+        return $lines;
     }
 
     /**
@@ -4061,7 +4110,7 @@ JEV_MODEL = "jev-latest"
 JEV_UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
 JEV_UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
                     "several of the options. Pick this rather than guessing.")
-JEV_CONFIDENCE_FLOOR = 0.6   # below this the decision is divided -> the model decides
+JEV_CONFIDENCE_FLOOR = 0.6   # default minimum confidence (a dispatcher's jev_min_confidence overrides it)
 JEV_TIMEOUT_S = 10
 
 
@@ -4070,13 +4119,15 @@ def _jev_available() -> bool:
     return bool(os.environ.get("TYPESAFE_API_KEY") or "")
 
 
-def _jev_route(request, targets, question):
+def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):
     """Choose one target for `request`, or say why not. Returns a dict with
     outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
     confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
-    other outcome tells the caller to fall back to the model. Never raises."""
+    other outcome tells the caller to fall back to the model (the hybrid) or
+    not to route (a Jev-only dispatcher). `floor` is the dispatcher's minimum
+    confidence (settings.jev_min_confidence). Never raises."""
     try:
-        return _jev_route_inner(request, targets, question)
+        return _jev_route_inner(request, targets, question, floor)
     except Exception as e:   # anything at all -> the model path, never a failed run
         return {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {},
                 "outcome": "error", "reason": f"{type(e).__name__}: {e}"}
@@ -4098,7 +4149,7 @@ def _jev_ssl_context():
     return ctx
 
 
-def _jev_route_inner(request, targets, question):
+def _jev_route_inner(request, targets, question, floor):
     import urllib.request
     blank = {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {}}
     key = os.environ.get("TYPESAFE_API_KEY") or ""
@@ -4152,9 +4203,9 @@ def _jev_route_inner(request, targets, question):
     if choice not in named:
         # Unreachable by contract; treated as an error rather than trusted.
         return {**common, "outcome": "error", "target": None, "reason": f"answer '{choice}' is not on the menu"}
-    if conf is not None and conf < JEV_CONFIDENCE_FLOOR:
+    if conf is not None and conf < floor:
         return {**common, "outcome": "low_confidence", "target": named[choice],
-                "reason": f"confidence {conf:.2f} below floor {JEV_CONFIDENCE_FLOOR:.2f}"}
+                "reason": f"confidence {conf:.2f} below floor {floor:.2f}"}
     return {**common, "outcome": "routed", "target": named[choice], "reason": None}
 
 
@@ -4168,16 +4219,25 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
     inputs = [outs[p]["text"] for p in parents(n) if p in outs]
     task = "\n\n".join(inputs) or state.get("user_prompt", "")
 
-    # Fast path: ask Jev before spending an LLM turn (twin of GraphWorkflowRunner).
-    # It decides ONLY on 'routed'; unclear / low_confidence / error all land in
-    # the untouched model path below. No key = silent, exactly as before.
-    if _jev_available():
+    # Routing mode (settings.routing_mode, twin of GraphWorkflowRunner):
+    #   "llm" -> the model only; Jev is never asked.
+    #   "jev" -> Jev only; the model is never called. Any outcome but 'routed'
+    #            (unclear, low_confidence, no key, error, timeout) = did not
+    #            route: routes END, so none of the dispatcher's branches runs.
+    #   ""    -> the hybrid fast path: ask Jev before spending an LLM turn. It
+    #            decides ONLY on 'routed'; unclear / low_confidence / error all
+    #            land in the untouched model path below. No key = silent.
+    mode = ad.get("routing_mode", "")
+    floor = ad.get("jev_min_confidence")
+    if floor is None:
+        floor = JEV_CONFIDENCE_FLOOR
+    if mode != "llm" and (mode == "jev" or _jev_available()):
         t0 = time.monotonic()
         try:
             # urlopen's timeout bounds each socket op, not DNS or the total; this does.
             jev = await asyncio.wait_for(
-                asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", "")), JEV_TIMEOUT_S + 1)
-        except Exception as e:   # asyncio.TimeoutError included -> the model path
+                asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)
+        except Exception as e:   # asyncio.TimeoutError included -> a declined outcome
             jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
                    "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
         dt = time.monotonic() - t0
@@ -4190,6 +4250,14 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
             print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
                   f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
             return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
+        if mode == "jev":
+            # Jev only: no model fallback, so the run stops here and says why
+            # (the reason names a missing key, too). Same message as the interpreter.
+            msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
+                   f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
+            print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
+                  f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
+            return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
         print(f"[node] [{n}] {ad['display']!r} Jev declined ({jev['outcome']}: {jev['reason']}, "
               f"confidence {conf}) — asking the model", flush=True)
 

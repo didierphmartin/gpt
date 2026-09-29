@@ -95,14 +95,17 @@ def answer(choice, conf):
             "usage": {"input_tokens": 12, "output_tokens": 1}}
 
 
-def run_dispatcher(ns, http, key="test-key"):
+def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6):
+    """ad carries what the generator emits for a dispatcher: routing_mode is
+    'jev' | 'llm' | '' (unset = hybrid) and jev_min_confidence the floor."""
     urllib.request.urlopen = http
     if key is None:
         os.environ.pop("TYPESAFE_API_KEY", None)
     else:
         os.environ["TYPESAFE_API_KEY"] = key
     llm = FakeLLM(ns)
-    ad = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION}
+    ad = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
+          "routing_mode": routing_mode, "jev_min_confidence": floor}
     state = {"node_outputs": {"1": {"source": "Start", "text": "My laptop will not boot"}}, "user_prompt": "x"}
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -220,6 +223,104 @@ def kind_routed():
     assert "Jev routed to 'IT claims'" in buf.getvalue()
 
 
+def branch_that_runs(out):
+    """What the compiled graph does with a dispatcher's result: its conditional
+    edge router is `state.get("routes", {}).get(n) or END` over the menu ids
+    plus END (single script and the modular/A2A orchestrators alike, which map
+    a route that is not a menu id to END). None = no branch runs."""
+    route = out.get("routes", {}).get("2") or END
+    return route if route in {t["id"] for t in TARGETS} else None
+
+
+def llm_mode():
+    """routing_mode 'llm': the model only; Jev is never asked, key or not."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.99))
+    out, llm_calls, log = run_dispatcher(ns, http, routing_mode="llm")
+    assert http.requests == [], "LLM mode must never call Jev"
+    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
+    assert "Jev" not in log, log
+    assert run_dispatcher.last_llm.durations_at_call == {}, "LLM mode must not time a Jev call"
+
+
+def jev_routed():
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.97))
+    out, llm_calls, log = run_dispatcher(ns, http, routing_mode="jev")
+    assert llm_calls == 0, "Jev mode never calls the model"
+    assert out == {"node_outputs": {"2": {"source": "techBuddy", "text": "My laptop will not boot"}},
+                   "routes": {"2": "3"}}, out
+    assert branch_that_runs(out) == "3"
+    assert "Jev routed to 'IT claims'" in log, log
+
+
+def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6, http_calls=1):
+    """routing_mode 'jev': any non-routed outcome stops at the dispatcher with
+    the interpreter's "did not route" message; no model call, no branch."""
+    ns = namespace()
+    http = FakeHTTP(body, exc)
+    out, llm_calls, log = run_dispatcher(ns, http, key=key, routing_mode="jev", floor=floor)
+    assert llm_calls == 0, f"Jev mode never calls the model ({expect_reason})"
+    assert len(http.requests) == http_calls, http.requests
+    msg = f'Error: dispatcher "techBuddy" did not route the request (Jev: {expect_reason}).'
+    assert out == {"node_outputs": {"2": {"source": "techBuddy", "text": msg}},
+                   "routes": {"2": END}, "final_output": msg}, out
+    assert branch_that_runs(out) is None, "no branch may run"
+    assert "asking the model" not in log and "no model fallback" in log, log
+
+
+def custom_floor():
+    """jev_min_confidence is honoured: 0.8 is below a 0.9 floor (the default
+    0.6 would route it). The hybrid then asks the model, as it does at 0.6."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.8))
+    urllib.request.urlopen = http
+    os.environ["TYPESAFE_API_KEY"] = "k"
+    r = ns["_jev_route"]("x", TARGETS, QUESTION, 0.9)
+    assert r["outcome"] == "low_confidence" and r["reason"] == "confidence 0.80 below floor 0.90", r
+    assert ns["_jev_route"]("x", TARGETS, QUESTION)["outcome"] == "routed", "default floor stays 0.6"
+    out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.8)), floor=0.9)
+    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
+    assert "Jev declined (low_confidence: confidence 0.80 below floor 0.90" in log, log
+
+
+def kind_jev_unrouted():
+    """A2A / modular: a Jev-only no-route travels back as route "" (not a menu
+    id -> the orchestrator's conditional edge goes to END) with the message."""
+    ns = namespace()
+    urllib.request.urlopen = FakeHTTP(answer("unclear", 1.0))
+    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    llm = FakeLLM(ns)
+    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
+                  "routing_mode": "jev", "jev_min_confidence": 0.6}
+    ns["_llm"] = lambda: llm
+    ns["parents"] = lambda n: []
+    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
+    with redirect_stdout(io.StringIO()):
+        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    assert llm.calls == 0, "Jev mode never calls the model"
+    msg = 'Error: dispatcher "techBuddy" did not route the request (Jev: unclear: the request names no branch).'
+    assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
+    assert out["route"] not in {t["id"] for t in TARGETS}, "no branch may run"
+
+
+def kind_llm_mode():
+    """A2A / modular: the wrapper passes routing_mode through -> no Jev call."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.99))
+    urllib.request.urlopen = http
+    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    llm = FakeLLM(ns)
+    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
+                  "routing_mode": "llm", "jev_min_confidence": 0.6}
+    ns["_llm"] = lambda: llm
+    ns["parents"] = lambda n: []
+    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
+    with redirect_stdout(io.StringIO()):
+        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
+
+
 case(routed)
 case(lambda: falls_through(answer("unclear", 1.0), outcome="unclear"))
 case(lambda: falls_through(answer("IT claims", 0.46), outcome="low_confidence"))
@@ -229,6 +330,15 @@ case(lambda: falls_through(answer("Sales", 0.99), outcome="error"))   # off-menu
 case(no_key)
 case(refusals)
 case(hung)
+case(llm_mode)
+case(jev_routed)
+case(lambda: jev_not_routed("unclear: the request names no branch", body=answer("unclear", 1.0)))
+case(lambda: jev_not_routed("unavailable: no TYPESAFE_API_KEY", body=answer("IT claims", 0.99), key=None, http_calls=0))
+case(lambda: jev_not_routed("low_confidence: confidence 0.80 below floor 0.90", body=answer("IT claims", 0.8), floor=0.9))
+case(lambda: jev_not_routed("error: <urlopen error timed out>", exc=urllib.error.URLError("timed out")))
+case(custom_floor)
 if KIND is not None:
     case(kind_routed)
+    case(kind_jev_unrouted)
+    case(kind_llm_mode)
 print(f"OK {cases} cases")
