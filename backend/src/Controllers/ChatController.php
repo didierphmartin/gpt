@@ -11,6 +11,8 @@ use Quantis\AIPortfolioAssistant\Services\CombinedToolsExecutor;
 use Quantis\AIPortfolioAssistant\Services\FilteredToolsExecutor;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
 use Quantis\AIPortfolioAssistant\Services\LLMProviderResolver;
+use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 use Quantis\AIPortfolioAssistant\Services\AttachmentDispatcher;
 use Quantis\AIPortfolioAssistant\Contracts\StreamingClientInterface;
 use PDO;
@@ -53,7 +55,10 @@ class ChatController
         }
         try {
             $stmt = $this->db->query(
-                "SELECT provider_key FROM system_llm_settings WHERE enabled = 1 ORDER BY sort_order ASC"
+                // Router rows (Jev) are not chat providers: never wire them up.
+                "SELECT provider_key FROM system_llm_settings WHERE enabled = 1"
+                . " AND (api_format IS NULL OR api_format <> '" . ProviderKinds::ROUTER_FORMAT . "')"
+                . " ORDER BY sort_order ASC"
             );
             $keys = $stmt->fetchAll(PDO::FETCH_COLUMN);
             if (!empty($keys)) {
@@ -2965,21 +2970,7 @@ class ChatController
 
     private function decryptApiKey(string $encryptedKey, string $encryptionKey): ?string
     {
-        try {
-            $data = base64_decode($encryptedKey);
-            if ($data === false || strlen($data) < 17) {
-                return null;
-            }
-
-            $key = hash('sha256', $encryptionKey, true);
-            $iv = substr($data, 0, 16);
-            $encrypted = substr($data, 16);
-
-            $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-            return $decrypted !== false ? $decrypted : null;
-        } catch (Exception $e) {
-            return null;
-        }
+        return ApiKeyCrypto::decrypt($encryptedKey, $encryptionKey);
     }
 
     /**

@@ -6,6 +6,7 @@ namespace AgentTeam\Services;
 
 use AgentTeam\Models\Workflow;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
 use Quantis\AIPortfolioAssistant\Providers\ProviderRequestFactory;
 
 /**
@@ -988,7 +989,9 @@ class GraphWorkflowRunner
         // untouched LLM path below. This can make routing cheap; it can never
         // make it fail.
         if ($dispatchTargets !== []) {
-            $jev = new JevRouter();
+            // The key the admin/user stored (user row wins); none = LLM path.
+            $jevKey = JevKeyResolver::resolve($this->db, $this->config, $userId)['key'];
+            $jev = new JevRouter($jevKey !== '' ? $jevKey : null);
             if ($jev->isAvailable()) {
                 $jevOut = $jev->route($task, $dispatchTargets,
                     DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));

@@ -16,6 +16,11 @@
 -- and it uses 'https://api.moonshot.ai' ('.cn' is the China endpoint).
 -- The controller's inconsistency is flagged for a later review, not fixed
 -- here.
+--
+-- The last row, `jev`, is NOT a chat provider. It is a router row
+-- (api_format 'router'): TypeSafe's Jev routes dispatcher nodes, and this row
+-- only holds its global key. It has no base_url and no price, and every chat
+-- path skips it (see backend/src/Services/ProviderKinds.php).
 
 INSERT INTO `system_llm_settings`
   (`provider_key`, `display_name`, `api_key`, `model`, `base_url`, `max_tokens`, `temperature`, `chat_endpoint`, `streaming`, `supports_tools`, `supported_models`, `api_format`, `system_prompt`, `enabled`, `sort_order`)
@@ -27,4 +32,5 @@ VALUES
 ('deepseek', 'DeepSeek', '', 'deepseek-chat', 'https://api.deepseek.com', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 4),
 ('kimi', 'Kimi', '', 'moonshot-v1-auto', 'https://api.moonshot.ai', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 5),
 ('gamma4', 'Gamma4', '', 'Gemma-4-E4B-it', 'https://g4eb.yellowbrickroad.info', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 6),
-('glm', 'GLM 5.2', '', 'glm-5.2', 'https://api.z.ai/api/paas/v4', 4096, 0.70, '/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 7);
+('glm', 'GLM 5.2', '', 'glm-5.2', 'https://api.z.ai/api/paas/v4', 4096, 0.70, '/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 7),
+('jev', 'Jev (dispatcher routing)', '', 'jev-latest', NULL, NULL, NULL, NULL, 0, 0, NULL, 'router', NULL, 1, 100);

@@ -92,6 +92,32 @@ final class JevRouterTest extends TestCase
         $this->assertSame('unavailable', $r->route('x', self::TARGETS, 'q')['outcome']);
     }
 
+    /**
+     * The key lives in the LLM settings now (JevKeyResolver), not in .env. A
+     * null key means "not configured", even when a stale TYPESAFE_API_KEY is
+     * still exported: reading it would silently bypass the per-user/global
+     * precedence and the admin's decision to leave Jev unset.
+     */
+    public function testNullKeyIgnoresTheEnvironment(): void
+    {
+        $prevEnv = $_ENV['TYPESAFE_API_KEY'] ?? null;
+        $prevGetenv = getenv('TYPESAFE_API_KEY');
+        $_ENV['TYPESAFE_API_KEY'] = 'env-key-must-be-ignored';
+        putenv('TYPESAFE_API_KEY=env-key-must-be-ignored');
+        try {
+            $r = new JevRouter(null, new Client());
+            $this->assertFalse($r->isAvailable());
+            $this->assertSame('unavailable', $r->route('x', self::TARGETS, 'q')['outcome']);
+        } finally {
+            if ($prevEnv === null) {
+                unset($_ENV['TYPESAFE_API_KEY']);
+            } else {
+                $_ENV['TYPESAFE_API_KEY'] = $prevEnv;
+            }
+            putenv($prevGetenv === false ? 'TYPESAFE_API_KEY' : 'TYPESAFE_API_KEY=' . $prevGetenv);
+        }
+    }
+
     /** A network failure is the LLM's cue, not the run's end. */
     public function testTransportFailureFallsBack(): void
     {

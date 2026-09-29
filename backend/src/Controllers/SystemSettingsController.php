@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
  * System Settings Controller
@@ -23,7 +24,8 @@ class SystemSettingsController
     private array $config;
 
     // Allowed API formats for validation
-    private const ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom'];
+    // 'router' marks a non-chat row (Jev): it only stores a key; see ProviderKinds.
+    private const ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ProviderKinds::ROUTER_FORMAT];
 
     // Top-level provider keys that have dedicated config sections
     private const TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
@@ -357,6 +359,27 @@ class SystemSettingsController
                 'error' => 'Invalid api_format. Allowed values: ' . implode(', ', self::ALLOWED_API_FORMATS),
                 'status_code' => 400
             ];
+        }
+
+        // A router row and a router key go together: 'router' on a chat key
+        // would silently drop that provider from chat, and a router key saved
+        // as a chat format would offer it as a chat provider it cannot be.
+        $isRouterKey = in_array($providerKey, ProviderKinds::ROUTER_KEYS, true);
+        if ($isRouterKey !== ($apiFormat === ProviderKinds::ROUTER_FORMAT)) {
+            return [
+                'success' => false,
+                'error' => $isRouterKey
+                    ? "Provider '$providerKey' is a router: api_format must be '" . ProviderKinds::ROUTER_FORMAT . "'"
+                    : "api_format '" . ProviderKinds::ROUTER_FORMAT . "' is reserved for: " . implode(', ', ProviderKinds::ROUTER_KEYS),
+                'status_code' => 400
+            ];
+        }
+        if ($isRouterKey) {
+            // No chat endpoint, no streaming, no tools: whatever the form sent.
+            $body['base_url'] = null;
+            $body['chat_endpoint'] = null;
+            $body['streaming'] = 0;
+            $body['supports_tools'] = 0;
         }
 
         try {

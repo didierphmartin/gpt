@@ -13,9 +13,12 @@ use GuzzleHttp\Exception\GuzzleException;
  * WHY THIS EXISTS, AND WHY IT IS NOT A PROVIDER
  * =============================================
  * Jev is a "System One" model: text in, a probability distribution out. It
- * cannot generate text, so it is not a chat provider and deliberately has no
- * row in system_llm_settings -- every code path there assumes a provider can
- * answer a prompt, and Jev cannot.
+ * cannot generate text, so it is not a chat provider. Its key is stored where
+ * LLM keys are (a ROUTER row in system_llm_settings, api_format 'router', and
+ * per-user rows in user_api_keys), but every chat path skips router rows --
+ * they all assume a provider can answer a prompt, and Jev cannot. The key a
+ * run uses comes from JevKeyResolver and is passed in; this class never reads
+ * the environment.
  *
  * What it CAN do is the one thing a dispatcher node actually needs: pick one
  * option from a closed set. That matters beyond speed. An LLM answering a
@@ -76,7 +79,10 @@ final class JevRouter
         private ?Client $http = null,
         private float $confidenceFloor = self::DEFAULT_CONFIDENCE_FLOOR
     ) {
-        $this->apiKey ??= (string) ($_ENV['TYPESAFE_API_KEY'] ?? getenv('TYPESAFE_API_KEY') ?: '');
+        // null = not configured. The key comes from JevKeyResolver (user row,
+        // else the global router row); .env TYPESAFE_API_KEY is deliberately
+        // NOT read, or it would bypass that precedence.
+        $this->apiKey ??= '';
         // 10s: a measured p50 of ~160ms and max of 385ms means a request still
         // running after ten seconds is broken, not slow. Failing fast matters
         // because the caller's fallback is a working LLM route, not an error.

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 use PDO;
 use Exception;
 
@@ -789,8 +790,9 @@ class AdminController
             ];
         }
 
-        // Include all valid providers with empty state if not set
-        $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+        // Include all valid providers with empty state if not set. Router keys
+        // (Jev) are listed too: stored per user like LLM keys, never a chat provider.
+        $validProviders = array_merge(['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'], ProviderKinds::ROUTER_KEYS);
         foreach ($validProviders as $provider) {
             if (!isset($keys[$provider])) {
                 $keys[$provider] = $emptyState;
@@ -884,7 +886,9 @@ class AdminController
 
         $this->ensureApiKeysTableExists();
 
-        $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+        // Router keys (Jev) are accepted like LLM keys; see the settings
+        // filter below for what a router row may carry.
+        $validProviders = array_merge(['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'], ProviderKinds::ROUTER_KEYS);
         $savedCount = 0;
 
         // Columns that can be updated individually (without requiring an api_key).
@@ -930,8 +934,13 @@ class AdminController
                 $params[':api_key'] = $apiKey;
             }
 
+            $isRouter = in_array($provider, ProviderKinds::ROUTER_KEYS, true);
             foreach ($settingFields as $inputKey => [$col, $cast]) {
                 if (!array_key_exists($inputKey, $entry)) {
+                    continue;
+                }
+                // A router has no model, endpoint, prompt or sampling to set.
+                if ($isRouter && $inputKey !== 'enabled') {
                     continue;
                 }
                 $cols[] = $col;

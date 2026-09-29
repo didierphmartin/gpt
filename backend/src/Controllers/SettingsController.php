@@ -6,7 +6,9 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
  * Settings Controller
@@ -36,7 +38,7 @@ class SettingsController
     {
         $this->db = $db;
         $this->config = $config;
-        $this->encryptionKey = $config['auth']['jwt_secret'] ?? 'default-encryption-key-change-this';
+        $this->encryptionKey = ApiKeyCrypto::secret($config);
     }
 
     /**
@@ -290,6 +292,10 @@ class SettingsController
         $systemPrompts = $request['body']['system_prompts'] ?? [];
 
         $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+        // Router keys (Jev) are stored like LLM keys, encrypted the same way,
+        // but a router has no model choice and no system prompt: accepted in
+        // `keys` only.
+        $validKeyProviders = array_merge($validProviders, ProviderKinds::ROUTER_KEYS);
 
         if (empty($keys) && empty($models) && empty($systemPrompts)) {
             return [
@@ -306,7 +312,7 @@ class SettingsController
 
         // Save API keys
         foreach ($keys as $provider => $apiKey) {
-            if (!in_array($provider, $validProviders)) {
+            if (!in_array($provider, $validKeyProviders)) {
                 continue;
             }
 
@@ -840,10 +846,7 @@ class SettingsController
      */
     private function encryptApiKey(string $apiKey): string
     {
-        $key = hash('sha256', $this->encryptionKey, true);
-        $iv = openssl_random_pseudo_bytes(16);
-        $encrypted = openssl_encrypt($apiKey, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-        return base64_encode($iv . $encrypted);
+        return ApiKeyCrypto::encrypt($apiKey, $this->encryptionKey);
     }
 
     /**
@@ -851,21 +854,7 @@ class SettingsController
      */
     private function decryptApiKey(string $encryptedKey): ?string
     {
-        try {
-            $data = base64_decode($encryptedKey);
-            if ($data === false || strlen($data) < 17) {
-                return null;
-            }
-
-            $key = hash('sha256', $this->encryptionKey, true);
-            $iv = substr($data, 0, 16);
-            $encrypted = substr($data, 16);
-
-            $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-            return $decrypted !== false ? $decrypted : null;
-        } catch (Exception $e) {
-            return null;
-        }
+        return ApiKeyCrypto::decrypt($encryptedKey, $this->encryptionKey);
     }
 
     /**
