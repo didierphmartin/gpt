@@ -969,54 +969,83 @@ class GraphWorkflowRunner
             ];
         }
 
-        // Dispatcher, fast path: ask Jev before spending an LLM turn.
+        // Dispatcher routing mode (settings.routing_mode):
+        //   'llm'  -> the model only; Jev is never consulted.
+        //   'jev'  -> Jev only; the model is never called. When Jev cannot
+        //             decide (unclear, below the minimum confidence, no key,
+        //             error, timeout) the run stops with "did not route".
+        //   other  -> (absent on every dispatcher saved before the setting
+        //             existed) today's hybrid, the fast path below: Jev first
+        //             when a key is stored, the model when Jev declines.
         //
-        // A dispatcher answers a CLOSED question, which is the one thing a
-        // System One model does natively -- and does with a guarantee the LLM
-        // cannot give: the answer is constrained to the options supplied, so a
-        // branch that does not exist is unrepresentable rather than merely
-        // unlikely. Measured on this workflow: ~250ms against ~5s for the
-        // forced route_to turn.
+        // Why Jev first. A dispatcher answers a CLOSED question, which is the
+        // one thing a System One model does natively -- and does with a
+        // guarantee the LLM cannot give: the answer is constrained to the
+        // options supplied, so a branch that does not exist is unrepresentable
+        // rather than merely unlikely. Measured on this workflow: ~250ms
+        // against ~5s for the forced route_to turn.
         //
         // It decides ONLY when it is sure. 'unclear' means the request named no
-        // branch, so fall through to the LLM rather than routing on a guess --
-        // and 'low_confidence' means a branch is defensible but so is another
-        // ("upgrade to the annual plan": Sales 0.73 / Billing 0.27), which is
-        // exactly where an LLM turn earns its cost, because it can also WRITE
-        // the notes the chosen child receives. Jev cannot write anything.
-        //
-        // No key, an error, a timeout: every non-'routed' outcome lands in the
-        // untouched LLM path below. This can make routing cheap; it can never
-        // make it fail.
+        // branch, so the hybrid falls through to the LLM rather than routing on
+        // a guess -- and 'low_confidence' means a branch is defensible but so is
+        // another ("upgrade to the annual plan": Sales 0.73 / Billing 0.27),
+        // which is exactly where an LLM turn earns its cost, because it can also
+        // WRITE the notes the chosen child receives. Jev cannot write anything.
+        // In the hybrid, no key, an error, a timeout: every non-'routed' outcome
+        // lands in the untouched LLM path below -- cheap routing, never failure.
         if ($dispatchTargets !== []) {
-            // The key the admin/user stored (user row wins); none = LLM path.
-            $jevKey = JevKeyResolver::resolve($this->db, $this->config, $userId)['key'];
-            $jev = new JevRouter($jevKey !== '' ? $jevKey : null);
-            if ($jev->isAvailable()) {
-                $jevOut = $jev->route($task, $dispatchTargets,
-                    DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
-                $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
-                if ($jevOut['outcome'] === 'routed') {
-                    $target = $jevOut['target'];
-                    // Same shape the LLM path returns below, minus notes: Jev
-                    // produces no prose, so the child gets the task alone --
-                    // which the notes block already treats as optional.
+            $routingSettings = $agent->getSettings();
+            $routingMode = $routingSettings['routing_mode'] ?? null;
+            if ($routingMode !== 'llm') {
+                // Same clamp as DispatchController (browser path): [0,1], else the default.
+                $floor = is_numeric($routingSettings['jev_min_confidence'] ?? null)
+                    ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
+                    : JevRouter::DEFAULT_CONFIDENCE_FLOOR;
+                // The key the admin/user stored (user row wins); none = the
+                // hybrid's LLM path, or "did not route" in Jev mode.
+                $jevKey = JevKeyResolver::resolve($this->db, $this->config, $userId)['key'];
+                $jev = $this->makeJevRouter($jevKey, $floor);
+                if ($routingMode === 'jev' || $jev->isAvailable()) {
+                    $jevOut = $jev->route($task, $dispatchTargets,
+                        DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
+                    $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
+                    $jevUsage = ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
+                                 'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)];
+                    if ($jevOut['outcome'] === 'routed') {
+                        $target = $jevOut['target'];
+                        // Same shape the LLM path returns below, minus notes: Jev
+                        // produces no prose, so the child gets the task alone --
+                        // which the notes block already treats as optional.
+                        $this->nodeLog($node, 'info', 'routing',
+                            "Jev routed to {$target['name']} (confidence {$conf}, {$jevOut['ms']}ms, no LLM turn)");
+                        return [
+                            'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                            'output' => $task,
+                            'route' => ['id' => $target['id'], 'name' => $target['name'], 'notes' => ''],
+                            'success' => true,
+                            'usage' => $jevUsage,
+                            'provider' => 'jev',
+                        ];
+                    }
+                    if ($routingMode === 'jev') {
+                        // Jev only: no model fallback, so the run stops here and
+                        // says why (the reason names a missing key, too).
+                        $why = "{$jevOut['outcome']}: {$jevOut['reason']}";
+                        $this->nodeLog($node, 'error', 'routing',
+                            "Jev did not route ({$why}, confidence {$conf}) — Jev-only dispatcher, no model fallback");
+                        return [
+                            'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                            'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request (Jev: {$why}).",
+                            'success' => false,
+                            'usage' => $jevUsage,
+                            'provider' => 'jev',
+                        ];
+                    }
+                    // Say WHY the cheap path was declined, so a run that took five
+                    // seconds is explainable after the fact rather than mysterious.
                     $this->nodeLog($node, 'info', 'routing',
-                        "Jev routed to {$target['name']} (confidence {$conf}, {$jevOut['ms']}ms, no LLM turn)");
-                    return [
-                        'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
-                        'output' => $task,
-                        'route' => ['id' => $target['id'], 'name' => $target['name'], 'notes' => ''],
-                        'success' => true,
-                        'usage' => ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
-                                    'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)],
-                        'provider' => 'jev',
-                    ];
+                        "Jev declined ({$jevOut['outcome']}: {$jevOut['reason']}, confidence {$conf}) — asking the model");
                 }
-                // Say WHY the cheap path was declined, so a run that took five
-                // seconds is explainable after the fact rather than mysterious.
-                $this->nodeLog($node, 'info', 'routing',
-                    "Jev declined ({$jevOut['outcome']}: {$jevOut['reason']}, confidence {$conf}) — asking the model");
             }
         }
 
@@ -1103,6 +1132,15 @@ class GraphWorkflowRunner
     }
 
     /**
+     * The Jev router for one dispatcher decision. A seam so tests can replace
+     * the HTTP transport; production always talks to the real service.
+     */
+    protected function makeJevRouter(string $key, float $floor): JevRouter
+    {
+        return new JevRouter($key !== '' ? $key : null, null, $floor);
+    }
+
+    /**
      * Per-1M-token pricing [input, output] in USD for a provider, sourced from
      * the centralized system_llm_settings table (the same place the app's
      * usage-cost reporting reads), falling back to sane defaults. Cached per
@@ -1186,6 +1224,11 @@ class GraphWorkflowRunner
     private function computeNodeCost(?string $provider, int $inputTokens, int $outputTokens): ?float
     {
         if (!$provider) return null;
+        // Jev is a routing service, not an LLM: it has no price row in
+        // system_llm_settings (and must never be listed with the LLM prices),
+        // so pricing it would only ever be "unknown". A Jev-routed step is
+        // recorded at zero LLM cost instead of asking PricingResolver.
+        if (strtolower($provider) === 'jev') return 0.0;
         [$priceIn, $priceOut] = $this->getProviderPricing($provider);
         if ($priceIn === null && $priceOut === null) return null;
         return ($inputTokens * ($priceIn ?? 0) + $outputTokens * ($priceOut ?? 0)) / 1_000_000;

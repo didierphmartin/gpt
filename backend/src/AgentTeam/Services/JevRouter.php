@@ -114,7 +114,7 @@ final class JevRouter
     {
         $blank = ['target' => null, 'confidence' => null, 'probabilities' => [], 'ms' => null, 'usage' => []];
         if (!$this->isAvailable()) {
-            return $blank + ['outcome' => 'unavailable', 'reason' => 'no TYPESAFE_API_KEY'];
+            return $blank + ['outcome' => 'unavailable', 'reason' => 'no Jev key'];
         }
         $named = [];
         foreach ($targets as $t) {
