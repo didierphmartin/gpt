@@ -6,6 +6,8 @@ FROM gpt-web-base:latest
 WORKDIR /login
 COPY . .
 # The checkout may hold a developer's real .env and git history: never ship them.
+# Dockerfile.dockerignore (deny by default) keeps them out of the context; the
+# rm below is belt-and-braces in case that file is ever not honoured.
 # (.superpowers/ is local planning scratch and the phpunit cache a test artefact.)
 RUN rm -rf .git .superpowers backend/vendor backend/.env backend/.env.bak* \
         backend/.phpunit.result.cache \

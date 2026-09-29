@@ -1,0 +1,26 @@
+# Deny by default: the login checkout is a developer's working tree and holds
+# a real backend/.env, backups of it, .git and local scratch. `COPY . .` would
+# put them into an image layer, where a later `rm` hides them but does not
+# remove them from the image history. Name only what the service runs.
+# (BuildKit reads <Dockerfile>.dockerignore beside the Dockerfile, even though
+# the build context is the login checkout.)
+**
+
+!.htaccess
+!frontend
+!backend/.htaccess
+!backend/index.php
+!backend/composer.json
+!backend/composer.lock
+!backend/config
+!backend/src
+!backend/schema
+# Operator CLI (mint-app-key.php, import-users.php) for `docker exec`; Apache
+# refuses HTTP access to it (docker/web/apache-corporate.conf).
+!backend/scripts
+
+# Secrets and scratch inside the allowed trees.
+**/.env
+**/.env.*
+**/.DS_Store
+**/.superpowers
