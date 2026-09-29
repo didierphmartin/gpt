@@ -121,6 +121,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/settings/provider', ['SettingsController', 'deleteProvider']);
         $r->get('/api/v1/settings/phone', ['SettingsController', 'getPhoneStatus']);
 
+        // Jev dispatcher routing (browser run path; the key stays server-side)
+        $r->get('/api/v1/dispatch/jev/status', ['DispatchController', 'jevStatus']);
+        $r->post('/api/v1/dispatch/jev', ['DispatchController', 'route']);
+
         // Storage settings
         $r->get('/api/v1/settings/storage', ['SettingsController', 'getStorageSettings']);
         $r->post('/api/v1/settings/storage', ['SettingsController', 'saveStorageSettings']);
