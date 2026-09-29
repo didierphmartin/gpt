@@ -1,11 +1,13 @@
 """Exercise the generated dispatcher runtime's Jev fast path (LangGraphGenerator::dispatchBlock).
 
-Usage: python3 jev_dispatch_harness.py <extracted_block.py>
+Usage: python3 jev_dispatch_harness.py <extracted_block.py> [<run_dispatcher_kind.py>]
 
 The block is the slice of a generated LangGraph file from the JEV_URL constants
 through the end of _run_dispatcher(). It is exec'd into a namespace with stubs
 for the LangChain/pydantic names the model path touches, so this needs only the
 standard library. urllib.request.urlopen is monkeypatched: no network.
+The optional second file is the A2A/modular wrapper _run_dispatcher_kind(),
+sliced from an agent file; when given, a routed case runs through it too.
 
 Exits 0 and prints "OK <n> cases" when every case passes; otherwise raises.
 """
@@ -21,6 +23,7 @@ from contextlib import redirect_stdout
 from typing import Literal
 
 BLOCK = open(sys.argv[1], encoding="utf-8").read()
+KIND = open(sys.argv[2], encoding="utf-8").read() if len(sys.argv) > 2 else None
 END = "__end__"
 TARGETS = [{"id": "3", "name": "IT claims", "description": ""},
            {"id": "4", "name": "Human resources", "description": "Leave, payroll and benefits."}]
@@ -34,14 +37,18 @@ class FakeResp:
 
 class FakeLLM:
     """Model path stand-in: always routes to Human resources with a note."""
-    def __init__(self):
+    def __init__(self, ns=None):
         self.calls = 0
+        self.ns = ns
+        self.durations_at_call = None   # NODE_DURATIONS as the model path found it
 
     def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, msgs):
         self.calls += 1
+        if self.ns is not None:
+            self.durations_at_call = dict(self.ns["NODE_DURATIONS"])
         return FakeResp([{"name": "route_to", "args": {"target": "Human resources", "notes": "from the model"}}])
 
 
@@ -94,12 +101,13 @@ def run_dispatcher(ns, http, key="test-key"):
         os.environ.pop("TYPESAFE_API_KEY", None)
     else:
         os.environ["TYPESAFE_API_KEY"] = key
-    llm = FakeLLM()
+    llm = FakeLLM(ns)
     ad = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION}
     state = {"node_outputs": {"1": {"source": "Start", "text": "My laptop will not boot"}}, "user_prompt": "x"}
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = asyncio.run(ns["_run_dispatcher"]("2", ad, state, [], llm))
+    run_dispatcher.last_llm = llm
     return out, llm.calls, buf.getvalue()
 
 
@@ -145,6 +153,8 @@ def falls_through(body=None, exc=None, outcome=""):
     assert out["routes"] == {"2": "4"}, out
     assert out["node_outputs"]["2"]["text"].endswith("## Dispatcher notes\nfrom the model"), out
     assert f"Jev declined ({outcome}: " in log and "asking the model" in log, log
+    # Jev's wall time is counted even when it declines (before the model runs).
+    assert "techBuddy" in (run_dispatcher.last_llm.durations_at_call or {}), "declined Jev time not counted"
     r = ns["_jev_route"]("x", TARGETS, QUESTION)
     assert r["outcome"] == outcome, r
 
@@ -156,6 +166,7 @@ def no_key():
     assert http.requests == [], "no key must not call HTTP"
     assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
     assert "Jev" not in log, log
+    assert run_dispatcher.last_llm.durations_at_call == {}, "no key must not touch NODE_DURATIONS before the model"
     assert ns["_jev_route"]("x", TARGETS, QUESTION)["outcome"] == "unavailable"
     os.environ["TYPESAFE_API_KEY"] = ""
     out, llm_calls, log = run_dispatcher(ns, http, key="")
@@ -178,6 +189,37 @@ def refusals():
     assert crit["A"] == "d" * 400 and crit["B"] == "B", crit
 
 
+def hung():
+    """A Jev call that never returns (DNS, a stalled read) is cut off by
+    asyncio.wait_for(JEV_TIMEOUT_S + 1) and lands in the model path."""
+    ns = namespace()
+    ns["JEV_TIMEOUT_S"] = 0   # -> wait_for bound of 1s
+    ns["_jev_route"] = lambda *a: (time.sleep(2), {"outcome": "routed"})[1]
+    t0 = time.monotonic()
+    out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)))
+    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
+    assert "Jev declined (error: TimeoutError" in log and "no answer within 1s" in log, log
+    assert ns["NODE_DURATIONS"]["techBuddy"] >= 1.0, ns["NODE_DURATIONS"]
+
+
+def kind_routed():
+    """A2A / modular: _run_dispatcher_kind carries the route id back as "route"."""
+    ns = namespace()
+    urllib.request.urlopen = FakeHTTP(answer("IT claims", 0.97))
+    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    llm = FakeLLM(ns)
+    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION}
+    ns["_llm"] = lambda: llm
+    ns["parents"] = lambda n: []   # agent file / module: no graph
+    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request: my laptop will not boot", []))
+    assert llm.calls == 0, "routed must not spend an LLM turn"
+    assert out == {"text": "Framed request: my laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
+    assert "Jev routed to 'IT claims'" in buf.getvalue()
+
+
 case(routed)
 case(lambda: falls_through(answer("unclear", 1.0), outcome="unclear"))
 case(lambda: falls_through(answer("IT claims", 0.46), outcome="low_confidence"))
@@ -186,4 +228,7 @@ case(lambda: falls_through(body=b"<html>not json</html>", outcome="error"))
 case(lambda: falls_through(answer("Sales", 0.99), outcome="error"))   # off-menu answer is never trusted
 case(no_key)
 case(refusals)
+case(hung)
+if KIND is not None:
+    case(kind_routed)
 print(f"OK {cases} cases")

@@ -44,14 +44,14 @@ class LangGraphJevDispatchTest extends TestCase
         ];
     }
 
-    private function generator(): LangGraphGenerator
+    private function generator(?array $graph = null, $agentRecord = null): LangGraphGenerator
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Dispatcher demo', 'user_id' => '3']));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
-        $graphRepo->method('getGraph')->willReturn(self::graph());
+        $graphRepo->method('getGraph')->willReturn($graph ?? self::graph());
         $agentRepo = $this->createMock(AgentRepository::class);
-        $agentRepo->method('findById')->willReturn(null);
+        $agentRepo->method('findById')->willReturn($agentRecord);
         return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
     }
 
@@ -80,7 +80,7 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertNotSame('', $runtime, "{$mode}: runtime file missing");
             foreach (['def _jev_route(request, targets, question):', 'JEV_URL = "https://api.typesafe.ai/v1/systemone"',
                       'JEV_MODEL = "jev-latest"', 'JEV_CONFIDENCE_FLOOR = 0.6', 'JEV_TIMEOUT_S = 10',
-                      'if _jev_available():', 'await asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""))',
+                      'if _jev_available():', 'asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", "")), JEV_TIMEOUT_S + 1)', 'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
                       'Jev routed to', '— asking the model'] as $needle) {
                 $this->assertStringContainsString($needle, $runtime, "{$mode}: {$needle}");
             }
@@ -95,6 +95,26 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertStringContainsString('"jev_question": ' . json_encode($question, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',',
                 $node, "{$mode}: question");
             $this->assertStringContainsString('TYPESAFE_API_KEY (TypeSafe Jev)', $node, "{$mode}: TO RUN note");
+        }
+    }
+
+    public function testSavedAgentRecordNamesTheJevQuestion(): void
+    {
+        // A dispatcher that references a saved agent: GraphWorkflowRunner asks Jev
+        // with $agent->getName()/getDescription(), so the compiled question must
+        // come from that record, not the node's own label/description.
+        $graph = self::graph();
+        $graph['nodes'][1]['config']['agent_id'] = 77;
+        $record = $this->createMock(\AgentTeam\Models\Agent::class);
+        $record->method('toArray')->willReturn(['id' => 77, 'name' => 'Front Desk', 'description' => 'routes every ticket',
+            'agent_type' => 'dispatcher', 'instructions' => '', 'provider' => 'claude', 'model' => 'claude-sonnet-4-5']);
+        $blank = $this->createMock(\AgentTeam\Models\Agent::class);
+        $blank->method('toArray')->willReturn(['id' => 78, 'name' => '', 'description' => '', 'agent_type' => 'dispatcher']);
+        foreach ([[$record, DispatchRouting::defaultInstructions('Front Desk', 'routes every ticket', 'Dispatcher demo')],
+                  // A record with no name/description falls back to the node config.
+                  [$blank, DispatchRouting::defaultInstructions('techBuddy', 'the front desk', 'Dispatcher demo')]] as [$agent, $want]) {
+            $code = $this->generator($graph, $agent)->generate(44, '3')['code'];
+            $this->assertStringContainsString('"jev_question": ' . json_encode($want, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',', $code);
         }
     }
 
@@ -126,7 +146,16 @@ class LangGraphJevDispatchTest extends TestCase
         if ($rc !== 0) {
             $this->markTestSkipped('python3 >= 3.9 not available');
         }
-        foreach ($this->modes() as $mode => [$runtime]) {
+        foreach ($this->modes() as $mode => [$runtime, $node]) {
+            // A2A agent / modular module: also slice the _run_dispatcher_kind wrapper.
+            $kindFile = null;
+            $k = strpos($node, 'async def _run_dispatcher_kind(');
+            if ($mode !== 'single') {
+                $this->assertNotFalse($k, "{$mode}: _run_dispatcher_kind");
+                $kEnd = strpos($node, "\n\n\nasync def ", $k + 10);
+                $kindFile = tempnam(sys_get_temp_dir(), 'jevk') . '.py';
+                file_put_contents($kindFile, substr($node, $k, $kEnd === false ? null : $kEnd - $k) . "\n");
+            }
             $a = strpos($runtime, self::BLOCK_START);
             $b = strpos($runtime, self::BLOCK_END);
             $this->assertNotFalse($a, "{$mode}: block start");
@@ -136,11 +165,12 @@ class LangGraphJevDispatchTest extends TestCase
             file_put_contents($base . '.py', $block);
             $out = [];
             exec('env -u TYPESAFE_API_KEY python3 ' . escapeshellarg(dirname(__DIR__) . '/fixtures/jev_dispatch_harness.py')
-                . ' ' . escapeshellarg($base . '.py') . ' 2>&1', $out, $rc);
+                . ' ' . escapeshellarg($base . '.py') . ($kindFile ? ' ' . escapeshellarg($kindFile) : '') . ' 2>&1', $out, $rc);
             @unlink($base . '.py');
+            if ($kindFile) @unlink($kindFile);
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame('OK 8 cases', end($out), $mode);
+            $this->assertSame($kindFile ? 'OK 10 cases' : 'OK 9 cases', end($out), $mode);
         }
     }
 

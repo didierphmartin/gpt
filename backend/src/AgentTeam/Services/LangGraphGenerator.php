@@ -910,11 +910,22 @@ class LangGraphGenerator
             // record carries explicit fields.
             $agentProvider = '';
             $agentModel = '';
+            // Who the dispatcher is, for its Jev question. GraphWorkflowRunner asks
+            // the resolved Agent (getName()/getDescription()); when this node
+            // references a saved agent, use that record, else the node config.
+            $jevName = self::displayName($node);
+            $jevDesc = (string) ($cfg['description'] ?? '');
             if ($agentId !== null && $agentId !== '') {
                 try {
                     $agent = $this->agentRepo->findById((int) $agentId);
                     if ($agent !== null) {
                         $agentArr = $agent->toArray();
+                        if (trim((string) ($agentArr['name'] ?? '')) !== '') {
+                            $jevName = (string) $agentArr['name'];
+                        }
+                        if (trim((string) ($agentArr['description'] ?? '')) !== '') {
+                            $jevDesc = (string) $agentArr['description'];
+                        }
                         if ($systemPrompt === '') {
                             $systemPrompt = (string) (
                                 $agentArr['instructions']
@@ -1060,7 +1071,7 @@ class LangGraphGenerator
                 // the agent's name, description and the workflow name) -- NOT the
                 // node's system prompt, which also carries the routing block.
                 'jev_question' => $dispatch !== []
-                    ? DispatchRouting::defaultInstructions(self::displayName($node), (string) ($cfg['description'] ?? ''), $wfName)
+                    ? DispatchRouting::defaultInstructions($jevName, $jevDesc, $wfName)
                     : '',
             ];
         }
@@ -4072,16 +4083,19 @@ def _jev_route(request, targets, question):
 
 
 def _jev_ssl_context():
-    """CA bundle from certifi when present (httpx, which this script already
-    needs, depends on it), else the system default. A python.org macOS build
-    has no system CA store until "Install Certificates" is run, and without
-    this every Jev call there fails verification and quietly falls back."""
+    """The system trust store PLUS certifi's bundle when present (httpx, which
+    this script already needs, depends on it). The union matters both ways: a
+    python.org macOS build has no system CA store until "Install Certificates"
+    is run, and an enterprise TLS-inspecting proxy's root CA lives ONLY in the
+    system store -- replacing it with certifi would break every call there."""
     import ssl
+    ctx = ssl.create_default_context()   # system store, SSL_CERT_FILE, OS trust (e.g. a proxy's root CA)
     try:
         import certifi
-        return ssl.create_default_context(cafile=certifi.where())
+        ctx.load_verify_locations(certifi.where())   # ADDED to, never replacing, the system store
     except Exception:
-        return ssl.create_default_context()
+        pass
+    return ctx
 
 
 def _jev_route_inner(request, targets, question):
@@ -4159,12 +4173,19 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
     # the untouched model path below. No key = silent, exactly as before.
     if _jev_available():
         t0 = time.monotonic()
-        jev = await asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""))
+        try:
+            # urlopen's timeout bounds each socket op, not DNS or the total; this does.
+            jev = await asyncio.wait_for(
+                asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", "")), JEV_TIMEOUT_S + 1)
+        except Exception as e:   # asyncio.TimeoutError included -> the model path
+            jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
+                   "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
         dt = time.monotonic() - t0
+        # Counted whether or not Jev decides, so the run summary is not under-reported.
+        NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
         conf = f"{jev['confidence']:.2f}" if jev.get("confidence") is not None else "?"
         if jev["outcome"] == "routed":
             chosen = jev["target"]
-            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
             # Same shape the model path returns, minus notes: Jev writes no prose.
             print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
                   f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
