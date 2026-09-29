@@ -147,3 +147,15 @@ def test_assistants_are_closed(quiet, monkeypatch):
     monkeypatch.setattr(pc, 'AIPortfolioAssistant', Spy)
     c = ProviderController(Db(), CFG); c.list(ctx()); c.switch(ctx(body={'provider': 'claude'})); c.switch(ctx(body={'provider': 'nope'}))
     assert closed == [True, True, True]
+
+
+def test_list_skips_router_rows(quiet):
+    """Jev (api_format 'router') is not a chat provider: never in the picker list."""
+    jev = {**ROW, 'provider_key': 'jev', 'display_name': 'Jev', 'model': 'jev-latest', 'api_format': 'router'}
+    class RDb(Db):
+        def fetch_all(self, sql, params=None):
+            if 'FROM system_llm_settings' in sql:
+                return [ROW2, jev, ROW]
+            return super().fetch_all(sql, params)
+    r = ProviderController(RDb(), CFG).list(ctx())
+    assert [p['name'] for p in r['providers']] == ['claude', 'kimi']

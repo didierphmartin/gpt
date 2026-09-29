@@ -157,3 +157,12 @@ def test_apply_user_api_keys_zero_string_user_id_is_empty_like_php():
 def test_quota_check_treats_empty_string_plan_as_not_free():
     q = ChatController(Db([{'plan': '', 'role': 'user'}]), {})._checkFreeTrialQuota('3')
     assert q is None
+
+
+def test_enabled_provider_keys_query_excludes_router_rows():
+    seen = []
+    class QDb(Db):
+        def fetch_column(self, sql, p=None):
+            seen.append(sql); return ['claude']
+    ChatController(QDb([]), {})._getEnabledProviderKeys()
+    assert "api_format <> 'router'" in seen[0] and 'api_format IS NULL' in seen[0]

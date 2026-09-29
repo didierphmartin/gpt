@@ -12,6 +12,10 @@ Placement of each provider matches what
   - `claude`, `openai`           -> at config root
   - everything else (`kimi`, `grok`, `gemini`, `deepseek`, ...) -> nested
     under `config['providers'][<key>]`
+  - router rows (`api_format = 'router'`, e.g. `jev`) -> under
+    `config['routers'][<key>]` and NEVER among the providers: a router answers
+    closed questions only, so it must not become a chat provider or a fallback
+    (see provider_kinds).
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import copy
 import json
 
 from app.support.logger import error_log
+from app.services.provider_kinds import is_router_row
 from app.support.phpcompat import php_empty
 
 ROOT_PROVIDERS = ('claude', 'openai')
@@ -61,7 +66,10 @@ class LLMProviderResolver:
                 key = row['provider_key']
                 built = LLMProviderResolver.buildProviderFromDb(row)
 
-                if key in ROOT_PROVIDERS:
+                if is_router_row(row):
+                    routers = config.setdefault('routers', {})
+                    routers[key] = {**routers.get(key, {}), **built}
+                elif key in ROOT_PROVIDERS:
                     existing = config.get(key) if config.get(key) is not None else {}
                     config[key] = {**existing, **built}
                 else:
