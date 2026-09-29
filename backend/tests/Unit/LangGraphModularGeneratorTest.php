@@ -177,7 +177,7 @@ class LangGraphModularGeneratorTest extends TestCase
     {
         $code = self::files()['agents/techbuddy.py'];
         $this->assertStringContainsString('"kind": "dispatcher"', $code);
-        $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims"}, {"id": "4", "name": "Human resources"}]', $code);
+        $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims", "description": ""}, {"id": "4", "name": "Human resources", "description": ""}]', $code);
         $this->assertStringContainsString('_run_dispatcher', $code);
     }
 

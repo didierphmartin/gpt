@@ -314,9 +314,9 @@ class LangGraphGenerator
                            '# optional, only for the attachment formats you use:',
                            '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
-                'extra' => !empty($missing)
+                'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [],
+                    : [], self::jevDocLines($agentData)),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -592,10 +592,8 @@ class LangGraphGenerator
             if (!empty($ad['dispatch'])) {
                 // Dispatcher menu: the node calls route_to over these names and only
                 // the chosen child runs (conditional edge in run()).
-                $lines[] = '        "dispatch": [' . implode(', ', array_map(
-                    fn($t) => '{"id": ' . json_encode((string) $t['id']) . ', "name": ' . json_encode((string) $t['name'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '}',
-                    $ad['dispatch']
-                )) . '],';
+                $lines[] = '        "dispatch": ' . self::dispatchMenuLiteral($ad['dispatch']) . ',';
+                $lines[] = '        "jev_question": ' . PythonEmitHelpers::pyStr((string) ($ad['jev_question'] ?? '')) . ',';
             }
             $lines[] = '    },';
         }
@@ -855,7 +853,13 @@ class LangGraphGenerator
                 if (!$child || !in_array(self::nodeType($child), ['agent', 'agent-template', 'playbook'], true)) {
                     continue;
                 }
-                $targets[] = ['id' => $childId, 'name' => self::displayName($child)];
+                // 'description' is what Jev reads as the option's criterion
+                // (JevRouter: role truncated to 400 chars, else the name). Kept
+                // EMPTY on purpose: the interpreter feeds Jev DispatchRouting::targets(),
+                // which carries no description, so every option is judged by its
+                // name alone there. Emitting the child's role here would make the
+                // compiled script route differently from the interpreter.
+                $targets[] = ['id' => $childId, 'name' => self::displayName($child), 'description' => ''];
                 $routedBy[$childId] = self::displayName($node);
             }
             if ($targets !== []) {
@@ -1051,6 +1055,13 @@ class LangGraphGenerator
                                 ? $cfgSettings['thinking'] : null),
                 'skills' => $skills,
                 'dispatch' => $dispatch,
+                // The Jev question for this dispatcher, computed exactly as the
+                // interpreter does (GraphWorkflowRunner: defaultInstructions over
+                // the agent's name, description and the workflow name) -- NOT the
+                // node's system prompt, which also carries the routing block.
+                'jev_question' => $dispatch !== []
+                    ? DispatchRouting::defaultInstructions(self::displayName($node), (string) ($cfg['description'] ?? ''), $wfName)
+                    : '',
             ];
         }
 
@@ -1330,7 +1341,8 @@ class LangGraphGenerator
             'data_flow' => self::a2aOrchestratorDataFlowDoc(),
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
-                      'extra' => ['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
+                      'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
+                          self::jevDocLines($facts['agentData'] ?? [])),
                       // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
                       'env_path' => '../../.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
@@ -2039,7 +2051,8 @@ PY;
             $L[] = '""",';
             $L[] = '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
             $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
-            $L[] = '    "dispatch": [' . implode(', ', array_map(fn($t) => '{"id": ' . $j((string) $t['id']) . ', "name": ' . $j($t['name']) . '}', $def['dispatch'] ?? [])) . '],';
+            $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
+            $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
         }
         $L[] = '}';
         $L[] = '';
@@ -2092,7 +2105,8 @@ PY;
             'data_flow' => self::a2aAgentDataFlowDoc(),
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
-                      'extra' => ['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
+                      'extra' => array_merge(['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
+                          self::jevDocLines($facts['agentData'] ?? [])),
                       // This file lives 3 levels under the workflow root (agents/<file>.py).
                       'env_path' => '../../../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
@@ -2175,7 +2189,7 @@ async def run_node(request_text: str, trace) -> dict:
 
 async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
     """Dispatcher: one forced route_to call; the chosen child id travels back as "route"."""
-    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"]}
+    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", "")}
     state = {"node_outputs": {}, "user_prompt": request_text}
     out = await _run_dispatcher("self", ad, state, msgs, _llm())
     route = out.get("routes", {}).get("self", "")
@@ -3257,7 +3271,7 @@ PY;
             // DATA FLOW paragraph of their own (run_node()/dispatcher/playbook
             // prose does not describe a swarm, which has none of those).
             'data_flow' => $dataFlow ?? self::modularDataFlowDoc(),
-            'run' => $run,
+            'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::jevDocLines($facts['agentData'] ?? []))] + $run,
             'storage' => $storage
                 ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()]
                 : ['enabled' => false, 'folder' => null],
@@ -3506,7 +3520,8 @@ TXT;
             $L[] = '""",';
             $L[] = '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
             $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
-            $L[] = '    "dispatch": [' . implode(', ', array_map(fn($t) => '{"id": ' . $j((string) $t['id']) . ', "name": ' . $j($t['name']) . '}', $def['dispatch'] ?? [])) . '],';
+            $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
+            $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
         }
         $L[] = '}';
         return implode("\n", $L);
@@ -3988,16 +4003,175 @@ PY;
         return PlaybookEmit::nodeData($node, $availableById, $providerDefaults, $userId);
     }
 
-    /** Dispatcher node runtime: one forced route_to call over the menu, result in state["routes"]. */
+    /**
+     * A dispatcher's menu as a Python list literal: [{"id", "name", "description"}, ...].
+     * One emitter for every LangGraph mode (single script AGENTS, A2A agent NODE,
+     * modular module NODE) so the menu the route_to tool and Jev see cannot drift.
+     */
+    private static function dispatchMenuLiteral(array $targets): string
+    {
+        return '[' . implode(', ', array_map(
+            fn($t) => '{"id": ' . PythonEmitHelpers::pyStr((string) $t['id'])
+                . ', "name": ' . PythonEmitHelpers::pyStr((string) $t['name'])
+                . ', "description": ' . PythonEmitHelpers::pyStr((string) ($t['description'] ?? '')) . '}',
+            $targets
+        )) . ']';
+    }
+
+    /**
+     * TO RUN note for TYPESAFE_API_KEY, only when the workflow has a dispatcher
+     * (nothing else reads it). LangGraph-only: the other compile targets still
+     * route every dispatcher with the model.
+     */
+    private static function jevDocLines(array $agentData): array
+    {
+        foreach ($agentData as $ad) {
+            if (!empty($ad['dispatch'])) {
+                return ['# Optional: TYPESAFE_API_KEY (TypeSafe Jev) lets a dispatcher route without an LLM turn',
+                        '#   when Jev is sure (confidence >= 0.6); blank = dispatchers route with the model.'];
+            }
+        }
+        return [];
+    }
+
+    /**
+     * Dispatcher node runtime: Jev fast path, then one forced route_to call over
+     * the menu; result in state["routes"]. _jev_route() is the standard-library
+     * twin of JevRouter::route() (same body, same 'unclear' option, same floor,
+     * same outcomes); the fast path mirrors GraphWorkflowRunner's.
+     */
     private static function dispatchBlock(): string
     {
         return <<<'PY'
+# TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
+# question with one of the options supplied -- never a value outside them.
+JEV_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-latest"
+JEV_UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
+JEV_UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
+                    "several of the options. Pick this rather than guessing.")
+JEV_CONFIDENCE_FLOOR = 0.6   # below this the decision is divided -> the model decides
+JEV_TIMEOUT_S = 10
+
+
+def _jev_available() -> bool:
+    """Configured = a key is present. Without one, dispatchers keep the model path untouched."""
+    return bool(os.environ.get("TYPESAFE_API_KEY") or "")
+
+
+def _jev_route(request, targets, question):
+    """Choose one target for `request`, or say why not. Returns a dict with
+    outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
+    confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
+    other outcome tells the caller to fall back to the model. Never raises."""
+    try:
+        return _jev_route_inner(request, targets, question)
+    except Exception as e:   # anything at all -> the model path, never a failed run
+        return {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {},
+                "outcome": "error", "reason": f"{type(e).__name__}: {e}"}
+
+
+def _jev_ssl_context():
+    """CA bundle from certifi when present (httpx, which this script already
+    needs, depends on it), else the system default. A python.org macOS build
+    has no system CA store until "Install Certificates" is run, and without
+    this every Jev call there fails verification and quietly falls back."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+def _jev_route_inner(request, targets, question):
+    import urllib.request
+    blank = {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {}}
+    key = os.environ.get("TYPESAFE_API_KEY") or ""
+    if not key:
+        return {**blank, "outcome": "unavailable", "reason": "no TYPESAFE_API_KEY"}
+    named = {}
+    for t in targets:
+        name = str(t.get("name") or "").strip()
+        if name == "" or name.lower() == JEV_UNCLEAR:
+            # A branch literally named "unclear" would collide with the escape hatch.
+            return {**blank, "outcome": "error", "reason": f"unusable target name: '{name}'"}
+        named[name] = t
+    if len(named) < 2:
+        return {**blank, "outcome": "error", "reason": "a menu needs at least two targets"}
+    criteria = {}
+    for name, t in named.items():
+        desc = str(t.get("description") or "").strip()
+        criteria[name] = desc[:400] if desc else name
+    criteria[JEV_UNCLEAR] = JEV_UNCLEAR_DESC
+    body = {
+        "state": {"request": request},
+        "model": JEV_MODEL,
+        "questions": {"route": {"type": "choice", "instructions": question, "criteria": criteria}},
+    }
+    req = urllib.request.Request(
+        JEV_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Authorization": "Bearer " + key, "Accept": "application/json",
+                 "Content-Type": "application/json"})
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=JEV_TIMEOUT_S, context=_jev_ssl_context()) as resp:   # HTTP 4xx/5xx raise here
+            raw = resp.read()
+    except Exception as e:
+        return {**blank, "outcome": "error", "reason": str(e)}
+    ms = int(round((time.monotonic() - t0) * 1000))
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        decoded = None
+    answers = decoded.get("answers") if isinstance(decoded, dict) else None
+    answer = answers.get("route") if isinstance(answers, dict) else None
+    if not isinstance(answer, dict) or answer.get("choice") is None:
+        return {**blank, "outcome": "error", "ms": ms, "reason": "no choice in the response"}
+    choice = str(answer["choice"])
+    conf = float(answer["confidence"]) if answer.get("confidence") is not None else None
+    probs = answer.get("probabilities") if isinstance(answer.get("probabilities"), (dict, list)) else {}
+    usage = decoded.get("usage") if isinstance(decoded.get("usage"), dict) else {}
+    common = {"confidence": conf, "probabilities": probs, "ms": ms, "usage": usage}
+    if choice == JEV_UNCLEAR:
+        return {**common, "outcome": "unclear", "target": None, "reason": "the request names no branch"}
+    if choice not in named:
+        # Unreachable by contract; treated as an error rather than trusted.
+        return {**common, "outcome": "error", "target": None, "reason": f"answer '{choice}' is not on the menu"}
+    if conf is not None and conf < JEV_CONFIDENCE_FLOOR:
+        return {**common, "outcome": "low_confidence", "target": named[choice],
+                "reason": f"confidence {conf:.2f} below floor {JEV_CONFIDENCE_FLOOR:.2f}"}
+    return {**common, "outcome": "routed", "target": named[choice], "reason": None}
+
+
 async def _run_dispatcher(n, ad, state, msgs, llm):
     """Dispatcher agent (twin of DispatchRouting in the PHP runner): the model
     MUST call route_to with one of the menu names; that child alone runs. The
     child receives the dispatcher's original input plus the notes."""
     targets = ad["dispatch"]
     names = [t["name"] for t in targets]
+    outs = state.get("node_outputs", {})
+    inputs = [outs[p]["text"] for p in parents(n) if p in outs]
+    task = "\n\n".join(inputs) or state.get("user_prompt", "")
+
+    # Fast path: ask Jev before spending an LLM turn (twin of GraphWorkflowRunner).
+    # It decides ONLY on 'routed'; unclear / low_confidence / error all land in
+    # the untouched model path below. No key = silent, exactly as before.
+    if _jev_available():
+        t0 = time.monotonic()
+        jev = await asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""))
+        dt = time.monotonic() - t0
+        conf = f"{jev['confidence']:.2f}" if jev.get("confidence") is not None else "?"
+        if jev["outcome"] == "routed":
+            chosen = jev["target"]
+            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
+            # Same shape the model path returns, minus notes: Jev writes no prose.
+            print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
+                  f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
+            return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
+        print(f"[node] [{n}] {ad['display']!r} Jev declined ({jev['outcome']}: {jev['reason']}, "
+              f"confidence {conf}) — asking the model", flush=True)
+
     route_args = create_model(
         "RouteToArgs",
         target=(Literal[tuple(names)], Field(..., description="Name of the agent to route to. MUST be one of the listed values.")),
@@ -4028,9 +4202,6 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
                 break
         if chosen:
             break
-    outs = state.get("node_outputs", {})
-    inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-    task = "\n\n".join(inputs) or state.get("user_prompt", "")
     if chosen is None:
         msg = (f"Error: dispatcher {ad['display']!r} did not route the request. "
                f"Expected route_to with one of: {', '.join(names)}.")
