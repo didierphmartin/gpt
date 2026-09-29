@@ -44,17 +44,24 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         ]], 'usage' => ['input_tokens' => 342, 'output_tokens' => 39]]));
     }
 
-    /** A PDO that answers ensureDbConnection and JevKeyResolver's two lookups. */
+    /** A PDO that answers ensureDbConnection and JevKeyResolver's package and key lookups. */
     private function pdo(string $userKey, string $globalKey): \PDO
     {
         $pdo = Mockery::mock(\PDO::class);
         $pdo->shouldReceive('query')->andReturn(Mockery::mock(\PDOStatement::class));
         $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($userKey, $globalKey) {
+            $row = false;
+            if (str_contains($sql, 'FROM users')) {
+                $row = ['role' => 'user'];
+            } elseif (str_contains($sql, 'FROM packages')) {
+                $row = ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => true]]]), 'updated_at' => null];
+            }
             $value = str_contains($sql, 'user_api_keys')
                 ? ($userKey !== '' ? ApiKeyCrypto::encrypt($userKey, self::SECRET) : false)
                 : ($globalKey !== '' ? $globalKey : false);
             $stmt = Mockery::mock(\PDOStatement::class);
             $stmt->shouldReceive('execute')->andReturn(true);
+            $stmt->shouldReceive('fetch')->andReturn($row);
             $stmt->shouldReceive('fetchColumn')->andReturn($value);
             return $stmt;
         });
@@ -305,7 +312,10 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($globalKey) {
             $stmt = Mockery::mock(\PDOStatement::class);
             $stmt->shouldReceive('execute')->andReturn(true);
-            $stmt->shouldReceive('fetch')->andReturn(false);
+            // The package lookup (userId 0 resolves to the guest package) enables Jev.
+            $stmt->shouldReceive('fetch')->andReturn(str_contains($sql, 'FROM packages')
+                ? ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => true]]]), 'updated_at' => null]
+                : false);
             $stmt->shouldReceive('fetchAll')->andReturn([]);
             $stmt->shouldReceive('fetchColumn')->andReturn(
                 str_contains($sql, 'system_llm_settings') && $globalKey !== '' ? $globalKey : false

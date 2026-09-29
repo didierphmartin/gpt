@@ -31,6 +31,10 @@ final class DispatchControllerTest extends TestCase
     protected function setUp(): void
     {
         $this->db = new PDO('sqlite::memory:');
+        $this->db->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
+        $this->db->exec("INSERT INTO users (id, role) VALUES (7, 'user'), (8, 'user')");
+        $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, capabilities TEXT, updated_at TEXT)');
+        $this->db->exec("INSERT INTO packages (role, capabilities) VALUES ('user', '{\"providers\":{\"jev\":{\"enabled\":true}}}')");
         $this->db->exec('CREATE TABLE system_llm_settings (provider_key TEXT, api_key TEXT, enabled INTEGER DEFAULT 1)');
         $this->db->exec('CREATE TABLE user_api_keys (user_id INTEGER, provider TEXT, api_key TEXT, enabled INTEGER DEFAULT 1)');
     }
