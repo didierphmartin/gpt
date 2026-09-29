@@ -3187,12 +3187,16 @@ class SettingsPanel {
             totalCost += costUsd;
 
             // Get pricing info for this provider and convert to selected currency
-            // The model catalog has no Jev, so its card names the recorded model.
-            const pricing = this.pricing[provider]
-                || { input: 0, output: 0, model: provider === 'jev' ? 'jev-latest' : '' };
-            const inputPrice = (pricing.input * rate).toFixed(2);
-            const outputPrice = (pricing.output * rate).toFixed(2);
-            const pricingText = `${currency.symbol}${inputPrice}/${currency.symbol}${outputPrice} per 1M`;
+            // The model catalog has no Jev: its card names the recorded model
+            // and takes the admin-set rate the server reports (null = unpriced).
+            let pricing = this.pricing[provider] || { input: 0, output: 0, model: '' };
+            if (provider === 'jev') {
+                const r = (usage.rates || {}).jev;
+                pricing = { input: r ? r.input : null, output: r ? r.output : null, model: 'jev-latest' };
+            }
+            const pricingText = (pricing.input === null || pricing.output === null)
+                ? '—'
+                : `${currency.symbol}${this.formatRate(pricing.input * rate)}/${currency.symbol}${this.formatRate(pricing.output * rate)} per 1M`;
 
             // Convert cost to selected currency
             const costConverted = costUsd * rate;
@@ -3232,7 +3236,7 @@ class SettingsPanel {
                     </div>
                     <div class="usage-card-cost">
                         <span class="cost-label">Month Cost</span>
-                        <span class="cost-value">${currency.symbol}${costConverted.toFixed(2)} ${currency.name}</span>
+                        <span class="cost-value">${currency.symbol}${this.formatCost(costConverted)} ${currency.name}</span>
                     </div>
                 </div>
             `;
@@ -3243,7 +3247,7 @@ class SettingsPanel {
         // Update total cost with selected currency
         const totalConverted = totalCost * rate;
         if (this.totalCostEl) {
-            this.totalCostEl.textContent = `${currency.symbol}${totalConverted.toFixed(2)} ${currency.name}`;
+            this.totalCostEl.textContent = `${currency.symbol}${this.formatCost(totalConverted)} ${currency.name}`;
         }
 
         // Update month label
@@ -3340,7 +3344,7 @@ class SettingsPanel {
                         callbacks: {
                             label: (context) => {
                                 if (context.datasetIndex === 0) {
-                                    return `Cost: ${currency.symbol}${context.raw.toFixed(2)} ${currency.name}`;
+                                    return `Cost: ${currency.symbol}${this.formatCost(context.raw)} ${currency.name}`;
                                 } else {
                                     return `Tokens: ${(context.raw * 1000).toLocaleString()}`;
                                 }
@@ -3836,6 +3840,16 @@ class SettingsPanel {
             'jev': 'Jev (dispatcher routing)'
         };
         return names[provider] || provider;
+    }
+
+    /** A per-1M rate: 3 decimals below 0.10 (so 0.042 stays visible), else 2. */
+    formatRate(v) {
+        return v > 0 && v < 0.1 ? v.toFixed(3) : v.toFixed(2);
+    }
+
+    /** A cost: 4 decimals when non-zero and below 0.01 (sub-cent spend), else 2. */
+    formatCost(v) {
+        return v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2);
     }
 
     /**

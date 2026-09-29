@@ -7,7 +7,9 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 use PDO;
 use Exception;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
+use Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\PricingResolver;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
@@ -170,6 +172,11 @@ class SettingsController
             'usage' => [
                 'current_month' => $currentMonth,
                 'by_provider' => $byProvider,
+                // Rates for usage rows the model catalog does not price (Jev),
+                // read from the admin-editable system_llm_settings row.
+                'rates' => [
+                    ProviderKinds::JEV_KEY => self::rateOf(new PricingResolver($this->db), ProviderKinds::JEV_KEY),
+                ],
                 'totals' => [
                     'cost_usd' => $totalCost,
                     'tokens' => $totalTokens,
@@ -188,6 +195,22 @@ class SettingsController
             ],
             'status_code' => 200
         ];
+    }
+
+    /**
+     * A provider's per-1M rates as {input, output}, or null when its row has
+     * no price (the card then shows a dash instead of a made-up $0).
+     *
+     * @return array{input: float, output: float}|null
+     */
+    public static function rateOf(PricingResolver $pricing, string $provider): ?array
+    {
+        try {
+            [$in, $out] = $pricing->resolve($provider);
+            return ['input' => $in, 'output' => $out];
+        } catch (PricingUnavailableException $e) {
+            return null;
+        }
     }
 
     /**
