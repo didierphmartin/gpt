@@ -289,6 +289,129 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame('Sales', $out['route']['name']);
     }
 
+    // ── Run level: what happens to the branches ────────────────────────────
+
+    private string $runsDir = '';
+
+    /**
+     * A whole run() over Start -> Router (dispatcher) -> Billing | Sales -> Output.
+     * The children are disabled nodes: if the traversal reaches them they record
+     * the 'disabled node' sentinel (and never call a model), so their presence
+     * in node_outputs is proof they ran.
+     */
+    private function runWorkflow(?array $settings, string $globalKey, array $jevQueue, AgentRunner $agentRunner): array
+    {
+        $pdo = Mockery::mock(\PDO::class);
+        $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($globalKey) {
+            $stmt = Mockery::mock(\PDOStatement::class);
+            $stmt->shouldReceive('execute')->andReturn(true);
+            $stmt->shouldReceive('fetch')->andReturn(false);
+            $stmt->shouldReceive('fetchAll')->andReturn([]);
+            $stmt->shouldReceive('fetchColumn')->andReturn(
+                str_contains($sql, 'system_llm_settings') && $globalKey !== '' ? $globalKey : false
+            );
+            $stmt->shouldReceive('rowCount')->andReturn(0);
+            return $stmt;
+        });
+        $pdo->shouldReceive('query')->andReturnUsing(fn () => Mockery::mock(\PDOStatement::class)->shouldIgnoreMissing());
+        $pdo->shouldReceive('exec')->andReturn(0);
+        $pdo->shouldReceive('lastInsertId')->andReturn('1');
+
+        $child = fn (int $id, string $name) => ['id' => $id, 'node_type' => 'agent', 'agent_id' => null,
+            'config' => ['agent_name' => $name, 'instructions' => "You are {$name}.", 'provider' => 'openai',
+                         'tools' => [], 'disabled' => true]];
+        $nodes = [
+            ['id' => 10, 'node_type' => 'start', 'agent_id' => null, 'config' => []],
+            ['id' => 1, 'node_type' => 'agent', 'agent_id' => null, 'config' => [
+                'agent_name' => 'Router', 'agent_type' => 'dispatcher', 'provider' => 'openai', 'model' => 'gpt-test',
+                'instructions' => 'Send the request to the right team.', 'tools' => [], 'settings' => $settings ?? [],
+            ]],
+            $child(2, 'Billing'),
+            $child(3, 'Sales'),
+            ['id' => 4, 'node_type' => 'output', 'agent_id' => null, 'config' => []],
+        ];
+        $edges = [
+            ['from_node_id' => 10, 'to_node_id' => 1],
+            ['from_node_id' => 1, 'to_node_id' => 2],
+            ['from_node_id' => 1, 'to_node_id' => 3],
+            ['from_node_id' => 2, 'to_node_id' => 4],
+            ['from_node_id' => 3, 'to_node_id' => 4],
+        ];
+        $graph = Mockery::mock(\AgentTeam\Services\WorkflowGraphRepository::class);
+        $graph->shouldReceive('findStartNode')->andReturn($nodes[0]);
+        $graph->shouldReceive('getGraph')->andReturn(['nodes' => $nodes, 'edges' => $edges]);
+
+        $this->runsDir = sys_get_temp_dir() . '/routing-mode-test-' . bin2hex(random_bytes(4));
+        $runner = new RoutingModeTestRunner(
+            $pdo,
+            Mockery::mock(\AgentTeam\Services\AgentRepository::class),
+            $agentRunner,
+            $graph,
+            ['auth' => ['jwt_secret' => self::SECRET], 'workflow_runs_dir' => $this->runsDir]
+        );
+        $runner->jevQueue = $jevQueue;
+
+        // userId 0: no per-user key lookup and no conversation archive.
+        return $runner->run(new \AgentTeam\Models\Workflow(['id' => 5, 'name' => 'Support desk']), 0,
+            ['prompt' => 'I was charged twice.']);
+    }
+
+    private function cleanRunsDir(): void
+    {
+        if ($this->runsDir !== '' && is_dir($this->runsDir)) {
+            array_map('unlink', glob($this->runsDir . '/*') ?: []);
+            rmdir($this->runsDir);
+        }
+    }
+
+    /** @return array<string, array{0: string, 1: Response[], 2: string}> */
+    public static function jevDeclines(): array
+    {
+        return [
+            'unclear' => ['global-jev-key', [self::jevAnswer(JevRouter::UNCLEAR, 1.0)], 'unclear: the request names no branch'],
+            'no key'  => ['', [], 'unavailable: no Jev key'],
+        ];
+    }
+
+    /** @dataProvider jevDeclines */
+    public function testAJevOnlyDispatcherThatDoesNotRouteStopsItsBranches(string $key, array $queue, string $why): void
+    {
+        try {
+            $out = $this->runWorkflow(['routing_mode' => 'jev'], $key, $queue, $this->agentRunner(false));
+        } finally {
+            $this->cleanRunsDir();
+        }
+        $message = "Error: dispatcher \"Router\" did not route the request (Jev: {$why}).";
+
+        $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
+        $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
+        $this->assertArrayNotHasKey(4, $out['node_outputs'], 'nothing downstream of the branches runs');
+        $this->assertFalse($out['node_outputs'][1]['success']);
+        $this->assertSame($message, $out['node_outputs'][1]['output']);
+        $this->assertSame($message, $out['output'], 'the run ends with the did-not-route result');
+    }
+
+    /**
+     * Scope pin: a hybrid (no mode) dispatcher whose model does not call
+     * route_to keeps today's behaviour, which fans out to every branch.
+     */
+    public function testAHybridDispatcherThatDoesNotRouteKeepsTodaysFanOut(): void
+    {
+        $model = Mockery::mock(AgentRunner::class);
+        $model->shouldReceive('run')->once()->andReturn(['success' => true, 'text' => 'Some prose, no route_to.',
+            'usage' => ['input_tokens' => 10, 'output_tokens' => 5]]);
+        try {
+            $out = $this->runWorkflow(null, '', [], $model);
+        } finally {
+            $this->cleanRunsDir();
+        }
+
+        $this->assertFalse($out['node_outputs'][1]['success']);
+        $this->assertStringContainsString('did not route the request. Expected a route_to call', $out['node_outputs'][1]['output']);
+        $this->assertSame('disabled node', $out['node_outputs'][2]['output'], 'Billing still runs (unchanged)');
+        $this->assertSame('disabled node', $out['node_outputs'][3]['output'], 'Sales still runs (unchanged)');
+    }
+
     // ── Usage recording ────────────────────────────────────────────────────
 
     /**
@@ -325,6 +448,7 @@ class RoutingModeTestRunner extends GraphWorkflowRunner
         $this->made++;
         $this->madeWithKey = $key;
         $this->madeWithFloor = $floor;
-        return new JevRouter($key, new Client(['handler' => HandlerStack::create(new MockHandler($this->jevQueue))]), $floor);
+        // Mirrors production: an empty key means "not configured" (null).
+        return new JevRouter($key !== '' ? $key : null, new Client(['handler' => HandlerStack::create(new MockHandler($this->jevQueue))]), $floor);
     }
 }

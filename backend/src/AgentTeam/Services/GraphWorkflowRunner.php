@@ -475,6 +475,13 @@ class GraphWorkflowRunner
                     continue;
                 }
 
+                // A Jev-only dispatcher that did not route: the run stops on
+                // that branch point, and its failure is the run's result.
+                if ($this->haltUnrouted($currentNodeId, $output, $edges, $executedNodes)) {
+                    $finalOutput = $output['output'] ?? null;
+                    continue;
+                }
+
                 // Check for parallel execution opportunity
                 // NEW: Detect parallelism from multiple outgoing edges to agent nodes (not just from 'parallel' node)
                 $nextNodeIds = $this->getNextNodeIds($currentNodeId, $edges);
@@ -661,6 +668,24 @@ class GraphWorkflowRunner
         }
         if (!in_array($chosen, $queue, true) && !in_array($chosen, $executedNodes, true)) $queue[] = $chosen;
         error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} routed to {$chosen} ({$route['name']}); skipped " . json_encode($unchosen));
+        return true;
+    }
+
+    /**
+     * Jev-only dispatcher that did not route ('halt_branches'): mark every
+     * branch -- and everything reachable solely through them -- as done
+     * without running it, so no child agent or model is called. Only Jev mode
+     * sets the flag; a hybrid/LLM dispatcher that does not route keeps its
+     * historical behaviour. Returns false (and touches nothing) otherwise.
+     */
+    private function haltUnrouted(int $nodeId, array $output, array $edges, array &$executedNodes): bool
+    {
+        if (empty($output['halt_branches'])) return false;
+        $branches = $this->getNextNodeIds($nodeId, $edges);
+        foreach (DispatchRouting::skipSet($branches, $edges) as $skipId) {
+            if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
+        }
+        error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} did not route (Jev only); skipped " . json_encode($branches));
         return true;
     }
 
@@ -1039,6 +1064,8 @@ class GraphWorkflowRunner
                             'success' => false,
                             'usage' => $jevUsage,
                             'provider' => 'jev',
+                            // The run loop reads this: no branch may run (see haltUnrouted).
+                            'halt_branches' => true,
                         ];
                     }
                     // Say WHY the cheap path was declined, so a run that took five
