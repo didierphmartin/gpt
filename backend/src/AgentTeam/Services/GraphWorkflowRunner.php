@@ -7,6 +7,8 @@ namespace AgentTeam\Services;
 use AgentTeam\Models\Workflow;
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
+use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use Quantis\AIPortfolioAssistant\Providers\ProviderRequestFactory;
 
 /**
@@ -1026,13 +1028,19 @@ class GraphWorkflowRunner
                 $floor = is_numeric($routingSettings['jev_min_confidence'] ?? null)
                     ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
                     : JevRouter::DEFAULT_CONFIDENCE_FLOOR;
-                // The key the admin/user stored (user row wins); none = the
-                // hybrid's LLM path, or "did not route" in Jev mode.
-                $jevKey = JevKeyResolver::resolve($this->db, $this->config, $userId)['key'];
-                $jev = $this->makeJevRouter($jevKey, $floor);
+                // The key the plan allows (user row, package key, global row);
+                // none = the hybrid's LLM path, or "did not route" in Jev mode.
+                $resolvedJev = JevKeyResolver::resolve($this->db, $this->config, $userId);
+                $jev = $this->makeJevRouter($resolvedJev['key'], $floor);
                 if ($routingMode === 'jev' || $jev->isAvailable()) {
                     $jevOut = $jev->route($task, $dispatchTargets,
                         DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
+                    if ($resolvedJev['key'] === '') {
+                        // Not in the plan vs. no key: the reason says which.
+                        $jevOut['reason'] = JevKeyResolver::unavailableReason($resolvedJev['source']);
+                    }
+                    // The only place a Jev call is written as usage (answered calls only).
+                    $this->recordJevUsage($userId, $jevOut);
                     $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
                     $jevUsage = ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
                                  'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)];
@@ -1167,6 +1175,12 @@ class GraphWorkflowRunner
         return new JevRouter($key !== '' ? $key : null, null, $floor);
     }
 
+    /** Test seam: where an answered Jev call is written as usage. */
+    protected function recordJevUsage(int $userId, array $jevOut): void
+    {
+        JevUsage::record(new UsageLogger($this->db), $userId, $jevOut);
+    }
+
     /**
      * Per-1M-token pricing [input, output] in USD for a provider, sourced from
      * the centralized system_llm_settings table (the same place the app's
@@ -1251,11 +1265,6 @@ class GraphWorkflowRunner
     private function computeNodeCost(?string $provider, int $inputTokens, int $outputTokens): ?float
     {
         if (!$provider) return null;
-        // Jev is a routing service, not an LLM: it has no price row in
-        // system_llm_settings (and must never be listed with the LLM prices),
-        // so pricing it would only ever be "unknown". A Jev-routed step is
-        // recorded at zero LLM cost instead of asking PricingResolver.
-        if (strtolower($provider) === 'jev') return 0.0;
         [$priceIn, $priceOut] = $this->getProviderPricing($provider);
         if ($priceIn === null && $priceOut === null) return null;
         return ($inputTokens * ($priceIn ?? 0) + $outputTokens * ($priceOut ?? 0)) / 1_000_000;

@@ -161,13 +161,15 @@ final class JevRouter
         $ms = (int) round((microtime(true) - $t0) * 1000);
 
         $answer = $decoded['answers']['route'] ?? null;
+        $usage  = is_array($decoded['usage'] ?? null) ? $decoded['usage'] : [];
         if (!is_array($answer) || !isset($answer['choice'])) {
-            return $blank + ['outcome' => 'error', 'ms' => $ms, 'reason' => 'no choice in the response'];
+            // Answered, so it keeps its time and usage (both are recorded): on the
+            // LEFT of the union, which keeps the first array's keys.
+            return ['outcome' => 'error', 'ms' => $ms, 'usage' => $usage, 'reason' => 'no choice in the response'] + $blank;
         }
         $choice = (string) $answer['choice'];
         $conf   = isset($answer['confidence']) ? (float) $answer['confidence'] : null;
         $probs  = is_array($answer['probabilities'] ?? null) ? $answer['probabilities'] : [];
-        $usage  = is_array($decoded['usage'] ?? null) ? $decoded['usage'] : [];
         $common = ['confidence' => $conf, 'probabilities' => $probs, 'ms' => $ms, 'usage' => $usage];
 
         if ($choice === self::UNCLEAR) {

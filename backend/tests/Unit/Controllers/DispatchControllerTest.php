@@ -12,6 +12,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\DispatchController;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
+use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 
 /**
  * The browser run path never sees the Jev key: it asks these endpoints to route
@@ -39,11 +40,26 @@ final class DispatchControllerTest extends TestCase
         $this->db->exec('CREATE TABLE user_api_keys (user_id INTEGER, provider TEXT, api_key TEXT, enabled INTEGER DEFAULT 1)');
     }
 
-    private function controller(array $queue = []): DispatchController
+    /** $logger: where answered calls are recorded; a silent stub unless a test watches it. */
+    private function controller(array $queue = [], ?UsageLogger $logger = null): DispatchController
     {
         $this->mock = new MockHandler($queue);
         $http = new Client(['handler' => HandlerStack::create($this->mock)]);
-        return new DispatchController($this->db, ['auth' => ['jwt_secret' => self::SECRET]], $http);
+        return new DispatchController($this->db, ['auth' => ['jwt_secret' => self::SECRET]], $http,
+            $logger ?? $this->createStub(UsageLogger::class));
+    }
+
+    private function neverLogger(): UsageLogger
+    {
+        $logger = $this->createMock(UsageLogger::class);
+        $logger->expects($this->never())->method('logTransaction');
+        return $logger;
+    }
+
+    /** The role's package switches Jev off (the key rows stay, the plan wins). */
+    private function jevOff(): void
+    {
+        $this->db->exec("UPDATE packages SET capabilities = '{\"providers\":{\"jev\":{\"enabled\":false}}}' WHERE role = 'user'");
     }
 
     private function globalKey(string $key = 'g-key'): void
@@ -61,7 +77,7 @@ final class DispatchControllerTest extends TestCase
     {
         return new Response(200, [], json_encode(['answers' => ['route' => [
             'choice' => $choice, 'confidence' => $confidence, 'probabilities' => [$choice => $confidence],
-        ]], 'usage' => ['input_tokens' => 1]]));
+        ]], 'usage' => ['input_tokens' => 342, 'output_tokens' => 39]]));
     }
 
     private function post(DispatchController $c, array $body, int $uid = 7): array
@@ -77,7 +93,7 @@ final class DispatchControllerTest extends TestCase
     public function testStatusPerSource(): void
     {
         $c = $this->controller();
-        $this->assertSame(['success' => true, 'available' => false, 'source' => 'none', 'status_code' => 200], $c->jevStatus(['user_id' => 7]));
+        $this->assertSame(['success' => true, 'allowed' => true, 'available' => false, 'source' => 'none', 'status_code' => 200], $c->jevStatus(['user_id' => 7]));
 
         $this->globalKey();
         $this->assertSame('global', $c->jevStatus(['user_id' => 7])['source']);
@@ -144,6 +160,66 @@ final class DispatchControllerTest extends TestCase
         $out = $this->post($this->controller([self::answer('Sales', 0.9)]), $this->body());
         $this->assertSame('routed', $out['outcome']);
         $this->assertSame(2, $out['target']['id']);
+    }
+
+    public function testStatusSaysNotAllowedWhenThePackageSwitchesJevOff(): void
+    {
+        $this->jevOff();
+        $this->globalKey();
+        $this->userKey(7);
+        $out = $this->controller()->jevStatus(['user_id' => 7]);
+        $this->assertFalse($out['allowed']);
+        $this->assertFalse($out['available']);
+        $this->assertSame('not_allowed', $out['source']);
+    }
+
+    public function testRouteGivesThePlanReasonAndRecordsNothingWhenNotAllowed(): void
+    {
+        $this->jevOff();
+        $this->globalKey();
+        $out = $this->post($this->controller([self::answer('Billing', 0.99)], $this->neverLogger()), $this->body());
+        $this->assertSame('unavailable', $out['outcome']);
+        $this->assertSame('Jev is not enabled for your plan', $out['reason']);
+        $this->assertCount(1, $this->mock, 'no HTTP call was made');
+    }
+
+    public function testNoKeyKeepsTheNoKeyReasonAndRecordsNothing(): void
+    {
+        $out = $this->post($this->controller([], $this->neverLogger()), $this->body());
+        $this->assertSame('unavailable', $out['outcome']);
+        $this->assertSame('no Jev key', $out['reason']);
+    }
+
+    public function testAMenuThatCannotBeSentRecordsNothing(): void
+    {
+        $this->globalKey();
+        $out = $this->post($this->controller([self::answer('Billing', 0.99)], $this->neverLogger()),
+            $this->body(['targets' => [self::TARGETS[0]]]));
+        $this->assertSame('error', $out['outcome']);
+        $this->assertCount(1, $this->mock, 'no HTTP call was made');
+    }
+
+    public function testAnAnsweredRouteIsRecordedOnce(): void
+    {
+        $this->globalKey();
+        $logger = $this->createMock(UsageLogger::class);
+        $logger->expects($this->once())->method('logTransaction')
+            ->with($this->callback(fn (array $t) => $t['provider'] === 'jev' && $t['user_id'] === 7
+                && $t['prompt_tokens'] === 342 && $t['completion_tokens'] === 39))
+            ->willReturn(1);
+        $out = $this->post($this->controller([self::answer('Billing', 0.95)], $logger), $this->body());
+        $this->assertSame('routed', $out['outcome']);
+        $this->assertArrayNotHasKey('usage', $out);
+    }
+
+    public function testAnAnsweredDeclineIsRecordedToo(): void
+    {
+        $this->globalKey();
+        $logger = $this->createMock(UsageLogger::class);
+        $logger->expects($this->once())->method('logTransaction')
+            ->with($this->callback(fn (array $t) => $t['request_metadata'] === ['jev_outcome' => 'unclear']))
+            ->willReturn(1);
+        $this->post($this->controller([self::answer('unclear', 1.0)], $logger), $this->body());
     }
 
     /** @dataProvider invalidBodies */

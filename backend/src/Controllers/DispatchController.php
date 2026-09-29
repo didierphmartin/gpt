@@ -8,6 +8,8 @@ use AgentTeam\Services\JevRouter;
 use GuzzleHttp\Client;
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
+use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 
 /**
  * Jev routing for the browser run path.
@@ -22,17 +24,19 @@ class DispatchController
     public function __construct(
         private PDO $db,
         private array $config,
-        private ?Client $http = null
+        private ?Client $http = null,
+        private ?UsageLogger $usage = null
     ) {
     }
 
-    /** Whether the calling user has a Jev key, and where it comes from. Never the key. */
+    /** Whether the plan allows Jev, whether a key exists and where it comes from. Never the key. */
     public function jevStatus(array $request): array
     {
         $resolved = JevKeyResolver::resolve($this->db, $this->config, $this->userId($request));
 
         return [
             'success' => true,
+            'allowed' => $resolved['source'] !== 'not_allowed',
             'available' => $resolved['key'] !== '',
             'source' => $resolved['source'],
             'status_code' => 200,
@@ -66,6 +70,11 @@ class DispatchController
 
         $resolved = JevKeyResolver::resolve($this->db, $this->config, $this->userId($request));
         $out = (new JevRouter($resolved['key'], $this->http, $floor))->route($text, $targets, $question);
+        if ($resolved['key'] === '') {
+            $out['reason'] = JevKeyResolver::unavailableReason($resolved['source']);
+        }
+        // One usage row per call TypeSafe answered; refused calls record nothing.
+        JevUsage::record($this->usage ?? new UsageLogger($this->db), $this->userId($request), $out);
 
         $target = is_array($out['target'] ?? null)
             ? ['id' => $out['target']['id'] ?? null, 'name' => $out['target']['name'] ?? null]

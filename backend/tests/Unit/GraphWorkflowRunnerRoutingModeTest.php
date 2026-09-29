@@ -15,6 +15,8 @@ use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
+use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 
 /**
  * The interpreter's dispatcher honours settings.routing_mode:
@@ -44,17 +46,25 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         ]], 'usage' => ['input_tokens' => 342, 'output_tokens' => 39]]));
     }
 
-    /** A PDO that answers ensureDbConnection and JevKeyResolver's package and key lookups. */
-    private function pdo(string $userKey, string $globalKey): \PDO
+    /**
+     * A PDO that answers ensureDbConnection, JevKeyResolver's package and key
+     * lookups, and PricingResolver's jev price row.
+     *
+     * @param bool $jevEnabled the role's package switches Jev on (false = not in the plan)
+     * @param array{0: ?float, 1: ?float} $jevPrices price_input_per_1m / price_output_per_1m of the jev row
+     */
+    private function pdo(string $userKey, string $globalKey, bool $jevEnabled = true, array $jevPrices = [0.042, 0.0]): \PDO
     {
         $pdo = Mockery::mock(\PDO::class);
         $pdo->shouldReceive('query')->andReturn(Mockery::mock(\PDOStatement::class));
-        $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($userKey, $globalKey) {
+        $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($userKey, $globalKey, $jevEnabled, $jevPrices) {
             $row = false;
             if (str_contains($sql, 'FROM users')) {
                 $row = ['role' => 'user'];
             } elseif (str_contains($sql, 'FROM packages')) {
-                $row = ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => true]]]), 'updated_at' => null];
+                $row = ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => $jevEnabled]]]), 'updated_at' => null];
+            } elseif (str_contains($sql, 'price_input_per_1m')) {
+                $row = ['price_input_per_1m' => $jevPrices[0], 'price_output_per_1m' => $jevPrices[1]];
             }
             $value = str_contains($sql, 'user_api_keys')
                 ? ($userKey !== '' ? ApiKeyCrypto::encrypt($userKey, self::SECRET) : false)
@@ -89,7 +99,8 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
      * @param array<string, mixed>|null $settings dispatcher settings (routing_mode, jev_min_confidence)
      * @param Response[] $jevQueue canned Jev API responses
      */
-    private function makeRunner(string $userKey, string $globalKey, AgentRunner $agentRunner, array $jevQueue): RoutingModeTestRunner
+    private function makeRunner(string $userKey, string $globalKey, AgentRunner $agentRunner, array $jevQueue,
+                                bool $jevEnabled = true, array $jevPrices = [0.042, 0.0]): RoutingModeTestRunner
     {
         $ref = new \ReflectionClass(GraphWorkflowRunner::class);
         /** @var RoutingModeTestRunner $runner */
@@ -100,7 +111,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
             $p->setAccessible(true);
             $p->setValue($runner, $value);
         };
-        $set('db', $this->pdo($userKey, $globalKey));
+        $set('db', $this->pdo($userKey, $globalKey, $jevEnabled, $jevPrices));
         $set('config', ['auth' => ['jwt_secret' => self::SECRET]]);
         $set('agentRunner', $agentRunner);
         $set('workflowName', 'Support desk');
@@ -424,23 +435,75 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
 
     // ── Usage recording ────────────────────────────────────────────────────
 
-    /**
-     * Jev is not priced in system_llm_settings (it is not an LLM), so a Jev
-     * step must be costed without asking PricingResolver at all.
-     */
-    public function testAJevStepIsNotPriced(): void
+    private function nodeCost(GraphWorkflowRunner $runner, int $in, int $out): ?float
     {
-        $pdo = Mockery::mock(\PDO::class);
-        $pdo->shouldNotReceive('prepare');
-        $ref = new \ReflectionClass(GraphWorkflowRunner::class);
-        $runner = $ref->newInstanceWithoutConstructor();
-        $p = $ref->getProperty('db');
-        $p->setAccessible(true);
-        $p->setValue($runner, $pdo);
-
-        $m = $ref->getMethod('computeNodeCost');
+        $m = new \ReflectionMethod(GraphWorkflowRunner::class, 'computeNodeCost');
         $m->setAccessible(true);
-        $this->assertSame(0.0, $m->invoke($runner, 'jev', 342, 39));
+        return $m->invoke($runner, 'jev', $in, $out);
+    }
+
+    /** Jev is priced from its system_llm_settings row, like any provider. */
+    public function testAJevRoutedStepIsRecordedOnceAndPricedFromTheRow(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Billing', 0.99)]);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev']);
+
+        $this->assertSame('Billing', $out['route']['name']);
+        $this->assertCount(1, $runner->recorded);
+        $this->assertSame(self::USER_ID, $runner->recorded[0]['user_id']);
+        $this->assertSame('routed', $runner->recorded[0]['outcome']);
+        $this->assertSame(['input_tokens' => 342, 'output_tokens' => 39], $runner->recorded[0]['usage']);
+        $this->assertEqualsWithDelta(0.042, $this->nodeCost($runner, 1_000_000, 10), 1e-9);
+    }
+
+    /** A hybrid decline is an answered call: recorded once, then the model runs. */
+    public function testAHybridDeclineIsRecordedOnceBeforeTheModel(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $out = $this->dispatch($runner, null);
+
+        $this->assertSame('openai', $out['provider']);
+        $this->assertCount(1, $runner->recorded);
+        $this->assertSame('unclear', $runner->recorded[0]['outcome']);
+    }
+
+    public function testJevModeNotAllowedStopsWithThePlanReasonAndRecordsNothing(): void
+    {
+        // The user's own key does not bypass the plan.
+        $runner = $this->makeRunner('personal-jev-key', 'global-jev-key', $this->agentRunner(false),
+            [self::jevAnswer('Billing', 0.99)], false);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev']);
+
+        $this->assertFalse($out['success']);
+        $this->assertStringContainsString('(Jev: unavailable: Jev is not enabled for your plan).', $out['output']);
+        $this->assertTrue($out['halt_branches']);
+        $this->assertSame([], $runner->recorded, 'a call that was never sent records nothing');
+    }
+
+    public function testJevModeWithoutAKeyRecordsNothing(): void
+    {
+        $runner = $this->makeRunner('', '', $this->agentRunner(false), []);
+        $this->dispatch($runner, ['routing_mode' => 'jev']);
+
+        $this->assertSame([], $runner->recorded);
+    }
+
+    public function testUnsetModeNotAllowedGoesToTheModel(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [self::jevAnswer('Billing', 0.99)], false);
+        $out = $this->dispatch($runner, null);
+
+        $this->assertTrue($out['success']);
+        $this->assertSame('openai', $out['provider']);
+        $this->assertSame('Sales', $out['route']['name']);
+        $this->assertSame([], $runner->recorded);
+    }
+
+    /** A jev row installed before prices existed: unknown cost, never a fake $0. */
+    public function testNullJevPricesGiveAnUnknownCostNotZero(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [], true, [null, null]);
+        $this->assertNull($this->nodeCost($runner, 100, 0));
     }
 }
 
@@ -452,6 +515,26 @@ class RoutingModeTestRunner extends GraphWorkflowRunner
     public int $made = 0;
     public ?string $madeWithKey = null;
     public ?float $madeWithFloor = null;
+    /** @var array<int, array<string, mixed>> the Jev results production would write as usage, with their user */
+    public array $recorded = [];
+
+    /** Production's filter (JevUsage::record), with the database write replaced by a list. */
+    protected function recordJevUsage(int $userId, array $jevOut): void
+    {
+        $recorded = &$this->recorded;
+        $logger = new class ($recorded, $jevOut) extends UsageLogger {
+            public function __construct(private array &$into, private array $jevOut)
+            {
+            }
+
+            public function logTransaction(array $data): ?int
+            {
+                $this->into[] = ['user_id' => $data['user_id']] + $this->jevOut;
+                return 1;
+            }
+        };
+        JevUsage::record($logger, $userId, $jevOut);
+    }
 
     protected function makeJevRouter(string $key, float $floor): JevRouter
     {

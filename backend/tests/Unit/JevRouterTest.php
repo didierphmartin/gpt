@@ -159,4 +159,26 @@ final class JevRouterTest extends TestCase
         $this->assertSame('error', $out['outcome']);
         $this->assertStringContainsString('not on the menu', $out['reason']);
     }
+
+    /**
+     * TypeSafe answered, but without a usable choice: still an answered call, so
+     * it carries the round-trip time and the usage (both are what gets recorded).
+     */
+    public function testAnAnswerWithoutAChoiceKeepsItsTimeAndUsage(): void
+    {
+        $res = new Response(200, [], json_encode(['answers' => [], 'usage' => ['input_tokens' => 342, 'output_tokens' => 0]]));
+        $out = $this->router([$res])->route('x', self::TARGETS, 'q');
+        $this->assertSame('error', $out['outcome']);
+        $this->assertSame('no choice in the response', $out['reason']);
+        $this->assertIsInt($out['ms']);
+        $this->assertSame(342, $out['usage']['input_tokens']);
+    }
+
+    /** A call that was never answered has no round-trip time: nothing to record. */
+    public function testRefusedAndFailedCallsHaveNoTime(): void
+    {
+        $this->assertNull($this->router([])->route('x', [self::TARGETS[0]], 'q')['ms']);
+        $this->assertNull($this->router([new ConnectException('timeout', new Request('POST', 'x'))])
+            ->route('x', self::TARGETS, 'q')['ms']);
+    }
 }
