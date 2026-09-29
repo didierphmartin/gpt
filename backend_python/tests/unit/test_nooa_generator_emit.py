@@ -149,3 +149,8 @@ def test_diamond_parallel_layer():
     assert 'run_agent("3"' in code
     assert 'OUTPUT_STORAGE_ENABLED = True' in code
     assert 'WORKFLOW_ID = 9' in code
+
+
+def test_deepseek_flash_gets_v4_thinking_rules():
+    code = NOOAGenerator.emitNooa(_analyzed())
+    assert 'elif p == "deepseek" and str(model).startswith(("deepseek-v4", "deepseek-flash")):' in code

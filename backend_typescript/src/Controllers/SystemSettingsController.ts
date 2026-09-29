@@ -1,4 +1,6 @@
+import { readFileSync } from 'fs';
 import { sql, Kysely, Transaction } from 'kysely';
+import { config } from '../config/env';
 import { db } from '../db/pools';
 import { DB } from '../db/types';
 import { Ctx, ControllerResult } from '../Support/Http';
@@ -18,6 +20,27 @@ import { Ctx, ControllerResult } from '../Support/Http';
  *    produce empty results — exactly matching live PHP. The full loops/seedProvider upsert are still
  *    ported for fidelity (they'd behave identically if the config ever carried provider blocks again).
  */
+
+/**
+ * [input, output] price per 1M tokens for a model from resources/model_catalog.json;
+ * [null, null] when the catalog does not list the model (or cannot be read).
+ * Mirrors PHP catalogPrices().
+ */
+export function catalogPrices(providerKey: string, model: string): [number | null, number | null] {
+  let data: any;
+  try {
+    data = JSON.parse(readFileSync(config.modelCatalogPath, 'utf8'));
+  } catch {
+    return [null, null];
+  }
+  const entries = data?.providers?.[providerKey];
+  const entry = Array.isArray(entries) ? entries.find((m: any) => m?.id === model) : undefined;
+  if (!entry) return [null, null];
+  return [
+    entry.input !== undefined && entry.input !== null ? phpFloatVal(entry.input) : null,
+    entry.output !== undefined && entry.output !== null ? phpFloatVal(entry.output) : null,
+  ];
+}
 
 // PHP (float) cast semantics (leading-numeric, else 0; bool→1/0).
 function phpFloatVal(v: any): number {
@@ -53,7 +76,7 @@ export class SystemSettingsController {
   private static readonly ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom'];
 
   // Top-level provider keys that have dedicated config sections (::TOP_LEVEL_PROVIDERS).
-  private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4'];
+  private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
 
   // Mirrors PHP's $this->config (the ai_config.php array) for provider-seeding purposes. The array
   // no longer carries provider blocks nor a 'providers' entry (now DB-loaded), so this is empty —
@@ -218,6 +241,16 @@ export class SystemSettingsController {
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
       },
+      glm: {
+        display_name: 'GLM 5.2',
+        base_url: 'https://api.z.ai/api/paas/v4',
+        model: 'glm-5.2',
+        price_input_per_1m: 1.40,
+        price_output_per_1m: 4.40,
+        max_tokens: 4096,
+        api_format: 'openai',
+        chat_endpoint: '/chat/completions',
+      },
     };
 
     // Add top-level providers
@@ -225,14 +258,19 @@ export class SystemSettingsController {
       if (this.phpConfig[key] !== undefined) {
         const cfg = this.phpConfig[key];
         const defaults = providerDefaults[key] ?? {};
-        const prices: [number | null, number | null] = [defaults.price_input_per_1m ?? null, defaults.price_output_per_1m ?? null];
+        // The default prices belong to the default model only; a model set in
+        // config gets its own catalog price (or none).
+        const model = cfg.model ?? defaults.model ?? '';
+        const prices: [number | null, number | null] = model === defaults.model
+          ? [defaults.price_input_per_1m ?? null, defaults.price_output_per_1m ?? null]
+          : catalogPrices(key, String(model));
         providers.push({
           id: null,
           provider_key: key,
           display_name: cfg.display_name ?? defaults.display_name ?? ucfirst(key),
           api_key: cfg.api_key ?? '',
           api_key_masked: this.maskApiKey(cfg.api_key ?? ''),
-          model: cfg.model ?? defaults.model ?? '',
+          model,
           base_url: cfg.base_url ?? defaults.base_url ?? '',
           max_tokens: phpIntVal(cfg.max_tokens ?? defaults.max_tokens ?? 4096),
           temperature: phpFloatVal(cfg.temperature ?? 0.7),

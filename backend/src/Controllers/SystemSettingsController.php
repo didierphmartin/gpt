@@ -112,6 +112,27 @@ class SystemSettingsController
     }
 
     /**
+     * [input, output] price per 1M tokens for a model, from
+     * backend/resources/model_catalog.json; [null, null] when the catalog
+     * does not list the model (or cannot be read).
+     */
+    private function catalogPrices(string $providerKey, string $model): array
+    {
+        $path = __DIR__ . '/../../resources/model_catalog.json';
+        $raw = is_readable($path) ? file_get_contents($path) : false;
+        $data = $raw === false ? null : json_decode($raw, true);
+        foreach ($data['providers'][$providerKey] ?? [] as $entry) {
+            if (($entry['id'] ?? null) === $model) {
+                return [
+                    isset($entry['input']) ? (float)$entry['input'] : null,
+                    isset($entry['output']) ? (float)$entry['output'] : null,
+                ];
+            }
+        }
+        return [null, null];
+    }
+
+    /**
      * Get providers from config file (fallback)
      */
     private function getProvidersFromConfig(): array
@@ -209,15 +230,19 @@ class SystemSettingsController
                 $config = $this->config[$key];
                 $defaults = $providerDefaults[$key] ?? [];
 
-                // Default model's prices, copied from backend/resources/model_catalog.json.
-                $prices = [$defaults['price_input_per_1m'] ?? null, $defaults['price_output_per_1m'] ?? null];
+                // The default prices belong to the default model only; a model
+                // set in config gets its own catalog price (or none).
+                $model = $config['model'] ?? $defaults['model'] ?? '';
+                $prices = $model === ($defaults['model'] ?? null)
+                    ? [$defaults['price_input_per_1m'] ?? null, $defaults['price_output_per_1m'] ?? null]
+                    : $this->catalogPrices($key, (string)$model);
                 $providers[] = [
                     'id' => null,
                     'provider_key' => $key,
                     'display_name' => $config['display_name'] ?? $defaults['display_name'] ?? ucfirst($key),
                     'api_key' => $config['api_key'] ?? '',
                     'api_key_masked' => $this->maskApiKey($config['api_key'] ?? ''),
-                    'model' => $config['model'] ?? $defaults['model'] ?? '',
+                    'model' => $model,
                     'base_url' => $config['base_url'] ?? $defaults['base_url'] ?? '',
                     'max_tokens' => (int)($config['max_tokens'] ?? $defaults['max_tokens'] ?? 4096),
                     'temperature' => (float)($config['temperature'] ?? 0.7),

@@ -50,7 +50,7 @@ class LangGraphA2AGeneratorTest extends TestCase
                     ['bound_skill' => ['dir_name' => 'html']])],
                 ['id' => '4', 'node_type' => '', 'config' => $agent('Human resources')],
                 ['id' => '5', 'node_type' => 'playbook', 'config' => ['type' => 'playbook', 'name' => 'Playbook HR',
-                    'playbook' => self::PLAYBOOK, 'agent_provider' => 'deepseek', 'model' => 'deepseek-v4-flash', 'writes_enabled' => true]],
+                    'playbook' => self::PLAYBOOK, 'agent_provider' => 'deepseek', 'model' => 'deepseek-flash', 'writes_enabled' => true]],
                 ['id' => '6', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ],
             'edges' => [

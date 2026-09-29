@@ -25,6 +25,9 @@ constraint.
 """
 from __future__ import annotations
 
+import json
+
+from app.controllers.model_catalog_controller import CATALOG_PATH
 from app.support.db_presence import DbPresence
 from app.support.phpcompat import (
     php_bool,
@@ -196,6 +199,25 @@ class SystemSettingsController:
 
     # ─── getProvidersFromConfig (php:146-289) ───────────────────────────
 
+    @staticmethod
+    def _catalog_prices(provider_key: str, model: str) -> tuple:
+        """(input, output) price per 1M tokens for a model from
+        resources/model_catalog.json; (None, None) when the catalog does not
+        list the model (or cannot be read). Mirrors PHP catalogPrices()."""
+        try:
+            data = json.loads(CATALOG_PATH.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return (None, None)
+        providers = data.get('providers') if isinstance(data, dict) else None
+        entries = providers.get(provider_key) if isinstance(providers, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get('id') == model:
+                return (
+                    float(entry['input']) if entry.get('input') is not None else None,
+                    float(entry['output']) if entry.get('output') is not None else None,
+                )
+        return (None, None)
+
     def _get_providers_from_config(self) -> dict:
         providers = []
         sort_order = 0
@@ -205,23 +227,30 @@ class SystemSettingsController:
             if cfg is None:
                 continue
             defaults = self._PROVIDER_DEFAULTS.get(key, {})
+            # The default prices belong to the default model only; a model
+            # set in config gets its own catalog price (or none).
+            model = php_coalesce(cfg.get('model'), defaults.get('model'), '')
+            if model == defaults.get('model'):
+                prices = (defaults.get('price_input_per_1m'), defaults.get('price_output_per_1m'))
+            else:
+                prices = self._catalog_prices(key, str(model))
             providers.append({
                 'id': None,
                 'provider_key': key,
                 'display_name': php_coalesce(cfg.get('display_name'), defaults.get('display_name'), ucfirst(key)),
                 'api_key': php_coalesce(cfg.get('api_key'), ''),
                 'api_key_masked': self._mask_api_key(cfg.get('api_key') if cfg.get('api_key') is not None else ''),
-                'model': php_coalesce(cfg.get('model'), defaults.get('model'), ''),
+                'model': model,
                 'base_url': php_coalesce(cfg.get('base_url'), defaults.get('base_url'), ''),
                 'max_tokens': php_intval(php_coalesce(cfg.get('max_tokens'), defaults.get('max_tokens'), 4096)),
                 'temperature': php_floatval(php_coalesce(cfg.get('temperature'), 0.7)),
                 'price_input_per_1m': (
                     php_floatval(cfg['price_input_per_1m']) if cfg.get('price_input_per_1m') is not None
-                    else defaults.get('price_input_per_1m')
+                    else prices[0]
                 ),
                 'price_output_per_1m': (
                     php_floatval(cfg['price_output_per_1m']) if cfg.get('price_output_per_1m') is not None
-                    else defaults.get('price_output_per_1m')
+                    else prices[1]
                 ),
                 'chat_endpoint': php_coalesce(cfg.get('chat_endpoint'), defaults.get('chat_endpoint'),
                                               '/v1/chat/completions'),

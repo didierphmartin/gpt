@@ -61,7 +61,7 @@ def _graph() -> dict:
             {'id': '3', 'node_type': '', 'config': _agent('IT claims')},
             {'id': '4', 'node_type': '', 'config': _agent('Human resources')},
             {'id': '5', 'node_type': 'playbook', 'config': {'type': 'playbook', 'name': 'Playbook HR',
-                'playbook': PLAYBOOK, 'agent_provider': 'deepseek', 'model': 'deepseek-v4-flash', 'writes_enabled': True}},
+                'playbook': PLAYBOOK, 'agent_provider': 'deepseek', 'model': 'deepseek-flash', 'writes_enabled': True}},
             {'id': '6', 'node_type': 'output', 'config': {'type': 'output'}},
         ],
         'edges': [

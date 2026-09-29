@@ -18,7 +18,7 @@
       { "id": "gpt-6-astra", "label": "GPT-6 Astra", "desc": "Latest flagship — most capable tier (long-context tier above a threshold costs more)", "input": 10.00, "output": 50.00 },
       { "id": "gpt-6-sol", "label": "GPT-6 Sol", "desc": "GPT-6 capable tier (long-context tier above a threshold costs more)", "input": 2.00, "output": 10.00 },
       { "id": "gpt-6-luna", "label": "GPT-6 Luna", "desc": "GPT-6 fastest, lowest cost tier (long-context tier above a threshold costs more)", "input": 0.10, "output": 0.50 },
-      { "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "GPT-5.6 most capable tier — promotional price through at least 2026-11-21; long-context tier $8.00/$30.00", "input": 4.00, "output": 20.00 },
+      { "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "GPT-5.6 most capable tier — promotional price through at least 2026-11-21 (end date approximate: OpenAI gives no firm end); long-context tier $8.00/$30.00", "promo_ends": "2026-11-21", "input": 4.00, "output": 20.00 },
       { "id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "desc": "Balanced tier (Jul 2026) — everyday work (long-context tier above a threshold costs more)", "input": 2.00, "output": 12.00 },
       { "id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": "Fastest, lowest cost GPT-5.6 tier (long-context tier above a threshold costs more)", "input": 0.20, "output": 1.20 },
       { "id": "gpt-5.5-pro", "label": "GPT-5.5 Pro", "desc": "GPT-5.5 maximum-compute variant", "input": 30.00, "output": 180.00 },
@@ -59,9 +59,9 @@
       { "id": "glm-5.2", "label": "GLM 5.2", "desc": "GLM 5.2 (z.ai / Zhipu) — OpenAI-compatible", "input": 1.40, "output": 4.40 }
     ],
     "gemini": [
-      { "id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash", "desc": "Newest Flash — promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
-      { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash", "desc": "Promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
-      { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "desc": "Workhorse (Jul 2026) — 1M context; promo price through 2026-12-31, $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash", "desc": "Newest Flash — promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "promo_ends": "2026-12-31", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash", "desc": "Promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "promo_ends": "2026-12-31", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "desc": "Workhorse (Jul 2026) — 1M context; promo price through 2026-12-31, $1.50/$7.50 from 2027-01-01", "promo_ends": "2026-12-31", "input": 0.75, "output": 3.75 },
       { "id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "desc": "Gemini 3.5 fast tier", "input": 1.50, "output": 9.00 },
       { "id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash Lite", "desc": "Cost-effective 3.5 tier (Jul 2026) — 1M context", "input": 0.30, "output": 2.50 },
       { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (preview)", "desc": "Gemini 3.1 flagship — prompts >200K tokens cost $4.00/$18.00", "input": 2.00, "output": 12.00 },

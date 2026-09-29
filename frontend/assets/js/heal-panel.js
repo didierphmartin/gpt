@@ -50,7 +50,7 @@
     const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
     // Default model per provider (mirrors skillopt-panel's first choices).
     const MODEL = {
-        claude: 'claude-sonnet-4-5-20250929', openai: 'gpt-4o', gemini: 'gemini-2.5-flash',
+        claude: 'claude-sonnet-4-5-20250929', openai: 'gpt-4o', gemini: 'gemini-3.6-flash',
         grok: 'grok-4-fast', deepseek: 'deepseek-chat', kimi: 'kimi-k2',
         gamma4: 'Gemma-4-E4B-it',
         glm: 'glm-5.2',

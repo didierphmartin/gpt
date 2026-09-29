@@ -60,6 +60,12 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('return OpenAIChatCompletionClient(**kwargs)', $code);
     }
 
+    public function testDeepSeekFlashGetsV4ThinkingRules(): void
+    {
+        $code = MAFGenerator::emitMaf($this->analyzed());
+        $this->assertStringContainsString('elif p == "deepseek" and str(model).startswith(("deepseek-v4", "deepseek-flash")):', $code);
+    }
+
     public function testClientFactoryUsesChatCompletionAndBaseUrls(): void
     {
         $code = MAFGenerator::emitMaf($this->analyzed());

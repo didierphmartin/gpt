@@ -50,7 +50,7 @@ TXT;
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (2, 85, 'submit_time_off', 'Submit', '{\"type\":\"object\",\"properties\":{\"start\":{\"type\":\"string\"}}}')");
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (3, 9, 'get_news', 'News', '{}')");
         $pdo->exec("INSERT INTO system_llm_settings VALUES ('claude', 'claude-sonnet-4-6', 1)");
-        $pdo->exec("INSERT INTO system_llm_settings VALUES ('deepseek', 'deepseek-v4-flash', 1)");
+        $pdo->exec("INSERT INTO system_llm_settings VALUES ('deepseek', 'deepseek-flash', 1)");
         return $pdo;
     }
 
@@ -74,7 +74,7 @@ TXT;
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'I want to take some vacations']],
                 ['id' => '2', 'node_type' => 'playbook', 'config' => [
                     'type' => 'playbook', 'name' => 'Playbook HR', 'playbook' => self::PLAYBOOK,
-                    'agent_provider' => 'deepseek', 'model' => 'deepseek-v4-flash', 'writes_enabled' => true,
+                    'agent_provider' => 'deepseek', 'model' => 'deepseek-flash', 'writes_enabled' => true,
                 ]],
                 ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ],
@@ -118,7 +118,9 @@ TXT;
         $this->assertStringNotContainsString('"#Request Approval"', $code);
         // Node settings.
         $this->assertStringContainsString('"provider": "deepseek"', $code);
-        $this->assertStringContainsString('"model": "deepseek-v4-flash"', $code);
+        $this->assertStringContainsString('"model": "deepseek-flash"', $code);
+        // deepseek-flash (the renamed deepseek-v4-flash) keeps the V4 thinking rules.
+        $this->assertStringContainsString('if model.startswith(("deepseek-v4", "deepseek-flash")):', $code);
         $this->assertStringContainsString('"writes_enabled": True', $code);
         $this->assertStringContainsString('"display": "Playbook HR"', $code);
         // Title and the instructions travel verbatim.

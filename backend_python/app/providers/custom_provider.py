@@ -310,12 +310,12 @@ class CustomProvider(
 
         self._sendProgress(f"Connecting to {self.displayName} API...")
 
-        # DeepSeek V4 (deepseek-v4-pro / deepseek-v4-flash) runs in thinking
+        # DeepSeek V4 (deepseek-v4-pro / deepseek-flash) runs in thinking
         # mode by default and rejects temperature/top_p/penalty params. Drop
         # those fields and send `thinking: {type: enabled}` explicitly.
         # Other OpenAI-compatible providers keep the legacy temperature
         # behaviour.
-        isDeepSeekV4 = self.name == 'deepseek' and self.model.startswith('deepseek-v4')
+        isDeepSeekV4 = self.name == 'deepseek' and self.model.startswith(('deepseek-v4', 'deepseek-flash'))
 
         payload = {
             'model': self.model,
