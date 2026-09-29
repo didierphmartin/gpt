@@ -55,6 +55,13 @@ final class LoginAccounts
             ->execute([$email, $passwordHash, $firstName, $lastName]);
     }
 
+    public function exists(string $email): bool
+    {
+        $stmt = $this->db->prepare('SELECT 1 FROM users WHERE email = ?');
+        $stmt->execute([strtolower(trim($email))]);
+        return $stmt->fetchColumn() !== false;
+    }
+
     public function setPassword(string $email, string $passwordHash): void
     {
         $this->db->prepare('UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?')

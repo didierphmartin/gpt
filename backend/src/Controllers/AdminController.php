@@ -234,7 +234,19 @@ class AdminController
         if (Edition::isCorporate($this->config) && $accounts === null) {
             return ['success' => false, 'error' => 'The login service is not configured', 'status_code' => 503];
         }
+
+        $loginRowExisted = false;
         if ($accounts !== null) {
+            // Refuse before writing anything if a gpt user already owns this email —
+            // otherwise upsertVerified would overwrite an existing login credential
+            // and the later gpt INSERT would fail on the UNIQUE email constraint,
+            // which would then delete the login row we just clobbered.
+            $existing = $this->db->prepare('SELECT 1 FROM users WHERE email = :email');
+            $existing->execute([':email' => $email]);
+            if ($existing->fetchColumn() !== false) {
+                return ['success' => false, 'error' => 'A user with that email already exists', 'status_code' => 409];
+            }
+            $loginRowExisted = $accounts->exists($email);
             $accounts->upsertVerified($email, password_hash($password, PASSWORD_BCRYPT), $firstName, $lastName);
         }
 
@@ -251,7 +263,7 @@ class AdminController
                 ':verified' => $accounts !== null ? 1 : 0,
             ]);
         } catch (\Throwable $e) {
-            if ($accounts !== null) {
+            if ($accounts !== null && !$loginRowExisted) {
                 $accounts->delete($email);   // don't leave a login account with no gpt account
             }
             throw $e;
@@ -281,7 +293,7 @@ class AdminController
         $userId = (int)($input['user_id'] ?? 0);
         $firstName = trim($input['first_name'] ?? '');
         $lastName = trim($input['last_name'] ?? '');
-        $email = trim($input['email'] ?? '');
+        $email = strtolower(trim($input['email'] ?? ''));
         $password = $input['password'] ?? '';
         $role = $input['role'] ?? null;
 

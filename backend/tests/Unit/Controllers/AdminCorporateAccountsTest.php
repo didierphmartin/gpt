@@ -98,4 +98,72 @@ class AdminCorporateAccountsTest extends TestCase
         $g = $this->gpt->query("SELECT * FROM users WHERE email = 'ann@corp.test'")->fetch();
         $this->assertNotNull($g['password']);
     }
+
+    public function test_duplicate_email_create_returns_409_and_preserves_existing_login_password(): void
+    {
+        $this->admin()->createUser($this->asAdmin(['email' => 'ann@corp.test', 'password' => 'ann-password-1']));
+
+        $r = $this->admin()->createUser($this->asAdmin(['email' => 'ann@corp.test', 'password' => 'different-password-2']));
+
+        $this->assertFalse($r['success']);
+        $this->assertSame(409, $r['status_code']);
+        $row = $this->loginRow('ann@corp.test');
+        $this->assertTrue(password_verify('ann-password-1', $row['password']));
+        $this->assertFalse(password_verify('different-password-2', $row['password']));
+    }
+
+    public function test_gpt_insert_failure_rolls_back_newly_created_login_row(): void
+    {
+        $now = fn () => date('Y-m-d H:i:s');
+        $broken = new PDO('sqlite::memory:');
+        $broken->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $broken->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $broken->sqliteCreateFunction('NOW', $now, 0);
+        // Full schema (requireAdmin's `role` lookup and the createUser() column
+        // list both need it), plus a trigger that aborts every INSERT so the
+        // gpt write fails at execute() time, after the login row already exists.
+        $broken->exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE,
+            password TEXT, first_name TEXT, last_name TEXT, role TEXT, plan TEXT, provider TEXT,
+            email_verified INTEGER DEFAULT 0, app_key_prefix TEXT, app_key_created_at TEXT,
+            created_at TEXT, updated_at TEXT)');
+        $broken->exec("INSERT INTO users (id, email, role) VALUES (1, 'boss@corp.test', 'admin')");
+        $broken->exec("CREATE TRIGGER forced_insert_failure BEFORE INSERT ON users
+            WHEN NEW.id IS NOT 1
+            BEGIN SELECT RAISE(ABORT, 'forced failure for rollback test'); END");
+
+        $admin = new AdminController($broken, ['edition' => 'corporate'], new LoginAccounts($this->login));
+
+        $threw = false;
+        try {
+            $admin->createUser($this->asAdmin(['email' => 'rollback@corp.test', 'password' => 'rollback-password-1']));
+        } catch (\Throwable $e) {
+            $threw = true;
+        }
+
+        $this->assertTrue($threw, 'expected the broken gpt INSERT to raise');
+        $this->assertFalse($this->loginRow('rollback@corp.test'));
+    }
+
+    public function test_explicit_null_accounts_on_corporate_returns_503(): void
+    {
+        $admin = new AdminController($this->gpt, ['edition' => 'corporate'], null);
+
+        $r = $admin->createUser($this->asAdmin(['email' => 'noaccounts@corp.test', 'password' => 'no-accounts-pw-1']));
+
+        $this->assertFalse($r['success']);
+        $this->assertSame(503, $r['status_code']);
+        $this->assertSame('The login service is not configured', $r['error']);
+    }
+
+    public function test_update_user_lowercases_email(): void
+    {
+        $this->admin()->createUser($this->asAdmin(['email' => 'ann@corp.test', 'password' => 'ann-password-1']));
+        $id = (int) $this->gpt->query("SELECT id FROM users WHERE email = 'ann@corp.test'")->fetchColumn();
+
+        $r = $this->admin()->updateUser($this->asAdmin(['user_id' => $id, 'email' => 'Ann@Corp.test']));
+
+        $this->assertTrue($r['success']);
+        $g = $this->gpt->query("SELECT email FROM users WHERE id = $id")->fetch();
+        $this->assertSame('ann@corp.test', $g['email']);
+    }
 }
