@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\Edition;
+use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
 use PDO;
 use Exception;
 
@@ -19,11 +21,28 @@ class AdminController
 
     private PDO $db;
     private array $config;
+    private ?LoginAccounts $accounts;
+    private bool $accountsInjected;
 
-    public function __construct(PDO $db, array $config)
+    public function __construct(PDO $db, array $config, ?LoginAccounts $accounts = null)
     {
         $this->db = $db;
         $this->config = $config;
+        $this->accounts = $accounts;
+        $this->accountsInjected = func_num_args() >= 3;
+    }
+
+    /** Only on a corporate install; throws if the login database is unreachable. */
+    private function loginAccounts(): ?LoginAccounts
+    {
+        if (!Edition::isCorporate($this->config)) {
+            return null;
+        }
+        if (!$this->accountsInjected) {
+            $this->accounts = LoginAccounts::fromConfig($this->config);
+            $this->accountsInjected = true;
+        }
+        return $this->accounts;
     }
 
     /**
@@ -187,7 +206,7 @@ class AdminController
 
         $firstName = trim($input['first_name'] ?? '');
         $lastName = trim($input['last_name'] ?? '');
-        $email = trim($input['email'] ?? '');
+        $email = strtolower(trim($input['email'] ?? ''));
         $password = $input['password'] ?? '';
         $role = $input['role'] ?? 'user';
 
@@ -204,19 +223,39 @@ class AdminController
             $role = 'user';
         }
 
-        // Hash password
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
-        $sql = "INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)
-                VALUES (:email, :password, :first_name, :last_name, :role, 'email', NOW(), NOW())";
+        // Corporate: the login service holds the credential, gpt holds the role.
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if (Edition::isCorporate($this->config) && $accounts === null) {
+            return ['success' => false, 'error' => 'The login service is not configured', 'status_code' => 503];
+        }
+        if ($accounts !== null) {
+            $accounts->upsertVerified($email, password_hash($password, PASSWORD_BCRYPT), $firstName, $lastName);
+        }
+
+        $sql = "INSERT INTO users (email, password, first_name, last_name, role, provider, email_verified, created_at, updated_at)
+                VALUES (:email, :password, :first_name, :last_name, :role, 'email', :verified, NOW(), NOW())";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([
-            ':email' => $email,
-            ':password' => $hashedPassword,
-            ':first_name' => $firstName,
-            ':last_name' => $lastName,
-            ':role' => $role
-        ]);
+        try {
+            $stmt->execute([
+                ':email' => $email,
+                ':password' => $accounts !== null ? null : $hashedPassword,
+                ':first_name' => $firstName,
+                ':last_name' => $lastName,
+                ':role' => $role,
+                ':verified' => $accounts !== null ? 1 : 0,
+            ]);
+        } catch (\Throwable $e) {
+            if ($accounts !== null) {
+                $accounts->delete($email);   // don't leave a login account with no gpt account
+            }
+            throw $e;
+        }
 
         $newUserId = $this->db->lastInsertId();
 
@@ -271,6 +310,27 @@ class AdminController
             ];
         }
 
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if ($accounts !== null) {
+            $current = $this->db->prepare('SELECT email FROM users WHERE id = :id');
+            $current->execute([':id' => $userId]);
+            $currentEmail = strtolower((string) $current->fetchColumn());
+            // sso_exchange matches the login account to the gpt account by email.
+            if ($currentEmail !== strtolower($email)) {
+                return ['success' => false,
+                    'error' => 'The email of an account cannot be changed on a corporate installation',
+                    'status_code' => 400];
+            }
+            if (!empty($password)) {
+                $accounts->setPassword($currentEmail, password_hash($password, PASSWORD_BCRYPT));
+            }
+            $password = '';   // gpt keeps no password on a corporate install
+        }
+
         // Build update query
         $fields = ['email = :email', 'first_name = :first_name', 'last_name = :last_name', 'updated_at = NOW()'];
         $params = [
@@ -316,6 +376,20 @@ class AdminController
                 'error' => 'Invalid user ID',
                 'status_code' => 400
             ];
+        }
+
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if ($accounts !== null) {
+            $row = $this->db->prepare('SELECT email FROM users WHERE id = :id');
+            $row->execute([':id' => $userId]);
+            $emailToDelete = (string) $row->fetchColumn();
+            if ($emailToDelete !== '') {
+                $accounts->delete($emailToDelete);
+            }
         }
 
         $sql = "DELETE FROM users WHERE id = :id";
