@@ -12,8 +12,6 @@ ADMIN_SRC=${GPT_ADMIN_SRC:-/Applications/XAMPP/xamppfiles/htdocs/gpt_admin}
 
 export COMPOSE_PROJECT_NAME=gpt-corp-test
 export GPT_PORT=18082
-export GPT_ADMIN_EMAIL=corp@test.local
-export GPT_ADMIN_PASSWORD=corp-test-pass-123
 trap 'docker compose -f compose.yaml -f compose.corporate.yaml down -v >/dev/null 2>&1 || true' EXIT
 
 docker compose -f compose.yaml -f compose.corporate.yaml down -v >/dev/null 2>&1 || true
@@ -27,6 +25,10 @@ docker build -t gpt-web-base:latest -f docker/web/Dockerfile . >/dev/null 2>&1 \
   || fail "base image build failed"
 docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$ADMIN_SRC" >/dev/null 2>&1 \
   || fail "gpt_admin image build failed"
+LOGIN_SRC=${GPT_LOGIN_SRC:-/Applications/XAMPP/xamppfiles/htdocs/login}
+[ -d "$LOGIN_SRC" ] || { echo "SKIP: login service checkout not found at $LOGIN_SRC"; exit 0; }
+docker build -q -t gpt-login-src:latest -f docker/login/Dockerfile "$LOGIN_SRC" >/dev/null \
+  || fail "login service image build failed"
 
 docker compose -f compose.yaml -f compose.corporate.yaml up -d --build >/dev/null 2>&1 \
   || fail "corporate stack failed to build"
@@ -46,13 +48,12 @@ cfg=$(curl -fsS "http://localhost:${GPT_PORT}/gpt/frontend/assets/js/config.js")
 echo "$cfg" | grep -q "gpt-auto-login" && fail "corporate edition has auto-login enabled"
 echo "$cfg" | grep -q "corporate" || fail "config.js does not report the corporate edition"
 
-# The admin from .env must be able to sign in.
-code=$(curl -s -o /tmp/corp.json -w '%{http_code}' \
-  -X POST "http://localhost:${GPT_PORT}/gpt/backend/api/v1/auth/login" \
-  -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$GPT_ADMIN_EMAIL\",\"password\":\"$GPT_ADMIN_PASSWORD\"}")
-[ "$code" = "200" ] || fail "the configured admin cannot sign in (HTTP $code)"
-grep -q '"role":"admin"' /tmp/corp.json || fail "the seeded account is not an admin"
-rm -f /tmp/corp.json
+# Unauthenticated /verify answers 401 from the login service itself; a 404 or
+# 500 means Apache is not routing /login/ to it.
+code=$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:${GPT_PORT}/login/backend/api/v1/verify")
+[ "$code" = "401" ] || [ "$code" = "200" ] \
+  || fail "login service API is not served at /login/backend/api/v1 (HTTP $code)"
+curl -fsS "http://localhost:${GPT_PORT}/gpt/backend/api/v1/setup/status" | grep -q '"needs_setup":true' \
+  || fail "a fresh corporate install does not report needs_setup"
 
-echo "PASS: corporate stack serves gpt + gpt_admin, sign-in required"
+echo "PASS: corporate stack serves gpt + gpt_admin, login service at /login/, awaiting setup"

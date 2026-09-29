@@ -50,6 +50,8 @@ fi
 # missing one into a crash loop on upgrade rather than a clear error.
 grep -q '^GPT_AUTO_PASSWORD=' "$SECRETS" || \
     echo "GPT_AUTO_PASSWORD=$(openssl rand -hex 9)" >> "$SECRETS"
+grep -q '^LOGIN_APP_KEY_SECRET=' "$SECRETS" || \
+    echo "LOGIN_APP_KEY_SECRET=$(openssl rand -hex 32)" >> "$SECRETS"
 
 # shellcheck disable=SC1090
 . "$SECRETS"
@@ -72,7 +74,8 @@ set_env() {
     # as an escape, so a value containing either (e.g. a MySQL password like
     # 'p&ss\w/rd') would silently corrupt the line instead of erroring --
     # escape both before substituting. Every key this function writes
-    # (DB_*, CTX_DB_*, JWT_SECRET, APP_KEY_SECRET, STORAGE_PROVIDER) already
+    # (DB_*, CTX_DB_*, JWT_SECRET, APP_KEY_SECRET, STORAGE_PROVIDER, GPT_EDITION,
+    # LOGIN_JWT_SECRET, LOGIN_DB_*) already
     # exists in backend/.env.example, which is copied to $ENV_FILE above, so
     # the grep always matches and there is no append path to fall back to.
     value=${value//\\/\\\\}
@@ -94,9 +97,36 @@ done
 set_env JWT_SECRET "$JWT_SECRET"
 set_env APP_KEY_SECRET "$APP_KEY_SECRET"
 set_env STORAGE_PROVIDER local
+set_env GPT_EDITION "${GPT_EDITION:-}"
+if [ "${GPT_EDITION:-}" = "corporate" ]; then
+    # gpt trusts the login service's tokens (same secret) and reads its users
+    # table for sso_exchange and for creating accounts from gpt_admin.
+    set_env LOGIN_JWT_SECRET "$JWT_SECRET"
+    set_env LOGIN_DB_HOST "${MYSQL_HOST:-db}"
+    set_env LOGIN_DB_NAME "${LOGIN_DB_NAME:-gpt_login}"
+    set_env LOGIN_DB_USER "$MYSQL_USER"
+    set_env LOGIN_DB_PASS "$MYSQL_PASSWORD"
+fi
 
 chown www-data:www-data "$ENV_FILE"
 chmod 600 "$ENV_FILE"
+
+# --- login service (corporate) -------------------------------------------------
+if [ "${GPT_EDITION:-}" = "corporate" ]; then
+    LOGIN_ENV=/var/www/html/login/backend/.env
+    log "rendering login/backend/.env"
+    {
+        echo "DB_HOST=${MYSQL_HOST:-db}"
+        echo "DB_NAME=${LOGIN_DB_NAME:-gpt_login}"
+        echo "DB_USER=${MYSQL_USER}"
+        echo "DB_PASS=${MYSQL_PASSWORD}"
+        echo "JWT_SECRET=${JWT_SECRET}"
+        echo "LOGIN_APP_KEY_SECRET=${LOGIN_APP_KEY_SECRET}"
+        echo "LOGIN_DISABLE_SIGNUP=1"
+    } > "$LOGIN_ENV"
+    chown www-data:www-data "$LOGIN_ENV"
+    chmod 600 "$LOGIN_ENV"
+fi
 
 # --- frontend config ---------------------------------------------------------
 # Both are gitignored and the app expects them to exist. Firebase values stay
@@ -231,7 +261,10 @@ EOF
 fi
 
 # --- admin account -----------------------------------------------------------
-if [ "${GPT_SKIP_ADMIN:-0}" != "1" ]; then
+if [ "${GPT_EDITION:-}" = "corporate" ]; then
+    # No admin from .env: the setup wizard in gpt_admin creates it, once.
+    [ "${GPT_SKIP_ADMIN:-0}" = "1" ] || php "$APP/docker/login-schema.php"
+elif [ "${GPT_SKIP_ADMIN:-0}" != "1" ]; then
     php "$APP/docker/bootstrap-admin.php" || log "admin bootstrap skipped (database not ready)"
 fi
 
