@@ -327,6 +327,13 @@ final class JevKeyStorageTest extends TestCase
         $this->assertSame(['key' => 'global-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), 7));
     }
 
+    public function testTruthyEnabledCountsAsOnLikeTheLlmProviders(): void
+    {
+        $this->userWithRole(7, 'user');
+        $this->package('user', ['enabled' => 1, 'default_api_key' => 'pkg-key']);
+        $this->assertSame(['key' => 'pkg-key', 'source' => 'package'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+    }
+
     public function testEnabledPackageAndNoKeyAnywhereIsNone(): void
     {
         $this->userWithRole(7, 'user');

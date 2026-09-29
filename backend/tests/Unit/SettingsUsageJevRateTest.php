@@ -40,4 +40,16 @@ final class SettingsUsageJevRateTest extends TestCase
     {
         $this->assertNull(SettingsController::rateOf(new PricingResolver(new PDO('sqlite::memory:')), 'jev'));
     }
+
+    public function testQuotaTokensUsedLeavesJevOut(): void
+    {
+        $balances = [
+            ['provider' => 'claude', 'total_tokens' => '1200'],
+            ['provider' => 'jev', 'total_tokens' => '90000'],
+            ['provider' => 'kimi', 'total_tokens' => 300],
+        ];
+        $this->assertSame(1500, SettingsController::quotaTokensUsed($balances));
+        $this->assertSame(0, SettingsController::quotaTokensUsed([['provider' => 'jev', 'total_tokens' => 5]]));
+        $this->assertSame(0, SettingsController::quotaTokensUsed([]));
+    }
 }

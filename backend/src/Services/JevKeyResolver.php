@@ -76,7 +76,7 @@ final class JevKeyResolver
             return [];
         }
         $jev = $providers[ProviderKinds::JEV_KEY] ?? null;
-        if (!is_array($jev) || ($jev['enabled'] ?? false) !== true) {
+        if (!is_array($jev) || empty($jev['enabled'])) {
             return false;
         }
         return $jev;

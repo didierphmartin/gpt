@@ -3133,14 +3133,21 @@ class WorkflowEditor {
                 // compiled dispatchers get TYPESAFE_API_KEY like any LLM key.
                 jev: 'TYPESAFE_API_KEY',
             };
+            // The global jev row is the organisation key; the plan decides whether
+            // this user may route with Jev at all. Not allowed → no TYPESAFE_API_KEY
+            // in the runner (and any earlier one is removed), so a compiled
+            // dispatcher falls back exactly like the server run does.
+            const jevSt = await this._jevStatus(true);
+            const jevBlocked = !!jevSt && jevSt.allowed === false;
             const keys = {};
             for (const p of providers) {
                 if (!p || p.enabled === false) continue;
                 const env = MAP[String(p.provider_key || '').toLowerCase()];
+                if (jevBlocked && env === 'TYPESAFE_API_KEY') continue;
                 const ak = String(p.api_key || '').trim();
                 if (env && ak) keys[env] = ak;
             }
-            if (!Object.keys(keys).length) return;
+            if (!Object.keys(keys).length && !jevBlocked) return;
 
             // Seed from existing .env (else .env.example) to preserve non-key lines.
             let lines = [];
@@ -3151,6 +3158,7 @@ class WorkflowEditor {
                     break;
                 } catch (_) { /* try next */ }
             }
+            if (jevBlocked) lines = lines.filter((ln) => !/^TYPESAFE_API_KEY=/.test(ln));
             const seen = {};
             lines = lines.map((ln) => {
                 const m = ln.match(/^([A-Z_]+_API_KEY)=/);

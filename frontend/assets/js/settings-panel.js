@@ -2228,10 +2228,12 @@ class SettingsPanel {
             if (plan === 'free' && role !== 'admin') {
                 if (quotaSection) quotaSection.classList.remove('hidden');
 
-                const percent = Math.min(100, Math.round((totalTokens / quota) * 100));
+                // The quota counts every provider but Jev (same sum the server enforces).
+                const quotaUsed = typeof usage.quota_tokens_used === 'number' ? usage.quota_tokens_used : totalTokens;
+                const percent = Math.min(100, Math.round((quotaUsed / quota) * 100));
 
                 if (quotaText) {
-                    quotaText.textContent = `${totalTokens.toLocaleString()} / ${quota.toLocaleString()} tokens (${percent}%)`;
+                    quotaText.textContent = `${quotaUsed.toLocaleString()} / ${quota.toLocaleString()} tokens (${percent}%)`;
                 }
                 if (quotaBar) {
                     quotaBar.style.width = `${percent}%`;

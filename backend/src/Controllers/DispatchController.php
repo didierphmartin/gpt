@@ -74,7 +74,7 @@ class DispatchController
             $out['reason'] = JevKeyResolver::unavailableReason($resolved['source']);
         }
         // One usage row per call TypeSafe answered; refused calls record nothing.
-        JevUsage::record($this->usage ?? new UsageLogger($this->db), $this->userId($request), $out);
+        JevUsage::record($this->usage ?? new UsageLogger($this->db, true, $this->config['contexts_database'] ?? $this->config['database'] ?? null), $this->userId($request), $out);
 
         $target = is_array($out['target'] ?? null)
             ? ['id' => $out['target']['id'] ?? null, 'name' => $out['target']['name'] ?? null]

@@ -1178,7 +1178,11 @@ class GraphWorkflowRunner
     /** Test seam: where an answered Jev call is written as usage. */
     protected function recordJevUsage(int $userId, array $jevOut): void
     {
-        JevUsage::record(new UsageLogger($this->db), $userId, $jevOut);
+        JevUsage::record(
+            new UsageLogger($this->db, true, $this->config['contexts_database'] ?? $this->config['database'] ?? null),
+            $userId,
+            $jevOut
+        );
     }
 
     /**

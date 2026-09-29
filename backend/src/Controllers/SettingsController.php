@@ -189,12 +189,32 @@ class SettingsController
                     'cost_usd' => (float)($lifetime['lifetime_cost_usd'] ?? 0),
                     'requests' => (int)($lifetime['lifetime_requests'] ?? 0)
                 ],
+                // What the free-trial quota counts: the same sum ChatController::checkFreeTrialQuota
+                // enforces (llm_usage_balance, Jev excluded). lifetime.total_tokens still counts all.
+                'quota_tokens_used' => self::quotaTokensUsed($balances),
                 'plan' => $userRow['plan'] ?? 'free',
                 'role' => $userRow['role'] ?? 'prospect',
                 'free_trial_quota' => 50000
             ],
             'status_code' => 200
         ];
+    }
+
+    /**
+     * Tokens that count toward the quota: every provider's balance total except
+     * Jev, whose routing tokens are recorded but never capped.
+     *
+     * @param array<int, array<string, mixed>> $balances llm_usage_balance rows
+     */
+    public static function quotaTokensUsed(array $balances): int
+    {
+        $sum = 0;
+        foreach ($balances as $row) {
+            if (($row['provider'] ?? '') !== ProviderKinds::JEV_KEY) {
+                $sum += (int) ($row['total_tokens'] ?? 0);
+            }
+        }
+        return $sum;
     }
 
     /**
