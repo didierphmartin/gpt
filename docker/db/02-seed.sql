@@ -19,8 +19,8 @@
 --
 -- The last row, `jev`, is NOT a chat provider. It is a router row
 -- (api_format 'router'): TypeSafe's Jev routes dispatcher nodes, and this row
--- only holds its global key. It has no base_url and no price, and every chat
--- path skips it (see backend/src/Services/ProviderKinds.php).
+-- only holds its global key. It has no base_url; its price is $0.042 per 1M
+-- input tokens, output free. Every chat path skips it (see backend/src/Services/ProviderKinds.php).
 
 INSERT INTO `system_llm_settings`
   (`provider_key`, `display_name`, `api_key`, `model`, `base_url`, `max_tokens`, `temperature`, `chat_endpoint`, `streaming`, `supports_tools`, `supported_models`, `api_format`, `system_prompt`, `enabled`, `sort_order`)
@@ -34,3 +34,9 @@ VALUES
 ('gamma4', 'Gamma4', '', 'Gemma-4-E4B-it', 'https://g4eb.yellowbrickroad.info', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 6),
 ('glm', 'GLM 5.2', '', 'glm-5.2', 'https://api.z.ai/api/paas/v4', 4096, 0.70, '/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 7),
 ('jev', 'Jev (dispatcher routing)', '', 'jev-latest', NULL, NULL, NULL, NULL, 0, 0, NULL, 'router', NULL, 1, 100);
+
+-- The seed's column list carries no prices (an admin sets LLM prices); Jev's
+-- are fixed by its vendor, so they are filled here.
+UPDATE `system_llm_settings`
+   SET `price_input_per_1m` = 0.042, `price_output_per_1m` = 0
+ WHERE `provider_key` = 'jev' AND `price_input_per_1m` IS NULL AND `price_output_per_1m` IS NULL;

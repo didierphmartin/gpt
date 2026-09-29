@@ -9,12 +9,18 @@
 INSERT INTO system_llm_settings
   (provider_key, display_name, api_key, model, base_url, max_tokens, temperature,
    chat_endpoint, streaming, supports_tools, supported_models, api_format,
-   system_prompt, enabled, sort_order)
+   system_prompt, enabled, sort_order, price_input_per_1m, price_output_per_1m)
 SELECT
   'jev', 'Jev (dispatcher routing)', '', 'jev-latest', NULL, NULL, NULL,
-  NULL, 0, 0, NULL, 'router', NULL, 1, 100
+  NULL, 0, 0, NULL, 'router', NULL, 1, 100, 0.042, 0
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_llm_settings WHERE provider_key = 'jev');
 
--- Verify: this must return exactly one row, with api_format 'router':
---   SELECT provider_key, api_format, enabled FROM system_llm_settings WHERE provider_key='jev';
+-- A row created before prices were known: fill them once, never overwrite an admin's edit.
+-- Jev pricing (docs.typesafe.ai/models): $0.042 per 1M input tokens, output free.
+UPDATE system_llm_settings
+   SET price_input_per_1m = 0.042, price_output_per_1m = 0
+ WHERE provider_key = 'jev' AND price_input_per_1m IS NULL AND price_output_per_1m IS NULL;
+
+-- Verify: this must return exactly one row, with api_format 'router' and prices 0.042 / 0:
+--   SELECT provider_key, api_format, enabled, price_input_per_1m, price_output_per_1m FROM system_llm_settings WHERE provider_key='jev';

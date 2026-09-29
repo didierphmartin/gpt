@@ -44,6 +44,12 @@ jev_row=$(grep -E "^\('jev'," "$SEED" || true)
 echo "$jev_row" | grep -q "'router'" || fail "jev row must use api_format 'router'"
 echo "$jev_row" | grep -qE "^\('jev', '[^']*', '', 'jev-latest', NULL," \
   || fail "jev row must have an empty api_key, model jev-latest and base_url NULL"
+# Jev is priced by its vendor ($0.042 per 1M input, output free); the seed's
+# INSERT has no price columns, so a separate UPDATE must set them.
+grep -qE "price_input_per_1m. = 0\.042, .price_output_per_1m. = 0" "$SEED" \
+  || fail "seed must price the jev row: input 0.042, output 0"
+grep -qE "provider_key. = 'jev'" "$SEED" \
+  || fail "the jev price UPDATE must target provider_key = 'jev'"
 
 [ -f "$CONTROLLER" ] || fail "missing $CONTROLLER"
 [ -f "$KIMI_PROVIDER" ] || fail "missing $KIMI_PROVIDER"
