@@ -3128,6 +3128,10 @@ class WorkflowEditor {
                 openai: 'OPENAI_API_KEY', gemini: 'GOOGLE_API_KEY', google: 'GOOGLE_API_KEY',
                 grok: 'XAI_API_KEY', xai: 'XAI_API_KEY', kimi: 'KIMI_API_KEY', moonshot: 'KIMI_API_KEY',
                 deepseek: 'DEEPSEEK_API_KEY', glm: 'GLM_API_KEY',
+                // Not a chat provider: the dispatcher router row (api_format
+                // 'router', no model/base_url). Only its key is read here, so
+                // compiled dispatchers get TYPESAFE_API_KEY like any LLM key.
+                jev: 'TYPESAFE_API_KEY',
             };
             const keys = {};
             for (const p of providers) {
@@ -12231,6 +12235,57 @@ class WorkflowEditor {
         try { this.startNodeTimer(dfId, dfId); } catch (_) {}
         this.highlightNode(dfId, 'active', dfId, 'agent');
         this.updateModalInputOutput(dfId);
+
+        // Dispatcher routing mode (settings.routing_mode) — same semantics as
+        // GraphWorkflowRunner (interpreter) and the LangGraph compiler:
+        //   'llm' -> the model only; Jev is never consulted.
+        //   'jev' -> Jev only; the model is never called. Anything but
+        //            'routed' stops here with "did not route" and halt:true,
+        //            so the caller runs none of this dispatcher's branches.
+        //   unset -> hybrid: Jev first when a key is available, the model
+        //            (route_to, below) on any other outcome.
+        // The browser never holds the Jev key: the server routes for it.
+        const routingMode = data.settings?.routing_mode;
+        if (handoffStyle === 'dispatch' && dispatchTargets?.length
+            && data.agent_type === 'dispatcher' && routingMode !== 'llm') {
+            const jevOnly = routingMode === 'jev';
+            const status = jevOnly ? null : await this._jevStatus();
+            if (jevOnly || status?.available) {
+                const jr = await this._wfJevRoute(data, agentLabel, inputText, dispatchTargets);
+                const conf = typeof jr.confidence === 'number' ? jr.confidence.toFixed(2) : '?';
+                const hit = (jr.outcome === 'routed' && jr.target)
+                    ? (dispatchTargets.find(t => String(t.id) === String(jr.target.id))
+                        || dispatchTargets.find(t => t.name === jr.target.name))
+                    : null;
+                const nd = this.nodeExecutionData[dfId];
+                if (hit) {
+                    // Jev writes no notes: the child gets the dispatcher's input alone.
+                    const route = { id: hit.id, name: hit.name, notes: '' };
+                    nd.output = inputText;
+                    nd.success = true;
+                    nd.executionTime = Date.now() - _startedAt;
+                    nd.inputTokens = 0; nd.outputTokens = 0;
+                    try { this.stopNodeTimer(dfId); } catch (_) {}
+                    this._wfNodeLog(dfId, 'routing', `Jev routed to ${hit.name} (confidence ${conf}, ${jr.ms ?? '?'}ms, no LLM turn)`);
+                    this.highlightNode(dfId, 'completed', dfId, 'agent');
+                    this.updateModalInputOutput(dfId);
+                    return { success: true, output: nd.output, route, history: conversationHistory };
+                }
+                const why = `${jr.outcome}: ${jr.reason || 'no reason given'}`;
+                if (jevOnly) {
+                    nd.output = `Error: dispatcher "${agentLabel}" did not route the request (Jev: ${why}).`;
+                    nd.success = false;
+                    nd.executionTime = Date.now() - _startedAt;
+                    try { this.stopNodeTimer(dfId); } catch (_) {}
+                    this._wfNodeLog(dfId, 'error', `Jev did not route (${why}, confidence ${conf}) — Jev-only dispatcher, no model fallback`, 'error');
+                    this.highlightNode(dfId, 'error', dfId, 'agent');
+                    this.updateModalInputOutput(dfId);
+                    return { success: false, output: nd.output, halt: true, history: conversationHistory };
+                }
+                this._wfNodeLog(dfId, 'routing', `Jev declined (${why}, confidence ${conf}) — asking the model`);
+            }
+        }
+
         this._wfNodeLog(dfId, 'llm', `calling ${provider}${model ? ' (' + model + ')' : ''}`);
 
         // Load the bound skill's body + scripts so the model can call it.
@@ -13956,6 +14011,42 @@ class WorkflowEditor {
         return null;
     }
 
+    /**
+     * POST /dispatch/jev for one dispatcher. Always resolves to the endpoint's
+     * shape ({outcome, target, confidence, ms, reason}); a transport or HTTP
+     * failure becomes outcome 'error', which every mode already handles.
+     * The question is the dispatcher's default role line, as the interpreter
+     * sends (DispatchRouting::defaultInstructions).
+     */
+    async _wfJevRoute(data, agentLabel, inputText, targets) {
+        const body = {
+            request: String(inputText || ''),
+            targets: targets.map(t => ({ id: t.id, name: t.name })),
+            question: this._wfDefaultInstructions(agentLabel, data.description || ''),
+        };
+        const floor = data.settings?.jev_min_confidence;
+        if (floor !== undefined && floor !== null && floor !== '' && Number.isFinite(Number(floor))) {
+            body.min_confidence = Number(floor);
+        }
+        try {
+            const resp = await fetch(`${this.apiBase}/dispatch/jev`, {
+                method: 'POST',
+                headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify(body),
+            });
+            let j = null;
+            try { j = await resp.json(); } catch (_) { /* not JSON */ }
+            if (!resp.ok || !j || j.success === false) {
+                return { outcome: 'error', target: null, confidence: null, ms: null,
+                         reason: (j && (j.message || j.error)) || `HTTP ${resp.status}` };
+            }
+            return j;
+        } catch (e) {
+            return { outcome: 'error', target: null, confidence: null, ms: null, reason: String(e?.message || e) };
+        }
+    }
+
     /** Ids to skip after a route: the unchosen targets plus everything reachable only through them. */
     _wfSkipSet(unchosenIds, nodes) {
         const skipped = new Set(unchosenIds.map(String));
@@ -14618,6 +14709,7 @@ class WorkflowEditor {
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
         this._wfRoutedBy = {}; // target id → {from, notes} once a dispatcher chose it
+        this._wfJevStatus = undefined; // Jev key status, read once per run (hybrid dispatchers)
         const done = new Set();
         const remaining = new Set();
 
@@ -14682,6 +14774,19 @@ class WorkflowEditor {
                                 this._wfOutputs[s] = '';
                                 done.add(s); remaining.delete(s);
                                 this.highlightNode(s, 'skipped', s, 'agent');
+                            }
+                        }
+                        // A Jev-only dispatcher that did not route: the run stops
+                        // there — none of its branches run (no fan-out). An Output
+                        // node cut off by that carries the "did not route" message
+                        // as the run's answer. LLM/hybrid no-route is unchanged.
+                        if (res?.halt && dispatchTargets?.length) {
+                            for (const s of this._wfSkipSet(this._wfDownstreamIds(id, nodes), nodes)) {
+                                if (done.has(s) || String(s) === String(id)) continue;
+                                const isOut = this._wfNodeKind(s, nodes) === 'output';
+                                this._wfOutputs[s] = isOut ? res.output : '';
+                                done.add(s); remaining.delete(s);
+                                if (!isOut) this.highlightNode(s, 'skipped', s, 'agent');
                             }
                         }
                         try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: res?.success !== false }); } catch (_) {}
@@ -16553,15 +16658,48 @@ class WorkflowEditor {
                                     </div>
                                 </div>
 
+                                <!-- Routing (Dispatcher only): Jev | LLM, neither selected
+                                     when the node has no saved mode (hybrid). The chosen mode
+                                     lives on data-mode; _applyRoutingVisibility() owns what shows. -->
+                                <div id="agent-routing-block" class="${agent.agent_type === 'dispatcher' ? '' : 'hidden'}">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">${tf('routing')}</label>
+                                    <div class="flex items-start gap-3">
+                                        <span id="agent-routing-mode" data-mode="${['jev', 'llm'].includes(agent.settings?.routing_mode) ? agent.settings.routing_mode : ''}"
+                                              class="inline-flex shrink-0 border border-gray-300 rounded-lg overflow-hidden text-sm">
+                                            <button type="button" data-routing="jev" class="px-4 py-1.5">${tf('routingJev')}</button>
+                                            <button type="button" data-routing="llm" class="px-4 py-1.5 border-l border-gray-300">${tf('routingLlm')}</button>
+                                        </span>
+                                        <p id="agent-routing-hint" class="text-xs text-gray-500 pt-1"></p>
+                                    </div>
+                                </div>
+
                                 <!-- Description -->
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">${tf('description')}</label>
                                     <input type="text" id="agent-description-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                                            value="${this.escapeHtml(agent.description || '')}" placeholder="${tf('descriptionPlaceholder')}">
+                                    <p id="agent-jev-description-hint" class="text-xs text-gray-500 mt-1 hidden">${tf('jevDescriptionHint')}</p>
+                                </div>
+
+                                <!-- Jev settings (Dispatcher in Jev mode only) -->
+                                <div id="agent-jev-block" class="space-y-3 hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                                            ${tf('jevMinConfidence')}: <span id="agent-jev-min-confidence-value">${Number(agent.settings?.jev_min_confidence ?? 0.6).toFixed(2)}</span>
+                                        </label>
+                                        <input type="range" id="agent-jev-min-confidence" class="w-full" min="0" max="1" step="0.05"
+                                               value="${Number(agent.settings?.jev_min_confidence ?? 0.6)}">
+                                        <p class="text-xs text-gray-500 mt-1">${tf('jevMinConfidenceHint')}</p>
+                                    </div>
+                                    <div>
+                                        <span class="block text-sm font-medium text-gray-700 mb-1">${tf('jevKey')}</span>
+                                        <p id="agent-jev-key-status" class="text-sm text-gray-600">${tf('jevKeyChecking')}</p>
+                                        <p id="agent-jev-key-switch-hint" class="text-xs text-gray-500 mt-1 hidden">${tf('jevKeySwitchHint')}</p>
+                                    </div>
                                 </div>
 
                                 <!-- Provider and Model -->
-                                <div class="grid grid-cols-2 gap-3">
+                                <div id="agent-provider-model-block" class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-1">${tf('provider')}</label>
                                         <select id="agent-provider-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
@@ -16582,7 +16720,7 @@ class WorkflowEditor {
 
 
                                 <!-- Temperature and Max Tokens -->
-                                <div class="grid grid-cols-2 gap-3">
+                                <div id="agent-sampling-block" class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-1">
                                             ${tf('temperature')}: <span id="temperature-value">${agent.settings?.temperature || 0.7}</span>
@@ -17014,6 +17152,7 @@ class WorkflowEditor {
             this._syncAgentTypeDoc();
         });
         this._wirePlaybookFacet();
+        this._wireRoutingMode();
         document.getElementById('tab-input')?.addEventListener('click', () => {
             this.switchAgentModalTab('input');
         });
@@ -17207,33 +17346,33 @@ class WorkflowEditor {
                 fan-out: exactly one child runs — the one this node picks — and the others are
                 skipped along with everything hanging off them. The chosen child receives the
                 dispatcher's own input, not its prose.</p>
-                <p class="${sub}">Hybrid routing: Jev first, the model when needed</p>
+                <p class="${sub}">Routing: Jev, LLM, or not set</p>
                 <p>Picking one of N branches is a <i>closed</i> question, so it does not need a
-                text-generating model. When a TypeSafe key is configured, the choice is made by
-                <b>Jev</b> — a "System One" model that returns a probability distribution over
-                the options instead of text. Two consequences:</p>
+                text-generating model. <b>Jev</b> is a "System One" model that returns a
+                probability distribution over the branches you drew instead of text: it cannot
+                invent a branch (a name that does not exist is unrepresentable rather than
+                merely unlikely), and it answers in about 250&nbsp;ms instead of about 5&nbsp;s,
+                billed on input only. The <b>Routing</b> choice under Type decides who picks:</p>
                 <ul class="list-disc ml-5 mt-2 space-y-1">
-                    <li><b>It cannot invent a branch.</b> The answer is constrained to the
-                    branches you drew, so a name that does not exist is unrepresentable rather
-                    than merely unlikely.</li>
-                    <li><b>It is fast and nearly free.</b> Around 250&nbsp;ms instead of about
-                    5&nbsp;s, and billed on input only.</li>
+                    <li><b>Jev</b> — Jev only; the model is never called, so this node's
+                    provider, model, sampling settings, system prompt and skills are hidden and
+                    unused. Jev routes only when it is sure: when the request names no branch
+                    ("hello"), when its confidence is below the <b>Minimum confidence</b>, or when
+                    there is no Jev key or the call fails, the run stops at this node with
+                    "did not route", naming the reason, and none of its branches run. The chosen
+                    child receives the request with no notes, because Jev writes nothing.</li>
+                    <li><b>LLM</b> — the model only; Jev is never asked. The model reads the
+                    request, picks a branch with <code>route_to</code> and can write notes for
+                    the child.</li>
+                    <li><b>Not set</b> (every dispatcher saved before this choice existed) —
+                    both: Jev first when a Jev key is available, and the model whenever Jev does
+                    not route (no signal, a divided signal such as "upgrade me to the annual
+                    plan" splitting between Sales and Billing, no key, or an error). This can make
+                    routing cheap; it cannot make it fail.</li>
                 </ul>
-                <p class="${sub}">When the model still decides</p>
-                <p>Jev is also asked whether it can tell at all, and how sure it is. It routes
-                only when it is confident:</p>
-                <ul class="list-disc ml-5 mt-2 space-y-1">
-                    <li><b>No signal</b> ("hello", "I have a question") — it says so, and the
-                    request is handed to the model rather than routed on a guess.</li>
-                    <li><b>Divided signal</b> — a branch is defensible but so is another
-                    ("upgrade me to the annual plan" splits between Sales and Billing). The model
-                    takes over, because it can both weigh the request <i>and</i> write the notes
-                    the chosen child receives. Jev writes nothing.</li>
-                </ul>
-                <div class="${note}">With no TypeSafe key, or if the call fails, the dispatcher
-                behaves exactly as it always did: the model routes. This can make routing cheap;
-                it cannot make it fail. Note that when Jev routes, this node's provider, model and
-                sampling settings apply only to that fallback turn.</div>`,
+                <div class="${note}">The Jev key is stored like an LLM key: your own in
+                Settings → LLM API Keys, or the organisation's, set by your admin. Yours wins.
+                The browser never sees it — the server routes for the canvas Run button.</div>`,
             playbook: `
                 <p class="${h}">📖 Playbook</p>
                 <p>Not an agent: an interpreter. The model re-decides at every round from the
@@ -17872,6 +18011,110 @@ Based on the analysis...
         return 'Playbook: ' + (t || fallback || '');
     }
 
+    /** The form's Routing choice: 'jev' | 'llm' | '' (not set = hybrid). */
+    _formRoutingMode() {
+        const m = document.getElementById('agent-routing-mode')?.dataset.mode || '';
+        return (m === 'jev' || m === 'llm') ? m : '';
+    }
+
+    /** True when the form is a Dispatcher set to Jev-only routing. */
+    _formRoutingIsJev() {
+        return document.getElementById('agent-type-select')?.value === 'dispatcher'
+            && this._formRoutingMode() === 'jev';
+    }
+
+    /**
+     * The dispatcher's Routing facet (Jev | LLM). Jev never reads the model
+     * settings, the system prompt or skills, so Jev mode hides them — hiding
+     * only: the inputs keep their values and saveAgent still writes them, so
+     * switching back to LLM restores them unchanged.
+     */
+    _applyRoutingVisibility() {
+        const tf = (k) => this.t('workflow.agentForm.' + k);
+        const isDisp = document.getElementById('agent-type-select')?.value === 'dispatcher';
+        const mode = this._formRoutingMode();
+        const jev = isDisp && mode === 'jev';
+        document.getElementById('agent-routing-block')?.classList.toggle('hidden', !isDisp);
+        document.getElementById('agent-provider-model-block')?.classList.toggle('hidden', jev);
+        document.getElementById('agent-sampling-block')?.classList.toggle('hidden', jev);
+        document.getElementById('agent-jev-block')?.classList.toggle('hidden', !jev);
+        document.getElementById('agent-jev-description-hint')?.classList.toggle('hidden', !jev);
+        document.getElementById('tab-system-prompt')?.classList.toggle('hidden', jev);
+        const isPb = document.getElementById('agent-type-select')?.value === 'playbook';
+        document.getElementById('tab-skills')?.classList.toggle('hidden', jev || isPb);
+        document.querySelectorAll('#agent-routing-mode [data-routing]').forEach((b) => {
+            const on = b.dataset.routing === mode;
+            b.classList.toggle('bg-blue-600', on);
+            b.classList.toggle('text-white', on);
+            b.classList.toggle('bg-white', !on);
+            b.classList.toggle('text-gray-700', !on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        const hint = document.getElementById('agent-routing-hint');
+        if (hint) hint.textContent = mode === 'jev' ? tf('routingJevHint')
+            : (mode === 'llm' ? tf('routingLlmHint') : tf('routingUnsetNote'));
+        if (jev) this._refreshJevKeyStatus();
+    }
+
+    /** Fill the key status line from GET /dispatch/jev/status (never the key). */
+    async _refreshJevKeyStatus() {
+        const tf = (k) => this.t('workflow.agentForm.' + k);
+        const el = document.getElementById('agent-jev-key-status');
+        const sw = document.getElementById('agent-jev-key-switch-hint');
+        if (!el) return;
+        const st = await this._jevStatus(true);
+        if (!document.body.contains(el)) return; // modal closed meanwhile
+        if (!st) {
+            el.textContent = tf('jevKeyUnknown');
+            el.className = 'text-sm text-gray-600';
+            sw?.classList.add('hidden');
+        } else if (st.available) {
+            el.textContent = st.source === 'user' ? tf('jevKeySetUser') : tf('jevKeySetGlobal');
+            el.className = 'text-sm text-green-700';
+            sw?.classList.add('hidden');
+        } else {
+            el.textContent = tf('jevKeyMissing');
+            el.className = 'text-sm text-amber-700';
+            sw?.classList.remove('hidden');
+        }
+    }
+
+    /**
+     * GET /dispatch/jev/status → {available, source} or null when it cannot be
+     * read. `fresh` skips the per-run cache (the form re-checks on every open).
+     */
+    async _jevStatus(fresh = false) {
+        if (!fresh && this._wfJevStatus !== undefined) return this._wfJevStatus;
+        let st = null;
+        try {
+            const resp = await fetch(`${this.apiBase}/dispatch/jev/status`, {
+                headers: this.getAuthHeaders(), credentials: 'include',
+            });
+            if (resp.ok) {
+                const j = await resp.json();
+                if (j && j.success !== false) st = { available: !!j.available, source: j.source || 'none' };
+            }
+        } catch (_) { /* unknown */ }
+        if (!fresh) this._wfJevStatus = st;
+        return st;
+    }
+
+    _wireRoutingMode() {
+        const seg = document.getElementById('agent-routing-mode');
+        seg?.querySelectorAll('[data-routing]').forEach((b) => {
+            b.addEventListener('click', () => {
+                seg.dataset.mode = b.dataset.routing;
+                this._applyRoutingVisibility();
+            });
+        });
+        document.getElementById('agent-jev-min-confidence')?.addEventListener('input', (e) => {
+            const v = document.getElementById('agent-jev-min-confidence-value');
+            if (v) v.textContent = Number(e.target.value).toFixed(2);
+        });
+        document.getElementById('agent-type-select')?.addEventListener('change', () => this._applyRoutingVisibility());
+        this._applyRoutingVisibility();
+    }
+
     /**
      * The playbook facet of the agent form (library card AND playbook node):
      * Edit/Preview toggle, Validate (POST /playbooks/validate) with the same
@@ -17883,7 +18126,8 @@ Based on the analysis...
         const applyVisibility = () => {
             const pb = isPb();
             document.getElementById('tools-content')?.closest('.flex-col')?.classList.toggle('hidden', pb);
-            document.getElementById('tab-skills')?.classList.toggle('hidden', pb);
+            // A Jev-routed dispatcher hides Skills too (_applyRoutingVisibility).
+            document.getElementById('tab-skills')?.classList.toggle('hidden', pb || this._formRoutingIsJev());
             document.getElementById('tab-schema')?.classList.toggle('hidden', pb);
             document.getElementById('agent-writes-block')?.classList.toggle('hidden', !pb);
             document.getElementById('agent-pb-toolbar')?.classList.toggle('hidden', !pb);
@@ -18448,6 +18692,18 @@ Based on the analysis...
                 // Playbook facet: write policy travels with the agent and the node.
                 ...(document.getElementById('agent-type-select')?.value === 'playbook'
                     ? { writes_enabled: !!document.getElementById('agent-writes-enabled')?.checked }
+                    : {}),
+                // Dispatcher routing: written only when a mode is picked, so an
+                // untouched dispatcher stays unset (hybrid). The floor only
+                // means something in Jev mode.
+                ...((document.getElementById('agent-type-select')?.value === 'dispatcher' && this._formRoutingMode())
+                    ? { routing_mode: this._formRoutingMode() }
+                    : {}),
+                ...(this._formRoutingIsJev()
+                    ? { jev_min_confidence: (() => {
+                        const v = parseFloat(document.getElementById('agent-jev-min-confidence')?.value);
+                        return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
+                    })() }
                     : {})
             },
             is_template: saveAsTemplate,
