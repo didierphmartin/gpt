@@ -160,6 +160,8 @@ done
 # catalog (and the seed, if the model is a default) must be refreshed.
 # SEED_TEST_TODAY=YYYY-MM-DD overrides today's date, to exercise this check.
 TODAY="${SEED_TEST_TODAY:-$(date +%F)}"
+[[ "$TODAY" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]] \
+  || fail "SEED_TEST_TODAY must be a date in YYYY-MM-DD form, got: $TODAY"
 promo_errors=$(python3 - "$CATALOG" "$TODAY" <<'PY'
 import json, re, sys
 catalog, today = json.load(open(sys.argv[1]))["providers"], sys.argv[2]

@@ -48,10 +48,11 @@
     const t = (k, d) => (window.i18n && window.i18n.t && window.i18n.t(k)) || d;
     const tok = () => (localStorage.getItem('token') || (window.authManager && window.authManager.token) || '');
     const hdrs = () => ({ 'Authorization': `Bearer ${tok()}`, 'Content-Type': 'application/json' });
-    // Default model per provider (mirrors skillopt-panel's first choices).
+    // Default model per provider: the platform defaults, all
+    // backend/resources/model_catalog.json ids (these are sent to the vendor).
     const MODEL = {
-        claude: 'claude-sonnet-4-5-20250929', openai: 'gpt-4o', gemini: 'gemini-3.6-flash',
-        grok: 'grok-4-fast', deepseek: 'deepseek-chat', kimi: 'kimi-k2',
+        claude: 'claude-sonnet-5', openai: 'gpt-5.6-terra', gemini: 'gemini-3.6-flash',
+        grok: 'grok-4.6', deepseek: 'deepseek-v4-pro', kimi: 'kimi-k2.6',
         gamma4: 'Gemma-4-E4B-it',
         glm: 'glm-5.2',
     };
@@ -170,7 +171,7 @@
         const script = isBody ? 'scripts/run_body_loop.py' : 'scripts/run_loop.py';
         const skillRel = `synergyAI/skills/${s.skill_dir}/`;
         const evalSet = `${skillRel}eval_set.json`;
-        const m = (p) => MODEL[p] || 'kimi-k2';
+        const m = (p) => MODEL[p] || MODEL.kimi;
         // Three roles, three models:
         //  EVALUATOR = the provider that's actually FAILING for this skill (so
         //  the bug reproduces); falls back to the eval setting if unknown.

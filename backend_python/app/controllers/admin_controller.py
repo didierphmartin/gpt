@@ -2116,7 +2116,9 @@ class AdminController:
             updated = 0
             errors = []
 
-            for category in ('llm', 'voice', 'avatar'):
+            # LLM prices come from the model catalog, so no AI refresh is
+            # spent on them.
+            for category in ('voice', 'avatar'):
                 for provider in allCosts[category]:
                     try:
                         updatedProvider = self.fetchProviderPricing(provider)
@@ -2398,70 +2400,37 @@ class AdminController:
     def getDefaultCosts(self) -> dict:
         """AdminController.php:3376-3550."""
         return {
+            # LLM prices live in resources/model_catalog.json; these entries
+            # only name the provider and its pricing page.
             'llm': [
                 {
                     'provider': 'claude', 'displayName': 'Claude (Anthropic)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Claude 3.5 Sonnet', 'price': '$3.00', 'unit': '/ 1M input tokens',
-                         'details': '$15.00 / 1M output tokens'},
-                        {'name': 'Claude 3.5 Haiku', 'price': '$0.80', 'unit': '/ 1M input tokens',
-                         'details': '$4.00 / 1M output tokens'},
-                        {'name': 'Claude 3 Opus', 'price': '$15.00', 'unit': '/ 1M input tokens',
-                         'details': '$75.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://www.anthropic.com/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'openai', 'displayName': 'OpenAI', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'GPT-4o', 'price': '$2.50', 'unit': '/ 1M input tokens',
-                         'details': '$10.00 / 1M output tokens'},
-                        {'name': 'GPT-4o mini', 'price': '$0.15', 'unit': '/ 1M input tokens',
-                         'details': '$0.60 / 1M output tokens'},
-                        {'name': 'GPT-4 Turbo', 'price': '$10.00', 'unit': '/ 1M input tokens',
-                         'details': '$30.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://openai.com/api/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'gemini', 'displayName': 'Gemini (Google)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Gemini 1.5 Pro', 'price': '$1.25', 'unit': '/ 1M input tokens',
-                         'details': '$5.00 / 1M output tokens'},
-                        {'name': 'Gemini 1.5 Flash', 'price': '$0.075', 'unit': '/ 1M input tokens',
-                         'details': '$0.30 / 1M output tokens'},
-                        {'name': 'Gemini 2.0 Flash', 'price': '$0.10', 'unit': '/ 1M input tokens',
-                         'details': '$0.40 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://ai.google.dev/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'grok', 'displayName': 'Grok (xAI)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Grok-2', 'price': '$2.00', 'unit': '/ 1M input tokens',
-                         'details': '$10.00 / 1M output tokens'},
-                        {'name': 'Grok-2 mini', 'price': '$0.20', 'unit': '/ 1M input tokens',
-                         'details': '$1.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://x.ai/api', 'lastUpdated': None,
                 },
                 {
                     'provider': 'deepseek', 'displayName': 'DeepSeek', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'DeepSeek-V3', 'price': '$0.27', 'unit': '/ 1M input tokens',
-                         'details': '$1.10 / 1M output tokens'},
-                        {'name': 'DeepSeek-R1', 'price': '$0.55', 'unit': '/ 1M input tokens',
-                         'details': '$2.19 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://platform.deepseek.com/api-docs/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'kimi', 'displayName': 'Kimi (Moonshot)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Moonshot-v1-8k', 'price': '$0.012', 'unit': '/ 1K tokens'},
-                        {'name': 'Moonshot-v1-32k', 'price': '$0.024', 'unit': '/ 1K tokens'},
-                        {'name': 'Moonshot-v1-128k', 'price': '$0.06', 'unit': '/ 1K tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://platform.moonshot.cn/docs/pricing', 'lastUpdated': None,
                 },
             ],

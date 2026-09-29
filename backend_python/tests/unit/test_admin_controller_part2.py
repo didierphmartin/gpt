@@ -588,7 +588,7 @@ def test_refresh_all_costs_accumulates_errors(monkeypatch):
     db = FakeDb(all_=[[]])  # final reload SELECT
 
     def fake_fetch(self, provider):
-        if provider['provider'] == 'claude':
+        if provider['provider'] == 'elevenlabs':
             raise RuntimeError('boom')
         return dict(provider, lastUpdated='now')
     monkeypatch.setattr(AdminController, 'fetchProviderPricing', fake_fetch)
@@ -596,8 +596,28 @@ def test_refresh_all_costs_accumulates_errors(monkeypatch):
 
     r = c(db).refreshAllCosts(ctx())
     assert r['success'] is True
-    assert any('claude: boom' in e for e in r['errors'])
-    assert r['updated_count'] > 0  # every non-claude provider still saved
+    assert any('elevenlabs: boom' in e for e in r['errors'])
+    assert r['updated_count'] > 0  # every other provider still saved
+
+
+def test_refresh_all_costs_spends_no_ai_refresh_on_llm_prices(monkeypatch):
+    # LLM prices come from the model catalog; only voice/avatar are refreshed.
+    db = FakeDb(all_=[[]])
+    fetched = []
+    monkeypatch.setattr(AdminController, 'fetchProviderPricing',
+                        lambda self, provider: fetched.append(provider['category']) or None)
+    r = c(db).refreshAllCosts(ctx())
+    assert r['success'] is True
+    assert fetched and 'llm' not in fetched
+    assert set(fetched) == {'voice', 'avatar'}
+
+
+def test_default_costs_llm_entries_carry_no_prices():
+    llm = c().getDefaultCosts()['llm']
+    assert len(llm) == 6
+    for p in llm:
+        assert p['tiers'] == []
+        assert p['displayName'] and p['pricingUrl']
 
 
 def test_get_admin_api_key_prefers_config():
