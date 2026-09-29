@@ -57,3 +57,54 @@ curl -fsS "http://localhost:${GPT_PORT}/gpt/backend/api/v1/setup/status" | grep 
   || fail "a fresh corporate install does not report needs_setup"
 
 echo "PASS: corporate stack serves gpt + gpt_admin, login service at /login/, awaiting setup"
+
+# --- full corporate setup + sign-in flow ---------------------------------------
+B="http://localhost:${GPT_PORT}"
+json() { curl -sS -H 'Content-Type: application/json' "$@"; }
+token_of() { sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'; }
+API="$B/gpt/backend/api/v1"
+LOGIN="$B/login/backend/api/v1"
+
+# --- setup, exactly once ----------------------------------------------------
+json -X POST "$API/setup/admin" -d '{"email":"boss@corp.test","password":"short"}' | grep -q '"success":false' \
+  || fail "a short admin password was accepted"
+json -X POST "$API/setup/admin" -d '{"email":"  Boss@Corp.TEST ","password":"correct-horse-1"}' | grep -q '"success":true' \
+  || fail "setup did not create the administrator"
+json -X POST "$API/setup/admin" -d '{"email":"intruder@corp.test","password":"another-pass-2"}' | grep -q 'already complete' \
+  || fail "a second administrator could be created"
+curl -fsS "$API/setup/status" | grep -q '"needs_setup":false' || fail "setup still reported as needed"
+
+# --- the admin signs in through the login service -----------------------------
+LT=$(json -X POST "$LOGIN/auth/login" -d '{"email":"boss@corp.test","password":"correct-horse-1"}' | token_of)
+[ -n "$LT" ] || fail "the admin could not sign in to the login service"
+EX=$(json -X POST "$API/auth" -d "{\"action\":\"sso_exchange\",\"login_token\":\"$LT\"}")
+echo "$EX" | grep -q '"role":"admin"' || fail "sso_exchange did not return the admin: $EX"
+GT=$(echo "$EX" | token_of)
+
+# --- no way in except the login service ---------------------------------------
+json -X POST "$API/auth" -d '{"action":"login","email":"boss@corp.test","password":"correct-horse-1"}' | grep -q '"success":false' \
+  || fail "gpt's own password login still works on corporate"
+json -X POST "$LOGIN/auth/register" -d '{"email":"self@corp.test","password":"self-signup-1"}' | grep -q '"success":false' \
+  || fail "the login service accepted a self-registration"
+
+# --- the admin creates a user, who can sign in -------------------------------
+json -X POST "$API/admin/users" -H "Authorization: Bearer $GT" \
+  -d '{"email":"ann@corp.test","password":"ann-password-1","role":"user"}' | grep -q '"success":true' \
+  || fail "the admin could not create a user"
+ALT=$(json -X POST "$LOGIN/auth/login" -d '{"email":"ann@corp.test","password":"ann-password-1"}' | token_of)
+[ -n "$ALT" ] || fail "the new user could not sign in to the login service"
+json -X POST "$API/auth" -d "{\"action\":\"sso_exchange\",\"login_token\":\"$ALT\"}" | grep -q '"role":"user"' \
+  || fail "the new user did not get a gpt session"
+
+# --- a password change takes effect ------------------------------------------
+ANN_ID=$(json "$API/admin/users" -H "Authorization: Bearer $GT" | sed -n 's/.*"id":\([0-9]*\),"email":"ann@corp.test".*/\1/p')
+[ -n "$ANN_ID" ] || fail "could not find the new user's id"
+json -X POST "$API/admin/users/update" -H "Authorization: Bearer $GT" \
+  -d "{\"user_id\":$ANN_ID,\"email\":\"ann@corp.test\",\"password\":\"ann-password-2\"}" | grep -q '"success":true' \
+  || fail "the admin could not change the password"
+json -X POST "$LOGIN/auth/login" -d '{"email":"ann@corp.test","password":"ann-password-1"}' | grep -q '"success":false' \
+  || fail "the old password still works"
+json -X POST "$LOGIN/auth/login" -d '{"email":"ann@corp.test","password":"ann-password-2"}' | grep -q '"success":true' \
+  || fail "the new password does not work"
+
+echo "PASS: corporate setup creates one admin; everyone signs in through the login service"
