@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SEED="$HERE/../db/02-seed.sql"
 CONTROLLER="$HERE/../../backend/src/Controllers/SystemSettingsController.php"
 KIMI_PROVIDER="$HERE/../../backend/src/Providers/KimiProvider.php"
+CATALOG="$HERE/../../backend/resources/model_catalog.json"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -42,12 +43,12 @@ done
 # (Plain indexed arrays, not associative -- macOS ships bash 3.2, which
 # has no declare -A.)
 PROVIDERS_MODEL=(
-  "claude:claude-sonnet-4-5"
-  "openai:gpt-4o"
-  "gemini:gemini-2.0-flash"
-  "grok:grok-2-latest"
-  "deepseek:deepseek-chat"
-  "kimi:moonshot-v1-auto"
+  "claude:claude-sonnet-5"
+  "openai:gpt-5.6-terra"
+  "gemini:gemini-3.6-flash"
+  "grok:grok-4.6"
+  "deepseek:deepseek-v4-pro"
+  "kimi:kimi-k2.6"
   "gamma4:Gemma-4-E4B-it"
   "glm:glm-5.2"
 )
@@ -94,6 +95,29 @@ if grep -E "^\(" "$SEED" | grep -qi "api.moonshot.cn"; then
   fail "seed must not use the moonshot.cn (China) endpoint for kimi"
 fi
 
+# Catalog guard: every seeded model must be a model_catalog.json entry for
+# its provider, and the seeded prices must be that entry's prices -- the
+# admin UI and the user Settings panel both read prices from the catalog,
+# so a seed that disagrees shows one price and bills another.
+[ -f "$CATALOG" ] || fail "missing $CATALOG"
+command -v python3 >/dev/null || fail "python3 is required for the catalog check"
+catalog_errors=$(python3 - "$SEED" "$CATALOG" <<'PY'
+import json, re, sys
+seed, catalog = open(sys.argv[1]).read(), json.load(open(sys.argv[2]))["providers"]
+row = re.compile(r"^\('([a-z0-9]+)', '[^']*', '', '([^']+)', '[^']*', \d+, [0-9.]+, ([0-9.]+|NULL), ([0-9.]+|NULL), ", re.M)
+rows = row.findall(seed)
+if not rows:
+    print("no seed rows matched the expected column layout")
+for key, model, pin, pout in rows:
+    entry = next((m for m in catalog.get(key, []) if m["id"] == model), None)
+    if entry is None:
+        print(f"{key}: seeded model {model} is not in model_catalog.json")
+    elif pin == "NULL" or pout == "NULL" or float(pin) != float(entry["input"]) or float(pout) != float(entry["output"]):
+        print(f"{key}: seeded prices {pin}/{pout} for {model} differ from the catalog's {entry['input']}/{entry['output']}")
+PY
+)
+[ -z "$catalog_errors" ] || fail "seed disagrees with model_catalog.json: $catalog_errors"
+
 # Every row must be enabled, or the provider picker will look empty. Row
 # tuples end in "...enabled, sort_order)" followed by either ',' (every row
 # but the last) or ';' (only the last) -- anchoring on ");" alone would only
@@ -102,4 +126,4 @@ if grep -qE ", *0, *[0-9]+\)[,;]" "$SEED"; then
   fail "a row appears to have enabled=0"
 fi
 
-echo "PASS: seed defines all 8 providers, carries no keys, and matches the app's defaults"
+echo "PASS: seed defines all 8 providers, carries no keys, and matches the app's defaults and the model catalog"

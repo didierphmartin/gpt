@@ -186,7 +186,9 @@ def test_get_llm_providers_falls_back_to_config_when_db_empty():
     assert keys == ['claude', 'custom1']
     claude = r['providers'][0]
     assert claude['display_name'] == 'Claude'
-    assert claude['model'] == 'claude-sonnet-4-5'
+    assert claude['model'] == 'claude-sonnet-5'
+    assert claude['price_input_per_1m'] == 2.0
+    assert claude['price_output_per_1m'] == 10.0
     assert claude['max_tokens'] == 64000
     assert claude['api_format'] == 'anthropic'
     assert claude['enabled'] is True

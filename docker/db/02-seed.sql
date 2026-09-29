@@ -2,8 +2,11 @@
 --
 -- Source of truth: backend/src/Controllers/SystemSettingsController.php,
 -- the $providerDefaults array inside getProvidersFromConfig() (~lines
--- 150-217), plus the field defaults applied in the loop that follows
--- (~lines 219-246). That is what the app itself serves when the database
+-- 123-198), plus the field defaults applied in the loop that follows
+-- (~lines 201-234). Each row's model is that provider's balanced current
+-- model, and its prices are that model's entry in
+-- backend/resources/model_catalog.json (docker/tests/seed-test.sh checks
+-- both). That is what the app itself serves when the database
 -- has no rows, so this seed agrees with the app by construction.
 --
 -- api_key is '' for every row, always. Keys are entered by the admin in
@@ -18,13 +21,13 @@
 -- here.
 
 INSERT INTO `system_llm_settings`
-  (`provider_key`, `display_name`, `api_key`, `model`, `base_url`, `max_tokens`, `temperature`, `chat_endpoint`, `streaming`, `supports_tools`, `supported_models`, `api_format`, `system_prompt`, `enabled`, `sort_order`)
+  (`provider_key`, `display_name`, `api_key`, `model`, `base_url`, `max_tokens`, `temperature`, `price_input_per_1m`, `price_output_per_1m`, `chat_endpoint`, `streaming`, `supports_tools`, `supported_models`, `api_format`, `system_prompt`, `enabled`, `sort_order`)
 VALUES
-('claude', 'Claude', '', 'claude-sonnet-4-5', 'https://api.anthropic.com', 64000, 0.70, '/v1/messages', 1, 1, NULL, 'anthropic', NULL, 1, 0),
-('openai', 'OpenAI', '', 'gpt-4o', 'https://api.openai.com', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 1),
-('gemini', 'Gemini', '', 'gemini-2.0-flash', 'https://generativelanguage.googleapis.com', 8192, 0.70, '/v1beta/models', 1, 1, NULL, 'gemini', NULL, 1, 2),
-('grok', 'Grok', '', 'grok-2-latest', 'https://api.x.ai', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 3),
-('deepseek', 'DeepSeek', '', 'deepseek-chat', 'https://api.deepseek.com', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 4),
-('kimi', 'Kimi', '', 'moonshot-v1-auto', 'https://api.moonshot.ai', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 5),
-('gamma4', 'Gamma4', '', 'Gemma-4-E4B-it', 'https://g4eb.yellowbrickroad.info', 4096, 0.70, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 6),
-('glm', 'GLM 5.2', '', 'glm-5.2', 'https://api.z.ai/api/paas/v4', 4096, 0.70, '/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 7);
+('claude', 'Claude', '', 'claude-sonnet-5', 'https://api.anthropic.com', 64000, 0.70, 2.00, 10.00, '/v1/messages', 1, 1, NULL, 'anthropic', NULL, 1, 0),
+('openai', 'OpenAI', '', 'gpt-5.6-terra', 'https://api.openai.com', 4096, 0.70, 2.00, 12.00, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 1),
+('gemini', 'Gemini', '', 'gemini-3.6-flash', 'https://generativelanguage.googleapis.com', 8192, 0.70, 0.75, 3.75, '/v1beta/models', 1, 1, NULL, 'gemini', NULL, 1, 2),
+('grok', 'Grok', '', 'grok-4.6', 'https://api.x.ai', 4096, 0.70, 2.00, 6.00, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 3),
+('deepseek', 'DeepSeek', '', 'deepseek-v4-pro', 'https://api.deepseek.com', 4096, 0.70, 0.66, 1.98, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 4),
+('kimi', 'Kimi', '', 'kimi-k2.6', 'https://api.moonshot.ai', 4096, 0.70, 0.95, 4.00, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 5),
+('gamma4', 'Gamma4', '', 'Gemma-4-E4B-it', 'https://g4eb.yellowbrickroad.info', 4096, 0.70, 0.00, 0.00, '/v1/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 6),
+('glm', 'GLM 5.2', '', 'glm-5.2', 'https://api.z.ai/api/paas/v4', 4096, 0.70, 1.40, 4.40, '/chat/completions', 1, 1, NULL, 'openai', NULL, 1, 7);

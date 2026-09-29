@@ -124,7 +124,9 @@ class SystemSettingsController
             'claude' => [
                 'display_name' => 'Claude',
                 'base_url' => 'https://api.anthropic.com',
-                'model' => 'claude-sonnet-4-5',
+                'model' => 'claude-sonnet-5',
+                'price_input_per_1m' => 2.00,
+                'price_output_per_1m' => 10.00,
                 'max_tokens' => 64000,
                 'api_format' => 'anthropic',
                 'chat_endpoint' => '/v1/messages',
@@ -132,7 +134,9 @@ class SystemSettingsController
             'openai' => [
                 'display_name' => 'OpenAI',
                 'base_url' => 'https://api.openai.com',
-                'model' => 'gpt-4o',
+                'model' => 'gpt-5.6-terra',
+                'price_input_per_1m' => 2.00,
+                'price_output_per_1m' => 12.00,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
@@ -140,7 +144,9 @@ class SystemSettingsController
             'gemini' => [
                 'display_name' => 'Gemini',
                 'base_url' => 'https://generativelanguage.googleapis.com',
-                'model' => 'gemini-2.0-flash',
+                'model' => 'gemini-3.6-flash',
+                'price_input_per_1m' => 0.75,
+                'price_output_per_1m' => 3.75,
                 'max_tokens' => 8192,
                 'api_format' => 'gemini',
                 'chat_endpoint' => '/v1beta/models',
@@ -148,7 +154,9 @@ class SystemSettingsController
             'grok' => [
                 'display_name' => 'Grok',
                 'base_url' => 'https://api.x.ai',
-                'model' => 'grok-2-latest',
+                'model' => 'grok-4.6',
+                'price_input_per_1m' => 2.00,
+                'price_output_per_1m' => 6.00,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
@@ -156,7 +164,9 @@ class SystemSettingsController
             'deepseek' => [
                 'display_name' => 'DeepSeek',
                 'base_url' => 'https://api.deepseek.com',
-                'model' => 'deepseek-chat',
+                'model' => 'deepseek-v4-pro',
+                'price_input_per_1m' => 0.66,
+                'price_output_per_1m' => 1.98,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
@@ -164,7 +174,9 @@ class SystemSettingsController
             'kimi' => [
                 'display_name' => 'Kimi',
                 'base_url' => 'https://api.moonshot.cn',
-                'model' => 'moonshot-v1-auto',
+                'model' => 'kimi-k2.6',
+                'price_input_per_1m' => 0.95,
+                'price_output_per_1m' => 4.00,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
@@ -173,6 +185,8 @@ class SystemSettingsController
                 'display_name' => 'Gamma4',
                 'base_url' => 'https://g4eb.yellowbrickroad.info',
                 'model' => 'Gemma-4-E4B-it',
+                'price_input_per_1m' => 0.00,
+                'price_output_per_1m' => 0.00,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/v1/chat/completions',
@@ -181,6 +195,8 @@ class SystemSettingsController
                 'display_name' => 'GLM 5.2',
                 'base_url' => 'https://api.z.ai/api/paas/v4',
                 'model' => 'glm-5.2',
+                'price_input_per_1m' => 1.40,
+                'price_output_per_1m' => 4.40,
                 'max_tokens' => 4096,
                 'api_format' => 'openai',
                 'chat_endpoint' => '/chat/completions',
@@ -193,7 +209,8 @@ class SystemSettingsController
                 $config = $this->config[$key];
                 $defaults = $providerDefaults[$key] ?? [];
 
-                $prices = [null, null];
+                // Default model's prices, copied from backend/resources/model_catalog.json.
+                $prices = [$defaults['price_input_per_1m'] ?? null, $defaults['price_output_per_1m'] ?? null];
                 $providers[] = [
                     'id' => null,
                     'provider_key' => $key,
