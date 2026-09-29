@@ -2823,6 +2823,15 @@
                                 </a>
                                 <span class="key-status default" id="key-status-glm">Default</span>
                             </div>
+                            <!-- Jev (dispatcher routing): key only, not a chat provider -->
+                            <div class="api-key-row">
+                                <label>Jev (dispatcher routing)</label>
+                                <input type="password" id="api-key-jev" placeholder="Jev key" autocomplete="off">
+                                <a class="console-link" href="https://console.typesafe.ai/" target="_blank" rel="noopener noreferrer" title="Open Jev console (get API key)" aria-label="Open Jev console">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                </a>
+                                <span class="key-status default" id="key-status-jev">Default</span>
+                            </div>
                         </div>
                         <!-- Advanced: per-provider system prompt overrides.
                              Empty = use admin global / default. The "Save API Keys"
@@ -4200,7 +4209,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260921-runner"></script>
-    <script src="assets/js/settings-panel.js?v=20260905-python"></script>
+    <script src="assets/js/settings-panel.js?v=20260929-jev-key"></script>
     <script src="assets/js/agent-teams-panel.js?v=20260903-playbook-agent"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>

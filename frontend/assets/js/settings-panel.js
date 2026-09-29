@@ -44,6 +44,10 @@ class SettingsPanel {
 
         // Provider list
         this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4', 'glm'];
+        // Providers that have an API-key slot. Jev is a routing service, not
+        // a chat provider: it is deliberately NOT in this.providers (model
+        // selects, prompts, usage, catalog) and only joins the key loops.
+        this.keyProviders = [...this.providers, 'jev'];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -3610,7 +3614,7 @@ class SettingsPanel {
      * Update API key status indicators
      */
     renderApiKeyStatuses() {
-        for (const provider of this.providers) {
+        for (const provider of this.keyProviders) {
             const statusEl = document.getElementById(`key-status-${provider}`);
             const inputEl = document.getElementById(`api-key-${provider}`);
 
@@ -3629,6 +3633,26 @@ class SettingsPanel {
                 }
             }
         }
+        this.renderJevOrgKeyStatus();
+    }
+
+    /**
+     * The Jev row has no package/default key notion; when the user has no
+     * personal key but the organisation has one, say so (status endpoint
+     * returns availability only, never the key).
+     */
+    async renderJevOrgKeyStatus() {
+        const statusEl = document.getElementById('key-status-jev');
+        if (!statusEl || (this.userKeys.jev && this.userKeys.jev.has_custom_key)) return;
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/dispatch/jev/status`, {
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}` }
+            });
+            const body = await res.json();
+            if (body.success && body.source === 'global' && !(this.userKeys.jev && this.userKeys.jev.has_custom_key)) {
+                statusEl.textContent = 'Organisation key';
+            }
+        } catch (e) { /* status is cosmetic */ }
     }
 
     /**
@@ -3640,7 +3664,7 @@ class SettingsPanel {
             const keys = {};
 
             // Collect non-empty keys
-            for (const provider of this.providers) {
+            for (const provider of this.keyProviders) {
                 const inputEl = document.getElementById(`api-key-${provider}`);
                 if (inputEl && inputEl.value.trim()) {
                     keys[provider] = inputEl.value.trim();
@@ -3702,7 +3726,7 @@ class SettingsPanel {
                 this.showNotification('API keys saved successfully', 'success');
 
                 // Clear input fields
-                for (const provider of this.providers) {
+                for (const provider of this.keyProviders) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
@@ -3753,7 +3777,7 @@ class SettingsPanel {
                 this.renderApiKeyStatuses();
 
                 // Clear input fields
-                for (const provider of this.providers) {
+                for (const provider of this.keyProviders) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
