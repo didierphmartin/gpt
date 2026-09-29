@@ -106,8 +106,10 @@ import json, re, sys
 seed, catalog = open(sys.argv[1]).read(), json.load(open(sys.argv[2]))["providers"]
 row = re.compile(r"^\('([a-z0-9]+)', '[^']*', '', '([^']+)', '[^']*', \d+, [0-9.]+, ([0-9.]+|NULL), ([0-9.]+|NULL), ", re.M)
 rows = row.findall(seed)
-if not rows:
-    print("no seed rows matched the expected column layout")
+expected = {"claude", "openai", "gemini", "grok", "deepseek", "kimi", "gamma4", "glm"}
+matched = [r[0] for r in rows]
+if len(matched) != len(expected) or set(matched) != expected:
+    print(f"expected exactly one row per provider {sorted(expected)} in the expected column layout, matched {matched}")
 for key, model, pin, pout in rows:
     entry = next((m for m in catalog.get(key, []) if m["id"] == model), None)
     if entry is None:

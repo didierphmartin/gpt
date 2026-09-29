@@ -1,54 +1,97 @@
 {
   "_comment": "Single source of truth for LLM model choices exposed to users and admins. Consumed by gpt (user Settings > LLM API Keys) and gpt_admin (Global Settings > LLM providers, and Packages editor). Prices are USD per 1M tokens. When editing: keep the active-per-provider entry's prices in sync with system_llm_settings DB rows; admins can adjust via Global Settings which writes to the DB.",
-  "_updated": "2026-05-09",
+  "_updated": "2026-09-28",
   "providers": {
     "claude": [
-      { "id": "claude-sonnet-4-5", "label": "Sonnet 4.5", "desc": "Best balance of speed & quality", "input": 3.00, "output": 15.00 },
-      { "id": "claude-opus-4-6", "label": "Opus 4.6", "desc": "Most capable, deep reasoning", "input": 15.00, "output": 75.00 },
-      { "id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5", "desc": "Fastest, low cost", "input": 0.80, "output": 4.00 }
+      { "id": "claude-opus-5-5", "label": "Opus 5.5", "desc": "Latest flagship — recommended default for demanding work, 1M context", "input": 4.00, "output": 20.00 },
+      { "id": "claude-fable-5-1", "label": "Fable 5.1", "desc": "Most capable Claude model — 1M context", "input": 10.00, "output": 50.00 },
+      { "id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "desc": "Latest balanced tier — 1M context", "input": 2.00, "output": 10.00 },
+      { "id": "claude-sonnet-5", "label": "Sonnet 5", "desc": "Balanced tier (Jun 2026) — 1M context", "input": 2.00, "output": 10.00 },
+      { "id": "claude-mythos-5-1", "label": "Mythos 5.1", "desc": "Limited availability — 1M context", "input": 10.00, "output": 50.00 },
+      { "id": "claude-opus-5", "label": "Opus 5", "desc": "Previous flagship (Jul 2026) — legacy, 1M context, adaptive thinking", "input": 5.00, "output": 25.00 },
+      { "id": "claude-fable-5", "label": "Fable 5", "desc": "Legacy (superseded by Fable 5.1) — 1M context", "input": 10.00, "output": 50.00 },
+      { "id": "claude-sonnet-4-5", "label": "Sonnet 4.5", "desc": "Legacy — speed & quality balance", "input": 3.00, "output": 15.00 },
+      { "id": "claude-opus-4-6", "label": "Opus 4.6", "desc": "Legacy — deep reasoning", "input": 5.00, "output": 25.00 },
+      { "id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5", "desc": "Fastest, lowest-cost active tier", "input": 1.00, "output": 5.00 }
     ],
     "openai": [
-      { "id": "gpt-4o", "label": "GPT-4o", "desc": "Flagship multimodal", "input": 2.50, "output": 10.00 },
-      { "id": "gpt-4o-mini", "label": "GPT-4o Mini", "desc": "Fast & affordable", "input": 0.15, "output": 0.60 },
-      { "id": "o3", "label": "o3", "desc": "Advanced reasoning", "input": 10.00, "output": 40.00 },
+      { "id": "gpt-6-astra", "label": "GPT-6 Astra", "desc": "Latest flagship — most capable tier (long-context tier above a threshold costs more)", "input": 10.00, "output": 50.00 },
+      { "id": "gpt-6-sol", "label": "GPT-6 Sol", "desc": "GPT-6 capable tier (long-context tier above a threshold costs more)", "input": 2.00, "output": 10.00 },
+      { "id": "gpt-6-luna", "label": "GPT-6 Luna", "desc": "GPT-6 fastest, lowest cost tier (long-context tier above a threshold costs more)", "input": 0.10, "output": 0.50 },
+      { "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "GPT-5.6 most capable tier — promotional price through at least 2026-11-21; long-context tier $8.00/$30.00", "input": 4.00, "output": 20.00 },
+      { "id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "desc": "Balanced tier (Jul 2026) — everyday work (long-context tier above a threshold costs more)", "input": 2.00, "output": 12.00 },
+      { "id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": "Fastest, lowest cost GPT-5.6 tier (long-context tier above a threshold costs more)", "input": 0.20, "output": 1.20 },
+      { "id": "gpt-5.5-pro", "label": "GPT-5.5 Pro", "desc": "GPT-5.5 maximum-compute variant", "input": 30.00, "output": 180.00 },
+      { "id": "gpt-5.5", "label": "GPT-5.5", "desc": "Previous flagship (Apr 2026) (long-context tier above a threshold costs more)", "input": 5.00, "output": 30.00 },
+      { "id": "gpt-5.4-pro", "label": "GPT-5.4 Pro", "desc": "GPT-5.4 maximum-compute variant", "input": 30.00, "output": 180.00 },
+      { "id": "gpt-5.4", "label": "GPT-5.4", "desc": "Earlier GPT-5.x flagship", "input": 2.50, "output": 15.00 },
+      { "id": "gpt-5.4-mini", "label": "GPT-5.4 Mini", "desc": "GPT-5.4 fast & affordable", "input": 0.75, "output": 4.50 },
+      { "id": "gpt-5.4-nano", "label": "GPT-5.4 Nano", "desc": "GPT-5.4 smallest, cheapest", "input": 0.20, "output": 1.25 },
+      { "id": "gpt-5.2-pro", "label": "GPT-5.2 Pro", "desc": "GPT-5.2 maximum-compute variant", "input": 21.00, "output": 168.00 },
+      { "id": "gpt-5.2", "label": "GPT-5.2", "desc": "Earlier GPT-5.x release", "input": 1.75, "output": 14.00 },
+      { "id": "gpt-5.1", "label": "GPT-5.1", "desc": "Earlier GPT-5.x release", "input": 1.25, "output": 10.00 },
+      { "id": "gpt-5-pro", "label": "GPT-5 Pro", "desc": "GPT-5 maximum-compute variant", "input": 15.00, "output": 120.00 },
+      { "id": "gpt-5", "label": "GPT-5", "desc": "Original GPT-5", "input": 1.25, "output": 10.00 },
+      { "id": "gpt-5-mini", "label": "GPT-5 Mini", "desc": "GPT-5 fast & affordable", "input": 0.25, "output": 2.00 },
+      { "id": "gpt-5-nano", "label": "GPT-5 Nano", "desc": "Cheapest current standard text model", "input": 0.05, "output": 0.40 },
+      { "id": "gpt-4.1", "label": "GPT-4.1", "desc": "Non-reasoning GPT-4 series flagship", "input": 2.00, "output": 8.00 },
+      { "id": "gpt-4.1-mini", "label": "GPT-4.1 Mini", "desc": "GPT-4.1 fast & affordable", "input": 0.40, "output": 1.60 },
+      { "id": "gpt-4.1-nano", "label": "GPT-4.1 Nano", "desc": "GPT-4.1 smallest, cheapest", "input": 0.10, "output": 0.40 },
+      { "id": "gpt-4o", "label": "GPT-4o", "desc": "Multimodal (legacy)", "input": 2.50, "output": 10.00 },
+      { "id": "gpt-4o-mini", "label": "GPT-4o Mini", "desc": "Fast & affordable (legacy)", "input": 0.15, "output": 0.60 },
+      { "id": "o3-pro", "label": "o3-pro", "desc": "o3 maximum-compute reasoning", "input": 20.00, "output": 80.00 },
+      { "id": "o3", "label": "o3", "desc": "Advanced reasoning", "input": 2.00, "output": 8.00 },
+      { "id": "o3-mini", "label": "o3-mini", "desc": "Compact reasoning", "input": 1.10, "output": 4.40 },
       { "id": "o4-mini", "label": "o4-mini", "desc": "Efficient reasoning", "input": 1.10, "output": 4.40 },
-      { "id": "gpt-5.5", "label": "GPT-5.5", "desc": "Latest flagship (Apr 2026)", "input": 5.00, "output": 30.00 }
+      { "id": "o1-pro", "label": "o1-pro", "desc": "o1 maximum-compute reasoning", "input": 150.00, "output": 600.00 },
+      { "id": "o1", "label": "o1", "desc": "First-generation reasoning", "input": 15.00, "output": 60.00 }
     ],
     "kimi": [
-      { "id": "kimi-k2.6", "label": "Kimi K2.6", "desc": "Latest flagship (Apr 2026), 1T MoE, 256K context", "input": 0.95, "output": 4.00 }
+      { "id": "kimi-k3", "label": "Kimi K3", "desc": "Latest flagship (Jul 2026) — 2.8T open-weight MoE, 1M context", "input": 3.00, "output": 15.00 },
+      { "id": "kimi-k2.7-code-highspeed", "label": "Kimi K2.7 Code (high-speed)", "desc": "Faster premium variant of K2.7 Code — 256K context", "input": 1.90, "output": 8.00 },
+      { "id": "kimi-k2.7-code", "label": "Kimi K2.7 Code", "desc": "Coding-tuned K2.7 — 256K context", "input": 0.95, "output": 4.00 },
+      { "id": "kimi-k2.6", "label": "Kimi K2.6", "desc": "Mid tier (Apr 2026), 1T MoE, 256K context", "input": 0.95, "output": 4.00 }
     ],
     "gamma4": [
       { "id": "Gemma-4-E4B-it", "label": "Gemma 4 E4B", "desc": "Gemma-4 E4B instruction-tuned — OpenAI-compatible, free", "input": 0, "output": 0 }
     ],
+    "glm": [
+      { "id": "glm-5.2", "label": "GLM 5.2", "desc": "GLM 5.2 (z.ai / Zhipu) — OpenAI-compatible", "input": 1.40, "output": 4.40 }
+    ],
     "gemini": [
-      { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro (preview)", "desc": "Gemini 3 flagship — highest capability, best for complex reasoning", "input": 1.25, "output": 10.00 },
-      { "id": "gemini-3-flash-preview", "label": "Gemini 3 Flash (preview)", "desc": "Gemini 3 fast tier — strong price/perf, good default", "input": 0.30, "output": 2.50 },
-      { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (preview)", "desc": "Gemini 3.1 flagship — verified live in API, May 2026", "input": 1.25, "output": 10.00 },
-      { "id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite (preview)", "desc": "Cheapest Gemini 3.x tier — verified live", "input": 0.10, "output": 0.40 },
-      { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite", "desc": "Gemini 3.1 lite GA", "input": 0.10, "output": 0.40 },
-      { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "desc": "Previous-gen flagship — mature, broad tool-call support", "input": 1.25, "output": 10.00 },
-      { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "desc": "Previous-gen fast tier — fast & cheap, well-supported", "input": 0.15, "output": 0.60 },
-      { "id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "desc": "Previous-gen cheapest — bulk/simple tasks", "input": 0.10, "output": 0.40 },
-      { "id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash", "desc": "Stable older flagship — fallback if newer models misbehave", "input": 0.10, "output": 0.40 },
-      { "id": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash Lite", "desc": "Stable older lite — lowest cost legacy option", "input": 0.075, "output": 0.30 }
+      { "id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash", "desc": "Newest Flash — promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash", "desc": "Promo price through 2026-12-31; $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "desc": "Workhorse (Jul 2026) — 1M context; promo price through 2026-12-31, $1.50/$7.50 from 2027-01-01", "input": 0.75, "output": 3.75 },
+      { "id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "desc": "Gemini 3.5 fast tier", "input": 1.50, "output": 9.00 },
+      { "id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash Lite", "desc": "Cost-effective 3.5 tier (Jul 2026) — 1M context", "input": 0.30, "output": 2.50 },
+      { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (preview)", "desc": "Gemini 3.1 flagship — prompts >200K tokens cost $4.00/$18.00", "input": 2.00, "output": 12.00 },
+      { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite", "desc": "Cheapest unrestricted current tier — audio input $0.50", "input": 0.25, "output": 1.50 },
+      { "id": "gemini-3-flash-preview", "label": "Gemini 3 Flash (preview)", "desc": "Legacy — replaced by Gemini 3.6 Flash; audio input $1.00", "input": 0.50, "output": 3.00 },
+      { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "desc": "Previous-gen flagship — prior users only; prompts >200K tokens cost $2.50/$15.00", "input": 1.25, "output": 10.00 },
+      { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "desc": "Previous-gen fast tier — prior users only; audio input $1.00", "input": 0.30, "output": 2.50 },
+      { "id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "desc": "Previous-gen cheapest — prior users only; audio input $0.30", "input": 0.10, "output": 0.40 }
     ],
     "grok": [
-      { "id": "grok-4.3", "label": "Grok 4.3", "desc": "Latest xAI flagship — most capable, newest release", "input": 3.00, "output": 15.00 },
-      { "id": "grok-4.20-multi-agent-0309", "label": "Grok 4.20 Multi-Agent (0309)", "desc": "Multi-agent reasoning variant", "input": 3.00, "output": 15.00 },
-      { "id": "grok-4.20-0309-reasoning", "label": "Grok 4.20 (0309, reasoning)", "desc": "Reasoning-tuned mid-tier", "input": 3.00, "output": 15.00 },
-      { "id": "grok-4.20-0309-non-reasoning", "label": "Grok 4.20 (0309, non-reasoning)", "desc": "Non-reasoning mid-tier — recommended for tool/skill workflows", "input": 3.00, "output": 15.00 },
-      { "id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast (reasoning)", "desc": "Fast reasoning model — caveat: reasoning models may bypass tool_choice forcing", "input": 0.20, "output": 0.50 },
-      { "id": "grok-4-1-fast-non-reasoning", "label": "Grok 4.1 Fast (non-reasoning)", "desc": "Non-reasoning fast variant — RECOMMENDED for skill/tool-driven workflows", "input": 0.20, "output": 0.50 },
-      { "id": "grok-4-fast-reasoning", "label": "Grok 4 Fast (reasoning)", "desc": "Older fast reasoning variant", "input": 0.20, "output": 0.50 },
-      { "id": "grok-4-fast-non-reasoning", "label": "Grok 4 Fast (non-reasoning)", "desc": "Older fast non-reasoning — good for tool calls", "input": 0.20, "output": 0.50 },
-      { "id": "grok-4-0709", "label": "Grok 4 (0709 snapshot)", "desc": "Pinned snapshot of grok-4", "input": 3.00, "output": 15.00 },
-      { "id": "grok-3", "label": "Grok 3", "desc": "Previous-gen flagship — mature, broad tool-call support", "input": 3.00, "output": 15.00 },
-      { "id": "grok-3-mini", "label": "Grok 3 Mini", "desc": "Compact previous-gen — cheap, supports tools", "input": 0.30, "output": 0.50 },
-      { "id": "grok-code-fast-1", "label": "Grok Code Fast 1", "desc": "Code-specialized variant", "input": 0.20, "output": 1.50 }
+      { "id": "grok-4.7", "label": "Grok 4.7", "desc": "Latest flagship — 500K context (2x price for prompts ≥200K)", "input": 2.00, "output": 6.00 },
+      { "id": "grok-4.6", "label": "Grok 4.6", "desc": "Previous flagship (Aug 2026) — long-running agents, 500K context (2x price for prompts ≥200K)", "input": 2.00, "output": 6.00 },
+      { "id": "grok-4.5", "label": "Grok 4.5", "desc": "Coding & agentic flagship (Jul 2026) — 500K context (2x price for prompts ≥200K)", "input": 2.00, "output": 6.00 },
+      { "id": "grok-4.3", "label": "Grok 4.3", "desc": "Apr 2026 — 1M context, video input (2x price for prompts ≥200K)", "input": 1.25, "output": 2.50 },
+      { "id": "grok-4.20-multi-agent-0309", "label": "Grok 4.20 Multi-Agent (0309)", "desc": "Multi-agent reasoning variant — 1M context (2x price for prompts ≥200K)", "input": 1.25, "output": 2.50 },
+      { "id": "grok-4.20-0309-reasoning", "label": "Grok 4.20 (0309, reasoning)", "desc": "Reasoning-tuned mid-tier — 1M context (2x price for prompts ≥200K)", "input": 1.25, "output": 2.50 },
+      { "id": "grok-4.20-0309-non-reasoning", "label": "Grok 4.20 (0309, non-reasoning)", "desc": "Non-reasoning mid-tier — recommended for tool/skill workflows (2x price for prompts ≥200K)", "input": 1.25, "output": 2.50 },
+      { "id": "grok-build-0.1", "label": "Grok Build 0.1", "desc": "Cheapest current text tier (2x price for prompts ≥200K)", "input": 1.00, "output": 2.00 },
+      { "id": "grok-4-1-fast-reasoning", "label": "Grok 4.1 Fast (reasoning)", "desc": "Fast reasoning model — caveat: reasoning models may bypass tool_choice forcing. Not on xAI's pricing page as of 2026-09-28", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-1-fast-non-reasoning", "label": "Grok 4.1 Fast (non-reasoning)", "desc": "Non-reasoning fast variant for skill/tool-driven workflows. Not on xAI's pricing page as of 2026-09-28", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-fast-reasoning", "label": "Grok 4 Fast (reasoning)", "desc": "Older fast reasoning variant. Not on xAI's pricing page as of 2026-09-28", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-fast-non-reasoning", "label": "Grok 4 Fast (non-reasoning)", "desc": "Older fast non-reasoning — good for tool calls. Not on xAI's pricing page as of 2026-09-28", "input": 0.20, "output": 0.50 },
+      { "id": "grok-4-0709", "label": "Grok 4 (0709 snapshot)", "desc": "Pinned snapshot of grok-4. Not on xAI's pricing page as of 2026-09-28", "input": 3.00, "output": 15.00 },
+      { "id": "grok-3", "label": "Grok 3", "desc": "Previous-gen flagship. Not on xAI's pricing page as of 2026-09-28", "input": 3.00, "output": 15.00 },
+      { "id": "grok-3-mini", "label": "Grok 3 Mini", "desc": "Compact previous-gen. Not on xAI's pricing page as of 2026-09-28", "input": 0.30, "output": 0.50 },
+      { "id": "grok-code-fast-1", "label": "Grok Code Fast 1", "desc": "Code-specialized variant. Not on xAI's pricing page as of 2026-09-28", "input": 0.20, "output": 1.50 }
     ],
     "deepseek": [
-      { "id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "desc": "Fast & low cost, 256K context (Apr 2026)", "input": 0.14, "output": 0.28 },
-      { "id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "desc": "Latest flagship, 1.6T MoE, 1M context (Apr 2026)", "input": 1.74, "output": 3.48 }
+      { "id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "desc": "Flagship, 1.6T MoE, 1M context — off-peak/standard price; peak hours (01:00–04:00 & 06:00–10:00 UTC Mon–Fri) cost $1.32/$3.96", "input": 0.66, "output": 1.98 },
+      { "id": "deepseek-flash", "label": "DeepSeek Flash", "desc": "Fast & low cost (served by DeepSeek-V4.1-Flash; replaces deepseek-v4-flash) — off-peak/standard price; peak hours cost $0.30/$1.20", "input": 0.15, "output": 0.60 }
     ]
   }
 }
