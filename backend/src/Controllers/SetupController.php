@@ -12,9 +12,10 @@ use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
  * First-run setup of a corporate install: creates the administrator, once.
  *
  * Both endpoints are public — before setup there is nobody to authenticate.
- * createAdmin is safe to expose because it refuses as soon as any admin
- * exists, and it re-checks under a MySQL named lock so two simultaneous
- * submissions cannot both pass the check.
+ * createAdmin is safe to expose because it refuses as soon as any gpt user
+ * exists (any role -- "no admin" is not enough, or removing the last admin
+ * would reopen setup to anyone), and it re-checks under a MySQL named lock so
+ * two simultaneous submissions cannot both pass the check.
  */
 class SetupController
 {
@@ -70,7 +71,9 @@ class SetupController
             return $this->fail('The login service is not configured', 503);
         }
 
-        $this->lock();
+        if (!$this->lock()) {
+            return $this->fail('Setup is busy, please try again', 503);
+        }
         try {
             if (!$this->needsSetup()) {
                 return $this->fail('Setup is already complete', 409);
@@ -97,7 +100,7 @@ class SetupController
         if (!Edition::isCorporate($this->config)) {
             return false;
         }
-        return (int) $this->db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() === 0;
+        return (int) $this->db->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0;
     }
 
     private function accounts(): ?LoginAccounts
@@ -125,14 +128,16 @@ class SetupController
             ->execute([$email, $firstName, $lastName]);
     }
 
-    private function lock(): void
+    /** True when the lock is held. GET_LOCK returns 1 on success, 0 on timeout, NULL on error. */
+    protected function lock(): bool
     {
-        if ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $this->db->query("SELECT GET_LOCK('gpt_corporate_setup', 10)");
+        if ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            return true;
         }
+        return (string) $this->db->query("SELECT GET_LOCK('gpt_corporate_setup', 10)")->fetchColumn() === '1';
     }
 
-    private function unlock(): void
+    protected function unlock(): void
     {
         if ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
             $this->db->query("SELECT RELEASE_LOCK('gpt_corporate_setup')");

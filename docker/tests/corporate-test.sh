@@ -80,6 +80,17 @@ LT=$(json -X POST "$LOGIN/auth/login" -d '{"email":"boss@corp.test","password":"
 EX=$(json -X POST "$API/auth" -d "{\"action\":\"sso_exchange\",\"login_token\":\"$LT\"}")
 echo "$EX" | grep -q '"role":"admin"' || fail "sso_exchange did not return the admin: $EX"
 GT=$(echo "$EX" | token_of)
+GRT=$(echo "$EX" | sed -n 's/.*"refresh_token":"\([^"]*\)".*/\1/p')
+[ -n "$GRT" ] || fail "sso_exchange returned no refresh token: $EX"
+
+# --- tokens do not cross services -------------------------------------------
+# Separate secrets: the login service's token (login user 1) must not pass as
+# gpt user 1, and gpt's refresh token must not mint login-service tokens.
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $LT" "$API/admin/users")
+[ "$code" = "401" ] || fail "a login-service token was accepted by gpt directly (HTTP $code)"
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+  -X POST "$LOGIN/auth/refresh" -d "{\"refresh_token\":\"$GRT\"}")
+[ "$code" = "401" ] || fail "a gpt refresh token was accepted by the login service (HTTP $code)"
 
 # --- no way in except the login service ---------------------------------------
 json -X POST "$API/auth" -d '{"action":"login","email":"boss@corp.test","password":"correct-horse-1"}' | grep -q '"success":false' \
@@ -106,5 +117,19 @@ json -X POST "$LOGIN/auth/login" -d '{"email":"ann@corp.test","password":"ann-pa
   || fail "the old password still works"
 json -X POST "$LOGIN/auth/login" -d '{"email":"ann@corp.test","password":"ann-password-2"}' | grep -q '"success":true' \
   || fail "the new password does not work"
+
+# --- the last admin stays, and setup stays closed ------------------------------
+BOSS_ID=$(json "$API/admin/users" -H "Authorization: Bearer $GT" | sed -n 's/.*"id":\([0-9]*\),"email":"boss@corp.test".*/\1/p')
+[ -n "$BOSS_ID" ] || fail "could not find the admin's id"
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $GT" "$API/admin/users/$BOSS_ID")
+[ "$code" = "409" ] || fail "the last administrator could be deleted (HTTP $code)"
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $GT" \
+  -X POST "$API/admin/users/update" -d "{\"user_id\":$BOSS_ID,\"email\":\"boss@corp.test\",\"role\":\"user\"}")
+[ "$code" = "409" ] || fail "the last administrator could be demoted (HTTP $code)"
+
+# --- the Login card cannot write the credential store on corporate -------------
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $GT" \
+  -X POST "$API/admin/login/users" -d '{"email":"sneak@corp.test"}')
+[ "$code" = "403" ] || fail "the Login card's create-user route wrote on corporate (HTTP $code)"
 
 echo "PASS: corporate setup creates one admin; everyone signs in through the login service"

@@ -155,6 +155,58 @@ class AdminCorporateAccountsTest extends TestCase
         $this->assertSame('The login service is not configured', $r['error']);
     }
 
+    public function test_deleting_the_last_admin_is_refused(): void
+    {
+        $r = $this->admin()->deleteUser($this->asAdmin([]), 1);
+
+        $this->assertSame(409, $r['status_code']);
+        $this->assertSame('The last administrator cannot be removed or demoted', $r['error']);
+        $this->assertSame('admin', $this->gpt->query('SELECT role FROM users WHERE id = 1')->fetchColumn());
+    }
+
+    public function test_deleting_the_last_admin_keeps_its_login_account(): void
+    {
+        $this->login->exec("INSERT INTO users (email, password, email_verified) VALUES ('boss@corp.test', 'x', 1)");
+
+        $this->admin()->deleteUser($this->asAdmin([]), 1);
+
+        $this->assertNotFalse($this->loginRow('boss@corp.test'));
+    }
+
+    public function test_demoting_the_last_admin_is_refused(): void
+    {
+        $r = $this->admin()->updateUser($this->asAdmin(['user_id' => 1, 'email' => 'boss@corp.test', 'role' => 'user']));
+
+        $this->assertSame(409, $r['status_code']);
+        $this->assertSame('The last administrator cannot be removed or demoted', $r['error']);
+        $this->assertSame('admin', $this->gpt->query('SELECT role FROM users WHERE id = 1')->fetchColumn());
+    }
+
+    public function test_updating_the_last_admin_without_changing_role_still_works(): void
+    {
+        $r = $this->admin()->updateUser($this->asAdmin(['user_id' => 1, 'email' => 'boss@corp.test',
+            'first_name' => 'Big', 'role' => 'admin']));
+        $this->assertTrue($r['success']);
+        $r = $this->admin()->updateUser($this->asAdmin(['user_id' => 1, 'email' => 'boss@corp.test', 'first_name' => 'Bigger']));
+        $this->assertTrue($r['success']);
+    }
+
+    public function test_a_non_last_admin_can_be_demoted_and_deleted(): void
+    {
+        $this->admin()->createUser($this->asAdmin(['email' => 'ann@corp.test', 'password' => 'ann-password-1', 'role' => 'admin']));
+        $this->admin()->createUser($this->asAdmin(['email' => 'bob@corp.test', 'password' => 'bob-password-1', 'role' => 'admin']));
+        $ann = (int) $this->gpt->query("SELECT id FROM users WHERE email = 'ann@corp.test'")->fetchColumn();
+        $bob = (int) $this->gpt->query("SELECT id FROM users WHERE email = 'bob@corp.test'")->fetchColumn();
+
+        $r = $this->admin()->updateUser($this->asAdmin(['user_id' => $ann, 'email' => 'ann@corp.test', 'role' => 'user']));
+        $this->assertTrue($r['success']);
+        $this->assertSame('user', $this->gpt->query("SELECT role FROM users WHERE id = $ann")->fetchColumn());
+
+        $r = $this->admin()->deleteUser($this->asAdmin([]), $bob);
+        $this->assertTrue($r['success']);
+        $this->assertFalse($this->loginRow('bob@corp.test'));
+    }
+
     public function test_update_user_lowercases_email(): void
     {
         $this->admin()->createUser($this->asAdmin(['email' => 'ann@corp.test', 'password' => 'ann-password-1']));

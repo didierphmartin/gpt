@@ -52,6 +52,13 @@ grep -q '^GPT_AUTO_PASSWORD=' "$SECRETS" || \
     echo "GPT_AUTO_PASSWORD=$(openssl rand -hex 9)" >> "$SECRETS"
 grep -q '^LOGIN_APP_KEY_SECRET=' "$SECRETS" || \
     echo "LOGIN_APP_KEY_SECRET=$(openssl rand -hex 32)" >> "$SECRETS"
+# The login service signs with its OWN secret, never gpt's JWT_SECRET. The two
+# user tables have independent ids and neither middleware checks `iss`, so a
+# shared secret would let a login-service token pass as the gpt user with the
+# same id (skipping sso_exchange's email mapping), and a gpt refresh token work
+# on the login service. gpt only needs this one to verify tokens in sso_exchange.
+grep -q '^LOGIN_JWT_SECRET=' "$SECRETS" || \
+    echo "LOGIN_JWT_SECRET=$(openssl rand -hex 32)" >> "$SECRETS"
 
 # shellcheck disable=SC1090
 . "$SECRETS"
@@ -99,9 +106,10 @@ set_env APP_KEY_SECRET "$APP_KEY_SECRET"
 set_env STORAGE_PROVIDER local
 set_env GPT_EDITION "${GPT_EDITION:-}"
 if [ "${GPT_EDITION:-}" = "corporate" ]; then
-    # gpt trusts the login service's tokens (same secret) and reads its users
-    # table for sso_exchange and for creating accounts from gpt_admin.
-    set_env LOGIN_JWT_SECRET "$JWT_SECRET"
+    # gpt verifies the login service's tokens in sso_exchange (with the login
+    # service's own secret, distinct from JWT_SECRET) and reads its users table
+    # for sso_exchange and for creating accounts from gpt_admin.
+    set_env LOGIN_JWT_SECRET "$LOGIN_JWT_SECRET"
     set_env LOGIN_DB_HOST "${MYSQL_HOST:-db}"
     set_env LOGIN_DB_NAME "${LOGIN_DB_NAME:-gpt_login}"
     set_env LOGIN_DB_USER "$MYSQL_USER"
@@ -120,7 +128,7 @@ if [ "${GPT_EDITION:-}" = "corporate" ]; then
         echo "DB_NAME=${LOGIN_DB_NAME:-gpt_login}"
         echo "DB_USER=${MYSQL_USER}"
         echo "DB_PASS=${MYSQL_PASSWORD}"
-        echo "JWT_SECRET=${JWT_SECRET}"
+        echo "JWT_SECRET=${LOGIN_JWT_SECRET}"
         echo "LOGIN_APP_KEY_SECRET=${LOGIN_APP_KEY_SECRET}"
         echo "LOGIN_DISABLE_SIGNUP=1"
     } > "$LOGIN_ENV"

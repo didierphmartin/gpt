@@ -322,6 +322,10 @@ class AdminController
             ];
         }
 
+        if ($role !== null && $role !== 'admin' && $this->isLastAdmin($userId)) {
+            return $this->lastAdminRefusal();
+        }
+
         try {
             $accounts = $this->loginAccounts();
         } catch (\Throwable $e) {
@@ -390,6 +394,10 @@ class AdminController
             ];
         }
 
+        if ($this->isLastAdmin($userId)) {
+            return $this->lastAdminRefusal();
+        }
+
         try {
             $accounts = $this->loginAccounts();
         } catch (\Throwable $e) {
@@ -420,6 +428,30 @@ class AdminController
             'success' => true,
             'message' => 'User deleted',
             'status_code' => 200
+        ];
+    }
+
+    /**
+     * Whether $userId is the only admin. Removing or demoting it would leave
+     * nobody able to administer the install (and on corporate, would once
+     * have reopened first-run setup).
+     */
+    private function isLastAdmin(int $userId): bool
+    {
+        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = :id");
+        $stmt->execute([':id' => $userId]);
+        if ($stmt->fetchColumn() !== 'admin') {
+            return false;
+        }
+        return (int) $this->db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() === 1;
+    }
+
+    private function lastAdminRefusal(): array
+    {
+        return [
+            'success' => false,
+            'error' => 'The last administrator cannot be removed or demoted',
+            'status_code' => 409
         ];
     }
 
