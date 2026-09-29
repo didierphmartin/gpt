@@ -18053,10 +18053,15 @@ Based on the analysis...
         const hint = document.getElementById('agent-routing-hint');
         if (hint) hint.textContent = mode === 'jev' ? tf('routingJevHint')
             : (mode === 'llm' ? tf('routingLlmHint') : tf('routingUnsetNote'));
-        if (jev) this._refreshJevKeyStatus();
+        if (isDisp) this._refreshJevKeyStatus();
     }
 
-    /** Fill the key status line from GET /dispatch/jev/status (never the key). */
+    /**
+     * Fill the key status line from GET /dispatch/jev/status (never the key).
+     * A plan without Jev disables the Jev routing button for a new choice;
+     * a dispatcher already saved in Jev mode keeps its mode and shows the
+     * note in place of the key status. LLM stays selectable.
+     */
     async _refreshJevKeyStatus() {
         const tf = (k) => this.t('workflow.agentForm.' + k);
         const el = document.getElementById('agent-jev-key-status');
@@ -18064,12 +18069,25 @@ Based on the analysis...
         if (!el) return;
         const st = await this._jevStatus(true);
         if (!document.body.contains(el)) return; // modal closed meanwhile
-        if (!st) {
+        const notAllowed = !!st && st.allowed === false;
+        const jevBtn = document.querySelector('#agent-routing-mode [data-routing="jev"]');
+        if (jevBtn) {
+            jevBtn.disabled = notAllowed;
+            jevBtn.title = notAllowed ? tf('jevNotInPlan') : '';
+            jevBtn.classList.toggle('opacity-50', notAllowed);
+            jevBtn.classList.toggle('cursor-not-allowed', notAllowed);
+        }
+        if (notAllowed) {
+            el.textContent = tf('jevNotInPlan');
+            el.className = 'text-sm text-amber-700';
+            sw?.classList.add('hidden');
+        } else if (!st) {
             el.textContent = tf('jevKeyUnknown');
             el.className = 'text-sm text-gray-600';
             sw?.classList.add('hidden');
         } else if (st.available) {
-            el.textContent = st.source === 'user' ? tf('jevKeySetUser') : tf('jevKeySetGlobal');
+            el.textContent = st.source === 'user' ? tf('jevKeySetUser')
+                : (st.source === 'package' ? tf('jevKeySetPackage') : tf('jevKeySetGlobal'));
             el.className = 'text-sm text-green-700';
             sw?.classList.add('hidden');
         } else {
@@ -18080,7 +18098,7 @@ Based on the analysis...
     }
 
     /**
-     * GET /dispatch/jev/status → {available, source} or null when it cannot be
+     * GET /dispatch/jev/status → {allowed, available, source} or null when it cannot be
      * read. `fresh` skips the per-run cache (the form re-checks on every open).
      */
     async _jevStatus(fresh = false) {
@@ -18092,7 +18110,7 @@ Based on the analysis...
             });
             if (resp.ok) {
                 const j = await resp.json();
-                if (j && j.success !== false) st = { available: !!j.available, source: j.source || 'none' };
+                if (j && j.success !== false) st = { allowed: j.allowed !== false, available: !!j.available, source: j.source || 'none' };
             }
         } catch (_) { /* unknown */ }
         if (!fresh) this._wfJevStatus = st;

@@ -48,6 +48,9 @@ class SettingsPanel {
         // a chat provider: it is deliberately NOT in this.providers (model
         // selects, prompts, usage, catalog) and only joins the key loops.
         this.keyProviders = [...this.providers, 'jev'];
+        // Providers shown in the Usage tab. Jev has usage and cost but is
+        // not a chat provider, so it joins here and not this.providers.
+        this.usageProviders = [...this.providers, 'jev'];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -3173,7 +3176,7 @@ class SettingsPanel {
         // Build cards HTML
         let cardsHtml = '';
 
-        for (const provider of this.providers) {
+        for (const provider of this.usageProviders) {
             const data = providerUsage[provider] || {
                 month_requests: 0,
                 month_tokens: 0,
@@ -3184,7 +3187,9 @@ class SettingsPanel {
             totalCost += costUsd;
 
             // Get pricing info for this provider and convert to selected currency
-            const pricing = this.pricing[provider] || { input: 0, output: 0, model: '' };
+            // The model catalog has no Jev, so its card names the recorded model.
+            const pricing = this.pricing[provider]
+                || { input: 0, output: 0, model: provider === 'jev' ? 'jev-latest' : '' };
             const inputPrice = (pricing.input * rate).toFixed(2);
             const outputPrice = (pricing.output * rate).toFixed(2);
             const pricingText = `${currency.symbol}${inputPrice}/${currency.symbol}${outputPrice} per 1M`;
@@ -3272,7 +3277,7 @@ class SettingsPanel {
         const costData = [];
         const tokenData = [];
 
-        for (const provider of this.providers) {
+        for (const provider of this.usageProviders) {
             const data = providerUsage[provider];
             // Include providers with any activity (requests, tokens, or cost)
             if (data && (data.month_requests > 0 || data.month_cost_usd > 0 || data.month_tokens > 0)) {
@@ -3623,12 +3628,12 @@ class SettingsPanel {
 
                 if (hasCustomKey) {
                     statusEl.textContent = 'Custom';
-                    statusEl.classList.remove('default');
+                    statusEl.classList.remove('default', 'missing');
                     statusEl.classList.add('custom');
                     inputEl.placeholder = '****' + (this.userKeys[provider].masked_key || '');
                 } else {
                     statusEl.textContent = 'Default';
-                    statusEl.classList.remove('custom');
+                    statusEl.classList.remove('custom', 'missing');
                     statusEl.classList.add('default');
                 }
             }
@@ -3637,20 +3642,25 @@ class SettingsPanel {
     }
 
     /**
-     * The Jev row has no package/default key notion; when the user has no
-     * personal key but the organisation has one, say so (status endpoint
-     * returns availability only, never the key).
+     * Where the Jev key comes from when the user has none of their own (their
+     * own key already shows "Custom" via renderApiKeyStatuses). A plan without
+     * Jev overrides even a personal key, since that key cannot be used. The
+     * status endpoint returns availability only, never the key.
      */
     async renderJevOrgKeyStatus() {
         const statusEl = document.getElementById('key-status-jev');
-        if (!statusEl || (this.userKeys.jev && this.userKeys.jev.has_custom_key)) return;
+        if (!statusEl) return;
         try {
             const res = await fetch(`${this.apiBaseUrl}/dispatch/jev/status`, {
                 headers: { 'Authorization': `Bearer ${this.getAuthToken()}` }
             });
-            const body = await res.json();
-            if (body.success && body.source === 'global' && !(this.userKeys.jev && this.userKeys.jev.has_custom_key)) {
-                statusEl.textContent = 'Organisation key';
+            const data = await res.json();
+            if (!data.success) return;
+            const hasOwnKey = !!(this.userKeys.jev && this.userKeys.jev.has_custom_key);
+            const label = { package: 'Package key', global: 'Organisation key', not_allowed: 'Not included in your plan' }[data.source];
+            if (label && (data.source === 'not_allowed' || !hasOwnKey)) {
+                statusEl.textContent = label;
+                statusEl.className = 'key-status ' + (data.source === 'not_allowed' ? 'missing' : 'default');
             }
         } catch (e) { /* status is cosmetic */ }
     }
@@ -3822,7 +3832,8 @@ class SettingsPanel {
             'grok': 'Grok (xAI)',
             'deepseek': 'DeepSeek',
             'gamma4': 'Gamma4',
-            'glm': 'GLM 5.2 (z.ai)'
+            'glm': 'GLM 5.2 (z.ai)',
+            'jev': 'Jev (dispatcher routing)'
         };
         return names[provider] || provider;
     }

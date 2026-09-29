@@ -855,6 +855,8 @@
       "jevKeyChecking": "Checking…",
       "jevKeySetUser": "✓ Jev key set (your key)",
       "jevKeySetGlobal": "✓ Jev key set (organisation key)",
+      "jevKeySetPackage": "✓ Jev key set (package key)",
+      "jevNotInPlan": "Jev is not included in your plan",
       "jevKeyMissing": "⚠ No Jev key — add one in Settings → LLM API Keys, or ask your admin",
       "jevKeySwitchHint": "Without a key this dispatcher cannot route: switch Routing to LLM to use the model instead.",
       "jevKeyUnknown": "Could not check the Jev key.",

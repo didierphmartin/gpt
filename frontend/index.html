@@ -1500,6 +1500,7 @@
         .usage-card.deepseek { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #93c5fd; }
         .usage-card.gamma4 { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }
         .usage-card.glm { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-color: #7dd3fc; }
+        .usage-card.jev { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #bbf7d0; }
         .usage-card-header {
             font-size: 13px;
             font-weight: 600;
@@ -1667,6 +1668,10 @@
         .api-key-row .key-status.custom {
             background: #d1fae5;
             color: #059669;
+        }
+        .api-key-row .key-status.missing {
+            background: #fee2e2;
+            color: #dc2626;
         }
         .settings-total-bar {
             background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
@@ -4209,7 +4214,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260921-runner"></script>
-    <script src="assets/js/settings-panel.js?v=20260929-jev-key"></script>
+    <script src="assets/js/settings-panel.js?v=20260930-jev-usage"></script>
     <script src="assets/js/agent-teams-panel.js?v=20260903-playbook-agent"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4243,7 +4248,7 @@
     <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
-    <script src="assets/js/workflow-editor.js?v=20260929-jevform"></script>
+    <script src="assets/js/workflow-editor.js?v=20260930-jev-usage"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>
