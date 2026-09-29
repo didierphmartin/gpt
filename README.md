@@ -27,7 +27,7 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 | **How it's delivered** | Docker container on your own machine | Docker container on the company intranet | Apache + PHP + MySQL, no container |
 | **LLM access** | Your own provider keys | Your company's own provider keys, shared by all staff | Keys configured by whoever runs the server |
 | **Admin app** | Not included | Included (`gpt_admin`): manage users, roles, LLM settings, MCP servers and usage | — |
-| **Sign-in** | None: the container signs you in | One account per person, with one sign-in for the app and the admin app | Yes |
+| **Sign-in** | None: the container signs you in | One account per person in the login service, for both the app and the admin app | Yes |
 | **Install guide** | [Individual install](#individual-install-docker) | [Corporate install](#corporate-install-docker-on-your-intranet) | [Manual install](#manual-install-apache--php) |
 
 Coming next: both Docker editions will also let you create an account with us
@@ -98,8 +98,9 @@ installation use it to:
 - **Every user signs in.** Each person has their own account, and nobody can
   use the app without signing in, so every conversation, setting and token
   counted belongs to a named user.
-- **One sign-in for both apps.** gpt is served at `/gpt/` and `gpt_admin` at
-  `/gpt_admin/` on the same address, so signing in once covers both.
+- **One account for both apps.** Accounts live in the login service that
+  ships with the corporate package, so the same email and password sign in
+  to gpt and `gpt_admin`.
 - **Only admins reach the admin app.** Other users who sign in get the app
   only.
 
@@ -107,6 +108,8 @@ installation use it to:
 - An intranet server (Linux recommended) with Docker Engine + Compose v2.
 - A checkout of the `gpt_admin` repository, which we supply with the
   corporate package (it is not public).
+- A checkout of the login service repository, which we supply with the
+  corporate package.
 - Your company's LLM provider keys.
 
 1. **Get the files and choose your settings.**
@@ -116,39 +119,43 @@ installation use it to:
    cp .env.example .env
    ```
 
-   Edit `.env` **before the first start**. The database passwords and the
-   first admin account are created from it, once:
+   Edit `.env` **before the first start**. It only holds the database
+   passwords and the port; there is no admin account to set here:
    - Replace `MYSQL_PASSWORD` and `MYSQL_ROOT_PASSWORD` with strong passwords.
-   - Set `GPT_ADMIN_EMAIL` and `GPT_ADMIN_PASSWORD` for the admin. That
-     account signs in to both gpt and `gpt_admin`, and it creates everyone
-     else's.
    - Change `GPT_PORT` if 8080 is already in use on the server.
 
-2. **Build and start the app.** This takes three commands, not one: Docker
+2. **Build and start the app.** This takes four commands, not one: Docker
    cannot copy files from outside the folder it is building, so `gpt_admin`
-   (a separate checkout) is built into its own image first. `GPT_ADMIN_SRC`
-   must be exported in the shell, because it names a folder on disk that only
-   the shell can pass to `docker build`.
+   and the login service (both separate checkouts) are each built into their
+   own image first. `GPT_ADMIN_SRC` and `GPT_LOGIN_SRC` must be exported in
+   the shell, because they name folders on disk that only the shell can pass
+   to `docker build`.
 
    ```bash
    export GPT_ADMIN_SRC=../gpt_admin      # your gpt_admin checkout
+   export GPT_LOGIN_SRC=../login          # your login service checkout
    docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
    docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+   docker build -t gpt-login-src:latest -f docker/login/Dockerfile "$GPT_LOGIN_SRC"
    docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
    ```
 
    The containers restart on their own when the server reboots.
 
-3. **Sign in as the admin** at `http://<server-name>:8080/gpt/`, from any
-   machine on the intranet.
+3. **Open `gpt_admin`** at `http://<server-name>:8080/gpt_admin/`, from any
+   machine on the intranet. The setup wizard starts on its own, because no
+   account exists yet.
 
-4. **Open `gpt_admin`** at `http://<server-name>:8080/gpt_admin/`. You are
-   already signed in there.
+4. **Create the administrator account.** The wizard's first screen is for the
+   administrator: enter an email and a password (at least 10 characters).
+   That account signs in to both gpt and `gpt_admin`, through the login
+   service, and it creates everyone else's.
 
-5. **Add the company's LLM keys** in `gpt_admin`'s LLM settings. They apply to
-   every user on the server.
+5. **Add the company's LLM keys** on the wizard's second screen. They apply
+   to every user.
 
-6. **Create your staff's accounts** in `gpt_admin`, one per person.
+6. **Create your staff's accounts** in `gpt_admin`, one per person. Nobody
+   can sign themselves up.
 
 7. **Give your staff the address.** Each person signs in with their own
    account from their own browser. Anyone who runs compiled workflows installs
@@ -158,11 +165,15 @@ installation use it to:
 We recommend putting the server behind your company's HTTPS reverse proxy, so
 passwords and conversations are encrypted on the network.
 
-> **Coming next for the corporate edition:** the setup wizard will create the
-> admin account (email and password) instead of `.env`, and ask for LLM
-> access. Both editions will then offer a choice between your own keys and an
-> account with us, to **subscribe** (a monthly plan covering every LLM we
-> support, up to a token limit) or **buy credits** (pay as you go).
+> **Upgrading an earlier corporate test install:** start from a fresh
+> database (`docker compose -f compose.yaml -f compose.corporate.yaml down
+> -v`). Installs made before this change created their admin from `.env`,
+> without a login-service account, so that admin cannot sign in any more.
+
+> **Coming next for the corporate edition:** both editions will offer a
+> choice between your own keys and an account with us, to **subscribe** (a
+> monthly plan covering every LLM we support, up to a token limit) or **buy
+> credits** (pay as you go).
 
 ### What the containers leave out, on purpose
 
