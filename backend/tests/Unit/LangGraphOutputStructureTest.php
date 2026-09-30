@@ -90,7 +90,7 @@ class LangGraphOutputStructureTest extends TestCase
         return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
     }
 
-    /** path => code for one mode. api.py is left out unless asked: RunServerEmitter (shared) writes most of it. */
+    /** path => code of one mode's Python files. api.py is left out unless asked: RunServerEmitter (shared) writes most of it. */
     private function files(array $graph, string $mode, bool $withApi = false): array
     {
         $gen = $this->generator($graph);
@@ -100,6 +100,9 @@ class LangGraphOutputStructureTest extends TestCase
         }
         $out = [];
         foreach ($gen->generate(44, '3', [$mode => true])['files'] as $f) {
+            if (!str_ends_with($f['path'], '.py')) {
+                continue;   // ARCHITECTURE.md: documentation, checked by LangGraphArchitectureDocTest
+            }
             if ($withApi || $f['path'] !== 'api.py') {
                 $out[$f['path']] = $f['code'];
             }

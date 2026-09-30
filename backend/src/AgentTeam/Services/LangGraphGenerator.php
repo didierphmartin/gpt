@@ -240,7 +240,11 @@ class LangGraphGenerator
     /**
      * Generate a standalone Python script from a workflow.
      *
-     * @return array{filename: string, code: string}
+     * Single file: {filename, code, architecture}. Modular / A2A: {root, files,
+     * architecture}, files ending with ARCHITECTURE.md. Swarm: {root, files}.
+     * architecture is the ARCHITECTURE.md text (LangGraphArchitectureDoc).
+     *
+     * @return array{filename: string, code: string, architecture: string}|array{root: string, files: list<array{path: string, code: string}>, architecture?: string}
      */
     public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
@@ -621,7 +625,7 @@ class LangGraphGenerator
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
         // (LangGraph was the original default and previously had no suffix).
         $filename = "{$safeName}_langgraph.py";
-        return ['filename' => $filename, 'code' => $code];
+        return ['filename' => $filename, 'code' => $code, 'architecture' => LangGraphArchitectureDoc::build($facts, 'single')];
     }
 
     /**
@@ -1277,7 +1281,7 @@ class LangGraphGenerator
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitA2AAgentFile($facts, $layout, (string)$nid)];
         }
-        return ['root' => $layout['root'], 'files' => $files];
+        return self::withArchitecture(['root' => $layout['root'], 'files' => $files], $facts, 'a2a');
     }
 
     /** orchestrator.py: the graph, the agent endpoint table, the supervisor and the A2A node runner. */
@@ -2814,7 +2818,20 @@ PY;
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitModularAgentFile($facts, $layout, (string) $nid)];
         }
-        return ['root' => $layout['root'], 'files' => $files];
+        return self::withArchitecture(['root' => $layout['root'], 'files' => $files], $facts, 'modular');
+    }
+
+    /**
+     * A multi-file result plus its ARCHITECTURE.md (LangGraphArchitectureDoc):
+     * under 'architecture' for a caller that only shows it, and as the last
+     * file so it is written beside the code wherever the package is saved.
+     */
+    private static function withArchitecture(array $result, array $facts, string $mode): array
+    {
+        $doc = LangGraphArchitectureDoc::build($facts, $mode);
+        $result['files'][] = ['path' => 'ARCHITECTURE.md', 'code' => $doc];
+        $result['architecture'] = $doc;
+        return $result;
     }
 
     /** docNodes descriptors for the modular layout: every node, with its module file under 'file'. */
