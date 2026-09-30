@@ -315,7 +315,7 @@ class WorkflowController
      * entries all sit under one folder -- the result's root for a package,
      * the script's own name for a single file -- with ARCHITECTURE.md beside
      * the code (a package already lists it among its files; a single file
-     * carries it under 'architecture'). The zip is named after the workflow
+     * carries it under 'architecture', null for an ingestion pipeline). The zip is named after the workflow
      * and the mode: "<workflow>_<mode>.zip".
      */
     public static function langGraphZipResponse(array $result, string $mode): array
@@ -325,8 +325,10 @@ class WorkflowController
             $files = $result['files'];
         } else {
             $folder = preg_replace('/\.py$/', '', $result['filename']);
-            $files = [['path' => $result['filename'], 'code' => $result['code']],
-                ['path' => 'ARCHITECTURE.md', 'code' => $result['architecture']]];
+            $files = [['path' => $result['filename'], 'code' => $result['code']]];
+            if (($result['architecture'] ?? null) !== null) {   // none for an ingestion pipeline
+                $files[] = ['path' => 'ARCHITECTURE.md', 'code' => $result['architecture']];
+            }
         }
         // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
         $slug = preg_replace('/_(langgraph|modular|a2a)(_swarm)?$/', '', $folder);

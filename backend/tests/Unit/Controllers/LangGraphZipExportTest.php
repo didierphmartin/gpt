@@ -74,4 +74,12 @@ final class LangGraphZipExportTest extends TestCase
         $this->assertSame('attachment; filename="crew_modular.zip"', $r['headers']['Content-Disposition']);
         $this->assertSame(['crew_modular_swarm/workflow.py'], array_keys(self::entries($r['raw_body'])));
     }
+
+    public function testASingleFileWithoutArchitectureZipsTheScriptAlone(): void
+    {
+        // An ingestion pipeline (or a doc that failed to build) has architecture = null.
+        $r = WorkflowController::langGraphZipResponse(['filename' => 'feed_langgraph.py', 'code' => 'print(1)',
+            'architecture' => null], 'single');
+        $this->assertSame(['feed_langgraph/feed_langgraph.py'], array_keys(self::entries($r['raw_body'])));
+    }
 }

@@ -5282,9 +5282,11 @@ class WorkflowEditor {
     /**
      * Export — the LangGraph package for the current codegen mode (the same
      * generation Display Code shows) as one zip with ARCHITECTURE.md inside,
-     * from generate-python?format=zip. Saved where the user picks
-     * (showSaveFilePicker); a browser without that API, or a picker that fails
-     * for another reason than a cancel, gets a plain download instead.
+     * from generate-python?format=zip. The save picker opens FIRST, while the
+     * click's user activation is still valid; the zip is fetched after, and the
+     * file is written only once the fetch succeeded. A browser without
+     * showSaveFilePicker (or whose picker fails for another reason than a
+     * cancel) gets a plain download instead.
      */
     async _exportLangGraphZip() {
         if (!this.currentWorkflowId) {
@@ -5293,8 +5295,24 @@ class WorkflowEditor {
         }
         const mode = this._codegenOptions().mode || 'single';
         const flag = mode === 'single' ? '' : `&${mode === 'modular' ? 'modular' : 'a2a'}=1`;
+        // The server's own name for the zip (LangGraphGenerator::safeVar + mode),
+        // computed here because the picker must open before the response exists.
+        const slug = String(this.currentWorkflowName || '').replace(/[^A-Za-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '').toLowerCase() || `workflow_${this.currentWorkflowId}`;
+        let suggestedName = `${slug}_${mode}.zip`;
+        let handle = null;
+        if (typeof window.showSaveFilePicker === 'function') {
+            try {
+                handle = await window.showSaveFilePicker({
+                    suggestedName,
+                    types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
+                });
+            } catch (e) {
+                if (e?.name === 'AbortError') return;   // the user cancelled the dialog
+                console.warn('[WorkflowEditor] save picker failed, downloading instead:', e);
+            }
+        }
         let blob;
-        let suggestedName = `workflow_${mode}.zip`;
         try {
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?format=zip${flag}`,
@@ -5308,29 +5326,29 @@ class WorkflowEditor {
             }
             if (resp.headers.get('Content-Type')?.includes('application/json')) {
                 // A backend without the zip export answers with the JSON generation instead.
-                throw new Error('Export is not available on this backend');
+                throw new Error(this.t('workflow.output.langgraphExportUnsupported'));
             }
             const m = (resp.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
             if (m) suggestedName = m[1];
             blob = await resp.blob();
         } catch (e) {
+            // Some browsers create the chosen file when the picker closes: remove
+            // it (where the handle can) rather than leave an empty zip behind.
+            if (handle && typeof handle.remove === 'function') {
+                try { await handle.remove(); } catch (_) { /* nothing was created */ }
+            }
             this._reportLangGraphError(this.t('workflow.output.langgraphExportFailed'), e);
             return;
         }
-        if (typeof window.showSaveFilePicker === 'function') {
+        if (handle) {
             try {
-                const handle = await window.showSaveFilePicker({
-                    suggestedName,
-                    types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
-                });
                 const writable = await handle.createWritable();
                 await writable.write(blob);
                 await writable.close();
-                return;
             } catch (e) {
-                if (e?.name === 'AbortError') return;   // the user cancelled the dialog
-                console.warn('[WorkflowEditor] save picker failed, downloading instead:', e);
+                this._reportLangGraphError(this.t('workflow.output.langgraphExportFailed'), e);
             }
+            return;
         }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -5352,6 +5370,13 @@ class WorkflowEditor {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
+        if (this._isSwarm()) {
+            // Not a failure: the compiler writes no ARCHITECTURE.md for a swarm.
+            const msg = this.t('workflow.output.langgraphArchitectureSwarm');
+            if (typeof window.showToast === 'function') window.showToast(msg, 'info');
+            else alert(msg);
+            return;
+        }
         const mode = this._codegenOptions().mode || 'single';
         let doc = '';
         try {
@@ -5367,7 +5392,7 @@ class WorkflowEditor {
             } else {
                 doc = (await this._fetchManifest(mode)).architecture || '';
             }
-            if (!doc) throw new Error('This backend does not produce ARCHITECTURE.md');
+            if (!doc) throw new Error(this.t('workflow.output.langgraphArchitectureUnsupported'));
         } catch (e) {
             this._reportLangGraphError(this.t('workflow.output.langgraphArchitectureFailed'), e);
             return;
@@ -5387,9 +5412,9 @@ class WorkflowEditor {
         `;
         document.body.appendChild(backdrop);
         const body = backdrop.querySelector('.arch-doc-body');
-        // Node and workflow names are user text: sanitize the rendered HTML.
-        const html = typeof window.renderMarkdown === 'function' ? window.renderMarkdown(doc) : this.escapeHtml(doc);
-        body.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html) : html;
+        // Node and workflow names are user text: rendered Markdown only through
+        // DOMPurify, else the escaped text -- never unsanitised HTML.
+        body.innerHTML = this._pbRenderBody(doc);
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.arch-close-btn').addEventListener('click', close);

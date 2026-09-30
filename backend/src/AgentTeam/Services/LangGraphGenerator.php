@@ -242,9 +242,10 @@ class LangGraphGenerator
      *
      * Single file: {filename, code, architecture}. Modular / A2A: {root, files,
      * architecture}, files ending with ARCHITECTURE.md. Swarm: {root, files}.
-     * architecture is the ARCHITECTURE.md text (LangGraphArchitectureDoc).
+     * architecture is the ARCHITECTURE.md text (LangGraphArchitectureDoc); in a
+     * single file it is null for an ingestion pipeline or when the doc failed.
      *
-     * @return array{filename: string, code: string, architecture: string}|array{root: string, files: list<array{path: string, code: string}>, architecture?: string}
+     * @return array{filename: string, code: string, architecture: ?string}|array{root: string, files: list<array{path: string, code: string}>, architecture?: string}
      */
     public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
@@ -625,7 +626,28 @@ class LangGraphGenerator
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
         // (LangGraph was the original default and previously had no suffix).
         $filename = "{$safeName}_langgraph.py";
-        return ['filename' => $filename, 'code' => $code, 'architecture' => LangGraphArchitectureDoc::build($facts, 'single')];
+        return ['filename' => $filename, 'code' => $code, 'architecture' => self::singleArchitecture($facts)];
+    }
+
+    /**
+     * The single file's ARCHITECTURE.md, or null. The document is a companion:
+     * it must never cost the user the script, so a failure to build it is
+     * logged and dropped. An ingestion pipeline (loader/splitter/vectorstore
+     * nodes) is not the agent graph the document describes, so it gets none.
+     */
+    private static function singleArchitecture(array $facts): ?string
+    {
+        foreach ($facts['byId'] as $n) {
+            if (in_array(self::nodeType($n), ['loader', 'splitter', 'vectorstore'], true)) {
+                return null;
+            }
+        }
+        try {
+            return LangGraphArchitectureDoc::build($facts, 'single');
+        } catch (\Throwable $e) {
+            error_log('[LangGraphGenerator] ARCHITECTURE.md skipped: ' . $e->getMessage());
+            return null;
+        }
     }
 
     /**

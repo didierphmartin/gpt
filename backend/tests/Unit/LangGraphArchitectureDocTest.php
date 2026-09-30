@@ -16,12 +16,12 @@ use AgentTeam\Services\WorkflowRepository;
  */
 class LangGraphArchitectureDocTest extends TestCase
 {
-    private function generate(string $graphName, string $mode): array
+    private function generate(string|array $graph, string $mode): array
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Dispatcher demo', 'user_id' => '3']));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
-        $graphRepo->method('getGraph')->willReturn(LangGraphOutputStructureTest::graphs()[$graphName]);
+        $graphRepo->method('getGraph')->willReturn(is_array($graph) ? $graph : LangGraphOutputStructureTest::graphs()[$graph]);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
         $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
@@ -136,6 +136,22 @@ class LangGraphArchitectureDocTest extends TestCase
             $this->assertStringContainsString("\"{$name}", $linear, $name);
         }
         $this->assertStringNotContainsString('choice', $linear);
+    }
+
+    /** An ingestion pipeline is not an agent graph: its single-file result carries no architecture doc (null, key kept). */
+    public function testIngestionWorkflowGetsNoArchitectureDoc(): void
+    {
+        $r = $this->generate([
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start']],
+                ['id' => '2', 'node_type' => 'loader', 'config' => ['type' => 'loader']],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3']],
+        ], 'single');
+        $this->assertSame(['filename', 'code', 'architecture'], array_keys($r));
+        $this->assertNull($r['architecture']);
+        $this->assertNotSame('', $r['code'], 'the script itself is still generated');
     }
 
     public function testRunFlowAndChangeSectionsFollowTheMode(): void
