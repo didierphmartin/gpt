@@ -42,9 +42,9 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testDocumentConverterBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::documentConverterBlock();
-        $this->assertSame(5127, strlen($block), 'documentConverterBlock byte length changed');
+        $this->assertSame(5500, strlen($block), 'documentConverterBlock byte length changed');
         $this->assertSame(
-            '0d4241548ff1d929cc88d083501cb8e1d9df126b719bc258d2f1cca7400c8dd1',
+            'a1bdc4bfe79b93a46c2ae6ca526fd4bac3ca1281576caa4f3643f344e60fc7bf',
             hash('sha256', $block),
             'documentConverterBlock content changed — this alters generated Python for both generators'
         );

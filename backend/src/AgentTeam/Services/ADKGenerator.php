@@ -339,55 +339,57 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
             f"No model for provider {p!r}. Set a model on the agent in the editor, "
             "or a default in system_llm_settings."
         )
-    if p in ("gemini", "google", "google-genai"):
-        return model
-    if p in ("claude", "anthropic"):
-        return LiteLlm(model=model if "/" in model else "anthropic/" + model)
-    if p == "openai":
-        return LiteLlm(model=model if "/" in model else "openai/" + model)
-    if p in ("grok", "xai"):
-        return LiteLlm(
-            model="openai/" + model,
-            api_base="https://api.x.ai/v1",
-            api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
-        )
-    if p == "deepseek":
-        kwargs = dict(
-            model="openai/" + model,
-            api_base="https://api.deepseek.com",
-            api_key=os.environ.get("DEEPSEEK_API_KEY"),
-        )
-        if model.startswith("deepseek-v4"):
-            # The node form's Thinking attribute governs (platform parity):
-            # 'off' -> disabled (form temperature accepted); 'on'/default ->
-            # V4's server default stays ON (sampling params are dropped at the
-            # config level by the generator in that case).
-            _mode = "disabled" if thinking == "off" else "enabled"
-            kwargs["extra_body"] = {"thinking": {"type": _mode}}
-        return LiteLlm(**kwargs)
-    if p == "kimi":
-        kwargs = dict(
-            model="openai/" + model,
-            api_base="https://api.moonshot.ai/v1",
-            api_key=os.environ.get("KIMI_API_KEY"),
-        )
-        if model.startswith("kimi-k2"):
-            # Thinking attribute governs; K2's sampling constraints per mode
-            # are enforced at the config level by the generator.
-            _mode = "enabled" if thinking == "on" else "disabled"
-            kwargs["extra_body"] = {"thinking": {"type": _mode}}
-        return LiteLlm(**kwargs)
-    if p == "glm":
-        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Default: thinking off so it
-        # answers directly; the node form's Thinking attribute can enable it.
-        return LiteLlm(
-            model="openai/" + model,
-            api_base="https://api.z.ai/api/paas/v4",
-            api_key=os.environ.get("GLM_API_KEY"),
-            extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
-        )
-    # Fallback: best-effort litellm prefixed spec.
-    return LiteLlm(model=model if "/" in model else p + "/" + model)
+    match p:
+        case "gemini" | "google" | "google-genai":
+            return model
+        case "claude" | "anthropic":
+            return LiteLlm(model=model if "/" in model else "anthropic/" + model)
+        case "openai":
+            return LiteLlm(model=model if "/" in model else "openai/" + model)
+        case "grok" | "xai":
+            return LiteLlm(
+                model="openai/" + model,
+                api_base="https://api.x.ai/v1",
+                api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
+            )
+        case "deepseek":
+            kwargs = dict(
+                model="openai/" + model,
+                api_base="https://api.deepseek.com",
+                api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            )
+            if model.startswith("deepseek-v4"):
+                # The node form's Thinking attribute governs (platform parity):
+                # 'off' -> disabled (form temperature accepted); 'on'/default ->
+                # V4's server default stays ON (sampling params are dropped at the
+                # config level by the generator in that case).
+                _mode = "disabled" if thinking == "off" else "enabled"
+                kwargs["extra_body"] = {"thinking": {"type": _mode}}
+            return LiteLlm(**kwargs)
+        case "kimi":
+            kwargs = dict(
+                model="openai/" + model,
+                api_base="https://api.moonshot.ai/v1",
+                api_key=os.environ.get("KIMI_API_KEY"),
+            )
+            if model.startswith("kimi-k2"):
+                # Thinking attribute governs; K2's sampling constraints per mode
+                # are enforced at the config level by the generator.
+                _mode = "enabled" if thinking == "on" else "disabled"
+                kwargs["extra_body"] = {"thinking": {"type": _mode}}
+            return LiteLlm(**kwargs)
+        case "glm":
+            # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Default: thinking off so it
+            # answers directly; the node form's Thinking attribute can enable it.
+            return LiteLlm(
+                model="openai/" + model,
+                api_base="https://api.z.ai/api/paas/v4",
+                api_key=os.environ.get("GLM_API_KEY"),
+                extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
+            )
+        case _:
+            # Fallback: best-effort litellm prefixed spec.
+            return LiteLlm(model=model if "/" in model else p + "/" + model)
 PY;
     }
 

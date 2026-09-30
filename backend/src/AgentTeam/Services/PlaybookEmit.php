@@ -571,41 +571,42 @@ def render_playbook_transcript(title: str, events: list, final: str, status: str
 
     for ev in events:
         t = ev.get("type")
-        if t == "tool_call":
-            name = ev.get("name", "tool")
-            if name in gate_tools:
-                continue
-            lines.append(f"- 🔧 {name} …")
-            pending[name] = len(lines) - 1
-        elif t == "tool_result":
-            name = ev.get("name", "tool")
-            res = ev.get("result") if isinstance(ev.get("result"), dict) else {}
-            if name in gate_tools:
-                d = res.get("decision", res.get("status", ""))
-                if isinstance(d, dict):
-                    res = {**d, **res}
-                    d = d.get("decision", d.get("status", d.get("outcome", "answered")))
-                decision, comment = s(d), s(res.get("comment", ""))
-                if decision:
-                    lines.append(f"  → {decision}" + (f" ({comment})" if comment else ""))
-                continue
-            ok = res.get("ok", True) is not False
-            mark = "✓" if ok else "✗"
-            suffix = (" — " + s(res.get("error"))) if (not ok and res.get("error")) else ""
-            if name in pending:
-                lines[pending.pop(name)] = f"- 🔧 {name} {mark}{suffix}"
-            else:
-                lines.append(f"- 🔧 {name} {mark}")
-        elif t == "message":
-            text = "(message redacted)" if ev.get("sensitive") else s(ev.get("text", ""))
-            if text:
-                lines.append("- 💬 Playbook:\n" + "\n".join("  " + l for l in text.split("\n")))
-        elif t == "gate_request":
-            kind = ev.get("kind", "gate")
-            p = ev.get("payload") or {}
-            what = s(p.get("question") or p.get("prompt")
-                     or (s(p.get("team_or_person", "")) + (" — " + s(p.get("reason")) if p.get("reason") else "")))
-            lines.append("- ✋ " + gate_titles.get(kind, kind.capitalize()) + (f": {what}" if what else ""))
+        match t:
+            case "tool_call":
+                name = ev.get("name", "tool")
+                if name in gate_tools:
+                    continue
+                lines.append(f"- 🔧 {name} …")
+                pending[name] = len(lines) - 1
+            case "tool_result":
+                name = ev.get("name", "tool")
+                res = ev.get("result") if isinstance(ev.get("result"), dict) else {}
+                if name in gate_tools:
+                    d = res.get("decision", res.get("status", ""))
+                    if isinstance(d, dict):
+                        res = {**d, **res}
+                        d = d.get("decision", d.get("status", d.get("outcome", "answered")))
+                    decision, comment = s(d), s(res.get("comment", ""))
+                    if decision:
+                        lines.append(f"  → {decision}" + (f" ({comment})" if comment else ""))
+                    continue
+                ok = res.get("ok", True) is not False
+                mark = "✓" if ok else "✗"
+                suffix = (" — " + s(res.get("error"))) if (not ok and res.get("error")) else ""
+                if name in pending:
+                    lines[pending.pop(name)] = f"- 🔧 {name} {mark}{suffix}"
+                else:
+                    lines.append(f"- 🔧 {name} {mark}")
+            case "message":
+                text = "(message redacted)" if ev.get("sensitive") else s(ev.get("text", ""))
+                if text:
+                    lines.append("- 💬 Playbook:\n" + "\n".join("  " + l for l in text.split("\n")))
+            case "gate_request":
+                kind = ev.get("kind", "gate")
+                p = ev.get("payload") or {}
+                what = s(p.get("question") or p.get("prompt")
+                         or (s(p.get("team_or_person", "")) + (" — " + s(p.get("reason")) if p.get("reason") else "")))
+                lines.append("- ✋ " + gate_titles.get(kind, kind.capitalize()) + (f": {what}" if what else ""))
     out = f"# Playbook: {title} ({status})\n\n## Timeline\n" + ("\n".join(lines) if lines else "- (no steps recorded)")
     if final.strip():
         out += "\n\n## Result\n" + final.strip()
