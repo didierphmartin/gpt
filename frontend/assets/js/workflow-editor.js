@@ -12245,20 +12245,22 @@ class WorkflowEditor {
         this.updateModalInputOutput(dfId);
 
         // Dispatcher routing mode (settings.routing_mode) — same semantics as
-        // GraphWorkflowRunner (interpreter) and the LangGraph compiler:
+        // GraphWorkflowRunner (interpreter) and the LangGraph compiler; always
+        // exactly one, never both:
         //   'llm' -> the model only; Jev is never consulted.
         //   'jev' -> Jev only; the model is never called. Anything but
         //            'routed' stops here with "did not route" and halt:true,
         //            so the caller runs none of this dispatcher's branches.
-        //   unset -> hybrid: Jev first when a key is available, the model
-        //            (route_to, below) on any other outcome.
+        //   unset -> 'jev' when the user's plan allows Jev, else 'llm'. If the
+        //            status cannot be read (null) it is 'jev': the server then
+        //            answers 'unavailable' with its reason and the run stops
+        //            there, visibly, rather than silently switching to the model.
         // The browser never holds the Jev key: the server routes for it.
-        const routingMode = data.settings?.routing_mode;
-        if (handoffStyle === 'dispatch' && dispatchTargets?.length
-            && data.agent_type === 'dispatcher' && routingMode !== 'llm') {
-            const jevOnly = routingMode === 'jev';
-            const status = jevOnly ? null : await this._jevStatus();
-            if (jevOnly || status?.available) {
+        if (handoffStyle === 'dispatch' && dispatchTargets?.length && data.agent_type === 'dispatcher') {
+            const saved = data.settings?.routing_mode;
+            const routingMode = (saved === 'jev' || saved === 'llm') ? saved
+                : ((await this._jevStatus())?.allowed === false ? 'llm' : 'jev');
+            if (routingMode === 'jev') {
                 const jr = await this._wfJevRoute(data, agentLabel, inputText, dispatchTargets);
                 const conf = typeof jr.confidence === 'number' ? jr.confidence.toFixed(2) : '?';
                 const hit = (jr.outcome === 'routed' && jr.target)
@@ -12280,17 +12282,14 @@ class WorkflowEditor {
                     return { success: true, output: nd.output, route, history: conversationHistory };
                 }
                 const why = `${jr.outcome}: ${jr.reason || 'no reason given'}`;
-                if (jevOnly) {
-                    nd.output = `Error: dispatcher "${agentLabel}" did not route the request (Jev: ${why}).`;
-                    nd.success = false;
-                    nd.executionTime = Date.now() - _startedAt;
-                    try { this.stopNodeTimer(dfId); } catch (_) {}
-                    this._wfNodeLog(dfId, 'error', `Jev did not route (${why}, confidence ${conf}) — Jev-only dispatcher, no model fallback`, 'error');
-                    this.highlightNode(dfId, 'error', dfId, 'agent');
-                    this.updateModalInputOutput(dfId);
-                    return { success: false, output: nd.output, halt: true, history: conversationHistory };
-                }
-                this._wfNodeLog(dfId, 'routing', `Jev declined (${why}, confidence ${conf}) — asking the model`);
+                nd.output = `Error: dispatcher "${agentLabel}" did not route the request (Jev: ${why}).`;
+                nd.success = false;
+                nd.executionTime = Date.now() - _startedAt;
+                try { this.stopNodeTimer(dfId); } catch (_) {}
+                this._wfNodeLog(dfId, 'error', `Jev did not route (${why}, confidence ${conf}) — Jev-only dispatcher, no model fallback`, 'error');
+                this.highlightNode(dfId, 'error', dfId, 'agent');
+                this.updateModalInputOutput(dfId);
+                return { success: false, output: nd.output, halt: true, history: conversationHistory };
             }
         }
 
@@ -14717,7 +14716,7 @@ class WorkflowEditor {
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
         this._wfRoutedBy = {}; // target id → {from, notes} once a dispatcher chose it
-        this._wfJevStatus = undefined; // Jev key status, read once per run (hybrid dispatchers)
+        this._wfJevStatus = undefined; // Jev status, read once per run (dispatchers with no saved mode)
         const done = new Set();
         const remaining = new Set();
 
@@ -14784,10 +14783,10 @@ class WorkflowEditor {
                                 this.highlightNode(s, 'skipped', s, 'agent');
                             }
                         }
-                        // A Jev-only dispatcher that did not route: the run stops
+                        // A Jev dispatcher that did not route: the run stops
                         // there — none of its branches run (no fan-out). An Output
                         // node cut off by that carries the "did not route" message
-                        // as the run's answer. LLM/hybrid no-route is unchanged.
+                        // as the run's answer. LLM no-route is unchanged.
                         if (res?.halt && dispatchTargets?.length) {
                             for (const s of this._wfSkipSet(this._wfDownstreamIds(id, nodes), nodes)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
@@ -16666,13 +16665,15 @@ class WorkflowEditor {
                                     </div>
                                 </div>
 
-                                <!-- Routing (Dispatcher only): Jev | LLM, neither selected
-                                     when the node has no saved mode (hybrid). The chosen mode
-                                     lives on data-mode; _applyRoutingVisibility() owns what shows. -->
+                                <!-- Routing (Dispatcher only): Jev | LLM, always one selected.
+                                     No saved mode = Jev, marked data-default so the plan check
+                                     (_refreshJevKeyStatus) can switch it to LLM until the user
+                                     clicks. The chosen mode lives on data-mode;
+                                     _applyRoutingVisibility() owns what shows. -->
                                 <div id="agent-routing-block" class="${agent.agent_type === 'dispatcher' ? '' : 'hidden'}">
                                     <label class="block text-sm font-medium text-gray-700 mb-1">${tf('routing')}</label>
                                     <div class="flex items-start gap-3">
-                                        <span id="agent-routing-mode" data-mode="${['jev', 'llm'].includes(agent.settings?.routing_mode) ? agent.settings.routing_mode : ''}"
+                                        <span id="agent-routing-mode" ${['jev', 'llm'].includes(agent.settings?.routing_mode) ? `data-mode="${agent.settings.routing_mode}"` : 'data-mode="jev" data-default="1"'}
                                               class="inline-flex shrink-0 border border-gray-300 rounded-lg overflow-hidden text-sm">
                                             <button type="button" data-routing="jev" class="px-4 py-1.5">${tf('routingJev')}</button>
                                             <button type="button" data-routing="llm" class="px-4 py-1.5 border-l border-gray-300">${tf('routingLlm')}</button>
@@ -17354,13 +17355,14 @@ class WorkflowEditor {
                 fan-out: exactly one child runs — the one this node picks — and the others are
                 skipped along with everything hanging off them. The chosen child receives the
                 dispatcher's own input, not its prose.</p>
-                <p class="${sub}">Routing: Jev, LLM, or not set</p>
+                <p class="${sub}">Routing: Jev or LLM</p>
                 <p>Picking one of N branches is a <i>closed</i> question, so it does not need a
                 text-generating model. <b>Jev</b> is a "System One" model that returns a
                 probability distribution over the branches you drew instead of text: it cannot
                 invent a branch (a name that does not exist is unrepresentable rather than
                 merely unlikely), and it answers in about 250&nbsp;ms instead of about 5&nbsp;s,
-                billed on input only. The <b>Routing</b> choice under Type decides who picks:</p>
+                billed on input only. The <b>Routing</b> choice under Type decides who picks —
+                always one of the two, never both:</p>
                 <ul class="list-disc ml-5 mt-2 space-y-1">
                     <li><b>Jev</b> — Jev only; the model is never called, so this node's
                     provider, model, sampling settings, system prompt and skills are hidden and
@@ -17371,13 +17373,12 @@ class WorkflowEditor {
                     child receives the request with no notes, because Jev writes nothing.</li>
                     <li><b>LLM</b> — the model only; Jev is never asked. The model reads the
                     request, picks a branch with <code>route_to</code> and can write notes for
-                    the child.</li>
-                    <li><b>Not set</b> (every dispatcher saved before this choice existed) —
-                    both: Jev first when a Jev key is available, and the model whenever Jev does
-                    not route (no signal, a divided signal such as "upgrade me to the annual
-                    plan" splitting between Sales and Billing, no key, or an error). This can make
-                    routing cheap; it cannot make it fail.</li>
+                    the child. Choose it when a request can reasonably go more than one way
+                    ("upgrade me to the annual plan": Sales or Billing) or the child needs notes.</li>
                 </ul>
+                <p class="mt-2">A new dispatcher starts on <b>Jev</b> when your plan includes Jev,
+                otherwise on <b>LLM</b>. A dispatcher saved before this choice existed runs the
+                same way: Jev when your plan includes it, else the model.</p>
                 <div class="${note}">The Jev key is stored like an LLM key: your own in
                 Settings → LLMs and Decision API Keys, or the organisation's, set by your admin. Yours wins.
                 The browser never sees it — the server routes for the canvas Run button.</div>`,
@@ -18019,10 +18020,10 @@ Based on the analysis...
         return 'Playbook: ' + (t || fallback || '');
     }
 
-    /** The form's Routing choice: 'jev' | 'llm' | '' (not set = hybrid). */
+    /** The form's Routing choice: always 'jev' | 'llm' (Jev when nothing else is set). */
     _formRoutingMode() {
         const m = document.getElementById('agent-routing-mode')?.dataset.mode || '';
-        return (m === 'jev' || m === 'llm') ? m : '';
+        return m === 'llm' ? 'llm' : 'jev';
     }
 
     /** True when the form is a Dispatcher set to Jev-only routing. */
@@ -18059,16 +18060,16 @@ Based on the analysis...
             b.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
         const hint = document.getElementById('agent-routing-hint');
-        if (hint) hint.textContent = mode === 'jev' ? tf('routingJevHint')
-            : (mode === 'llm' ? tf('routingLlmHint') : tf('routingUnsetNote'));
+        if (hint) hint.textContent = mode === 'jev' ? tf('routingJevHint') : tf('routingLlmHint');
         if (isDisp) this._refreshJevKeyStatus();
     }
 
     /**
      * Fill the key status line from GET /dispatch/jev/status (never the key).
-     * A plan without Jev disables the Jev routing button for a new choice;
-     * a dispatcher already saved in Jev mode keeps its mode and shows the
-     * note in place of the key status. LLM stays selectable.
+     * A plan without Jev disables the Jev routing button for a new choice and
+     * moves a dispatcher with no saved mode (still on the Jev default, not
+     * clicked) to LLM; a dispatcher already saved in Jev mode keeps its mode
+     * and shows the note in place of the key status. LLM stays selectable.
      */
     async _refreshJevKeyStatus() {
         const tf = (k) => this.t('workflow.agentForm.' + k);
@@ -18084,6 +18085,13 @@ Based on the analysis...
             jevBtn.title = notAllowed ? tf('jevNotInPlan') : '';
             jevBtn.classList.toggle('opacity-50', notAllowed);
             jevBtn.classList.toggle('cursor-not-allowed', notAllowed);
+        }
+        const seg = document.getElementById('agent-routing-mode');
+        if (notAllowed && seg?.dataset.default === '1') {
+            delete seg.dataset.default;
+            seg.dataset.mode = 'llm';
+            this._applyRoutingVisibility();
+            return; // it refreshes this line again, now with the default settled
         }
         if (notAllowed) {
             el.textContent = tf('jevNotInPlan');
@@ -18129,6 +18137,7 @@ Based on the analysis...
         const seg = document.getElementById('agent-routing-mode');
         seg?.querySelectorAll('[data-routing]').forEach((b) => {
             b.addEventListener('click', () => {
+                delete seg.dataset.default; // the user chose: the plan check no longer moves it
                 seg.dataset.mode = b.dataset.routing;
                 this._applyRoutingVisibility();
             });
@@ -18719,10 +18728,10 @@ Based on the analysis...
                 ...(document.getElementById('agent-type-select')?.value === 'playbook'
                     ? { writes_enabled: !!document.getElementById('agent-writes-enabled')?.checked }
                     : {}),
-                // Dispatcher routing: written only when a mode is picked, so an
-                // untouched dispatcher stays unset (hybrid). The floor only
-                // means something in Jev mode.
-                ...((document.getElementById('agent-type-select')?.value === 'dispatcher' && this._formRoutingMode())
+                // Dispatcher routing: always written, 'jev' or 'llm' (the form
+                // always has one selected). The floor only means something in
+                // Jev mode.
+                ...(document.getElementById('agent-type-select')?.value === 'dispatcher'
                     ? { routing_mode: this._formRoutingMode() }
                     : {}),
                 ...(this._formRoutingIsJev()

@@ -848,7 +848,6 @@
       "routing": "Enrutamiento",
       "routingJev": "Jev",
       "routingLlm": "LLM",
-      "routingUnsetNote": "Sin definir: primero Jev, luego el modelo.",
       "routingJevHint": "Jev elige una rama en ~250 ms sin coste de LLM. Solo elige entre tus ramas y no escribe notas para el hijo.",
       "routingLlmHint": "El modelo lee la solicitud y elige una rama con route_to. Puede escribir notas para el hijo.",
       "jevDescriptionHint": "Jev usa esto para entender qué decide el dispatcher.",

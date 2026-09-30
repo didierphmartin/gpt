@@ -848,7 +848,6 @@
       "routing": "Routage",
       "routingJev": "Jev",
       "routingLlm": "LLM",
-      "routingUnsetNote": "Non défini : Jev d'abord, puis le modèle.",
       "routingJevHint": "Jev choisit une branche en ~250 ms sans coût LLM. Il ne choisit que parmi vos branches et n'écrit aucune note pour l'enfant.",
       "routingLlmHint": "Le modèle lit la demande et choisit une branche avec route_to. Il peut écrire des notes pour l'enfant.",
       "jevDescriptionHint": "Jev s'en sert pour comprendre ce que décide le dispatcher.",
