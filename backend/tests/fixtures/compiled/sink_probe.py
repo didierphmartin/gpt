@@ -16,7 +16,7 @@ seen = []
 prev = common.set_event_sink(seen.append)
 assert prev is None, "set_event_sink should return the previous sink"
 common.emit_event(type="round", round=1)
-run = common._PlaybookRun(False, {})
+run = common.PlaybookRun(False, {})
 run.emit(type="message", text="hello", sensitive=False)
 
 assert seen[0] == {"type": "round", "round": 1}, seen

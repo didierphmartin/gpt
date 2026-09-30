@@ -144,7 +144,7 @@ class LangGraphA2AGeneratorTest extends TestCase
         $this->assertStringContainsString('"get_news"', $code);
         $this->assertStringNotContainsString('get_pto_balance', $code);
         // No playbook runtime in a plain agent file.
-        $this->assertStringNotContainsString('def build_playbook_tools', $code);
+        $this->assertStringNotContainsString('class PlaybookToolset:', $code);
         // Skill-bound node: run_skill_script is registered into the catalog (the
         // local, non-MCP tool, SKILLS.tool, next to the MCP tools ToolCatalog builds)
         // and the skill binding is baked onto NODE.
@@ -167,10 +167,10 @@ class LangGraphA2AGeneratorTest extends TestCase
     {
         $code = $this->agentFile('5');
         $this->assertStringContainsString('"kind": "playbook"', $code);
-        $this->assertStringContainsString('def build_playbook_tools', $code);
+        $this->assertStringContainsString('class PlaybookToolset:', $code);
         $this->assertStringContainsString('"workday__get_pto_balance"', $code);
         $this->assertStringContainsString('def _a2a_gate(run, kind: str, name: str, args: dict) -> dict:', $code);
-        $this->assertStringContainsString('_playbook_gate = _a2a_gate', $code);
+        $this->assertStringContainsString('GATE_BRIDGE = _a2a_gate', $code);
         $this->assertStringContainsString('requires_input(', $code);
         $this->assertCompiles($code, 'agent 5');
     }
@@ -200,7 +200,7 @@ class LangGraphA2AGeneratorTest extends TestCase
                   'NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
-        $this->assertStringNotContainsString('def build_playbook_tools', $code, 'the orchestrator runs no node logic itself');
+        $this->assertStringNotContainsString('class PlaybookToolset:', $code, 'the orchestrator runs no node logic itself');
         $this->assertCompiles($code, 'orchestrator');
     }
 

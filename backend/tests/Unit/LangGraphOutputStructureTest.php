@@ -146,15 +146,13 @@ class LangGraphOutputStructureTest extends TestCase
     /**
      * A NameError is a runtime failure py_compile never sees. GeneratedDocParityTest scans only
      * the single files of the four targets; this scans every LangGraph file of every mode, for
-     * three workflow shapes. The allowlist is the set of names the playbook runtime deliberately
-     * probes for (try/except NameError); Task 7b empties it. Module dunders such as __file__ are
-     * allowed by lg_static_checks.py itself, not here.
+     * three workflow shapes. Nothing is probed for any more (RunEvents replaced the playbook
+     * runtime's try/except NameError), so every name must be defined. Module dunders such as
+     * __file__ are allowed by lg_static_checks.py itself; the entry here only restates that.
      */
     public function testNoLangGraphFileReferencesAnUndefinedGlobal(): void
     {
-        // PlaybookEmit's runtime probes for the event sink (try/except NameError) so it runs
-        // with or without one: in a file without the sink these four are unbound on purpose.
-        $allowed = ['_SINK', 'emit_event', 'open_gate', 'take_gate_answer'];
+        $allowed = ['__file__'];
         foreach (self::graphs() as $name => $graph) {
             foreach (['single', 'modular', 'a2a'] as $mode) {
                 $w = self::write($this->files($graph, $mode, true));
@@ -177,7 +175,7 @@ class LangGraphOutputStructureTest extends TestCase
     /** Every class and public function the LangGraph target emits says why it exists. */
     public function testEveryLangGraphClassAndPublicFunctionHasADocstring(): void
     {
-        $allowed = ['def _PlaybookRun.emit has no docstring'];   // PlaybookEmit's; Task 7b replaces it
+        $allowed = [];
         foreach (self::graphs() as $name => $graph) {
             foreach (['single', 'modular', 'a2a'] as $mode) {
                 $found = array_filter($this->staticCheck('docstrings', self::write($this->files($graph, $mode))['paths']),
@@ -380,6 +378,25 @@ class LangGraphOutputStructureTest extends TestCase
                 $this->assertStringContainsString($n, $all, "{$mode}: {$n}");
             }
             foreach (['def build_tools_from_catalog', 'def _run_skill_script(', 'RUN_SKILL_SCRIPT_TOOL', 'def _summarize_tool_result'] as $gone) {
+                $this->assertStringNotContainsString($gone, $all, "{$mode}: {$gone}");
+            }
+            // Per file: each A2A agent file is self-contained, so it carries its own ToolCatalog.
+            foreach ($this->files(self::graphs()['dispatcher_demo'], $mode) as $path => $code) {
+                if (str_contains($code, 'class ToolCatalog:')) {
+                    $this->assertSame(1, substr_count($code, 'type_map = ') + substr_count($code, 'TYPE_MAP = '), "{$mode} {$path}: one schema->pydantic helper");
+                }
+            }
+        }
+    }
+
+    public function testPlaybookRuntimeIsLangGraphsOwnClasses(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            foreach (['class RunEvents:', 'class PlaybookRun:', 'class PlaybookToolset:', 'EVENTS = RunEvents()'] as $n) {
+                $this->assertStringContainsString($n, $all, "{$mode}: {$n}");
+            }
+            foreach (['_pb_sink_active', 'except NameError', "globals().get(", 'def build_playbook_tools('] as $gone) {
                 $this->assertStringNotContainsString($gone, $all, "{$mode}: {$gone}");
             }
         }

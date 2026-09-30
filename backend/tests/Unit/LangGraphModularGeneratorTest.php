@@ -144,8 +144,8 @@ class LangGraphModularGeneratorTest extends TestCase
         foreach (['"""Shared runtime for workflow "Dispatcher demo"', 'def _make_llm(', 'class McpClient:',
                   'class ToolCatalog:', 'class SkillRuntime:', 'TOOLS = ToolCatalog(TOOL_CATALOG)',
                   'class Dispatcher:', 'def inject_datetime(', 'def build_context(',
-                  'def _convert_doc_to_markdown(', 'class WFState(', 'def build_playbook_tools(',
-                  'def _playbook_gate(', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:',
+                  'def _convert_doc_to_markdown(', 'class WFState(', 'class PlaybookToolset:',
+                  '    def gate(self, kind: str, name: str, args: dict) -> dict:', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:',
                   'class WorkflowGraph:', 'def save_output(', 'def print_run_summary(', 'RUN SUMMARY'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
@@ -208,7 +208,7 @@ class LangGraphModularGeneratorTest extends TestCase
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // The graph calls the modules; it never re-implements a node itself.
-        foreach (['def build_playbook_tools(', 'class ToolCatalog', 'create_react_agent(',
+        foreach (['class PlaybookToolset:', 'class ToolCatalog', 'create_react_agent(',
                   'PLAYBOOK_SYSTEM_PROMPT = '] as $needle) {
             $this->assertStringNotContainsString($needle, $code, "workflow.py must not carry: {$needle}");
         }

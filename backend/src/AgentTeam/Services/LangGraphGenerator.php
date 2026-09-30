@@ -414,9 +414,10 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '';
         $lines[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
+        $lines[] = LangGraphRuntime::runEventsBlock();
         $lines[] = LangGraphRuntime::dispatcherBlock();
         if ($playbookData !== []) {
-            $lines[] = self::playbookRuntimeBlock();
+            $lines[] = LangGraphRuntime::playbookBlock();
         }
 
         // ---------- state ----------
@@ -1375,7 +1376,7 @@ class LangGraphGenerator
         // orchestrator.py carries no common.py, so the event sink + gate rendezvous
         // (installed by api.py, consumed by _handle_gate() below) is emitted here.
         $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
-        $L[] = PythonEmitHelpers::eventSinkBlock();
+        $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         $L[] = self::a2aOrchestratorBlock();
@@ -1598,7 +1599,7 @@ def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
     question = args.get("question") or args.get("prompt") or args.get("reason") or kind
     print("[gate] " + json.dumps({"agent": agent_name, "task": task_id, "kind": kind, "question": question, "args": args}, ensure_ascii=False), flush=True)
     mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
-        "server" if _SINK is not None
+        "server" if EVENTS.active
         else "prompt" if sys.stdin.isatty()
         else "auto")
     if mode == "server":
@@ -1606,14 +1607,14 @@ def _handle_gate(agent_name: str, task_id: str, gate: dict) -> dict:
         # gate onto the event stream, and block this A2A task's coroutine until
         # resolve_gate() delivers an answer or PLAYBOOK_GATE_TIMEOUT_S runs out.
         tool_call_id = uuid.uuid4().hex
-        waiter = open_gate(tool_call_id)
-        emit_event(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
+        waiter = EVENTS.open_gate(tool_call_id)
+        EVENTS.emit(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
         waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
         # Pop unconditionally, and decide on what the pop returned: an answer
         # that lands between the wait() timing out and this line is still the
         # human's answer, and popping also clears the slot so a later POST gets
         # a truthful 404 instead of answering 200 into a run that moved on.
-        answer = take_gate_answer(tool_call_id)
+        answer = EVENTS.take_answer(tool_call_id)
         if answer is not None:
             print("[gate-answer] " + json.dumps({"agent": agent_name, "task": task_id, **answer}, ensure_ascii=False), flush=True)
             return answer
@@ -1671,9 +1672,9 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
     # their status lines here is the ONLY way an A2A run streams anything but
     # gates.
     try:
-        emit_event(type="round", round=ORDER.index(nid))
+        EVENTS.emit(type="round", round=ORDER.index(nid))
     except ValueError:
-        emit_event(type="round", round=0)
+        EVENTS.emit(type="round", round=0)
     async with httpx.AsyncClient(timeout=None) as hc:
         client = await create_client(url, ClientConfig(streaming=True, httpx_client=hc))
         req = T.SendMessageRequest(message=T.Message(message_id=str(uuid.uuid4()), role=T.Role.ROLE_USER, parts=[T.Part(text=request_text)]))
@@ -1692,7 +1693,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
                         for line in get_text_parts(su.status.message.parts):
                             if line and su.status.state != T.TaskState.TASK_STATE_INPUT_REQUIRED:
                                 print(f"[{ad['display']}] {line}", flush=True)
-                                emit_event(type="message", text=f"[{ad['display']}] {line}", sensitive=False)
+                                EVENTS.emit(type="message", text=f"[{ad['display']}] {line}", sensitive=False)
                     if su.status.state == T.TaskState.TASK_STATE_INPUT_REQUIRED:
                         parts = get_data_parts(su.status.message.parts) if su.status.HasField("message") else []
                         gate_payload = dict(parts[0]) if parts and isinstance(parts[0], dict) else {"gate": "gate", "args": {}}
@@ -1726,8 +1727,8 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
     print(f"[node] [{nid}] {ad['display']!r} done over A2A -- {sum(len(t) for t in text_parts)} chars ({dt:.1f}s)", flush=True)
     out = {"text": "\n".join(text_parts), "route": str(data.get("route") or ""), "notes": str(data.get("notes") or ""), "status": str(data.get("status") or "ok")}
     if out["text"]:
-        emit_event(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
-    emit_event(type="final", leg=nid, status=out["status"] or "ok")
+        EVENTS.emit(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
+    EVENTS.emit(type="final", leg=nid, status=out["status"] or "ok")
     return out
 
 
@@ -1828,7 +1829,7 @@ PY;
         $L[] = 'from enum import Enum';
         $L[] = 'from functools import cached_property';
         $L[] = 'from pathlib import Path';
-        $L[] = 'from typing import Literal';
+        $L[] = 'from typing import Callable, Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
@@ -1872,10 +1873,11 @@ PY;
         $L[] = LangGraphRuntime::mcpClientBlock();
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
         $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
+        $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($isPlaybook) {
-            $L[] = self::playbookRuntimeBlock();
+            $L[] = LangGraphRuntime::playbookBlock();
         }
         $L[] = LangGraphRuntime::nodeClassesBlock($isPlaybook);
         $L[] = '';
@@ -2074,7 +2076,7 @@ def _a2a_gate(run, kind: str, name: str, args: dict) -> dict:
 
 
 if NODE["kind"] == "playbook":
-    _playbook_gate = _a2a_gate   # the playbook runtime calls _playbook_gate(run, kind, name, args)
+    GATE_BRIDGE = _a2a_gate   # PlaybookRun.gate() hands every gate to GATE_BRIDGE(run, kind, name, args)
 
 
 class NodeExecutor(AgentExecutor):
@@ -2575,7 +2577,7 @@ PY;
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import emit_event';
+        $L[] = 'from common import EVENTS';
         foreach ($members as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import build_agent as build_' . $e['name'];
         }
@@ -2653,8 +2655,8 @@ PY;
         $L[] = '    # `agent` is carried as its own field, not only inside the text: the';
         $L[] = '    # conversation UI labels the bubble with it, and a label reading';
         $L[] = '    # "Playbook" over an answer from "Human resources" is worse than no';
-        $L[] = '    # label at all. emit_event takes **kwargs, so this is additive.';
-        $L[] = '    emit_event(type="message", text=f"**{display}**\\n\\n{text}", agent=display, sensitive=False)';
+        $L[] = '    # label at all. EVENTS.emit takes **kwargs, so this is additive.';
+        $L[] = '    EVENTS.emit(type="message", text=f"**{display}**\\n\\n{text}", agent=display, sensitive=False)';
         $L[] = '    return text';
         $L[] = '';
         $L[] = '';
@@ -2889,19 +2891,20 @@ PY;
         $L[] = '  _make_llm()                     provider/model -> LangChain chat model';
         $L[] = '                                   (claude, openai, gemini, grok, deepseek, kimi, glm)';
         $L[] = '  MCP_SERVERS, TOOL_CATALOG       this workflow\'s MCP servers + tool schemas, baked at generation time';
-        $L[] = '  McpClient, MCP, _call_mcp_tool  the MCP JSON-RPC client: handshake (endpoint remembered), tools/call, JSON or SSE replies; one reused HTTP client';
+        $L[] = '  McpClient, MCP                  the MCP JSON-RPC client: handshake (endpoint remembered), tools/call, JSON or SSE replies; one reused HTTP client';
         $L[] = '  ToolCatalog, TOOLS              TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC; built once, each node takes its own by name';
         $L[] = '  SkillRuntime, SKILLS            folder-backed skills: run_skill_script, the per-skill tool, a skill as a mandatory node step';
-        $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
-        $L[] = '  open_gate(), resolve_gate(),';
-        $L[] = '  take_gate_answer()              the human-gate rendezvous a playbook node\'s tools wait on';
+        $L[] = '  RunEvents, EVENTS               how a run\'s events reach api.py; EVENTS.emit() is a no-op with no sink installed;';
+        $L[] = '                                   also the human-gate rendezvous a playbook node\'s tools wait on';
+        $L[] = '  set_event_sink, emit_event,';
+        $L[] = '  resolve_gate                    EVENTS\' methods under their old names, for api.py and the run-server probes';
         $L[] = '  JevRouter, Dispatcher           a DISPATCHER node\'s routing: Jev or one forced route_to call, never both';
-        if ($facts['playbookData'] !== []) {
-            $L[] = '  PLAYBOOK_SYSTEM_PROMPT, _PlaybookRun,';
-            $L[] = '  build_playbook_tools(),';
-            $L[] = '  render_playbook_transcript()    the playbook interpreter (this workflow has playbook nodes)';
-        }
         $L[] = '  inject_datetime()               prepends a dated header, resolves [date]/[weekday]/[year]/[time] in a system prompt';
+        if ($facts['playbookData'] !== []) {
+            $L[] = '  PLAYBOOK_SYSTEM_PROMPT,';
+            $L[] = '  GATE_BRIDGE, PlaybookRun,';
+            $L[] = '  PlaybookToolset                 the playbook interpreter (this workflow has playbook nodes)';
+        }
         $L[] = '  Node, AgentNode, DispatcherNode,';
         if ($facts['playbookData'] !== []) {
             $L[] = '  PlaybookNode,';
@@ -3128,14 +3131,14 @@ TXT;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
         $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
-        $L[] = PythonEmitHelpers::eventSinkBlock();
+        $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
         $L[] = $sep;
         $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($withPlaybooks) {
-            $L[] = self::playbookRuntimeBlock();
+            $L[] = LangGraphRuntime::playbookBlock();
         }
         $L[] = LangGraphRuntime::nodeClassesBlock($withPlaybooks);
         $L[] = '';
@@ -3321,7 +3324,7 @@ TXT;
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import WorkflowGraph, emit_event, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, WorkflowGraph, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3403,9 +3406,9 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     ad = AGENTS[nid]
     t0 = time.monotonic()
     try:
-        emit_event(type="round", round=ORDER.index(nid))
+        EVENTS.emit(type="round", round=ORDER.index(nid))
     except ValueError:
-        emit_event(type="round", round=0)
+        EVENTS.emit(type="round", round=0)
 
     async def trace(line: str):
         """Progress callback the module calls; in one process this is just a print."""
@@ -3420,8 +3423,8 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     # A playbook node already streamed its own transcript through the sink --
     # re-posting its answer here would double it in the overlay.
     if ad.get("kind") != "playbook" and out.get("text"):
-        emit_event(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
-    emit_event(type="final", leg=nid, status=out.get("status") or "ok")
+        EVENTS.emit(type="message", text=f"**{ad['display']}**\n\n{out['text']}", sensitive=False)
+    EVENTS.emit(type="final", leg=nid, status=out.get("status") or "ok")
     return out
 
 
@@ -3534,18 +3537,6 @@ PY;
             $lines[] = '#   cannot decide stops the run there (no model fallback).';
         }
         return $lines;
-    }
-
-    /**
-     * Playbook node runtime: twin of the PHP interpreter stack
-     * (PlaybookInterpreter + PlaybookActionSpace + PlaybookNativeTools +
-     * GateManager + PlaybookNodeRunner::renderTranscript). Emitted only when
-     * the workflow has a playbook node.
-     */
-    /** @see PlaybookEmit::runtimeBlock() -- the one playbook interpreter, emitted by every target. */
-    private static function playbookRuntimeBlock(): string
-    {
-        return PlaybookEmit::runtimeBlock();
     }
 
     /** DATA FLOW section of the module docstring (LangGraph-specific mechanics). */

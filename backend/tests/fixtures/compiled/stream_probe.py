@@ -27,10 +27,10 @@ workflow = importlib.import_module("workflow")
 async def fake_run(prompt: str, session: str | None = None) -> str:
     common.emit_event(type="round", round=1)
     common.emit_event(type="message", text=f"echo: {prompt}", sensitive=False)
-    run = common._PlaybookRun(False, {})
+    run = common.PlaybookRun(False, {})
     loop = asyncio.get_running_loop()
     decision = await loop.run_in_executor(
-        None, common._playbook_gate, run, "approval", "request_approval", {"question": "ok?"})
+        None, run.gate, "approval", "request_approval", {"question": "ok?"})
     return "decision=" + decision["decision"]["decision"]
 
 

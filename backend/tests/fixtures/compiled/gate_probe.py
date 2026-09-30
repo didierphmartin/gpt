@@ -10,15 +10,15 @@ common = importlib.import_module("common")
 
 seen = []
 common.set_event_sink(seen.append)
-run = common._PlaybookRun(False, {})
+run = common.PlaybookRun(False, {})
 
 # 1. A gate blocks until answered, and returns the human's decision.
 result = {}
 
 
 def ask():
-    result["value"] = common._playbook_gate(
-        run, "approval", "request_approval",
+    result["value"] = run.gate(
+        "approval", "request_approval",
         {"approver": "manager", "question": "Approve the PTO?"})
 
 
@@ -46,25 +46,25 @@ assert result["value"]["decision"]["comment"] == "not now", result
 
 # 2. An unanswered gate times out to the policy answer (PLAYBOOK_GATE_TIMEOUT_S=5).
 seen.clear()
-timed = common._playbook_gate(run, "approval", "request_approval",
-                              {"approver": "manager", "question": "Nobody home?"})
+timed = run.gate("approval", "request_approval",
+                 {"approver": "manager", "question": "Nobody home?"})
 assert timed["ok"] is True, timed
 assert timed["decision"]["actor"] == "policy", timed
 
 # 3. PLAYBOOK_GATE_MODE still wins over the sink.
 os.environ["PLAYBOOK_GATE_MODE"] = "deny"
-denied = common._playbook_gate(run, "approval", "request_approval", {"question": "x"})
+denied = run.gate("approval", "request_approval", {"question": "x"})
 assert denied["decision"]["decision"] == "denied", denied
 assert denied["decision"]["actor"] == "policy", denied
 del os.environ["PLAYBOOK_GATE_MODE"]
 
-# 4. The real tool surface (build_playbook_tools/wrap()) must emit exactly one
+# 4. The real tool surface (PlaybookToolset.build()/_wrap()) must emit exactly one
 # gate_request and one tool_result for a gate call -- not two. This is the
-# path a live agent actually calls; _playbook_gate() alone (cases 1-3 above)
-# bypasses wrap() and would not have caught the duplicate-tool_result bug.
+# path a live agent actually calls; PlaybookRun.gate() alone (cases 1-3 above)
+# bypasses _wrap() and would not have caught the duplicate-tool_result bug.
 playbook_hr = importlib.import_module("agents.playbook_hr")
-run2 = common._PlaybookRun(False, {})
-tools = common.build_playbook_tools(playbook_hr.NODE, run2)
+run2 = common.PlaybookRun(False, {})
+tools = common.PlaybookToolset(playbook_hr.NODE, run2).build()
 approval_tool = next(t for t in tools if t.name == "request_approval")
 
 seen.clear()

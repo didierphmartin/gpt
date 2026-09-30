@@ -201,12 +201,12 @@ class PlaybookNode(Node):
     """
 
     async def run(self, request: str, trace) -> dict:
-        """Playbook: the playbook runtime; gates go through whatever _playbook_gate the
-        surrounding file installed (console prompts in a modular package, an
-        input-required task update in an A2A agent server)."""
+        """Playbook: the playbook runtime; gates are answered by PlaybookRun.gate(), or
+        by the GATE_BRIDGE the surrounding file installed (an input-required task
+        update in an A2A agent server)."""
         pb = self.cfg
-        run = _PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {})
-        tools = build_playbook_tools(pb, run)
+        run = PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {}, gate_bridge=GATE_BRIDGE)
+        tools = PlaybookToolset(pb, run).build()
         await trace(f"{self.display!r} playbook -- {len(tools)} tools (provider={pb.get('provider', '?')}, "
                     f"model={pb.get('model', '?')}, writes={'on' if run.writes_enabled else 'off'})")
         system = PLAYBOOK_SYSTEM_PROMPT.format(
@@ -228,8 +228,7 @@ class PlaybookNode(Node):
             run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
             await trace(f"⚠ playbook failed: {e}")
         await trace(f"done -- status={run.status} ({len(run.events)} events, {time.monotonic() - t0:.1f}s)")
-        transcript = render_playbook_transcript(pb["title"], run.events, text, run.status)
-        return {"text": transcript, "route": "", "notes": "", "status": run.status}
+        return {"text": run.transcript(pb["title"], text), "route": "", "notes": "", "status": run.status}
 
 
 PY;
@@ -793,9 +792,8 @@ PY;
      * into a class that reuses one httpx.Client. PythonEmitHelpers::mcpClientBlock() stays
      * as it is for ADK, MAF and NOOA.
      *
-     * The block ends with the alias `_call_mcp_tool = MCP.call_tool`: the shared playbook
-     * runtime (PlaybookEmit::runtimeBlock(), still in LangGraph's output) calls that name.
-     * Task 7b removes the alias.
+     * Its callers are ToolCatalog (catalog tools) and PlaybookToolset (bound #Actions), both
+     * through MCP.call_tool.
      */
     public static function mcpClientBlock(): string
     {
@@ -945,9 +943,6 @@ class McpClient:
 
 
 MCP = McpClient()
-
-# The name the playbook runtime calls its bound #Actions by (until it moves to MCP.call_tool).
-_call_mcp_tool = MCP.call_tool
 PY;
     }
 
@@ -1389,6 +1384,450 @@ SKILLS = SkillRuntime(
     outputs_root=os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs"),
     scratch_dir=os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch"),
 )
+
+PY;
+    }
+
+    /**
+     * RunEvents and its module instance EVENTS: how a run's events reach a watching host
+     * (api.py installs a sink) and the rendezvous where a human gate waits for its answer.
+     * With no sink installed it is inert, so a console run prints its trace lines and nothing
+     * else changes.
+     *
+     * LangGraph's own copy of PythonEmitHelpers::eventSinkBlock() (_SINK, _GATES, _GATES_LOCK,
+     * set_event_sink, emit_event, open_gate, resolve_gate, take_gate_answer), restructured into
+     * a class. Every LangGraph file that runs a node or a graph emits it (the single file,
+     * common.py, the A2A orchestrator and every A2A agent file), so no caller ever probes for
+     * it with globals() or NameError. PythonEmitHelpers::eventSinkBlock() stays as it is for
+     * ADK, MAF and NOOA.
+     *
+     * The block ends with the aliases api.py (emitted by the shared RunServerEmitter) and the
+     * run-server probes import: set_event_sink, emit_event, resolve_gate.
+     */
+    public static function runEventsBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# EVENT SINK + GATE RENDEZVOUS
+# Inert until a host installs a sink (see api.py). With no sink the
+# generated code prints its trace lines and nothing else changes.
+# ==============================================================
+class RunEvents:
+    """The run's event stream and its human-gate rendezvous.
+
+    A host watching the run (api.py) installs a sink with set_sink() and receives every
+    protocol event emit() publishes. A playbook gate registers itself with open_gate(),
+    blocks on the returned Event, and collects what resolve_gate() delivered with
+    take_answer(). One instance (EVENTS) serves the whole process.
+    """
+
+    def __init__(self):
+        self._sink = None            # callable(dict) -> None, or None
+        self._gates = {}             # tool_call_id -> {"event": threading.Event, "answer": dict | None}
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> bool:
+        """Is a run host watching this run?
+
+        True once a host (api.py) has installed a sink. Read on every call, never copied,
+        because set_sink() replaces the sink after import.
+        """
+        return self._sink is not None
+
+    def set_sink(self, fn: Callable | None) -> Callable | None:
+        """Install (or clear with None) the run-event sink. Returns the previous one."""
+        prev, self._sink = self._sink, fn
+        return prev
+
+    def emit(self, **ev) -> None:
+        """Publish one protocol event. A no-op when no sink is installed."""
+        sink = self._sink
+        if sink is not None:
+            sink(dict(ev))
+
+    def open_gate(self, tool_call_id: str) -> threading.Event:
+        """Register a pending gate and return the Event the waiter blocks on."""
+        with self._lock:
+            slot = {"event": threading.Event(), "answer": None}
+            self._gates[tool_call_id] = slot
+        return slot["event"]
+
+    def resolve_gate(self, tool_call_id: str, answer: dict) -> bool:
+        """Deliver a human answer to a waiting gate. False when no gate is waiting."""
+        with self._lock:
+            slot = self._gates.get(tool_call_id)
+        if slot is None:
+            return False
+        slot["answer"] = dict(answer or {})
+        slot["event"].set()
+        return True
+
+    def take_answer(self, tool_call_id: str) -> dict | None:
+        """Pop a resolved gate's answer (None when unanswered), clearing the slot."""
+        with self._lock:
+            slot = self._gates.pop(tool_call_id, None)
+        return slot["answer"] if slot else None
+
+
+EVENTS = RunEvents()
+
+# The names api.py (the shared run server) and the run-server test probes import.
+set_event_sink = EVENTS.set_sink
+emit_event = EVENTS.emit
+resolve_gate = EVENTS.resolve_gate
+
+PY;
+    }
+
+    /**
+     * The playbook interpreter: its constants, PlaybookRun (one node run's timeline, status,
+     * write ledger, human gates and Markdown transcript) and PlaybookToolset (the whitelisted
+     * tool surface the model calls). PlaybookNode (nodeClassesBlock) runs them. Twin of the
+     * PHP interpreter stack (PlaybookInterpreter + PlaybookActionSpace + PlaybookNativeTools +
+     * GateManager + PlaybookNodeRunner::renderTranscript). Emitted only when the workflow has
+     * a playbook node (an A2A agent file: only when its node is one).
+     *
+     * LangGraph's own copy of PlaybookEmit::runtimeBlock() (_PlaybookRun, _pb_sink_active,
+     * _playbook_gate, _playbook_gate_policy, build_playbook_tools, render_playbook_transcript),
+     * restructured into classes. It reports through EVENTS (runEventsBlock) and calls bound
+     * #Actions through MCP.call_tool, so it no longer probes for either. An A2A agent server
+     * forwards gates to its client by setting GATE_BRIDGE. PlaybookEmit::runtimeBlock() stays
+     * as it is for ADK, MAF and NOOA.
+     */
+    public static function playbookBlock(): string
+    {
+        return <<<'PY'
+# ---------------------------------------------------------------------------
+# PLAYBOOK RUNTIME
+#
+# The LLM re-decides each round from the running transcript of tool calls
+# (no pre-computed action queue). Tools it sees: the native verbs, the human
+# gates, one tool per bound #Action (MCP, write-policed) and a stub per
+# unbound #Action. The node output is the same Markdown transcript the app's
+# run overlay shows, so downstream nodes get the story either way.
+# ---------------------------------------------------------------------------
+PLAYBOOK_MAX_ROUNDS = 40
+
+PLAYBOOK_SYSTEM_PROMPT = """You are a playbook interpreter for {domain}. Execute the PLAYBOOK below
+for the current REQUEST, step by step, using ONLY the tools provided.
+Rules:
+- Never invent tool results, user input, or tools. If information from the requester
+  is missing, you must obtain it through the provided tools; if an action has no
+  working tool (an "unbound" tool tells you so), follow its guidance instead of guessing.
+- Take parameters for later steps from earlier tool results.
+- When the playbook says Stop or the work is complete, call resolve_request.
+- Record what you did with leave_internal_note before resolving, as the playbook asks.
+PLAYBOOK:
+{instructions}
+POLICY: {policy_json}
+REQUESTER: {requester_json}
+APPROVERS: {approvers_json}"""
+
+# Fail-closed write classifier: a tool is a WRITE unless its name is recognizably read-only.
+_PB_READ_VERB_RE = re.compile(r"^(?:[a-z0-9]+_)?(get|list|search|read|find|describe|verify|check|lookup)(_|$)", re.I)
+
+_PB_GATES = {
+    "trigger_form": ("form", "Present a form to the requester and wait for it to be submitted"),
+    "request_approval": ("approval", "Ask an approver to approve or deny an action and wait for their decision"),
+    "prompt_handoff": ("handoff", "Hand off to a human team or person and wait for their response"),
+    "await_message": ("await_message", "Wait for a message from the requester before continuing"),
+}
+_PB_GATE_FIELDS = {
+    "trigger_form": {"prompt": (str, True, "Instructions shown above the form"),
+                     "fields": (list[dict], True, "Form fields to collect: [{name, label, type, options?, sensitive?}]")},
+    "request_approval": {"approver": (str, True, "Who must approve"), "question": (str, True, "What is being approved"),
+                         "context": (str, False, "Supporting context for the decision")},
+    "prompt_handoff": {"team_or_person": (str, True, "Who to hand off to"), "reason": (str, True, "Why this needs a human"),
+                       "summary": (str, False, "Summary of the situation so far")},
+    "await_message": {"prompt": (str, True, "What to wait for")},
+}
+
+# None: gates are answered here (a watching host, the console, or PLAYBOOK_GATE_MODE). An A2A agent server sets it to forward gates to its client.
+GATE_BRIDGE = None
+
+
+class PlaybookRun:
+    """Per-node run record: event timeline (twin of the run overlay), status, write ledger.
+
+    Also where the run's human gates are answered (gate()) and where its timeline becomes
+    the node's Markdown output (transcript()).
+    """
+
+    def __init__(self, writes_enabled: bool, policy: dict, gate_bridge: Callable | None = None):
+        self.events = []
+        self.status = "running"
+        self.writes_enabled = writes_enabled
+        self.policy = policy
+        self.ledger = {}
+        self.gate_bridge = gate_bridge   # gate_bridge(run, kind, name, args) answers every gate instead, when set
+
+    def emit(self, **ev) -> None:
+        """The run's own timeline AND, when a host is watching, the live stream."""
+        self.events.append(ev)
+        EVENTS.emit(**ev)
+
+    def gate(self, kind: str, name: str, args: dict) -> dict:
+        """Human gate. A host watching this run (api.py) gets the question over the
+        event stream and answers it with resolve_gate(). On an interactive terminal
+        the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
+        auto (default) approves approvals and acknowledges handoffs, deny denies,
+        prompt forces the console. PLAYBOOK_GATE_MODE always wins.
+
+        A run given a gate_bridge (an A2A agent server's) hands every gate to it instead."""
+        if self.gate_bridge is not None:
+            return self.gate_bridge(self, kind, name, args)
+        mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
+            "server" if EVENTS.active
+            else "prompt" if sys.stdin.isatty()
+            else "auto")
+        what = args.get("question") or args.get("prompt") or args.get("reason") or ""
+        if mode == "server":
+            # NOTE: run.emit() already tees a gate_request into the stream, but
+            # without the tool_call_id the answer must come back on, so the server
+            # mode emits its own and skips the bare one.
+            tool_call_id = uuid.uuid4().hex
+            waiter = EVENTS.open_gate(tool_call_id)
+            self.events.append({"type": "gate_request", "kind": kind, "payload": dict(args)})
+            EVENTS.emit(type="gate_request", kind=kind, payload=dict(args), tool_call_id=tool_call_id)
+            waiter.wait(float(os.environ.get("PLAYBOOK_GATE_TIMEOUT_S", "900")))
+            answer = EVENTS.take_answer(tool_call_id)
+            if answer is not None:
+                return {"ok": True, "decision": answer}
+            # Nobody attached, or nobody answered in time: same result as a
+            # non-interactive run, recorded so the transcript says who decided.
+            # PlaybookToolset._wrap() emits the single tool_result for this call, same as every
+            # other mode -- do not emit one here too.
+            return self.policy_answer(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
+        self.emit(type="gate_request", kind=kind, payload=dict(args))
+        match mode:
+            case "prompt":
+                print(f"\n✋ [{kind}] {what}", flush=True)
+                if kind == "approval":
+                    ans = input("approve/deny [comment]: ").strip()
+                    decision = "denied" if ans.lower().startswith("d") else "approved"
+                    comment = ans.split(" ", 1)[1] if " " in ans else ""
+                    return {"ok": True, "decision": {"decision": decision, "comment": comment, "actor": "console"}}
+                ans = input("your answer: ").strip()
+                return {"ok": True, "decision": {"decision": "answered", "comment": ans, "actor": "console"}}
+            case "deny":
+                return self.policy_answer(kind, "denied by PLAYBOOK_GATE_MODE=deny", deny=True)
+            case _:
+                return self.policy_answer(kind, "non-interactive run")
+
+    @staticmethod
+    def policy_answer(kind: str, why: str, deny: bool = False) -> dict:
+        """The answer a policy gives when no human is available. One definition so
+        the auto, deny and timed-out-server paths cannot drift apart."""
+        if deny:
+            return {"ok": True, "decision": {"decision": "denied", "comment": why, "actor": "policy"}}
+        if kind == "approval":
+            return {"ok": True, "decision": {"decision": "approved", "comment": f"auto-approved ({why})", "actor": "policy"}}
+        if kind == "handoff":
+            return {"ok": True, "decision": {"decision": "acknowledged", "comment": f"handed off; no human available ({why})", "actor": "policy"}}
+        return {"ok": False, "timeout": True,
+                "guidance": "No human is available in this non-interactive run. Continue with what you already know "
+                            "and note the gap with leave_internal_note."}
+
+    def transcript(self, title: str, final: str) -> str:
+        """Markdown transcript, twin of PlaybookNodeRunner::renderTranscript() (PHP)."""
+        gate_titles = {"approval": "Approval requested", "form": "Form request", "handoff": "Handed off to a human",
+                       "await_message": "Waiting for the requester", "wait": "Waiting"}
+        gate_tools = {"request_approval", "trigger_form", "prompt_handoff", "await_message", "wait_until"}
+        lines, pending = [], {}
+
+        def s(v):
+            if isinstance(v, str):
+                return v.strip()
+            return "" if v is None else json.dumps(v, ensure_ascii=False)
+
+        for ev in self.events:
+            t = ev.get("type")
+            match t:
+                case "tool_call":
+                    name = ev.get("name", "tool")
+                    if name in gate_tools:
+                        continue
+                    lines.append(f"- 🔧 {name} …")
+                    pending[name] = len(lines) - 1
+                case "tool_result":
+                    name = ev.get("name", "tool")
+                    res = ev.get("result") if isinstance(ev.get("result"), dict) else {}
+                    if name in gate_tools:
+                        d = res.get("decision", res.get("status", ""))
+                        if isinstance(d, dict):
+                            res = {**d, **res}
+                            d = d.get("decision", d.get("status", d.get("outcome", "answered")))
+                        decision, comment = s(d), s(res.get("comment", ""))
+                        if decision:
+                            lines.append(f"  → {decision}" + (f" ({comment})" if comment else ""))
+                        continue
+                    ok = res.get("ok", True) is not False
+                    mark = "✓" if ok else "✗"
+                    suffix = (" — " + s(res.get("error"))) if (not ok and res.get("error")) else ""
+                    if name in pending:
+                        lines[pending.pop(name)] = f"- 🔧 {name} {mark}{suffix}"
+                    else:
+                        lines.append(f"- 🔧 {name} {mark}")
+                case "message":
+                    text = "(message redacted)" if ev.get("sensitive") else s(ev.get("text", ""))
+                    if text:
+                        lines.append("- 💬 Playbook:\n" + "\n".join("  " + l for l in text.split("\n")))
+                case "gate_request":
+                    kind = ev.get("kind", "gate")
+                    p = ev.get("payload") or {}
+                    what = s(p.get("question") or p.get("prompt")
+                             or (s(p.get("team_or_person", "")) + (" — " + s(p.get("reason")) if p.get("reason") else "")))
+                    lines.append("- ✋ " + gate_titles.get(kind, kind.capitalize()) + (f": {what}" if what else ""))
+        out = f"# Playbook: {title} ({self.status})\n\n## Timeline\n" + ("\n".join(lines) if lines else "- (no steps recorded)")
+        if final.strip():
+            out += "\n\n## Result\n" + final.strip()
+        return out + f"\n\n[playbook run: {self.status}]"
+
+
+class PlaybookToolset:
+    """The whitelisted tool surface for one playbook run (twin of PlaybookActionSpace).
+
+    build() returns every tool the model may call. Each one goes through _wrap(), which
+    logs the call and records it, and its result, on the run's timeline.
+    """
+
+    def __init__(self, pb: dict, run: PlaybookRun):
+        self.pb = pb
+        self.run = run
+
+    def build(self) -> list[StructuredTool]:
+        """The run's tools, in the order the model sees them: native verbs, human gates, #Actions."""
+        tools = []
+        # Native verbs: always available, no binding needed.
+        tools += self._native_tools()
+        # Human gates.
+        tools += self._gate_tools()
+        # Bound MCP actions (write-policed) and unbound stubs.
+        tools += [self._action_tool(act) for act in self.pb.get("actions", [])]
+        return tools
+
+    @staticmethod
+    def _model(name: str, fields: dict):
+        """The pydantic model `<name>Args` for a field table {field: (type, required, description)}."""
+        return create_model(name + "Args", **{p: (t, Field(... if req else None, description=d))
+                                              for p, (t, req, d) in fields.items()})
+
+    def _wrap(self, name, fn, description, args_model) -> StructuredTool:
+        """One tool: prints the call and its result, and records both on the run's timeline."""
+        run = self.run
+
+        def invoke(**kwargs):
+            run.emit(type="tool_call", name=name, args=kwargs)
+            preview = json.dumps(kwargs, default=str, ensure_ascii=False)
+            print(f"  [playbook] -> {name}({preview[:200]}{'...' if len(preview) > 200 else ''})", flush=True)
+            result = fn(**kwargs)
+            run.emit(type="tool_result", name=name, result=result)
+            ok = result.get("ok", True) is not False
+            detail = str(result.get("error") or result.get("guidance") or result.get("decision") or "")
+            print(f"  [playbook] <- {name}: {'✓' if ok else '✗'} {detail[:160]}", flush=True)
+            return json.dumps(result, default=str, ensure_ascii=False)
+        return StructuredTool.from_function(func=invoke, name=name, description=description, args_schema=args_model)
+
+    def _native_tools(self) -> list:
+        """Native verbs: always available, no binding needed."""
+        run = self.run
+        tools = []
+
+        def message(**a):
+            run.emit(type="message", text=str(a.get("text", "")), sensitive=bool(a.get("sensitive", False)))
+            return {"ok": True}
+        tools.append(self._wrap("send_direct_message", message, "Send a direct message to the requester",
+                                self._model("SendDirectMessage", {"text": (str, True, "Message text"),
+                                                                  "sensitive": (bool, False, "Mark as sensitive for redaction")})))
+        tools.append(self._wrap("send_channel_message", message, "Post a message in a channel",
+                                self._model("SendChannelMessage", {"channel": (str, True, "Channel name"), "text": (str, True, "Message text")})))
+        tools.append(self._wrap("send_email", message, "Send an email",
+                                self._model("SendEmail", {"to": (str, True, "Email recipient"), "subject": (str, True, "Email subject"),
+                                                          "text": (str, True, "Email body")})))
+
+        def note(**a):
+            run.emit(type="note", text=str(a.get("text", "")))
+            return {"ok": True}
+        tools.append(self._wrap("leave_internal_note", note, "Leave an internal note on the request record",
+                                self._model("LeaveInternalNote", {"text": (str, True, "Note text")})))
+
+        def priority(**a):
+            run.emit(type="note", text=f"priority → {a.get('priority', '')}: {a.get('reason', '')}")
+            return {"ok": True}
+        tools.append(self._wrap("set_priority", priority, "Set the request priority (escalation)",
+                                self._model("SetPriority", {"priority": (str, True, "Priority level"), "reason": (str, True, "Reason for priority")})))
+
+        def resolve(**a):
+            run.status = "resolved"
+            return {"ok": True, "terminal": True}
+        tools.append(self._wrap("resolve_request", resolve, "Mark the request as resolved",
+                                self._model("ResolveRequest", {"outcome": (str, True, "Resolution outcome"), "summary": (str, True, "Resolution summary")})))
+        return tools
+
+    def _gate_tools(self) -> list:
+        """Human gates: one tool per _PB_GATES entry, answered by PlaybookRun.gate()."""
+        tools = []
+        for gname, (kind, desc) in _PB_GATES.items():
+            def gate_fn(_kind=kind, _name=gname, **a):
+                return self.run.gate(_kind, _name, a)
+            tools.append(self._wrap(gname, gate_fn, desc, self._model(gname, _PB_GATE_FIELDS[gname])))
+        return tools
+
+    def _action_tool(self, act: dict) -> StructuredTool:
+        """One #Action: a write-policed MCP call when it is bound, an unbound stub otherwise."""
+        match act.get("kind"):
+            case "mcp":
+                return self._mcp_action_tool(act)
+            case _:
+                return self._unbound_tool(act)
+
+    def _mcp_action_tool(self, act: dict) -> StructuredTool:
+        """A bound #Action: its MCP tool, with the write policy (writes_enabled) and the ledger
+        that replays a write already made with the same arguments."""
+        run = self.run
+        is_write = _PB_READ_VERB_RE.match(act["tool"]) is None
+
+        def mcp_fn(**a):
+            key = act["target"] + "|" + json.dumps(a, sort_keys=True, default=str)
+            if is_write and key in run.ledger:
+                return {"ok": True, "outcome": "replayed", "result": run.ledger[key]}
+            if is_write and not run.writes_enabled:
+                return {"ok": False, "error": "writes disabled by policy"}
+            raw = MCP.call_tool(act["server_url"], act["tool"], a)
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = raw
+            error = parsed.get("error") if isinstance(parsed, dict) else None
+            if error:
+                return {"ok": False, "error": str(error)}
+            if is_write:
+                run.ledger[key] = parsed
+            return {"ok": True, "result": parsed}
+        desc = act["action_name"] + (" — " + act["description"] if act.get("description") else "")
+        return self._wrap(act["llm_name"], mcp_fn, desc, ToolCatalog.args_model(act["llm_name"], act.get("input_schema") or {}))
+
+    def _unbound_tool(self, act: dict) -> StructuredTool:
+        """An unbound #Action: calling it returns the guidance of the on_unbound policy."""
+        run = self.run
+
+        def unbound_fn(**a):
+            pol = run.policy.get("on_unbound", "handoff")
+            match pol:
+                case "skip":
+                    return {"ok": False, "unbound": True, "skipped": True,
+                            "guidance": "This action is unavailable and the policy says skip it: note it in the internal record and continue with the rest of the playbook."}
+                case "fail":
+                    return {"ok": False, "unbound": True, "fatal": True,
+                            "guidance": "This action is unavailable and the policy says fail: leave an internal note and resolve the request as not completed."}
+                case _:
+                    return {"ok": False, "unbound": True, "policy": pol,
+                            "guidance": "This action has no connected implementation. Follow the policy: hand off to a human with prompt_handoff and note what could not be done."}
+        return self._wrap(act["llm_name"], unbound_fn,
+                          f"{act['action_name']}: NOT AVAILABLE — calling this applies the on_unbound policy",
+                          create_model(act["llm_name"] + "Args"))
+
 
 PY;
     }

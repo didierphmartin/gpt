@@ -1,16 +1,16 @@
 """Probe: every event the compiled runtime emits validates against the contract.
 
-Drives the real production call sites wherever one exists -- build_playbook_tools()
+Drives the real production call sites wherever one exists -- PlaybookToolset.build()
 + StructuredTool.invoke(), the same pattern gate_probe.py uses -- rather than
 re-typing the call-site literals (name=..., args=...) here: a hand-typed
 `run.emit(type="tool_call", name="x", ...)` would stay green even if the real
-wrap()/invoke() in LangGraphGenerator.php renamed or dropped a field, since it
+_wrap()/invoke() in LangGraphRuntime.php renamed or dropped a field, since it
 duplicates the literal instead of exercising it.
 
 tool_call/tool_result/message/note/gate_request are all produced this way,
 through the native send_direct_message/leave_internal_note/request_approval
 tools (no live MCP server needed -- those three are pure local closures in
-build_playbook_tools()). round and final are the one exception: they are the
+PlaybookToolset.build()). round and final are the one exception: they are the
 PHP interpreter's own vocabulary (see backend/schema/run-protocol-v1.json's note) --
 grepping LangGraphGenerator.php's Python output finds no `emit(type="round"`
 or `type="final"` call site at all, so there is nothing real to drive. Those
@@ -30,18 +30,18 @@ seen = []
 common.set_event_sink(seen.append)
 
 playbook_hr = importlib.import_module("agents.playbook_hr")
-run = common._PlaybookRun(False, {})
-tools = common.build_playbook_tools(playbook_hr.NODE, run)
+run = common.PlaybookRun(False, {})
+tools = common.PlaybookToolset(playbook_hr.NODE, run).build()
 by_name = {t.name: t for t in tools}
 
-# Real tool_call + message + tool_result, through wrap()/invoke().
+# Real tool_call + message + tool_result, through _wrap()/invoke().
 by_name["send_direct_message"].invoke({"text": "hi", "sensitive": False})
 
-# Real tool_call + note + tool_result, through wrap()/invoke().
+# Real tool_call + note + tool_result, through _wrap()/invoke().
 by_name["leave_internal_note"].invoke({"text": "noted"})
 
-# Real tool_call + gate_request + tool_result, through wrap()/invoke() and
-# _playbook_gate()'s server-mode branch (a sink is installed, so that branch
+# Real tool_call + gate_request + tool_result, through _wrap()/invoke() and
+# PlaybookRun.gate()'s server-mode branch (a sink is installed, so that branch
 # is taken). Threaded and answered via resolve_gate(), same as gate_probe.py,
 # so this exercises the answered path rather than the timeout fallback.
 os.environ["PLAYBOOK_GATE_TIMEOUT_S"] = "5"

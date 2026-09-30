@@ -280,7 +280,7 @@ class LangGraphSwarmGeneratorTest extends TestCase
      * until run() actually emits one. `active_agent` is the member holding
      * the turn when it ended -- resolved against MEMBER_NAMES (every valid
      * create_swarm() identity) with the entry agent as the fallback -- and
-     * follows the DAG path's own emit_event(type="message", ...) convention
+     * follows the DAG path's own EVENTS.emit(type="message", ...) convention
      * (LangGraphGenerator.php:1776, :3387) rather than inventing a new one.
      */
     public function testRunEmitsTheAnswerAsAMessageEventNamingTheAnsweringMember(): void
@@ -288,7 +288,7 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $files = $this->generateSwarm(self::twoAgentSwarm());
         $workflow = $files['workflow.py'];
 
-        $this->assertStringContainsString('from common import emit_event', $workflow);
+        $this->assertStringContainsString('from common import EVENTS', $workflow);
         $this->assertStringContainsString('MEMBER_NAMES = {"Alice", "Bob"}', $workflow);
         $this->assertStringContainsString('active = result.get("active_agent")', $workflow);
         $this->assertStringContainsString(
@@ -300,20 +300,20 @@ class LangGraphSwarmGeneratorTest extends TestCase
         // the text keeps the **{display}** prefix the DAG path emits and the
         // saved transcript depends on.
         $this->assertStringContainsString(
-            'emit_event(type="message", text=f"**{display}**\n\n{text}", agent=display, sensitive=False)',
+            'EVENTS.emit(type="message", text=f"**{display}**\n\n{text}", agent=display, sensitive=False)',
             $workflow
         );
-        // emit_event() runs before the function returns, so the answer reaches the
+        // EVENTS.emit() runs before the function returns, so the answer reaches the
         // sink (and therefore SSE) even though api.py never reads run()'s return
         // value for anything but the terminal `done` frame's `output` field.
         $this->assertLessThan(
             strpos($workflow, 'return text'),
-            strpos($workflow, 'emit_event(type="message"'),
+            strpos($workflow, 'EVENTS.emit(type="message"'),
             'the message event must be emitted before run() returns'
         );
     }
 
-    /** The added emit_event()/active_agent lines are still syntactically valid Python. */
+    /** The added EVENTS.emit()/active_agent lines are still syntactically valid Python. */
     public function testWorkflowStillCompilesAfterEmittingTheAnswerEvent(): void
     {
         $files = $this->generateSwarm(self::twoAgentSwarm());

@@ -131,7 +131,7 @@ TXT;
     public function testPlaybookRuntimeEmitted(): void
     {
         $code = $this->generate($this->playbookGraph());
-        foreach (['def build_playbook_tools', 'def render_playbook_transcript', 'def _playbook_gate',
+        foreach (['class PlaybookToolset:', '    def transcript(self, title: str, final: str) -> str:', '    def gate(self',
                   'case NodeKind.PLAYBOOK:', 'PLAYBOOK_SYSTEM_PROMPT', 'writes disabled by policy',
                   '"resolve_request"', '"request_approval"', '"prompt_handoff"'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
@@ -144,7 +144,7 @@ TXT;
     {
         $code = $this->generate($this->dispatcherGraph());
         $this->assertStringContainsString('PLAYBOOKS = {}', $code);
-        $this->assertStringNotContainsString('def build_playbook_tools', $code);
+        $this->assertStringNotContainsString('class PlaybookToolset:', $code);
     }
 
     public function testDispatcherAgentGetsRouteMenuAndConditionalEdge(): void

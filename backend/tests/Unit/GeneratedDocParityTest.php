@@ -188,8 +188,10 @@ class GeneratedDocParityTest extends TestCase
      */
     public function testNoTargetReferencesAnUndefinedGlobal(): void
     {
-        $allowed = ['SkillRuntime', '_CURRENT_NODE', '_SINK', '__file__',
-                    'emit_event', 'open_gate', 'take_gate_answer'];
+        // _SINK: PlaybookEmit::runtimeBlock()'s _pb_sink_active() reads it under try/except
+        // NameError in the ADK/MAF/NOOA files. LangGraph's own RunEvents needs no entry here, so
+        // emit_event, open_gate and take_gate_answer were dropped with its NameError probing.
+        $allowed = ['SkillRuntime', '_CURRENT_NODE', '_SINK', '__file__'];
         $checker = <<<'PYCODE'
 import ast, builtins, sys
 tree = ast.parse(open(sys.argv[1]).read())
