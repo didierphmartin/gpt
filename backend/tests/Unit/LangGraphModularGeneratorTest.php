@@ -144,7 +144,7 @@ class LangGraphModularGeneratorTest extends TestCase
         foreach (['"""Shared runtime for workflow "Dispatcher demo"', 'def _make_llm(', 'class McpClient:',
                   'class ToolCatalog:', 'class SkillRuntime:', 'TOOLS = ToolCatalog(TOOL_CATALOG)',
                   'class Dispatcher:', 'def inject_datetime(', 'def build_context(',
-                  'def _convert_doc_to_markdown(', 'class WFState(', 'class PlaybookToolset:',
+                  'class DocumentConverter:', 'class WFState(', 'class PlaybookToolset:',
                   '    def gate(self, kind: str, name: str, args: dict) -> dict:', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:',
                   'class WorkflowGraph:', 'def save_output(', 'def print_run_summary(', 'RUN SUMMARY'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");

@@ -419,4 +419,20 @@ class LangGraphOutputStructureTest extends TestCase
         [$r] = $this->probe(['mcp', $path]);
         $this->assertSame(['texts' => ['news ok', 'news ok'], 'initialize' => 2], $r, 'SSE parsed; one handshake per call, as today');
     }
+
+    public function testAttachmentsGoThroughTheDocumentConverter(): void
+    {
+        $graph = self::graphs()['linear'];
+        $doc = sys_get_temp_dir() . '/lgdoc_' . bin2hex(random_bytes(4)) . '.md';
+        file_put_contents($doc, "# Brief\nWrite about tides.");
+        $graph['nodes'][0]['config']['documents'] = [['name' => 'brief.md', 'path' => $doc], ['name' => 'lost.pdf', 'path' => '']];
+        $pkg = $this->files($graph, 'modular');
+        $this->assertStringContainsString('class DocumentConverter:', $pkg['common.py']);
+        $this->assertStringNotContainsString('_convert_doc_to_markdown', implode("\n", $pkg));
+        [, $log] = $this->probe(['workflow', 'modular', self::write($pkg)['root'], 'go']);
+        // The Start text the graph builds: converted brief + the stricter no-path note (Task 5) + the prompt.
+        $start = "## Attached Documents\n\n### brief.md\n\n# Brief\nWrite about tides.\n\n---\n\n"
+            . "### lost.pdf\n\n_(no path on attachment record)_\n\n---\n\ngo";
+        $this->assertStringContainsString('[node] [1] start -- ' . strlen($start) . ' chars', $log);
+    }
 }

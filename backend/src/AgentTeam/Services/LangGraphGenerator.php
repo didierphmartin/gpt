@@ -486,7 +486,7 @@ class LangGraphGenerator
         $lines[] = '# this script (absolute paths recommended).';
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = PythonEmitHelpers::documentConverterBlock();
+        $lines[] = LangGraphRuntime::documentConverterBlock();
 
         // ---------- the graph, output storage and run summary (shared with every mode) ----------
         $lines[] = '';
@@ -503,7 +503,7 @@ class LangGraphGenerator
         $lines[] = '# CLI arguments override it; if neither is provided, DEFAULT_PROMPT is used.';
         $lines[] = '# If the workflow has documents attached to the start node,';
         $lines[] = "# they're read from doc.path, converted to Markdown via";
-        $lines[] = '# _convert_doc_to_markdown(), and prepended to the prompt.';
+        $lines[] = '# DOCUMENTS.convert(), and prepended to the prompt.';
         $lines[] = $sep;
         $lines[] = '';
         // Verbatim, as the package bakes it: no 80-column wrap, so the prompt is the same text in every mode.
@@ -1372,7 +1372,7 @@ class LangGraphGenerator
         $L[] = self::stateBlock();
         $L[] = self::datetimeInjectorBlock();
         $L[] = self::contextBuilderBlock();
-        $L[] = PythonEmitHelpers::documentConverterBlock();
+        $L[] = LangGraphRuntime::documentConverterBlock();
         // orchestrator.py carries no common.py, so the event sink + gate rendezvous
         // (installed by api.py, consumed by _handle_gate() below) is emitted here.
         $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
@@ -2911,7 +2911,7 @@ PY;
         }
         $L[] = '  NodeKind, make_node()           one Node subclass per node kind; every agent module is its NODE + make_node(NODE).run';
         $L[] = '  WFState, build_context()        the graph state type and per-node input builder (used by WorkflowGraph)';
-        $L[] = '  _convert_doc_to_markdown()      Start-node attachment -> Markdown (office/PDF formats via lazy imports, text formats verbatim)';
+        $L[] = '  DocumentConverter / DOCUMENTS   Start-node attachment -> Markdown, one method per format (lazy imports, text formats verbatim)';
         $L[] = '  WorkflowGraph                   the LangGraph StateGraph over workflow.py\'s EDGES/ORDER/NODE_TYPES and its node runner';
         $L[] = '  save_output(),';
         $L[] = '  print_run_summary()             the Output node\'s storage rule and the closing RUN SUMMARY (workflow.py\'s CLI)';
@@ -3150,7 +3150,7 @@ TXT;
         $L[] = $sep;
         $L[] = '# ATTACHMENT CONVERTER (Start-node documents)';
         $L[] = $sep;
-        $L[] = PythonEmitHelpers::documentConverterBlock();
+        $L[] = LangGraphRuntime::documentConverterBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";

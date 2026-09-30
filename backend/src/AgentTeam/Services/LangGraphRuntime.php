@@ -613,7 +613,7 @@ class WorkflowGraph:
                         doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
                         continue
                     try:
-                        md = _convert_doc_to_markdown(path)
+                        md = DOCUMENTS.convert(path)
                         doc_parts.append(f"### {name}\n\n{md}")
                     except Exception as e:
                         doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
@@ -778,6 +778,161 @@ def print_run_summary(output: str, saved: str | None, started: float | None, dur
     print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
     print("=" * 74, flush=True)
 
+
+PY;
+    }
+
+    /**
+     * DocumentConverter and DOCUMENTS: turn a Start-node attachment into Markdown.
+     *
+     * LangGraph's own copy of PythonEmitHelpers::documentConverterBlock() (the flat
+     * _convert_doc_to_markdown function), split into one method per format. That helper
+     * stays as it is for ADK, MAF and NOOA. WorkflowGraph._start_node calls DOCUMENTS.convert
+     * for each attachment that has a path.
+     */
+    public static function documentConverterBlock(): string
+    {
+        return <<<'PY'
+class DocumentConverter:
+    """Read a file and return its contents as Markdown.
+
+    Text-native formats (HTML/MD/TXT/JSON/YAML/CSV/XML/source) are returned
+    verbatim. Binary office formats and PDFs are routed to their matching
+    pure-Python parser. Imports are lazy so the script doesn't pull in a
+    library unless the corresponding format is actually attached.
+
+    convert() picks the parser by extension; each binary format has its own method.
+    """
+
+    TEXT_NATIVE = {
+        ".html", ".htm", ".md", ".markdown", ".txt", ".text",
+        ".json", ".yaml", ".yml", ".xml", ".csv", ".tsv",
+        ".css", ".scss", ".less",
+        ".js", ".mjs", ".ts", ".tsx", ".jsx",
+        ".py", ".rb", ".go", ".rs", ".java", ".c", ".cc", ".cpp", ".h", ".hpp",
+        ".sh", ".bash", ".zsh", ".sql", ".log", ".rtf", ".ini", ".toml",
+    }
+    MAX_ROWS = 200  # spreadsheet rows kept per sheet; the rest is cut with a note
+
+    def convert(self, path: str) -> str:
+        """Return the file at `path` as Markdown, choosing the parser by extension.
+
+        Raises FileNotFoundError if the path doesn't exist, ValueError for an
+        unsupported extension, ImportError if the format's library is missing.
+        """
+        from pathlib import Path
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"document not found: {path}")
+        ext = p.suffix.lower()
+        match ext:
+            case _ if ext in self.TEXT_NATIVE:
+                return p.read_text(encoding="utf-8", errors="replace")
+            case ".docx":
+                return self._docx(p)
+            case ".pptx":
+                return self._pptx(p)
+            case ".xlsx" | ".xlsm":
+                return self._xlsx(p)
+            case ".pdf":
+                return self._pdf(p)
+            case _:
+                raise ValueError(f"unsupported document format: {ext}")
+
+    def _docx(self, p) -> str:
+        """Word document -> Markdown through mammoth."""
+        import mammoth
+        with p.open("rb") as f:
+            return mammoth.convert_to_markdown(f).value
+
+    def _pptx(self, p) -> str:
+        """PowerPoint deck -> one section per slide: title, bullet text and speaker notes."""
+        from pptx import Presentation
+        prs = Presentation(str(p))
+        sections = [f"# {p.name}", f"_{len(prs.slides)} slide(s)_"]
+        for i, slide in enumerate(prs.slides, start=1):
+            layout = slide.slide_layout.name if slide.slide_layout else "?"
+            sections.append(f"## Slide {i} -- {layout}")
+            title_text = ""
+            if slide.shapes.title and slide.shapes.title.has_text_frame:
+                title_text = slide.shapes.title.text_frame.text.strip()
+            if title_text:
+                sections.append(f"### {title_text}")
+            body = []
+            for shape in slide.shapes:
+                if shape == slide.shapes.title:
+                    continue
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    line = "".join(run.text or "" for run in para.runs).strip()
+                    if not line and para.text:
+                        line = para.text.strip()
+                    if line:
+                        indent = "  " * (para.level or 0)
+                        body.append(f"{indent}- {line}")
+            if body:
+                sections.append("\n".join(body))
+            if slide.has_notes_slide:
+                notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if notes:
+                    sections.append("### Notes")
+                    sections.append(notes)
+        return "\n\n".join(sections) + "\n"
+
+    def _xlsx(self, p) -> str:
+        """Excel workbook -> one Markdown table per sheet, cut at MAX_ROWS rows."""
+        from openpyxl import load_workbook
+        wb = load_workbook(str(p), data_only=True)
+        sections = [f"# {p.name}", f"_{len(wb.sheetnames)} sheet(s)_"]
+        for name in wb.sheetnames:
+            ws = wb[name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                row_vals = list(row)
+                while row_vals and (row_vals[-1] is None or row_vals[-1] == ""):
+                    row_vals.pop()
+                if row_vals or not rows:
+                    rows.append(row_vals)
+            while rows and not any(c not in (None, "") for c in rows[-1]):
+                rows.pop()
+            sections.append(f"## Sheet: {name}")
+            sections.append(f"_{len(rows)} row(s) -- {ws.max_column} col(s)_")
+            if not rows:
+                sections.append("_(empty)_")
+                continue
+            width = max(len(r) for r in rows)
+            rows = [list(r) + [""] * (width - len(r)) for r in rows]
+            truncated = len(rows) > self.MAX_ROWS
+            if truncated:
+                rows = rows[:self.MAX_ROWS]
+            def cell(v):
+                return ("" if v is None else str(v)).replace("|", "\\|").replace("\n", " ")
+            table = ["| " + " | ".join(cell(v) for v in rows[0]) + " |",
+                     "| " + " | ".join(["---"] * width) + " |"]
+            for r in rows[1:]:
+                table.append("| " + " | ".join(cell(v) for v in r) + " |")
+            if truncated:
+                table.append(f"\n_(showing first {self.MAX_ROWS} rows)_")
+            sections.append("\n".join(table))
+        return "\n\n".join(sections) + "\n"
+
+    def _pdf(self, p) -> str:
+        """PDF -> one section per page; a page with no extractable text says so."""
+        from pypdf import PdfReader
+        reader = PdfReader(str(p))
+        parts = [f"# {p.name} -- {len(reader.pages)} page(s)"]
+        for i, page in enumerate(reader.pages, start=1):
+            try:
+                t = (page.extract_text() or "").strip()
+            except Exception as e:
+                t = ""
+            parts.append(f"## Page {i}")
+            parts.append(t if t else "_(no extractable text)_")
+        return "\n\n".join(parts) + "\n"
+
+
+DOCUMENTS = DocumentConverter()
 
 PY;
     }
