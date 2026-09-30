@@ -132,7 +132,7 @@ TXT;
     {
         $code = $this->generate($this->playbookGraph());
         foreach (['def build_playbook_tools', 'def render_playbook_transcript', 'def _playbook_gate',
-                  'case "playbook":', 'PLAYBOOK_SYSTEM_PROMPT', 'writes disabled by policy',
+                  'case NodeKind.PLAYBOOK:', 'PLAYBOOK_SYSTEM_PROMPT', 'writes disabled by policy',
                   '"resolve_request"', '"request_approval"', '"prompt_handoff"'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
@@ -164,7 +164,7 @@ TXT;
     public function testNonDispatcherAgentHasNoDispatchEntry(): void
     {
         $code = $this->generate($this->dispatcherGraph());
-        $this->assertSame(1, substr_count($code, '"dispatch": ['), 'only the dispatcher carries a menu');
+        $this->assertSame(1, substr_count($code, '"dispatch": [{'), 'only the dispatcher carries a menu');
     }
 
     public function testEmittedScriptIsValidPython(): void

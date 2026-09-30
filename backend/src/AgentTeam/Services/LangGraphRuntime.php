@@ -487,7 +487,6 @@ class Dispatcher:
     async def _via_jev(self, task: str) -> RouteDecision:
         """Jev only: 'routed' decides; any other outcome stops the run here (no model fallback)."""
         nid = self.cfg["id"]
-        t0 = time.monotonic()
         try:
             # urlopen's timeout bounds each socket op, not DNS or the total; this does.
             jev = await asyncio.wait_for(
@@ -495,9 +494,6 @@ class Dispatcher:
         except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
             jev = JevResult("error", reason=f"{type(e).__name__}: no answer within {self.router.TIMEOUT_S + 1}s"
                             if isinstance(e, asyncio.TimeoutError) else str(e))
-        dt = time.monotonic() - t0
-        # Counted whether or not Jev decides, so the run summary is not under-reported.
-        NODE_DURATIONS[self.display] = NODE_DURATIONS.get(self.display, 0.0) + dt
         conf = f"{jev.confidence:.2f}" if jev.confidence is not None else "?"
         if jev.outcome == "routed":
             chosen = jev.target
@@ -536,7 +532,6 @@ class Dispatcher:
         t0 = time.monotonic()
         resp = await llm.ainvoke(msgs)
         dt = time.monotonic() - t0
-        NODE_DURATIONS[self.display] = NODE_DURATIONS.get(self.display, 0.0) + dt
         chosen, notes = None, ""
         for call in getattr(resp, "tool_calls", None) or []:
             if call.get("name") != "route_to":
@@ -558,6 +553,233 @@ class Dispatcher:
               + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
         text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
         return RouteDecision(text=text, route=chosen["id"], notes=notes, status="ok")
+
+
+PY;
+    }
+
+    /**
+     * WorkflowGraph: the workflow as a LangGraph StateGraph, built from the frozen
+     * EDGES / ORDER / NODE_TYPES and one node table. Written once for every mode: the
+     * single file and orchestrator.py carry it inline, the modular package in common.py.
+     * The mode supplies only `run_node(nid, request)` -- a Node in this process, an agent
+     * module, or an A2A task -- so the graph code (Start, Output, the request framing,
+     * the dispatcher's conditional edge) is the same everywhere.
+     */
+    public static function workflowGraphBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# WORKFLOW GRAPH
+# WorkflowGraph builds the LangGraph, wires edges, and executes it.
+# Each node type has a method (_start_node, _module_node, _output_node)
+# that returns a callable for LangGraph to invoke. Agent and playbook
+# nodes go through the run_node the mode supplies; Start and Output
+# run here, with no LLM.
+# ==============================================================
+
+
+class WorkflowGraph:
+    """The workflow as a LangGraph StateGraph built from its frozen EDGES / ORDER / NODE_TYPES.
+
+    Start and Output run here with no LLM; every agent/playbook node goes through `run_node`
+    (in this process, in an agent module, or over A2A -- the graph does not care). A dispatcher's
+    menu children hang off one conditional edge, so only the chosen child runs.
+    """
+
+    def __init__(self, *, edges: list, order: list[str], node_types: dict[str, str], agents: dict[str, dict],
+                 run_node: Callable[[str, str], Awaitable[dict]], start_documents: list[dict]):
+        """agents maps an agent/playbook node id to its entry (display, kind, dispatch menu);
+        run_node(nid, request) runs that node and returns {"text", "route", "notes", "status"}."""
+        self.edges, self.order, self.node_types = edges, order, node_types
+        self.agents, self.run_node, self.start_documents = agents, run_node, start_documents
+        self.started: float | None = None   # time.monotonic() when the run began (RUN SUMMARY)
+
+    def parents(self, nid: str) -> list[str]:
+        """Get direct predecessor node IDs (nodes with edges INTO this node)."""
+        return [f for f, t in self.edges if t == nid]
+
+    def children(self, nid: str) -> list[str]:
+        """Get direct successor node IDs (nodes this node has edges TO)."""
+        return [t for f, t in self.edges if f == nid]
+
+    def _start_node(self, nid: str):
+        """The Start node: the prompt, with attached documents converted to Markdown placed before it."""
+        def _run(state):
+            text = state.get("user_prompt", "")
+            if self.start_documents:
+                doc_parts = []
+                for doc in self.start_documents:
+                    name = doc.get("name", "Document")
+                    path = doc.get("path", "")
+                    if not path:
+                        doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
+                        continue
+                    try:
+                        md = _convert_doc_to_markdown(path)
+                        doc_parts.append(f"### {name}\n\n{md}")
+                    except Exception as e:
+                        doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+                if doc_parts:
+                    text = (
+                        "## Attached Documents\n\n"
+                        + "\n\n---\n\n".join(doc_parts)
+                        + "\n\n---\n\n"
+                        + text
+                    )
+            print(f"[node] [{nid}] start -- {len(text)} chars", flush=True)
+            return {"node_outputs": {nid: {"source": "start", "text": text}}}
+        return _run
+
+    def _request_for(self, nid: str, state: dict) -> str:
+        """What a node receives: a playbook gets its parents' texts joined, an agent the labelled context."""
+        outs = state.get("node_outputs", {})
+        if self.agents[nid]["kind"] == "playbook":
+            return "\n\n".join(outs[p]["text"] for p in self.parents(nid) if p in outs) or state.get("user_prompt", "")
+        return build_context(state.get("user_prompt", ""), self.parents(nid), outs)
+
+    def _module_node(self, nid: str):
+        """An agent/playbook node: run it, then turn a dispatcher's choice into the conditional edge's input."""
+        async def _run(state):
+            ad = self.agents[nid]
+            out = await self.run_node(nid, self._request_for(nid, state))
+            result = {"node_outputs": {nid: {"source": ad["display"], "text": out["text"]}}}
+            if ad.get("dispatch"):
+                # Dispatcher: the node chose a child (or none) -> conditional edge input;
+                # a request it did not route ends the run with its message.
+                route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
+                if route == END:
+                    print(f"[node] [{nid}] ⚠ dispatcher did not route; ending the run", flush=True)
+                    result["final_output"] = out["text"]
+                result["routes"] = {nid: route}
+            return result
+        return _run
+
+    def _output_node(self, nid: str):
+        """The Output node: the lone parent's text verbatim, else every parent's text under its name."""
+        def _run(state):
+            pids = self.parents(nid)
+            outs = state.get("node_outputs", {})
+            if len(pids) == 1 and pids[0] in outs:
+                final = outs[pids[0]]["text"]
+            else:
+                blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                final = "\n\n---\n\n".join(blocks)
+            print(f"[node] [{nid}] output -- {len(final)} chars", flush=True)
+            return {"final_output": final}
+        return _run
+
+    def _router(self, nid: str):
+        """The conditional-edge function of dispatcher `nid`: the child it chose, or END."""
+        return lambda state: state.get("routes", {}).get(nid) or END
+
+    def _wire_edges(self, sg) -> None:
+        """Plain edges forward in ORDER; a dispatcher's menu children only through its conditional edge."""
+        # Wire edges. A dispatcher's menu children hang off a conditional edge:
+        # only the child named in state["routes"] runs (siblings are skipped).
+        pos = {n: i for i, n in enumerate(self.order)}
+        sg.add_edge(START, self.order[0])
+        for nid in self.order:
+            menu = {t["id"] for t in self.agents.get(nid, {}).get("dispatch", [])}
+            for child in self.children(nid):
+                if child in pos and pos[child] > pos[nid] and child not in menu:
+                    sg.add_edge(nid, child)
+            if menu:
+                sg.add_conditional_edges(nid, self._router(nid), {t: t for t in menu} | {END: END})
+        for nid in self.order:
+            if not self.children(nid):
+                sg.add_edge(nid, END)
+
+    def compile(self):
+        """The compiled LangGraph: one graph node per workflow node, chosen by its type."""
+        sg = StateGraph(WFState)
+        for nid in self.order:
+            ntype = self.node_types.get(nid, "")
+            match ntype:
+                case "start":
+                    sg.add_node(nid, self._start_node(nid))
+                case "agent" | "playbook":
+                    sg.add_node(nid, self._module_node(nid))
+                case "output":
+                    sg.add_node(nid, self._output_node(nid))
+                case _:
+                    sg.add_node(nid, lambda s: {})
+        self._wire_edges(sg)
+        return sg.compile()
+
+    async def run(self, prompt: str) -> str:
+        """Run the workflow once on `prompt`; returns the final output ('' if the run stopped with none).
+
+        Steps: compile the graph (nodes from ORDER, edges from EDGES in topological
+        order), invoke it on the prompt, and return the final output text.
+        """
+        graph = self.compile()
+        print("[info] Running...", flush=True)
+        self.started = time.monotonic()
+        result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
+        return result.get("final_output", "")
+
+
+PY;
+    }
+
+    /**
+     * save_output() and print_run_summary(): what every mode does once the graph has
+     * answered. One rule for the saved file's name and place (the modular package's),
+     * and one RUN SUMMARY whose only per-mode part is the timing label.
+     */
+    public static function outputBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# OUTPUT STORAGE + RUN SUMMARY
+# ==============================================================
+
+
+def save_output(output: str, *, enabled: bool, folder: str | None, workflow_id: int, workflow_name: str) -> str | None:
+    """Honour the Output node's storage setting: when ON, save the final result where the
+    app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via
+    SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, don't save.
+
+    A full HTML document is saved without the narration/fences around it. Returns the
+    saved file's absolute path, or None (storage OFF, or the save failed with a warning).
+    """
+    if not enabled:
+        return None
+    try:
+        root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+        target = os.path.expanduser(folder) if folder else os.path.join(root, "workflow")
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        os.makedirs(target, exist_ok=True)
+        m = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
+        ext = "html" if m else "md"
+        slug = "".join(c if c.isalnum() else "-" for c in workflow_name.lower()).strip("-")[:40]
+        path = os.path.join(target, f"{workflow_id}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(m.group(0) if m else output)
+        return os.path.abspath(path)
+    except Exception as e:
+        print(f"\n[warn] failed to save result: {e}")
+        return None
+
+
+def print_run_summary(output: str, saved: str | None, started: float | None, durations: dict[str, float], timing_label: str) -> None:
+    """Closing RUN SUMMARY (printed LAST): time per node, total wall-clock, document location.
+
+    timing_label names what a node's time covers in this mode (in this process, in its
+    module, or an A2A round trip); the rest of the summary is the same in every mode.
+    """
+    print("\n" + "=" * 74 + "\nRUN SUMMARY\n" + "-" * 74, flush=True)
+    if durations:
+        w = max(len(n) for n in durations)
+        print(f"  {timing_label}:", flush=True)
+        for name, secs in sorted(durations.items(), key=lambda kv: -kv[1]):
+            print(f"    {name:<{w}}   {secs:7.1f}s", flush=True)
+    print(f"  Total wall-clock: {time.monotonic() - started:.1f}s" if started else "  Total wall-clock: n/a", flush=True)
+    print(f"  Final output: {len(output)} chars", flush=True)
+    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
+    print("=" * 74, flush=True)
 
 
 PY;

@@ -42,18 +42,14 @@ class FakeResp:
 
 class FakeLLM:
     """Model path stand-in: always routes to Human resources with a note."""
-    def __init__(self, ns=None):
+    def __init__(self):
         self.calls = 0
-        self.ns = ns
-        self.durations_at_call = None   # NODE_DURATIONS as the model path found it
 
     def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def ainvoke(self, msgs):
         self.calls += 1
-        if self.ns is not None:
-            self.durations_at_call = dict(self.ns["NODE_DURATIONS"])
         return FakeResp([{"name": "route_to", "args": {"target": "Human resources", "notes": "from the model"}}])
 
 
@@ -66,7 +62,7 @@ class _Tool:
 def namespace():
     ns = {"asyncio": asyncio, "json": json, "os": os, "time": time, "Literal": Literal,
           "create_model": lambda *a, **k: object, "Field": lambda *a, **k: None, "StructuredTool": _Tool,
-          "NODE_DURATIONS": {}, "dataclass": dataclass, "field": field, "asdict": asdict,
+          "dataclass": dataclass, "field": field, "asdict": asdict,
           # What the Node classes need to be defined and to build a dispatcher's turn.
           "ABC": ABC, "abstractmethod": abstractmethod, "cached_property": cached_property, "Enum": Enum,
           "SystemMessage": lambda content: content, "HumanMessage": lambda content: content,
@@ -113,7 +109,7 @@ def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=
         os.environ.pop("TYPESAFE_API_KEY", None)
     else:
         os.environ["TYPESAFE_API_KEY"] = key
-    llm = FakeLLM(ns)
+    llm = FakeLLM()
     cfg = {"id": "2", "display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
            "routing_mode": routing_mode, "jev_min_confidence": floor}
     made = []   # how many times the dispatcher asked for its chat model
@@ -147,7 +143,6 @@ def routed():
     assert run_dispatcher.llm_made == 0, "Jev mode must not even build the chat model"
     assert out == {"text": "My laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
     assert "[node] [2] 'techBuddy' Jev routed to 'IT claims' (confidence 0.97, " in log and "ms, no LLM turn)" in log, log
-    assert "techBuddy" in ns["NODE_DURATIONS"], ns["NODE_DURATIONS"]
     # The wire request: same contract as JevRouter.php.
     req, timeout = http.requests[0]
     assert req.full_url == "https://api.typesafe.ai/v1/systemone" and req.get_method() == "POST"
@@ -174,7 +169,6 @@ def no_key():
     assert llm_calls == 1 and out == {"text": "My laptop will not boot\n\n## Dispatcher notes\nfrom the model",
                                       "route": "4", "notes": "from the model", "status": "ok"}, out
     assert "Jev" not in log, log
-    assert run_dispatcher.last_llm.durations_at_call == {}, "no key must not touch NODE_DURATIONS before the model"
     assert ns["JevRouter"]().route("x", TARGETS, QUESTION).outcome == "unavailable"
     os.environ["TYPESAFE_API_KEY"] = ""
     out, llm_calls, log = run_dispatcher(ns, http, key="")
@@ -210,11 +204,13 @@ def hung():
             time.sleep(2)
             return ns["JevResult"]("routed")
 
+    t0 = time.monotonic()
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)), router=Slow())
+    waited = time.monotonic() - t0
     assert llm_calls == 0 and run_dispatcher.llm_made == 0, "a Jev timeout never falls back to the model"
     assert out["route"] == "" and out["status"] == "unrouted" and branch_that_runs(out) is None, out
     assert "Jev did not route (error: TimeoutError" in log and "no answer within 1s" in log, log
-    assert ns["NODE_DURATIONS"]["techBuddy"] >= 1.0, ns["NODE_DURATIONS"]
+    assert waited >= 1.0, waited
 
 
 async def _noop_trace(line):
@@ -266,7 +262,6 @@ def llm_mode():
     assert http.requests == [], "LLM mode must never call Jev"
     assert llm_calls == 1 and out["route"] == "4" and out["notes"] == "from the model", out
     assert "Jev" not in log, log
-    assert run_dispatcher.last_llm.durations_at_call == {}, "LLM mode must not time a Jev call"
 
 
 def jev_routed():
@@ -293,7 +288,6 @@ def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert branch_that_runs(out) is None, "no branch may run"
     assert "asking the model" not in log and "no model fallback" in log, log
-    assert "techBuddy" in ns["NODE_DURATIONS"], "Jev's wall time is counted"
 
 
 def custom_floor():
@@ -344,7 +338,7 @@ def kind_unset_no_key():
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
     os.environ.pop("TYPESAFE_API_KEY", None)
-    llm = FakeLLM(ns)
+    llm = FakeLLM()
     out, _ = run_dispatcher_node(ns, llm, "", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
 
@@ -355,7 +349,7 @@ def kind_llm_mode():
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
     os.environ["TYPESAFE_API_KEY"] = "test-key"
-    llm = FakeLLM(ns)
+    llm = FakeLLM()
     out, _ = run_dispatcher_node(ns, llm, "llm", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
     assert out["notes"] == "from the model", out

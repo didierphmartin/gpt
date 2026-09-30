@@ -189,21 +189,20 @@ class LangGraphJevDispatchTest extends TestCase
     public function testDispatcherWithNoRouteReachesEndInEveryGraph(): void
     {
         // The graph-level half of the harness's "no branch runs": a dispatcher
-        // result whose route is END (single script) or not a menu id (modular /
-        // A2A orchestrators) takes the conditional edge to END.
+        // result whose route is not a menu id takes the conditional edge to END
+        // (WorkflowGraph, the same code in the single script and the modular /
+        // A2A orchestrators).
         $gen = $this->generator(self::withSettings(['routing_mode' => 'jev']));
         $byPath = fn(array $m) => array_column($m['files'], 'code', 'path');
         $graphs = [
             'single' => $gen->generate(44, '3')['code'],
-            'modular' => $byPath($gen->generate(44, '3', ['modular' => true]))['workflow.py'] ?? '',
+            'modular' => $byPath($gen->generate(44, '3', ['modular' => true]))['common.py'] ?? '',   // WorkflowGraph lives here
             'a2a' => $byPath($gen->generate(44, '3', ['a2a' => true]))['orchestrator.py'] ?? '',
         ];
         foreach ($graphs as $mode => $code) {
-            $this->assertStringContainsString('return state.get("routes", {}).get(n) or END', $code, $mode);
-            $this->assertStringContainsString('sg.add_conditional_edges(nid, make_router(), {t: t for t in menu} | {END: END})', $code, $mode);
-            if ($mode !== 'single') {
-                $this->assertStringContainsString('route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END', $code, $mode);
-            }
+            $this->assertStringContainsString('return lambda state: state.get("routes", {}).get(nid) or END', $code, $mode);
+            $this->assertStringContainsString('sg.add_conditional_edges(nid, self._router(nid), {t: t for t in menu} | {END: END})', $code, $mode);
+            $this->assertStringContainsString('route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END', $code, $mode);
         }
     }
 

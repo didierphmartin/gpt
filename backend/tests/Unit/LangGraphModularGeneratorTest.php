@@ -145,16 +145,18 @@ class LangGraphModularGeneratorTest extends TestCase
                   'def build_tools_from_catalog', 'RUN_SKILL_SCRIPT_TOOL', 'async def _run_skill_step(',
                   'class Dispatcher:', 'def inject_datetime(', 'def build_context(',
                   'def _convert_doc_to_markdown(', 'class WFState(', 'def build_playbook_tools(',
-                  'def _playbook_gate(', 'NODE_DURATIONS = {}', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:'] as $needle) {
+                  'def _playbook_gate(', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:',
+                  'class WorkflowGraph:', 'def save_output(', 'def print_run_summary(', 'RUN SUMMARY'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // The whole catalog lives here once; the agent modules only name their tools.
         $this->assertStringContainsString('"get_news"', $code);
-        // No graph and no node definitions: those belong to workflow.py / agents/*.
-        // (Node.run is a method; the graph's run() would be a top-level function.)
-        foreach (['EDGES = ', 'ORDER = ', 'NODE_TYPES = ', "\nasync def run(", 'NODE = {', 'AGENTS = {'] as $needle) {
+        // No graph data and no node definitions: those belong to workflow.py / agents/*.
+        // (Node.run and WorkflowGraph.run are methods; a graph run() would be a top-level function.)
+        foreach (['EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'NODE = {', 'AGENTS = {'] as $needle) {
             $this->assertStringNotContainsString($needle, $code, "common.py must not carry: {$needle}");
         }
+        $this->assertDoesNotMatchRegularExpression('/^async def run\(/m', $code);
     }
 
     public function testAgentModuleImportsTheRuntimeAndBakesOnlyItsOwnNode(): void
@@ -200,9 +202,9 @@ class LangGraphModularGeneratorTest extends TestCase
         $code = self::files()['workflow.py'];
         foreach (['"""LangGraph workflow: Dispatcher demo', 'from agents.techbuddy import run_node as techbuddy_run',
                   'from agents.playbook_hr import run_node as playbook_hr_run', 'from common import',
-                  'EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'def parents(', 'def children(',
-                  'StateGraph(WFState)', 'add_conditional_edges', 'async def run(', 'def _save_output(',
-                  'RUN SUMMARY', 'if __name__ == "__main__":', 'AGENT MODULES'] as $needle) {
+                  'EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'def build_graph() -> WorkflowGraph:',
+                  'async def run(', 'save_output(', 'print_run_summary(',
+                  'if __name__ == "__main__":', 'AGENT MODULES'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // The graph calls the modules; it never re-implements a node itself.

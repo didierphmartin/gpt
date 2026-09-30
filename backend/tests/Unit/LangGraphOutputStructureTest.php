@@ -309,4 +309,48 @@ class LangGraphOutputStructureTest extends TestCase
             }
         }
     }
+
+    public function testSingleFileAndPackageSendTheSamePromptsAndSaveUnderTheSameName(): void
+    {
+        $graph = self::graphs()['dispatcher_demo'];
+        $long = str_repeat('Always answer politely and route vacation requests to Human resources. ', 3);
+        $graph['nodes'][2]['config']['instructions'] = $long;        // one line longer than 80 columns
+        $graph['nodes'][0]['config']['prompt'] = $long;
+        $single = implode("\n", $this->files($graph, 'single'));
+        $pkg = $this->files($graph, 'modular');
+        $this->assertStringContainsString(rtrim($long), $single, 'single file: system prompt and DEFAULT_PROMPT verbatim');
+        $this->assertStringContainsString(rtrim($long), $pkg['agents/it_claims.py']);
+        $this->assertStringContainsString('def save_output(', $single);
+        $this->assertStringContainsString('def save_output(', $pkg['common.py']);
+        $root = sys_get_temp_dir() . '/lgsave_' . bin2hex(random_bytes(4));
+        $names = [];
+        foreach (['single' => array_values(self::write($this->files($graph, 'single'))['paths'])[0],
+                  'modular' => self::write($pkg)['root']] as $mode => $target) {
+            [$r] = $this->probe(['save', $target, 'hello'], ['SYNERGYAI_OUTPUT_ROOT' => $root]);
+            $names[$mode] = preg_replace('/_\d{8}-\d{6}\./', '_<ts>.', basename((string) $r['path']));
+        }
+        $this->assertSame(['single' => '44-dispatcher-demo_<ts>.md', 'modular' => '44-dispatcher-demo_<ts>.md'], $names);
+    }
+
+    public function testLinearWorkflowRunsTheSameInSingleAndModular(): void    // Review Focus 1
+    {
+        $graph = self::graphs()['linear'];
+        $single = $this->files($graph, 'single');
+        $this->assertStringContainsString('class WorkflowGraph:', implode("\n", $single));
+        [$a, $logA] = $this->probe(['workflow', 'single', array_values(self::write($single)['paths'])[0], 'write something']);
+        [$b] = $this->probe(['workflow', 'modular', self::write($this->files($graph, 'modular'))['root'], 'write something']);
+        $this->assertSame($a['output'], $b['output']);
+        $this->assertStringStartsWith('answer to:', $a['output']);
+        $this->assertStringContainsString('[node] [4] output -- ', $logA);
+    }
+
+    public function testOneGraphImplementationInEveryMode(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            $this->assertSame(1, substr_count($all, 'class WorkflowGraph:'), $mode);
+            $this->assertSame(0, substr_count($all, 'def make_start('), $mode);
+            $this->assertSame(0, substr_count($all, "def _save_output("), $mode);
+        }
+    }
 }

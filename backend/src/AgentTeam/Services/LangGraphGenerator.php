@@ -344,7 +344,7 @@ class LangGraphGenerator
         $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
         $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $lines[] = 'DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps';
-        $lines[] = 'from typing import Annotated, Literal, TypedDict';
+        $lines[] = 'from typing import Annotated, Awaitable, Callable, Literal, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';
         $lines[] = '# Provider-aware LLM wiring — each agent uses the LLM (provider/model)';
@@ -496,6 +496,11 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = PythonEmitHelpers::documentConverterBlock();
 
+        // ---------- the graph, output storage and run summary (shared with every mode) ----------
+        $lines[] = '';
+        $lines[] = LangGraphRuntime::workflowGraphBlock();
+        $lines[] = LangGraphRuntime::outputBlock();
+
         // ---------- start node config ----------
         $lines[] = '';
         $lines[] = $sep;
@@ -509,16 +514,8 @@ class LangGraphGenerator
         $lines[] = '# _convert_doc_to_markdown(), and prepended to the prompt.';
         $lines[] = $sep;
         $lines[] = '';
-        $promptEscaped = str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $startPrompt);
-        $lines[] = 'DEFAULT_PROMPT = """';
-        foreach (explode("\n", $promptEscaped) as $pline) {
-            if (strlen($pline) <= 80) {
-                $lines[] = $pline;
-            } else {
-                $lines[] = wordwrap($pline, 80, "\n", true);
-            }
-        }
-        $lines[] = '""".strip()';
+        // Verbatim, as the package bakes it: no 80-column wrap, so the prompt is the same text in every mode.
+        $lines[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($startPrompt);
         $lines[] = '';
         // Output-node storage setting baked in so the compiled script persists the final
         // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
@@ -553,65 +550,15 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = 'AGENTS = {';
         foreach ($agentData as $nid => $ad) {
-            // json_encode list (no pretty) matches Python json.dumps without indent
-            $toolsList = json_encode($ad['tool_names'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if ($toolsList === '[]' || $toolsList === false) {
-                $toolsList = '[]';
-            }
-            $promptText = str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $ad['system_prompt']);
-            $wrappedLines = [];
-            foreach (explode("\n", $promptText) as $pline) {
-                if (strlen($pline) <= 80) {
-                    $wrappedLines[] = $pline;
-                } else {
-                    foreach (explode("\n", wordwrap($pline, 80, "\n", true)) as $wl) {
-                        $wrappedLines[] = $wl;
-                    }
-                }
-            }
-            $displayJson = json_encode($ad['display'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $providerJson = json_encode((string) ($ad['provider'] ?? 'claude'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $modelJson = json_encode((string) ($ad['model'] ?? ''), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $temperatureLit = json_encode((float) ($ad['temperature'] ?? 0.7));
-            $maxTokensLit = (int) ($ad['max_tokens'] ?? 4096);
             if (isset($docById[$nid])) {
                 foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($docById[$nid], '    ')) as $cl) {
                     $lines[] = $cl;
                 }
             }
-            $lines[] = '    "' . $nid . '": {';
-            $lines[] = '        "id": "' . $nid . '",';
-            $lines[] = '        "kind": "' . (!empty($ad['dispatch']) ? 'dispatcher' : 'agent') . '",';
-            $lines[] = '        "display": ' . $displayJson . ',';
-            $lines[] = '        "provider": ' . $providerJson . ',';
-            $lines[] = '        "model": ' . $modelJson . ',';
-            $lines[] = '        "temperature": ' . $temperatureLit . ',';
-            $lines[] = '        "max_tokens": ' . $maxTokensLit . ',';
-            $thinkLit = in_array($ad['thinking'] ?? null, ['on', 'off'], true)
-                ? '"' . $ad['thinking'] . '"' : 'None';
-            $lines[] = '        "thinking": ' . $thinkLit . ',  # node form Thinking attribute';
-            $lines[] = '        "system_prompt": """';
-            foreach ($wrappedLines as $wl) {
-                $lines[] = $wl;
+            $kind = !empty($ad['dispatch']) ? 'dispatcher' : 'agent';
+            foreach (explode("\n", $this->nodeDefinitionLines($facts, (string) $nid, $kind, $ad['display'], $ad, false, '"' . $nid . '": {', '    ')) as $nl) {
+                $lines[] = $nl;
             }
-            $lines[] = '""",';
-            $skillsJson = json_encode($ad['skills'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if ($skillsJson === false) {
-                $skillsJson = '[]';
-            }
-            $lines[] = '        "tool_names": ' . $toolsList . ',';
-            // Ordered skill bindings ([{"dir": "..."}] / [{"inline": "..."}]) — the node
-            // runs each as a mandatory post-agent step; the last produces the node output.
-            $lines[] = '        "skills": ' . $skillsJson . ',';
-            if (!empty($ad['dispatch'])) {
-                // Dispatcher menu: the node calls route_to over these names and only
-                // the chosen child runs (conditional edge in run()).
-                $lines[] = '        "dispatch": ' . self::dispatchMenuLiteral($ad['dispatch']) . ',';
-                $lines[] = '        "jev_question": ' . PythonEmitHelpers::pyStr((string) ($ad['jev_question'] ?? '')) . ',';
-                $lines[] = '        "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($ad['routing_mode'] ?? '')) . ',';
-                $lines[] = '        "jev_min_confidence": ' . self::pyFloor($ad) . ',';
-            }
-            $lines[] = '    },';
         }
         $lines[] = '}';
         $lines[] = '';
@@ -631,34 +578,14 @@ class LangGraphGenerator
         } else {
             $lines[] = 'PLAYBOOKS = {';
             foreach ($playbookData as $nid => $pd) {
-                $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 if (isset($docById[$nid])) {
                     foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($docById[$nid], '    ')) as $cl) {
                         $lines[] = $cl;
                     }
                 }
-                $lines[] = '    "' . $nid . '": {';
-                $lines[] = '        "id": "' . $nid . '",';
-                $lines[] = '        "kind": "playbook",';
-                $lines[] = '        "display": ' . $j($pd['display']) . ',';
-                $lines[] = '        "title": ' . $j($pd['title']) . ',';
-                $lines[] = '        "domain": ' . $j($pd['domain']) . ',';
-                $lines[] = '        "provider": ' . $j($pd['provider']) . ',';
-                $lines[] = '        "model": ' . $j($pd['model']) . ',';
-                $lines[] = '        "temperature": ' . json_encode((float) $pd['temperature']) . ',';
-                $lines[] = '        "max_tokens": ' . (int) $pd['max_tokens'] . ',';
-                $lines[] = '        "thinking": ' . ($pd['thinking'] !== null ? '"' . $pd['thinking'] . '"' : 'None') . ',';
-                $lines[] = '        "writes_enabled": ' . ($pd['writes_enabled'] ? 'True' : 'False') . ',';
-                $lines[] = '        "policy": ' . PythonEmitHelpers::jsonToPython($pd['policy'], true) . ',';
-                $lines[] = '        "approvers": ' . PythonEmitHelpers::jsonToPython($pd['approvers'], true) . ',';
-                $lines[] = '        "requester": ' . PythonEmitHelpers::jsonToPython($pd['requester'], true) . ',';
-                $lines[] = '        "instructions": """';
-                foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $pd['instructions'])) as $pl) {
-                    $lines[] = $pl;
+                foreach (explode("\n", $this->nodeDefinitionLines($facts, (string) $nid, 'playbook', $pd['display'], $pd, true, '"' . $nid . '": {', '    ')) as $nl) {
+                    $lines[] = $nl;
                 }
-                $lines[] = '""",';
-                $lines[] = '        "actions": ' . PythonEmitHelpers::jsonToPython($pd['actions'], false) . ',';
-                $lines[] = '    },';
             }
             $lines[] = '}';
         }
@@ -676,12 +603,10 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = 'EDGES = ' . PythonEmitHelpers::jsonToPython($edgeList);
         $lines[] = 'ORDER = ' . PythonEmitHelpers::jsonToPython($order);
-        $lines[] = '';
-        $lines[] = self::parentsChildrenBlock();
-
         $typeMap = [];
         foreach ($order as $nid) {
-            $typeMap[$nid] = self::nodeType($byId[$nid]);
+            $t = self::nodeType($byId[$nid]);
+            $typeMap[$nid] = $t === 'agent-template' ? 'agent' : $t;
         }
         $lines[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $lines[] = '';
@@ -690,23 +615,17 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '# MAIN EXECUTION';
         $lines[] = '#';
-        $lines[] = '# run() builds the LangGraph, wires edges, and executes it.';
-        $lines[] = '# Each node type has a factory function (make_start, make_agent,';
-        $lines[] = '# make_output) that returns a callable for LangGraph to invoke.';
+        $lines[] = '# run() builds the WorkflowGraph over this file\'s nodes and executes it;';
+        $lines[] = '# every agent/playbook node runs in this process (_run_local_node).';
         $lines[] = '#';
         $lines[] = "# Agent nodes use LangChain's ReAct pattern: the LLM receives";
         $lines[] = '# the system prompt + upstream context, and can call tools in a';
         $lines[] = '# loop until it produces a final answer.';
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = self::runHeaderBlock();
-
-        if (!empty($missing)) {
-            $lines[] = '    print("[warn] Missing tools (not MCP): ' . self::pythonListRepr($missing) . '")';
-            $lines[] = '';
-        }
-
-        $lines[] = self::runBodyBlock($playbookData !== []);
+        $lines[] = self::singleRunBlock(!empty($missing)
+            ? '    print("[warn] Missing tools (not MCP): ' . self::pythonListRepr($missing) . '")' . "\n"
+            : '');
 
         $code = implode("\n", $lines);
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
@@ -1415,7 +1334,7 @@ class LangGraphGenerator
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
-        $L[] = 'from typing import Annotated, TypedDict';
+        $L[] = 'from typing import Annotated, Awaitable, Callable, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
@@ -1458,7 +1377,6 @@ class LangGraphGenerator
         foreach ($facts['order'] as $nid) $typeMap[$nid] = isset($layout['agents'][$nid]) ? ($layout['agents'][$nid]['kind'] === 'playbook' ? 'playbook' : 'agent') : self::nodeType($facts['byId'][$nid]);
         $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $L[] = '';
-        $L[] = self::parentsChildrenBlock();
         $L[] = self::stateBlock();
         $L[] = self::datetimeInjectorBlock();
         $L[] = self::contextBuilderBlock();
@@ -1467,6 +1385,8 @@ class LangGraphGenerator
         // (installed by api.py, consumed by _handle_gate() below) is emitted here.
         $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
         $L[] = PythonEmitHelpers::eventSinkBlock();
+        $L[] = LangGraphRuntime::workflowGraphBlock();
+        $L[] = LangGraphRuntime::outputBlock();
         $L[] = self::a2aOrchestratorBlock();
         return implode("\n", $L) . "\n";
     }
@@ -1824,7 +1744,12 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
 # MAIN EXECUTION -- the LangGraph state graph over A2A tasks
 # ==============================================================
 NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)
-_RUN_T0 = None
+
+
+def build_graph() -> WorkflowGraph:
+    """The workflow's graph (WorkflowGraph above): agent nodes call their A2A servers."""
+    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents=AGENTS,
+                         run_node=_run_remote_node, start_documents=START_DOCUMENTS)
 
 
 async def run(user_prompt: str, session: str | None = None) -> str:
@@ -1835,107 +1760,7 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     run dispatches independent tasks to remote agents and has no
     conversation to resume between calls.
     """
-    sg = StateGraph(WFState)
-    for nid in ORDER:
-        ntype = NODE_TYPES.get(nid, "")
-        match ntype:
-            case "start":
-                def make_start(n=nid):
-                    def _run(state):
-                        text = state.get("user_prompt", "")
-                        if START_DOCUMENTS:
-                            doc_parts = []
-                            for doc in START_DOCUMENTS:
-                                name = doc.get("name", "Document")
-                                path = doc.get("path", "")
-                                try:
-                                    doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
-                                except Exception as e:
-                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                            text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
-                        print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
-                        return {"node_outputs": {n: {"source": "start", "text": text}}}
-                    return _run
-                sg.add_node(nid, make_start())
-            case "agent" | "playbook":
-                def make_remote(n=nid):
-                    async def _run(state):
-                        ad = AGENTS[n]
-                        outs = state.get("node_outputs", {})
-                        if ad["kind"] == "playbook":
-                            inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                            request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                        else:
-                            request = build_context(state.get("user_prompt", ""), parents(n), outs)
-                        out = await _run_remote_node(n, request)
-                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
-                        if ad["dispatch"]:
-                            # Dispatcher: the agent chose a child (or none) -> conditional edge input.
-                            route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
-                            if route == END:
-                                print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
-                                result["final_output"] = out["text"]
-                            result["routes"] = {n: route}
-                        return result
-                    return _run
-                sg.add_node(nid, make_remote())
-            case "output":
-                def make_output(n=nid):
-                    def _run(state):
-                        pids = parents(n)
-                        outs = state.get("node_outputs", {})
-                        if len(pids) == 1 and pids[0] in outs:
-                            final = outs[pids[0]]["text"]
-                        else:
-                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                            final = "\n\n---\n\n".join(blocks)
-                        print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
-                        return {"final_output": final}
-                    return _run
-                sg.add_node(nid, make_output())
-            case _:
-                sg.add_node(nid, lambda s: {})
-    # Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
-    pos = {n: i for i, n in enumerate(ORDER)}
-    sg.add_edge(START, ORDER[0])
-    for nid in ORDER:
-        menu = {t["id"] for t in AGENTS.get(nid, {}).get("dispatch", [])}
-        for child in children(nid):
-            if child in pos and pos[child] > pos[nid] and child not in menu:
-                sg.add_edge(nid, child)
-        if menu:
-            def make_router(n=nid):
-                def _route(state):
-                    return state.get("routes", {}).get(n) or END
-                return _route
-            sg.add_conditional_edges(nid, make_router(), {t: t for t in menu} | {END: END})
-    for nid in ORDER:
-        if not children(nid):
-            sg.add_edge(nid, END)
-    graph = sg.compile()
-    print("[info] Running...", flush=True)
-    global _RUN_T0
-    _RUN_T0 = time.monotonic()
-    result = await graph.ainvoke({"user_prompt": user_prompt, "node_outputs": {}})
-    return result.get("final_output", "")
-
-
-def _save_output(output: str) -> str | None:
-    """Honour the Output node's storage setting (same rule as the single-file script)."""
-    if not OUTPUT_STORAGE_ENABLED:
-        return None
-    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
-    folder = OUTPUT_FOLDER or os.path.join(root, "workflow")
-    if not os.path.isabs(folder):
-        folder = os.path.join(root, folder)
-    os.makedirs(folder, exist_ok=True)
-    m = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
-    ext = "html" if m else "md"
-    slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
-    path = os.path.join(folder, f"{WORKFLOW_ID}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(m.group(0) if m else output)
-    return path
+    return await build_graph().run(user_prompt)
 
 
 if __name__ == "__main__":
@@ -1947,24 +1772,17 @@ if __name__ == "__main__":
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
     sup = AgentSupervisor(spawn=not a.no_spawn)
+    graph = build_graph()
     try:
         sup.start()
-        output = asyncio.run(run(prompt))
+        output = asyncio.run(graph.run(prompt))
     finally:
         if not a.keep_serving:
             sup.stop()
     print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-    saved = _save_output(output)
-    print("\n" + "=" * 74 + "\nRUN SUMMARY\n" + "-" * 74, flush=True)
-    if NODE_DURATIONS:
-        w = max(len(n) for n in NODE_DURATIONS)
-        print("  Time per node (A2A round trip):", flush=True)
-        for name, secs in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
-            print(f"    {name:<{w}}   {secs:7.1f}s", flush=True)
-    print(f"  Total wall-clock: {time.monotonic() - _RUN_T0:.1f}s" if _RUN_T0 else "  Total wall-clock: n/a", flush=True)
-    print(f"  Final output: {len(output)} chars", flush=True)
-    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
-    print("=" * 74, flush=True)
+    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (A2A round trip)")
 PY;
     }
 
@@ -2068,9 +1886,6 @@ PY;
         if ($isPlaybook) {
             $L[] = self::playbookRuntimeBlock();
         }
-        $L[] = 'NODE_DURATIONS = {}   # display name -> seconds (kept for the shared dispatcher block)';
-        $L[] = '';
-        $L[] = '';
         $L[] = LangGraphRuntime::nodeClassesBlock($isPlaybook);
         $L[] = '';
         // ---- node definition ----
@@ -2567,7 +2382,11 @@ PY;
                 }
             }
         }
-        foreach (explode("\n", $this->nodeDefinitionLines($facts, $nid, 'agent', $entry['display'], $def, false)) as $nl) {
+        // The swarm target is outside the LangGraph OO refactor: its NODE keeps its old bytes,
+        // without the Thinking comment the other modes now carry.
+        $node = str_replace(',  # node form Thinking attribute', ',',
+            $this->nodeDefinitionLines($facts, $nid, 'agent', $entry['display'], $def, false));
+        foreach (explode("\n", $node) as $nl) {
             $L[] = $nl;
         }
         $L[] = '';
@@ -3047,7 +2866,7 @@ PY;
     }
 
     /**
-     * common.py's own module-docstring body. This file has no graph and no
+     * common.py's own module-docstring body. This file has no graph data and no
      * nodes -- it is the shared runtime imported by workflow.py and every
      * agent module -- so workflowDocBlock()'s GRAPH NODES/EDGES/EXECUTION
      * ORDER dump described nothing that lives here. PROVENANCE keeps the
@@ -3099,8 +2918,11 @@ PY;
             $L[] = '  PlaybookNode,';
         }
         $L[] = '  NodeKind, make_node()           one Node subclass per node kind; every agent module is its NODE + make_node(NODE).run';
-        $L[] = '  WFState, build_context()        the graph state type and per-node input builder (workflow.py only)';
+        $L[] = '  WFState, build_context()        the graph state type and per-node input builder (used by WorkflowGraph)';
         $L[] = '  _convert_doc_to_markdown()      Start-node attachment -> Markdown (office/PDF formats via lazy imports, text formats verbatim)';
+        $L[] = '  WorkflowGraph                   the LangGraph StateGraph over workflow.py\'s EDGES/ORDER/NODE_TYPES and its node runner';
+        $L[] = '  save_output(),';
+        $L[] = '  print_run_summary()             the Output node\'s storage rule and the closing RUN SUMMARY (workflow.py\'s CLI)';
         $L[] = '';
         $L[] = 'CONFIGURATION';
         $L[] = '=============';
@@ -3231,8 +3053,9 @@ PY;
     {
         return <<<'TXT'
 This workflow is one Python package, run in ONE process. workflow.py owns the
-graph: it frames each node's input (original prompt + labelled parent outputs)
-and calls that node's module. agents/<name>.py holds one node's frozen settings
+graph data; common.py's WorkflowGraph frames each node's input (original prompt
++ labelled parent outputs) and calls that node's module through workflow.py's
+node runner. agents/<name>.py holds one node's frozen settings
 (NODE) and exposes run_node = make_node(NODE).run, called as
 run_node(request_text, trace) -> {"text", "route", "notes", "status"}. The node
 logic lives in common.py's Node classes, one per kind: an AGENT node (AgentNode)
@@ -3246,7 +3069,7 @@ once instead of copied per node.
 TXT;
     }
 
-    /** common.py: the shared runtime library. No graph, no node definitions. */
+    /** common.py: the shared runtime library, WorkflowGraph included. No graph data, no node definitions. */
     private function emitModularCommon(array $facts, array $layout): string
     {
         $sep = '# ' . str_repeat('=', 62);
@@ -3262,13 +3085,13 @@ TXT;
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $withPlaybooks = $facts['playbookData'] !== [];
-        $L[] = 'import asyncio, json, os, ' . ($withPlaybooks ? 're, ' : '') . 'subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
+        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
         $L[] = 'from abc import ABC, abstractmethod';
         $L[] = 'from dataclasses import asdict, dataclass, field';
         $L[] = 'from enum import Enum';
         $L[] = 'from functools import cached_property';
         $L[] = 'from pathlib import Path';
-        $L[] = 'from typing import Annotated, Literal, TypedDict';
+        $L[] = 'from typing import Annotated, Awaitable, Callable, Literal, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
@@ -3282,6 +3105,7 @@ TXT;
         $L[] = 'import httpx';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
         $L[] = 'from langchain_core.tools import StructuredTool';
+        $L[] = 'from langgraph.graph import END, START, StateGraph';
         $L[] = 'try:';
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
         $L[] = 'except ImportError:';
@@ -3319,9 +3143,6 @@ TXT;
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
         $L[] = $sep;
-        $L[] = 'NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work; workflow.py prints the RUN SUMMARY from it';
-        $L[] = '';
-        $L[] = '';
         $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($withPlaybooks) {
@@ -3330,7 +3151,7 @@ TXT;
         $L[] = LangGraphRuntime::nodeClassesBlock($withPlaybooks);
         $L[] = '';
         $L[] = $sep;
-        $L[] = '# GRAPH STATE + CONTEXT BUILDING (used by workflow.py)';
+        $L[] = '# GRAPH STATE + CONTEXT BUILDING (used by WorkflowGraph)';
         $L[] = $sep;
         $L[] = self::stateBlock();
         $L[] = self::contextBuilderBlock();
@@ -3338,6 +3159,8 @@ TXT;
         $L[] = '# ATTACHMENT CONVERTER (Start-node documents)';
         $L[] = $sep;
         $L[] = PythonEmitHelpers::documentConverterBlock();
+        $L[] = LangGraphRuntime::workflowGraphBlock();
+        $L[] = LangGraphRuntime::outputBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -3416,48 +3239,56 @@ TXT;
 
     /**
      * The `NODE = {...}` literal shared by the A2A agent files and the modular
-     * agent modules: the node's editor settings, frozen.
+     * agent modules: the node's editor settings, frozen. The single file emits
+     * its AGENTS / PLAYBOOKS entries through here too ($opener `"<id>": {`,
+     * $indent four spaces), so every mode bakes the same keys, and the prompt
+     * text verbatim (the model gets the same text in every mode).
      */
-    private function nodeDefinitionLines(array $facts, string $nid, string $kind, string $display, array $def, bool $isPlaybook): string
+    private function nodeDefinitionLines(array $facts, string $nid, string $kind, string $display, array $def, bool $isPlaybook,
+                                         string $opener = 'NODE = {', string $indent = ''): string
     {
         $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // Text inside a triple-quoted string is emitted as is: indenting it would change the prompt.
+        $verbatim = fn(string $text): array => explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $text));
         $L = [];
-        $L[] = 'NODE = {';
-        $L[] = '    "id": ' . $j($nid) . ',';
-        $L[] = '    "kind": ' . $j($kind) . ',';
-        $L[] = '    "display": ' . $j($display) . ',';
-        $L[] = '    "provider": ' . $j($def['provider']) . ',';
-        $L[] = '    "model": ' . $j($def['model']) . ',';
-        $L[] = '    "temperature": ' . json_encode((float) $def['temperature']) . ',';
-        $L[] = '    "max_tokens": ' . (int) $def['max_tokens'] . ',';
-        $L[] = '    "thinking": ' . (in_array($def['thinking'] ?? null, ['on', 'off'], true) ? '"' . $def['thinking'] . '"' : 'None') . ',';
+        $L[] = $indent . $opener;
+        $L[] = $indent . '    "id": ' . $j($nid) . ',';
+        $L[] = $indent . '    "kind": ' . $j($kind) . ',';
+        $L[] = $indent . '    "display": ' . $j($display) . ',';
+        $L[] = $indent . '    "provider": ' . $j($def['provider']) . ',';
+        $L[] = $indent . '    "model": ' . $j($def['model']) . ',';
+        $L[] = $indent . '    "temperature": ' . json_encode((float) $def['temperature']) . ',';
+        $L[] = $indent . '    "max_tokens": ' . (int) $def['max_tokens'] . ',';
+        $L[] = $indent . '    "thinking": ' . (in_array($def['thinking'] ?? null, ['on', 'off'], true) ? '"' . $def['thinking'] . '"' : 'None')
+            . ',  # node form Thinking attribute';
         if ($isPlaybook) {
-            $L[] = '    "title": ' . $j($def['title']) . ',';
-            $L[] = '    "domain": ' . $j($def['domain']) . ',';
-            $L[] = '    "writes_enabled": ' . ($def['writes_enabled'] ? 'True' : 'False') . ',';
-            $L[] = '    "policy": ' . PythonEmitHelpers::jsonToPython($def['policy'], true) . ',';
-            $L[] = '    "approvers": ' . PythonEmitHelpers::jsonToPython($def['approvers'], true) . ',';
-            $L[] = '    "requester": ' . PythonEmitHelpers::jsonToPython($def['requester'], true) . ',';
-            $L[] = '    "instructions": """';
-            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['instructions'])) as $pl) {
-                $L[] = $pl;
-            }
+            $L[] = $indent . '    "title": ' . $j($def['title']) . ',';
+            $L[] = $indent . '    "domain": ' . $j($def['domain']) . ',';
+            $L[] = $indent . '    "writes_enabled": ' . ($def['writes_enabled'] ? 'True' : 'False') . ',';
+            $L[] = $indent . '    "policy": ' . PythonEmitHelpers::jsonToPython($def['policy'], true) . ',';
+            $L[] = $indent . '    "approvers": ' . PythonEmitHelpers::jsonToPython($def['approvers'], true) . ',';
+            $L[] = $indent . '    "requester": ' . PythonEmitHelpers::jsonToPython($def['requester'], true) . ',';
+            $L[] = $indent . '    "instructions": """';
+            array_push($L, ...$verbatim($def['instructions']));
             $L[] = '""",';
-            $L[] = '    "actions": ' . PythonEmitHelpers::jsonToPython($def['actions'], false) . ',';
+            $L[] = $indent . '    "actions": ' . PythonEmitHelpers::jsonToPython($def['actions'], false) . ',';
         } else {
-            $L[] = '    "system_prompt": """';
-            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['system_prompt'])) as $pl) {
-                $L[] = $pl;
-            }
+            $L[] = $indent . '    "system_prompt": """';
+            array_push($L, ...$verbatim($def['system_prompt']));
             $L[] = '""",';
-            $L[] = '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
-            $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
-            $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
-            $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
-            $L[] = '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
-            $L[] = '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
+            $L[] = $indent . '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
+            // Ordered skill bindings ([{"dir": "..."}] / [{"inline": "..."}]) — the node
+            // runs each as a mandatory post-agent step; the last produces the node output.
+            $L[] = $indent . '    "skills": ' . $j($def['skills'] ?? []) . ',';
+            // Dispatcher menu: the node calls route_to over these names and only
+            // the chosen child runs (conditional edge in WorkflowGraph).
+            $L[] = $indent . '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
+            $L[] = $indent . '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
+            $L[] = $indent . '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
+            $L[] = $indent . '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
         }
-        $L[] = '}';
+        // An entry inside a dict literal (the single file's AGENTS / PLAYBOOKS) ends with a comma.
+        $L[] = $indent . '}' . ($indent !== '' ? ',' : '');
         return implode("\n", $L);
     }
 
@@ -3493,17 +3324,15 @@ TXT;
         foreach ($modules as $m) {
             $L[] = $m;
         }
-        $L[] = '  common.py holds the runtime they share; Start and Output run here, with no LLM.';
+        $L[] = '  common.py holds the runtime they share and the WorkflowGraph; Start and Output run there, with no LLM.';
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, os, re, time';
-        $L[] = '';
-        $L[] = 'from langgraph.graph import END, START, StateGraph';
+        $L[] = 'import argparse, asyncio, time';
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import NODE_DURATIONS, WFState, build_context, emit_event, _convert_doc_to_markdown';
+        $L[] = 'from common import WorkflowGraph, emit_event, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3557,7 +3386,6 @@ TXT;
         }
         $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $L[] = '';
-        $L[] = self::parentsChildrenBlock();
         $L[] = self::modularRunnerBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
@@ -3571,7 +3399,7 @@ TXT;
 # Every agent/playbook node goes through here: frame nothing (workflow.py
 # already did), call the module, time it, report.
 # ==============================================================
-_RUN_T0 = None
+NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
 
 
 async def _run_node_module(nid: str, request_text: str) -> dict:
@@ -3596,10 +3424,8 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
 
     out = await _NODE_RUNNERS[nid](request_text, trace)
     dt = time.monotonic() - t0
-    # Assignment, not +=: a dispatcher module already added its own LLM time to
-    # the shared NODE_DURATIONS (common.Dispatcher), and this is the same
-    # dict in the same process. Overwrite it with the node's total so the RUN
-    # SUMMARY counts each node exactly once.
+    # The node's whole time (model turns and skills), written once per node, so
+    # the RUN SUMMARY counts each node exactly once.
     NODE_DURATIONS[ad["display"]] = dt
     print(f"[node] [{nid}] {ad['display']!r} done -- {len(out['text'])} chars ({dt:.1f}s)", flush=True)
     # A playbook node already streamed its own transcript through the sink --
@@ -3613,6 +3439,12 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
 # ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over the agent modules
 # ==============================================================
+def build_graph() -> WorkflowGraph:
+    """The workflow's graph (common.WorkflowGraph): agent nodes call their modules."""
+    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents=AGENTS,
+                         run_node=_run_node_module, start_documents=START_DOCUMENTS)
+
+
 async def run(user_prompt: str, session: str | None = None) -> str:
     """Build the graph (agent nodes call their modules), run it, return the final output.
 
@@ -3620,107 +3452,7 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     (api.py calls both the same way) but is ignored here: a DAG run has no
     conversation to resume -- each call is already a fresh, independent run.
     """
-    sg = StateGraph(WFState)
-    for nid in ORDER:
-        ntype = NODE_TYPES.get(nid, "")
-        match ntype:
-            case "start":
-                def make_start(n=nid):
-                    def _run(state):
-                        text = state.get("user_prompt", "")
-                        if START_DOCUMENTS:
-                            doc_parts = []
-                            for doc in START_DOCUMENTS:
-                                name = doc.get("name", "Document")
-                                path = doc.get("path", "")
-                                try:
-                                    doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
-                                except Exception as e:
-                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                            text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
-                        print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
-                        return {"node_outputs": {n: {"source": "start", "text": text}}}
-                    return _run
-                sg.add_node(nid, make_start())
-            case "agent" | "playbook":
-                def make_node(n=nid):
-                    async def _run(state):
-                        ad = AGENTS[n]
-                        outs = state.get("node_outputs", {})
-                        if ad["kind"] == "playbook":
-                            inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                            request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                        else:
-                            request = build_context(state.get("user_prompt", ""), parents(n), outs)
-                        out = await _run_node_module(n, request)
-                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
-                        if ad["dispatch"]:
-                            # Dispatcher: the module chose a child (or none) -> conditional edge input.
-                            route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
-                            if route == END:
-                                print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
-                                result["final_output"] = out["text"]
-                            result["routes"] = {n: route}
-                        return result
-                    return _run
-                sg.add_node(nid, make_node())
-            case "output":
-                def make_output(n=nid):
-                    def _run(state):
-                        pids = parents(n)
-                        outs = state.get("node_outputs", {})
-                        if len(pids) == 1 and pids[0] in outs:
-                            final = outs[pids[0]]["text"]
-                        else:
-                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                            final = "\n\n---\n\n".join(blocks)
-                        print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
-                        return {"final_output": final}
-                    return _run
-                sg.add_node(nid, make_output())
-            case _:
-                sg.add_node(nid, lambda s: {})
-    # Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
-    pos = {n: i for i, n in enumerate(ORDER)}
-    sg.add_edge(START, ORDER[0])
-    for nid in ORDER:
-        menu = {t["id"] for t in AGENTS.get(nid, {}).get("dispatch", [])}
-        for child in children(nid):
-            if child in pos and pos[child] > pos[nid] and child not in menu:
-                sg.add_edge(nid, child)
-        if menu:
-            def make_router(n=nid):
-                def _route(state):
-                    return state.get("routes", {}).get(n) or END
-                return _route
-            sg.add_conditional_edges(nid, make_router(), {t: t for t in menu} | {END: END})
-    for nid in ORDER:
-        if not children(nid):
-            sg.add_edge(nid, END)
-    graph = sg.compile()
-    print("[info] Running...", flush=True)
-    global _RUN_T0
-    _RUN_T0 = time.monotonic()
-    result = await graph.ainvoke({"user_prompt": user_prompt, "node_outputs": {}})
-    return result.get("final_output", "")
-
-
-def _save_output(output: str) -> str | None:
-    """Honour the Output node's storage setting (same rule as the single-file script)."""
-    if not OUTPUT_STORAGE_ENABLED:
-        return None
-    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
-    folder = OUTPUT_FOLDER or os.path.join(root, "workflow")
-    if not os.path.isabs(folder):
-        folder = os.path.join(root, folder)
-    os.makedirs(folder, exist_ok=True)
-    m = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
-    ext = "html" if m else "md"
-    slug = "".join(c if c.isalnum() else "-" for c in WORKFLOW_NAME.lower()).strip("-")[:40]
-    path = os.path.join(folder, f"{WORKFLOW_ID}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(m.group(0) if m else output)
-    return path
+    return await build_graph().run(user_prompt)
 
 
 if __name__ == "__main__":
@@ -3729,19 +3461,12 @@ if __name__ == "__main__":
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
-    output = asyncio.run(run(prompt))
+    graph = build_graph()
+    output = asyncio.run(graph.run(prompt))
     print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-    saved = _save_output(output)
-    print("\n" + "=" * 74 + "\nRUN SUMMARY\n" + "-" * 74, flush=True)
-    if NODE_DURATIONS:
-        w = max(len(n) for n in NODE_DURATIONS)
-        print("  Time per node (LLM + skills):", flush=True)
-        for name, secs in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
-            print(f"    {name:<{w}}   {secs:7.1f}s", flush=True)
-    print(f"  Total wall-clock: {time.monotonic() - _RUN_T0:.1f}s" if _RUN_T0 else "  Total wall-clock: n/a", flush=True)
-    print(f"  Final output: {len(output)} chars", flush=True)
-    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
-    print("=" * 74, flush=True)
+    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
 PY;
     }
 
@@ -4137,33 +3862,49 @@ def build_context(user_prompt: str, parent_ids: list[str], outputs: dict) -> str
 PY;
     }
 
-    private static function parentsChildrenBlock(): string
+    /**
+     * The single file's run(): its nodes live in this process, so run_node is
+     * _run_local_node, and the graph itself is the shared WorkflowGraph. Then the
+     * __main__ block. $missingWarning is the '[warn] Missing tools' line (or '').
+     */
+    private static function singleRunBlock(string $missingWarning): string
     {
         return <<<'PY'
-def parents(nid: str) -> list[str]:
-    """Get direct predecessor node IDs (nodes with edges INTO this node)."""
-    return [f for f, t in EDGES if t == nid]
+# One Node per agent and playbook node -- provider/model come from the AGENTS
+# and PLAYBOOKS dicts, which the generator baked from each node's workflow config.
+# Each node builds its chat model on first use (Node.llm), not here.
+NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS}.items()}
+NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
 
-def children(nid: str) -> list[str]:
-    """Get direct successor node IDs (nodes this node has edges TO)."""
-    return [t for f, t in EDGES if f == nid]
 
-PY;
-    }
+async def _run_local_node(nid: str, request: str) -> dict:
+    """Run node `nid` in this process: its console lines are tagged [node] [nid], and the
+    whole node (model turns and skills) is timed for the RUN SUMMARY."""
+    node = NODES[nid]
 
-    private static function runHeaderBlock(): string
-    {
-        return <<<'PY'
-async def run(user_prompt: str):
-    """Execute the workflow with the given user prompt.
+    async def trace(line: str):
+        """Progress line of this node, printed with its id."""
+        print(f"[node] [{nid}] {line}", flush=True)
+
+    t0 = time.monotonic()
+    out = await node.run(request, trace)
+    NODE_DURATIONS[node.display] = time.monotonic() - t0
+    return out
+
+
+def build_graph() -> WorkflowGraph:
+    """The workflow's graph over this file's nodes (AGENTS and PLAYBOOKS, run in this process)."""
+    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents={**AGENTS, **PLAYBOOKS},
+                         run_node=_run_local_node, start_documents=START_DOCUMENTS)
+
+
+async def run(user_prompt: str, graph: WorkflowGraph | None = None) -> str:
+    """Execute the workflow with the given user prompt; returns the final output text.
 
     Steps:
     1. Build LangChain tools from the embedded TOOL_CATALOG
-    2. Build one Node per agent/playbook node (each builds its own chat model on first use)
-    3. Construct a LangGraph StateGraph with nodes from ORDER
-    4. Wire edges from EDGES (respecting topological order)
-    5. Compile and invoke the graph
-    6. Return the final output text
+    2. Run the WorkflowGraph (`graph`, else build_graph()): one Node per agent/playbook
+       node, each building its own chat model on first use
     """
     print("[info] Building tools from embedded catalog...")
     catalog = build_tools_from_catalog()
@@ -4173,206 +3914,22 @@ async def run(user_prompt: str):
     catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL
     print(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
 
-PY;
-    }
-
-    /**
-     * The body of run() and the __main__ block. The playbook arm of the node loop is emitted
-     * only when the workflow has playbook nodes: without them its names (PLAYBOOK_MAX_ROUNDS,
-     * _PlaybookRun, ...) are never defined in the file.
-     */
-    private static function runBodyBlock(bool $withPlaybooks): string
-    {
-        return <<<'PY'
-    # One Node per agent and playbook node -- provider/model come from the AGENTS
-    # and PLAYBOOKS dicts, which the generator baked from each node's workflow config.
-    # Each node builds its chat model on first use (Node.llm), not here.
-    NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS}.items()}
-
-    async def run_node(n: str, request: str) -> dict:
-        """Run node n on its request: its console lines are tagged [node] [n], and the
-        whole node (model turns and skills) is timed for the RUN SUMMARY."""
-        async def trace(line: str):
-            print(f"[node] [{n}] {line}", flush=True)
-
-        t0 = time.monotonic()
-        out = await NODES[n].run(request, trace)
-        NODE_DURATIONS[NODES[n].display] = time.monotonic() - t0
-        return out
-
-    sg = StateGraph(WFState)
-
-    for nid in ORDER:
-        ntype = NODE_TYPES.get(nid, "")
-
-        match ntype:
-            case "start":
-                def make_start(n=nid):
-                    def _run(state):
-                        text = state.get("user_prompt", "")
-                        if START_DOCUMENTS:
-                            doc_parts = []
-                            for doc in START_DOCUMENTS:
-                                name = doc.get("name", "Document")
-                                path = doc.get("path", "")
-                                if not path:
-                                    doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
-                                    continue
-                                try:
-                                    md = _convert_doc_to_markdown(path)
-                                    doc_parts.append(f"### {name}\n\n{md}")
-                                except Exception as e:
-                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                            if doc_parts:
-                                text = (
-                                    "## Attached Documents\n\n"
-                                    + "\n\n---\n\n".join(doc_parts)
-                                    + "\n\n---\n\n"
-                                    + text
-                                )
-                        print(f"[node] [{n}] start -- {len(text)} chars")
-                        return {"node_outputs": {n: {"source": "start", "text": text}}}
-                    return _run
-                sg.add_node(nid, make_start())
-
-            case "agent" | "agent-template":
-                def make_agent(n=nid):
-                    async def _run(state):
-                        ad = AGENTS[n]
-                        ctx = build_context(state.get("user_prompt", ""), parents(n), state.get("node_outputs", {}))
-                        out = await run_node(n, ctx)
-                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
-                        if ad.get("dispatch"):
-                            # Dispatcher: its chosen child (or END) feeds the conditional edge;
-                            # a request it did not route ends the run with its message.
-                            result["routes"] = {n: out["route"] or END}
-                            if out["status"] == "unrouted":
-                                result["final_output"] = out["text"]
-                        return result
-                    return _run
-                sg.add_node(nid, make_agent())
-
-
-PY . ($withPlaybooks ? <<<'PY'
-            case "playbook":
-                def make_playbook(n=nid):
-                    async def _run(state):
-                        pb = PLAYBOOKS[n]
-                        outs = state.get("node_outputs", {})
-                        inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                        request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                        out = await run_node(n, request)
-                        return {"node_outputs": {n: {"source": pb["display"], "text": out["text"]}}}
-                    return _run
-                sg.add_node(nid, make_playbook())
-
-PY : '') . <<<'PY'
-            case "output":
-                def make_output(n=nid):
-                    def _run(state):
-                        pids = parents(n)
-                        outs = state.get("node_outputs", {})
-                        if len(pids) == 1 and pids[0] in outs:
-                            final = outs[pids[0]]["text"]
-                        else:
-                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                            final = "\n\n---\n\n".join(blocks)
-                        print(f"[node] [{n}] output -- {len(final)} chars")
-                        return {"final_output": final}
-                    return _run
-                sg.add_node(nid, make_output())
-
-            case _:
-                sg.add_node(nid, lambda s: {})
-
-    # Wire edges. A dispatcher's menu children hang off a conditional edge:
-    # only the child named in state["routes"] runs (siblings are skipped).
-    pos = {n: i for i, n in enumerate(ORDER)}
-    sg.add_edge(START, ORDER[0])
-    for nid in ORDER:
-        menu = {t["id"] for t in AGENTS.get(nid, {}).get("dispatch", [])}
-        for child in children(nid):
-            if child in pos and pos[child] > pos[nid] and child not in menu:
-                sg.add_edge(nid, child)
-        if menu:
-            def make_router(n=nid):
-                def _route(state):
-                    return state.get("routes", {}).get(n) or END
-                return _route
-            sg.add_conditional_edges(nid, make_router(), {t: t for t in menu} | {END: END})
-    for nid in ORDER:
-        if not children(nid):
-            sg.add_edge(nid, END)
-
-    graph = sg.compile()
-    print("[info] Running...")
-    global _RUN_T0
-    _RUN_T0 = time.monotonic()
-    result = await graph.ainvoke({"user_prompt": user_prompt, "node_outputs": {}})
-    return result.get("final_output", "")
-
-
-NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
-_RUN_T0 = None
+PY . $missingWarning . <<<'PY'
+    return await (graph or build_graph()).run(user_prompt)
 
 
 if __name__ == "__main__":
     prompt = " ".join(sys.argv[1:]) or DEFAULT_PROMPT or "Hello"
     print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-    output = asyncio.run(run(prompt))
+    graph = build_graph()
+    output = asyncio.run(run(prompt, graph))
     print("\n" + "=" * 60)
     print("FINAL OUTPUT")
     print("=" * 60)
     print(output)
-
-    # Honour the Output node's storage setting: when ON, save the final result where the
-    # app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via
-    # SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, don't save.
-    if OUTPUT_STORAGE_ENABLED:
-        try:
-            _mm = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
-            if _mm:
-                output = _mm.group(0)  # strip narration/fences around a full HTML doc
-                _ext = "html"
-            else:
-                _ext = "md"
-            _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
-            _ts = time.strftime("%Y%m%d-%H%M%S")
-            _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
-            if OUTPUT_FOLDER:
-                _cf = os.path.expanduser(OUTPUT_FOLDER)
-                _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)
-            else:
-                _save_dir = os.path.join(_root, "workflow")
-            os.makedirs(_save_dir, exist_ok=True)
-            _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
-            with open(_out, "w", encoding="utf-8") as _f:
-                _f.write(output)
-            _saved_path = os.path.abspath(_out)
-        except Exception as e:
-            _saved_path = None
-            print(f"\n[warn] failed to save result: {e}")
-    else:
-        _saved_path = None
-
-    # Closing RUN SUMMARY (printed LAST): time per node, total, document location.
-    print("\n" + "=" * 74)
-    print("RUN SUMMARY")
-    print("-" * 74)
-    if NODE_DURATIONS:
-        _w = max(len(k) for k in NODE_DURATIONS)
-        print("  Time per node:")
-        for _n, _s in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
-            print(f"    {_n:<{_w}}   {_s:7.1f}s")
-    if _RUN_T0 is not None:
-        print(f"  Total wall-clock: {time.monotonic() - _RUN_T0:.1f}s")
-    print(f"  Final output: {len(output)} chars")
-    if _saved_path:
-        print(f"  Document saved to: {_saved_path}")
-    else:
-        print("  Document not saved (output storage is OFF in the workflow settings) -- "
-              "the output is printed above.")
-    print("=" * 74)
+    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
 
 PY;
     }
