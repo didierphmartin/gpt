@@ -18695,6 +18695,18 @@ Based on the analysis...
         }
 
         // Collect form data
+        // Routing still on its unchosen default: settle it against the plan now,
+        // in case the save beats the plan check. A null status keeps Jev.
+        const routingSeg = document.getElementById('agent-routing-mode');
+        if (document.getElementById('agent-type-select')?.value === 'dispatcher'
+            && routingSeg?.dataset.default === '1') {
+            const st = await this._jevStatus(true);
+            if (st && st.allowed === false && routingSeg.dataset.default === '1') {
+                delete routingSeg.dataset.default;
+                routingSeg.dataset.mode = 'llm';
+                this._applyRoutingVisibility();
+            }
+        }
         const agentData = {
             id: this.editingAgent?.id || null,
             name: document.getElementById('agent-name-input')?.value?.trim() || '',

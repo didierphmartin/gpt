@@ -3181,7 +3181,7 @@ PY;
         $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
         $L[] = '  open_gate(), resolve_gate(),';
         $L[] = '  take_gate_answer()              the human-gate rendezvous a playbook node\'s tools wait on';
-        $L[] = '  _run_dispatcher()                forces one route_to tool call, used by a DISPATCHER node\'s agent module';
+        $L[] = '  _run_dispatcher()                routes with Jev or with one forced route_to call, used by a DISPATCHER node\'s agent module';
         if ($facts['playbookData'] !== []) {
             $L[] = '  PLAYBOOK_SYSTEM_PROMPT, _PlaybookRun,';
             $L[] = '  build_playbook_tools(),';
