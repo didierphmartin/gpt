@@ -1823,62 +1823,63 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     sg = StateGraph(WFState)
     for nid in ORDER:
         ntype = NODE_TYPES.get(nid, "")
-        if ntype == "start":
-            def make_start(n=nid):
-                def _run(state):
-                    text = state.get("user_prompt", "")
-                    if START_DOCUMENTS:
-                        doc_parts = []
-                        for doc in START_DOCUMENTS:
-                            name = doc.get("name", "Document")
-                            path = doc.get("path", "")
-                            try:
-                                doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
-                            except Exception as e:
-                                doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                        text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
-                    print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
-                    return {"node_outputs": {n: {"source": "start", "text": text}}}
-                return _run
-            sg.add_node(nid, make_start())
-        elif ntype in ("agent", "playbook"):
-            def make_remote(n=nid):
-                async def _run(state):
-                    ad = AGENTS[n]
-                    outs = state.get("node_outputs", {})
-                    if ad["kind"] == "playbook":
-                        inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                        request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                    else:
-                        request = build_context(state.get("user_prompt", ""), parents(n), outs)
-                    out = await _run_remote_node(n, request)
-                    result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
-                    if ad["dispatch"]:
-                        # Dispatcher: the agent chose a child (or none) -> conditional edge input.
-                        route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
-                        if route == END:
-                            print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
-                            result["final_output"] = out["text"]
-                        result["routes"] = {n: route}
-                    return result
-                return _run
-            sg.add_node(nid, make_remote())
-        elif ntype == "output":
-            def make_output(n=nid):
-                def _run(state):
-                    pids = parents(n)
-                    outs = state.get("node_outputs", {})
-                    if len(pids) == 1 and pids[0] in outs:
-                        final = outs[pids[0]]["text"]
-                    else:
-                        blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                        final = "\n\n---\n\n".join(blocks)
-                    print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
-                    return {"final_output": final}
-                return _run
-            sg.add_node(nid, make_output())
-        else:
-            sg.add_node(nid, lambda s: {})
+        match ntype:
+            case "start":
+                def make_start(n=nid):
+                    def _run(state):
+                        text = state.get("user_prompt", "")
+                        if START_DOCUMENTS:
+                            doc_parts = []
+                            for doc in START_DOCUMENTS:
+                                name = doc.get("name", "Document")
+                                path = doc.get("path", "")
+                                try:
+                                    doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
+                                except Exception as e:
+                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+                            text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
+                        print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
+                        return {"node_outputs": {n: {"source": "start", "text": text}}}
+                    return _run
+                sg.add_node(nid, make_start())
+            case "agent" | "playbook":
+                def make_remote(n=nid):
+                    async def _run(state):
+                        ad = AGENTS[n]
+                        outs = state.get("node_outputs", {})
+                        if ad["kind"] == "playbook":
+                            inputs = [outs[p]["text"] for p in parents(n) if p in outs]
+                            request = "\n\n".join(inputs) or state.get("user_prompt", "")
+                        else:
+                            request = build_context(state.get("user_prompt", ""), parents(n), outs)
+                        out = await _run_remote_node(n, request)
+                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
+                        if ad["dispatch"]:
+                            # Dispatcher: the agent chose a child (or none) -> conditional edge input.
+                            route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
+                            if route == END:
+                                print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
+                                result["final_output"] = out["text"]
+                            result["routes"] = {n: route}
+                        return result
+                    return _run
+                sg.add_node(nid, make_remote())
+            case "output":
+                def make_output(n=nid):
+                    def _run(state):
+                        pids = parents(n)
+                        outs = state.get("node_outputs", {})
+                        if len(pids) == 1 and pids[0] in outs:
+                            final = outs[pids[0]]["text"]
+                        else:
+                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                            final = "\n\n---\n\n".join(blocks)
+                        print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
+                        return {"final_output": final}
+                    return _run
+                sg.add_node(nid, make_output())
+            case _:
+                sg.add_node(nid, lambda s: {})
     # Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
     pos = {n: i for i, n in enumerate(ORDER)}
     sg.add_edge(START, ORDER[0])
@@ -3745,62 +3746,63 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     sg = StateGraph(WFState)
     for nid in ORDER:
         ntype = NODE_TYPES.get(nid, "")
-        if ntype == "start":
-            def make_start(n=nid):
-                def _run(state):
-                    text = state.get("user_prompt", "")
-                    if START_DOCUMENTS:
-                        doc_parts = []
-                        for doc in START_DOCUMENTS:
-                            name = doc.get("name", "Document")
-                            path = doc.get("path", "")
-                            try:
-                                doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
-                            except Exception as e:
-                                doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                        text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
-                    print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
-                    return {"node_outputs": {n: {"source": "start", "text": text}}}
-                return _run
-            sg.add_node(nid, make_start())
-        elif ntype in ("agent", "playbook"):
-            def make_node(n=nid):
-                async def _run(state):
-                    ad = AGENTS[n]
-                    outs = state.get("node_outputs", {})
-                    if ad["kind"] == "playbook":
-                        inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                        request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                    else:
-                        request = build_context(state.get("user_prompt", ""), parents(n), outs)
-                    out = await _run_node_module(n, request)
-                    result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
-                    if ad["dispatch"]:
-                        # Dispatcher: the module chose a child (or none) -> conditional edge input.
-                        route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
-                        if route == END:
-                            print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
-                            result["final_output"] = out["text"]
-                        result["routes"] = {n: route}
-                    return result
-                return _run
-            sg.add_node(nid, make_node())
-        elif ntype == "output":
-            def make_output(n=nid):
-                def _run(state):
-                    pids = parents(n)
-                    outs = state.get("node_outputs", {})
-                    if len(pids) == 1 and pids[0] in outs:
-                        final = outs[pids[0]]["text"]
-                    else:
-                        blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                        final = "\n\n---\n\n".join(blocks)
-                    print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
-                    return {"final_output": final}
-                return _run
-            sg.add_node(nid, make_output())
-        else:
-            sg.add_node(nid, lambda s: {})
+        match ntype:
+            case "start":
+                def make_start(n=nid):
+                    def _run(state):
+                        text = state.get("user_prompt", "")
+                        if START_DOCUMENTS:
+                            doc_parts = []
+                            for doc in START_DOCUMENTS:
+                                name = doc.get("name", "Document")
+                                path = doc.get("path", "")
+                                try:
+                                    doc_parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}")
+                                except Exception as e:
+                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+                            text = "## Attached Documents\n\n" + "\n\n---\n\n".join(doc_parts) + "\n\n---\n\n" + text
+                        print(f"[node] [{n}] start -- {len(text)} chars", flush=True)
+                        return {"node_outputs": {n: {"source": "start", "text": text}}}
+                    return _run
+                sg.add_node(nid, make_start())
+            case "agent" | "playbook":
+                def make_node(n=nid):
+                    async def _run(state):
+                        ad = AGENTS[n]
+                        outs = state.get("node_outputs", {})
+                        if ad["kind"] == "playbook":
+                            inputs = [outs[p]["text"] for p in parents(n) if p in outs]
+                            request = "\n\n".join(inputs) or state.get("user_prompt", "")
+                        else:
+                            request = build_context(state.get("user_prompt", ""), parents(n), outs)
+                        out = await _run_node_module(n, request)
+                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
+                        if ad["dispatch"]:
+                            # Dispatcher: the module chose a child (or none) -> conditional edge input.
+                            route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
+                            if route == END:
+                                print(f"[node] [{n}] ⚠ dispatcher did not route; ending the run", flush=True)
+                                result["final_output"] = out["text"]
+                            result["routes"] = {n: route}
+                        return result
+                    return _run
+                sg.add_node(nid, make_node())
+            case "output":
+                def make_output(n=nid):
+                    def _run(state):
+                        pids = parents(n)
+                        outs = state.get("node_outputs", {})
+                        if len(pids) == 1 and pids[0] in outs:
+                            final = outs[pids[0]]["text"]
+                        else:
+                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                            final = "\n\n---\n\n".join(blocks)
+                        print(f"[node] [{n}] output -- {len(final)} chars", flush=True)
+                        return {"final_output": final}
+                    return _run
+                sg.add_node(nid, make_output())
+            case _:
+                sg.add_node(nid, lambda s: {})
     # Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
     pos = {n: i for i, n in enumerate(ORDER)}
     sg.add_edge(START, ORDER[0])
@@ -4257,72 +4259,73 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
     floor = ad.get("jev_min_confidence")
     if floor is None:
         floor = JEV_CONFIDENCE_FLOOR
-    if mode == "jev":
-        t0 = time.monotonic()
-        try:
-            # urlopen's timeout bounds each socket op, not DNS or the total; this does.
-            jev = await asyncio.wait_for(
-                asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)
-        except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
-            jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
-                   "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
-        dt = time.monotonic() - t0
-        # Counted whether or not Jev decides, so the run summary is not under-reported.
-        NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-        conf = f"{jev['confidence']:.2f}" if jev.get("confidence") is not None else "?"
-        if jev["outcome"] == "routed":
-            chosen = jev["target"]
-            # Same shape the model path returns, minus notes: Jev writes no prose.
-            print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
-                  f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
-            return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
-        # Jev only: no model fallback, so the run stops here and says why
-        # (the reason names a missing key, too). Same message as the interpreter.
-        msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
-               f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
-        print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
-              f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
-        return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
-
-    route_args = create_model(
-        "RouteToArgs",
-        target=(Literal[tuple(names)], Field(..., description="Name of the agent to route to. MUST be one of the listed values.")),
-        notes=(str, Field("", description="Optional short note for the target agent (what you understood, what to focus on).")),
-    )
-    route_tool = StructuredTool.from_function(
-        func=lambda target, notes="": "routed",
-        name="route_to",
-        description=("REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent "
-                     "whose role matches the request. Available targets: " + ", ".join(names)
-                     + ". The chosen agent receives the original request, plus your notes."),
-        args_schema=route_args,
-    )
-    llm = llm.bind_tools([route_tool], tool_choice="any")
-    t0 = time.monotonic()
-    resp = await llm.ainvoke(msgs)
-    dt = time.monotonic() - t0
-    NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-    chosen, notes = None, ""
-    for call in getattr(resp, "tool_calls", None) or []:
-        if call.get("name") != "route_to":
-            continue
-        args = call.get("args") or {}
-        want = str(args.get("target", "")).strip().lower()
-        for t in targets:
-            if t["name"].strip().lower() == want:
-                chosen, notes = t, str(args.get("notes", "") or "").strip()
-                break
-        if chosen:
-            break
-    if chosen is None:
-        msg = (f"Error: dispatcher {ad['display']!r} did not route the request. "
-               f"Expected route_to with one of: {', '.join(names)}.")
-        print(f"[node] [{n}] ⚠ {msg}", flush=True)
-        return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
-    print(f"[node] [{n}] {ad['display']!r} routed to {chosen['name']!r} ({dt:.1f}s)"
-          + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
-    text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
-    return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}
+    match mode:
+        case "jev":
+            t0 = time.monotonic()
+            try:
+                # urlopen's timeout bounds each socket op, not DNS or the total; this does.
+                jev = await asyncio.wait_for(
+                    asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)
+            except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
+                jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
+                       "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
+            dt = time.monotonic() - t0
+            # Counted whether or not Jev decides, so the run summary is not under-reported.
+            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
+            conf = f"{jev['confidence']:.2f}" if jev.get("confidence") is not None else "?"
+            if jev["outcome"] == "routed":
+                chosen = jev["target"]
+                # Same shape the model path returns, minus notes: Jev writes no prose.
+                print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
+                      f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
+                return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
+            # Jev only: no model fallback, so the run stops here and says why
+            # (the reason names a missing key, too). Same message as the interpreter.
+            msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
+                   f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
+            print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
+                  f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
+            return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
+        case _:
+            route_args = create_model(
+                "RouteToArgs",
+                target=(Literal[tuple(names)], Field(..., description="Name of the agent to route to. MUST be one of the listed values.")),
+                notes=(str, Field("", description="Optional short note for the target agent (what you understood, what to focus on).")),
+            )
+            route_tool = StructuredTool.from_function(
+                func=lambda target, notes="": "routed",
+                name="route_to",
+                description=("REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent "
+                             "whose role matches the request. Available targets: " + ", ".join(names)
+                             + ". The chosen agent receives the original request, plus your notes."),
+                args_schema=route_args,
+            )
+            llm = llm.bind_tools([route_tool], tool_choice="any")
+            t0 = time.monotonic()
+            resp = await llm.ainvoke(msgs)
+            dt = time.monotonic() - t0
+            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
+            chosen, notes = None, ""
+            for call in getattr(resp, "tool_calls", None) or []:
+                if call.get("name") != "route_to":
+                    continue
+                args = call.get("args") or {}
+                want = str(args.get("target", "")).strip().lower()
+                for t in targets:
+                    if t["name"].strip().lower() == want:
+                        chosen, notes = t, str(args.get("notes", "") or "").strip()
+                        break
+                if chosen:
+                    break
+            if chosen is None:
+                msg = (f"Error: dispatcher {ad['display']!r} did not route the request. "
+                       f"Expected route_to with one of: {', '.join(names)}.")
+                print(f"[node] [{n}] ⚠ {msg}", flush=True)
+                return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
+            print(f"[node] [{n}] {ad['display']!r} routed to {chosen['name']!r} ({dt:.1f}s)"
+                  + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
+            text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
+            return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}
 
 
 PY;
@@ -4536,194 +4539,195 @@ PY;
     for nid in ORDER:
         ntype = NODE_TYPES.get(nid, "")
 
-        if ntype == "start":
-            def make_start(n=nid):
-                def _run(state):
-                    text = state.get("user_prompt", "")
-                    if START_DOCUMENTS:
-                        doc_parts = []
-                        for doc in START_DOCUMENTS:
-                            name = doc.get("name", "Document")
-                            path = doc.get("path", "")
-                            if not path:
-                                doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
-                                continue
-                            try:
-                                md = _convert_doc_to_markdown(path)
-                                doc_parts.append(f"### {name}\n\n{md}")
-                            except Exception as e:
-                                doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
-                        if doc_parts:
-                            text = (
-                                "## Attached Documents\n\n"
-                                + "\n\n---\n\n".join(doc_parts)
-                                + "\n\n---\n\n"
-                                + text
-                            )
-                    print(f"[node] [{n}] start -- {len(text)} chars")
-                    return {"node_outputs": {n: {"source": "start", "text": text}}}
-                return _run
-            sg.add_node(nid, make_start())
+        match ntype:
+            case "start":
+                def make_start(n=nid):
+                    def _run(state):
+                        text = state.get("user_prompt", "")
+                        if START_DOCUMENTS:
+                            doc_parts = []
+                            for doc in START_DOCUMENTS:
+                                name = doc.get("name", "Document")
+                                path = doc.get("path", "")
+                                if not path:
+                                    doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
+                                    continue
+                                try:
+                                    md = _convert_doc_to_markdown(path)
+                                    doc_parts.append(f"### {name}\n\n{md}")
+                                except Exception as e:
+                                    doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+                            if doc_parts:
+                                text = (
+                                    "## Attached Documents\n\n"
+                                    + "\n\n---\n\n".join(doc_parts)
+                                    + "\n\n---\n\n"
+                                    + text
+                                )
+                        print(f"[node] [{n}] start -- {len(text)} chars")
+                        return {"node_outputs": {n: {"source": "start", "text": text}}}
+                    return _run
+                sg.add_node(nid, make_start())
 
-        elif ntype in ("agent", "agent-template"):
-            def make_agent(n=nid):
-                async def _run(state):
-                    from datetime import datetime as _dt
-                    ad = AGENTS[n]
-                    tool_names = ad["tool_names"]
-                    tools = [catalog[t] for t in tool_names if t in catalog]
-                    print(f"[node] [{n}] {ad['display']!r} -- {len(tools)} tools "
-                          f"(provider={ad.get('provider', '?')}, model={ad.get('model', '?')})")
+            case "agent" | "agent-template":
+                def make_agent(n=nid):
+                    async def _run(state):
+                        from datetime import datetime as _dt
+                        ad = AGENTS[n]
+                        tool_names = ad["tool_names"]
+                        tools = [catalog[t] for t in tool_names if t in catalog]
+                        print(f"[node] [{n}] {ad['display']!r} -- {len(tools)} tools "
+                              f"(provider={ad.get('provider', '?')}, model={ad.get('model', '?')})")
 
-                    ctx = build_context(state.get("user_prompt", ""), parents(n), state.get("node_outputs", {}))
-                    sys_chars = len(ad["system_prompt"]) if ad.get("system_prompt") else 0
-                    print(f"[node] [{n}] inputs: system={sys_chars} chars, context={len(ctx)} chars", flush=True)
+                        ctx = build_context(state.get("user_prompt", ""), parents(n), state.get("node_outputs", {}))
+                        sys_chars = len(ad["system_prompt"]) if ad.get("system_prompt") else 0
+                        print(f"[node] [{n}] inputs: system={sys_chars} chars, context={len(ctx)} chars", flush=True)
 
-                    msgs = []
-                    if ad["system_prompt"]:
-                        msgs.append(SystemMessage(content=inject_datetime(ad["system_prompt"])))
-                    msgs.append(HumanMessage(content=ctx))
-                    # Dispatcher: one forced route_to call picks the child; no ReAct loop.
-                    if ad.get("dispatch"):
-                        return await _run_dispatcher(n, ad, state, msgs, LLMS[n])
-                    # Per-agent LLM. Each agent uses the provider/model
-                    # it was configured with in the workflow editor.
-                    agent = create_react_agent(LLMS[n], tools)
-                    t0 = time.monotonic()
-                    result = await agent.ainvoke({"messages": msgs})
-                    dt = time.monotonic() - t0
+                        msgs = []
+                        if ad["system_prompt"]:
+                            msgs.append(SystemMessage(content=inject_datetime(ad["system_prompt"])))
+                        msgs.append(HumanMessage(content=ctx))
+                        # Dispatcher: one forced route_to call picks the child; no ReAct loop.
+                        if ad.get("dispatch"):
+                            return await _run_dispatcher(n, ad, state, msgs, LLMS[n])
+                        # Per-agent LLM. Each agent uses the provider/model
+                        # it was configured with in the workflow editor.
+                        agent = create_react_agent(LLMS[n], tools)
+                        t0 = time.monotonic()
+                        result = await agent.ainvoke({"messages": msgs})
+                        dt = time.monotonic() - t0
 
-                    final = result["messages"][-1]
-                    text = final.content if isinstance(final, AIMessage) else str(final)
-                    if isinstance(text, list):
-                        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-
-                    msgs_out = result.get("messages", [])
-                    llm_rounds = sum(1 for m in msgs_out if isinstance(m, AIMessage))
-                    tool_results = sum(
-                        1 for m in msgs_out
-                        if getattr(m, "type", None) == "tool"
-                        or m.__class__.__name__ == "ToolMessage"
-                    )
-                    NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-                    print(f"[node] [{n}] done -- {len(text)} chars "
-                          f"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)")
-                    # Preview of what the agent produced, so the log shows the
-                    # actual answer without opening the _debug dump.
-                    print(f"[node] [{n}] output head: {text[:240]!r}", flush=True)
-                    # High-signal red flag: a tool-bound agent that ran ZERO
-                    # tools almost certainly fabricated its answer (the exact
-                    # failure that produced "Missing /llms.txt"). Surface it.
-                    if tools and tool_results == 0:
-                        print(f"[node] [{n}] ⚠ answered with 0 tool calls despite "
-                              f"{len(tools)} tool(s) available — likely fabricated; "
-                              f"check the skill ran", flush=True)
-
-                    try:
-                        script_root = Path(__file__).resolve().parent.parent
-                        debug_dir = script_root / "outputs" / "_debug"
-                        debug_dir.mkdir(parents=True, exist_ok=True)
-                        ts = _dt.now().strftime("%Y%m%d-%H%M%S")
-                        stem = Path(__file__).stem
-                        dump_path = debug_dir / f"{stem}_{n}_{ts}.json"
-                        entries = []
-                        for m in msgs_out:
-                            content = m.content
-                            if isinstance(content, list):
-                                content = [
-                                    (b if isinstance(b, dict) else {"type": "text", "text": str(b)})
-                                    for b in content
-                                ]
-                            entries.append({
-                                "role": m.__class__.__name__,
-                                "content": content,
-                                "tool_calls": getattr(m, "tool_calls", None),
-                                "tool_call_id": getattr(m, "tool_call_id", None),
-                                "name": getattr(m, "name", None),
-                            })
-                        dump_path.write_text(
-                            json.dumps(entries, default=str, indent=2, ensure_ascii=False),
-                            encoding="utf-8",
-                        )
-                        print(f"[debug] [{n}] message history → outputs/_debug/{dump_path.name}")
-                    except Exception as e:
-                        print(f"[debug] [{n}] failed to dump message history: {e}")
-
-                    # Mandatory skill pipeline: each attached skill runs on the agent's
-                    # result in order; the last skill's produced deliverable (e.g. the html
-                    # skill's rendered HTML file) becomes this node's output.
-                    for _skill in ad.get("skills", []):
-                        text = await _run_skill_step(_skill, text, LLMS[n])
-                        print(f"[node] [{n}] after skill {_skill.get('dir') or 'inline'!r}: "
-                              f"{len(text)} chars", flush=True)
-
-                    return {"node_outputs": {n: {"source": ad["display"], "text": text}}}
-                return _run
-            sg.add_node(nid, make_agent())
-
-
-PY . ($withPlaybooks ? <<<'PY'
-        elif ntype == "playbook":
-            def make_playbook(n=nid):
-                async def _run(state):
-                    pb = PLAYBOOKS[n]
-                    run = _PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {})
-                    tools = build_playbook_tools(pb, run)
-                    print(f"[node] [{n}] {pb['display']!r} playbook -- {len(tools)} tools "
-                          f"(provider={pb.get('provider', '?')}, model={pb.get('model', '?')}, "
-                          f"writes={'on' if run.writes_enabled else 'off'})", flush=True)
-                    outs = state.get("node_outputs", {})
-                    inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-                    request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                    system = PLAYBOOK_SYSTEM_PROMPT.format(
-                        domain=pb.get("domain") or "this organization",
-                        instructions=pb["instructions"],
-                        policy_json=json.dumps(run.policy, ensure_ascii=False),
-                        requester_json=json.dumps(pb.get("requester") or {}, ensure_ascii=False),
-                        approvers_json=json.dumps(pb["approvers"], ensure_ascii=False) if pb.get("approvers") else "{}",
-                    )
-                    msgs = [SystemMessage(content=inject_datetime(system)),
-                            HumanMessage(content="REQUEST:\n" + request)]
-                    agent = create_react_agent(LLMS[n], tools)
-                    t0 = time.monotonic()
-                    text = ""
-                    try:
-                        result = await agent.ainvoke({"messages": msgs},
-                                                     config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
                         final = result["messages"][-1]
                         text = final.content if isinstance(final, AIMessage) else str(final)
                         if isinstance(text, list):
                             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-                    except Exception as e:
-                        run.status = "failed"
-                        run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
-                        print(f"[node] [{n}] ⚠ playbook failed: {e}", flush=True)
-                    dt = time.monotonic() - t0
-                    NODE_DURATIONS[pb["display"]] = NODE_DURATIONS.get(pb["display"], 0.0) + dt
-                    print(f"[node] [{n}] done -- status={run.status} ({len(run.events)} events, {dt:.1f}s)", flush=True)
-                    transcript = render_playbook_transcript(pb["title"], run.events, text, run.status)
-                    return {"node_outputs": {n: {"source": pb["display"], "text": transcript}}}
-                return _run
-            sg.add_node(nid, make_playbook())
+
+                        msgs_out = result.get("messages", [])
+                        llm_rounds = sum(1 for m in msgs_out if isinstance(m, AIMessage))
+                        tool_results = sum(
+                            1 for m in msgs_out
+                            if getattr(m, "type", None) == "tool"
+                            or m.__class__.__name__ == "ToolMessage"
+                        )
+                        NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
+                        print(f"[node] [{n}] done -- {len(text)} chars "
+                              f"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)")
+                        # Preview of what the agent produced, so the log shows the
+                        # actual answer without opening the _debug dump.
+                        print(f"[node] [{n}] output head: {text[:240]!r}", flush=True)
+                        # High-signal red flag: a tool-bound agent that ran ZERO
+                        # tools almost certainly fabricated its answer (the exact
+                        # failure that produced "Missing /llms.txt"). Surface it.
+                        if tools and tool_results == 0:
+                            print(f"[node] [{n}] ⚠ answered with 0 tool calls despite "
+                                  f"{len(tools)} tool(s) available — likely fabricated; "
+                                  f"check the skill ran", flush=True)
+
+                        try:
+                            script_root = Path(__file__).resolve().parent.parent
+                            debug_dir = script_root / "outputs" / "_debug"
+                            debug_dir.mkdir(parents=True, exist_ok=True)
+                            ts = _dt.now().strftime("%Y%m%d-%H%M%S")
+                            stem = Path(__file__).stem
+                            dump_path = debug_dir / f"{stem}_{n}_{ts}.json"
+                            entries = []
+                            for m in msgs_out:
+                                content = m.content
+                                if isinstance(content, list):
+                                    content = [
+                                        (b if isinstance(b, dict) else {"type": "text", "text": str(b)})
+                                        for b in content
+                                    ]
+                                entries.append({
+                                    "role": m.__class__.__name__,
+                                    "content": content,
+                                    "tool_calls": getattr(m, "tool_calls", None),
+                                    "tool_call_id": getattr(m, "tool_call_id", None),
+                                    "name": getattr(m, "name", None),
+                                })
+                            dump_path.write_text(
+                                json.dumps(entries, default=str, indent=2, ensure_ascii=False),
+                                encoding="utf-8",
+                            )
+                            print(f"[debug] [{n}] message history → outputs/_debug/{dump_path.name}")
+                        except Exception as e:
+                            print(f"[debug] [{n}] failed to dump message history: {e}")
+
+                        # Mandatory skill pipeline: each attached skill runs on the agent's
+                        # result in order; the last skill's produced deliverable (e.g. the html
+                        # skill's rendered HTML file) becomes this node's output.
+                        for _skill in ad.get("skills", []):
+                            text = await _run_skill_step(_skill, text, LLMS[n])
+                            print(f"[node] [{n}] after skill {_skill.get('dir') or 'inline'!r}: "
+                                  f"{len(text)} chars", flush=True)
+
+                        return {"node_outputs": {n: {"source": ad["display"], "text": text}}}
+                    return _run
+                sg.add_node(nid, make_agent())
+
+
+PY . ($withPlaybooks ? <<<'PY'
+            case "playbook":
+                def make_playbook(n=nid):
+                    async def _run(state):
+                        pb = PLAYBOOKS[n]
+                        run = _PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {})
+                        tools = build_playbook_tools(pb, run)
+                        print(f"[node] [{n}] {pb['display']!r} playbook -- {len(tools)} tools "
+                              f"(provider={pb.get('provider', '?')}, model={pb.get('model', '?')}, "
+                              f"writes={'on' if run.writes_enabled else 'off'})", flush=True)
+                        outs = state.get("node_outputs", {})
+                        inputs = [outs[p]["text"] for p in parents(n) if p in outs]
+                        request = "\n\n".join(inputs) or state.get("user_prompt", "")
+                        system = PLAYBOOK_SYSTEM_PROMPT.format(
+                            domain=pb.get("domain") or "this organization",
+                            instructions=pb["instructions"],
+                            policy_json=json.dumps(run.policy, ensure_ascii=False),
+                            requester_json=json.dumps(pb.get("requester") or {}, ensure_ascii=False),
+                            approvers_json=json.dumps(pb["approvers"], ensure_ascii=False) if pb.get("approvers") else "{}",
+                        )
+                        msgs = [SystemMessage(content=inject_datetime(system)),
+                                HumanMessage(content="REQUEST:\n" + request)]
+                        agent = create_react_agent(LLMS[n], tools)
+                        t0 = time.monotonic()
+                        text = ""
+                        try:
+                            result = await agent.ainvoke({"messages": msgs},
+                                                         config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
+                            final = result["messages"][-1]
+                            text = final.content if isinstance(final, AIMessage) else str(final)
+                            if isinstance(text, list):
+                                text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+                        except Exception as e:
+                            run.status = "failed"
+                            run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
+                            print(f"[node] [{n}] ⚠ playbook failed: {e}", flush=True)
+                        dt = time.monotonic() - t0
+                        NODE_DURATIONS[pb["display"]] = NODE_DURATIONS.get(pb["display"], 0.0) + dt
+                        print(f"[node] [{n}] done -- status={run.status} ({len(run.events)} events, {dt:.1f}s)", flush=True)
+                        transcript = render_playbook_transcript(pb["title"], run.events, text, run.status)
+                        return {"node_outputs": {n: {"source": pb["display"], "text": transcript}}}
+                    return _run
+                sg.add_node(nid, make_playbook())
 
 PY : '') . <<<'PY'
-        elif ntype == "output":
-            def make_output(n=nid):
-                def _run(state):
-                    pids = parents(n)
-                    outs = state.get("node_outputs", {})
-                    if len(pids) == 1 and pids[0] in outs:
-                        final = outs[pids[0]]["text"]
-                    else:
-                        blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
-                        final = "\n\n---\n\n".join(blocks)
-                    print(f"[node] [{n}] output -- {len(final)} chars")
-                    return {"final_output": final}
-                return _run
-            sg.add_node(nid, make_output())
+            case "output":
+                def make_output(n=nid):
+                    def _run(state):
+                        pids = parents(n)
+                        outs = state.get("node_outputs", {})
+                        if len(pids) == 1 and pids[0] in outs:
+                            final = outs[pids[0]]["text"]
+                        else:
+                            blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                            final = "\n\n---\n\n".join(blocks)
+                        print(f"[node] [{n}] output -- {len(final)} chars")
+                        return {"final_output": final}
+                    return _run
+                sg.add_node(nid, make_output())
 
-        else:
-            sg.add_node(nid, lambda s: {})
+            case _:
+                sg.add_node(nid, lambda s: {})
 
     # Wire edges. A dispatcher's menu children hang off a conditional edge:
     # only the child named in state["routes"] runs (siblings are skipped).

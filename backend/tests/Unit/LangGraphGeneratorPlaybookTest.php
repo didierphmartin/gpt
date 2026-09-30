@@ -132,7 +132,7 @@ TXT;
     {
         $code = $this->generate($this->playbookGraph());
         foreach (['def build_playbook_tools', 'def render_playbook_transcript', 'def _playbook_gate',
-                  'elif ntype == "playbook":', 'PLAYBOOK_SYSTEM_PROMPT', 'writes disabled by policy',
+                  'case "playbook":', 'PLAYBOOK_SYSTEM_PROMPT', 'writes disabled by policy',
                   '"resolve_request"', '"request_approval"', '"prompt_handoff"'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }

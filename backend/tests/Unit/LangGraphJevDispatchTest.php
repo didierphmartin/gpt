@@ -21,7 +21,7 @@ use AgentTeam\Services\WorkflowRepository;
 class LangGraphJevDispatchTest extends TestCase
 {
     private const BLOCK_START = '# TypeSafe Jev (twin of JevRouter.php)';
-    private const BLOCK_END = '    return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}';
+    private const BLOCK_END = '            return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}';
 
     private static function graph(): array
     {
@@ -81,7 +81,7 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertNotSame('', $runtime, "{$mode}: runtime file missing");
             foreach (['def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):', 'JEV_URL = "https://api.typesafe.ai/v1/systemone"',
                       'JEV_MODEL = "jev-latest"', 'JEV_CONFIDENCE_FLOOR = 0.6', 'JEV_TIMEOUT_S = 10',
-                      'if mode not in ("jev", "llm"):', 'mode = "jev" if _jev_available() else "llm"', 'if mode == "jev":',
+                      'if mode not in ("jev", "llm"):', 'mode = "jev" if _jev_available() else "llm"', 'case "jev":',
                       'asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)', 'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
                       'Jev routed to', 'Jev-only dispatcher, no model fallback'] as $needle) {
                 $this->assertStringContainsString($needle, $runtime, "{$mode}: {$needle}");
@@ -91,7 +91,7 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertStringNotContainsString('Jev declined', $runtime, "{$mode}: no hybrid");
             // The Jev path returns BEFORE the forced route_to turn.
             $this->assertLessThan(strpos($runtime, 'llm = llm.bind_tools([route_tool], tool_choice="any")'),
-                strpos($runtime, 'if mode == "jev":'), "{$mode}: Jev mode is decided first");
+                strpos($runtime, 'case "jev":'), "{$mode}: Jev mode is decided first");
             // techBuddy has no routing_mode saved: '' (resolved at run time), at the default floor.
             $this->assertStringContainsString('"routing_mode": "",', $node, "{$mode}: routing_mode");
             $this->assertStringContainsString('"jev_min_confidence": 0.6,', $node, "{$mode}: floor");

@@ -182,4 +182,16 @@ class LangGraphOutputStructureTest extends TestCase
             }
         }
     }
+
+    /** Same-variable if/elif chains on ntype and routing mode are match statements (spec step 2). */
+    public function testNodeTypeAndRoutingModeAreMatchStatements(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            $this->assertStringContainsString('match ntype:', $all, $mode);
+            $this->assertStringNotContainsString('if ntype == "start":', $all, $mode);
+            $this->assertStringContainsString('    match mode:', $all, $mode);
+            $this->assertStringNotContainsString('    if mode == "jev":', $all, $mode);
+        }
+    }
 }

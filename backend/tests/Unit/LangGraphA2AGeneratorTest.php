@@ -191,7 +191,7 @@ class LangGraphA2AGeneratorTest extends TestCase
                   'from a2a.client import create_client, ClientConfig', 'class AgentSupervisor', 'async def _run_remote_node(',
                   'def _handle_gate(', 'add_conditional_edges', 'A2A_AGENT_2_URL', '"file": "agents/2_techbuddy.py"',
                   '"port": 8701', '--keep-serving', '--no-spawn', 'TASK_STATE_INPUT_REQUIRED', '[gate] ', '[gate-answer] ',
-                  '# ---- node 2: techBuddy (agent-template)', 'elif ntype in ("agent", "playbook"):', 'PLAYBOOK_GATE_MODE',
+                  '# ---- node 2: techBuddy (agent-template)', 'case "agent" | "playbook":', 'PLAYBOOK_GATE_MODE',
                   // AGENTS dict keys must be strings ("2", not 2) so they match ORDER/NODE_TYPES/state (live-run fix).
                   '    "2": {"display": "techBuddy"',
                   // Documentation nits from the Task 3 review: docstrings + the NODE_DURATIONS comment.
