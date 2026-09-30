@@ -22,8 +22,9 @@ use Quantis\AIPortfolioAssistant\Services\UsageLogger;
  * The interpreter's dispatcher honours settings.routing_mode:
  *   'jev' = Jev only (the model is never called; no decision = "did not route"),
  *   'llm' = model only (Jev is never consulted),
- *   anything else (absent) = today's hybrid: Jev first when a key exists, the
- *   model when Jev declines or no key.
+ *   anything else (absent, unknown) = the default: Jev when the user's plan
+ *   allows Jev, else the model. There is no hybrid: an unset dispatcher on a
+ *   plan with Jev is Jev only, and a Jev decline never falls back to the model.
  * The key is the stored one (user row wins over the global row), never .env.
  */
 final class GraphWorkflowRunnerRoutingModeTest extends TestCase
@@ -231,43 +232,65 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame(0, $runner->made);
     }
 
-    // ── No mode saved: today's hybrid ──────────────────────────────────────
+    // ── No mode saved: Jev when the plan allows it, else the model ─────────
 
-    public function testHybridRoutedByJevSkipsTheModel(): void
+    public function testUnsetModeAllowedRoutesWithJev(): void
     {
         $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Billing', 0.99)]);
         $out = $this->dispatch($runner, null);
 
+        $this->assertTrue($out['success']);
         $this->assertSame('jev', $out['provider']);
         $this->assertSame('Billing', $out['route']['name']);
     }
 
-    public function testHybridUnclearFallsBackToTheModel(): void
+    public function testUnsetModeAllowedUnclearStopsWithDidNotRouteAndNeverCallsTheModel(): void
     {
-        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
         $out = $this->dispatch($runner, []);
 
-        $this->assertTrue($out['success']);
-        $this->assertSame('openai', $out['provider']);
-        $this->assertSame('Sales', $out['route']['name']);
+        $this->assertFalse($out['success']);
+        $this->assertSame('jev', $out['provider']);
+        $this->assertArrayNotHasKey('route', $out);
+        $this->assertTrue($out['halt_branches']);
+        $this->assertSame(
+            'Error: dispatcher "Router" did not route the request (Jev: unclear: the request names no branch).',
+            $out['output']
+        );
     }
 
-    public function testHybridWithoutAKeyIsThePureModel(): void
+    public function testUnsetModeAllowedWithoutAKeyStopsWithDidNotRoute(): void
     {
-        $runner = $this->makeRunner('', '', $this->agentRunner(true), []);
+        $runner = $this->makeRunner('', '', $this->agentRunner(false), []);
         $out = $this->dispatch($runner, null);
 
-        $this->assertSame('openai', $out['provider']);
-        $this->assertSame('Sales', $out['route']['name']);
+        $this->assertFalse($out['success']);
+        $this->assertSame('jev', $out['provider']);
+        $this->assertTrue($out['halt_branches']);
+        $this->assertSame(
+            'Error: dispatcher "Router" did not route the request (Jev: unavailable: no Jev key).',
+            $out['output']
+        );
     }
 
-    public function testAnUnknownModeIsTheHybrid(): void
+    public function testAnUnknownModeIsTheDefault(): void
     {
-        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
         $out = $this->dispatch($runner, ['routing_mode' => 'banana']);
 
-        $this->assertSame('openai', $out['provider'], 'an unknown mode must fall back to the model like the hybrid');
+        $this->assertSame('jev', $out['provider'], 'an unknown mode resolves like an unset one: Jev when allowed');
+        $this->assertFalse($out['success']);
+        $this->assertTrue($out['halt_branches']);
+    }
+
+    public function testAnUnknownModeNotAllowedGoesToTheModel(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [], false);
+        $out = $this->dispatch($runner, ['routing_mode' => 'banana']);
+
+        $this->assertSame('openai', $out['provider']);
         $this->assertSame('Sales', $out['route']['name']);
+        $this->assertSame(0, $runner->made, 'not allowed: the Jev router is never built');
     }
 
     // ── Minimum confidence ─────────────────────────────────────────────────
@@ -412,17 +435,32 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame($message, $out['output'], 'the run ends with the did-not-route result');
     }
 
+    /** An unset dispatcher on a plan with Jev is Jev only: a decline stops its branches too. */
+    public function testAnUnsetDispatcherThatJevDoesNotRouteStopsItsBranches(): void
+    {
+        try {
+            $out = $this->runWorkflow(null, 'global-jev-key', [self::jevAnswer(JevRouter::UNCLEAR, 1.0)], $this->agentRunner(false));
+        } finally {
+            $this->cleanRunsDir();
+        }
+        $message = 'Error: dispatcher "Router" did not route the request (Jev: unclear: the request names no branch).';
+
+        $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
+        $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
+        $this->assertSame($message, $out['output']);
+    }
+
     /**
-     * Scope pin: a hybrid (no mode) dispatcher whose model does not call
-     * route_to keeps today's behaviour, which fans out to every branch.
+     * Scope pin: an LLM-mode dispatcher whose model does not call route_to
+     * keeps today's behaviour, which fans out to every branch.
      */
-    public function testAHybridDispatcherThatDoesNotRouteKeepsTodaysFanOut(): void
+    public function testAnLlmDispatcherThatDoesNotRouteKeepsTodaysFanOut(): void
     {
         $model = Mockery::mock(AgentRunner::class);
         $model->shouldReceive('run')->once()->andReturn(['success' => true, 'text' => 'Some prose, no route_to.',
             'usage' => ['input_tokens' => 10, 'output_tokens' => 5]]);
         try {
-            $out = $this->runWorkflow(null, '', [], $model);
+            $out = $this->runWorkflow(['routing_mode' => 'llm'], '', [], $model);
         } finally {
             $this->cleanRunsDir();
         }
@@ -456,13 +494,13 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertEqualsWithDelta(0.042, $this->nodeCost($runner, 1_000_000, 10), 1e-9);
     }
 
-    /** A hybrid decline is an answered call: recorded once, then the model runs. */
-    public function testAHybridDeclineIsRecordedOnceBeforeTheModel(): void
+    /** An unset dispatcher's decline is an answered call: recorded once, and the model never runs. */
+    public function testAnUnsetDeclineIsRecordedOnceAndTheModelNeverRuns(): void
     {
-        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
         $out = $this->dispatch($runner, null);
 
-        $this->assertSame('openai', $out['provider']);
+        $this->assertSame('jev', $out['provider']);
         $this->assertCount(1, $runner->recorded);
         $this->assertSame('unclear', $runner->recorded[0]['outcome']);
     }
@@ -497,6 +535,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame('openai', $out['provider']);
         $this->assertSame('Sales', $out['route']['name']);
         $this->assertSame([], $runner->recorded);
+        $this->assertSame(0, $runner->made, 'not allowed: the Jev router is never built');
     }
 
     /** A jev row installed before prices existed: unknown cost, never a fake $0. */
