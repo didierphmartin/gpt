@@ -3056,30 +3056,40 @@ class WorkflowEditor {
                 const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
                 generated = { path: `${rootName}/python/scripts/${data.root}/`, code: data.files };
             } else {
+                // The JSON generation: {filename, code} plus, from a backend that
+                // writes one, the ARCHITECTURE.md text under `architecture`.
                 const resp = await fetch(
-                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
+                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python`,
                     { headers: this.getAuthHeaders() }
                 );
                 if (!resp.ok) {
                     const err = await resp.text();
                     throw new Error(err || `HTTP ${resp.status}`);
                 }
-                // Derive filename from Content-Disposition, fall back to workflow name
-                let filename = 'workflow.py';
-                const dispo = resp.headers.get('Content-Disposition') || '';
-                const m = dispo.match(/filename="([^"]+)"/);
-                if (m) filename = m[1];
-                const text = await resp.text();
+                const j = await resp.json();
+                if (j?.success === false) throw new Error(j.error || 'Generation failed');
+                const data = j?.data ?? j;
+                const filename = data?.filename || 'workflow.py';
+                const text = data?.code ?? '';
 
                 // Make sure python/scripts/ exists, then write the .py file there.
                 const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
                 if (!scriptsDir) {
                     throw new Error('Could not resolve synergyAI/python/scripts.');
                 }
-                const fileHandle = await scriptsDir.getFileHandle(filename, { create: true });
-                const writable = await fileHandle.createWritable();
-                await writable.write(text);
-                await writable.close();
+                const writeFile = async (name, content) => {
+                    const fileHandle = await scriptsDir.getFileHandle(name, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(content);
+                    await writable.close();
+                };
+                await writeFile(filename, text);
+                // Its ARCHITECTURE.md beside it, named after the script: scripts/ is
+                // shared by every generated workflow, so a bare ARCHITECTURE.md would
+                // be overwritten by the next one.
+                if (data?.architecture && !this._outputConnectedToIngestion()) {
+                    await writeFile(filename.replace(/\.py$/, '') + '_ARCHITECTURE.md', data.architecture);
+                }
 
                 // Refresh python/.env with the current provider keys so the script can auth.
                 await this._syncRunnerEnv();
@@ -3408,7 +3418,10 @@ class WorkflowEditor {
      *   - Generate    : download the freshly generated script to scripts/
      *   - Info        : describes the runtime layout under synergyAI/python/
      *   - Run         : execute the generated .py via the local runner
+     *   - Stop        : stop the compiled run server
      *   - Display Code: fetch + show the generated Python in a modal
+     *   - Export      : the generated package (current codegen mode) as a zip
+     *   - Architecture: the package's ARCHITECTURE.md, rendered in a modal
      */
     _showLangGraphMenu(buttonEl) {
         // Close any existing instance — clicking the button again should toggle.
@@ -3453,10 +3466,16 @@ class WorkflowEditor {
                 ${this.escapeHtml(this.t('workflow.output.langgraphRun') || 'Run')}
             </button>
             <button type="button" class="langgraph-menu-item" data-action="stop-server">
-                ${this.escapeHtml(this.t('workflow.output.stopServer') || 'Stop the run server')}
+                ${this.escapeHtml(this.t('workflow.output.langgraphStop') || 'Stop')}
             </button>
             <button type="button" class="langgraph-menu-item" data-action="display-code">
                 ${this.escapeHtml(this.t('workflow.output.langgraphDisplayCode') || 'Display Code')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="export">
+                ${this.escapeHtml(this.t('workflow.output.langgraphExport') || 'Export')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="architecture">
+                ${this.escapeHtml(this.t('workflow.output.langgraphArchitecture') || 'Architecture')}
             </button>
         `;
         document.body.appendChild(menu);
@@ -3509,6 +3528,14 @@ class WorkflowEditor {
                 return;
             }
             this._showLangGraphCodeModal();
+        });
+        menu.querySelector('[data-action="export"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._exportLangGraphZip();
+        });
+        menu.querySelector('[data-action="architecture"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showLangGraphArchitectureModal();
         });
 
         // Dismiss on any outside click. Schedule on next tick so the
@@ -5250,6 +5277,131 @@ class WorkflowEditor {
         await this._syncRunnerEnv();
         console.log(`[WorkflowEditor] Saved ${data.files.length} ${mode} files under python/scripts/${data.root}/`);
         return data;
+    }
+
+    /**
+     * Export — the LangGraph package for the current codegen mode (the same
+     * generation Display Code shows) as one zip with ARCHITECTURE.md inside,
+     * from generate-python?format=zip. Saved where the user picks
+     * (showSaveFilePicker); a browser without that API, or a picker that fails
+     * for another reason than a cancel, gets a plain download instead.
+     */
+    async _exportLangGraphZip() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        const mode = this._codegenOptions().mode || 'single';
+        const flag = mode === 'single' ? '' : `&${mode === 'modular' ? 'modular' : 'a2a'}=1`;
+        let blob;
+        let suggestedName = `workflow_${mode}.zip`;
+        try {
+            const resp = await fetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?format=zip${flag}`,
+                { headers: this.getAuthHeaders() }
+            );
+            if (!resp.ok) {
+                const body = await resp.text();
+                let msg = body;
+                try { msg = JSON.parse(body).error || body; } catch (_) { /* not JSON */ }
+                throw new Error(msg || `HTTP ${resp.status}`);
+            }
+            if (resp.headers.get('Content-Type')?.includes('application/json')) {
+                // A backend without the zip export answers with the JSON generation instead.
+                throw new Error('Export is not available on this backend');
+            }
+            const m = (resp.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+            if (m) suggestedName = m[1];
+            blob = await resp.blob();
+        } catch (e) {
+            this._reportLangGraphError(this.t('workflow.output.langgraphExportFailed'), e);
+            return;
+        }
+        if (typeof window.showSaveFilePicker === 'function') {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName,
+                    types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                return;
+            } catch (e) {
+                if (e?.name === 'AbortError') return;   // the user cancelled the dialog
+                console.warn('[WorkflowEditor] save picker failed, downloading instead:', e);
+            }
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = suggestedName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    /**
+     * Architecture — the ARCHITECTURE.md the compiler writes for the current
+     * codegen mode, rendered with the app's Markdown renderer and its Mermaid
+     * hook (class diagram + workflow diagram), in the code modal's frame.
+     */
+    async _showLangGraphArchitectureModal() {
+        if (!this.currentWorkflowId) {
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        const mode = this._codegenOptions().mode || 'single';
+        let doc = '';
+        try {
+            if (mode === 'single') {
+                const resp = await fetch(
+                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python`,
+                    { headers: this.getAuthHeaders() }
+                );
+                if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+                const j = await resp.json();
+                if (j?.success === false) throw new Error(j.error || 'Generation failed');
+                doc = (j?.data ?? j)?.architecture || '';
+            } else {
+                doc = (await this._fetchManifest(mode)).architecture || '';
+            }
+            if (!doc) throw new Error('This backend does not produce ARCHITECTURE.md');
+        } catch (e) {
+            this._reportLangGraphError(this.t('workflow.output.langgraphArchitectureFailed'), e);
+            return;
+        }
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-gray-900">${this.escapeHtml(this.t('workflow.output.langgraphArchitecture') || 'Architecture')}</h3>
+                </div>
+                <div class="arch-doc-body markdown-content overflow-auto flex-1 text-sm"></div>
+                <div class="flex justify-end mt-3">
+                    <button class="arch-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(backdrop);
+        const body = backdrop.querySelector('.arch-doc-body');
+        // Node and workflow names are user text: sanitize the rendered HTML.
+        const html = typeof window.renderMarkdown === 'function' ? window.renderMarkdown(doc) : this.escapeHtml(doc);
+        body.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html) : html;
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        backdrop.querySelector('.arch-close-btn').addEventListener('click', close);
+        if (typeof window.renderMermaidIn === 'function') await window.renderMermaidIn(body);
+    }
+
+    /** A failed Export/Architecture request: a toast when the app has one, else an alert. */
+    _reportLangGraphError(what, e) {
+        const msg = `${what}: ${e?.message || e}`;
+        console.error('[WorkflowEditor]', msg);
+        if (typeof window.showToast === 'function') window.showToast(msg, 'error');
+        else alert(msg);
     }
 
     /**
