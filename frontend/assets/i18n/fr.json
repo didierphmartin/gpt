@@ -860,7 +860,7 @@
       "jevKeySetGlobal": "✓ Clé Jev définie (clé de l'organisation)",
       "jevKeySetPackage": "✓ Clé Jev définie (clé du forfait)",
       "jevNotInPlan": "Jev n'est pas inclus dans votre forfait",
-      "jevKeyMissing": "⚠ Aucune clé Jev — ajoutez-en une dans Paramètres → Clés API LLM, ou demandez à votre administrateur",
+      "jevKeyMissing": "⚠ Aucune clé Jev — ajoutez-en une dans Paramètres → Clés API des LLM et de décision, ou demandez à votre administrateur",
       "jevKeySwitchHint": "Sans clé ce dispatcher ne peut pas router : passez le routage sur LLM pour utiliser le modèle.",
       "jevKeyUnknown": "Impossible de vérifier la clé Jev.",
       "tools": "Outils",

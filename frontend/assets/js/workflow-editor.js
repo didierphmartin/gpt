@@ -17379,7 +17379,7 @@ class WorkflowEditor {
                     routing cheap; it cannot make it fail.</li>
                 </ul>
                 <div class="${note}">The Jev key is stored like an LLM key: your own in
-                Settings → LLM API Keys, or the organisation's, set by your admin. Yours wins.
+                Settings → LLMs and Decision API Keys, or the organisation's, set by your admin. Yours wins.
                 The browser never sees it — the server routes for the canvas Run button.</div>`,
             playbook: `
                 <p class="${h}">📖 Playbook</p>

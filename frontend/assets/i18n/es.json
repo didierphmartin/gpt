@@ -860,7 +860,7 @@
       "jevKeySetGlobal": "✓ Clave de Jev configurada (clave de la organización)",
       "jevKeySetPackage": "✓ Clave de Jev configurada (clave del paquete)",
       "jevNotInPlan": "Jev no está incluido en tu plan",
-      "jevKeyMissing": "⚠ No hay clave de Jev — añade una en Configuración → Claves API de LLM, o pídesela a tu administrador",
+      "jevKeyMissing": "⚠ No hay clave de Jev — añade una en Configuración → Claves API de LLM y de decisión, o pídesela a tu administrador",
       "jevKeySwitchHint": "Sin clave este dispatcher no puede enrutar: cambia el enrutamiento a LLM para usar el modelo.",
       "jevKeyUnknown": "No se pudo comprobar la clave de Jev.",
       "tools": "Herramientas",
