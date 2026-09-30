@@ -968,6 +968,7 @@
       "langgraphExportUnsupported": "L'exportation n'est pas disponible sur ce backend",
       "langgraphArchitectureUnsupported": "Ce backend ne produit pas de document d'architecture",
       "langgraphArchitectureSwarm": "Les workflows en essaim n'ont pas de document d'architecture.",
+      "langgraphArchitectureNone": "Aucun document d'architecture pour ce workflow.",
       "langgraphRunPrompt": "Invite à transmettre au script (sera sys.argv[1:])",
       "codegenTitle": "Options de génération de code",
       "codegenSingle": "Fichier unique",

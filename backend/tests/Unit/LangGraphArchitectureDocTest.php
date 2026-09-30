@@ -154,6 +154,50 @@ class LangGraphArchitectureDocTest extends TestCase
         $this->assertNotSame('', $r['code'], 'the script itself is still generated');
     }
 
+    /**
+     * The doc is a companion: when it cannot be built, a modular/A2A package
+     * still returns every code file, without ARCHITECTURE.md (architecture null,
+     * key kept), and its zip carries the code alone.
+     */
+    public function testADocFailureStillReturnsTheCodeFiles(): void
+    {
+        $facts = LangGraphA2AGeneratorTest::facts();
+        $facts['workflow'] = null;   // build() calls $facts['workflow']->isOutputStorageEnabled(): throws
+        $with = new \ReflectionMethod(LangGraphGenerator::class, 'withArchitecture');
+        $with->setAccessible(true);
+        foreach (['modular', 'a2a'] as $mode) {
+            $code = [['path' => 'workflow.py', 'code' => 'print(1)'], ['path' => 'agents/a.py', 'code' => 'NODE = {}']];
+            $r = $with->invoke(null, ['root' => "demo_{$mode}", 'files' => $code], $facts, $mode);
+            $this->assertSame($code, $r['files'], "{$mode}: the code files, nothing added");
+            $this->assertArrayHasKey('architecture', $r, $mode);
+            $this->assertNull($r['architecture'], $mode);
+            $zip = \AgentTeam\Controllers\WorkflowController::langGraphZipResponse($r, $mode);
+            $tmp = tempnam(sys_get_temp_dir(), 'lgzip');
+            file_put_contents($tmp, $zip['raw_body']);
+            $z = new \ZipArchive();
+            $z->open($tmp);
+            $names = [];
+            for ($i = 0; $i < $z->numFiles; $i++) {
+                $names[] = $z->getNameIndex($i);
+            }
+            $z->close();
+            unlink($tmp);
+            $this->assertSame(["demo_{$mode}/workflow.py", "demo_{$mode}/agents/a.py"], $names, $mode);
+        }
+    }
+
+    /** An ingestion pipeline gets no doc in the multi-file modes either. */
+    public function testIngestionPackageGetsNoArchitectureDoc(): void
+    {
+        $facts = LangGraphA2AGeneratorTest::facts();
+        $facts['byId']['99'] = ['id' => '99', 'node_type' => 'loader', 'config' => ['type' => 'loader']];
+        $with = new \ReflectionMethod(LangGraphGenerator::class, 'withArchitecture');
+        $with->setAccessible(true);
+        $r = $with->invoke(null, ['root' => 'feed_modular', 'files' => [['path' => 'workflow.py', 'code' => '']]], $facts, 'modular');
+        $this->assertSame(['workflow.py'], array_column($r['files'], 'path'));
+        $this->assertNull($r['architecture']);
+    }
+
     public function testRunFlowAndChangeSectionsFollowTheMode(): void
     {
         $single = $this->generate('dispatcher_demo', 'single')['architecture'];

@@ -242,8 +242,9 @@ class LangGraphGenerator
      *
      * Single file: {filename, code, architecture}. Modular / A2A: {root, files,
      * architecture}, files ending with ARCHITECTURE.md. Swarm: {root, files}.
-     * architecture is the ARCHITECTURE.md text (LangGraphArchitectureDoc); in a
-     * single file it is null for an ingestion pipeline or when the doc failed.
+     * architecture is the ARCHITECTURE.md text (LangGraphArchitectureDoc), or
+     * null (and no ARCHITECTURE.md file) for an ingestion pipeline or when the
+     * doc failed to build.
      *
      * @return array{filename: string, code: string, architecture: ?string}|array{root: string, files: list<array{path: string, code: string}>, architecture?: string}
      */
@@ -626,16 +627,16 @@ class LangGraphGenerator
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
         // (LangGraph was the original default and previously had no suffix).
         $filename = "{$safeName}_langgraph.py";
-        return ['filename' => $filename, 'code' => $code, 'architecture' => self::singleArchitecture($facts)];
+        return ['filename' => $filename, 'code' => $code, 'architecture' => self::architectureDoc($facts, 'single')];
     }
 
     /**
-     * The single file's ARCHITECTURE.md, or null. The document is a companion:
-     * it must never cost the user the script, so a failure to build it is
-     * logged and dropped. An ingestion pipeline (loader/splitter/vectorstore
-     * nodes) is not the agent graph the document describes, so it gets none.
+     * This compile's ARCHITECTURE.md, or null. The document is a companion: it
+     * must never cost the user the code, so a failure to build it is logged
+     * and dropped. An ingestion pipeline (loader/splitter/vectorstore nodes) is
+     * not the agent graph the document describes, so it gets none.
      */
-    private static function singleArchitecture(array $facts): ?string
+    private static function architectureDoc(array $facts, string $mode): ?string
     {
         foreach ($facts['byId'] as $n) {
             if (in_array(self::nodeType($n), ['loader', 'splitter', 'vectorstore'], true)) {
@@ -643,9 +644,9 @@ class LangGraphGenerator
             }
         }
         try {
-            return LangGraphArchitectureDoc::build($facts, 'single');
+            return LangGraphArchitectureDoc::build($facts, $mode);
         } catch (\Throwable $e) {
-            error_log('[LangGraphGenerator] ARCHITECTURE.md skipped: ' . $e->getMessage());
+            error_log("[LangGraphGenerator] {$mode} ARCHITECTURE.md skipped: " . $e->getMessage());
             return null;
         }
     }
@@ -2844,14 +2845,18 @@ PY;
     }
 
     /**
-     * A multi-file result plus its ARCHITECTURE.md (LangGraphArchitectureDoc):
-     * under 'architecture' for a caller that only shows it, and as the last
-     * file so it is written beside the code wherever the package is saved.
+     * A multi-file result plus its ARCHITECTURE.md (architectureDoc()): under
+     * 'architecture' for a caller that only shows it, and as the last file so
+     * it is written beside the code wherever the package is saved. With no doc
+     * (ingestion, or it failed to build) 'architecture' is null and the files
+     * are the code alone.
      */
     private static function withArchitecture(array $result, array $facts, string $mode): array
     {
-        $doc = LangGraphArchitectureDoc::build($facts, $mode);
-        $result['files'][] = ['path' => 'ARCHITECTURE.md', 'code' => $doc];
+        $doc = self::architectureDoc($facts, $mode);
+        if ($doc !== null) {
+            $result['files'][] = ['path' => 'ARCHITECTURE.md', 'code' => $doc];
+        }
         $result['architecture'] = $doc;
         return $result;
     }

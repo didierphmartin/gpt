@@ -5378,7 +5378,7 @@ class WorkflowEditor {
             return;
         }
         const mode = this._codegenOptions().mode || 'single';
-        let doc = '';
+        let data;
         try {
             if (mode === 'single') {
                 const resp = await fetch(
@@ -5388,13 +5388,23 @@ class WorkflowEditor {
                 if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
                 const j = await resp.json();
                 if (j?.success === false) throw new Error(j.error || 'Generation failed');
-                doc = (j?.data ?? j)?.architecture || '';
+                data = j?.data ?? j;
             } else {
-                doc = (await this._fetchManifest(mode)).architecture || '';
+                data = await this._fetchManifest(mode);
             }
-            if (!doc) throw new Error(this.t('workflow.output.langgraphArchitectureUnsupported'));
+            // No key at all: a backend without the feature.
+            if (!data || !('architecture' in data)) throw new Error(this.t('workflow.output.langgraphArchitectureUnsupported'));
         } catch (e) {
             this._reportLangGraphError(this.t('workflow.output.langgraphArchitectureFailed'), e);
+            return;
+        }
+        const doc = data.architecture || '';
+        if (!doc) {
+            // The key is there but empty: this workflow has none (an ingestion
+            // pipeline, or the compiler skipped it). Not a failure.
+            const msg = this.t('workflow.output.langgraphArchitectureNone');
+            if (typeof window.showToast === 'function') window.showToast(msg, 'info');
+            else alert(msg);
             return;
         }
         const backdrop = document.createElement('div');
