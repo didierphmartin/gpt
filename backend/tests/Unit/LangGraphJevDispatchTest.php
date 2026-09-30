@@ -277,7 +277,9 @@ class LangGraphJevDispatchTest extends TestCase
             $k = strpos($node, 'async def _run_dispatcher_kind(');
             if ($mode !== 'single') {
                 $this->assertNotFalse($k, "{$mode}: _run_dispatcher_kind");
-                $kEnd = strpos($node, "\n\n\nasync def ", $k + 10);
+                // Ends at the next top-level statement: _run_playbook_kind in a playbook file,
+                // the A2A serving banner in an agent server, end of file in a module.
+                $kEnd = preg_match('/\n\n\n(?=\S)/', $node, $mm, PREG_OFFSET_CAPTURE, $k + 10) ? $mm[0][1] : false;
                 $kindFile = tempnam(sys_get_temp_dir(), 'jevk') . '.py';
                 file_put_contents($kindFile, substr($node, $k, $kEnd === false ? null : $kEnd - $k) . "\n");
             }

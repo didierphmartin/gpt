@@ -328,7 +328,8 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '');
+        $lines[] = 'from pathlib import Path';
         $lines[] = '';
         $lines[] = 'from dotenv import load_dotenv';
         $lines[] = '';
@@ -337,7 +338,7 @@ class LangGraphGenerator
         $lines[] = '# call fails; runner-mediated runs only worked because main.py loads the';
         $lines[] = '# same file and subprocesses inherit the environment.';
         $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))';
-        $lines[] = 'from typing import Annotated, Any, Literal, TypedDict';
+        $lines[] = 'from typing import Annotated, Literal, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';
         $lines[] = '# Provider-aware LLM wiring — each agent uses the LLM (provider/model)';
@@ -351,7 +352,7 @@ class LangGraphGenerator
         $lines[] = '    from langchain.agents import create_agent as create_react_agent';
         $lines[] = 'except ImportError:';
         $lines[] = '    from langgraph.prebuilt import create_react_agent';
-        $lines[] = 'from pydantic import BaseModel, Field, create_model';
+        $lines[] = 'from pydantic import Field, create_model';
         $lines[] = '';
         $lines[] = '# Optional global override: setting MODEL_NAME in the env forces every';
         $lines[] = "# agent to use that model regardless of its per-agent setting. Useful for";
@@ -690,7 +691,7 @@ class LangGraphGenerator
             $lines[] = '';
         }
 
-        $lines[] = self::runBodyBlock();
+        $lines[] = self::runBodyBlock($playbookData !== []);
 
         $code = implode("\n", $lines);
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
@@ -1399,7 +1400,7 @@ class LangGraphGenerator
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
-        $L[] = 'from typing import Annotated, Any, TypedDict';
+        $L[] = 'from typing import Annotated, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
@@ -1491,7 +1492,7 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, atexit, json, os, time, uuid';
+        $L[] = 'import argparse, asyncio, atexit, json, os, sys, time, uuid';
         $L[] = '';
         $L[] = 'from fastapi import FastAPI, HTTPException, Request';
         $L[] = 'from fastapi.middleware.cors import CORSMiddleware';
@@ -1996,7 +1997,7 @@ PY;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'import argparse, asyncio, json, os, ' . ($isPlaybook ? 're, ' : '') . 'subprocess, sys, threading, time' . ($isPlaybook ? ', uuid' : '');
         $L[] = 'from typing import Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
@@ -2014,14 +2015,14 @@ PY;
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
         $L[] = 'except ImportError:';
         $L[] = '    from langgraph.prebuilt import create_react_agent';
-        $L[] = 'from pydantic import BaseModel, Field, create_model';
+        $L[] = 'from pydantic import Field, create_model';
         $L[] = 'from a2a import types as T';
         $L[] = 'from a2a.server.agent_execution import AgentExecutor, RequestContext';
         $L[] = 'from a2a.server.events import EventQueue';
         $L[] = 'from a2a.server.request_handlers import DefaultRequestHandler';
         $L[] = 'from a2a.server.tasks import InMemoryTaskStore, TaskUpdater';
         $L[] = 'from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes';
-        $L[] = 'from a2a.helpers.proto_helpers import new_task_from_user_message, new_data_part, get_data_parts, get_text_parts';
+        $L[] = 'from a2a.helpers.proto_helpers import new_task_from_user_message, new_data_part, get_data_parts';
         $L[] = '';
         $L[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $L[] = '';
@@ -2092,7 +2093,7 @@ PY;
         }
         $L[] = '}';
         $L[] = '';
-        $L[] = self::a2aNodeLogicBlock();
+        $L[] = self::a2aNodeLogicBlock($isPlaybook);
         $L[] = self::a2aAgentServerBlock();
         $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
         $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
@@ -2176,17 +2177,20 @@ the text part of the result.
 TXT;
     }
 
-    /** run_node(): the node body, shared by the three kinds; called by the executor. */
-    private static function a2aNodeLogicBlock(): string
+    /**
+     * run_node(): the node body, shared by the three kinds; called by the executor.
+     * The playbook branch and _run_playbook_kind are emitted only into a playbook node's
+     * file: elsewhere the playbook runtime they call is not defined.
+     */
+    private static function a2aNodeLogicBlock(bool $isPlaybook): string
     {
-        return <<<'PY'
+        $header = <<<'PY'
 # ==============================================================
 # NODE LOGIC
 # run_node() executes this node once for one request text and returns
 # {"text", "route", "notes", "status"}. It is the single-file script's
 # node function with the LangGraph state replaced by plain arguments.
 # ==============================================================
-PLAYBOOK_MAX_ROUNDS = 40
 
 
 def _llm():
@@ -2197,13 +2201,19 @@ def _llm():
 async def run_node(request_text: str, trace) -> dict:
     """Run the node on `request_text` (the orchestrator's framed input).
 
-    trace(line) is an async callback that reports progress to the A2A client.
+    trace(line) is an async callback that reports progress: a print in a package, a task status update in an A2A agent server.
     Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
-    Exceptions propagate to the executor, which fails the task.
+    Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).
     """
     kind = NODE["kind"]
+
+PY;
+        $playbookBranch = <<<'PY'
     if kind == "playbook":
         return await _run_playbook_kind(request_text, trace)
+
+PY;
+        $runNode = <<<'PY'
     catalog = build_tools_from_catalog()
     catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL   # local (non-MCP) tool, same as the single-file script
     tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]
@@ -2223,6 +2233,9 @@ async def run_node(request_text: str, trace) -> dict:
     return {"text": text, "route": "", "notes": "", "status": "ok"}
 
 
+
+PY;
+        $dispatcher = <<<'PY'
 async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
     """Dispatcher: Jev or one forced route_to call (_run_dispatcher); the chosen child id travels back as "route"."""
     ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", ""),
@@ -2235,6 +2248,8 @@ async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
     return {"text": text, "route": "" if route == END else str(route), "notes": notes, "status": "ok" if route != END else "unrouted"}
 
 
+PY;
+        $playbook = <<<'PY'
 async def _run_playbook_kind(request_text: str, trace) -> dict:
     """Playbook: the playbook runtime; gates go through whatever _playbook_gate the
     surrounding file installed (console prompts in a modular package, an
@@ -2264,6 +2279,7 @@ async def _run_playbook_kind(request_text: str, trace) -> dict:
 
 
 PY;
+        return $header . ($isPlaybook ? $playbookBranch : '') . $runNode . $dispatcher . ($isPlaybook ? "\n" . $playbook : '');
     }
 
     /** Agent Card, executor with pause/resume legs, gate bridge, CLI entry. */
@@ -3351,8 +3367,9 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid';
-        $L[] = 'from typing import Annotated, Any, Literal, TypedDict';
+        $withPlaybooks = $facts['playbookData'] !== [];
+        $L[] = 'import asyncio, json, os, ' . ($withPlaybooks ? 're, ' : '') . 'subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
+        $L[] = 'from typing import Annotated, Literal, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
@@ -3369,7 +3386,7 @@ TXT;
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
         $L[] = 'except ImportError:';
         $L[] = '    from langgraph.prebuilt import create_react_agent';
-        $L[] = 'from pydantic import BaseModel, Field, create_model';
+        $L[] = 'from pydantic import Field, create_model';
         $L[] = '';
         $L[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $L[] = '';
@@ -3398,9 +3415,6 @@ TXT;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
         $L[] = self::toolBuilderBlock();
-        $L[] = $sep;
-        $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)';
-        $L[] = $sep;
         $L[] = PythonEmitHelpers::eventSinkBlock();
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
@@ -3421,10 +3435,7 @@ TXT;
         $L[] = '';
         $L[] = self::dispatchBlock();
         $L[] = self::datetimeInjectorBlock();
-        if ($facts['playbookData'] !== []) {
-            $L[] = $sep;
-            $L[] = '# PLAYBOOK RUNTIME (this workflow has playbook nodes)';
-            $L[] = $sep;
+        if ($withPlaybooks) {
             $L[] = self::playbookRuntimeBlock();
         }
         $L[] = $sep;
@@ -3487,8 +3498,10 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import json, os, time';
-        $L[] = '';
+        if ($isPlaybook) {
+            $L[] = 'import json';
+            $L[] = '';
+        }
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
         $L[] = 'from langgraph.graph import END';
         $L[] = 'try:';
@@ -3501,7 +3514,7 @@ TXT;
         $L[] = '# every module of the package.';
         $imports = ['_make_llm', '_run_dispatcher', '_run_skill_step', 'build_tools_from_catalog', 'inject_datetime', 'RUN_SKILL_SCRIPT_TOOL'];
         if ($isPlaybook) {
-            $imports = array_merge($imports, ['PLAYBOOK_SYSTEM_PROMPT', '_PlaybookRun', 'build_playbook_tools', 'render_playbook_transcript']);
+            $imports = array_merge($imports, ['PLAYBOOK_MAX_ROUNDS', 'PLAYBOOK_SYSTEM_PROMPT', '_PlaybookRun', 'build_playbook_tools', 'render_playbook_transcript']);
         }
         $L[] = 'from common import ' . implode(', ', $imports);
         $L[] = '';
@@ -3519,7 +3532,7 @@ TXT;
             $L[] = $nl;
         }
         $L[] = '';
-        $L[] = self::a2aNodeLogicBlock();
+        $L[] = self::a2aNodeLogicBlock($isPlaybook);
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -3606,7 +3619,7 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, os, re, sys, time';
+        $L[] = 'import argparse, asyncio, os, re, time';
         $L[] = '';
         $L[] = 'from langgraph.graph import END, START, StateGraph';
         $L[] = '';
@@ -4480,7 +4493,7 @@ async def run(user_prompt: str):
 
     Steps:
     1. Build LangChain tools from the embedded TOOL_CATALOG
-    2. Initialize the LLM (Anthropic Claude)
+    2. Build each node's own chat model (provider/model set per node in the workflow editor)
     3. Construct a LangGraph StateGraph with nodes from ORDER
     4. Wire edges from EDGES (respecting topological order)
     5. Compile and invoke the graph
@@ -4497,7 +4510,12 @@ async def run(user_prompt: str):
 PY;
     }
 
-    private static function runBodyBlock(): string
+    /**
+     * The body of run() and the __main__ block. The playbook arm of the node loop is emitted
+     * only when the workflow has playbook nodes: without them its names (PLAYBOOK_MAX_ROUNDS,
+     * _PlaybookRun, ...) are never defined in the file.
+     */
+    private static function runBodyBlock(bool $withPlaybooks): string
     {
         return <<<'PY'
     # One LLM instance per agent — provider/model come from the AGENTS
@@ -4550,7 +4568,6 @@ PY;
         elif ntype in ("agent", "agent-template"):
             def make_agent(n=nid):
                 async def _run(state):
-                    from pathlib import Path
                     from datetime import datetime as _dt
                     ad = AGENTS[n]
                     tool_names = ad["tool_names"]
@@ -4644,6 +4661,8 @@ PY;
                 return _run
             sg.add_node(nid, make_agent())
 
+
+PY . ($withPlaybooks ? <<<'PY'
         elif ntype == "playbook":
             def make_playbook(n=nid):
                 async def _run(state):
@@ -4686,6 +4705,8 @@ PY;
                     return {"node_outputs": {n: {"source": pb["display"], "text": transcript}}}
                 return _run
             sg.add_node(nid, make_playbook())
+
+PY : '') . <<<'PY'
         elif ntype == "output":
             def make_output(n=nid):
                 def _run(state):
@@ -4749,9 +4770,7 @@ if __name__ == "__main__":
     # SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, don't save.
     if OUTPUT_STORAGE_ENABLED:
         try:
-            import os, time
-            import re as _re2
-            _mm = _re2.search(r"(?is)<!doctype html.*?</html\s*>", output) or _re2.search(r"(?is)<html[\s>].*?</html\s*>", output)
+            _mm = re.search(r"(?is)<!doctype html.*?</html\s*>", output) or re.search(r"(?is)<html[\s>].*?</html\s*>", output)
             if _mm:
                 output = _mm.group(0)  # strip narration/fences around a full HTML doc
                 _ext = "html"
@@ -4777,7 +4796,6 @@ if __name__ == "__main__":
         _saved_path = None
 
     # Closing RUN SUMMARY (printed LAST): time per node, total, document location.
-    import time as _t2
     print("\n" + "=" * 74)
     print("RUN SUMMARY")
     print("-" * 74)
@@ -4787,7 +4805,7 @@ if __name__ == "__main__":
         for _n, _s in sorted(NODE_DURATIONS.items(), key=lambda kv: -kv[1]):
             print(f"    {_n:<{_w}}   {_s:7.1f}s")
     if _RUN_T0 is not None:
-        print(f"  Total wall-clock: {_t2.monotonic() - _RUN_T0:.1f}s")
+        print(f"  Total wall-clock: {time.monotonic() - _RUN_T0:.1f}s")
     print(f"  Final output: {len(output)} chars")
     if _saved_path:
         print(f"  Document saved to: {_saved_path}")

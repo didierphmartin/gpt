@@ -1,1 +1,7 @@
-{}
+{
+  "EVENT SINK -- how api.py observes a run (inert for CLI runs)": {"now": "Inert until a host installs a sink (see api.py). With no sink the", "why": "banner doubled the block's own EVENT SINK + GATE RENDEZVOUS banner (analysis C2)"},
+  "PLAYBOOK RUNTIME (this workflow has playbook nodes)": {"now": "PLAYBOOK RUNTIME", "why": "banner doubled PlaybookEmit::runtimeBlock's own banner (analysis C2)"},
+  "2. Initialize the LLM (Anthropic Claude)": {"now": "2. Build each node's own chat model (provider/model set per node in the workflow editor)", "why": "stale docstring (analysis D7)"},
+  "trace(line) is an async callback that reports progress to the A2A client.": {"now": "trace(line) is an async callback that reports progress: a print in a package, a task status update in an A2A agent server.", "why": "stale docstring (analysis D7)"},
+  "Exceptions propagate to the executor, which fails the task.": {"now": "Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).", "why": "stale docstring (analysis D7)"}
+}

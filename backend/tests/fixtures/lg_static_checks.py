@@ -16,7 +16,9 @@ import ast, builtins, io, re, sys, tokenize
 
 
 def undefined(tree):
-    known = set(dir(builtins))
+    # Module dunders are bound by the import system, not by builtins; __file__ is the one
+    # dir(builtins) lacks, the others are listed so the rule reads complete.
+    known = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__package__", "__spec__"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             known.add(node.name)

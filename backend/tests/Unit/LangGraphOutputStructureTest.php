@@ -118,9 +118,12 @@ class LangGraphOutputStructureTest extends TestCase
                 file_put_contents($file, implode("\n", $now) . "\n");
                 continue;
             }
+            $this->assertFileExists($file, "{$mode}: documentation baseline missing");
+            $baseline = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $this->assertNotEmpty($baseline, "{$mode}: documentation baseline is empty, so it would pass vacuously");
             $have = array_flip($now);
             $lost = [];
-            foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            foreach ($baseline as $line) {
                 $r = $reworded[$line] ?? null;
                 $ok = isset($have[$line])
                     || ($r !== null && array_key_exists('now', $r)
@@ -133,6 +136,50 @@ class LangGraphOutputStructureTest extends TestCase
         }
         if (getenv('LG_DOC_BASELINE_WRITE') === '1') {
             $this->markTestSkipped('baseline written');
+        }
+    }
+
+    /**
+     * A NameError is a runtime failure py_compile never sees. GeneratedDocParityTest scans only
+     * the single files of the four targets; this scans every LangGraph file of every mode, for
+     * three workflow shapes. The allowlist is the set of names the playbook runtime deliberately
+     * probes for (try/except NameError); Task 7b empties it. Module dunders such as __file__ are
+     * allowed by lg_static_checks.py itself, not here.
+     */
+    public function testNoLangGraphFileReferencesAnUndefinedGlobal(): void
+    {
+        // PlaybookEmit's runtime probes for the event sink (try/except NameError) so it runs
+        // with or without one: in a file without the sink these four are unbound on purpose.
+        $allowed = ['_SINK', 'emit_event', 'open_gate', 'take_gate_answer'];
+        foreach (self::graphs() as $name => $graph) {
+            foreach (['single', 'modular', 'a2a'] as $mode) {
+                $w = self::write($this->files($graph, $mode, true));
+                $found = array_filter($this->staticCheck('undefined', $w['paths']),
+                    fn($l) => !in_array(substr($l, strrpos($l, ' ') + 1), $allowed, true));
+                $this->assertSame([], array_values($found), "{$name}/{$mode}");
+            }
+        }
+    }
+
+    public function testNoLangGraphFileImportsAnUnusedName(): void
+    {
+        foreach (self::graphs() as $name => $graph) {
+            foreach (['single', 'modular', 'a2a'] as $mode) {
+                $this->assertSame([], $this->staticCheck('unused', self::write($this->files($graph, $mode))['paths']), "{$name}/{$mode}");
+            }
+        }
+    }
+
+    /** Every class and public function the LangGraph target emits says why it exists. */
+    public function testEveryLangGraphClassAndPublicFunctionHasADocstring(): void
+    {
+        $allowed = ['def _PlaybookRun.emit has no docstring'];   // PlaybookEmit's; Task 7b replaces it
+        foreach (self::graphs() as $name => $graph) {
+            foreach (['single', 'modular', 'a2a'] as $mode) {
+                $found = array_filter($this->staticCheck('docstrings', self::write($this->files($graph, $mode))['paths']),
+                    fn($l) => !in_array(substr($l, strpos($l, ': ') + 2), $allowed, true));
+                $this->assertSame([], array_values($found), "{$name}/{$mode}");
+            }
         }
     }
 }
