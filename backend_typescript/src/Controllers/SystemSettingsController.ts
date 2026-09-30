@@ -4,6 +4,7 @@ import { config } from '../config/env';
 import { db } from '../db/pools';
 import { DB } from '../db/types';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { ROUTER_FORMAT, routerPairingError, ROUTER_KEYS } from '../Services/ProviderKinds';
 
 /**
  * Mirrors src/Controllers/SystemSettingsController.php — the admin dashboard's LLM
@@ -73,7 +74,7 @@ function ucfirst(s: string): string {
 
 export class SystemSettingsController {
   // Allowed API formats for validation (SystemSettingsController::ALLOWED_API_FORMATS).
-  private static readonly ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom'];
+  private static readonly ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ROUTER_FORMAT];
 
   // Top-level provider keys that have dedicated config sections (::TOP_LEVEL_PROVIDERS).
   private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
@@ -392,6 +393,19 @@ export class SystemSettingsController {
         error: 'Invalid api_format. Allowed values: ' + SystemSettingsController.ALLOWED_API_FORMATS.join(', '),
         status_code: 400,
       };
+    }
+
+    // A router row and a router key go together (see ProviderKinds).
+    const pairingError = routerPairingError(providerKey, apiFormat);
+    if (pairingError) {
+      return { success: false, error: pairingError, status_code: 400 };
+    }
+    if (ROUTER_KEYS.includes(providerKey)) {
+      // No chat endpoint, no streaming, no tools: whatever the form sent.
+      body.base_url = null;
+      body.chat_endpoint = null;
+      body.streaming = 0;
+      body.supports_tools = 0;
     }
 
     try {

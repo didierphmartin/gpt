@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The seed must define the eight providers, must never carry a key, and must
-# not silently drift from the app's own fallback provider table.
+# not silently drift from the app's own fallback provider table. It also holds
+# ONE router row (jev, api_format 'router'): not a chat provider, so it has no
+# catalog entry and no base_url, and is exempt from the chat-provider checks.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SEED="$HERE/../db/02-seed.sql"
@@ -33,6 +35,22 @@ empty_keys=$(grep -o "', '', '" "$SEED" | wc -l | tr -d ' ')
 for p in claude openai gemini grok deepseek kimi gamma4 glm; do
   grep -qi "'$p'" "$SEED" || fail "no row for provider: $p"
 done
+
+# The router row: exactly one, it is jev, it has no base_url, and no chat
+# provider row may borrow the 'router' format (that would drop it from chat).
+router_rows=$(grep -E "^\('[a-z0-9]+'," "$SEED" | grep -c "'router'" || true)
+[ "$router_rows" -eq 1 ] || fail "expected exactly 1 router row, found $router_rows"
+jev_row=$(grep -E "^\('jev'," "$SEED" || true)
+[ -n "$jev_row" ] || fail "no row for router: jev"
+echo "$jev_row" | grep -q "'router'" || fail "jev row must use api_format 'router'"
+echo "$jev_row" | grep -qE "^\('jev', '[^']*', '', 'jev-latest', NULL," \
+  || fail "jev row must have an empty api_key, model jev-latest and base_url NULL"
+# Jev is priced by its vendor ($0.042 per 1M input, output free), not by the
+# model catalog; its row carries NULL prices, so a separate UPDATE must set them.
+grep -qE "price_input_per_1m. = 0\.042, .price_output_per_1m. = 0" "$SEED" \
+  || fail "seed must price the jev row: input 0.042, output 0"
+grep -qE "provider_key. = 'jev'" "$SEED" \
+  || fail "the jev price UPDATE must target provider_key = 'jev'"
 
 [ -f "$CONTROLLER" ] || fail "missing $CONTROLLER"
 [ -f "$KIMI_PROVIDER" ] || fail "missing $KIMI_PROVIDER"
@@ -186,4 +204,4 @@ if grep -qE ", *0, *[0-9]+\)[,;]" "$SEED"; then
   fail "a row appears to have enabled=0"
 fi
 
-echo "PASS: seed defines all 8 providers, carries no keys, matches the app's defaults (models and prices) and the model catalog, and no promotional price has expired"
+echo "PASS: seed defines all 8 providers + the jev router row, carries no keys, matches the app's defaults (models and prices) and the model catalog, and no promotional price has expired"

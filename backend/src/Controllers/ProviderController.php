@@ -8,6 +8,7 @@ use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
 use Quantis\AIPortfolioAssistant\Services\LLMProviderResolver;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 use AgentTeam\Functions\AgentDelegationFunctions;
 use PDO;
 use Exception;
@@ -229,6 +230,11 @@ class ProviderController
 
             $providers = [];
             foreach ($rows as $row) {
+                // A router row (Jev) stores a key here but cannot chat: never
+                // offer it in a provider picker.
+                if (ProviderKinds::isRouterRow($row)) {
+                    continue;
+                }
                 $providers[] = [
                     'name' => $row['provider_key'],
                     'display_name' => $row['display_name'],

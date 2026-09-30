@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 
 from app.controllers.model_catalog_controller import CATALOG_PATH
+from app.services.provider_kinds import ROUTER_FORMAT, ROUTER_KEYS, router_pairing_error
 from app.support.db_presence import DbPresence
 from app.support.phpcompat import (
     php_bool,
@@ -43,7 +44,8 @@ from app.support.phpjson import php_json_decode, php_json_encode
 
 class SystemSettingsController:
     # Allowed API formats for validation (SystemSettingsController.php:24)
-    ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom']
+    # 'router' marks a non-chat row (Jev): it only stores a key; see provider_kinds.
+    ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ROUTER_FORMAT]
 
     # Top-level provider keys that have dedicated config sections (php:27)
     TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm']
@@ -368,6 +370,14 @@ class SystemSettingsController:
                 'error': 'Invalid api_format. Allowed values: ' + ', '.join(self.ALLOWED_API_FORMATS),
                 'status_code': 400,
             }
+
+        # A router row and a router key go together (see provider_kinds).
+        pairing_error = router_pairing_error(provider_key, api_format)
+        if pairing_error:
+            return {'success': False, 'error': pairing_error, 'status_code': 400}
+        if provider_key in ROUTER_KEYS:
+            # No chat endpoint, no streaming, no tools: whatever the form sent.
+            body = {**body, 'base_url': None, 'chat_endpoint': None, 'streaming': 0, 'supports_tools': 0}
 
         try:
             self._ensure_price_columns()

@@ -22,6 +22,7 @@ use Quantis\AIPortfolioAssistant\Providers\DeepSeekProvider;
 use Quantis\AIPortfolioAssistant\Providers\KimiProvider;
 use Quantis\AIPortfolioAssistant\Services\DebugLogger;
 use Quantis\AIPortfolioAssistant\Services\LLMManager;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 use Quantis\AIPortfolioAssistant\Services\SSEHubClient;
 use Quantis\AIPortfolioAssistant\Services\ToolsManager;
 use Quantis\AIPortfolioAssistant\Services\UsageTracker;
@@ -479,7 +480,13 @@ class AIPortfolioAssistant
         // Everything declared in config['providers'] (DB-driven via
         // system_llm_settings): deepseek/gemini/grok/kimi resolve to their
         // dedicated classes through the map; the rest get CustomProvider.
-        $customProviders = $this->config->get('providers', []);
+        // Router rows (Jev) never land here (LLMProviderResolver files them
+        // under config['routers']); filtered again so a hand-built config
+        // cannot turn one into a chat provider or a fallback.
+        $customProviders = array_filter(
+            $this->config->get('providers', []),
+            fn($providerConfig) => !is_array($providerConfig) || !ProviderKinds::isRouterRow($providerConfig)
+        );
         foreach ($customProviders as $name => $providerConfig) {
             if (empty($providerConfig['base_url'])) {
                 continue;

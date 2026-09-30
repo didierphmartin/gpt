@@ -20,6 +20,10 @@ use Exception;
  *   - `claude`, `openai`           → at config root
  *   - everything else (`kimi`, `grok`, `gemini`, `deepseek`, …) → nested
  *     under `config['providers'][<key>]`
+ *   - router rows (`api_format = 'router'`, e.g. `jev`) → under
+ *     `config['routers'][<key>]` and NEVER among the providers: a router
+ *     answers closed questions only, so it must not become a chat provider or
+ *     a fallback (see ProviderKinds).
  */
 class LLMProviderResolver
 {
@@ -34,14 +38,20 @@ class LLMProviderResolver
     public static function applyDbSettings(PDO $db, array $config): array
     {
         try {
-            $stmt = $db->query("SHOW TABLES LIKE 'system_llm_settings'");
-            if ($stmt->rowCount() === 0) {
-                return $config;
+            // SHOW TABLES is MySQL-only; on other drivers (the SQLite unit
+            // tests) a missing table throws and is caught below instead.
+            if ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+                $stmt = $db->query("SHOW TABLES LIKE 'system_llm_settings'");
+                if ($stmt === false || $stmt->rowCount() === 0) {
+                    return $config;
+                }
             }
 
-            $rows = $db
-                ->query("SELECT * FROM system_llm_settings WHERE enabled = 1")
-                ->fetchAll(PDO::FETCH_ASSOC);
+            $stmt = $db->query("SELECT * FROM system_llm_settings WHERE enabled = 1");
+            if ($stmt === false) {
+                return $config;
+            }
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             if (!isset($config['providers']) || !is_array($config['providers'])) {
                 $config['providers'] = [];
@@ -51,7 +61,9 @@ class LLMProviderResolver
                 $key = $row['provider_key'];
                 $built = self::buildProviderFromDb($row);
 
-                if (in_array($key, self::ROOT_PROVIDERS, true)) {
+                if (ProviderKinds::isRouterRow($row)) {
+                    $config['routers'][$key] = array_merge($config['routers'][$key] ?? [], $built);
+                } elseif (in_array($key, self::ROOT_PROVIDERS, true)) {
                     $existing = $config[$key] ?? [];
                     $config[$key] = array_merge($existing, $built);
                 } else {

@@ -6,6 +6,9 @@ namespace AgentTeam\Services;
 
 use AgentTeam\Models\Workflow;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
+use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use Quantis\AIPortfolioAssistant\Providers\ProviderRequestFactory;
 
 /**
@@ -474,6 +477,13 @@ class GraphWorkflowRunner
                     continue;
                 }
 
+                // A Jev-only dispatcher that did not route: the run stops on
+                // that branch point, and its failure is the run's result.
+                if ($this->haltUnrouted($currentNodeId, $output, $edges, $executedNodes)) {
+                    $finalOutput = $output['output'] ?? null;
+                    continue;
+                }
+
                 // Check for parallel execution opportunity
                 // NEW: Detect parallelism from multiple outgoing edges to agent nodes (not just from 'parallel' node)
                 $nextNodeIds = $this->getNextNodeIds($currentNodeId, $edges);
@@ -660,6 +670,24 @@ class GraphWorkflowRunner
         }
         if (!in_array($chosen, $queue, true) && !in_array($chosen, $executedNodes, true)) $queue[] = $chosen;
         error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} routed to {$chosen} ({$route['name']}); skipped " . json_encode($unchosen));
+        return true;
+    }
+
+    /**
+     * Jev-only dispatcher that did not route ('halt_branches'): mark every
+     * branch -- and everything reachable solely through them -- as done
+     * without running it, so no child agent or model is called. Only Jev mode
+     * sets the flag; an LLM dispatcher that does not route keeps its
+     * historical behaviour. Returns false (and touches nothing) otherwise.
+     */
+    private function haltUnrouted(int $nodeId, array $output, array $edges, array &$executedNodes): bool
+    {
+        if (empty($output['halt_branches'])) return false;
+        $branches = $this->getNextNodeIds($nodeId, $edges);
+        foreach (DispatchRouting::skipSet($branches, $edges) as $skipId) {
+            if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
+        }
+        error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} did not route (Jev only); skipped " . json_encode($branches));
         return true;
     }
 
@@ -968,6 +996,92 @@ class GraphWorkflowRunner
             ];
         }
 
+        // Dispatcher routing mode (settings.routing_mode) -- always exactly one:
+        //   'llm'  -> the model only; Jev is never consulted.
+        //   'jev'  -> Jev only; the model is never called. When Jev cannot
+        //             decide (unclear, below the minimum confidence, not in the
+        //             plan, no key, error, timeout) the run stops with "did not
+        //             route" and none of the branches run.
+        //   other  -> (absent on dispatchers saved before the setting existed,
+        //             or unknown) resolved here: Jev when the user's plan allows
+        //             Jev, else the model. There is no third, hybrid state.
+        //
+        // Why Jev by default. A dispatcher answers a CLOSED question, which is
+        // the one thing a System One model does natively -- and does with a
+        // guarantee the LLM cannot give: the answer is constrained to the
+        // options supplied, so a branch that does not exist is unrepresentable
+        // rather than merely unlikely. Measured on this workflow: ~250ms
+        // against ~5s for the forced route_to turn.
+        //
+        // It decides ONLY when it is sure: 'unclear' (no branch named) and
+        // 'low_confidence' (two branches defensible) are not routes, and in Jev
+        // mode they stop the run rather than route on a guess. A dispatcher
+        // that needs the model's judgement -- or the notes only a model can
+        // write for the chosen child -- is set to LLM.
+        if ($dispatchTargets !== []) {
+            $routingSettings = $agent->getSettings();
+            $savedMode = $routingSettings['routing_mode'] ?? null;
+            // One resolve serves both the default and the Jev call below.
+            $resolvedJev = null;
+            if ($savedMode === 'jev' || $savedMode === 'llm') {
+                $routingMode = $savedMode;
+            } else {
+                $resolvedJev = JevKeyResolver::resolve($this->db, $this->config, $userId);
+                $routingMode = $resolvedJev['source'] === 'not_allowed' ? 'llm' : 'jev';
+            }
+            if ($routingMode === 'jev') {
+                // Same clamp as DispatchController (browser path): [0,1], else the default.
+                $floor = is_numeric($routingSettings['jev_min_confidence'] ?? null)
+                    ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
+                    : JevRouter::DEFAULT_CONFIDENCE_FLOOR;
+                // The key the plan allows (user row, package key, global row);
+                // none = "did not route", with the reason saying why.
+                $resolvedJev ??= JevKeyResolver::resolve($this->db, $this->config, $userId);
+                $jev = $this->makeJevRouter($resolvedJev['key'], $floor);
+                $jevOut = $jev->route($task, $dispatchTargets,
+                    DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
+                if ($resolvedJev['key'] === '') {
+                    // Not in the plan vs. no key: the reason says which.
+                    $jevOut['reason'] = JevKeyResolver::unavailableReason($resolvedJev['source']);
+                }
+                // The only place a Jev call is written as usage (answered calls only).
+                $this->recordJevUsage($userId, $jevOut);
+                $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
+                $jevUsage = ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
+                             'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)];
+                if ($jevOut['outcome'] === 'routed') {
+                    $target = $jevOut['target'];
+                    // Same shape the LLM path returns below, minus notes: Jev
+                    // produces no prose, so the child gets the task alone --
+                    // which the notes block already treats as optional.
+                    $this->nodeLog($node, 'info', 'routing',
+                        "Jev routed to {$target['name']} (confidence {$conf}, {$jevOut['ms']}ms, no LLM turn)");
+                    return [
+                        'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                        'output' => $task,
+                        'route' => ['id' => $target['id'], 'name' => $target['name'], 'notes' => ''],
+                        'success' => true,
+                        'usage' => $jevUsage,
+                        'provider' => 'jev',
+                    ];
+                }
+                // Jev only: no model fallback, so the run stops here and says
+                // why (the reason names a missing key or the plan, too).
+                $why = "{$jevOut['outcome']}: {$jevOut['reason']}";
+                $this->nodeLog($node, 'error', 'routing',
+                    "Jev did not route ({$why}, confidence {$conf}) — Jev-only dispatcher, no model fallback");
+                return [
+                    'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                    'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request (Jev: {$why}).",
+                    'success' => false,
+                    'usage' => $jevUsage,
+                    'provider' => 'jev',
+                    // The run loop reads this: no branch may run (see haltUnrouted).
+                    'halt_branches' => true,
+                ];
+            }
+        }
+
         // Dispatcher: declare route_to and force the call so the model cannot
         // answer in prose and skip the routing. Grok/DeepSeek ignore the
         // specific-function form, so they get bare 'required'.
@@ -1048,6 +1162,25 @@ class GraphWorkflowRunner
             'usage' => $result['usage'] ?? null,
             'provider' => $agent->getProvider(),
         ];
+    }
+
+    /**
+     * The Jev router for one dispatcher decision. A seam so tests can replace
+     * the HTTP transport; production always talks to the real service.
+     */
+    protected function makeJevRouter(string $key, float $floor): JevRouter
+    {
+        return new JevRouter($key !== '' ? $key : null, null, $floor);
+    }
+
+    /** Test seam: where an answered Jev call is written as usage. */
+    protected function recordJevUsage(int $userId, array $jevOut): void
+    {
+        JevUsage::record(
+            new UsageLogger($this->db, true, $this->config['contexts_database'] ?? $this->config['database'] ?? null),
+            $userId,
+            $jevOut
+        );
     }
 
     /**

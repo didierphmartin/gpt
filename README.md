@@ -458,6 +458,10 @@ gpt/
 
 - **LLM provider keys live only in the database** (`system_llm_settings` global, `user_api_keys`
   per‑user), resolved by `LLMProviderResolver` — never in committed files.
+- **The Jev key** (TypeSafe's dispatcher router) is stored the same way — the `jev` row of
+  `system_llm_settings` (gpt_admin → LLM settings) or per user in Settings → LLMs and Decision API Keys; the
+  user's key wins. The backend does not read it from `.env`. Compiled workflows read
+  `TYPESAFE_API_KEY` from the runner environment, which the workflow editor fills from the stored key.
 - The backend uses **two MySQL connections**: a primary `chatbot` DB (auth, contexts,
   provider settings) and a residual `portfolio_manager` connection inherited from the app this was
   derived from (documented in `docs/HARDENING.md`, which is not published — see *Documentation* below).

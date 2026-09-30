@@ -1,5 +1,6 @@
 import { db } from '../db/pools';
 import { ProviderConfig } from '../Contracts/types';
+import { isRouterRow } from './ProviderKinds';
 
 /**
  * Resolves a provider's runtime config from `system_llm_settings` (the source of truth since the
@@ -43,7 +44,8 @@ export class LLMProviderResolver {
       .where('provider_key', '=', key)
       .where('enabled', '=', 1)
       .executeTakeFirst();
-    if (!row) return null;
+    // Router rows (Jev) are not chat providers (PHP files them under config['routers']).
+    if (!row || isRouterRow(row)) return null;
 
     // Apply PHP-parity endpoint defaults when the DB row leaves base_url/chat_endpoint blank
     // (see OPENAI_COMPAT_DEFAULTS). DB values, when present, always take precedence.
@@ -67,5 +69,20 @@ export class LLMProviderResolver {
       temperature: Number(row.temperature ?? 0.7),
       system_prompt: row.system_prompt,
     };
+  }
+
+  /**
+   * Router row (e.g. 'jev') — the TS twin of PHP's config['routers'][key]. Never a chat provider;
+   * returns null when the key has no enabled router row.
+   */
+  static async getRouterConfig(key: string): Promise<{ provider_key: string; api_key: string; model: string } | null> {
+    const row = await db
+      .selectFrom('system_llm_settings')
+      .selectAll()
+      .where('provider_key', '=', key.toLowerCase())
+      .where('enabled', '=', 1)
+      .executeTakeFirst();
+    if (!row || !isRouterRow(row)) return null;
+    return { provider_key: row.provider_key, api_key: row.api_key ?? '', model: row.model };
   }
 }

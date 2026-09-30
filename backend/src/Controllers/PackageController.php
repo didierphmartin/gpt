@@ -49,9 +49,28 @@ class PackageController
         return [
             'success' => true,
             'role' => $package['role'],
-            'capabilities' => $package['capabilities'],
+            'capabilities' => self::withoutProviderKeys($package['capabilities']),
             'updated_at' => $package['updated_at'],
         ];
+    }
+
+    /**
+     * The browser sees which providers are on and their default model, never
+     * the package's default keys (the server resolves those per call). The
+     * admin endpoints keep the keys: gpt_admin edits them.
+     */
+    private static function withoutProviderKeys(array $capabilities): array
+    {
+        if (!is_array($capabilities['providers'] ?? null)) {
+            return $capabilities;
+        }
+        foreach ($capabilities['providers'] as $name => $entry) {
+            if (is_array($entry)) {
+                unset($entry['default_api_key']);
+                $capabilities['providers'][$name] = $entry;
+            }
+        }
+        return $capabilities;
     }
 
     /**

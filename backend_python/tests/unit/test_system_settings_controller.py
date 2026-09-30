@@ -281,7 +281,7 @@ def test_save_validates_api_format():
     r = c(db).saveLLMProvider(ctx(body={'provider_key': 'kimi', 'model': 'm', 'api_format': 'bogus'}))
     assert r == {
         'success': False,
-        'error': 'Invalid api_format. Allowed values: openai, anthropic, gemini, custom',
+        'error': 'Invalid api_format. Allowed values: openai, anthropic, gemini, custom, router',
         'status_code': 400,
     }
 
@@ -562,3 +562,30 @@ def test_config_fallback_model_outside_catalog_has_no_prices():
 def test_config_fallback_configured_prices_still_win():
     p = _fallback({'gemini': {'model': 'gemini-3.5-flash', 'price_input_per_1m': 9, 'price_output_per_1m': 8}})['gemini']
     assert (p['price_input_per_1m'], p['price_output_per_1m']) == (9.0, 8.0)
+
+
+# ─── router rows (Jev) ───────────────────────────────────────────────────
+
+def test_save_router_key_requires_router_format():
+    db = _admin_db(one=[None])
+    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'jev', 'model': 'jev-latest', 'api_format': 'openai'}))
+    assert r == {'success': False, 'error': "Provider 'jev' is a router: api_format must be 'router'", 'status_code': 400}
+    r = c(_admin_db(one=[None])).saveLLMProvider(ctx(body={'provider_key': 'jev', 'model': 'jev-latest'}))   # default 'openai'
+    assert r['status_code'] == 400
+
+
+def test_save_router_format_is_reserved_for_router_keys():
+    r = c(_admin_db(one=[None])).saveLLMProvider(ctx(body={'provider_key': 'kimi', 'model': 'm', 'api_format': 'router'}))
+    assert r == {'success': False, 'error': "api_format 'router' is reserved for: jev", 'status_code': 400}
+
+
+def test_save_router_row_accepted_and_stripped_of_chat_settings():
+    db = _admin_db(one=[None])
+    body = {'provider_key': 'jev', 'model': 'jev-latest', 'api_format': 'router', 'api_key': 'sk-jevkey12345',
+            'base_url': 'https://x', 'chat_endpoint': '/v1', 'streaming': 1, 'supports_tools': 1}
+    r = c(db).saveLLMProvider(ctx(body=body))
+    assert r['success'] is True and r['status_code'] == 201
+    params = db.calls[-1][1]
+    assert params[':api_format'] == 'router'
+    assert params[':base_url'] is None and params[':chat_endpoint'] is None
+    assert params[':streaming'] == 0 and params[':supports_tools'] == 0

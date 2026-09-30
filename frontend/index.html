@@ -1500,6 +1500,7 @@
         .usage-card.deepseek { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #93c5fd; }
         .usage-card.gamma4 { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }
         .usage-card.glm { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-color: #7dd3fc; }
+        .usage-card.jev { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #bbf7d0; }
         .usage-card-header {
             font-size: 13px;
             font-weight: 600;
@@ -1667,6 +1668,10 @@
         .api-key-row .key-status.custom {
             background: #d1fae5;
             color: #059669;
+        }
+        .api-key-row .key-status.missing {
+            background: #fee2e2;
+            color: #dc2626;
         }
         .settings-total-bar {
             background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
@@ -2628,7 +2633,7 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
                         </svg>
-                        <span data-i18n="settings.tabApiKeys">LLM API Keys</span>
+                        <span data-i18n="settings.tabApiKeys">LLMs and Decision API Keys</span>
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2822,6 +2827,27 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-glm">Default</span>
+                            </div>
+                        </div>
+                        <!-- Decision models: choose between options, never write text.
+                             Key rows only; not chat providers (no model choice, no prompt). -->
+                        <h4 class="text-sm font-semibold text-gray-700 mt-6 mb-1" data-i18n="settings.decisionModels">Decision models</h4>
+                        <p class="text-xs text-gray-500 mb-4" data-i18n="settings.decisionModelsDescription">
+                            Decision models choose between options instead of writing text. Jev routes dispatcher nodes in workflows. Leave the key empty to use your plan's key.
+                        </p>
+                        <div id="decision-keys-container">
+                            <!-- Jev (dispatcher routing): key only, not a chat provider -->
+                            <div class="api-key-row">
+                                <label>Jev</label>
+                                <select class="model-select" id="model-select-jev" disabled>
+                                    <option value="jev-latest">jev-latest</option>
+                                </select>
+                                <span class="model-info" id="model-info-jev"></span>
+                                <input type="password" id="api-key-jev" placeholder="apikey..." autocomplete="off">
+                                <a class="console-link" href="https://console.typesafe.ai/" target="_blank" rel="noopener noreferrer" title="Open Jev console (get API key)" aria-label="Open Jev console">
+                                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                </a>
+                                <span class="key-status default" id="key-status-jev">Default</span>
                             </div>
                         </div>
                         <!-- Advanced: per-provider system prompt overrides.
@@ -4200,7 +4226,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260925-runnerurl"></script>
-    <script src="assets/js/settings-panel.js?v=20260905-python"></script>
+    <script src="assets/js/settings-panel.js?v=20260930-jev-keys"></script>
     <script src="assets/js/agent-teams-panel.js?v=20260903-playbook-agent"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4234,7 +4260,7 @@
     <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
-    <script src="assets/js/workflow-editor.js?v=20260925-runnercd"></script>
+    <script src="assets/js/workflow-editor.js?v=20260930-editions-merge"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>

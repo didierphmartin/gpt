@@ -44,6 +44,13 @@ class SettingsPanel {
 
         // Provider list
         this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4', 'glm'];
+        // Providers that have an API-key slot. Jev is a routing service, not
+        // a chat provider: it is deliberately NOT in this.providers (model
+        // selects, prompts, usage, catalog) and only joins the key loops.
+        this.keyProviders = [...this.providers, 'jev'];
+        // Providers shown in the Usage tab. Jev has usage and cost but is
+        // not a chat provider, so it joins here and not this.providers.
+        this.usageProviders = [...this.providers, 'jev'];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -146,6 +153,7 @@ class SettingsPanel {
         if (this.isActive && this.usageData) {
             this.renderUsageStats(this.usageData);
         }
+        if (this.keyRates) this.renderJevModelInfo();
     }
 
     /**
@@ -2221,10 +2229,12 @@ class SettingsPanel {
             if (plan === 'free' && role !== 'admin') {
                 if (quotaSection) quotaSection.classList.remove('hidden');
 
-                const percent = Math.min(100, Math.round((totalTokens / quota) * 100));
+                // The quota counts every provider but Jev (same sum the server enforces).
+                const quotaUsed = typeof usage.quota_tokens_used === 'number' ? usage.quota_tokens_used : totalTokens;
+                const percent = Math.min(100, Math.round((quotaUsed / quota) * 100));
 
                 if (quotaText) {
-                    quotaText.textContent = `${totalTokens.toLocaleString()} / ${quota.toLocaleString()} tokens (${percent}%)`;
+                    quotaText.textContent = `${quotaUsed.toLocaleString()} / ${quota.toLocaleString()} tokens (${percent}%)`;
                 }
                 if (quotaBar) {
                     quotaBar.style.width = `${percent}%`;
@@ -3169,7 +3179,7 @@ class SettingsPanel {
         // Build cards HTML
         let cardsHtml = '';
 
-        for (const provider of this.providers) {
+        for (const provider of this.usageProviders) {
             const data = providerUsage[provider] || {
                 month_requests: 0,
                 month_tokens: 0,
@@ -3180,10 +3190,16 @@ class SettingsPanel {
             totalCost += costUsd;
 
             // Get pricing info for this provider and convert to selected currency
-            const pricing = this.pricing[provider] || { input: 0, output: 0, model: '' };
-            const inputPrice = (pricing.input * rate).toFixed(2);
-            const outputPrice = (pricing.output * rate).toFixed(2);
-            const pricingText = `${currency.symbol}${inputPrice}/${currency.symbol}${outputPrice} per 1M`;
+            // The model catalog has no Jev: its card names the recorded model
+            // and takes the admin-set rate the server reports (null = unpriced).
+            let pricing = this.pricing[provider] || { input: 0, output: 0, model: '' };
+            if (provider === 'jev') {
+                const r = (usage.rates || {}).jev;
+                pricing = { input: r ? r.input : null, output: r ? r.output : null, model: 'jev-latest' };
+            }
+            const pricingText = (pricing.input === null || pricing.output === null)
+                ? '—'
+                : `${currency.symbol}${this.formatRate(pricing.input * rate)}/${currency.symbol}${this.formatRate(pricing.output * rate)} per 1M`;
 
             // Convert cost to selected currency
             const costConverted = costUsd * rate;
@@ -3223,7 +3239,7 @@ class SettingsPanel {
                     </div>
                     <div class="usage-card-cost">
                         <span class="cost-label">Month Cost</span>
-                        <span class="cost-value">${currency.symbol}${costConverted.toFixed(2)} ${currency.name}</span>
+                        <span class="cost-value">${currency.symbol}${this.formatCost(costConverted)} ${currency.name}</span>
                     </div>
                 </div>
             `;
@@ -3234,7 +3250,7 @@ class SettingsPanel {
         // Update total cost with selected currency
         const totalConverted = totalCost * rate;
         if (this.totalCostEl) {
-            this.totalCostEl.textContent = `${currency.symbol}${totalConverted.toFixed(2)} ${currency.name}`;
+            this.totalCostEl.textContent = `${currency.symbol}${this.formatCost(totalConverted)} ${currency.name}`;
         }
 
         // Update month label
@@ -3268,7 +3284,7 @@ class SettingsPanel {
         const costData = [];
         const tokenData = [];
 
-        for (const provider of this.providers) {
+        for (const provider of this.usageProviders) {
             const data = providerUsage[provider];
             // Include providers with any activity (requests, tokens, or cost)
             if (data && (data.month_requests > 0 || data.month_cost_usd > 0 || data.month_tokens > 0)) {
@@ -3331,7 +3347,7 @@ class SettingsPanel {
                         callbacks: {
                             label: (context) => {
                                 if (context.datasetIndex === 0) {
-                                    return `Cost: ${currency.symbol}${context.raw.toFixed(2)} ${currency.name}`;
+                                    return `Cost: ${currency.symbol}${this.formatCost(context.raw)} ${currency.name}`;
                                 } else {
                                     return `Tokens: ${(context.raw * 1000).toLocaleString()}`;
                                 }
@@ -3475,7 +3491,9 @@ class SettingsPanel {
                 // even if the user has nothing saved.
                 this.providerLocked = data.locked || {};
                 this.packageModels = data.package_models || {};
+                this.keyRates = data.rates || {};
                 this.renderApiKeyStatuses();
+                this.renderJevModelInfo();
                 this.renderModelSelections();
                 this.renderSystemPrompts();
             }
@@ -3610,7 +3628,7 @@ class SettingsPanel {
      * Update API key status indicators
      */
     renderApiKeyStatuses() {
-        for (const provider of this.providers) {
+        for (const provider of this.keyProviders) {
             const statusEl = document.getElementById(`key-status-${provider}`);
             const inputEl = document.getElementById(`api-key-${provider}`);
 
@@ -3619,16 +3637,54 @@ class SettingsPanel {
 
                 if (hasCustomKey) {
                     statusEl.textContent = 'Custom';
-                    statusEl.classList.remove('default');
+                    statusEl.classList.remove('default', 'missing');
                     statusEl.classList.add('custom');
                     inputEl.placeholder = '****' + (this.userKeys[provider].masked_key || '');
                 } else {
                     statusEl.textContent = 'Default';
-                    statusEl.classList.remove('custom');
+                    statusEl.classList.remove('custom', 'missing');
                     statusEl.classList.add('default');
                 }
             }
         }
+        this.renderJevOrgKeyStatus();
+    }
+
+    /**
+     * The Jev row's description and admin-set rate (from /settings/keys
+     * `rates.jev`; null = unpriced, shown as a dash). Jev is not in
+     * this.providers, so updateModelInfo and the model-selection loops never
+     * touch it and its model is never saved.
+     */
+    renderJevModelInfo() {
+        const infoEl = document.getElementById('model-info-jev');
+        if (!infoEl) return;
+        const r = (this.keyRates || {}).jev;
+        const cost = r
+            ? `$${this.formatRate(r.input)}/M in \u00b7 $${this.formatRate(r.output)}/M out`
+            : '\u2014';
+        infoEl.innerHTML = `<span class="model-desc">${this.escapeHtml(this.t('settings.jevModelDesc'))}</span><br><span class="model-cost">${cost}</span>`;
+    }
+
+    /**
+     * Jev's status tag. renderApiKeyStatuses already shows "Custom" for the
+     * user's own key and "Default" otherwise (package / organisation key, or
+     * none, like an LLM row). A plan without Jev overrides both, since no key
+     * can be used then. The status endpoint returns availability only, never
+     * the key.
+     */
+    async renderJevOrgKeyStatus() {
+        const statusEl = document.getElementById('key-status-jev');
+        if (!statusEl) return;
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/dispatch/jev/status`, {
+                headers: { 'Authorization': `Bearer ${this.getAuthToken()}` }
+            });
+            const data = await res.json();
+            if (!data.success || data.allowed !== false) return;
+            statusEl.textContent = 'Not included in your plan';
+            statusEl.className = 'key-status missing';
+        } catch (e) { /* status is cosmetic */ }
     }
 
     /**
@@ -3640,7 +3696,7 @@ class SettingsPanel {
             const keys = {};
 
             // Collect non-empty keys
-            for (const provider of this.providers) {
+            for (const provider of this.keyProviders) {
                 const inputEl = document.getElementById(`api-key-${provider}`);
                 if (inputEl && inputEl.value.trim()) {
                     keys[provider] = inputEl.value.trim();
@@ -3702,7 +3758,7 @@ class SettingsPanel {
                 this.showNotification('API keys saved successfully', 'success');
 
                 // Clear input fields
-                for (const provider of this.providers) {
+                for (const provider of this.keyProviders) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
@@ -3753,7 +3809,7 @@ class SettingsPanel {
                 this.renderApiKeyStatuses();
 
                 // Clear input fields
-                for (const provider of this.providers) {
+                for (const provider of this.keyProviders) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
@@ -3798,9 +3854,20 @@ class SettingsPanel {
             'grok': 'Grok (xAI)',
             'deepseek': 'DeepSeek',
             'gamma4': 'Gamma4',
-            'glm': 'GLM 5.2 (z.ai)'
+            'glm': 'GLM 5.2 (z.ai)',
+            'jev': 'Jev (dispatcher routing)'
         };
         return names[provider] || provider;
+    }
+
+    /** A per-1M rate: 3 decimals below 0.10 (so 0.042 stays visible), else 2. */
+    formatRate(v) {
+        return v > 0 && v < 0.1 ? v.toFixed(3) : v.toFixed(2);
+    }
+
+    /** A cost: 4 decimals when non-zero and below 0.01 (sub-cent spend), else 2. */
+    formatCost(v) {
+        return v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2);
     }
 
     /**

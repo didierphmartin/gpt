@@ -13,6 +13,7 @@ from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.services.package_resolver import PackageResolver
+from app.services.provider_kinds import is_router_row
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, php_empty, php_intval, php_items
 
@@ -208,6 +209,9 @@ class ProviderController:
 
             providers = []
             for row in rows:
+                # A router row (Jev) stores a key here but cannot chat: never offer it.
+                if is_router_row(row):
+                    continue
                 raw = row['supported_models'] if row.get('supported_models') is not None else '[]'
                 try:
                     supported = json.loads(raw)

@@ -50,3 +50,16 @@ def test_apply_db_settings_does_not_mutate_caller_config():
     assert cfg == snapshot
     assert result['claude'] == {'api_key': 'K', 'model': 'c-1'}
     assert result['providers']['kimi'] == {'model': 'k', 'base_url': 'u'}
+
+
+def test_apply_db_settings_files_router_rows_under_routers_never_providers():
+    """The Jev router row (api_format 'router') stores a key but is not a chat provider."""
+    class Db:
+        def fetch_all(self, sql, p=None):
+            if 'SHOW TABLES' in sql: return [{'Tables_in_x': 'system_llm_settings'}]
+            return [{'provider_key': 'kimi', 'base_url': 'u', 'model': 'k', 'api_format': 'openai'},
+                    {'provider_key': 'jev', 'model': 'jev-latest', 'api_key': 'JK', 'api_format': 'router'}]
+    cfg = LLMProviderResolver.applyDbSettings(Db(), {})
+    assert 'jev' not in cfg['providers'] and 'jev' not in cfg
+    assert cfg['routers']['jev']['api_key'] == 'JK' and cfg['routers']['jev']['model'] == 'jev-latest'
+    assert list(cfg['providers']) == ['kimi']

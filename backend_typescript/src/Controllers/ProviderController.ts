@@ -4,6 +4,7 @@ import { ToolsManager } from '../Services/ToolsManager';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
 import { SearchFunctions } from '../Functions/SearchFunctions';
 import { LLMProviderResolver } from '../Services/LLMProviderResolver';
+import { chatProviderRows } from '../Services/ProviderKinds';
 
 /** Mirrors src/Controllers/ProviderController.php (the provider picker's data source). */
 export class ProviderController {
@@ -32,7 +33,8 @@ export class ProviderController {
       .orderBy('sort_order')
       .orderBy('display_name')
       .execute();
-    return rows.map((r) => ({
+    // Router rows (Jev) store a key here but cannot chat: never offer them.
+    return chatProviderRows(rows).map((r) => ({
       name: r.provider_key,
       display_name: r.display_name,
       model: r.model,

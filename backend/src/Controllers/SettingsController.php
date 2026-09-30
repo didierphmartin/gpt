@@ -6,7 +6,11 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
+use Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\PricingResolver;
+use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
  * Settings Controller
@@ -36,7 +40,7 @@ class SettingsController
     {
         $this->db = $db;
         $this->config = $config;
-        $this->encryptionKey = $config['auth']['jwt_secret'] ?? 'default-encryption-key-change-this';
+        $this->encryptionKey = ApiKeyCrypto::secret($config);
     }
 
     /**
@@ -168,6 +172,9 @@ class SettingsController
             'usage' => [
                 'current_month' => $currentMonth,
                 'by_provider' => $byProvider,
+                // Rates for usage rows the model catalog does not price (Jev),
+                // read from the admin-editable system_llm_settings row.
+                'rates' => self::routerRates(new PricingResolver($this->db)),
                 'totals' => [
                     'cost_usd' => $totalCost,
                     'tokens' => $totalTokens,
@@ -180,12 +187,59 @@ class SettingsController
                     'cost_usd' => (float)($lifetime['lifetime_cost_usd'] ?? 0),
                     'requests' => (int)($lifetime['lifetime_requests'] ?? 0)
                 ],
+                // What the free-trial quota counts: the same sum ChatController::checkFreeTrialQuota
+                // enforces (llm_usage_balance, Jev excluded). lifetime.total_tokens still counts all.
+                'quota_tokens_used' => self::quotaTokensUsed($balances),
                 'plan' => $userRow['plan'] ?? 'free',
                 'role' => $userRow['role'] ?? 'prospect',
                 'free_trial_quota' => 50000
             ],
             'status_code' => 200
         ];
+    }
+
+    /**
+     * Tokens that count toward the quota: every provider's balance total except
+     * Jev, whose routing tokens are recorded but never capped.
+     *
+     * @param array<int, array<string, mixed>> $balances llm_usage_balance rows
+     */
+    public static function quotaTokensUsed(array $balances): int
+    {
+        $sum = 0;
+        foreach ($balances as $row) {
+            if (($row['provider'] ?? '') !== ProviderKinds::JEV_KEY) {
+                $sum += (int) ($row['total_tokens'] ?? 0);
+            }
+        }
+        return $sum;
+    }
+
+    /**
+     * A provider's per-1M rates as {input, output}, or null when its row has
+     * no price (the card then shows a dash instead of a made-up $0).
+     *
+     * @return array{input: float, output: float}|null
+     */
+    public static function rateOf(PricingResolver $pricing, string $provider): ?array
+    {
+        try {
+            [$in, $out] = $pricing->resolve($provider);
+            return ['input' => $in, 'output' => $out];
+        } catch (PricingUnavailableException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Rates for rows the model catalog does not price (Jev), keyed by
+     * provider; shared by /settings/usage and /settings/keys.
+     *
+     * @return array<string, array{input: float, output: float}|null>
+     */
+    public static function routerRates(PricingResolver $pricing): array
+    {
+        return [ProviderKinds::JEV_KEY => self::rateOf($pricing, ProviderKinds::JEV_KEY)];
     }
 
     /**
@@ -272,6 +326,8 @@ class SettingsController
             'package_models' => $packageModels,
             'locked' => $locked,
             'system_prompts' => $systemPrompts,
+            // Admin-set rates for the decision-model rows (Jev); null = unpriced.
+            'rates' => self::routerRates(new PricingResolver($this->db)),
             'status_code' => 200
         ];
     }
@@ -290,6 +346,10 @@ class SettingsController
         $systemPrompts = $request['body']['system_prompts'] ?? [];
 
         $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
+        // Router keys (Jev) are stored like LLM keys, encrypted the same way,
+        // but a router has no model choice and no system prompt: accepted in
+        // `keys` only.
+        $validKeyProviders = array_merge($validProviders, ProviderKinds::ROUTER_KEYS);
 
         if (empty($keys) && empty($models) && empty($systemPrompts)) {
             return [
@@ -306,7 +366,7 @@ class SettingsController
 
         // Save API keys
         foreach ($keys as $provider => $apiKey) {
-            if (!in_array($provider, $validProviders)) {
+            if (!in_array($provider, $validKeyProviders)) {
                 continue;
             }
 
@@ -840,10 +900,7 @@ class SettingsController
      */
     private function encryptApiKey(string $apiKey): string
     {
-        $key = hash('sha256', $this->encryptionKey, true);
-        $iv = openssl_random_pseudo_bytes(16);
-        $encrypted = openssl_encrypt($apiKey, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-        return base64_encode($iv . $encrypted);
+        return ApiKeyCrypto::encrypt($apiKey, $this->encryptionKey);
     }
 
     /**
@@ -851,21 +908,7 @@ class SettingsController
      */
     private function decryptApiKey(string $encryptedKey): ?string
     {
-        try {
-            $data = base64_decode($encryptedKey);
-            if ($data === false || strlen($data) < 17) {
-                return null;
-            }
-
-            $key = hash('sha256', $this->encryptionKey, true);
-            $iv = substr($data, 0, 16);
-            $encrypted = substr($data, 16);
-
-            $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-            return $decrypted !== false ? $decrypted : null;
-        } catch (Exception $e) {
-            return null;
-        }
+        return ApiKeyCrypto::decrypt($encryptedKey, $this->encryptionKey);
     }
 
     /**

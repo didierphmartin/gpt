@@ -26,6 +26,7 @@ from app.services.combined_tools_executor import CombinedToolsExecutor
 from app.services.filtered_tools_executor import FilteredToolsExecutor
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.services.package_resolver import PackageResolver
+from app.services.provider_kinds import ROUTER_FORMAT
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.sse_hub_client import SSEHubClient
 from app.services.usage_logger import UsageLogger
@@ -60,7 +61,10 @@ class ChatController:
             return self.enabledProviderKeysCache
         try:
             keys = self.db.fetch_column(
-                "SELECT provider_key FROM system_llm_settings WHERE enabled = 1 ORDER BY sort_order ASC"
+                # Router rows (Jev) are not chat providers: never wire them up.
+                "SELECT provider_key FROM system_llm_settings WHERE enabled = 1"
+                f" AND (api_format IS NULL OR api_format <> '{ROUTER_FORMAT}')"
+                " ORDER BY sort_order ASC"
             )
             if not php_empty(keys):
                 self.enabledProviderKeysCache = list(dict.fromkeys(keys))

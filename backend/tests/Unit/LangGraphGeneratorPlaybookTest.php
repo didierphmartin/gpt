@@ -152,7 +152,7 @@ TXT;
     public function testDispatcherAgentGetsRouteMenuAndConditionalEdge(): void
     {
         $code = $this->generate($this->dispatcherGraph());
-        $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims"}, {"id": "4", "name": "Human resources"}]', $code);
+        $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims", "description": ""}, {"id": "4", "name": "Human resources", "description": ""}]', $code);
         $this->assertStringContainsString('## Routing', $code, 'dispatcher prompt carries the routing block');
         $this->assertStringContainsString('  - IT claims', $code);
         $this->assertStringContainsString('## Routed request', $code, 'children carry the routed-to fragment');
