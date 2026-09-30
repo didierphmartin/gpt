@@ -234,17 +234,22 @@ class WorkflowController
      *   - ?modular=1: Multi-file "agents in separate files" mode (one importable
      *     module per node plus workflow.py/common.py). Same manifest shape as A2A.
      *   - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in multi-file modes.
+     *   - ?format=zip: Export -- the same generation for the chosen mode as one zip
+     *     (application/zip, "<workflow>_<mode>.zip"), ARCHITECTURE.md included;
+     *     see langGraphZipResponse(). Wins over download=1.
      *
      * Returns either:
      *   - Multi-file (?a2a=1 or ?modular=1): {success: true, data: {root, files}} (JSON only)
      *   - Single-file with ?download=1: Content-Type: text/x-python (raw source)
-     *   - Single-file default: application/json {filename, code}
+     *   - Single-file default: application/json {filename, code, architecture}
+     *   - ?format=zip: application/zip (raw bytes)
      */
     public function generatePython(array $request): array
     {
         $userId = $request['user_id'] ?? 0;
         $workflowId = (int) ($request['params']['id'] ?? 0);
         $download = ($request['query']['download'] ?? '0') === '1';
+        $zip = ($request['query']['format'] ?? '') === 'zip';
 
         if (!$userId) {
             return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
@@ -269,7 +274,14 @@ class WorkflowController
             // A2A wins if both are set: the two are mutually exclusive in the
             // editor's form, so this only guards a hand-written URL.
             $modular = !$a2a && ($request['query']['modular'] ?? '0') === '1';
+            if ($zip && !class_exists(\ZipArchive::class)) {
+                return ['success' => false, 'error' => 'Export needs the PHP zip extension (ZipArchive), which this server does not have.',
+                    'status_code' => 500];
+            }
             $result = $gen->generate($workflowId, (string) $userId, ['a2a' => $a2a, 'modular' => $modular]);
+            if ($zip) {
+                return self::langGraphZipResponse($result, $a2a ? 'a2a' : ($modular ? 'modular' : 'single'));
+            }
             if ($a2a || $modular) {
                 // Multi-file output: always JSON (the editor writes the folder itself).
                 return ['success' => true, 'data' => $result, 'status_code' => 200];
@@ -296,6 +308,52 @@ class WorkflowController
             error_log('[WorkflowController] generatePython failed: ' . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
         }
+    }
+
+    /**
+     * The Export download: one LangGraph generation result as a zip whose
+     * entries all sit under one folder -- the result's root for a package,
+     * the script's own name for a single file -- with ARCHITECTURE.md beside
+     * the code (a package already lists it among its files; a single file
+     * carries it under 'architecture'). The zip is named after the workflow
+     * and the mode: "<workflow>_<mode>.zip".
+     */
+    public static function langGraphZipResponse(array $result, string $mode): array
+    {
+        if (isset($result['files'])) {
+            $folder = $result['root'];
+            $files = $result['files'];
+        } else {
+            $folder = preg_replace('/\.py$/', '', $result['filename']);
+            $files = [['path' => $result['filename'], 'code' => $result['code']],
+                ['path' => 'ARCHITECTURE.md', 'code' => $result['architecture']]];
+        }
+        // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
+        $slug = preg_replace('/_(langgraph|modular|a2a)(_swarm)?$/', '', $folder);
+        $tmp = tempnam(sys_get_temp_dir(), 'lgzip');
+        try {
+            $zip = new \ZipArchive();
+            if ($zip->open($tmp, \ZipArchive::OVERWRITE) !== true) {
+                throw new \RuntimeException('could not create the zip archive');
+            }
+            foreach ($files as $f) {
+                $zip->addFromString("{$folder}/{$f['path']}", $f['code']);
+            }
+            $zip->close();
+            $bytes = file_get_contents($tmp);
+        } finally {
+            @unlink($tmp);
+        }
+        return [
+            'success' => true,
+            'raw_body' => $bytes,
+            'headers' => [
+                'Content-Type' => 'application/zip',
+                'Content-Disposition' => "attachment; filename=\"{$slug}_{$mode}.zip\"",
+                'Content-Length' => (string) strlen($bytes),
+            ],
+            'status_code' => 200,
+        ];
     }
 
     /**
