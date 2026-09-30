@@ -1085,8 +1085,9 @@ class LangGraphGenerator
                     ? DispatchRouting::defaultInstructions($jevName, $jevDesc, $wfName)
                     : '',
                 // Routing mode, as GraphWorkflowRunner reads it: 'jev' (Jev only),
-                // 'llm' (model only), anything else '' = the hybrid (Jev first,
-                // the model when Jev declines).
+                // 'llm' (model only), anything else '' = unset, resolved by the
+                // runtime (_run_dispatcher): Jev when TYPESAFE_API_KEY is set,
+                // else the model. Never both.
                 'routing_mode' => in_array($routingSettings['routing_mode'] ?? null, ['jev', 'llm'], true)
                     ? $routingSettings['routing_mode'] : '',
                 // Same clamp as the interpreter: numeric -> [0, 1], else the default floor.
@@ -2221,7 +2222,7 @@ async def run_node(request_text: str, trace) -> dict:
 
 
 async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
-    """Dispatcher: one forced route_to call; the chosen child id travels back as "route"."""
+    """Dispatcher: Jev or one forced route_to call (_run_dispatcher); the chosen child id travels back as "route"."""
     ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", ""),
           "routing_mode": NODE.get("routing_mode", ""), "jev_min_confidence": NODE.get("jev_min_confidence")}
     state = {"node_outputs": {}, "user_prompt": request_text}
@@ -4063,14 +4064,14 @@ PY;
     /**
      * TO RUN note for TYPESAFE_API_KEY, by the dispatchers' routing modes
      * (nothing else reads it): required when a dispatcher is Jev-only, optional
-     * for the hybrid (no mode saved), not mentioned when every dispatcher routes
-     * with the model. LangGraph-only: the other compile targets still route
+     * for an unset one (no mode saved: Jev when the key is set, else the model),
+     * not mentioned when every dispatcher routes with the model. LangGraph-only: the other compile targets still route
      * every dispatcher with the model.
      */
     private static function jevDocLines(array $agentData): array
     {
         $jevOnly = [];
-        $hybrid = false;
+        $unset = [];
         foreach ($agentData as $ad) {
             if (empty($ad['dispatch'])) {
                 continue;
@@ -4079,7 +4080,7 @@ PY;
             if ($mode === 'jev') {
                 $jevOnly[] = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));   // one comment line
             } elseif ($mode !== 'llm') {
-                $hybrid = true;
+                $unset[] = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));
             }
         }
         $lines = [];
@@ -4087,18 +4088,20 @@ PY;
             $lines[] = '# Required: TYPESAFE_API_KEY (TypeSafe Jev) for Jev-only dispatchers (' . implode(', ', $jevOnly) . ');';
             $lines[] = '#   without it (or when Jev cannot decide) they do not route and the run stops there.';
         }
-        if ($hybrid) {
-            $lines[] = '# Optional: TYPESAFE_API_KEY (TypeSafe Jev) lets a dispatcher route without an LLM turn';
-            $lines[] = '#   when Jev is sure (confidence >= 0.6); blank = dispatchers route with the model.';
+        if ($unset !== []) {
+            $lines[] = '# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (' . implode(', ', $unset) . '):';
+            $lines[] = '#   Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev';
+            $lines[] = '#   cannot decide stops the run there (no model fallback).';
         }
         return $lines;
     }
 
     /**
-     * Dispatcher node runtime: Jev fast path, then one forced route_to call over
-     * the menu; result in state["routes"]. _jev_route() is the standard-library
+     * Dispatcher node runtime: Jev (routing_mode 'jev', or unset with a key) or
+     * one forced route_to call over the menu (the model), never both; result in
+     * state["routes"]. _jev_route() is the standard-library
      * twin of JevRouter::route() (same body, same 'unclear' option, same floor,
-     * same outcomes); the fast path mirrors GraphWorkflowRunner's.
+     * same outcomes); the mode choice mirrors GraphWorkflowRunner's.
      */
     private static function dispatchBlock(): string
     {
@@ -4115,7 +4118,7 @@ JEV_TIMEOUT_S = 10
 
 
 def _jev_available() -> bool:
-    """Configured = a key is present. Without one, dispatchers keep the model path untouched."""
+    """Configured = a key is present. An unset dispatcher routes with Jev only then, else with the model."""
     return bool(os.environ.get("TYPESAFE_API_KEY") or "")
 
 
@@ -4123,12 +4126,12 @@ def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):
     """Choose one target for `request`, or say why not. Returns a dict with
     outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
     confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
-    other outcome tells the caller to fall back to the model (the hybrid) or
-    not to route (a Jev-only dispatcher). `floor` is the dispatcher's minimum
+    other outcome means the dispatcher does not route (no model fallback).
+    `floor` is the dispatcher's minimum
     confidence (settings.jev_min_confidence). Never raises."""
     try:
         return _jev_route_inner(request, targets, question, floor)
-    except Exception as e:   # anything at all -> the model path, never a failed run
+    except Exception as e:   # anything at all -> an 'error' outcome, never a raise
         return {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {},
                 "outcome": "error", "reason": f"{type(e).__name__}: {e}"}
 
@@ -4219,25 +4222,29 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
     inputs = [outs[p]["text"] for p in parents(n) if p in outs]
     task = "\n\n".join(inputs) or state.get("user_prompt", "")
 
-    # Routing mode (settings.routing_mode, twin of GraphWorkflowRunner):
+    # Routing mode (settings.routing_mode, twin of GraphWorkflowRunner) --
+    # always exactly one, never both:
     #   "llm" -> the model only; Jev is never asked.
     #   "jev" -> Jev only; the model is never called. Any outcome but 'routed'
     #            (unclear, low_confidence, no key, error, timeout) = did not
     #            route: routes END, so none of the dispatcher's branches runs.
-    #   ""    -> the hybrid fast path: ask Jev before spending an LLM turn. It
-    #            decides ONLY on 'routed'; unclear / low_confidence / error all
-    #            land in the untouched model path below. No key = silent.
+    #   ""    -> unset (saved before the setting existed): resolved here to
+    #            "jev" when TYPESAFE_API_KEY is set -- the editor's runner sync
+    #            writes it only when the user's plan allows Jev, the stand-in
+    #            for the interpreter's plan check -- else "llm".
     mode = ad.get("routing_mode", "")
+    if mode not in ("jev", "llm"):
+        mode = "jev" if _jev_available() else "llm"
     floor = ad.get("jev_min_confidence")
     if floor is None:
         floor = JEV_CONFIDENCE_FLOOR
-    if mode != "llm" and (mode == "jev" or _jev_available()):
+    if mode == "jev":
         t0 = time.monotonic()
         try:
             # urlopen's timeout bounds each socket op, not DNS or the total; this does.
             jev = await asyncio.wait_for(
                 asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)
-        except Exception as e:   # asyncio.TimeoutError included -> a declined outcome
+        except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
             jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
                    "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
         dt = time.monotonic() - t0
@@ -4250,16 +4257,13 @@ async def _run_dispatcher(n, ad, state, msgs, llm):
             print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
                   f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
             return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
-        if mode == "jev":
-            # Jev only: no model fallback, so the run stops here and says why
-            # (the reason names a missing key, too). Same message as the interpreter.
-            msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
-                   f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
-            print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
-                  f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
-            return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
-        print(f"[node] [{n}] {ad['display']!r} Jev declined ({jev['outcome']}: {jev['reason']}, "
-              f"confidence {conf}) — asking the model", flush=True)
+        # Jev only: no model fallback, so the run stops here and says why
+        # (the reason names a missing key, too). Same message as the interpreter.
+        msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
+               f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
+        print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
+              f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
+        return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
 
     route_args = create_model(
         "RouteToArgs",

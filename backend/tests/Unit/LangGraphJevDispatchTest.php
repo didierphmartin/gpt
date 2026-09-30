@@ -11,9 +11,10 @@ use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
 
 /**
- * LangGraph compiler: a dispatcher asks TypeSafe's Jev before spending an LLM
- * turn, the same way GraphWorkflowRunner does (JevRouter + "Dispatcher, fast
- * path"). Checked in every LangGraph mode that runs a dispatcher (single
+ * LangGraph compiler: a dispatcher routes with TypeSafe's Jev or with the
+ * model, never both, the same way GraphWorkflowRunner does. An unset mode is
+ * resolved at run time (Jev when TYPESAFE_API_KEY is set, else the model).
+ * Checked in every LangGraph mode that runs a dispatcher (single
  * script, modular package, A2A agent server), and the emitted runtime itself is
  * exercised by tests/fixtures/jev_dispatch_harness.py with a fake HTTP layer.
  */
@@ -80,14 +81,18 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertNotSame('', $runtime, "{$mode}: runtime file missing");
             foreach (['def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):', 'JEV_URL = "https://api.typesafe.ai/v1/systemone"',
                       'JEV_MODEL = "jev-latest"', 'JEV_CONFIDENCE_FLOOR = 0.6', 'JEV_TIMEOUT_S = 10',
-                      'if mode != "llm" and (mode == "jev" or _jev_available()):', 'asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)', 'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
-                      'Jev routed to', '— asking the model'] as $needle) {
+                      'if mode not in ("jev", "llm"):', 'mode = "jev" if _jev_available() else "llm"', 'if mode == "jev":',
+                      'asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)', 'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
+                      'Jev routed to', 'Jev-only dispatcher, no model fallback'] as $needle) {
                 $this->assertStringContainsString($needle, $runtime, "{$mode}: {$needle}");
             }
-            // The Jev path runs BEFORE the forced route_to turn.
+            // No hybrid: a Jev decline never falls through to the model.
+            $this->assertStringNotContainsString('asking the model', $runtime, "{$mode}: no hybrid");
+            $this->assertStringNotContainsString('Jev declined', $runtime, "{$mode}: no hybrid");
+            // The Jev path returns BEFORE the forced route_to turn.
             $this->assertLessThan(strpos($runtime, 'llm = llm.bind_tools([route_tool], tool_choice="any")'),
-                strpos($runtime, 'if mode != "llm" and (mode == "jev" or _jev_available()):'), "{$mode}: Jev must be asked first");
-            // techBuddy has no routing_mode saved: the hybrid, at the default floor.
+                strpos($runtime, 'if mode == "jev":'), "{$mode}: Jev mode is decided first");
+            // techBuddy has no routing_mode saved: '' (resolved at run time), at the default floor.
             $this->assertStringContainsString('"routing_mode": "",', $node, "{$mode}: routing_mode");
             $this->assertStringContainsString('"jev_min_confidence": 0.6,', $node, "{$mode}: floor");
             // Target descriptions mirror the interpreter: DispatchRouting::targets()
@@ -134,7 +139,7 @@ class LangGraphJevDispatchTest extends TestCase
         $cases = [
             [['routing_mode' => 'jev', 'jev_min_confidence' => 0.85], '"jev"', '0.85'],
             [['routing_mode' => 'llm'], '"llm"', '0.6'],
-            // Anything else is the hybrid (''), exactly like the interpreter.
+            // Anything else is unset (''), resolved at run time like the interpreter.
             [['routing_mode' => 'bogus'], '""', '0.6'],
             [['routing_mode' => ''], '""', '0.6'],
             // jev_min_confidence: numeric -> clamped to [0, 1]; otherwise 0.6.
@@ -165,7 +170,7 @@ class LangGraphJevDispatchTest extends TestCase
             return $r;
         };
         foreach ([[['routing_mode' => 'llm', 'jev_min_confidence' => 0.75], ['"llm"', '0.75']],
-                  // A record without the setting is the hybrid, whatever the node says.
+                  // A record without the setting is unset, whatever the node says.
                   [[], ['""', '0.6']]] as [$settings, $want]) {
             foreach ($this->routingData($graph, $record($settings)) as $m => $got) {
                 $this->assertSame($want, $got, $m . ': ' . json_encode($settings));
@@ -201,10 +206,13 @@ class LangGraphJevDispatchTest extends TestCase
     public function testToRunNoteFollowsTheRoutingMode(): void
     {
         $doc = fn(array $settings) => $this->generator(self::withSettings($settings))->generate(44, '3')['code'];
-        // Hybrid (unset): optional, unchanged wording.
-        $hybrid = $doc([]);
-        $this->assertStringContainsString('# Optional: TYPESAFE_API_KEY (TypeSafe Jev) lets a dispatcher route without an LLM turn', $hybrid);
-        $this->assertStringNotContainsString('Required: TYPESAFE_API_KEY', $hybrid);
+        // Unset: Jev when the key is set, else the model -- never both.
+        $unset = $doc([]);
+        $this->assertStringContainsString('# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (techBuddy):', $unset);
+        $this->assertStringContainsString('#   Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev', $unset);
+        $this->assertStringContainsString('#   cannot decide stops the run there (no model fallback).', $unset);
+        $this->assertStringNotContainsString('Required: TYPESAFE_API_KEY', $unset);
+        $this->assertStringNotContainsString('lets a dispatcher route without an LLM turn', $unset);
         // Jev only: required.
         $jev = $doc(['routing_mode' => 'jev']);
         $this->assertStringContainsString('# Required: TYPESAFE_API_KEY (TypeSafe Jev) for Jev-only dispatchers (techBuddy)', $jev);
@@ -257,7 +265,7 @@ class LangGraphJevDispatchTest extends TestCase
         }
     }
 
-    public function testEmittedRuntimeRoutesAndFallsBack(): void
+    public function testEmittedRuntimeRoutesOrStops(): void
     {
         exec('python3 -c "import sys; assert sys.version_info >= (3, 9)" 2>&1', $o, $rc);
         if ($rc !== 0) {
@@ -287,7 +295,7 @@ class LangGraphJevDispatchTest extends TestCase
             if ($kindFile) @unlink($kindFile);
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame($kindFile ? 'OK 19 cases' : 'OK 16 cases', end($out), $mode);
+            $this->assertSame($kindFile ? 'OK 20 cases' : 'OK 16 cases', end($out), $mode);
         }
     }
 

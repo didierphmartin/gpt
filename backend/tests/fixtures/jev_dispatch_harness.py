@@ -97,7 +97,8 @@ def answer(choice, conf):
 
 def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6):
     """ad carries what the generator emits for a dispatcher: routing_mode is
-    'jev' | 'llm' | '' (unset = hybrid) and jev_min_confidence the floor."""
+    'jev' | 'llm' | '' (unset: Jev when TYPESAFE_API_KEY is set, else the
+    model) and jev_min_confidence the floor."""
     urllib.request.urlopen = http
     if key is None:
         os.environ.pop("TYPESAFE_API_KEY", None)
@@ -148,21 +149,8 @@ def routed():
     assert r["outcome"] == "routed" and r["target"]["id"] == "3" and r["usage"]["input_tokens"] == 12, r
 
 
-def falls_through(body=None, exc=None, outcome=""):
-    ns = namespace()
-    http = FakeHTTP(body, exc)
-    out, llm_calls, log = run_dispatcher(ns, http)
-    assert llm_calls == 1, f"{outcome}: the model must decide"
-    assert out["routes"] == {"2": "4"}, out
-    assert out["node_outputs"]["2"]["text"].endswith("## Dispatcher notes\nfrom the model"), out
-    assert f"Jev declined ({outcome}: " in log and "asking the model" in log, log
-    # Jev's wall time is counted even when it declines (before the model runs).
-    assert "techBuddy" in (run_dispatcher.last_llm.durations_at_call or {}), "declined Jev time not counted"
-    r = ns["_jev_route"]("x", TARGETS, QUESTION)
-    assert r["outcome"] == outcome, r
-
-
 def no_key():
+    """Unset without TYPESAFE_API_KEY resolves to the model: Jev is never asked."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     out, llm_calls, log = run_dispatcher(ns, http, key=None)
@@ -194,14 +182,16 @@ def refusals():
 
 def hung():
     """A Jev call that never returns (DNS, a stalled read) is cut off by
-    asyncio.wait_for(JEV_TIMEOUT_S + 1) and lands in the model path."""
+    asyncio.wait_for(JEV_TIMEOUT_S + 1): an unset dispatcher with a key is Jev
+    only, so the run stops with "did not route" -- the model is never asked."""
     ns = namespace()
     ns["JEV_TIMEOUT_S"] = 0   # -> wait_for bound of 1s
     ns["_jev_route"] = lambda *a: (time.sleep(2), {"outcome": "routed"})[1]
     t0 = time.monotonic()
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)))
-    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
-    assert "Jev declined (error: TimeoutError" in log and "no answer within 1s" in log, log
+    assert llm_calls == 0, "a Jev timeout never falls back to the model"
+    assert out["routes"] == {"2": END} and branch_that_runs(out) is None, out
+    assert "Jev did not route (error: TimeoutError" in log and "no answer within 1s" in log, log
     assert ns["NODE_DURATIONS"]["techBuddy"] >= 1.0, ns["NODE_DURATIONS"]
 
 
@@ -254,12 +244,13 @@ def jev_routed():
     assert "Jev routed to 'IT claims'" in log, log
 
 
-def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6, http_calls=1):
-    """routing_mode 'jev': any non-routed outcome stops at the dispatcher with
-    the interpreter's "did not route" message; no model call, no branch."""
+def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6, http_calls=1, routing_mode="jev"):
+    """routing_mode 'jev' (or unset with a key, which resolves to Jev): any
+    non-routed outcome stops at the dispatcher with the interpreter's "did not
+    route" message; no model call, no branch."""
     ns = namespace()
     http = FakeHTTP(body, exc)
-    out, llm_calls, log = run_dispatcher(ns, http, key=key, routing_mode="jev", floor=floor)
+    out, llm_calls, log = run_dispatcher(ns, http, key=key, routing_mode=routing_mode, floor=floor)
     assert llm_calls == 0, f"Jev mode never calls the model ({expect_reason})"
     assert len(http.requests) == http_calls, http.requests
     msg = f'Error: dispatcher "techBuddy" did not route the request (Jev: {expect_reason}).'
@@ -267,11 +258,13 @@ def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6
                    "routes": {"2": END}, "final_output": msg}, out
     assert branch_that_runs(out) is None, "no branch may run"
     assert "asking the model" not in log and "no model fallback" in log, log
+    assert "techBuddy" in ns["NODE_DURATIONS"], "Jev's wall time is counted"
 
 
 def custom_floor():
     """jev_min_confidence is honoured: 0.8 is below a 0.9 floor (the default
-    0.6 would route it). The hybrid then asks the model, as it does at 0.6."""
+    0.6 would route it). An unset dispatcher with a key is Jev only, so it
+    stops there -- the model is never asked."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.8))
     urllib.request.urlopen = http
@@ -280,8 +273,8 @@ def custom_floor():
     assert r["outcome"] == "low_confidence" and r["reason"] == "confidence 0.80 below floor 0.90", r
     assert ns["_jev_route"]("x", TARGETS, QUESTION)["outcome"] == "routed", "default floor stays 0.6"
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.8)), floor=0.9)
-    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
-    assert "Jev declined (low_confidence: confidence 0.80 below floor 0.90" in log, log
+    assert llm_calls == 0 and out["routes"] == {"2": END}, out
+    assert "Jev did not route (low_confidence: confidence 0.80 below floor 0.90" in log, log
 
 
 def kind_jev_unrouted():
@@ -304,6 +297,23 @@ def kind_jev_unrouted():
     assert out["route"] not in {t["id"] for t in TARGETS}, "no branch may run"
 
 
+def kind_unset_no_key():
+    """A2A / modular: an unset dispatcher without TYPESAFE_API_KEY -> the model."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.99))
+    urllib.request.urlopen = http
+    os.environ.pop("TYPESAFE_API_KEY", None)
+    llm = FakeLLM(ns)
+    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
+                  "routing_mode": "", "jev_min_confidence": 0.6}
+    ns["_llm"] = lambda: llm
+    ns["parents"] = lambda n: []
+    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
+    with redirect_stdout(io.StringIO()):
+        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
+
+
 def kind_llm_mode():
     """A2A / modular: the wrapper passes routing_mode through -> no Jev call."""
     ns = namespace()
@@ -322,11 +332,12 @@ def kind_llm_mode():
 
 
 case(routed)
-case(lambda: falls_through(answer("unclear", 1.0), outcome="unclear"))
-case(lambda: falls_through(answer("IT claims", 0.46), outcome="low_confidence"))
-case(lambda: falls_through(exc=urllib.error.URLError("timed out"), outcome="error"))
-case(lambda: falls_through(body=b"<html>not json</html>", outcome="error"))
-case(lambda: falls_through(answer("Sales", 0.99), outcome="error"))   # off-menu answer is never trusted
+# Unset with a key = Jev only: a decline never falls back to the model.
+case(lambda: jev_not_routed("unclear: the request names no branch", body=answer("unclear", 1.0), routing_mode=""))
+case(lambda: jev_not_routed("low_confidence: confidence 0.46 below floor 0.60", body=answer("IT claims", 0.46), routing_mode=""))
+case(lambda: jev_not_routed("error: <urlopen error timed out>", exc=urllib.error.URLError("timed out"), routing_mode=""))
+case(lambda: jev_not_routed("error: no choice in the response", body=b"<html>not json</html>", routing_mode=""))
+case(lambda: jev_not_routed("error: answer 'Sales' is not on the menu", body=answer("Sales", 0.99), routing_mode=""))   # off-menu answer is never trusted
 case(no_key)
 case(refusals)
 case(hung)
@@ -341,4 +352,5 @@ if KIND is not None:
     case(kind_routed)
     case(kind_jev_unrouted)
     case(kind_llm_mode)
+    case(kind_unset_no_key)
 print(f"OK {cases} cases")
