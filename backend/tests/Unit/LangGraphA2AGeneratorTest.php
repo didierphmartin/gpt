@@ -131,7 +131,7 @@ class LangGraphA2AGeneratorTest extends TestCase
         foreach (['"""A2A agent "IT claims" -- node 3 of workflow "Dispatcher demo"',
                   'from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes',
                   'new_task_from_user_message', 'class NodeExecutor(AgentExecutor)', 'def build_agent_card',
-                  'AGENT_CARD = build_agent_card(', 'Skill id:   node-3', 'def _make_llm(', 'def _call_mcp_tool(',
+                  'AGENT_CARD = build_agent_card(', 'Skill id:   node-3', 'def _make_llm(', 'class McpClient:',
                   'class ToolCatalog:', 'run_node = make_node(NODE).run', 'uvicorn.run(', '"--port"',
                   '# ---- node 3: IT claims (agent-template)', 'NODE = {', '"kind": "agent"',
                   '<== this agent', 'A2A SERVING', 'A2A_GATE_TIMEOUT_S',

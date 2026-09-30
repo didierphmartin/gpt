@@ -384,4 +384,22 @@ class LangGraphOutputStructureTest extends TestCase
             }
         }
     }
+
+    public function testMcpClientIsLangGraphsOwnClass(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            $this->assertStringContainsString('class McpClient:', $all, $mode);
+            $this->assertStringContainsString('MCP = McpClient()', $all, $mode);
+            $this->assertStringNotContainsString('def _init_mcp_session(', $all, $mode);
+            $this->assertStringNotContainsString('import json as _json', $all, $mode);
+        }
+    }
+
+    public function testMcpClientTalksJsonRpcAndSse(): void
+    {
+        $path = array_values(self::write($this->files(self::graphs()['linear'], 'single'))['paths'])[0];
+        [$r] = $this->probe(['mcp', $path]);
+        $this->assertSame(['texts' => ['news ok', 'news ok'], 'initialize' => 2], $r, 'SSE parsed; one handshake per call, as today');
+    }
 }

@@ -64,5 +64,6 @@
   "RUN_SKILL_SCRIPT_TOOL,": {"now": "SkillRuntime, SKILLS folder-backed skills: run_skill_script, the per-skill tool, a skill as a mandatory node step", "why": "Task 6: build_tools_from_catalog/RUN_SKILL_SCRIPT_TOOL/_make_skill_tool became the ToolCatalog and SkillRuntime classes"},
   "_make_skill_tool() the skill runner tool + the per-skill tool builder": {"now": "SkillRuntime, SKILLS folder-backed skills: run_skill_script, the per-skill tool, a skill as a mandatory node step", "why": "Task 6: build_tools_from_catalog/RUN_SKILL_SCRIPT_TOOL/_make_skill_tool became the ToolCatalog and SkillRuntime classes"},
   "local (non-MCP) tool, same as the single-file script": {"now": "Local (non-MCP) tool: lets skill-bound agents run their folder-backed", "why": "Task 6: Node.tools no longer adds run_skill_script itself; ToolCatalog.build() adds it once for every mode, under the single file's comment"},
-  "TOOL BUILDER + SKILL RUNTIME (shared blocks)": {"now": "TOOL BUILDER + SKILL RUNTIME", "why": "Task 6: the tool and skill blocks are LangGraph's own (ToolCatalog, SkillRuntime), no longer the shared ones"}
+  "TOOL BUILDER + SKILL RUNTIME (shared blocks)": {"now": "TOOL BUILDER + SKILL RUNTIME", "why": "Task 6: the tool and skill blocks are LangGraph's own (ToolCatalog, SkillRuntime), no longer the shared ones"},
+  "MCP CLIENT -- JSON-RPC 2.0 over HTTP (shared block)": {"now": "MCP CLIENT -- JSON-RPC 2.0 over HTTP", "why": "Task 7a: the A2A agent file carries LangGraph's own McpClient, not the shared PythonEmitHelpers block"}
 }

@@ -6,6 +6,7 @@
   lg_run_probe.py node a2a    <agent file.py>                <request>
   lg_run_probe.py save <file.py | package root> <output text>   (from Task 5: save_output)
   lg_run_probe.py llm  <file.py> <cfg json>                     (no stub: build cfg's model, report the error)
+  lg_run_probe.py mcp  <file.py>                                (a local SSE MCP server; two tool calls)
 The stub answers "answer to: <last 40 chars of the request>". Bound to route_to it routes to
 $STUB_ROUTE_TO; bound to run_skill_script with $STUB_SKILL_CALL (JSON args) set, it calls that
 tool once and then answers. $STUB_BLOCK_IMPORT=<module> makes that import fail (missing package).
@@ -101,6 +102,32 @@ def main():
                 print("RESULT " + json.dumps({"error": None}))
             except Exception as e:
                 print("RESULT " + json.dumps({"error": f"{type(e).__name__}: {e}"}))
+        case "mcp":
+            (path,) = args
+            mod = load_file(path, "lg_single")
+            import http.server, threading
+            calls = {"initialize": 0}
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                """A one-tool MCP server answering in SSE form, counting handshakes."""
+                def do_POST(self):
+                    body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    if body.get("method") == "initialize":
+                        calls["initialize"] += 1
+                    result = {"content": [{"type": "text", "text": "news ok"}]} if body.get("method") == "tools/call" else {}
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    self.wfile.write(("data: " + json.dumps({"jsonrpc": "2.0", "id": body.get("id"), "result": result}) + "\n\n").encode())
+
+                def log_message(self, *a):
+                    pass
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            url = f"http://127.0.0.1:{srv.server_address[1]}/srv.php"      # .php = already the endpoint
+            call = mod.MCP.call_tool if hasattr(mod, "MCP") else mod._call_mcp_tool
+            texts = [call(url, "get_news", {}), call(url, "get_news", {})]
+            print("RESULT " + json.dumps({"texts": texts, "initialize": calls["initialize"]}))
 
 
 main()

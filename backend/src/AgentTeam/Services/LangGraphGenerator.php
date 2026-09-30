@@ -397,19 +397,10 @@ class LangGraphGenerator
         // ---------- MCP JSON-RPC client ----------
         $lines[] = $sep;
         $lines[] = "# MCP CLIENT -- JSON-RPC 2.0 over HTTP";
-        $lines[] = '#';
-        $lines[] = '# The Model Context Protocol (MCP) uses JSON-RPC 2.0 over HTTP.';
-        $lines[] = '# Each tool call requires:';
-        $lines[] = "#   1. URL normalization -- append /mcp if not present";
-        $lines[] = "#   2. Session initialization -- send 'initialize' + notification";
-        $lines[] = "#   3. Tool invocation -- send 'tools/call' with name + arguments";
-        $lines[] = "#   4. Response parsing -- handle plain JSON or SSE-wrapped JSON";
-        $lines[] = '#';
-        $lines[] = '# Some MCP servers return Server-Sent Events (SSE) instead of';
-        $lines[] = '# plain JSON. The parser handles both formats transparently.';
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = PythonEmitHelpers::mcpClientBlock();
+        // The protocol steps and the SSE note are McpClient's class docstring.
+        $lines[] = LangGraphRuntime::mcpClientBlock();
 
         // ---------- tool builder ----------
         $lines[] = '';
@@ -1877,8 +1868,8 @@ PY;
         $L[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($servers, true);
         $L[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($catalog, true);
         $L[] = '';
-        $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP (shared block)'; $L[] = $sep;
-        $L[] = PythonEmitHelpers::mcpClientBlock();
+        $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP'; $L[] = $sep;
+        $L[] = LangGraphRuntime::mcpClientBlock();
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
         $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $L[] = LangGraphRuntime::dispatcherBlock();
@@ -2898,6 +2889,7 @@ PY;
         $L[] = '  _make_llm()                     provider/model -> LangChain chat model';
         $L[] = '                                   (claude, openai, gemini, grok, deepseek, kimi, glm)';
         $L[] = '  MCP_SERVERS, TOOL_CATALOG       this workflow\'s MCP servers + tool schemas, baked at generation time';
+        $L[] = '  McpClient, MCP, _call_mcp_tool  the MCP JSON-RPC client: handshake (endpoint remembered), tools/call, JSON or SSE replies; one reused HTTP client';
         $L[] = '  ToolCatalog, TOOLS              TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC; built once, each node takes its own by name';
         $L[] = '  SkillRuntime, SKILLS            folder-backed skills: run_skill_script, the per-skill tool, a skill as a mandatory node step';
         $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
@@ -3131,7 +3123,7 @@ TXT;
         $L[] = $sep;
         $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP';
         $L[] = $sep;
-        $L[] = PythonEmitHelpers::mcpClientBlock();
+        $L[] = LangGraphRuntime::mcpClientBlock();
         $L[] = $sep;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
@@ -3471,7 +3463,8 @@ PY;
     // These correspond to the textwrap.dedent('''...''') heredocs in the
     // Python generator. Reproduced here byte-for-byte as nowdoc strings.
     //
-    // mcpClientBlock()  → moved to PythonEmitHelpers::mcpClientBlock() (Task 2)
+    // mcpClientBlock()  → LangGraphRuntime::mcpClientBlock() (LangGraph's own McpClient;
+    //                      PythonEmitHelpers::mcpClientBlock() stays for ADK/MAF/NOOA)
     // toolBuilderBlock() → LangGraphRuntime::toolCatalogBlock() + skillRuntimeBlock()
     //                      (LangGraph's own copies; the shared skill blocks stay for ADK/MAF/NOOA)
 

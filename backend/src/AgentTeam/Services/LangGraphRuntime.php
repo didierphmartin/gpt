@@ -784,13 +784,181 @@ PY;
     }
 
     /**
+     * McpClient and its module instance MCP: the MCP JSON-RPC client every tool call goes
+     * through (URL normalisation, the initialize handshake with its fallback to the URL as
+     * registered, the per-server endpoint cache, tools/call, plain-JSON or SSE parsing).
+     *
+     * LangGraph's own copy of PythonEmitHelpers::mcpClientBlock() (_normalize_mcp_url,
+     * _MCP_ENDPOINTS, _init_mcp_session, _parse_mcp_response, _call_mcp_tool), restructured
+     * into a class that reuses one httpx.Client. PythonEmitHelpers::mcpClientBlock() stays
+     * as it is for ADK, MAF and NOOA.
+     *
+     * The block ends with the alias `_call_mcp_tool = MCP.call_tool`: the shared playbook
+     * runtime (PlaybookEmit::runtimeBlock(), still in LangGraph's output) calls that name.
+     * Task 7b removes the alias.
+     */
+    public static function mcpClientBlock(): string
+    {
+        return <<<'PY'
+class McpClient:
+    """The MCP client: calls a tool on an MCP server and returns its text.
+
+    The Model Context Protocol (MCP) uses JSON-RPC 2.0 over HTTP.
+    Each tool call requires:
+      1. URL normalization -- append /mcp if not present
+      2. Session initialization -- send 'initialize' + notification
+      3. Tool invocation -- send 'tools/call' with name + arguments
+      4. Response parsing -- handle plain JSON or SSE-wrapped JSON
+
+    Some MCP servers return Server-Sent Events (SSE) instead of
+    plain JSON. The parser handles both formats transparently.
+
+    One instance (MCP) serves the whole process: it remembers which endpoint each
+    server answered on and sends every request through one reused HTTP client.
+    """
+
+    HEADERS = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream, */*"}
+
+    def __init__(self):
+        self._endpoints: dict[str, str] = {}   # registered server URL -> endpoint that accepted the handshake
+        # One connection pool for every handshake and call; each request sets its own
+        # timeout (30 s for the handshake, 180 s for a tool call).
+        self._http = httpx.Client()
+
+    @staticmethod
+    def normalize_url(url: str) -> str:
+        """Ensure the URL points to the MCP endpoint.
+
+        - If it already ends with /mcp, leave it alone.
+        - If it ends with a .php file, it IS the endpoint already (XAMPP-style
+          MCP server scripts like mcp-server.php). Don't append anything.
+        - Otherwise, append /mcp per the MCP convention.
+        """
+        url = url.rstrip("/")
+        if url.endswith("/mcp") or url.endswith(".php"):
+            return url
+        return url + "/mcp"
+
+    @staticmethod
+    def _parse(text: str) -> dict | None:
+        """Parse a JSON-RPC response from an MCP server.
+
+        MCP servers may respond in two formats:
+        - Plain JSON: standard JSON-RPC response body
+        - SSE (Server-Sent Events): lines prefixed with 'data:' containing JSON
+        This function tries plain JSON first, then falls back to SSE parsing.
+        """
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                data = line[5:].strip()
+                if data:
+                    try:
+                        return json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+        return None
+
+    def _handshake(self, url: str) -> str | None:
+        """Initialize an MCP session with the server.
+
+        The MCP protocol requires a handshake before tool calls:
+        1. Client sends 'initialize' with protocol version and capabilities
+        2. Server responds with its capabilities
+        3. Client sends 'notifications/initialized' to confirm
+
+        Tries the /mcp-normalised URL first, then the URL exactly as registered
+        (servers mounted at their bare URL, e.g. PHP mock servers, answer there
+        and 404 or error on /mcp). The endpoint that answers is remembered.
+        Returns that endpoint URL, or None when no candidate accepted the handshake.
+        """
+        init_req = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "LangGraph-Workflow", "version": "1.0.0"},
+                "capabilities": {}
+            }
+        }
+        candidates = [self._endpoints[url]] if url in self._endpoints else []
+        for cand in (self.normalize_url(url), url):
+            if cand not in candidates:
+                candidates.append(cand)
+        last_err = None
+        for mcp_url in candidates:
+            try:
+                r = self._http.post(mcp_url, json=init_req, headers=self.HEADERS, timeout=30)
+                r.raise_for_status()
+                data = self._parse(r.text)
+                if data is None or "error" in (data or {}):
+                    last_err = (data or {}).get("error") if data else "invalid response"
+                    continue
+                # Send initialized notification
+                self._http.post(mcp_url, json={
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {}
+                }, headers=self.HEADERS, timeout=30)
+                self._endpoints[url] = mcp_url
+                return mcp_url
+            except Exception as e:
+                last_err = e
+        print(f"[warn] MCP init failed for {url}: {last_err}")
+        return None
+
+    def call_tool(self, server_url: str, tool_name: str, arguments: dict) -> str:
+        """Call a tool on an MCP server via JSON-RPC 2.0.
+
+        Sequence: init session -> send tools/call -> parse response -> extract text.
+        The MCP response contains a 'content' array; we extract all text items
+        and join them. If no text is found, falls back to raw JSON.
+        """
+        mcp_url = self._handshake(server_url) or self.normalize_url(server_url)
+
+        request = {
+            "jsonrpc": "2.0", "id": int(time.time()),
+            "method": "tools/call",
+            "params": {"name": tool_name,
+                       "arguments": arguments or {}}
+        }
+        try:
+            r = self._http.post(mcp_url, json=request, headers=self.HEADERS, timeout=180)
+            r.raise_for_status()
+            data = self._parse(r.text)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+        if data is None:
+            return json.dumps({"error": "invalid response"})
+        if "error" in data:
+            return json.dumps({"error": data["error"].get("message", "unknown")})
+
+        content = (data.get("result") or {}).get("content", [])
+        texts = [c.get("text", "") for c in content
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
+
+
+MCP = McpClient()
+
+# The name the playbook runtime calls its bound #Actions by (until it moves to MCP.call_tool).
+_call_mcp_tool = MCP.call_tool
+PY;
+    }
+
+    /**
      * ToolCatalog and its module instance TOOLS: the workflow's tools as LangChain
      * StructuredTools -- every baked TOOL_CATALOG entry (an MCP tool) plus the local
      * run_skill_script (SKILLS.tool) -- built once per process and shared by every node.
      *
      * LangGraph's own copy of what was LangGraphGenerator::toolBuilderBlock()'s tool half
      * (_summarize_tool_result + build_tools_from_catalog), restructured into a class.
-     * Emitted after TOOL_CATALOG and the MCP client (_call_mcp_tool), which it calls.
+     * Emitted after TOOL_CATALOG and the MCP client (MCP.call_tool), which it calls.
      */
     public static function toolCatalogBlock(): string
     {
@@ -860,7 +1028,7 @@ class ToolCatalog:
             argv_preview = argv if len(argv) <= 250 else argv[:250] + f" ... +{len(argv) - 250} chars"
             print(f"  [tool] -> {name}({argv_preview})")
             t0 = time.monotonic()
-            result = _call_mcp_tool(server_url, name, kwargs)
+            result = MCP.call_tool(server_url, name, kwargs)
             dt = time.monotonic() - t0
             summary = self._summarize(result)
             print(f"  [tool] ← {name}: {summary} ({len(result)} chars, {dt:.1f}s)")
