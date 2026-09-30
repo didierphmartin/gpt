@@ -132,7 +132,7 @@ class LangGraphA2AGeneratorTest extends TestCase
                   'from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes',
                   'new_task_from_user_message', 'class NodeExecutor(AgentExecutor)', 'def build_agent_card',
                   'AGENT_CARD = build_agent_card(', 'Skill id:   node-3', 'def _make_llm(', 'def _call_mcp_tool(',
-                  'def build_tools_from_catalog', 'run_node = make_node(NODE).run', 'uvicorn.run(', '"--port"',
+                  'class ToolCatalog:', 'run_node = make_node(NODE).run', 'uvicorn.run(', '"--port"',
                   '# ---- node 3: IT claims (agent-template)', 'NODE = {', '"kind": "agent"',
                   '<== this agent', 'A2A SERVING', 'A2A_GATE_TIMEOUT_S',
                   // A follow-up on a task with no paused run (completed/expired) must be rejected,
@@ -146,9 +146,9 @@ class LangGraphA2AGeneratorTest extends TestCase
         // No playbook runtime in a plain agent file.
         $this->assertStringNotContainsString('def build_playbook_tools', $code);
         // Skill-bound node: run_skill_script is registered into the catalog (the
-        // local, non-MCP tool build_tools_from_catalog() itself never produces)
+        // local, non-MCP tool, SKILLS.tool, next to the MCP tools ToolCatalog builds)
         // and the skill binding is baked onto NODE.
-        $this->assertStringContainsString('catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL', $code);
+        $this->assertStringContainsString('built["run_skill_script"] = SKILLS.tool', $code);
         $this->assertStringContainsString('"skills": [{"dir":"html"}]', $code);
         $this->assertCompiles($code, 'agent 3');
     }

@@ -422,7 +422,7 @@ class LangGraphGenerator
         $lines[] = "# other LangChain tool -- it doesn't know about MCP internals.";
         $lines[] = $sep;
         $lines[] = '';
-        $lines[] = self::toolBuilderBlock();
+        $lines[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $lines[] = LangGraphRuntime::dispatcherBlock();
         if ($playbookData !== []) {
             $lines[] = self::playbookRuntimeBlock();
@@ -992,7 +992,7 @@ class LangGraphGenerator
             // (e.g. "Missing /llms.txt" when the file exists). Detect via the
             // assembled prompt, which carries the skill's "call run_skill_script
             // with dir_name …" instructions. The tool itself is a LOCAL
-            // subprocess runner registered into the catalog (see toolBuilderBlock).
+            // subprocess runner registered into the catalog (see ToolCatalog.build).
             // NOTE: the main agent NEVER gets run_skill_script — skills run as separate
             // mandatory steps after it (see the skill loop in the node function).
 
@@ -1879,8 +1879,8 @@ PY;
         $L[] = '';
         $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP (shared block)'; $L[] = $sep;
         $L[] = PythonEmitHelpers::mcpClientBlock();
-        $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME (shared blocks)'; $L[] = $sep;
-        $L[] = self::toolBuilderBlock();
+        $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
+        $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($isPlaybook) {
@@ -2370,7 +2370,7 @@ PY;
         $L[] = '# The shared runtime lives in common.py, one directory up. Python puts the';
         $L[] = '# workflow folder on sys.path when workflow.py starts, so this resolves for';
         $L[] = '# every module of the package.';
-        $L[] = 'from common import _make_llm, build_tools_from_catalog, inject_datetime, RUN_SKILL_SCRIPT_TOOL';
+        $L[] = 'from common import _make_llm, TOOLS, inject_datetime';
         $L[] = '';
         $L[] = $sep;
         $L[] = '# NODE DEFINITION -- frozen from the workflow editor';
@@ -2434,9 +2434,7 @@ PY;
         $L[] = '    name= is the member\'s DISPLAY name -- what create_swarm() and every colleague\'s';
         $L[] = '    HANDOFFS identify it by, the same name the rewrite guaranteed unique.';
         $L[] = '    """';
-        $L[] = '    catalog = build_tools_from_catalog()';
-        $L[] = '    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL';
-        $L[] = '    tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]';
+        $L[] = '    tools = TOOLS.tools_for(NODE["tool_names"])';
         $L[] = '    return create_react_agent(';
         $L[] = '        _llm(),';
         $L[] = '        tools + HANDOFFS,';
@@ -2900,9 +2898,8 @@ PY;
         $L[] = '  _make_llm()                     provider/model -> LangChain chat model';
         $L[] = '                                   (claude, openai, gemini, grok, deepseek, kimi, glm)';
         $L[] = '  MCP_SERVERS, TOOL_CATALOG       this workflow\'s MCP servers + tool schemas, baked at generation time';
-        $L[] = '  build_tools_from_catalog()      TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC';
-        $L[] = '  RUN_SKILL_SCRIPT_TOOL,';
-        $L[] = '  _make_skill_tool()              the skill runner tool + the per-skill tool builder';
+        $L[] = '  ToolCatalog, TOOLS              TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC; built once, each node takes its own by name';
+        $L[] = '  SkillRuntime, SKILLS            folder-backed skills: run_skill_script, the per-skill tool, a skill as a mandatory node step';
         $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
         $L[] = '  open_gate(), resolve_gate(),';
         $L[] = '  take_gate_answer()              the human-gate rendezvous a playbook node\'s tools wait on';
@@ -3138,7 +3135,7 @@ TXT;
         $L[] = $sep;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
-        $L[] = self::toolBuilderBlock();
+        $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $L[] = PythonEmitHelpers::eventSinkBlock();
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
@@ -3475,181 +3472,8 @@ PY;
     // Python generator. Reproduced here byte-for-byte as nowdoc strings.
     //
     // mcpClientBlock()  → moved to PythonEmitHelpers::mcpClientBlock() (Task 2)
-    // skillDepsBlock()  → moved to PythonEmitHelpers::skillDepsBlock()  (Task 2)
-
-    private static function toolBuilderBlock(): string
-    {
-        // Part A: _summarize_tool_result + build_tools_from_catalog
-        // Three blank lines after 'return catalog' produce content ending \n\n\n
-        // so that concatenating skillDepsBlock() (which starts with '# ---')
-        // yields the original two-blank-line separator.
-        $partA = <<<'PY'
-def _summarize_tool_result(result: str) -> str:
-    """Short, informative summary of a tool result for logs.
-
-    Parses JSON when possible and surfaces the most useful fields
-    (article count + first PMIDs, error message, query text, etc.)
-    so the log shows *what* came back, not just the raw first 120 chars.
-    """
-    try:
-        parsed = json.loads(result)
-    except Exception:
-        s = result.strip().replace("\n", " ")
-        return s[:160] + (" ..." if len(s) > 160 else "")
-    if isinstance(parsed, dict):
-        if "error" in parsed:
-            return f"error: {str(parsed['error'])[:200]}"
-        if isinstance(parsed.get("articles"), list):
-            arts = parsed["articles"]
-            pmids = [str(a.get("pmid", "?")) for a in arts[:5] if isinstance(a, dict)]
-            more = "" if len(arts) <= 5 else f", +{len(arts) - 5} more"
-            return f"{len(arts)} articles (PMIDs: {', '.join(pmids)}{more})"
-        if isinstance(parsed.get("suggestions"), list):
-            return f"{len(parsed['suggestions'])} suggestions"
-        if isinstance(parsed.get("query"), str):
-            q = parsed["query"]
-            return f"query: {q[:200]}" + (" ..." if len(q) > 200 else "")
-        if isinstance(parsed.get("items"), list):
-            return f"{len(parsed['items'])} items"
-        keys = ", ".join(list(parsed.keys())[:6])
-        return f"keys: {keys}"
-    if isinstance(parsed, list):
-        return f"list of {len(parsed)} items"
-    s = str(parsed)
-    return s[:160] + (" ..." if len(s) > 160 else "")
-
-
-def build_tools_from_catalog() -> dict[str, StructuredTool]:
-    """Build LangChain StructuredTool wrappers from TOOL_CATALOG.
-
-    For each tool:
-    1. Parse the JSON Schema into a Pydantic model (for LLM argument validation)
-    2. Create a callable that sends the MCP JSON-RPC request
-    3. Wrap both into a LangChain StructuredTool
-
-    Returns: dict mapping tool_name -> StructuredTool
-    """
-    type_map = {"string": str, "integer": int, "number": float,
-                "boolean": bool, "array": list, "object": dict}
-    catalog = {}
-    for name, info in TOOL_CATALOG.items():
-        schema = info.get("input_schema") or {}
-        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
-        required = set(schema.get("required", []) if isinstance(schema, dict) else [])
-        fields = {}
-        for pname, pspec in props.items():
-            spec = pspec if isinstance(pspec, dict) else {}
-            ptype = type_map.get(spec.get("type", "string"), str)
-            default = ... if pname in required else None
-            fields[pname] = (ptype, Field(default, description=spec.get("description", "")))
-        args_model = create_model(f"{name}Args", **fields) if fields else create_model(f"{name}Args")
-
-        server_url = info["server_url"]
-        def make_fn(n=name, s=server_url):
-            def invoke(**kwargs):
-                argv = json.dumps(kwargs, default=str)
-                argv_preview = argv if len(argv) <= 250 else argv[:250] + f" ... +{len(argv) - 250} chars"
-                print(f"  [tool] -> {n}({argv_preview})")
-                t0 = time.monotonic()
-                result = _call_mcp_tool(s, n, kwargs)
-                dt = time.monotonic() - t0
-                summary = _summarize_tool_result(result)
-                print(f"  [tool] ← {n}: {summary} ({len(result)} chars, {dt:.1f}s)")
-                return result
-            return invoke
-
-        catalog[name] = StructuredTool.from_function(
-            func=make_fn(),
-            name=name,
-            description=info.get("description") or f"MCP tool {name}",
-            args_schema=args_model,
-        )
-    return catalog
-
-
-
-PY;
-        // Part B: skillFsSyncBlock (shared, LangChain-free) + LangGraph-specific tail.
-        // skillFsSyncBlock ends after _read_skill_md. The two blank lines that separate
-        // _read_skill_md from RUN_SKILL_SCRIPT_TOOL are provided by the two leading blank
-        // lines in $lgSpecific. RUN_SKILL_SCRIPT_TOOL lives here (not in the shared block)
-        // because it uses StructuredTool/create_model which are LangChain-only.
-        $lgSpecific = <<<'PY'
-
-
-RUN_SKILL_SCRIPT_TOOL = StructuredTool.from_function(
-    func=_run_skill_script,
-    name="run_skill_script",
-    description=("Execute a folder-backed skill's Python script and return its "
-                 "stdout. Pass the dir_name/script/argv the skill instructions "
-                 "specify, e.g. dir_name='GEO/geo-llmstxt', "
-                 "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
-    args_schema=create_model(
-        "RunSkillScriptArgs",
-        dir_name=(str, ...),
-        script=(str, ...),
-        # list[str] (not bare list) so the generated JSON schema carries
-        # `items`. Gemini rejects array params without `items` (400
-        # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
-        # input_files as a bare dict — Gemini accepted that, and dict[str,str]
-        # would add additionalProperties which Gemini may reject.
-        argv=(list[str], []),
-        input_files=(dict, {}),
-        read_outputs=(list[str], []),
-    ),
-)
-
-
-def _make_skill_tool(dir_name: str):
-    """run_skill_script scoped to ONE skill dir: the model picks only the script + argv
-    (and input_files/read_outputs); the dir is fixed to this skill."""
-    def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
-        return _run_skill_script(dir_name, script, argv, input_files, read_outputs)
-    return StructuredTool.from_function(
-        func=run_skill_script, name="run_skill_script",
-        description=(f"Run a script in the '{dir_name}' skill (dir fixed). Stage authored "
-                     "content via input_files and pass the output path in read_outputs."),
-        args_schema=create_model(
-            "ScopedSkillArgs",
-            script=(str, ...), argv=(list[str], []),
-            input_files=(dict, {}), read_outputs=(list[str], []),
-        ),
-    )
-
-
-async def _run_skill_step(skill, prior, llm):
-    """Run ONE skill as a mandatory step on `prior` (the previous stage's output). A
-    dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to
-    the dir; the step output becomes the skill's produced deliverable file (via
-    read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform."""
-    dir_name = skill.get("dir", "")
-    body = skill.get("inline") or (_read_skill_md(dir_name) if dir_name else "")
-    system = (
-        "You are running the '" + (dir_name or "inline") + "' skill as a MANDATORY step in "
-        "a compiled workflow. Follow the skill instructions below and APPLY THE SKILL to the "
-        "INPUT. If the skill produces a document/file (e.g. an HTML report via a create/"
-        "render script), you MUST call run_skill_script -- stage your authored content via "
-        "input_files and pass the output path in read_outputs; the workflow captures that "
-        "produced file as this node's output. If the skill has no script, return the "
-        "transformed result as your response.\n\n=== SKILL INSTRUCTIONS ===\n" + body
-    )
-    tools = [_make_skill_tool(dir_name)] if dir_name else []
-    if dir_name:
-        _LAST_SKILL_OUTPUTS.pop(dir_name, None)
-    agent = create_react_agent(llm, tools)
-    msgs = [SystemMessage(content=system),
-            HumanMessage(content="## INPUT (apply the skill to this)\n" + str(prior))]
-    result = await agent.ainvoke({"messages": msgs})
-    final = result["messages"][-1]
-    text = final.content if isinstance(final, AIMessage) else str(final)
-    if isinstance(text, list):
-        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-    produced = _LAST_SKILL_OUTPUTS.pop(dir_name, None) if dir_name else None
-    return produced[-1] if produced else text
-
-PY;
-        return $partA . PythonEmitHelpers::skillDepsBlock() . PythonEmitHelpers::skillFsSyncBlock() . $lgSpecific;
-    }
+    // toolBuilderBlock() → LangGraphRuntime::toolCatalogBlock() + skillRuntimeBlock()
+    //                      (LangGraph's own copies; the shared skill blocks stay for ADK/MAF/NOOA)
 
     /**
      * Bake one playbook node: parse + analyze the playbook against the
@@ -3907,11 +3731,7 @@ async def run(user_prompt: str, graph: WorkflowGraph | None = None) -> str:
        node, each building its own chat model on first use
     """
     print("[info] Building tools from embedded catalog...")
-    catalog = build_tools_from_catalog()
-    # Local (non-MCP) tool: lets skill-bound agents run their folder-backed
-    # skill as a subprocess. Always registered; only agents whose tool_names
-    # include it (skill agents) actually receive it.
-    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL
+    catalog = TOOLS.build()   # built once here; every node then takes its own tools from TOOLS
     print(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
 
 PY . $missingWarning . <<<'PY'

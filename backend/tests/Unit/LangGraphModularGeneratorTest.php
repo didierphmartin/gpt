@@ -142,7 +142,7 @@ class LangGraphModularGeneratorTest extends TestCase
     {
         $code = self::files()['common.py'];
         foreach (['"""Shared runtime for workflow "Dispatcher demo"', 'def _make_llm(', 'def _call_mcp_tool(',
-                  'def build_tools_from_catalog', 'RUN_SKILL_SCRIPT_TOOL', 'async def _run_skill_step(',
+                  'class ToolCatalog:', 'class SkillRuntime:', 'TOOLS = ToolCatalog(TOOL_CATALOG)',
                   'class Dispatcher:', 'def inject_datetime(', 'def build_context(',
                   'def _convert_doc_to_markdown(', 'class WFState(', 'def build_playbook_tools(',
                   'def _playbook_gate(', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:',
@@ -170,7 +170,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $this->assertStringContainsString('"tool_names": ["get_news","run_skill_script"]', $code);
         $this->assertStringContainsString('"skills": [{"dir":"html"}]', $code);
         // The shared runtime is imported, never duplicated (the A2A trade, reversed).
-        foreach (['def _call_mcp_tool(', 'def build_tools_from_catalog', 'def _make_llm(',
+        foreach (['def _call_mcp_tool(', 'class ToolCatalog', 'def _make_llm(',
                   'TOOL_CATALOG = ', 'def build_agent_card', 'uvicorn'] as $needle) {
             $this->assertStringNotContainsString($needle, $code, "agent module must not carry: {$needle}");
         }
@@ -208,7 +208,7 @@ class LangGraphModularGeneratorTest extends TestCase
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // The graph calls the modules; it never re-implements a node itself.
-        foreach (['def build_playbook_tools(', 'def build_tools_from_catalog', 'create_react_agent(',
+        foreach (['def build_playbook_tools(', 'class ToolCatalog', 'create_react_agent(',
                   'PLAYBOOK_SYSTEM_PROMPT = '] as $needle) {
             $this->assertStringNotContainsString($needle, $code, "workflow.py must not carry: {$needle}");
         }

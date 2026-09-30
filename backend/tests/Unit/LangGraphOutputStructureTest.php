@@ -353,4 +353,35 @@ class LangGraphOutputStructureTest extends TestCase
             $this->assertSame(0, substr_count($all, "def _save_output("), $mode);
         }
     }
+
+    public function testSkillStepOutputBecomesTheNodeOutput(): void            // Review Focus 5
+    {
+        $base = sys_get_temp_dir() . '/lgskill_' . bin2hex(random_bytes(4));
+        @mkdir("{$base}/skills/lgtest/scripts", 0777, true);
+        file_put_contents("{$base}/skills/lgtest/SKILL.md", "---\nname: lgtest\n---\nRender the input with scripts/make.py.\n");
+        file_put_contents("{$base}/skills/lgtest/scripts/make.py",
+            "import sys\nopen(sys.argv[1], 'w', encoding='utf-8').write('<html>made by the skill</html>')\nprint('ok')\n");
+        $graph = self::graphs()['linear'];
+        $graph['nodes'][2]['config']['bound_skill'] = ['dir_name' => 'lgtest'];
+        $root = self::write($this->files($graph, 'modular'))['root'];
+        [$r, $log] = $this->probe(['node', 'module', $root, 'agents.writer', 'write something'], [
+            'SYNERGYAI_SKILLS_DIR' => "{$base}/skills", 'SYNERGYAI_OUTPUT_ROOT' => "{$base}/outputs",
+            'STUB_SKILL_CALL' => json_encode(['script' => 'scripts/make.py', 'argv' => ['/outputs/report.html'], 'read_outputs' => ['/outputs/report.html']]),
+        ]);
+        $this->assertSame('<html>made by the skill</html>', $r['text'], $log);
+        $this->assertStringContainsString("after skill 'lgtest'", $log);
+    }
+
+    public function testToolsAndSkillsAreLangGraphOwnedClasses(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            foreach (['class ToolCatalog:', 'class SkillRuntime:', 'TOOLS = ToolCatalog(TOOL_CATALOG)', 'SKILLS = SkillRuntime('] as $n) {
+                $this->assertStringContainsString($n, $all, "{$mode}: {$n}");
+            }
+            foreach (['def build_tools_from_catalog', 'def _run_skill_script(', 'RUN_SKILL_SCRIPT_TOOL', 'def _summarize_tool_result'] as $gone) {
+                $this->assertStringNotContainsString($gone, $all, "{$mode}: {$gone}");
+            }
+        }
+    }
 }

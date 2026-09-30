@@ -27,7 +27,7 @@ final class LangGraphRuntime
      * `kind === 'playbook'`.
      *
      * The classes look their collaborators up as module globals at call time
-     * (_make_llm, build_tools_from_catalog, Dispatcher, the playbook runtime, ...),
+     * (_make_llm, TOOLS, SKILLS, Dispatcher, the playbook runtime, ...),
      * which is why a test that patches common._make_llm after import still reaches them.
      */
     public static function nodeClassesBlock(bool $withPlaybook): string
@@ -71,9 +71,7 @@ class Node(ABC):
     @cached_property
     def tools(self) -> list:
         """The catalog tools this node names, looked up once (run_skill_script is a local, non-MCP tool)."""
-        catalog = build_tools_from_catalog()
-        catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL   # local (non-MCP) tool, same as the single-file script
-        return [catalog[t] for t in self.cfg.get("tool_names", []) if t in catalog]
+        return TOOLS.tools_for(self.cfg.get("tool_names", []))
 
     @staticmethod
     def _messages(system: str | None, human: str) -> list:
@@ -139,7 +137,7 @@ class AgentNode(Node):
         # result in order; the last skill's produced deliverable (e.g. the html
         # skill's rendered HTML file) becomes this node's output.
         for skill in c.get("skills", []):
-            text = await _run_skill_step(skill, text, self.llm)
+            text = await SKILLS.run_step(skill, text, self.llm)
             await trace(f"after skill {skill.get('dir') or 'inline'!r}: {len(text)} chars")
         return {"text": text, "route": "", "notes": "", "status": "ok"}
 
@@ -781,6 +779,448 @@ def print_run_summary(output: str, saved: str | None, started: float | None, dur
     print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)
     print("=" * 74, flush=True)
 
+
+PY;
+    }
+
+    /**
+     * ToolCatalog and its module instance TOOLS: the workflow's tools as LangChain
+     * StructuredTools -- every baked TOOL_CATALOG entry (an MCP tool) plus the local
+     * run_skill_script (SKILLS.tool) -- built once per process and shared by every node.
+     *
+     * LangGraph's own copy of what was LangGraphGenerator::toolBuilderBlock()'s tool half
+     * (_summarize_tool_result + build_tools_from_catalog), restructured into a class.
+     * Emitted after TOOL_CATALOG and the MCP client (_call_mcp_tool), which it calls.
+     */
+    public static function toolCatalogBlock(): string
+    {
+        return <<<'PY'
+class ToolCatalog:
+    """The workflow's tools, built once and shared: each node takes its own by name.
+
+    Converts the baked catalog (tool name -> MCP server URL, description, JSON Schema) into
+    LangChain StructuredTools whose calls go out over MCP JSON-RPC, and adds the local
+    run_skill_script (SKILLS.tool). Building is deferred to the first build(), so importing
+    the file costs nothing, and every later call reuses the same tools.
+    """
+
+    # JSON Schema "type" -> the Python type of the pydantic field (anything else is a str).
+    TYPE_MAP = {"string": str, "integer": int, "number": float,
+                "boolean": bool, "array": list, "object": dict}
+
+    def __init__(self, catalog: dict[str, dict]):
+        self.catalog = catalog
+        self._built: dict[str, StructuredTool] | None = None   # set by the first build()
+
+    def build(self) -> dict[str, StructuredTool]:
+        """Build LangChain StructuredTool wrappers from TOOL_CATALOG.
+
+        For each tool:
+        1. Parse the JSON Schema into a Pydantic model (for LLM argument validation)
+        2. Create a callable that sends the MCP JSON-RPC request
+        3. Wrap both into a LangChain StructuredTool
+
+        Built on the first call, then reused; run_skill_script is added to the MCP tools.
+        Returns: dict mapping tool_name -> StructuredTool
+        """
+        if self._built is None:
+            built = {name: self._tool(name, info) for name, info in self.catalog.items()}
+            # Local (non-MCP) tool: lets skill-bound agents run their folder-backed
+            # skill as a subprocess. Always registered; only agents whose tool_names
+            # include it (skill agents) actually receive it.
+            built["run_skill_script"] = SKILLS.tool
+            self._built = built
+        return self._built
+
+    def tools_for(self, names: list[str]) -> list[StructuredTool]:
+        """The tools a node names (its tool_names), in that order; a name the catalog lacks is skipped."""
+        built = self.build()
+        return [built[t] for t in names if t in built]
+
+    @staticmethod
+    def args_model(name: str, schema: dict):
+        """The pydantic model `<name>Args` for a tool's JSON Schema, so the LLM's arguments are
+        validated: required properties are mandatory, the others default to None."""
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        required = set(schema.get("required", []) if isinstance(schema, dict) else [])
+        fields = {}
+        for pname, pspec in props.items():
+            spec = pspec if isinstance(pspec, dict) else {}
+            ptype = ToolCatalog.TYPE_MAP.get(spec.get("type", "string"), str)
+            default = ... if pname in required else None
+            fields[pname] = (ptype, Field(default, description=spec.get("description", "")))
+        return create_model(f"{name}Args", **fields) if fields else create_model(f"{name}Args")
+
+    def _tool(self, name: str, info: dict) -> StructuredTool:
+        """One catalog entry as a StructuredTool: a logged call to its MCP server."""
+        server_url = info["server_url"]
+
+        def invoke(**kwargs):
+            argv = json.dumps(kwargs, default=str)
+            argv_preview = argv if len(argv) <= 250 else argv[:250] + f" ... +{len(argv) - 250} chars"
+            print(f"  [tool] -> {name}({argv_preview})")
+            t0 = time.monotonic()
+            result = _call_mcp_tool(server_url, name, kwargs)
+            dt = time.monotonic() - t0
+            summary = self._summarize(result)
+            print(f"  [tool] ← {name}: {summary} ({len(result)} chars, {dt:.1f}s)")
+            return result
+
+        return StructuredTool.from_function(
+            func=invoke,
+            name=name,
+            description=info.get("description") or f"MCP tool {name}",
+            args_schema=self.args_model(name, info.get("input_schema") or {}),
+        )
+
+    @staticmethod
+    def _summarize(result: str) -> str:
+        """Short, informative summary of a tool result for logs.
+
+        Parses JSON when possible and surfaces the most useful fields
+        (article count + first PMIDs, error message, query text, etc.)
+        so the log shows *what* came back, not just the raw first 120 chars.
+        """
+        try:
+            parsed = json.loads(result)
+        except Exception:
+            s = result.strip().replace("\n", " ")
+            return s[:160] + (" ..." if len(s) > 160 else "")
+        match parsed:
+            case {"error": err}:
+                return f"error: {str(err)[:200]}"
+            case {"articles": list() as arts}:
+                pmids = [str(a.get("pmid", "?")) for a in arts[:5] if isinstance(a, dict)]
+                more = "" if len(arts) <= 5 else f", +{len(arts) - 5} more"
+                return f"{len(arts)} articles (PMIDs: {', '.join(pmids)}{more})"
+            case {"suggestions": list() as sugg}:
+                return f"{len(sugg)} suggestions"
+            case {"query": str() as q}:
+                return f"query: {q[:200]}" + (" ..." if len(q) > 200 else "")
+            case {"items": list() as items}:
+                return f"{len(items)} items"
+            case dict():
+                return f"keys: {', '.join(list(parsed.keys())[:6])}"
+            case list():
+                return f"list of {len(parsed)} items"
+            case _:
+                s = str(parsed)
+                return s[:160] + (" ..." if len(s) > 160 else "")
+
+
+TOOLS = ToolCatalog(TOOL_CATALOG)
+
+
+PY;
+    }
+
+    /**
+     * SkillRuntime and its module instance SKILLS: folder-backed skills run as CPython
+     * subprocesses (dependency install, bucketed /outputs and /scratch dirs, virtual-path
+     * remap, input staging, output readback), the run_skill_script tools, and a skill run
+     * as a mandatory node step (run_step).
+     *
+     * LangGraph's own copy of PythonEmitHelpers::skillDepsBlock() + skillFsSyncBlock() and
+     * of the LangChain tail of what was LangGraphGenerator::toolBuilderBlock()
+     * (RUN_SKILL_SCRIPT_TOOL, _make_skill_tool, _run_skill_step), restructured into a
+     * class. The PythonEmitHelpers blocks stay as they are for ADK, MAF and NOOA.
+     */
+    public static function skillRuntimeBlock(): string
+    {
+        return <<<'PY'
+# ---------------------------------------------------------------------------
+# Local run_skill_script — execute a folder-backed skill's Python script as a
+# subprocess. Skills are real CPython (the browser runs them in Pyodide; here
+# we shell out). Registered into the catalog at startup so skill-bound agents
+# actually run their skill instead of fabricating output.
+# ---------------------------------------------------------------------------
+SKILLS_DIR = os.environ.get(
+    "SYNERGYAI_SKILLS_DIR",
+    os.path.join(os.path.expanduser("~"), "Documents", "synergyAI", "skills"),
+)
+
+
+# Skill filesystem (mirrors the browser interpreter + ADK): real bucketed /outputs and
+# /scratch dirs, virtual-path remap, env exposure, and a deliverable stash so a skill's
+# produced file (not the model's chatter) can become the node output.
+class SkillRuntime:
+    """Runs folder-backed skills the way the browser does, but as real CPython subprocesses.
+
+    Owns the skill folders, the /outputs and /scratch dirs a skill writes into, the
+    dependencies already installed, and the stash of files a skill produced, so that a
+    skill run as a node step can hand its produced document on as the node's output.
+    """
+
+    def __init__(self, skills_dir: str, outputs_root: str, scratch_dir: str):
+        self.skills_dir = skills_dir
+        self.outputs_root = outputs_root
+        self.scratch_dir = scratch_dir
+        # Skills declare their PyPI deps in SKILL.md frontmatter
+        # (e.g. `dependencies: [beautifulsoup4]`). The browser installs them via
+        # micropip; here we pip-install missing ones into the runner venv on first
+        # use. Cached + lock-guarded because parallel branches call skills at once.
+        self._installed_deps = set()
+        self._deps_lock = threading.Lock()
+        self._last_outputs = {}   # dir_name -> contents of the files its last run produced
+
+    def ensure_deps(self, skill_dir: str) -> None:
+        """pip-install the dependencies a skill's SKILL.md frontmatter declares, once per process."""
+        md = os.path.join(skill_dir, "SKILL.md")
+        if not os.path.isfile(md):
+            return
+        deps = []
+        try:
+            lines = open(md, encoding="utf-8").read().splitlines()
+        except Exception:
+            return
+        # Only the YAML frontmatter (between leading '---' fences) is authoritative;
+        # a 'dependencies:' line in the prose body is not a real declaration.
+        if not lines or lines[0].strip() != "---":
+            return
+        for line in lines[1:]:
+            s = line.strip()
+            if s == "---":
+                break
+            if s.lower().startswith("dependencies:"):
+                val = s.split(":", 1)[1].strip().strip("[]")
+                deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+                break
+        with self._deps_lock:
+            for d in deps:
+                if d in self._installed_deps:
+                    continue
+                self._installed_deps.add(d)
+                try:
+                    print(f"  [run_skill_script] ensuring dependency: {d}", flush=True)
+                    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],
+                                       capture_output=True, text=True, timeout=600)
+                    if r.returncode != 0:
+                        print(f"  [run_skill_script] pip install {d} FAILED: "
+                              f"{(r.stderr or '')[-300:]}", flush=True)
+                except Exception as e:
+                    print(f"  [run_skill_script] pip install {d} error: {e}", flush=True)
+
+    def output_dir(self, dir_name: str) -> str:
+        """The real /outputs dir of a skill: <outputs root>/<group> for a grouped skill ('GEO/x'), else the root."""
+        group = dir_name.split("/")[0] if "/" in dir_name else ""
+        if group and all(c.isalnum() or c in "._-" for c in group):
+            return os.path.join(self.outputs_root, group)
+        return self.outputs_root
+
+    def remap_path(self, p, out_dir: str) -> str:
+        """A virtual /outputs/... or /scratch/... path as the real path; any other path unchanged."""
+        p = str(p)
+        for virt, real in (("/outputs", out_dir), ("/scratch", self.scratch_dir)):
+            if p == virt:
+                return real
+            if p.startswith(virt + "/"):
+                return os.path.join(real, p[len(virt) + 1:])
+        return p
+
+    @staticmethod
+    def fix_overescaped(text):
+        """Repair JSON-style over-escaping in model-carried document content.
+
+        Models (Claude especially) sometimes emit large documents inside tool
+        arguments as an escaped single-line string: literal \\n / \\" sequences
+        and ZERO real newlines. Written verbatim, the HTML/CSS is broken and the
+        page renders unstyled (a live report shipped with 1131 literal \\n).
+        Mirrors the platform chat's _coerceInputFiles over-escape recovery.
+        Detection is conservative: many escape sequences AND no real newlines."""
+        s = str(text)
+        if s.count("\\n") > 5 and s.count("\n") == 0:
+            print("  [stage] repairing over-escaped content ("
+                  + str(s.count("\\n")) + " literal escape sequences)", flush=True)
+            s = (s.replace("\\\\", "\x00").replace("\\n", "\n").replace("\\t", "\t")
+                  .replace("\\r", "").replace('\\"', '"').replace("\\'", "'").replace("\x00", "\\"))
+        return s
+
+    def run_script(self, dir_name: str, script: str, argv=None,
+                   input_files=None, read_outputs=None) -> str:
+        """run_skill_script: run one script of a skill and return its stdout (plus the files read back).
+
+        Stages input_files, executes the script with the virtual paths in argv remapped,
+        then reads back read_outputs and stashes them for run_step. Errors come back as
+        text for the model, never as exceptions.
+        """
+        if isinstance(argv, str):
+            try:
+                argv = json.loads(argv)
+            except Exception:
+                argv = [argv]
+        argv = list(argv) if argv else []
+        skill_dir = os.path.join(self.skills_dir, *str(dir_name).split("/"))
+        script_path = os.path.join(skill_dir, *str(script).split("/"))
+        if not os.path.isfile(script_path):
+            return f"ERROR: skill script not found: {dir_name}/{script} (looked in {script_path})"
+        self.ensure_deps(skill_dir)
+        out_dir = self.output_dir(dir_name)
+        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(self.scratch_dir, exist_ok=True)
+        # Remap the interpreter's virtual /outputs & /scratch in argv to real dirs.
+        argv = [self.remap_path(a, out_dir) for a in argv]
+        # Stage input_files (e.g. HTML the skill will render) at their remapped paths.
+        self._stage_inputs(input_files, out_dir)
+        try:
+            out = self._exec(dir_name, script, skill_dir, script_path, argv, out_dir)
+        except subprocess.TimeoutExpired:
+            print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s", flush=True)
+            return f"ERROR: skill {dir_name}/{script} timed out after 300s"
+        # Read back requested outputs AND stash them so the skill step can use the produced
+        # document as the node output.
+        out += self._read_outputs(dir_name, read_outputs, out_dir)
+        return out or "(skill produced no stdout)"
+
+    def _stage_inputs(self, input_files, out_dir: str) -> None:
+        """Write each input_files entry (path -> content) at its remapped path; a failure is logged, not raised."""
+        if isinstance(input_files, dict):
+            for raw_path, content in input_files.items():
+                try:
+                    target = self.remap_path(raw_path, out_dir)
+                    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                    with open(target, "w", encoding="utf-8") as fh:
+                        fh.write(self.fix_overescaped(content))
+                except Exception as e:
+                    print(f"  [run_skill_script] could not stage {raw_path}: {e}")
+
+    def _exec(self, dir_name: str, script: str, skill_dir: str, script_path: str, argv: list, out_dir: str) -> str:
+        """Run the script in its skill dir with the SYNERGYAI_* env; stdout, plus the exit code and
+        stderr tail when it failed. Raises subprocess.TimeoutExpired after 300s."""
+        env = dict(
+            os.environ,
+            SYNERGYAI_OUTPUT_DIR=out_dir,
+            SYNERGYAI_SCRATCH_DIR=self.scratch_dir,
+            SYNERGYAI_SKILL_DIR_NAME=dir_name,
+            SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),
+        )
+        cmd = [sys.executable, script_path] + [str(a) for a in argv]
+        print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}", flush=True)
+        _t0 = time.monotonic()
+        proc = subprocess.run(cmd, cwd=skill_dir, env=env, capture_output=True,
+                              text=True, timeout=300)
+        _dt = time.monotonic() - _t0
+        out = proc.stdout or ""
+        _stderr = (proc.stderr or "").strip()
+        _head = out.replace(chr(10), " ")[:160]
+        print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
+              f"{len(out)} chars stdout, {_dt:.1f}s | {_head}", flush=True)
+        if proc.returncode != 0 and _stderr:
+            print(f"  [run_skill_script]   stderr tail: {_stderr[-400:]}", flush=True)
+        if proc.returncode != 0:
+            out = (out + f"\n[run_skill_script exit {proc.returncode}]\n"
+                   + _stderr[-2000:]).strip()
+        return out
+
+    def _read_outputs(self, dir_name: str, read_outputs, out_dir: str) -> str:
+        """The read_outputs files as text to append to stdout; their contents are stashed for run_step.
+        A file that cannot be read is skipped."""
+        text = ""
+        _produced = []
+        if isinstance(read_outputs, list):
+            for rel in read_outputs:
+                try:
+                    with open(self.remap_path(rel, out_dir), "r", encoding="utf-8") as fh:
+                        _content = fh.read()
+                    text += f"\n\n[output file {rel}]\n" + _content
+                    _produced.append(_content)
+                except Exception:
+                    pass
+        if _produced:
+            self._last_outputs[dir_name] = _produced
+        return text
+
+    def read_skill_md(self, dir_name: str) -> str:
+        """The live SKILL.md body (progressive disclosure); frontmatter stripped."""
+        path = os.path.join(self.skills_dir, *str(dir_name).split("/"), "SKILL.md")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return f"(SKILL.md not found for skill '{dir_name}')"
+        if text.startswith("---"):
+            end = text.find("\n---\n", 3)
+            if end != -1:
+                nl = text.find("\n", end + 1)
+                text = text[nl + 1:] if nl != -1 else ""
+        return text.strip()
+
+    @cached_property
+    def tool(self) -> StructuredTool:
+        """run_skill_script for ANY skill dir: the model names dir_name, script and argv (a catalog tool)."""
+        return StructuredTool.from_function(
+            func=self.run_script,
+            name="run_skill_script",
+            description=("Execute a folder-backed skill's Python script and return its "
+                         "stdout. Pass the dir_name/script/argv the skill instructions "
+                         "specify, e.g. dir_name='GEO/geo-llmstxt', "
+                         "script='scripts/llmstxt_signals.py', argv=['https://example.com']."),
+            args_schema=create_model(
+                "RunSkillScriptArgs",
+                dir_name=(str, ...),
+                script=(str, ...),
+                # list[str] (not bare list) so the generated JSON schema carries
+                # `items`. Gemini rejects array params without `items` (400
+                # INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+                # input_files as a bare dict — Gemini accepted that, and dict[str,str]
+                # would add additionalProperties which Gemini may reject.
+                argv=(list[str], []),
+                input_files=(dict, {}),
+                read_outputs=(list[str], []),
+            ),
+        )
+
+    def scoped_tool(self, dir_name: str) -> StructuredTool:
+        """run_skill_script scoped to ONE skill dir: the model picks only the script + argv
+        (and input_files/read_outputs); the dir is fixed to this skill."""
+        def run_skill_script(script: str, argv=None, input_files=None, read_outputs=None) -> str:
+            return self.run_script(dir_name, script, argv, input_files, read_outputs)
+        return StructuredTool.from_function(
+            func=run_skill_script, name="run_skill_script",
+            description=(f"Run a script in the '{dir_name}' skill (dir fixed). Stage authored "
+                         "content via input_files and pass the output path in read_outputs."),
+            args_schema=create_model(
+                "ScopedSkillArgs",
+                script=(str, ...), argv=(list[str], []),
+                input_files=(dict, {}), read_outputs=(list[str], []),
+            ),
+        )
+
+    async def run_step(self, skill: dict, prior: str, llm) -> str:
+        """Run ONE skill as a mandatory step on `prior` (the previous stage's output). A
+        dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to
+        the dir; the step output becomes the skill's produced deliverable file (via
+        read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform."""
+        dir_name = skill.get("dir", "")
+        body = skill.get("inline") or (self.read_skill_md(dir_name) if dir_name else "")
+        system = (
+            "You are running the '" + (dir_name or "inline") + "' skill as a MANDATORY step in "
+            "a compiled workflow. Follow the skill instructions below and APPLY THE SKILL to the "
+            "INPUT. If the skill produces a document/file (e.g. an HTML report via a create/"
+            "render script), you MUST call run_skill_script -- stage your authored content via "
+            "input_files and pass the output path in read_outputs; the workflow captures that "
+            "produced file as this node's output. If the skill has no script, return the "
+            "transformed result as your response.\n\n=== SKILL INSTRUCTIONS ===\n" + body
+        )
+        tools = [self.scoped_tool(dir_name)] if dir_name else []
+        if dir_name:
+            self._last_outputs.pop(dir_name, None)
+        agent = create_react_agent(llm, tools)
+        msgs = [SystemMessage(content=system),
+                HumanMessage(content="## INPUT (apply the skill to this)\n" + str(prior))]
+        result = await agent.ainvoke({"messages": msgs})
+        final = result["messages"][-1]
+        text = final.content if isinstance(final, AIMessage) else str(final)
+        if isinstance(text, list):
+            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+        produced = self._last_outputs.pop(dir_name, None) if dir_name else None
+        return produced[-1] if produced else text
+
+
+SKILLS = SkillRuntime(
+    skills_dir=SKILLS_DIR,
+    outputs_root=os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(SKILLS_DIR), "outputs"),
+    scratch_dir=os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(os.path.dirname(SKILLS_DIR), "scratch"),
+)
 
 PY;
     }

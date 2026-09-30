@@ -208,7 +208,13 @@ for node in ast.walk(tree):
         known.add(node.arg)
     elif isinstance(node, ast.Global):
         known.update(node.names)
-used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    elif isinstance(node, ast.MatchAs) and node.name:        # `case {"k": list() as x}` binds x
+        known.add(node.name)
+    elif isinstance(node, ast.MatchStar) and node.name:
+        known.add(node.name)
+    elif isinstance(node, ast.MatchMapping) and node.rest:
+        known.add(node.rest)
+used ={n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 print(" ".join(sorted(used - known)))
 PYCODE;
         $checkerPath = tempnam(sys_get_temp_dir(), 'chk') . '.py';
