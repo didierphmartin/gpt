@@ -1,9 +1,9 @@
-"""Exercise the generated dispatcher runtime's Jev fast path (LangGraphGenerator::dispatchBlock).
+"""Exercise the generated dispatcher runtime (LangGraphRuntime::dispatcherBlock): JevRouter and Dispatcher.
 
 Usage: python3 jev_dispatch_harness.py <extracted_block.py> [<node_classes.py>]
 
-The block is the slice of a generated LangGraph file from the JEV_URL constants
-through the end of _run_dispatcher(). It is exec'd into a namespace with stubs
+The block is the slice of a generated LangGraph file from the TypeSafe Jev comment
+through the end of Dispatcher._via_llm(). It is exec'd into a namespace with stubs
 for the LangChain/pydantic names the model path touches, so this needs only the
 standard library. urllib.request.urlopen is monkeypatched: no network.
 The optional second file is the Node classes (class Node through make_node()),
@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from contextlib import redirect_stdout
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
 from typing import Literal
@@ -63,9 +64,9 @@ class _Tool:
 
 
 def namespace():
-    ns = {"asyncio": asyncio, "json": json, "os": os, "time": time, "Literal": Literal, "END": END,
+    ns = {"asyncio": asyncio, "json": json, "os": os, "time": time, "Literal": Literal,
           "create_model": lambda *a, **k: object, "Field": lambda *a, **k: None, "StructuredTool": _Tool,
-          "NODE_DURATIONS": {}, "parents": lambda n: ["1"],
+          "NODE_DURATIONS": {}, "dataclass": dataclass, "field": field, "asdict": asdict,
           # What the Node classes need to be defined and to build a dispatcher's turn.
           "ABC": ABC, "abstractmethod": abstractmethod, "cached_property": cached_property, "Enum": Enum,
           "SystemMessage": lambda content: content, "HumanMessage": lambda content: content,
@@ -103,24 +104,24 @@ def answer(choice, conf):
             "usage": {"input_tokens": 12, "output_tokens": 1}}
 
 
-def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6):
-    """ad carries what the generator emits for a dispatcher: routing_mode is
+def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=None):
+    """The cfg carries what the generator emits for a dispatcher: routing_mode is
     'jev' | 'llm' | '' (unset: Jev when TYPESAFE_API_KEY is set, else the
-    model) and jev_min_confidence the floor."""
+    model) and jev_min_confidence the floor. Returns the RouteDecision as a dict."""
     urllib.request.urlopen = http
     if key is None:
         os.environ.pop("TYPESAFE_API_KEY", None)
     else:
         os.environ["TYPESAFE_API_KEY"] = key
     llm = FakeLLM(ns)
-    ad = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
-          "routing_mode": routing_mode, "jev_min_confidence": floor}
-    state = {"node_outputs": {"1": {"source": "Start", "text": "My laptop will not boot"}}, "user_prompt": "x"}
+    cfg = {"id": "2", "display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
+           "routing_mode": routing_mode, "jev_min_confidence": floor}
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = asyncio.run(ns["_run_dispatcher"]("2", ad, state, [], llm))
+        decision = asyncio.run(ns["Dispatcher"](cfg, router).route("My laptop will not boot", [], llm))
+    assert isinstance(decision, ns["RouteDecision"]), decision
     run_dispatcher.last_llm = llm
-    return out, llm.calls, buf.getvalue()
+    return asdict(decision), llm.calls, buf.getvalue()
 
 
 cases = 0
@@ -137,9 +138,8 @@ def routed():
     http = FakeHTTP(answer("IT claims", 0.97))
     out, llm_calls, log = run_dispatcher(ns, http)
     assert llm_calls == 0, "routed must not spend an LLM turn"
-    assert out == {"node_outputs": {"2": {"source": "techBuddy", "text": "My laptop will not boot"}},
-                   "routes": {"2": "3"}}, out
-    assert "Jev routed to 'IT claims' (confidence 0.97, " in log and "ms, no LLM turn)" in log, log
+    assert out == {"text": "My laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
+    assert "[node] [2] 'techBuddy' Jev routed to 'IT claims' (confidence 0.97, " in log and "ms, no LLM turn)" in log, log
     assert "techBuddy" in ns["NODE_DURATIONS"], ns["NODE_DURATIONS"]
     # The wire request: same contract as JevRouter.php.
     req, timeout = http.requests[0]
@@ -152,9 +152,10 @@ def routed():
     assert q["type"] == "choice" and q["instructions"] == QUESTION, q
     assert q["criteria"] == {"IT claims": "IT claims",   # blank description -> the name
                              "Human resources": "Leave, payroll and benefits.",
-                             "unclear": ns["JEV_UNCLEAR_DESC"]}, q["criteria"]
-    r = ns["_jev_route"]("x", TARGETS, QUESTION)
-    assert r["outcome"] == "routed" and r["target"]["id"] == "3" and r["usage"]["input_tokens"] == 12, r
+                             "unclear": ns["JevRouter"].UNCLEAR_DESC}, q["criteria"]
+    r = ns["JevRouter"]().route("x", TARGETS, QUESTION)
+    assert isinstance(r, ns["JevResult"]), r
+    assert r.outcome == "routed" and r.target["id"] == "3" and r.usage["input_tokens"] == 12, r
 
 
 def no_key():
@@ -163,10 +164,11 @@ def no_key():
     http = FakeHTTP(answer("IT claims", 0.99))
     out, llm_calls, log = run_dispatcher(ns, http, key=None)
     assert http.requests == [], "no key must not call HTTP"
-    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
+    assert llm_calls == 1 and out == {"text": "My laptop will not boot\n\n## Dispatcher notes\nfrom the model",
+                                      "route": "4", "notes": "from the model", "status": "ok"}, out
     assert "Jev" not in log, log
     assert run_dispatcher.last_llm.durations_at_call == {}, "no key must not touch NODE_DURATIONS before the model"
-    assert ns["_jev_route"]("x", TARGETS, QUESTION)["outcome"] == "unavailable"
+    assert ns["JevRouter"]().route("x", TARGETS, QUESTION).outcome == "unavailable"
     os.environ["TYPESAFE_API_KEY"] = ""
     out, llm_calls, log = run_dispatcher(ns, http, key="")
     assert http.requests == [] and llm_calls == 1 and "Jev" not in log
@@ -177,28 +179,33 @@ def refusals():
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
     os.environ["TYPESAFE_API_KEY"] = "k"
-    r = ns["_jev_route"]("x", [{"id": "1", "name": "Unclear"}, TARGETS[0]], QUESTION)
-    assert r["outcome"] == "error" and "unusable target name" in r["reason"], r
-    r = ns["_jev_route"]("x", [TARGETS[0]], QUESTION)
-    assert r["outcome"] == "error" and "at least two" in r["reason"], r
+    r = ns["JevRouter"]().route("x", [{"id": "1", "name": "Unclear"}, TARGETS[0]], QUESTION)
+    assert r.outcome == "error" and "unusable target name" in r.reason, r
+    r = ns["JevRouter"]().route("x", [TARGETS[0]], QUESTION)
+    assert r.outcome == "error" and "at least two" in r.reason, r
     assert http.requests == [], "refusals happen before any HTTP"
     long = [{"id": "1", "name": "A", "description": "d" * 900}, {"id": "2", "name": "B"}]
-    ns["_jev_route"]("x", long, QUESTION)
+    ns["JevRouter"]().route("x", long, QUESTION)
     crit = json.loads(http.requests[0][0].data)["questions"]["route"]["criteria"]
     assert crit["A"] == "d" * 400 and crit["B"] == "B", crit
 
 
 def hung():
     """A Jev call that never returns (DNS, a stalled read) is cut off by
-    asyncio.wait_for(JEV_TIMEOUT_S + 1): an unset dispatcher with a key is Jev
+    asyncio.wait_for(router.TIMEOUT_S + 1): an unset dispatcher with a key is Jev
     only, so the run stops with "did not route" -- the model is never asked."""
     ns = namespace()
-    ns["JEV_TIMEOUT_S"] = 0   # -> wait_for bound of 1s
-    ns["_jev_route"] = lambda *a: (time.sleep(2), {"outcome": "routed"})[1]
-    t0 = time.monotonic()
-    out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)))
+
+    class Slow(ns["JevRouter"]):
+        TIMEOUT_S = 0   # -> wait_for bound of 1s
+
+        def route(self, *a):
+            time.sleep(2)
+            return ns["JevResult"]("routed")
+
+    out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)), router=Slow())
     assert llm_calls == 0, "a Jev timeout never falls back to the model"
-    assert out["routes"] == {"2": END} and branch_that_runs(out) is None, out
+    assert out["route"] == "" and out["status"] == "unrouted" and branch_that_runs(out) is None, out
     assert "Jev did not route (error: TimeoutError" in log and "no answer within 1s" in log, log
     assert ns["NODE_DURATIONS"]["techBuddy"] >= 1.0, ns["NODE_DURATIONS"]
 
@@ -210,7 +217,6 @@ async def _noop_trace(line):
 def run_dispatcher_node(ns, llm, routing_mode, request):
     """A2A / modular / single: the dispatcher node as every mode now runs it,
     make_node(cfg).run(request, trace), with the model replaced by `llm`."""
-    ns["parents"] = lambda n: []   # the node gets its request already framed
     exec(compile(KIND, "node_classes", "exec"), ns)
     node = ns["make_node"]({"id": "2", "kind": "dispatcher", "display": "techBuddy", "provider": "claude", "model": "m",
                             "temperature": 0.7, "max_tokens": 10, "system_prompt": "", "tool_names": [],
@@ -241,7 +247,7 @@ def branch_that_runs(out):
     edge router is `state.get("routes", {}).get(n) or END` over the menu ids
     plus END (single script and the modular/A2A orchestrators alike, which map
     a route that is not a menu id to END). None = no branch runs."""
-    route = out.get("routes", {}).get("2") or END
+    route = out["route"] or END
     return route if route in {t["id"] for t in TARGETS} else None
 
 
@@ -251,7 +257,7 @@ def llm_mode():
     http = FakeHTTP(answer("IT claims", 0.99))
     out, llm_calls, log = run_dispatcher(ns, http, routing_mode="llm")
     assert http.requests == [], "LLM mode must never call Jev"
-    assert llm_calls == 1 and out["routes"] == {"2": "4"}, out
+    assert llm_calls == 1 and out["route"] == "4" and out["notes"] == "from the model", out
     assert "Jev" not in log, log
     assert run_dispatcher.last_llm.durations_at_call == {}, "LLM mode must not time a Jev call"
 
@@ -261,8 +267,7 @@ def jev_routed():
     http = FakeHTTP(answer("IT claims", 0.97))
     out, llm_calls, log = run_dispatcher(ns, http, routing_mode="jev")
     assert llm_calls == 0, "Jev mode never calls the model"
-    assert out == {"node_outputs": {"2": {"source": "techBuddy", "text": "My laptop will not boot"}},
-                   "routes": {"2": "3"}}, out
+    assert out == {"text": "My laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
     assert branch_that_runs(out) == "3"
     assert "Jev routed to 'IT claims'" in log, log
 
@@ -277,8 +282,7 @@ def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6
     assert llm_calls == 0, f"Jev mode never calls the model ({expect_reason})"
     assert len(http.requests) == http_calls, http.requests
     msg = f'Error: dispatcher "techBuddy" did not route the request (Jev: {expect_reason}).'
-    assert out == {"node_outputs": {"2": {"source": "techBuddy", "text": msg}},
-                   "routes": {"2": END}, "final_output": msg}, out
+    assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert branch_that_runs(out) is None, "no branch may run"
     assert "asking the model" not in log and "no model fallback" in log, log
     assert "techBuddy" in ns["NODE_DURATIONS"], "Jev's wall time is counted"
@@ -292,12 +296,26 @@ def custom_floor():
     http = FakeHTTP(answer("IT claims", 0.8))
     urllib.request.urlopen = http
     os.environ["TYPESAFE_API_KEY"] = "k"
-    r = ns["_jev_route"]("x", TARGETS, QUESTION, 0.9)
-    assert r["outcome"] == "low_confidence" and r["reason"] == "confidence 0.80 below floor 0.90", r
-    assert ns["_jev_route"]("x", TARGETS, QUESTION)["outcome"] == "routed", "default floor stays 0.6"
+    r = ns["JevRouter"]().route("x", TARGETS, QUESTION, 0.9)
+    assert r.outcome == "low_confidence" and r.reason == "confidence 0.80 below floor 0.90", r
+    assert ns["JevRouter"]().route("x", TARGETS, QUESTION).outcome == "routed", "default floor stays 0.6"
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.8)), floor=0.9)
-    assert llm_calls == 0 and out["routes"] == {"2": END}, out
+    assert llm_calls == 0 and out["route"] == "" and out["status"] == "unrouted", out
     assert "Jev did not route (low_confidence: confidence 0.80 below floor 0.90" in log, log
+
+
+def mode_resolution():
+    """Dispatcher.mode(): a saved mode wins; unset (or anything else) is Jev with a key, else the model."""
+    ns = namespace()
+    for saved, key, want in [("jev", None, "jev"), ("llm", "k", "llm"), ("", "k", "jev"), ("", None, "llm"),
+                             ("bogus", "k", "jev"), ("", "", "llm")]:
+        if key is None:
+            os.environ.pop("TYPESAFE_API_KEY", None)
+        else:
+            os.environ["TYPESAFE_API_KEY"] = key
+        got = ns["Dispatcher"]({"id": "2", "display": "techBuddy", "dispatch": TARGETS, "routing_mode": saved}).mode()
+        assert got == want, (saved, key, got)
+        assert isinstance(got, ns["RoutingMode"]), got
 
 
 def kind_jev_unrouted():
@@ -354,6 +372,7 @@ case(lambda: jev_not_routed("unavailable: no TYPESAFE_API_KEY", body=answer("IT 
 case(lambda: jev_not_routed("low_confidence: confidence 0.80 below floor 0.90", body=answer("IT claims", 0.8), floor=0.9))
 case(lambda: jev_not_routed("error: <urlopen error timed out>", exc=urllib.error.URLError("timed out")))
 case(custom_floor)
+case(mode_resolution)
 if KIND is not None:
     case(kind_routed)
     case(kind_jev_unrouted)

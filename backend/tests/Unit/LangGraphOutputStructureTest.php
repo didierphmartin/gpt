@@ -194,7 +194,7 @@ class LangGraphOutputStructureTest extends TestCase
             $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
             $this->assertStringContainsString('match ntype:', $all, $mode);
             $this->assertStringNotContainsString('if ntype == "start":', $all, $mode);
-            $this->assertStringContainsString('    match mode:', $all, $mode);
+            $this->assertStringContainsString('        match self.mode():', $all, $mode);
             $this->assertStringNotContainsString('    if mode == "jev":', $all, $mode);
         }
     }
@@ -293,6 +293,19 @@ class LangGraphOutputStructureTest extends TestCase
         foreach (self::graphs() as $name => $graph) {
             foreach (['single', 'modular', 'a2a'] as $mode) {
                 $this->assertSame([], $this->staticCheck('readability', self::write($this->files($graph, $mode))['paths']), "{$name}/{$mode}");
+            }
+        }
+    }
+
+    /** The dispatcher runtime is JevRouter + Dispatcher; the parents() stubs and the fake graph state are gone (analysis D6). */
+    public function testDispatcherIsAClassAndTheFakeStateIsGone(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            $this->assertStringContainsString('class JevRouter:', $all, $mode);
+            $this->assertStringContainsString('class Dispatcher:', $all, $mode);
+            foreach (['def parents(_n)', 'state = {"node_outputs": {}, "user_prompt": request}', 'def _jev_route('] as $gone) {
+                $this->assertStringNotContainsString($gone, $all, "{$mode}: {$gone}");
             }
         }
     }

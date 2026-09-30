@@ -21,7 +21,7 @@ use AgentTeam\Services\WorkflowRepository;
 class LangGraphJevDispatchTest extends TestCase
 {
     private const BLOCK_START = '# TypeSafe Jev (twin of JevRouter.php)';
-    private const BLOCK_END = '            return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}';
+    private const BLOCK_END = '        return RouteDecision(text=text, route=chosen["id"], notes=notes, status="ok")';
     private const NODE_START = 'class Node(ABC):';
     private const NODE_END = '            raise ValueError(f"unknown node kind: {cfg[\'kind\']!r}")';
 
@@ -58,7 +58,7 @@ class LangGraphJevDispatchTest extends TestCase
         return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
     }
 
-    /** mode => [runtime file (carries dispatchBlock), node file (carries the dispatcher's data)] */
+    /** mode => [runtime file (carries dispatcherBlock), node file (carries the dispatcher's data)] */
     private function modes(): array
     {
         $gen = $this->generator();
@@ -81,10 +81,12 @@ class LangGraphJevDispatchTest extends TestCase
             . 'Handle the request you receive directly and completely, in the role your name implies.', $question);
         foreach ($this->modes() as $mode => [$runtime, $node]) {
             $this->assertNotSame('', $runtime, "{$mode}: runtime file missing");
-            foreach (['def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):', 'JEV_URL = "https://api.typesafe.ai/v1/systemone"',
-                      'JEV_MODEL = "jev-latest"', 'JEV_CONFIDENCE_FLOOR = 0.6', 'JEV_TIMEOUT_S = 10',
-                      'if mode not in ("jev", "llm"):', 'mode = "jev" if _jev_available() else "llm"', 'case "jev":',
-                      'asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)', 'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
+            foreach (['    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> JevResult:',
+                      '    URL = "https://api.typesafe.ai/v1/systemone"', '    MODEL = "jev-latest"', '    CONFIDENCE_FLOOR = 0.6', '    TIMEOUT_S = 10',
+                      '        if mode in (RoutingMode.JEV, RoutingMode.LLM):', '        return RoutingMode.JEV if self.router.available() else RoutingMode.LLM',
+                      'case RoutingMode.JEV:',
+                      'asyncio.to_thread(self.router.route, task, self.targets, self.cfg.get("jev_question", ""), self.floor), self.router.TIMEOUT_S + 1)',
+                      'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
                       'Jev routed to', 'Jev-only dispatcher, no model fallback'] as $needle) {
                 $this->assertStringContainsString($needle, $runtime, "{$mode}: {$needle}");
             }
@@ -92,8 +94,8 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertStringNotContainsString('asking the model', $runtime, "{$mode}: no hybrid");
             $this->assertStringNotContainsString('Jev declined', $runtime, "{$mode}: no hybrid");
             // The Jev path returns BEFORE the forced route_to turn.
-            $this->assertLessThan(strpos($runtime, 'llm = llm.bind_tools([route_tool], tool_choice="any")'),
-                strpos($runtime, 'case "jev":'), "{$mode}: Jev mode is decided first");
+            $this->assertLessThan(strpos($runtime, 'llm = llm.bind_tools([self._route_tool()], tool_choice="any")'),
+                strpos($runtime, 'case RoutingMode.JEV:'), "{$mode}: Jev mode is decided first");
             // techBuddy has no routing_mode saved: '' (resolved at run time), at the default floor.
             $this->assertStringContainsString('"routing_mode": "",', $node, "{$mode}: routing_mode");
             $this->assertStringContainsString('"jev_min_confidence": 0.6,', $node, "{$mode}: floor");
@@ -296,7 +298,7 @@ class LangGraphJevDispatchTest extends TestCase
             @unlink($base . '_nodes.py');
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame('OK 20 cases', end($out), $mode);
+            $this->assertSame('OK 21 cases', end($out), $mode);
         }
     }
 

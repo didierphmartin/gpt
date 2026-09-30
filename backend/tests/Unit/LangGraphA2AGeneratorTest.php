@@ -158,7 +158,7 @@ class LangGraphA2AGeneratorTest extends TestCase
         $code = $this->agentFile('2');
         $this->assertStringContainsString('"kind": "dispatcher"', $code);
         $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims", "description": ""}, {"id": "4", "name": "Human resources", "description": ""}]', $code);
-        $this->assertStringContainsString('async def _run_dispatcher(', $code);
+        $this->assertStringContainsString('class Dispatcher:', $code);
         $this->assertStringContainsString('## Routing', $code);
         $this->assertCompiles($code, 'agent 2');
     }

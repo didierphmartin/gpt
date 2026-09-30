@@ -330,6 +330,7 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '');
         $lines[] = 'from abc import ABC, abstractmethod';
+        $lines[] = 'from dataclasses import asdict, dataclass, field';
         $lines[] = 'from enum import Enum';
         $lines[] = 'from functools import cached_property';
         $lines[] = 'from pathlib import Path';
@@ -422,7 +423,7 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '';
         $lines[] = self::toolBuilderBlock();
-        $lines[] = self::dispatchBlock();
+        $lines[] = LangGraphRuntime::dispatcherBlock();
         if ($playbookData !== []) {
             $lines[] = self::playbookRuntimeBlock();
         }
@@ -1101,7 +1102,7 @@ class LangGraphGenerator
                     : '',
                 // Routing mode, as GraphWorkflowRunner reads it: 'jev' (Jev only),
                 // 'llm' (model only), anything else '' = unset, resolved by the
-                // runtime (_run_dispatcher): Jev when TYPESAFE_API_KEY is set,
+                // runtime (Dispatcher.mode()): Jev when TYPESAFE_API_KEY is set,
                 // else the model. Never both.
                 'routing_mode' => in_array($routingSettings['routing_mode'] ?? null, ['jev', 'llm'], true)
                     ? $routingSettings['routing_mode'] : '',
@@ -2014,6 +2015,7 @@ PY;
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, ' . ($isPlaybook ? 're, ' : '') . 'subprocess, sys, threading, time' . ($isPlaybook ? ', uuid' : '');
         $L[] = 'from abc import ABC, abstractmethod';
+        $L[] = 'from dataclasses import asdict, dataclass, field';
         $L[] = 'from enum import Enum';
         $L[] = 'from functools import cached_property';
         $L[] = 'from pathlib import Path';
@@ -2031,7 +2033,6 @@ PY;
         $L[] = 'from starlette.applications import Starlette';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
         $L[] = 'from langchain_core.tools import StructuredTool';
-        $L[] = 'from langgraph.graph import END';
         $L[] = 'try:';
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
         $L[] = 'except ImportError:';
@@ -2062,18 +2063,12 @@ PY;
         $L[] = PythonEmitHelpers::mcpClientBlock();
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME (shared blocks)'; $L[] = $sep;
         $L[] = self::toolBuilderBlock();
-        $L[] = self::dispatchBlock();
+        $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($isPlaybook) {
             $L[] = self::playbookRuntimeBlock();
         }
         $L[] = 'NODE_DURATIONS = {}   # display name -> seconds (kept for the shared dispatcher block)';
-        $L[] = 'def parents(_n):';
-        $L[] = '    """Always []: this file has no graph, only one node. Exists so the reused';
-        $L[] = '    _run_dispatcher() (which looks up parent outputs via parents(n)) finds none';
-        $L[] = '    and falls back to state["user_prompt"] -- the orchestrator\'s framed input --';
-        $L[] = '    instead of raising on a missing function."""';
-        $L[] = '    return []';
         $L[] = '';
         $L[] = '';
         $L[] = LangGraphRuntime::nodeClassesBlock($isPlaybook);
@@ -3092,7 +3087,7 @@ PY;
         $L[] = '  set_event_sink(), emit_event()  how a run\'s events reach api.py; emit_event() is a no-op with no sink installed';
         $L[] = '  open_gate(), resolve_gate(),';
         $L[] = '  take_gate_answer()              the human-gate rendezvous a playbook node\'s tools wait on';
-        $L[] = '  _run_dispatcher()                routes with Jev or with one forced route_to call, used by a DISPATCHER node\'s agent module';
+        $L[] = '  JevRouter, Dispatcher           a DISPATCHER node\'s routing: Jev or one forced route_to call, never both';
         if ($facts['playbookData'] !== []) {
             $L[] = '  PLAYBOOK_SYSTEM_PROMPT, _PlaybookRun,';
             $L[] = '  build_playbook_tools(),';
@@ -3269,6 +3264,7 @@ TXT;
         $withPlaybooks = $facts['playbookData'] !== [];
         $L[] = 'import asyncio, json, os, ' . ($withPlaybooks ? 're, ' : '') . 'subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
         $L[] = 'from abc import ABC, abstractmethod';
+        $L[] = 'from dataclasses import asdict, dataclass, field';
         $L[] = 'from enum import Enum';
         $L[] = 'from functools import cached_property';
         $L[] = 'from pathlib import Path';
@@ -3286,7 +3282,6 @@ TXT;
         $L[] = 'import httpx';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
         $L[] = 'from langchain_core.tools import StructuredTool';
-        $L[] = 'from langgraph.graph import END';
         $L[] = 'try:';
         $L[] = '    from langchain.agents import create_agent as create_react_agent';
         $L[] = 'except ImportError:';
@@ -3327,18 +3322,7 @@ TXT;
         $L[] = 'NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work; workflow.py prints the RUN SUMMARY from it';
         $L[] = '';
         $L[] = '';
-        $L[] = 'def parents(_n):';
-        $L[] = '    """Always []: this module has no graph.';
-        $L[] = '';
-        $L[] = '    _run_dispatcher() below looks up its input via parents(n) when it runs';
-        $L[] = '    inside the single-file script. Here the framing already happened in';
-        $L[] = '    workflow.py, which passes the finished text as state["user_prompt"], so';
-        $L[] = '    the lookup must find nothing and fall back to it. workflow.py defines';
-        $L[] = '    its own real parents() over EDGES for the graph itself."""';
-        $L[] = '    return []';
-        $L[] = '';
-        $L[] = '';
-        $L[] = self::dispatchBlock();
+        $L[] = LangGraphRuntime::dispatcherBlock();
         $L[] = self::datetimeInjectorBlock();
         if ($withPlaybooks) {
             $L[] = self::playbookRuntimeBlock();
@@ -3613,7 +3597,7 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     out = await _NODE_RUNNERS[nid](request_text, trace)
     dt = time.monotonic() - t0
     # Assignment, not +=: a dispatcher module already added its own LLM time to
-    # the shared NODE_DURATIONS (common._run_dispatcher), and this is the same
+    # the shared NODE_DURATIONS (common.Dispatcher), and this is the same
     # dict in the same process. Overwrite it with the node's total so the RUN
     # SUMMARY counts each node exactly once.
     NODE_DURATIONS[ad["display"]] = dt
@@ -4008,220 +3992,6 @@ PY;
             $lines[] = '#   cannot decide stops the run there (no model fallback).';
         }
         return $lines;
-    }
-
-    /**
-     * Dispatcher node runtime: Jev (routing_mode 'jev', or unset with a key) or
-     * one forced route_to call over the menu (the model), never both; result in
-     * state["routes"]. _jev_route() is the standard-library
-     * twin of JevRouter::route() (same body, same 'unclear' option, same floor,
-     * same outcomes); the mode choice mirrors GraphWorkflowRunner's.
-     */
-    private static function dispatchBlock(): string
-    {
-        return <<<'PY'
-# TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
-# question with one of the options supplied -- never a value outside them.
-JEV_URL = "https://api.typesafe.ai/v1/systemone"
-JEV_MODEL = "jev-latest"
-JEV_UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
-JEV_UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
-                    "several of the options. Pick this rather than guessing.")
-JEV_CONFIDENCE_FLOOR = 0.6   # default minimum confidence (a dispatcher's jev_min_confidence overrides it)
-JEV_TIMEOUT_S = 10
-
-
-def _jev_available() -> bool:
-    """Configured = a key is present. An unset dispatcher routes with Jev only then, else with the model."""
-    return bool(os.environ.get("TYPESAFE_API_KEY") or "")
-
-
-def _jev_route(request, targets, question, floor=JEV_CONFIDENCE_FLOOR):
-    """Choose one target for `request`, or say why not. Returns a dict with
-    outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
-    confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
-    other outcome means the dispatcher does not route (no model fallback).
-    `floor` is the dispatcher's minimum
-    confidence (settings.jev_min_confidence). Never raises."""
-    try:
-        return _jev_route_inner(request, targets, question, floor)
-    except Exception as e:   # anything at all -> an 'error' outcome, never a raise
-        return {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {},
-                "outcome": "error", "reason": f"{type(e).__name__}: {e}"}
-
-
-def _jev_ssl_context():
-    """The system trust store PLUS certifi's bundle when present (httpx, which
-    this script already needs, depends on it). The union matters both ways: a
-    python.org macOS build has no system CA store until "Install Certificates"
-    is run, and an enterprise TLS-inspecting proxy's root CA lives ONLY in the
-    system store -- replacing it with certifi would break every call there."""
-    import ssl
-    ctx = ssl.create_default_context()   # system store, SSL_CERT_FILE, OS trust (e.g. a proxy's root CA)
-    try:
-        import certifi
-        ctx.load_verify_locations(certifi.where())   # ADDED to, never replacing, the system store
-    except Exception:
-        pass
-    return ctx
-
-
-def _jev_route_inner(request, targets, question, floor):
-    import urllib.request
-    blank = {"target": None, "confidence": None, "probabilities": {}, "ms": None, "usage": {}}
-    key = os.environ.get("TYPESAFE_API_KEY") or ""
-    if not key:
-        return {**blank, "outcome": "unavailable", "reason": "no TYPESAFE_API_KEY"}
-    named = {}
-    for t in targets:
-        name = str(t.get("name") or "").strip()
-        if name == "" or name.lower() == JEV_UNCLEAR:
-            # A branch literally named "unclear" would collide with the escape hatch.
-            return {**blank, "outcome": "error", "reason": f"unusable target name: '{name}'"}
-        named[name] = t
-    if len(named) < 2:
-        return {**blank, "outcome": "error", "reason": "a menu needs at least two targets"}
-    criteria = {}
-    for name, t in named.items():
-        desc = str(t.get("description") or "").strip()
-        criteria[name] = desc[:400] if desc else name
-    criteria[JEV_UNCLEAR] = JEV_UNCLEAR_DESC
-    body = {
-        "state": {"request": request},
-        "model": JEV_MODEL,
-        "questions": {"route": {"type": "choice", "instructions": question, "criteria": criteria}},
-    }
-    req = urllib.request.Request(
-        JEV_URL, data=json.dumps(body).encode("utf-8"), method="POST",
-        headers={"Authorization": "Bearer " + key, "Accept": "application/json",
-                 "Content-Type": "application/json"})
-    t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=JEV_TIMEOUT_S, context=_jev_ssl_context()) as resp:   # HTTP 4xx/5xx raise here
-            raw = resp.read()
-    except Exception as e:
-        return {**blank, "outcome": "error", "reason": str(e)}
-    ms = int(round((time.monotonic() - t0) * 1000))
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-    except ValueError:
-        decoded = None
-    answers = decoded.get("answers") if isinstance(decoded, dict) else None
-    answer = answers.get("route") if isinstance(answers, dict) else None
-    if not isinstance(answer, dict) or answer.get("choice") is None:
-        return {**blank, "outcome": "error", "ms": ms, "reason": "no choice in the response"}
-    choice = str(answer["choice"])
-    conf = float(answer["confidence"]) if answer.get("confidence") is not None else None
-    probs = answer.get("probabilities") if isinstance(answer.get("probabilities"), (dict, list)) else {}
-    usage = decoded.get("usage") if isinstance(decoded.get("usage"), dict) else {}
-    common = {"confidence": conf, "probabilities": probs, "ms": ms, "usage": usage}
-    if choice == JEV_UNCLEAR:
-        return {**common, "outcome": "unclear", "target": None, "reason": "the request names no branch"}
-    if choice not in named:
-        # Unreachable by contract; treated as an error rather than trusted.
-        return {**common, "outcome": "error", "target": None, "reason": f"answer '{choice}' is not on the menu"}
-    if conf is not None and conf < floor:
-        return {**common, "outcome": "low_confidence", "target": named[choice],
-                "reason": f"confidence {conf:.2f} below floor {floor:.2f}"}
-    return {**common, "outcome": "routed", "target": named[choice], "reason": None}
-
-
-async def _run_dispatcher(n, ad, state, msgs, llm):
-    """Dispatcher agent (twin of DispatchRouting in the PHP runner): the model
-    MUST call route_to with one of the menu names; that child alone runs. The
-    child receives the dispatcher's original input plus the notes."""
-    targets = ad["dispatch"]
-    names = [t["name"] for t in targets]
-    outs = state.get("node_outputs", {})
-    inputs = [outs[p]["text"] for p in parents(n) if p in outs]
-    task = "\n\n".join(inputs) or state.get("user_prompt", "")
-
-    # Routing mode (settings.routing_mode, twin of GraphWorkflowRunner) --
-    # always exactly one, never both:
-    #   "llm" -> the model only; Jev is never asked.
-    #   "jev" -> Jev only; the model is never called. Any outcome but 'routed'
-    #            (unclear, low_confidence, no key, error, timeout) = did not
-    #            route: routes END, so none of the dispatcher's branches runs.
-    #   ""    -> unset (saved before the setting existed): resolved here to
-    #            "jev" when TYPESAFE_API_KEY is set -- the editor's runner sync
-    #            writes it only when the user's plan allows Jev, the stand-in
-    #            for the interpreter's plan check -- else "llm".
-    mode = ad.get("routing_mode", "")
-    if mode not in ("jev", "llm"):
-        mode = "jev" if _jev_available() else "llm"
-    floor = ad.get("jev_min_confidence")
-    if floor is None:
-        floor = JEV_CONFIDENCE_FLOOR
-    match mode:
-        case "jev":
-            t0 = time.monotonic()
-            try:
-                # urlopen's timeout bounds each socket op, not DNS or the total; this does.
-                jev = await asyncio.wait_for(
-                    asyncio.to_thread(_jev_route, task, targets, ad.get("jev_question", ""), floor), JEV_TIMEOUT_S + 1)
-            except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
-                jev = {"outcome": "error", "confidence": None, "ms": None, "target": None,
-                       "reason": f"{type(e).__name__}: no answer within {JEV_TIMEOUT_S + 1}s" if isinstance(e, asyncio.TimeoutError) else str(e)}
-            dt = time.monotonic() - t0
-            # Counted whether or not Jev decides, so the run summary is not under-reported.
-            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-            conf = f"{jev['confidence']:.2f}" if jev.get("confidence") is not None else "?"
-            if jev["outcome"] == "routed":
-                chosen = jev["target"]
-                # Same shape the model path returns, minus notes: Jev writes no prose.
-                print(f"[node] [{n}] {ad['display']!r} Jev routed to {chosen['name']!r} "
-                      f"(confidence {conf}, {jev['ms']}ms, no LLM turn)", flush=True)
-                return {"node_outputs": {n: {"source": ad["display"], "text": task}}, "routes": {n: chosen["id"]}}
-            # Jev only: no model fallback, so the run stops here and says why
-            # (the reason names a missing key, too). Same message as the interpreter.
-            msg = (f'Error: dispatcher "{ad["display"]}" did not route the request '
-                   f'(Jev: {jev["outcome"]}: {jev["reason"]}).')
-            print(f"[node] [{n}] ⚠ {ad['display']!r} Jev did not route ({jev['outcome']}: {jev['reason']}, "
-                  f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
-            return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
-        case _:
-            route_args = create_model(
-                "RouteToArgs",
-                target=(Literal[tuple(names)], Field(..., description="Name of the agent to route to. MUST be one of the listed values.")),
-                notes=(str, Field("", description="Optional short note for the target agent (what you understood, what to focus on).")),
-            )
-            route_tool = StructuredTool.from_function(
-                func=lambda target, notes="": "routed",
-                name="route_to",
-                description=("REQUIRED tool to hand the request to exactly one downstream agent. Pick the agent "
-                             "whose role matches the request. Available targets: " + ", ".join(names)
-                             + ". The chosen agent receives the original request, plus your notes."),
-                args_schema=route_args,
-            )
-            llm = llm.bind_tools([route_tool], tool_choice="any")
-            t0 = time.monotonic()
-            resp = await llm.ainvoke(msgs)
-            dt = time.monotonic() - t0
-            NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-            chosen, notes = None, ""
-            for call in getattr(resp, "tool_calls", None) or []:
-                if call.get("name") != "route_to":
-                    continue
-                args = call.get("args") or {}
-                want = str(args.get("target", "")).strip().lower()
-                for t in targets:
-                    if t["name"].strip().lower() == want:
-                        chosen, notes = t, str(args.get("notes", "") or "").strip()
-                        break
-                if chosen:
-                    break
-            if chosen is None:
-                msg = (f"Error: dispatcher {ad['display']!r} did not route the request. "
-                       f"Expected route_to with one of: {', '.join(names)}.")
-                print(f"[node] [{n}] ⚠ {msg}", flush=True)
-                return {"node_outputs": {n: {"source": ad["display"], "text": msg}}, "routes": {n: END}, "final_output": msg}
-            print(f"[node] [{n}] {ad['display']!r} routed to {chosen['name']!r} ({dt:.1f}s)"
-                  + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
-            text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
-            return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}
-
-
-PY;
     }
 
     /**
