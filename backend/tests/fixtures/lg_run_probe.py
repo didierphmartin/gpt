@@ -6,6 +6,7 @@
   lg_run_probe.py node a2a    <agent file.py>                <request>
   lg_run_probe.py save <file.py | package root> <output text>   (from Task 5: save_output)
   lg_run_probe.py llm  <file.py> <cfg json>                     (no stub: build cfg's model, report the error)
+  lg_run_probe.py llm-args <file.py>                            (records what _make_llm passes each provider class)
   lg_run_probe.py mcp  <file.py>                                (a local SSE MCP server; two tool calls)
 The stub answers "answer to: <last 40 chars of the request>". Bound to route_to it routes to
 $STUB_ROUTE_TO; bound to run_skill_script with $STUB_SKILL_CALL (JSON args) set, it calls that
@@ -102,6 +103,23 @@ def main():
                 print("RESULT " + json.dumps({"error": None}))
             except Exception as e:
                 print("RESULT " + json.dumps({"error": f"{type(e).__name__}: {e}"}))
+        case "llm-args":
+            (path,) = args
+            mod = load_file(path, "lg_single")
+            import types
+            seen = []
+
+            class Recorder:
+                """Stands in for a LangChain chat-model class: records the arguments the factory passes."""
+                def __init__(self, **kwargs):
+                    seen.append(kwargs)
+            sys.modules["langchain_openai"] = types.SimpleNamespace(ChatOpenAI=Recorder)
+            sys.modules["langchain_anthropic"] = types.SimpleNamespace(ChatAnthropic=Recorder)
+            mod._make_llm("deepseek", "deepseek-v4-flash", 0.7, 100, "on")
+            mod._make_llm("deepseek", "deepseek-v4-flash", 0.7, 100, "off")
+            mod._make_llm("kimi", "kimi-k2-x", 0.3, 100, None)
+            mod._make_llm("claude", "claude-x", 0.5, 100, None)
+            print("RESULT " + json.dumps(seen, default=str))
         case "mcp":
             (path,) = args
             mod = load_file(path, "lg_single")

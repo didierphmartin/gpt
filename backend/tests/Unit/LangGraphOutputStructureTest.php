@@ -435,4 +435,27 @@ class LangGraphOutputStructureTest extends TestCase
             . "### lost.pdf\n\n_(no path on attachment record)_\n\n---\n\ngo";
         $this->assertStringContainsString('[node] [1] start -- ' . strlen($start) . ' chars', $log);
     }
+
+    public function testLlmFactoryIsLangGraphsOwnFunction(): void
+    {
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            $all = implode("\n", $this->files(self::graphs()['dispatcher_demo'], $mode));
+            foreach (['def _claude(', 'def _deepseek(', 'def _kimi(', 'def _glm('] as $n) {
+                $this->assertStringContainsString($n, $all, "{$mode}: {$n}");
+            }
+            $this->assertStringContainsString('            return _deepseek(model, temperature, max_tokens, thinking)', $all, $mode);
+        }
+    }
+
+    public function testLlmFactoryPassesTheSameProviderArguments(): void
+    {
+        $path = array_values(self::write($this->files(self::graphs()['linear'], 'single'))['paths'])[0];
+        [$r] = $this->probe(['llm-args', $path]);
+        $this->assertSame(['type' => 'enabled'], $r[0]['model_kwargs']['extra_body']['thinking']);
+        $this->assertArrayNotHasKey('temperature', $r[0], 'deepseek v4 in thinking mode drops temperature');
+        $this->assertSame(['type' => 'disabled'], $r[1]['model_kwargs']['extra_body']['thinking']);
+        $this->assertSame(0.7, $r[1]['temperature']);
+        $this->assertSame(0.6, $r[2]['temperature'], 'kimi k2, thinking off -> 0.6 (provider constraint)');
+        $this->assertSame(['model' => 'claude-x', 'temperature' => 0.5, 'max_tokens' => 100], $r[3]);
+    }
 }

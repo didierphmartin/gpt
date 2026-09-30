@@ -783,6 +783,168 @@ PY;
     }
 
     /**
+     * _make_llm() and one small private function per provider.
+     *
+     * LangGraph's own copy of LangGraphGenerator::llmFactoryLines() (which stays as it is
+     * for ADK, MAF and NOOA). _make_llm keeps its name and stays a plain function: it
+     * resolves the model, then one `match` arm calls the provider's function, each of which
+     * holds its lazy import so a missing package fails only the node that uses it. The
+     * provider rules (DeepSeek V4 thinking, Kimi K2 temperature, GLM reasoning) live in
+     * the functions that apply them. Callers look _make_llm up as a module global, so a
+     * probe that patches common._make_llm still reaches every node.
+     */
+    public static function llmFactoryBlock(): string
+    {
+        return <<<'PY'
+def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096, thinking=None):
+    """Build a LangChain chat model for the given provider/model.
+
+    The (provider, model) pair was resolved by the generator: the
+    agent's explicit model overrides the provider's default from
+    system_llm_settings, and that result is what reaches this
+    function. No hardcoded model fallbacks here — every value comes
+    from the database, so changing a model in the editor propagates
+    via the next Generate Python.
+
+    Recognised providers (case-insensitive):
+      claude     → langchain_anthropic.ChatAnthropic
+      openai     → langchain_openai.ChatOpenAI
+      gemini     → langchain_google_genai.ChatGoogleGenerativeAI
+      grok       → ChatOpenAI on https://api.x.ai/v1
+      deepseek   → ChatOpenAI on https://api.deepseek.com
+      kimi       → ChatOpenAI on https://api.moonshot.ai/v1
+      glm        → ChatOpenAI on https://api.z.ai/api/paas/v4
+
+    Reads API keys from the environment (loaded from .env at startup).
+    """
+    p = (provider or "claude").lower()
+    if MODEL_NAME_OVERRIDE:
+        model = MODEL_NAME_OVERRIDE
+    if not model:
+        raise RuntimeError(
+            f"No model specified for provider {p!r}. "
+            "Set a model name on the agent in the workflow editor, "
+            "or set MODEL_NAME in .env."
+        )
+    match p:
+        case "claude":
+            return _claude(model, temperature, max_tokens)
+        case "openai":
+            return _openai(model, temperature, max_tokens)
+        case "gemini":
+            return _gemini(model, temperature, max_tokens)
+        case "grok":
+            return _grok(model, temperature, max_tokens)
+        case "deepseek":
+            return _deepseek(model, temperature, max_tokens, thinking)
+        case "kimi":
+            return _kimi(model, temperature, max_tokens, thinking)
+        case "glm":
+            return _glm(model, temperature, max_tokens)
+        case _:
+            raise RuntimeError(
+                f"Unknown provider {provider!r}. Supported: claude, openai, gemini, grok, deepseek, kimi, glm."
+            )
+
+
+def _claude(model, temperature, max_tokens):
+    """Anthropic Claude through langchain_anthropic."""
+    from langchain_anthropic import ChatAnthropic
+    return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens)
+
+
+def _openai(model, temperature, max_tokens):
+    """OpenAI through langchain_openai."""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens)
+
+
+def _gemini(model, temperature, max_tokens):
+    """Google Gemini through langchain_google_genai (its token limit is called max_output_tokens)."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens)
+
+
+def _grok(model, temperature, max_tokens):
+    """xAI Grok: OpenAI-compatible."""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=model,
+        base_url="https://api.x.ai/v1",
+        api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+
+def _deepseek(model, temperature, max_tokens, thinking):
+    """DeepSeek: OpenAI-compatible; V4 models also take the node's Thinking setting."""
+    from langchain_openai import ChatOpenAI
+    kwargs = dict(
+        model=model,
+        base_url="https://api.deepseek.com",
+        api_key=os.environ.get("DEEPSEEK_API_KEY"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    if model.startswith("deepseek-v4"):
+        # The node form Thinking attribute governs (platform parity):
+        # off -> disabled, form temperature kept; on/default -> V4 thinking
+        # stays enabled and the API rejects sampling params, so temperature
+        # is dropped (set Thinking=Off on the node to use a temperature).
+        if thinking == "off":
+            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}
+        else:
+            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "enabled"}}}
+            if "temperature" in kwargs:
+                print(f"[info] deepseek {model}: temperature dropped (thinking mode)", flush=True)
+                kwargs.pop("temperature", None)
+    return ChatOpenAI(**kwargs)
+
+
+def _kimi(model, temperature, max_tokens, thinking):
+    """Moonshot Kimi: OpenAI-compatible; K2 models take the node's Thinking setting."""
+    from langchain_openai import ChatOpenAI
+    # Kimi is OpenAI-compatible. The node form Thinking attribute governs
+    # K2 reasoning mode (default off, matching the PHP KimiProvider); the
+    # API then constrains sampling: thinking OFF -> temperature MUST be 0.6,
+    # thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).
+    _k2 = model.startswith("kimi-k2")
+    if _k2:
+        _want = 1.0 if thinking == "on" else 0.6
+        if temperature != _want:
+            print(f"[info] kimi {model}: temperature {temperature} -> {_want} (model constraint)", flush=True)
+            temperature = _want
+    kwargs = dict(
+        model=model,
+        base_url="https://api.moonshot.ai/v1",
+        api_key=os.environ.get("KIMI_API_KEY"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    if _k2:
+        _mode = "enabled" if thinking == "on" else "disabled"
+        kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": _mode}}}
+    return ChatOpenAI(**kwargs)
+
+
+def _glm(model, temperature, max_tokens):
+    """Zhipu GLM (z.ai): OpenAI-compatible, with thinking switched off."""
+    from langchain_openai import ChatOpenAI
+    # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
+    return ChatOpenAI(
+        model=model,
+        base_url="https://api.z.ai/api/paas/v4",
+        api_key=os.environ.get("GLM_API_KEY"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        # GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.
+        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+    )
+PY;
+    }
+
+    /**
      * DocumentConverter and DOCUMENTS: turn a Start-node attachment into Markdown.
      *
      * LangGraph's own copy of PythonEmitHelpers::documentConverterBlock() (the flat

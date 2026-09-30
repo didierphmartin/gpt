@@ -366,9 +366,7 @@ class LangGraphGenerator
         $lines[] = "MODEL_NAME_OVERRIDE = os.environ.get('MODEL_NAME', '').strip()";
         $lines[] = '';
         $lines[] = '';
-        foreach (self::llmFactoryLines() as $l) {
-            $lines[] = $l;
-        }
+        $lines[] = LangGraphRuntime::llmFactoryBlock();
         $lines[] = '';
 
         // ---------- MCP server registry (baked) ----------
@@ -1109,6 +1107,7 @@ class LangGraphGenerator
 
     /** The `_make_llm(provider, model, temperature, max_tokens, thinking)` factory, one emitted line per entry. */
     /**
+     * LangGraph no longer calls this: it emits LangGraphRuntime::llmFactoryBlock().
      * PUBLIC because the playbook node needs it on every target: PlaybookEmit's
      * interpreter is a LangChain agent loop, so a target emitting a playbook
      * node emits this factory too (see PlaybookEmit::supportBlock()).
@@ -1863,7 +1862,7 @@ PY;
         $L[] = '# script carries, duplicated here so this agent can be copied to another host';
         $L[] = '# alone.';
         $L[] = $sep; $L[] = '# LLM FACTORY'; $L[] = '# Provider/model -> LangChain chat model (same rules as the single-file script).'; $L[] = $sep;
-        foreach (self::llmFactoryLines() as $l) $L[] = $l;
+        $L[] = LangGraphRuntime::llmFactoryBlock();
         $L[] = '';
         $L[] = $sep; $L[] = '# MCP SERVER REGISTRY + TOOL CATALOG (this node only)'; $L[] = $sep;
         $L[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($servers, true);
@@ -3111,9 +3110,7 @@ TXT;
         $L[] = '# Provider/model -> LangChain chat model. Every node calls this with its';
         $L[] = '# own baked settings, so one workflow can mix providers.';
         $L[] = $sep;
-        foreach (self::llmFactoryLines() as $l) {
-            $L[] = $l;
-        }
+        $L[] = LangGraphRuntime::llmFactoryBlock();
         $L[] = '';
         $L[] = $sep;
         $L[] = '# MCP SERVER REGISTRY + TOOL CATALOG (every tool this workflow uses)';
