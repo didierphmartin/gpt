@@ -153,6 +153,7 @@ class SettingsPanel {
         if (this.isActive && this.usageData) {
             this.renderUsageStats(this.usageData);
         }
+        if (this.keyRates) this.renderJevModelInfo();
     }
 
     /**
@@ -3490,7 +3491,9 @@ class SettingsPanel {
                 // even if the user has nothing saved.
                 this.providerLocked = data.locked || {};
                 this.packageModels = data.package_models || {};
+                this.keyRates = data.rates || {};
                 this.renderApiKeyStatuses();
+                this.renderJevModelInfo();
                 this.renderModelSelections();
                 this.renderSystemPrompts();
             }
@@ -3648,10 +3651,27 @@ class SettingsPanel {
     }
 
     /**
-     * Where the Jev key comes from when the user has none of their own (their
-     * own key already shows "Custom" via renderApiKeyStatuses). A plan without
-     * Jev overrides even a personal key, since that key cannot be used. The
-     * status endpoint returns availability only, never the key.
+     * The Jev row's description and admin-set rate (from /settings/keys
+     * `rates.jev`; null = unpriced, shown as a dash). Jev is not in
+     * this.providers, so updateModelInfo and the model-selection loops never
+     * touch it and its model is never saved.
+     */
+    renderJevModelInfo() {
+        const infoEl = document.getElementById('model-info-jev');
+        if (!infoEl) return;
+        const r = (this.keyRates || {}).jev;
+        const cost = r
+            ? `$${this.formatRate(r.input)}/M in \u00b7 $${this.formatRate(r.output)}/M out`
+            : '\u2014';
+        infoEl.innerHTML = `<span class="model-desc">${this.escapeHtml(this.t('settings.jevModelDesc'))}</span><br><span class="model-cost">${cost}</span>`;
+    }
+
+    /**
+     * Jev's status tag. renderApiKeyStatuses already shows "Custom" for the
+     * user's own key and "Default" otherwise (package / organisation key, or
+     * none, like an LLM row). A plan without Jev overrides both, since no key
+     * can be used then. The status endpoint returns availability only, never
+     * the key.
      */
     async renderJevOrgKeyStatus() {
         const statusEl = document.getElementById('key-status-jev');
@@ -3661,13 +3681,9 @@ class SettingsPanel {
                 headers: { 'Authorization': `Bearer ${this.getAuthToken()}` }
             });
             const data = await res.json();
-            if (!data.success) return;
-            const hasOwnKey = !!(this.userKeys.jev && this.userKeys.jev.has_custom_key);
-            const label = { package: 'Package key', global: 'Organisation key', not_allowed: 'Not included in your plan' }[data.source];
-            if (label && (data.source === 'not_allowed' || !hasOwnKey)) {
-                statusEl.textContent = label;
-                statusEl.className = 'key-status ' + (data.source === 'not_allowed' ? 'missing' : 'default');
-            }
+            if (!data.success || data.allowed !== false) return;
+            statusEl.textContent = 'Not included in your plan';
+            statusEl.className = 'key-status missing';
         } catch (e) { /* status is cosmetic */ }
     }
 

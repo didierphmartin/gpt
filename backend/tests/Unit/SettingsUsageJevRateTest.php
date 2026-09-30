@@ -41,6 +41,24 @@ final class SettingsUsageJevRateTest extends TestCase
         $this->assertNull(SettingsController::rateOf(new PricingResolver(new PDO('sqlite::memory:')), 'jev'));
     }
 
+    public function testRouterRatesForKeysResponse(): void
+    {
+        $this->assertSame(
+            ['jev' => ['input' => 0.042, 'output' => 0.0]],
+            SettingsController::routerRates(new PricingResolver($this->pdo('0.042', '0')))
+        );
+        $this->assertSame(['jev' => null], SettingsController::routerRates(new PricingResolver($this->pdo(null, null))));
+    }
+
+    public function testGetKeysReturnsRouterRates(): void
+    {
+        $src = file_get_contents(__DIR__ . '/../../src/Controllers/SettingsController.php');
+        $start = strpos($src, 'public function getKeys(');
+        $end = strpos($src, 'public function saveKeys(');
+        $this->assertNotFalse($start);
+        $this->assertStringContainsString("'rates' => self::routerRates(", substr($src, $start, $end - $start));
+    }
+
     public function testQuotaTokensUsedLeavesJevOut(): void
     {
         $balances = [

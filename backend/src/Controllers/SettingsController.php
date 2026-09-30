@@ -174,9 +174,7 @@ class SettingsController
                 'by_provider' => $byProvider,
                 // Rates for usage rows the model catalog does not price (Jev),
                 // read from the admin-editable system_llm_settings row.
-                'rates' => [
-                    ProviderKinds::JEV_KEY => self::rateOf(new PricingResolver($this->db), ProviderKinds::JEV_KEY),
-                ],
+                'rates' => self::routerRates(new PricingResolver($this->db)),
                 'totals' => [
                     'cost_usd' => $totalCost,
                     'tokens' => $totalTokens,
@@ -231,6 +229,17 @@ class SettingsController
         } catch (PricingUnavailableException $e) {
             return null;
         }
+    }
+
+    /**
+     * Rates for rows the model catalog does not price (Jev), keyed by
+     * provider; shared by /settings/usage and /settings/keys.
+     *
+     * @return array<string, array{input: float, output: float}|null>
+     */
+    public static function routerRates(PricingResolver $pricing): array
+    {
+        return [ProviderKinds::JEV_KEY => self::rateOf($pricing, ProviderKinds::JEV_KEY)];
     }
 
     /**
@@ -317,6 +326,8 @@ class SettingsController
             'package_models' => $packageModels,
             'locked' => $locked,
             'system_prompts' => $systemPrompts,
+            // Admin-set rates for the decision-model rows (Jev); null = unpriced.
+            'rates' => self::routerRates(new PricingResolver($this->db)),
             'status_code' => 200
         ];
     }
