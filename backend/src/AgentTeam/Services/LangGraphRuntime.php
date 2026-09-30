@@ -95,7 +95,7 @@ class Node(ABC):
         """Run the node once on `request` (the graph's framed input for it).
 
         trace(line) is an async callback that reports progress: a print in a package, a task status update in an A2A agent server.
-        Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
+        Returns {"text": str, "route": str ("" when none), "notes": str, "status": str}.
         Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).
         """
 
@@ -151,8 +151,7 @@ class AgentNode(Node):
             debug_dir = Path(RUNNER_DIR) / "outputs" / "_debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
             ts = _dt.now().strftime("%Y%m%d-%H%M%S")
-            stem = Path(sys.argv[0]).stem
-            dump_path = debug_dir / f"{stem}_{nid}_{ts}.json"
+            dump_path = debug_dir / f"{DEBUG_STEM}_{nid}_{ts}.json"
             entries = []
             for m in messages:
                 content = m.content
@@ -255,7 +254,7 @@ def make_node(cfg: dict) -> Node:
         case NodeKind.AGENT:
             return AgentNode(cfg)
         case NodeKind.DISPATCHER:
-            # Dispatcher: one forced route_to call picks the child; no ReAct loop.
+            # Dispatcher: Jev or one forced route_to call picks the child; no ReAct loop.
             return DispatcherNode(cfg)
 
 PY;

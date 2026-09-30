@@ -94,20 +94,25 @@ def readability(tree, src):
             return 0
         parents = [b.id for b in node.bases if isinstance(b, ast.Name) and b.id in classes]
         return 1 + max((depth(p, seen + (name,)) for p in parents), default=-1) if parents else 0
+    def methods_of(node):
+        return [m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and not m.name.startswith("__")]
+
+    def has_state(node):
+        return any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self"
+                   for m in ast.walk(node) if isinstance(m, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                   for t in (m.targets if isinstance(m, ast.Assign) else [m.target]))
     for name, node in classes.items():
         if depth(name) > 1:
             out.append(f"class {name} is more than one level below its root")
         if any(k.arg == "metaclass" for k in node.keywords):
             out.append(f"class {name} uses a metaclass")
-        methods = [m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and not m.name.startswith("__")]
-        state = any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self"
-                    for m in ast.walk(node) if isinstance(m, (ast.Assign, ast.AnnAssign, ast.AugAssign))
-                    for t in (m.targets if isinstance(m, ast.Assign) else [m.target]))
         plain_bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
-        # A subclass of a class in this file (Node -> AgentNode) overrides the base's actions and
-        # uses its state; the base is what groups them, so it is not a helper on its own.
-        if len(methods) <= 1 and not state and not plain_bases & ({"TypedDict", "Exception", "ABC"} | set(classes)) and not any(
-                isinstance(s, (ast.Assign, ast.AnnAssign)) for s in node.body):
+        # A one-method subclass of a same-file base that groups state or several actions
+        # (Node -> DispatcherNode) overrides that base's action; the base is the class, not a helper.
+        real_base = any(b in classes and (has_state(classes[b]) or len(methods_of(classes[b])) >= 2) for b in plain_bases)
+        if len(methods_of(node)) <= 1 and not has_state(node) and not real_base \
+                and not plain_bases & {"TypedDict", "Exception", "ABC"} \
+                and not any(isinstance(s, (ast.Assign, ast.AnnAssign)) for s in node.body):
             out.append(f"class {name} is a single helper (one method, no state)")
     for m in ast.walk(tree):
         if isinstance(m, ast.Match):

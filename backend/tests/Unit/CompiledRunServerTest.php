@@ -16,11 +16,33 @@ use AgentTeam\Services\WorkflowRepository;
  */
 class CompiledRunServerTest extends TestCase
 {
+    /** Temp trees made by packageRoot(), removed when the PHP process ends. */
+    private static array $written = [];
+
+    /**
+     * A fresh package root at <tmp>/<prefix><hex>/python/scripts/wf: the runner's layout, so what
+     * the package writes next to its runner folder (RUNNER_DIR, e.g. the agents' outputs/_debug
+     * dumps) stays inside <prefix><hex>, which is deleted afterwards. Used by RunProtocolConformanceTest too.
+     */
+    private static function packageRoot(string $prefix): string
+    {
+        $top = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(6));
+        if (self::$written === []) {
+            register_shutdown_function(static function (): void {
+                foreach (self::$written as $dir) {
+                    exec('rm -rf ' . escapeshellarg($dir));
+                }
+            });
+        }
+        self::$written[] = $top;
+        return $top . '/python/scripts/wf';
+    }
+
     /** Write the modular manifest for workflow 44 to a fresh temp dir; returns the package root. */
     public static function writePackage(): string
     {
         $m = LangGraphA2AGeneratorTest::generator()->generate(44, '3', ['modular' => true]);
-        $root = sys_get_temp_dir() . '/compiled_' . bin2hex(random_bytes(6));
+        $root = self::packageRoot('compiled_');
         foreach ($m['files'] as $f) {
             $path = $root . '/' . $f['path'];
             @mkdir(dirname($path), 0777, true);
@@ -64,7 +86,7 @@ class CompiledRunServerTest extends TestCase
         $agentRepo->method('findById')->willReturn(null);
         $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
 
-        $root = sys_get_temp_dir() . '/compiled_linear_' . bin2hex(random_bytes(6));
+        $root = self::packageRoot('compiled_linear_');
         foreach ($gen->generate(77, '3', ['modular' => true])['files'] as $f) {
             $path = $root . '/' . $f['path'];
             @mkdir(dirname($path), 0777, true);

@@ -342,6 +342,7 @@ class LangGraphGenerator
         $lines[] = '# same file and subprocesses inherit the environment.';
         $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
         $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $lines[] = 'DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps';
         $lines[] = 'from typing import Annotated, Literal, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';
@@ -2023,6 +2024,7 @@ PY;
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $L[] = 'DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node\'s outputs/_debug dumps';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'import uvicorn';
@@ -3001,7 +3003,7 @@ PY;
             ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
             ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
             ['path' => 'agents/__init__.py', 'code' => '"""Agent modules of workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-                . " -- one per agent/playbook node.\n\nEach module exposes NODE (the frozen editor settings) and\nrun_node(request_text, trace), which workflow.py calls from its graph.\n\"\"\"\n"],
+                . " -- one per agent/playbook node.\n\nEach module exposes NODE (the frozen editor settings) and\nrun_node = make_node(NODE).run (common.py's Node classes), which workflow.py\ncalls from its graph as run_node(request_text, trace).\n\"\"\"\n"],
         ];
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitModularAgentFile($facts, $layout, (string) $nid)];
@@ -3235,14 +3237,17 @@ PY;
         return <<<'TXT'
 This workflow is one Python package, run in ONE process. workflow.py owns the
 graph: it frames each node's input (original prompt + labelled parent outputs)
-and calls that node's module. agents/<name>.py owns one node and exposes
-run_node(request_text, trace) -> {"text", "route", "notes", "status"}: an AGENT
-node = LangChain ReAct loop over its MCP tools plus mandatory skill steps; a
-DISPATCHER node = one forced route_to call whose choice comes back as "route"
-and drives a conditional edge, so only the chosen child runs; a PLAYBOOK node =
-the playbook runtime, whose transcript is the text. common.py holds everything
-they share -- LLM factory, MCP client, tool builder, skills, dispatcher and
-playbook runtimes -- imported once instead of copied per node.
+and calls that node's module. agents/<name>.py holds one node's frozen settings
+(NODE) and exposes run_node = make_node(NODE).run, called as
+run_node(request_text, trace) -> {"text", "route", "notes", "status"}. The node
+logic lives in common.py's Node classes, one per kind: an AGENT node (AgentNode)
+= LangChain ReAct loop over its MCP tools plus mandatory skill steps; a
+DISPATCHER node (DispatcherNode) = Jev or one forced route_to call, whose choice
+comes back as "route" and drives a conditional edge, so only the chosen child
+runs; a PLAYBOOK node (PlaybookNode) = the playbook runtime, whose transcript is
+the text. common.py holds everything they share -- LLM factory, MCP client, tool
+builder, skills, dispatcher and playbook runtimes, the Node classes -- imported
+once instead of copied per node.
 TXT;
     }
 
@@ -3276,6 +3281,7 @@ TXT;
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $L[] = 'DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
@@ -3391,7 +3397,7 @@ TXT;
             'LangGraph modular agent module (Python) -- one node; workflow.py drives the graph',
             ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
              'usage' => 'imported by workflow.py as ' . $entry['module'] . ' -- run the workflow, not this file',
-             'extra' => ['# Exposes NODE (frozen editor settings) and run_node(request_text, trace).'],
+             'extra' => ["# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py's Node classes."],
              'env_path' => '../../../.env'], $nid);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
@@ -3418,8 +3424,8 @@ TXT;
             $L[] = $nl;
         }
         $L[] = '';
-        $L[] = "# The node's behaviour is common.make_node(NODE): one Node subclass per kind,";
-        $L[] = '# shared by every module.';
+        $L[] = "# The node logic lives in common.py's Node classes: make_node(NODE) builds the";
+        $L[] = "# subclass for this NODE's kind, and workflow.py calls its run(request_text, trace).";
         $L[] = 'run_node = make_node(NODE).run';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
