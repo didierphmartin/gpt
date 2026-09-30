@@ -1,7 +1,13 @@
 {
   "EVENT SINK -- how api.py observes a run (inert for CLI runs)": {"now": "Inert until a host installs a sink (see api.py). With no sink the", "why": "banner doubled the block's own EVENT SINK + GATE RENDEZVOUS banner (analysis C2)"},
   "PLAYBOOK RUNTIME (this workflow has playbook nodes)": {"now": "PLAYBOOK RUNTIME", "why": "banner doubled PlaybookEmit::runtimeBlock's own banner (analysis C2)"},
-  "2. Initialize the LLM (Anthropic Claude)": {"now": "2. Build each node's own chat model (provider/model set per node in the workflow editor)", "why": "stale docstring (analysis D7)"},
+  "2. Initialize the LLM (Anthropic Claude)": {"now": "2. Build one Node per agent/playbook node (each builds its own chat model on first use)", "why": "stale docstring (analysis D7); Task 3: models are built per node on first use (Open question 3)"},
   "trace(line) is an async callback that reports progress to the A2A client.": {"now": "trace(line) is an async callback that reports progress: a print in a package, a task status update in an A2A agent server.", "why": "stale docstring (analysis D7)"},
-  "Exceptions propagate to the executor, which fails the task.": {"now": "Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).", "why": "stale docstring (analysis D7)"}
+  "Exceptions propagate to the executor, which fails the task.": {"now": "Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).", "why": "stale docstring (analysis D7)"},
+  "One LLM instance per agent — provider/model come from the AGENTS": {"now": "One Node per agent and playbook node -- provider/model come from the AGENTS", "why": "LLMS became NODES (Task 3): one Node per node, which owns its chat model"},
+  "dict, which the generator baked from each agent's workflow config.": {"now": "and PLAYBOOKS dicts, which the generator baked from each node's workflow config.", "why": "LLMS became NODES (Task 3), built from AGENTS and PLAYBOOKS"},
+  "Built eagerly (not per-call) so we fail fast on missing API keys.": {"now": null, "why": "the eager LLMS dict is deleted: Node.llm is built on first use in every mode (Open question 3, ruling: lazy, and the error names the node and its provider)"},
+  "Run the node on `request_text` (the orchestrator's framed input).": {"now": "Run the node once on `request` (the graph's framed input for it).", "why": "run_node(request_text, trace) became Node.run(request, trace), called by every mode's graph (Task 3)"},
+  "The chat model for this node, built from NODE (provider/model/sampling/thinking).": {"now": "The chat model for this node, built from its settings (provider/model/sampling/thinking).", "why": "_llm() read the module's NODE; Node.llm reads self.cfg, which may be an AGENTS or PLAYBOOKS entry (Task 3)"},
+  "run_node() executes this node once for one request text and returns": {"now": "Node.run() executes a node once for one request text and returns", "why": "the NODE LOGIC banner now heads the Node classes, shared by every node (Task 3)"}
 }

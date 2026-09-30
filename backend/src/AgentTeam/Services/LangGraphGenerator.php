@@ -329,6 +329,9 @@ class LangGraphGenerator
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
         $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '');
+        $lines[] = 'from abc import ABC, abstractmethod';
+        $lines[] = 'from enum import Enum';
+        $lines[] = 'from functools import cached_property';
         $lines[] = 'from pathlib import Path';
         $lines[] = '';
         $lines[] = 'from dotenv import load_dotenv';
@@ -337,7 +340,8 @@ class LangGraphGenerator
         $lines[] = '# Without this a DIRECT terminal run has no credentials and every provider';
         $lines[] = '# call fails; runner-mediated runs only worked because main.py loads the';
         $lines[] = '# same file and subprocesses inherit the environment.';
-        $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))';
+        $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
+        $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $lines[] = 'from typing import Annotated, Literal, TypedDict';
         $lines[] = '';
         $lines[] = 'import httpx';
@@ -465,6 +469,10 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = self::contextBuilderBlock();
 
+        // ---------- node classes (one per node kind; run() builds NODES from them) ----------
+        $lines[] = '';
+        $lines[] = LangGraphRuntime::nodeClassesBlock($playbookData !== []);
+
         // ---------- document converter ----------
         $lines[] = '';
         $lines[] = $sep;
@@ -531,6 +539,7 @@ class LangGraphGenerator
         $lines[] = '# AGENT DEFINITIONS';
         $lines[] = '#';
         $lines[] = '# Each agent is identified by its workflow node ID.';
+        $lines[] = '#   id, kind:      The node ID again, and which Node class runs it (make_node)';
         $lines[] = '#   display:       Human-readable name (for logs and context labels)';
         $lines[] = "#   system_prompt: The agent's persona/instructions (sent as SystemMessage)";
         $lines[] = '#   tool_names:    List of tool names this agent can call (from TOOL_CATALOG)';
@@ -569,6 +578,8 @@ class LangGraphGenerator
                 }
             }
             $lines[] = '    "' . $nid . '": {';
+            $lines[] = '        "id": "' . $nid . '",';
+            $lines[] = '        "kind": "' . (!empty($ad['dispatch']) ? 'dispatcher' : 'agent') . '",';
             $lines[] = '        "display": ' . $displayJson . ',';
             $lines[] = '        "provider": ' . $providerJson . ',';
             $lines[] = '        "model": ' . $modelJson . ',';
@@ -625,6 +636,8 @@ class LangGraphGenerator
                     }
                 }
                 $lines[] = '    "' . $nid . '": {';
+                $lines[] = '        "id": "' . $nid . '",';
+                $lines[] = '        "kind": "playbook",';
                 $lines[] = '        "display": ' . $j($pd['display']) . ',';
                 $lines[] = '        "title": ' . $j($pd['title']) . ',';
                 $lines[] = '        "domain": ' . $j($pd['domain']) . ',';
@@ -1999,12 +2012,17 @@ PY;
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, ' . ($isPlaybook ? 're, ' : '') . 'subprocess, sys, threading, time' . ($isPlaybook ? ', uuid' : '');
+        $L[] = 'from abc import ABC, abstractmethod';
+        $L[] = 'from enum import Enum';
+        $L[] = 'from functools import cached_property';
+        $L[] = 'from pathlib import Path';
         $L[] = 'from typing import Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))), ".env"))';
+        $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)';
+        $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'import uvicorn';
@@ -2055,46 +2073,21 @@ PY;
         $L[] = '    instead of raising on a missing function."""';
         $L[] = '    return []';
         $L[] = '';
+        $L[] = '';
+        $L[] = LangGraphRuntime::nodeClassesBlock($isPlaybook);
+        $L[] = '';
         // ---- node definition ----
         $L[] = $sep; $L[] = '# NODE DEFINITION -- frozen from the workflow editor'; $L[] = $sep;
         $docNodes = $this->a2aDocNodes($facts, $layout);
         foreach ($docNodes as $dn) {
             if ($dn['id'] === $nid) { foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($dn)) as $cl) $L[] = $cl; }
         }
-        $L[] = 'NODE = {';
-        $L[] = '    "id": ' . $j($nid) . ',';
-        $L[] = '    "kind": ' . $j($kind) . ',';
-        $L[] = '    "display": ' . $j($entry['display']) . ',';
-        $L[] = '    "provider": ' . $j($def['provider']) . ',';
-        $L[] = '    "model": ' . $j($def['model']) . ',';
-        $L[] = '    "temperature": ' . json_encode((float) $def['temperature']) . ',';
-        $L[] = '    "max_tokens": ' . (int) $def['max_tokens'] . ',';
-        $L[] = '    "thinking": ' . (in_array($def['thinking'] ?? null, ['on', 'off'], true) ? '"' . $def['thinking'] . '"' : 'None') . ',';
-        if ($isPlaybook) {
-            $L[] = '    "title": ' . $j($def['title']) . ',';
-            $L[] = '    "domain": ' . $j($def['domain']) . ',';
-            $L[] = '    "writes_enabled": ' . ($def['writes_enabled'] ? 'True' : 'False') . ',';
-            $L[] = '    "policy": ' . PythonEmitHelpers::jsonToPython($def['policy'], true) . ',';
-            $L[] = '    "approvers": ' . PythonEmitHelpers::jsonToPython($def['approvers'], true) . ',';
-            $L[] = '    "requester": ' . PythonEmitHelpers::jsonToPython($def['requester'], true) . ',';
-            $L[] = '    "instructions": """';
-            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['instructions'])) as $pl) $L[] = $pl;
-            $L[] = '""",';
-            $L[] = '    "actions": ' . PythonEmitHelpers::jsonToPython($def['actions'], false) . ',';
-        } else {
-            $L[] = '    "system_prompt": """';
-            foreach (explode("\n", str_replace(['\\', '"""'], ['\\\\', '\\"\\"\\"'], $def['system_prompt'])) as $pl) $L[] = $pl;
-            $L[] = '""",';
-            $L[] = '    "tool_names": ' . $j(array_values($def['tool_names'])) . ',';
-            $L[] = '    "skills": ' . $j($def['skills'] ?? []) . ',';
-            $L[] = '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
-            $L[] = '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
-            $L[] = '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
-            $L[] = '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
-        }
-        $L[] = '}';
+        foreach (explode("\n", $this->nodeDefinitionLines($facts, $nid, $kind, $entry['display'], $def, $isPlaybook)) as $nl) $L[] = $nl;
         $L[] = '';
-        $L[] = self::a2aNodeLogicBlock($isPlaybook);
+        $L[] = '# The executor below runs this node through run_node(request_text, trace).';
+        $L[] = 'run_node = make_node(NODE).run';
+        $L[] = '';
+        $L[] = '';
         $L[] = self::a2aAgentServerBlock();
         $L[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
         $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts));
@@ -2176,111 +2169,6 @@ choice travels back as the artifact's "route"; a PLAYBOOK node = the playbook
 runtime (native verbs, gates, write-policed MCP actions), whose transcript is
 the text part of the result.
 TXT;
-    }
-
-    /**
-     * run_node(): the node body, shared by the three kinds; called by the executor.
-     * The playbook branch and _run_playbook_kind are emitted only into a playbook node's
-     * file: elsewhere the playbook runtime they call is not defined.
-     */
-    private static function a2aNodeLogicBlock(bool $isPlaybook): string
-    {
-        $header = <<<'PY'
-# ==============================================================
-# NODE LOGIC
-# run_node() executes this node once for one request text and returns
-# {"text", "route", "notes", "status"}. It is the single-file script's
-# node function with the LangGraph state replaced by plain arguments.
-# ==============================================================
-
-
-def _llm():
-    """The chat model for this node, built from NODE (provider/model/sampling/thinking)."""
-    return _make_llm(NODE["provider"], NODE["model"], float(NODE["temperature"]), int(NODE["max_tokens"]), thinking=NODE.get("thinking"))
-
-
-async def run_node(request_text: str, trace) -> dict:
-    """Run the node on `request_text` (the orchestrator's framed input).
-
-    trace(line) is an async callback that reports progress: a print in a package, a task status update in an A2A agent server.
-    Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
-    Exceptions propagate to the caller (workflow.py's node runner, or the A2A executor, which fails the task).
-    """
-    kind = NODE["kind"]
-
-PY;
-        $playbookBranch = <<<'PY'
-    if kind == "playbook":
-        return await _run_playbook_kind(request_text, trace)
-
-PY;
-        $runNode = <<<'PY'
-    catalog = build_tools_from_catalog()
-    catalog["run_skill_script"] = RUN_SKILL_SCRIPT_TOOL   # local (non-MCP) tool, same as the single-file script
-    tools = [catalog[t] for t in NODE["tool_names"] if t in catalog]
-    msgs = [SystemMessage(content=inject_datetime(NODE["system_prompt"])), HumanMessage(content=request_text)]
-    await trace(f"{NODE['display']!r} -- {len(tools)} tools (provider={NODE['provider']}, model={NODE['model']})")
-    if kind == "dispatcher":
-        return await _run_dispatcher_kind(request_text, msgs)
-    agent = create_react_agent(_llm(), tools)
-    result = await agent.ainvoke({"messages": msgs})
-    final = result["messages"][-1]
-    text = final.content if isinstance(final, AIMessage) else str(final)
-    if isinstance(text, list):
-        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-    for skill in NODE.get("skills", []):
-        text = await _run_skill_step(skill, text, _llm())
-        await trace(f"after skill {skill.get('dir') or 'inline'!r}: {len(text)} chars")
-    return {"text": text, "route": "", "notes": "", "status": "ok"}
-
-
-
-PY;
-        $dispatcher = <<<'PY'
-async def _run_dispatcher_kind(request_text: str, msgs) -> dict:
-    """Dispatcher: Jev or one forced route_to call (_run_dispatcher); the chosen child id travels back as "route"."""
-    ad = {"display": NODE["display"], "dispatch": NODE["dispatch"], "jev_question": NODE.get("jev_question", ""),
-          "routing_mode": NODE.get("routing_mode", ""), "jev_min_confidence": NODE.get("jev_min_confidence")}
-    state = {"node_outputs": {}, "user_prompt": request_text}
-    out = await _run_dispatcher("self", ad, state, msgs, _llm())
-    route = out.get("routes", {}).get("self", "")
-    text = out["node_outputs"]["self"]["text"]
-    notes = text.split("## Dispatcher notes\n", 1)[1] if "## Dispatcher notes\n" in text else ""
-    return {"text": text, "route": "" if route == END else str(route), "notes": notes, "status": "ok" if route != END else "unrouted"}
-
-
-PY;
-        $playbook = <<<'PY'
-async def _run_playbook_kind(request_text: str, trace) -> dict:
-    """Playbook: the playbook runtime; gates go through whatever _playbook_gate the
-    surrounding file installed (console prompts in a modular package, an
-    input-required task update in an A2A agent server)."""
-    run = _PlaybookRun(bool(NODE.get("writes_enabled")), NODE.get("policy") or {})
-    tools = build_playbook_tools(NODE, run)
-    await trace(f"{NODE['display']!r} playbook -- {len(tools)} tools (writes={'on' if run.writes_enabled else 'off'})")
-    system = PLAYBOOK_SYSTEM_PROMPT.format(
-        domain=NODE.get("domain") or "this organization", instructions=NODE["instructions"],
-        policy_json=json.dumps(run.policy, ensure_ascii=False),
-        requester_json=json.dumps(NODE.get("requester") or {}, ensure_ascii=False),
-        approvers_json=json.dumps(NODE["approvers"], ensure_ascii=False) if NODE.get("approvers") else "{}")
-    msgs = [SystemMessage(content=inject_datetime(system)), HumanMessage(content="REQUEST:\n" + request_text)]
-    agent = create_react_agent(_llm(), tools)
-    text = ""
-    try:
-        result = await agent.ainvoke({"messages": msgs}, config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
-        final = result["messages"][-1]
-        text = final.content if isinstance(final, AIMessage) else str(final)
-        if isinstance(text, list):
-            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-    except Exception as e:
-        run.status = "failed"
-        run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
-    transcript = render_playbook_transcript(NODE["title"], run.events, text, run.status)
-    return {"text": transcript, "route": "", "notes": "", "status": run.status}
-
-
-PY;
-        return $header . ($isPlaybook ? $playbookBranch : '') . $runNode . $dispatcher . ($isPlaybook ? "\n" . $playbook : '');
     }
 
     /** Agent Card, executor with pause/resume legs, gate bridge, CLI entry. */
@@ -3209,6 +3097,11 @@ PY;
             $L[] = '  render_playbook_transcript()    the playbook interpreter (this workflow has playbook nodes)';
         }
         $L[] = '  inject_datetime()               prepends a dated header, resolves [date]/[weekday]/[year]/[time] in a system prompt';
+        $L[] = '  Node, AgentNode, DispatcherNode,';
+        if ($facts['playbookData'] !== []) {
+            $L[] = '  PlaybookNode,';
+        }
+        $L[] = '  NodeKind, make_node()           one Node subclass per node kind; every agent module is its NODE + make_node(NODE).run';
         $L[] = '  WFState, build_context()        the graph state type and per-node input builder (workflow.py only)';
         $L[] = '  _convert_doc_to_markdown()      Start-node attachment -> Markdown (office/PDF formats via lazy imports, text formats verbatim)';
         $L[] = '';
@@ -3370,6 +3263,10 @@ TXT;
         $L[] = '';
         $withPlaybooks = $facts['playbookData'] !== [];
         $L[] = 'import asyncio, json, os, ' . ($withPlaybooks ? 're, ' : '') . 'subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
+        $L[] = 'from abc import ABC, abstractmethod';
+        $L[] = 'from enum import Enum';
+        $L[] = 'from functools import cached_property';
+        $L[] = 'from pathlib import Path';
         $L[] = 'from typing import Annotated, Literal, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
@@ -3377,7 +3274,8 @@ TXT;
         $L[] = '# Loaded here rather than in workflow.py so a module imported on its own';
         $L[] = '# (a test, a REPL) still finds the provider keys.';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))';
+        $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
+        $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
@@ -3439,6 +3337,8 @@ TXT;
         if ($withPlaybooks) {
             $L[] = self::playbookRuntimeBlock();
         }
+        $L[] = LangGraphRuntime::nodeClassesBlock($withPlaybooks);
+        $L[] = '';
         $L[] = $sep;
         $L[] = '# GRAPH STATE + CONTEXT BUILDING (used by workflow.py)';
         $L[] = $sep;
@@ -3499,25 +3399,10 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        if ($isPlaybook) {
-            $L[] = 'import json';
-            $L[] = '';
-        }
-        $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
-        $L[] = 'from langgraph.graph import END';
-        $L[] = 'try:';
-        $L[] = '    from langchain.agents import create_agent as create_react_agent';
-        $L[] = 'except ImportError:';
-        $L[] = '    from langgraph.prebuilt import create_react_agent';
-        $L[] = '';
         $L[] = '# The shared runtime lives in common.py, one directory up. Python puts the';
         $L[] = "# workflow folder on sys.path when workflow.py starts, so this resolves for";
         $L[] = '# every module of the package.';
-        $imports = ['_make_llm', '_run_dispatcher', '_run_skill_step', 'build_tools_from_catalog', 'inject_datetime', 'RUN_SKILL_SCRIPT_TOOL'];
-        if ($isPlaybook) {
-            $imports = array_merge($imports, ['PLAYBOOK_MAX_ROUNDS', 'PLAYBOOK_SYSTEM_PROMPT', '_PlaybookRun', 'build_playbook_tools', 'render_playbook_transcript']);
-        }
-        $L[] = 'from common import ' . implode(', ', $imports);
+        $L[] = 'from common import make_node';
         $L[] = '';
         $L[] = $sep;
         $L[] = '# NODE DEFINITION -- frozen from the workflow editor';
@@ -3533,7 +3418,9 @@ TXT;
             $L[] = $nl;
         }
         $L[] = '';
-        $L[] = self::a2aNodeLogicBlock($isPlaybook);
+        $L[] = "# The node's behaviour is common.make_node(NODE): one Node subclass per kind,";
+        $L[] = '# shared by every module.';
+        $L[] = 'run_node = make_node(NODE).run';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -4496,7 +4383,7 @@ async def run(user_prompt: str):
 
     Steps:
     1. Build LangChain tools from the embedded TOOL_CATALOG
-    2. Build each node's own chat model (provider/model set per node in the workflow editor)
+    2. Build one Node per agent/playbook node (each builds its own chat model on first use)
     3. Construct a LangGraph StateGraph with nodes from ORDER
     4. Wire edges from EDGES (respecting topological order)
     5. Compile and invoke the graph
@@ -4521,19 +4408,22 @@ PY;
     private static function runBodyBlock(bool $withPlaybooks): string
     {
         return <<<'PY'
-    # One LLM instance per agent — provider/model come from the AGENTS
-    # dict, which the generator baked from each agent's workflow config.
-    # Built eagerly (not per-call) so we fail fast on missing API keys.
-    LLMS = {
-        nid: _make_llm(
-            ad.get("provider", "claude"),
-            ad.get("model", ""),
-            float(ad.get("temperature", 0.7)),
-            int(ad.get("max_tokens", 4096)),
-            thinking=ad.get("thinking"),
-        )
-        for nid, ad in {**AGENTS, **PLAYBOOKS}.items()
-    }
+    # One Node per agent and playbook node -- provider/model come from the AGENTS
+    # and PLAYBOOKS dicts, which the generator baked from each node's workflow config.
+    # Each node builds its chat model on first use (Node.llm), not here.
+    NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS}.items()}
+
+    async def run_node(n: str, request: str) -> dict:
+        """Run node n on its request: its console lines are tagged [node] [n], and the
+        whole node (model turns and skills) is timed for the RUN SUMMARY."""
+        async def trace(line: str):
+            print(f"[node] [{n}] {line}", flush=True)
+
+        t0 = time.monotonic()
+        out = await NODES[n].run(request, trace)
+        NODE_DURATIONS[NODES[n].display] = time.monotonic() - t0
+        return out
+
     sg = StateGraph(WFState)
 
     for nid in ORDER:
@@ -4572,96 +4462,17 @@ PY;
             case "agent" | "agent-template":
                 def make_agent(n=nid):
                     async def _run(state):
-                        from datetime import datetime as _dt
                         ad = AGENTS[n]
-                        tool_names = ad["tool_names"]
-                        tools = [catalog[t] for t in tool_names if t in catalog]
-                        print(f"[node] [{n}] {ad['display']!r} -- {len(tools)} tools "
-                              f"(provider={ad.get('provider', '?')}, model={ad.get('model', '?')})")
-
                         ctx = build_context(state.get("user_prompt", ""), parents(n), state.get("node_outputs", {}))
-                        sys_chars = len(ad["system_prompt"]) if ad.get("system_prompt") else 0
-                        print(f"[node] [{n}] inputs: system={sys_chars} chars, context={len(ctx)} chars", flush=True)
-
-                        msgs = []
-                        if ad["system_prompt"]:
-                            msgs.append(SystemMessage(content=inject_datetime(ad["system_prompt"])))
-                        msgs.append(HumanMessage(content=ctx))
-                        # Dispatcher: one forced route_to call picks the child; no ReAct loop.
+                        out = await run_node(n, ctx)
+                        result = {"node_outputs": {n: {"source": ad["display"], "text": out["text"]}}}
                         if ad.get("dispatch"):
-                            return await _run_dispatcher(n, ad, state, msgs, LLMS[n])
-                        # Per-agent LLM. Each agent uses the provider/model
-                        # it was configured with in the workflow editor.
-                        agent = create_react_agent(LLMS[n], tools)
-                        t0 = time.monotonic()
-                        result = await agent.ainvoke({"messages": msgs})
-                        dt = time.monotonic() - t0
-
-                        final = result["messages"][-1]
-                        text = final.content if isinstance(final, AIMessage) else str(final)
-                        if isinstance(text, list):
-                            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-
-                        msgs_out = result.get("messages", [])
-                        llm_rounds = sum(1 for m in msgs_out if isinstance(m, AIMessage))
-                        tool_results = sum(
-                            1 for m in msgs_out
-                            if getattr(m, "type", None) == "tool"
-                            or m.__class__.__name__ == "ToolMessage"
-                        )
-                        NODE_DURATIONS[ad["display"]] = NODE_DURATIONS.get(ad["display"], 0.0) + dt
-                        print(f"[node] [{n}] done -- {len(text)} chars "
-                              f"({llm_rounds} LLM rounds, {tool_results} tool results, {dt:.1f}s)")
-                        # Preview of what the agent produced, so the log shows the
-                        # actual answer without opening the _debug dump.
-                        print(f"[node] [{n}] output head: {text[:240]!r}", flush=True)
-                        # High-signal red flag: a tool-bound agent that ran ZERO
-                        # tools almost certainly fabricated its answer (the exact
-                        # failure that produced "Missing /llms.txt"). Surface it.
-                        if tools and tool_results == 0:
-                            print(f"[node] [{n}] ⚠ answered with 0 tool calls despite "
-                                  f"{len(tools)} tool(s) available — likely fabricated; "
-                                  f"check the skill ran", flush=True)
-
-                        try:
-                            script_root = Path(__file__).resolve().parent.parent
-                            debug_dir = script_root / "outputs" / "_debug"
-                            debug_dir.mkdir(parents=True, exist_ok=True)
-                            ts = _dt.now().strftime("%Y%m%d-%H%M%S")
-                            stem = Path(__file__).stem
-                            dump_path = debug_dir / f"{stem}_{n}_{ts}.json"
-                            entries = []
-                            for m in msgs_out:
-                                content = m.content
-                                if isinstance(content, list):
-                                    content = [
-                                        (b if isinstance(b, dict) else {"type": "text", "text": str(b)})
-                                        for b in content
-                                    ]
-                                entries.append({
-                                    "role": m.__class__.__name__,
-                                    "content": content,
-                                    "tool_calls": getattr(m, "tool_calls", None),
-                                    "tool_call_id": getattr(m, "tool_call_id", None),
-                                    "name": getattr(m, "name", None),
-                                })
-                            dump_path.write_text(
-                                json.dumps(entries, default=str, indent=2, ensure_ascii=False),
-                                encoding="utf-8",
-                            )
-                            print(f"[debug] [{n}] message history → outputs/_debug/{dump_path.name}")
-                        except Exception as e:
-                            print(f"[debug] [{n}] failed to dump message history: {e}")
-
-                        # Mandatory skill pipeline: each attached skill runs on the agent's
-                        # result in order; the last skill's produced deliverable (e.g. the html
-                        # skill's rendered HTML file) becomes this node's output.
-                        for _skill in ad.get("skills", []):
-                            text = await _run_skill_step(_skill, text, LLMS[n])
-                            print(f"[node] [{n}] after skill {_skill.get('dir') or 'inline'!r}: "
-                                  f"{len(text)} chars", flush=True)
-
-                        return {"node_outputs": {n: {"source": ad["display"], "text": text}}}
+                            # Dispatcher: its chosen child (or END) feeds the conditional edge;
+                            # a request it did not route ends the run with its message.
+                            result["routes"] = {n: out["route"] or END}
+                            if out["status"] == "unrouted":
+                                result["final_output"] = out["text"]
+                        return result
                     return _run
                 sg.add_node(nid, make_agent())
 
@@ -4671,42 +4482,11 @@ PY . ($withPlaybooks ? <<<'PY'
                 def make_playbook(n=nid):
                     async def _run(state):
                         pb = PLAYBOOKS[n]
-                        run = _PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {})
-                        tools = build_playbook_tools(pb, run)
-                        print(f"[node] [{n}] {pb['display']!r} playbook -- {len(tools)} tools "
-                              f"(provider={pb.get('provider', '?')}, model={pb.get('model', '?')}, "
-                              f"writes={'on' if run.writes_enabled else 'off'})", flush=True)
                         outs = state.get("node_outputs", {})
                         inputs = [outs[p]["text"] for p in parents(n) if p in outs]
                         request = "\n\n".join(inputs) or state.get("user_prompt", "")
-                        system = PLAYBOOK_SYSTEM_PROMPT.format(
-                            domain=pb.get("domain") or "this organization",
-                            instructions=pb["instructions"],
-                            policy_json=json.dumps(run.policy, ensure_ascii=False),
-                            requester_json=json.dumps(pb.get("requester") or {}, ensure_ascii=False),
-                            approvers_json=json.dumps(pb["approvers"], ensure_ascii=False) if pb.get("approvers") else "{}",
-                        )
-                        msgs = [SystemMessage(content=inject_datetime(system)),
-                                HumanMessage(content="REQUEST:\n" + request)]
-                        agent = create_react_agent(LLMS[n], tools)
-                        t0 = time.monotonic()
-                        text = ""
-                        try:
-                            result = await agent.ainvoke({"messages": msgs},
-                                                         config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
-                            final = result["messages"][-1]
-                            text = final.content if isinstance(final, AIMessage) else str(final)
-                            if isinstance(text, list):
-                                text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-                        except Exception as e:
-                            run.status = "failed"
-                            run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
-                            print(f"[node] [{n}] ⚠ playbook failed: {e}", flush=True)
-                        dt = time.monotonic() - t0
-                        NODE_DURATIONS[pb["display"]] = NODE_DURATIONS.get(pb["display"], 0.0) + dt
-                        print(f"[node] [{n}] done -- status={run.status} ({len(run.events)} events, {dt:.1f}s)", flush=True)
-                        transcript = render_playbook_transcript(pb["title"], run.events, text, run.status)
-                        return {"node_outputs": {n: {"source": pb["display"], "text": transcript}}}
+                        out = await run_node(n, request)
+                        return {"node_outputs": {n: {"source": pb["display"], "text": out["text"]}}}
                     return _run
                 sg.add_node(nid, make_playbook())
 

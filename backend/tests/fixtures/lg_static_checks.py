@@ -104,7 +104,9 @@ def readability(tree, src):
                     for m in ast.walk(node) if isinstance(m, (ast.Assign, ast.AnnAssign, ast.AugAssign))
                     for t in (m.targets if isinstance(m, ast.Assign) else [m.target]))
         plain_bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
-        if len(methods) <= 1 and not state and not plain_bases & {"TypedDict", "Exception", "ABC"} and not any(
+        # A subclass of a class in this file (Node -> AgentNode) overrides the base's actions and
+        # uses its state; the base is what groups them, so it is not a helper on its own.
+        if len(methods) <= 1 and not state and not plain_bases & ({"TypedDict", "Exception", "ABC"} | set(classes)) and not any(
                 isinstance(s, (ast.Assign, ast.AnnAssign)) for s in node.body):
             out.append(f"class {name} is a single helper (one method, no state)")
     for m in ast.walk(tree):

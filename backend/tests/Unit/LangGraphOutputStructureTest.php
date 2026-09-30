@@ -80,10 +80,14 @@ class LangGraphOutputStructureTest extends TestCase
         return $out;
     }
 
-    /** Write $files under a fresh temp root. @return array{root: string, paths: array<string,string>} */
+    /**
+     * Write $files under a fresh temp root. The root sits at <tmp>/lgos_<hex>/python/scripts/wf, the
+     * runner's layout, so what the code writes next to its runner folder (RUNNER_DIR, e.g. the
+     * agents' outputs/_debug dumps) stays inside lgos_<hex>. @return array{root: string, paths: array<string,string>}
+     */
     private static function write(array $files): array
     {
-        $root = sys_get_temp_dir() . '/lgos_' . bin2hex(random_bytes(6));
+        $root = sys_get_temp_dir() . '/lgos_' . bin2hex(random_bytes(6)) . '/python/scripts/wf';
         $paths = [];
         foreach ($files as $rel => $code) {
             $paths[$rel] = $root . '/' . $rel;
@@ -192,6 +196,104 @@ class LangGraphOutputStructureTest extends TestCase
             $this->assertStringNotContainsString('if ntype == "start":', $all, $mode);
             $this->assertStringContainsString('    match mode:', $all, $mode);
             $this->assertStringNotContainsString('    if mode == "jev":', $all, $mode);
+        }
+    }
+
+    /** The runner venv's interpreter (langchain/langgraph/a2a installed), or skip. */
+    private function venvPython(): string
+    {
+        $py = getenv('LANGGRAPH_TEST_PYTHON') ?: (getenv('HOME') . '/Documents/synergyAI/python/.venv/bin/python');
+        exec(escapeshellarg($py) . ' -c "import langchain_core, langgraph" 2>&1', $o, $rc);
+        if ($rc !== 0) {
+            $this->markTestSkipped("runner venv python not usable: {$py}");
+        }
+        return $py;
+    }
+
+    /** Run lg_run_probe.py; returns [decoded RESULT, full console]. */
+    private function probe(array $args, array $env = []): array
+    {
+        $prefix = 'env -u TYPESAFE_API_KEY -u MODEL_NAME -u PLAYBOOK_GATE_MODE';
+        foreach ($env as $k => $v) {
+            $prefix .= ' ' . $k . '=' . escapeshellarg($v);
+        }
+        exec($prefix . ' ' . escapeshellarg($this->venvPython()) . ' ' . escapeshellarg(self::FIXTURES . '/lg_run_probe.py')
+            . ' ' . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1', $out, $rc);
+        $console = implode("\n", $out);
+        $this->assertSame(0, $rc, $console);
+        $line = (string) end($out);
+        $this->assertStringStartsWith('RESULT ', $line, $console);
+        return [json_decode(substr($line, 7), true), $console];
+    }
+
+    public function testEveryNodeKindRunsThroughMakeNode(): void
+    {
+        $files = $this->files(self::graphs()['dispatcher_demo'], 'modular');
+        $this->assertStringContainsString('class Node(ABC):', $files['common.py']);
+        $this->assertStringContainsString('def make_node(cfg: dict) -> Node:', $files['common.py']);
+        foreach (['agents/techbuddy.py', 'agents/it_claims.py', 'agents/playbook_hr.py'] as $p) {
+            $this->assertStringContainsString("run_node = make_node(NODE).run", $files[$p], $p);
+            $this->assertStringNotContainsString('async def ', $files[$p], "{$p}: node logic lives in common.py");
+        }
+        $root = self::write($files)['root'];
+        [$r] = $this->probe(['node', 'module', $root, 'agents.techbuddy', 'my laptop will not boot'], ['STUB_ROUTE_TO' => 'IT claims']);
+        $this->assertSame(['text' => 'my laptop will not boot', 'route' => '3', 'notes' => '', 'status' => 'ok'], $r);
+        [$r, $log] = $this->probe(['node', 'module', $root, 'agents.human_resources', 'two days off']);
+        $this->assertSame('ok', $r['status']);
+        $this->assertStringContainsString('answer to: two days off', $r['text']);
+        $this->assertStringContainsString("inputs: system=", $log);
+        [$r] = $this->probe(['node', 'module', $root, 'agents.playbook_hr', 'two days off'], ['PLAYBOOK_GATE_MODE' => 'auto']);
+        $this->assertStringStartsWith('# Playbook: Time Off (', $r['text']);
+    }
+
+    public function testPlaybookOnlyWorkflowRunsInEveryMode(): void          // Review Focus 2
+    {
+        $graph = self::graphs()['playbook_only'];
+        $single = self::write($this->files($graph, 'single'));
+        [$r] = $this->probe(['workflow', 'single', array_values($single['paths'])[0], 'I want two days off'], ['PLAYBOOK_GATE_MODE' => 'auto']);
+        $this->assertStringStartsWith('# Playbook: Time Off (', $r['output']);
+        [$r] = $this->probe(['workflow', 'modular', self::write($this->files($graph, 'modular'))['root'], 'I want two days off'], ['PLAYBOOK_GATE_MODE' => 'auto']);
+        $this->assertStringStartsWith('# Playbook: Time Off (', $r['output']);
+        $a2a = self::write($this->files($graph, 'a2a'));
+        [$r] = $this->probe(['node', 'a2a', $a2a['paths']['agents/2_playbook-hr.py'], 'I want two days off'], ['PLAYBOOK_GATE_MODE' => 'auto']);
+        $this->assertStringStartsWith('# Playbook: Time Off (', $r['text']);
+    }
+
+    public function testMissingProviderPackageFailsOnlyThatNode(): void     // Review Focus 3
+    {
+        $path = array_values(self::write($this->files(self::graphs()['linear'], 'single'))['paths'])[0];
+        $cfg = json_encode(['id' => '9', 'kind' => 'agent', 'display' => 'G', 'provider' => 'gemini', 'model' => 'gemini-x',
+            'temperature' => 0.7, 'max_tokens' => 100, 'thinking' => null, 'system_prompt' => 'x', 'tool_names' => [], 'skills' => []]);
+        [$r] = $this->probe(['llm', $path, $cfg], ['STUB_BLOCK_IMPORT' => 'langchain_google_genai']);
+        $this->assertStringStartsWith('ImportError', (string) $r['error'], 'import and make_node() succeed; only .llm fails');
+        // Built lazily, so the failure comes mid-run: it names the node and its provider (ruling OQ3).
+        $this->assertStringContainsString("node 9 'G'", (string) $r['error']);
+        $this->assertStringContainsString("'gemini'", (string) $r['error']);
+        // Any other build failure (here: no model name) names them too.
+        [$r] = $this->probe(['llm', $path, str_replace('"gemini-x"', '""', $cfg)]);
+        $this->assertStringStartsWith('RuntimeError', (string) $r['error']);
+        $this->assertStringContainsString("node 9 'G'", (string) $r['error']);
+        $this->assertStringContainsString("'gemini'", (string) $r['error']);
+    }
+
+    public function testA2AAgentFilesRunTheirNodeThroughMakeNode(): void    // Review Focus 4
+    {
+        $a2a = self::write($this->files(self::graphs()['dispatcher_demo'], 'a2a'));
+        [$r] = $this->probe(['node', 'a2a', $a2a['paths']['agents/2_techbuddy.py'], 'I need vacation'], ['STUB_ROUTE_TO' => 'Human resources']);
+        $this->assertSame('4', $r['route']);
+        [$r] = $this->probe(['node', 'a2a', $a2a['paths']['agents/4_human-resources.py'], 'I need vacation']);
+        $this->assertSame(['route' => '', 'notes' => '', 'status' => 'ok'], array_diff_key($r, ['text' => 1]));
+        [$r] = $this->probe(['node', 'a2a', $a2a['paths']['agents/5_playbook-hr.py'], 'I need vacation'], ['PLAYBOOK_GATE_MODE' => 'auto']);
+        $this->assertStringStartsWith('# Playbook: Time Off (', $r['text']);
+    }
+
+    /** The emitted classes follow the spec's readability rule (checked from Task 3 on). */
+    public function testEmittedClassesFollowTheReadabilityRule(): void
+    {
+        foreach (self::graphs() as $name => $graph) {
+            foreach (['single', 'modular', 'a2a'] as $mode) {
+                $this->assertSame([], $this->staticCheck('readability', self::write($this->files($graph, $mode))['paths']), "{$name}/{$mode}");
+            }
         }
     }
 }

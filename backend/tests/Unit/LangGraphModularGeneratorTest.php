@@ -145,13 +145,14 @@ class LangGraphModularGeneratorTest extends TestCase
                   'def build_tools_from_catalog', 'RUN_SKILL_SCRIPT_TOOL', 'async def _run_skill_step(',
                   'async def _run_dispatcher(', 'def inject_datetime(', 'def build_context(',
                   'def _convert_doc_to_markdown(', 'class WFState(', 'def build_playbook_tools(',
-                  'def _playbook_gate(', 'NODE_DURATIONS = {}'] as $needle) {
+                  'def _playbook_gate(', 'NODE_DURATIONS = {}', 'class Node(ABC):', 'def make_node(cfg: dict) -> Node:'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // The whole catalog lives here once; the agent modules only name their tools.
         $this->assertStringContainsString('"get_news"', $code);
         // No graph and no node definitions: those belong to workflow.py / agents/*.
-        foreach (['EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'async def run(', 'NODE = {', 'AGENTS = {'] as $needle) {
+        // (Node.run is a method; the graph's run() would be a top-level function.)
+        foreach (['EDGES = ', 'ORDER = ', 'NODE_TYPES = ', "\nasync def run(", 'NODE = {', 'AGENTS = {'] as $needle) {
             $this->assertStringNotContainsString($needle, $code, "common.py must not carry: {$needle}");
         }
     }
@@ -160,7 +161,7 @@ class LangGraphModularGeneratorTest extends TestCase
     {
         $code = self::files()['agents/it_claims.py'];
         foreach (['"""Agent module "IT claims" -- node 3 of workflow "Dispatcher demo"',
-                  'from common import', 'async def run_node(', 'NODE = {', '"kind": "agent"',
+                  'from common import', 'run_node = make_node(NODE).run', 'NODE = {', '"kind": "agent"',
                   '# ---- node 3: IT claims (agent-template)', '<== this module'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
@@ -178,7 +179,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $code = self::files()['agents/techbuddy.py'];
         $this->assertStringContainsString('"kind": "dispatcher"', $code);
         $this->assertStringContainsString('"dispatch": [{"id": "3", "name": "IT claims", "description": ""}, {"id": "4", "name": "Human resources", "description": ""}]', $code);
-        $this->assertStringContainsString('_run_dispatcher', $code);
+        $this->assertStringContainsString('run_node = make_node(NODE).run', $code);
     }
 
     public function testPlaybookModuleKeepsConsoleGates(): void
@@ -186,7 +187,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $code = self::files()['agents/playbook_hr.py'];
         $this->assertStringContainsString('"kind": "playbook"', $code);
         $this->assertStringContainsString('"instructions": """', $code);
-        $this->assertStringContainsString('build_playbook_tools', $code);
+        $this->assertStringContainsString('class PlaybookNode(Node):', self::files()['common.py']);
         // The playbook's bound MCP action travels in NODE["actions"], not in the shared catalog.
         $this->assertStringContainsString('"workday__get_pto_balance"', $code);
         // Gates stay the single-file console/PLAYBOOK_GATE_MODE ones: no A2A bridge.

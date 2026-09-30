@@ -22,6 +22,8 @@ class LangGraphJevDispatchTest extends TestCase
 {
     private const BLOCK_START = '# TypeSafe Jev (twin of JevRouter.php)';
     private const BLOCK_END = '            return {"node_outputs": {n: {"source": ad["display"], "text": text}}, "routes": {n: chosen["id"]}}';
+    private const NODE_START = 'class Node(ABC):';
+    private const NODE_END = '            raise ValueError(f"unknown node kind: {cfg[\'kind\']!r}")';
 
     private static function graph(): array
     {
@@ -267,37 +269,34 @@ class LangGraphJevDispatchTest extends TestCase
 
     public function testEmittedRuntimeRoutesOrStops(): void
     {
-        exec('python3 -c "import sys; assert sys.version_info >= (3, 9)" 2>&1', $o, $rc);
+        exec('python3 -c "import sys; assert sys.version_info >= (3, 10)" 2>&1', $o, $rc);
         if ($rc !== 0) {
-            $this->markTestSkipped('python3 >= 3.9 not available');
+            $this->markTestSkipped('python3 >= 3.10 not available');
         }
-        foreach ($this->modes() as $mode => [$runtime, $node]) {
-            // A2A agent / modular module: also slice the _run_dispatcher_kind wrapper.
-            $kindFile = null;
-            $k = strpos($node, 'async def _run_dispatcher_kind(');
-            if ($mode !== 'single') {
-                $this->assertNotFalse($k, "{$mode}: _run_dispatcher_kind");
-                // Ends at the next top-level statement: _run_playbook_kind in a playbook file,
-                // the A2A serving banner in an agent server, end of file in a module.
-                $kEnd = preg_match('/\n\n\n(?=\S)/', $node, $mm, PREG_OFFSET_CAPTURE, $k + 10) ? $mm[0][1] : false;
-                $kindFile = tempnam(sys_get_temp_dir(), 'jevk') . '.py';
-                file_put_contents($kindFile, substr($node, $k, $kEnd === false ? null : $kEnd - $k) . "\n");
-            }
+        foreach ($this->modes() as $mode => [$runtime]) {
+            // The dispatch block, and the Node classes that run a dispatcher node in every
+            // mode (class Node through make_node()), both sliced from the runtime file.
             $a = strpos($runtime, self::BLOCK_START);
             $b = strpos($runtime, self::BLOCK_END);
             $this->assertNotFalse($a, "{$mode}: block start");
             $this->assertNotFalse($b, "{$mode}: block end");
             $block = substr($runtime, $a, $b - $a + strlen(self::BLOCK_END)) . "\n";
+            $k = strpos($runtime, self::NODE_START);
+            $kEnd = strpos($runtime, self::NODE_END);
+            $this->assertNotFalse($k, "{$mode}: Node classes start");
+            $this->assertNotFalse($kEnd, "{$mode}: Node classes end");
+            $classes = substr($runtime, $k, $kEnd - $k + strlen(self::NODE_END)) . "\n";
             $base = tempnam(sys_get_temp_dir(), 'jev');
             file_put_contents($base . '.py', $block);
+            file_put_contents($base . '_nodes.py', $classes);
             $out = [];
             exec('env -u TYPESAFE_API_KEY python3 ' . escapeshellarg(dirname(__DIR__) . '/fixtures/jev_dispatch_harness.py')
-                . ' ' . escapeshellarg($base . '.py') . ($kindFile ? ' ' . escapeshellarg($kindFile) : '') . ' 2>&1', $out, $rc);
+                . ' ' . escapeshellarg($base . '.py') . ' ' . escapeshellarg($base . '_nodes.py') . ' 2>&1', $out, $rc);
             @unlink($base . '.py');
-            if ($kindFile) @unlink($kindFile);
+            @unlink($base . '_nodes.py');
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame($kindFile ? 'OK 20 cases' : 'OK 16 cases', end($out), $mode);
+            $this->assertSame('OK 20 cases', end($out), $mode);
         }
     }
 

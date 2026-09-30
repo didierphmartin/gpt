@@ -1,13 +1,14 @@
 """Exercise the generated dispatcher runtime's Jev fast path (LangGraphGenerator::dispatchBlock).
 
-Usage: python3 jev_dispatch_harness.py <extracted_block.py> [<run_dispatcher_kind.py>]
+Usage: python3 jev_dispatch_harness.py <extracted_block.py> [<node_classes.py>]
 
 The block is the slice of a generated LangGraph file from the JEV_URL constants
 through the end of _run_dispatcher(). It is exec'd into a namespace with stubs
 for the LangChain/pydantic names the model path touches, so this needs only the
 standard library. urllib.request.urlopen is monkeypatched: no network.
-The optional second file is the A2A/modular wrapper _run_dispatcher_kind(),
-sliced from an agent file; when given, a routed case runs through it too.
+The optional second file is the Node classes (class Node through make_node()),
+sliced from the same generated file; when given, the dispatcher cases also run
+through make_node(...).run(), the way every mode runs a dispatcher node.
 
 Exits 0 and prints "OK <n> cases" when every case passes; otherwise raises.
 """
@@ -19,7 +20,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from abc import ABC, abstractmethod
 from contextlib import redirect_stdout
+from enum import Enum
+from functools import cached_property
 from typing import Literal
 
 BLOCK = open(sys.argv[1], encoding="utf-8").read()
@@ -61,7 +65,11 @@ class _Tool:
 def namespace():
     ns = {"asyncio": asyncio, "json": json, "os": os, "time": time, "Literal": Literal, "END": END,
           "create_model": lambda *a, **k: object, "Field": lambda *a, **k: None, "StructuredTool": _Tool,
-          "NODE_DURATIONS": {}, "parents": lambda n: ["1"]}
+          "NODE_DURATIONS": {}, "parents": lambda n: ["1"],
+          # What the Node classes need to be defined and to build a dispatcher's turn.
+          "ABC": ABC, "abstractmethod": abstractmethod, "cached_property": cached_property, "Enum": Enum,
+          "SystemMessage": lambda content: content, "HumanMessage": lambda content: content,
+          "AIMessage": FakeResp, "inject_datetime": lambda s: s}
     exec(compile(BLOCK, "dispatch_block", "exec"), ns)
     return ns
 
@@ -195,22 +203,37 @@ def hung():
     assert ns["NODE_DURATIONS"]["techBuddy"] >= 1.0, ns["NODE_DURATIONS"]
 
 
+async def _noop_trace(line):
+    pass
+
+
+def run_dispatcher_node(ns, llm, routing_mode, request):
+    """A2A / modular / single: the dispatcher node as every mode now runs it,
+    make_node(cfg).run(request, trace), with the model replaced by `llm`."""
+    ns["parents"] = lambda n: []   # the node gets its request already framed
+    exec(compile(KIND, "node_classes", "exec"), ns)
+    node = ns["make_node"]({"id": "2", "kind": "dispatcher", "display": "techBuddy", "provider": "claude", "model": "m",
+                            "temperature": 0.7, "max_tokens": 10, "system_prompt": "", "tool_names": [],
+                            "dispatch": TARGETS, "jev_question": QUESTION, "routing_mode": routing_mode,
+                            "jev_min_confidence": 0.6})
+    node.llm = llm
+    node.__dict__["tools"] = []
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = asyncio.run(node.run(request, _noop_trace))
+    return out, buf.getvalue()
+
+
 def kind_routed():
-    """A2A / modular: _run_dispatcher_kind carries the route id back as "route"."""
+    """DispatcherNode carries the route id back as "route"."""
     ns = namespace()
     urllib.request.urlopen = FakeHTTP(answer("IT claims", 0.97))
     os.environ["TYPESAFE_API_KEY"] = "test-key"
     llm = FakeLLM(ns)
-    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION}
-    ns["_llm"] = lambda: llm
-    ns["parents"] = lambda n: []   # agent file / module: no graph
-    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request: my laptop will not boot", []))
+    out, log = run_dispatcher_node(ns, llm, "", "Framed request: my laptop will not boot")
     assert llm.calls == 0, "routed must not spend an LLM turn"
     assert out == {"text": "Framed request: my laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
-    assert "Jev routed to 'IT claims'" in buf.getvalue()
+    assert "Jev routed to 'IT claims'" in log
 
 
 def branch_that_runs(out):
@@ -278,19 +301,13 @@ def custom_floor():
 
 
 def kind_jev_unrouted():
-    """A2A / modular: a Jev-only no-route travels back as route "" (not a menu
-    id -> the orchestrator's conditional edge goes to END) with the message."""
+    """A Jev-only no-route travels back as route "" (not a menu id -> the
+    graph's conditional edge goes to END) with the message."""
     ns = namespace()
     urllib.request.urlopen = FakeHTTP(answer("unclear", 1.0))
     os.environ["TYPESAFE_API_KEY"] = "test-key"
     llm = FakeLLM(ns)
-    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
-                  "routing_mode": "jev", "jev_min_confidence": 0.6}
-    ns["_llm"] = lambda: llm
-    ns["parents"] = lambda n: []
-    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
-    with redirect_stdout(io.StringIO()):
-        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    out, _ = run_dispatcher_node(ns, llm, "jev", "Framed request")
     assert llm.calls == 0, "Jev mode never calls the model"
     msg = 'Error: dispatcher "techBuddy" did not route the request (Jev: unclear: the request names no branch).'
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
@@ -298,37 +315,26 @@ def kind_jev_unrouted():
 
 
 def kind_unset_no_key():
-    """A2A / modular: an unset dispatcher without TYPESAFE_API_KEY -> the model."""
+    """An unset dispatcher without TYPESAFE_API_KEY -> the model."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
     os.environ.pop("TYPESAFE_API_KEY", None)
     llm = FakeLLM(ns)
-    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
-                  "routing_mode": "", "jev_min_confidence": 0.6}
-    ns["_llm"] = lambda: llm
-    ns["parents"] = lambda n: []
-    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
-    with redirect_stdout(io.StringIO()):
-        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    out, _ = run_dispatcher_node(ns, llm, "", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
 
 
 def kind_llm_mode():
-    """A2A / modular: the wrapper passes routing_mode through -> no Jev call."""
+    """The node passes routing_mode through -> no Jev call."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
     os.environ["TYPESAFE_API_KEY"] = "test-key"
     llm = FakeLLM(ns)
-    ns["NODE"] = {"display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
-                  "routing_mode": "llm", "jev_min_confidence": 0.6}
-    ns["_llm"] = lambda: llm
-    ns["parents"] = lambda n: []
-    exec(compile(KIND, "dispatcher_kind", "exec"), ns)
-    with redirect_stdout(io.StringIO()):
-        out = asyncio.run(ns["_run_dispatcher_kind"]("Framed request", []))
+    out, _ = run_dispatcher_node(ns, llm, "llm", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
+    assert out["notes"] == "from the model", out
 
 
 case(routed)
