@@ -1,0 +1,413 @@
+"" -> unset (saved before the setting existed): resolved here to
+"jev" -> Jev only; the model is never called. Any outcome but 'routed'
+"jev" when TYPESAFE_API_KEY is set -- the editor's runner sync
+"llm" -> the model only; Jev is never asked.
+# ANTHROPIC_API_KEY (claude)
+# API keys read from ../../../.env for the providers this workflow uses:
+# API keys read from ../../.env for the providers this workflow uses:
+# DEEPSEEK_API_KEY (deepseek)
+# Everything here is shared: change it once and every node of this workflow follows.
+# Exposes NODE (frozen editor settings) and run_node(request_text, trace).
+# Human gates (playbook nodes): on a terminal the script asks on the console;
+# Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev
+# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (techBuddy):
+# Output storage (Output node setting): OFF (the result is printed, not saved)
+# Requires Python 3.10+ (the generated code uses match statements)
+# cannot decide stops the run there (no model fallback).
+# optional, only for the attachment formats you use:
+# otherwise PLAYBOOK_GATE_MODE=auto (default: approve/acknowledge) | deny | prompt.
+# pip install mammoth (.docx) python-pptx (.pptx) openpyxl (.xlsx) pypdf (.pdf)
+(a test, a REPL) still finds the provider keys.
+(and input_files/read_outputs); the dir is fixed to this skill.
+(api.py calls both the same way) but is ignored here: a DAG run has no
+(article count + first PMIDs, error message, query text, etc.)
+(claude, openai, gemini, grok, deepseek, kimi, glm)
+(e.g. `dependencies: [beautifulsoup4]`). The browser installs them via
+(no pre-computed action queue). Tools it sees: the native verbs, the human
+(servers mounted at their bare URL, e.g. PHP mock servers, answer there
+(the reason names a missing key, too). Same message as the interpreter.
+(unclear, low_confidence, no key, error, timeout) = did not
+- If it already ends with /mcp, leave it alone.
+- If it ends with a .php file, it IS the endpoint already (XAMPP-style
+- Otherwise, append /mcp per the MCP convention.
+- Plain JSON: standard JSON-RPC response body
+- SSE (Server-Sent Events): lines prefixed with 'data:' containing JSON
+---- node 2: techBuddy (agent-template) ------------------------------------
+---- node 3: IT claims (agent-template) ------------------------------------
+---- node 4: Human resources (agent-template) ------------------------------
+---- node 5: Playbook HR (playbook) ----------------------------------------
+/scratch dirs, virtual-path remap, env exposure, and a deliverable stash so a skill's
+1 (start): Start -- receives the user prompt -- default: "I want to take some vacations"
+1. Client sends 'initialize' with protocol version and capabilities
+1. Parse the JSON Schema into a Pydantic model (for LLM argument validation)
+2 (agent-template): techBuddy -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s), DISPATCHER -> one of: IT claims | Human resources
+2 (agent-template): techBuddy -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s), DISPATCHER -> one of: IT claims | Human resources <== this module
+2 techBuddy agents/techbuddy.py
+2. Create a callable that sends the MCP JSON-RPC request
+2. Server responds with its capabilities
+3 (agent-template): IT claims -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 2 tool(s), 1 skill(s): html
+3 (agent-template): IT claims -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 2 tool(s), 1 skill(s): html <== this module
+3 IT claims agents/it_claims.py
+3. Client sends 'notifications/initialized' to confirm
+3. Wrap both into a LangChain StructuredTool
+4 (agent-template): Human resources -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s)
+4 (agent-template): Human resources -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s) <== this module
+4 Human resources agents/human_resources.py
+5 (playbook): Playbook HR -- deepseek/deepseek-v4-flash, temp 0.7, max_tokens 4096, playbook "Time Off", 1 bound / 0 unbound action(s), writes ON
+5 (playbook): Playbook HR -- deepseek/deepseek-v4-flash, temp 0.7, max_tokens 4096, playbook "Time Off", 1 bound / 0 unbound action(s), writes ON <== this module
+5 Playbook HR agents/playbook_hr.py
+6 (output): Output -- merges its parents' outputs verbatim (no LLM) -- the workflow result
+A branch literally named "unclear" would collide with the escape hatch.
+A playbook node already streamed its own transcript through the sink --
+A watching host (api.py) sees the run through these events and nothing
+ADDED to, never replacing, the system store
+AGENT MODULES (id, name, file -- each exposes NODE and run_node)
+AGENT TABLE -- what each node is, and which module runs it
+API then constrains sampling: thinking OFF -> temperature MUST be 0.6,
+ATTACHMENT CONVERTER (Start-node documents)
+Agent module "Human resources" -- node 4 of workflow "Dispatcher demo"
+Agent module "IT claims" -- node 3 of workflow "Dispatcher demo"
+Agent module "Playbook HR" -- node 5 of workflow "Dispatcher demo"
+Agent module "techBuddy" -- node 2 of workflow "Dispatcher demo"
+Agent modules of workflow "Dispatcher demo" -- one per agent/playbook node.
+Always []: this module has no graph.
+Annotated with _merge so parallel nodes don't conflict.
+Args:
+Assignment, not +=: a dispatcher module already added its own LLM time to
+Attributes:
+Baked at generation time. An agent module names the tools it may use
+Bound MCP actions (write-policed) and unbound stubs.
+Build LangChain StructuredTool wrappers from TOOL_CATALOG.
+Build a LangChain chat model for the given provider/model.
+Build the HumanMessage content for an agent node.
+Build the graph (agent nodes call their modules), run it, return the final output.
+CONFIGURATION
+Call a tool on an MCP server via JSON-RPC 2.0.
+Choose one target for `request`, or say why not. Returns a dict with
+Configured = a key is present. An unset dispatcher routes with Jev only then, else with the model.
+Counted whether or not Jev decides, so the run summary is not under-reported.
+DATA FLOW
+DISPATCHER RUNTIME
+DISPATCHER node = one forced route_to call whose choice comes back as "route"
+Deliver a human answer to a waiting gate. False when no gate is waiting.
+Detection is conservative: many escape sequences AND no real newlines.
+Dispatcher agent (twin of DispatchRouting in the PHP runner): the model
+Dispatcher: Jev or one forced route_to call (_run_dispatcher); the chosen child id travels back as "route".
+Dispatcher: the module chose a child (or none) -> conditional edge input.
+EVENT SINK + GATE RENDEZVOUS
+EVENT SINK -- how api.py observes a run (inert for CLI runs)
+EXECUTION ORDER (topological layers; nodes on one line run in PARALLEL)
+Each module exposes NODE (the frozen editor settings) and
+Ensure the URL points to the MCP endpoint.
+Every agent/playbook node goes through here: frame nothing (workflow.py
+Exceptions propagate to the executor, which fails the task.
+Fail-closed write classifier: a tool is a WRITE unless its name is recognizably read-only.
+For each tool:
+Formatted string with labeled inputs from each predecessor.
+GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
+GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.
+GRAPH EDGES (from -> to)
+GRAPH NODES (id (type): name -- settings; topological order)
+GRAPH STATE + CONTEXT BUILDING (used by workflow.py)
+GRAPH STRUCTURE -- frozen from the workflow editor
+Get direct predecessor node IDs (nodes with edges INTO this node).
+Get direct successor node IDs (nodes this node has edges TO).
+HTTP 4xx/5xx raise here
+Honour the Output node's storage setting (same rule as the single-file script).
+Human gate. A host watching this run (api.py) gets the question over the
+Human gates.
+Human resources (4) -> Playbook HR (5)
+INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+IT claims (3) -> Output (6)
+Imported by workflow.py and every module under agents/. Emitted byte-
+Inert until a host installs a sink (see api.py). With no sink the
+Initialize an MCP session with the server.
+Inject current date/time into a system prompt.
+Install (or clear with None) the run-event sink. Returns the previous one.
+Is a run host watching this run?
+Jev only: no model fallback, so the run stops here and says why
+K2 reasoning mode (default off, matching the PHP KimiProvider); the
+Kimi is OpenAI-compatible. The node form Thinking attribute governs
+LLM FACTORY
+LangGraph workflow: Dispatcher demo
+Loaded here rather than in workflow.py so a module imported on its own
+Local run_skill_script — execute a folder-backed skill's Python script as a
+MAIN EXECUTION -- the LangGraph state graph over the agent modules
+MCP CLIENT -- JSON-RPC 2.0 over HTTP
+MCP SERVER REGISTRY + TOOL CATALOG (every tool this workflow uses)
+MCP server scripts like mcp-server.php). Don't append anything.
+MCP servers may respond in two formats:
+MCP_SERVERS, TOOL_CATALOG this workflow's MCP servers + tool schemas, baked at generation time
+MUST call route_to with one of the menu names; that child alone runs. The
+Markdown transcript, twin of PlaybookNodeRunner::renderTranscript() (PHP).
+Mirrors the platform chat's _coerceInputFiles over-escape recovery.
+Models (Claude especially) sometimes emit large documents inside tool
+NODE DEFINITION -- frozen from the workflow editor
+NODE LOGIC
+NODE RUNNER
+NOTE: run.emit() already tees a gate_request into the stream, but
+Native verbs: always available, no binding needed.
+Nobody attached, or nobody answered in time: same result as a
+Only the YAML frontmatter (between leading '---' fences) is authoritative;
+PLAYBOOK RUNTIME
+PLAYBOOK RUNTIME (this workflow has playbook nodes)
+PLAYBOOK_SYSTEM_PROMPT, _PlaybookRun,
+PROVENANCE
+PROVIDES (top-level names this file defines, in source order)
+Parse a JSON-RPC response from an MCP server.
+Parses JSON when possible and surfaces the most useful fields
+Per-node run record: event timeline (twin of the run overlay), status, write ledger.
+Playbook HR (5) -> Output (6)
+Playbook: the playbook runtime; gates go through whatever _playbook_gate the
+Pop a resolved gate's answer (None when unanswered), clearing the slot.
+Prepends a dated header so the LLM knows "today" relative to its
+Progress callback the module calls; in one process this is just a print.
+Provider/model -> LangChain chat model. Every node calls this with its
+Publish one protocol event. A no-op when no sink is installed.
+RUN_SKILL_SCRIPT_TOOL,
+Raises FileNotFoundError if the path doesn't exist, ValueError for an
+Read a file and return its contents as Markdown.
+Read back requested outputs AND stash them so the skill step can use the produced
+Reads API keys from the environment (loaded from .env at startup).
+Recognised providers (case-insensitive):
+Reducer for node_outputs -- merges dicts from parallel branches.
+Register a pending gate and return the Event the waiter blocks on.
+Remap the interpreter's virtual /outputs & /scratch in argv to real dirs.
+Repair JSON-style over-escaping in model-carried document content.
+Returns that endpoint URL, or None when no candidate accepted the handshake.
+Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
+Returns:
+Returns: dict mapping tool_name -> StructuredTool
+Routing mode (settings.routing_mode, twin of GraphWorkflowRunner) --
+Run ONE skill as a mandatory step on `prior` (the previous stage's output). A
+Run node `nid` by calling its module. Returns {"text", "route", "notes", "status"}.
+Run the node on `request_text` (the orchestrator's framed input).
+Running this file puts its own folder on sys.path, so `common` and the
+SHARED RUNTIME (no graph, no nodes -- this is a library, not a workflow file)
+SUMMARY counts each node exactly once.
+Same shape the model path returns, minus notes: Jev writes no prose.
+Send initialized notification
+Sequence: init session -> send tools/call -> parse response -> extract text.
+Shared runtime for workflow "Dispatcher demo"
+Shared state for the workflow graph.
+Short, informative summary of a tool result for logs.
+Skill filesystem (mirrors the browser interpreter + ADK): real bucketed /outputs and
+Skills declare their PyPI deps in SKILL.md frontmatter
+Stage input_files (e.g. HTML the skill will render) at their remapped paths.
+Start (1) -> techBuddy (2)
+SystemMessage (the agent's instructions/persona).
+TO RUN
+TOOL BUILDER + SKILL RUNTIME
+Target: LangGraph modular agent module (Python) -- one node; workflow.py drives the graph
+Target: LangGraph modular shared runtime (Python) -- imported by workflow.py and every agent module
+Target: LangGraph modular workflow (Python) -- StateGraph over one importable module per node
+Text-native formats (HTML/MD/TXT/JSON/YAML/CSV/XML/source) are returned
+The (provider, model) pair was resolved by the generator: the
+The LLM re-decides each round from the running transcript of tool calls
+The MCP protocol requires a handshake before tool calls:
+The MCP response contains a 'content' array; we extract all text items
+The agent sees this as a single HumanMessage alongside its
+The answer a policy gives when no human is available. One definition so
+The chat model for this node, built from NODE (provider/model/sampling/thinking).
+The live SKILL.md body (progressive disclosure); frontmatter stripped.
+The node form Thinking attribute governs (platform parity):
+The run's own timeline AND, when a host is watching, the live stream.
+The shared runtime lives in common.py, one directory up. Python puts the
+The system trust store PLUS certifi's bundle when present (httpx, which
+The whitelisted tool surface for one playbook run (twin of PlaybookActionSpace).
+This file is a frozen snapshot of the workflow. Edits made here are
+This file lives in <root>/; the runner .env is two levels up (python/.env).
+This function tries plain JSON first, then falls back to SSE parsing.
+This workflow is one Python package, run in ONE process. workflow.py owns the
+Tries the /mcp-normalised URL first, then the URL exactly as registered
+Two shapes, one question. LangGraph's package defines the sink in the same
+TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
+Unreachable by contract; treated as an error rather than trusted.
+WFState, build_context() the graph state type and per-node input builder (workflow.py only)
+When two nodes run in parallel (e.g., diamond graph), both write to
+Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
+Workflow: Dispatcher demo (id 44)
+_convert_doc_to_markdown() Start-node attachment -> Markdown (office/PDF formats via lazy imports, text formats verbatim)
+_make_llm() provider/model -> LangChain chat model
+_make_skill_tool() the skill runner tool + the per-skill tool builder
+_run_dispatcher() below looks up its input via parents(n) when it runs
+_run_dispatcher() routes with Jev or with one forced route_to call, used by a DISPATCHER node's agent module
+`agents` package below resolve wherever the workflow folder is copied.
+`floor` is the dispatcher's minimum
+`items`. Gemini rejects array params without `items` (400
+`session` is accepted so this signature matches the swarm target's run()
+a 'dependencies:' line in the prose body is not a real declaration.
+actually render there; round and final carry the structure.
+actually run their skill instead of fabricating output.
+agent's explicit model overrides the provider's default from
+already did), call the module, time it, report.
+always exactly one, never both:
+and 404 or error on /mcp). The endpoint that answers is remembered.
+and ZERO real newlines. Written verbatim, the HTML/CSS is broken and the
+and calls that node's module. agents/<name>.py owns one node and exposes
+and drives a conditional edge, so only the chosen child runs; a PLAYBOOK node =
+and join them. If no text is found, falls back to raw JSON.
+anything at all -> an 'error' outcome, never a raise
+arguments as an escaped single-line string: literal \n / \" sequences
+asyncio.TimeoutError included -> an 'error' outcome (did not route)
+at import time, before workflow.py or any agent module reads a provider
+auto (default) approves approvals and acknowledges handoffs, deny denies,
+because set_event_sink() rebinds the global after import.
+build_playbook_tools(),
+build_tools_from_catalog() TOOL_CATALOG -> {name: StructuredTool}, calling out over MCP JSON-RPC
+callable(dict) -> None, or None
+child receives the dispatcher's original input plus the notes.
+children : IT claims (3) | Human resources (4)
+children : Output (6)
+children : Playbook HR (5)
+claude → langchain_anthropic.ChatAnthropic
+common.py holds the runtime they share; Start and Output run here, with no LLM.
+confidence (settings.jev_min_confidence). Never raises.
+confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
+conversation to resume -- each call is already a fresh, independent run.
+copies what it needs into its own process instead.)
+deepseek → ChatOpenAI on https://api.deepseek.com
+default minimum confidence (a dispatcher's jev_min_confidence overrides it)
+dict in the same process. Overwrite it with the node's total so the RUN
+dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to
+dispatcher : routes to one of: IT claims | Human resources
+display name -> seconds of LLM+skill work; workflow.py prints the RUN SUMMARY from it
+document as the node output.
+else: a plain agent node has no other sink, so without the round/message
+event stream and answers it with resolve_gate(). On an interactive terminal
+every module of the package.
+exact file, so a change here reaches every node of either shape at the
+final_output: The final text result, set by the output node.
+for the interpreter's plan check -- else "llm".
+from the database, so changing a model in the editor propagates
+function. No hardcoded model fallbacks here — every value comes
+gates, one tool per bound #Action (MCP, write-policed) and a stub per
+gemini → langchain_google_genai.ChatGoogleGenerativeAI
+generated code prints its trace lines and nothing else changes.
+glm → ChatOpenAI on https://api.z.ai/api/paas/v4
+graph: it frames each node's input (original prompt + labelled parent outputs)
+grok → ChatOpenAI on https://api.x.ai/v1
+identical for the DAG (modular) and swarm packages -- both import this
+imported by workflow.py as agents.human_resources -- run the workflow, not this file
+imported by workflow.py as agents.it_claims -- run the workflow, not this file
+imported by workflow.py as agents.playbook_hr -- run the workflow, not this file
+imported by workflow.py as agents.techbuddy -- run the workflow, not this file
+imported, not run directly -- see workflow.py
+in NODE["tool_names"]; the catalog itself is shared.
+inject_datetime() prepends a dated header, resolves [date]/[weekday]/[year]/[time] in a system prompt
+input-required task update in an A2A agent server).
+input_files as a bare dict — Gemini accepted that, and dict[str,str]
+inside the single-file script. Here the framing already happened in
+is dropped (set Thinking=Off on the node to use a temperature).
+is missing or empty.
+is run, and an enterprise TLS-inspecting proxy's root CA lives ONLY in the
+its own real parents() over EDGES for the graph itself.
+key is checked here: building a chat model succeeds either way, and the
+key, so importing this module alone (a test, a REPL) still finds them. No
+kimi → ChatOpenAI on https://api.moonshot.ai/v1
+knowledge cutoff. Also replaces [date], [weekday], [year], [time]
+layer 0: Start
+layer 1: techBuddy
+layer 2: IT claims || Human resources (dispatcher: only the chosen one runs)
+layer 3: Playbook HR
+layer 4: Output
+library unless the corresponding format is actually attached.
+list[str] (not bare list) so the generated JSON schema carries
+load_dotenv() resolves python/.env -- two directories above this file --
+local (non-MCP) tool, same as the single-file script
+micropip; here we pip-install missing ones into the runner venv on first
+mode emits its own and skips the bare one.
+module as the interpreter; the other targets keep it in common.py and bind
+next Generate. (The A2A package does not import it: an A2A agent file
+node = LangChain ReAct loop over its MCP tools plus mandatory skill steps; a
+node function with the LangGraph state replaced by plain arguments.
+node id -> the module function that runs it (imported above).
+node_outputs. LangGraph needs a reducer to combine them. This does a
+node_outputs: Each node stores its output as {source, text}.
+non-interactive run, recorded so the transcript says who decided.
+off -> disabled, form temperature kept; on/default -> V4 thinking
+open_gate(), resolve_gate(),
+openai → langchain_openai.ChatOpenAI
+other mode -- do not emit one here too.
+other outcome means the dispatcher does not route (no model fallback).
+outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
+outputs: Current node_outputs state dict
+overwritten by the next Generate: change the workflow in the editor and
+own baked settings, so one workflow can mix providers.
+page renders unstyled (a live report shipped with 1131 literal \n).
+pair below a workflow of ordinary agent nodes streams an empty overlay
+parent_ids: Node IDs of direct predecessors (from EDGES)
+parents : Human resources (4)
+parents : Start (1)
+parents : techBuddy (2)
+pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv
+placeholders in the prompt body with live values.
+playbook : "Time Off" -- 1 bound / 0 unbound action(s), writes ON
+playbook runtimes -- imported once instead of copied per node.
+produced file (not the model's chatter) can become the node output.
+prompt forces the console. PLAYBOOK_GATE_MODE always wins.
+provider/model : claude / claude-sonnet-4-5 temp 0.7 max_tokens 4096 thinking default
+provider/model : deepseek / deepseek-v4-flash temp 0.7 max_tokens 4096 thinking default
+pure-Python parser. Imports are lazy so the script doesn't pull in a
+python workflow.py "your prompt here"
+python.org macOS build has no system CA store until "Install Certificates"
+question with one of the options supplied -- never a value outside them.
+re-generate instead.
+re-posting its answer here would double it in the overlay.
+read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform.
+registered server URL -> endpoint that accepted the handshake
+render_playbook_transcript() the playbook interpreter (this workflow has playbook nodes)
+route: routes END, so none of the dispatcher's branches runs.
+run overlay shows, so downstream nodes get the story either way.
+run_node() executes this node once for one request text and returns
+run_node(request_text, trace) -> {"text", "route", "notes", "status"}: an AGENT
+run_node(request_text, trace), which workflow.py calls from its graph.
+run_skill_script scoped to ONE skill dir: the model picks only the script + argv
+set_event_sink(), emit_event() how a run's events reach api.py; emit_event() is a no-op with no sink installed
+shallow merge where the right (newer) value wins on key conflicts.
+single-file/A2A targets without the sink block
+skills : (none)
+skills : html
+so the log shows *what* came back, not just the raw first 120 chars.
+stays enabled and the API rejects sampling params, so temperature
+subprocess. Skills are real CPython (the browser runs them in Pyodide; here
+surrounding file installed (console prompts in a modular package, an
+synthetic option that makes "I cannot tell" sayable; never a real branch
+system store -- replacing it with certifi would break every call there.
+system store, SSL_CERT_FILE, OS trust (e.g. a proxy's root CA)
+system_llm_settings, and that result is what reaches this
+take_gate_answer() the human-gate rendezvous a playbook node's tools wait on
+techBuddy (2) -> Human resources (4) (dispatcher menu: one of)
+techBuddy (2) -> IT claims (3) (dispatcher menu: one of)
+that module as _pb_host. Checked through the module (never a by-value copy)
+the auto, deny and timed-out-server paths cannot drift apart.
+the dir; the step output becomes the skill's produced deliverable file (via
+the lookup must find nothing and fall back to it. workflow.py defines
+the playbook runtime, whose transcript is the text. common.py holds everything
+the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
+the shared NODE_DURATIONS (common._run_dispatcher), and this is the same
+they share -- LLM factory, MCP client, tool builder, skills, dispatcher and
+thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).
+this script already needs, depends on it). The union matters both ways: a
+tool_call_id -> {"event": threading.Event, "answer": dict | None}
+tools : (none)
+tools : get_news, run_skill_script
+trace(line) is an async callback that reports progress to the A2A client.
+unbound #Action. The node output is the same Markdown transcript the app's
+underlying provider SDK raises at the first real request if a required key
+unsupported extension, ImportError if the format's library is missing.
+until the terminal frame. Only message/tool_call/tool_result/gate_request
+urlopen's timeout bounds each socket op, not DNS or the total; this does.
+use. Cached + lock-guarded because parallel branches call skills at once.
+user_prompt: The original user input, set once at the start.
+user_prompt: The original user request
+verbatim. Binary office formats and PDFs are routed to their matching
+via the next Generate Python.
+we shell out). Registered into the catalog at startup so skill-bound agents
+without the tool_call_id the answer must come back on, so the server
+workflow folder on sys.path when workflow.py starts, so this resolves for
+workflow.py, which passes the finished text as state["user_prompt"], so
+would add additionalProperties which Gemini may reject.
+wrap() emits the single tool_result for this call, same as every
+writes it only when the user's plan allows Jev, the stand-in
+{"text", "route", "notes", "status"}. It is the single-file script's

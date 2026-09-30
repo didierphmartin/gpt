@@ -1,0 +1,496 @@
+"" -> unset (saved before the setting existed): resolved here to
+"jev" -> Jev only; the model is never called. Any outcome but 'routed'
+"jev" when TYPESAFE_API_KEY is set -- the editor's runner sync
+"llm" -> the model only; Jev is never asked.
+# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.
+# ANTHROPIC_API_KEY (claude)
+# API keys read from ../../../.env for the providers this workflow uses:
+# API keys read from ../../.env for the providers this workflow uses:
+# Card: http://127.0.0.1:8701/.well-known/agent-card.json -- JSON-RPC at /
+# Card: http://127.0.0.1:8702/.well-known/agent-card.json -- JSON-RPC at /
+# Card: http://127.0.0.1:8703/.well-known/agent-card.json -- JSON-RPC at /
+# Card: http://127.0.0.1:8704/.well-known/agent-card.json -- JSON-RPC at /
+# DEEPSEEK_API_KEY (deepseek)
+# Human gates (playbook nodes): on a terminal the script asks on the console;
+# Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev
+# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (techBuddy):
+# Output storage (Output node setting): OFF (the result is printed, not saved)
+# Requires Python 3.10+ (the generated code uses match statements)
+# cannot decide stops the run there (no model fallback).
+# otherwise PLAYBOOK_GATE_MODE=auto (default: approve/acknowledge) | deny | prompt.
+'result' artifact as the node output. A dispatcher's chosen child comes back
+'result' artifact.
+(+ data {route, notes, status}; a dispatcher's route drives the conditional edge).
+(and input_files/read_outputs); the dir is fixed to this skill.
+(article count + first PMIDs, error message, query text, etc.)
+(e.g. `dependencies: [beautifulsoup4]`). The browser installs them via
+(no pre-computed action queue). Tools it sees: the native verbs, the human
+(orchestrator.py in the parent folder) builds the node input, sends it as a
+(servers mounted at their bare URL, e.g. PHP mock servers, answer there
+(shared with the modular and swarm targets) but is ignored here: an A2A
+(the reason names a missing key, too). Same message as the interpreter.
+(unclear, low_confidence, no key, error, timeout) = did not
+- If it already ends with /mcp, leave it alone.
+- If it ends with a .php file, it IS the endpoint already (XAMPP-style
+- Otherwise, append /mcp per the MCP convention.
+- Plain JSON: standard JSON-RPC response body
+- SSE (Server-Sent Events): lines prefixed with 'data:' containing JSON
+-- raise immediately naming the agent, its exit code and the port,
+---- node 2: techBuddy (agent-template) ------------------------------------
+---- node 3: IT claims (agent-template) ------------------------------------
+---- node 4: Human resources (agent-template) ------------------------------
+---- node 5: Playbook HR (playbook) ----------------------------------------
+/scratch dirs, virtual-path remap, env exposure, and a deliverable stash so a skill's
+1 (start): Start -- receives the user prompt -- default: "I want to take some vacations"
+1. AgentSupervisor starts every local agent (python <file> --port N) and waits for its card.
+1. Client sends 'initialize' with protocol version and capabilities
+1. Parse the JSON Schema into a Pydantic model (for LLM argument validation)
+1. proc.poll() is checked BEFORE trusting any 200 from the card
+2 (agent-template): techBuddy -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s), DISPATCHER -> one of: IT claims | Human resources
+2 (agent-template): techBuddy -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s), DISPATCHER -> one of: IT claims | Human resources <== this agent
+2 techBuddy agents/2_techbuddy.py http://127.0.0.1:8701/ (env A2A_AGENT_2_URL)
+2. Create a callable that sends the MCP JSON-RPC request
+2. Each agent node = one A2A task: the framed input goes in as text, status updates are
+2. Server responds with its capabilities
+2. When a card DOES answer 200, its "version" field is compared to
+3 (agent-template): IT claims -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 2 tool(s), 1 skill(s): html
+3 (agent-template): IT claims -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 2 tool(s), 1 skill(s): html <== this agent
+3 IT claims agents/3_it-claims.py http://127.0.0.1:8702/ (env A2A_AGENT_3_URL)
+3. Client sends 'notifications/initialized' to confirm
+3. Start and Output run locally; the Output merges parent outputs verbatim.
+3. Wrap both into a LangChain StructuredTool
+4 (agent-template): Human resources -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s)
+4 (agent-template): Human resources -- claude/claude-sonnet-4-5, temp 0.7, max_tokens 4096, 0 tool(s) <== this agent
+4 Human resources agents/4_human-resources.py http://127.0.0.1:8703/ (env A2A_AGENT_4_URL)
+4. Agents are stopped at the end unless --keep-serving; --no-spawn expects them reachable.
+5 (playbook): Playbook HR -- deepseek/deepseek-v4-flash, temp 0.7, max_tokens 4096, playbook "Time Off", 1 bound / 0 unbound action(s), writes ON
+5 (playbook): Playbook HR -- deepseek/deepseek-v4-flash, temp 0.7, max_tokens 4096, playbook "Time Off", 1 bound / 0 unbound action(s), writes ON <== this agent
+5 Playbook HR agents/5_playbook-hr.py http://127.0.0.1:8704/ (env A2A_AGENT_5_URL)
+6 (output): Output -- merges its parents' outputs verbatim (no LLM) -- the workflow result
+A branch literally named "unclear" would collide with the escape hatch.
+A first request (no run recorded for this task, or a run with no pending
+A follow-up on an existing task, but no run is paused waiting for it:
+A host (api.py) has installed an event sink: mint a tool_call_id, tee the
+A2A RUN
+A2A SERVING
+A2A agent "Human resources" -- node 4 of workflow "Dispatcher demo"
+A2A agent "IT claims" -- node 3 of workflow "Dispatcher demo"
+A2A agent "Playbook HR" -- node 5 of workflow "Dispatcher demo"
+A2A agent "techBuddy" -- node 2 of workflow "Dispatcher demo"
+A2A executor: a new task starts a node run; a follow-up message answers its gate.
+A2A orchestrator for workflow "Dispatcher demo"
+ADDED to, never replacing, the system store
+AGENT ENDPOINTS (id, name, file, default URL; env override)
+AGENT SUPERVISOR
+AGENTS -- the endpoint table (one A2A server per agent/playbook node)
+API then constrains sampling: thinking OFF -> temperature MUST be 0.6,
+After A2A_GATE_TIMEOUT_S (default 900 s) with no answer the node run continues with
+Agent Card, the AgentExecutor (one task = one node run, paused at
+Always []: this file has no graph, only one node. Exists so the reused
+An agent's input-required status reaches the human here. Terminal:
+Annotated with _merge so parallel nodes don't conflict.
+Args:
+Attributes:
+Bound MCP actions (write-policed) and unbound stubs.
+Build LangChain StructuredTool wrappers from TOOL_CATALOG.
+Build a LangChain chat model for the given provider/model.
+Build the HumanMessage content for an agent node.
+Build the graph (agent nodes call their A2A servers), run it, return the final output.
+CLI entry: `python <this file> --host 127.0.0.1 --port 8701` (env A2A_HOST / A2A_PORT are the defaults).
+Call a tool on an MCP server via JSON-RPC 2.0.
+Cancel the run behind a task (the SDK marks the task canceled).
+Checked BEFORE the http GET below: a spawned child that already
+Choose one target for `request`, or say why not. Returns a dict with
+Configured = a key is present. An unset dispatcher routes with Jev only then, else with the model.
+Copy an agent's stdout to ours, line by line, prefixed with its name.
+Counted whether or not Jev decides, so the run summary is not under-reported.
+DATA FLOW
+Default card (port from A2A_PORT or the layout); main() rebuilds it for the real host/port.
+Deliver a human answer to a waiting gate. False when no gate is waiting.
+Detection is conservative: many escape sequences AND no real newlines.
+Dispatcher agent (twin of DispatchRouting in the PHP runner): the model
+Dispatcher: Jev or one forced route_to call (_run_dispatcher); the chosen child id travels back as "route".
+Dispatcher: the agent chose a child (or none) -> conditional edge input.
+EVENT SINK + GATE RENDEZVOUS
+EVENT SINK -- how api.py observes a run (inert for CLI runs)
+EXECUTION ORDER (topological layers; nodes on one line run in PARALLEL)
+Each node opens a round so a watching host can tell the legs apart. The
+Ensure the URL points to the MCP endpoint.
+Exceptions propagate to the executor, which fails the task.
+Fail-closed write classifier: a tool is a WRITE unless its name is recognizably read-only.
+For each tool:
+Formatted string with labeled inputs from each predecessor.
+GATE HANDLER
+GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
+GLM 5.2 defaults to heavy reasoning; disable thinking for direct answers.
+GRAPH EDGES (from -> to)
+GRAPH NODES (id (type): name -- settings; topological order)
+GRAPH STRUCTURE (same shape as the single-file script)
+Gate bridge for the playbook runtime (called from a tool, i.e. a worker thread):
+Gates: the task moves to input-required with data {gate, tool, args}; the orchestrator answers on
+Get direct predecessor node IDs (nodes with edges INTO this node).
+Get direct successor node IDs (nodes this node has edges TO).
+HTTP 4xx/5xx raise here
+Handle one A2A request: either start a node run or resume one paused at a gate.
+Honour the Output node's storage setting (same rule as the single-file script).
+Human gate. A host watching this run (api.py) gets the question over the
+Human gates.
+Human resources (4) -> Playbook HR (5)
+INVALID_ARGUMENT); list[str] is valid for every provider. Leave
+IT claims (3) -> Output (6)
+Inert until a host installs a sink (see api.py). With no sink the
+Initialize an MCP session with the server.
+Inject current date/time into a system prompt.
+Install (or clear with None) the run-event sink. Returns the previous one.
+Is a run host watching this run?
+Jev only: no model fallback, so the run stops here and says why
+K2 reasoning mode (default off, matching the PHP KimiProvider); the
+Kimi is OpenAI-compatible. The node form Thinking attribute governs
+LLM FACTORY
+Local run_skill_script — execute a folder-backed skill's Python script as a
+MAIN EXECUTION -- the LangGraph state graph over A2A tasks
+MCP CLIENT -- JSON-RPC 2.0 over HTTP (shared block)
+MCP SERVER REGISTRY + TOOL CATALOG (this node only)
+MCP server scripts like mcp-server.php). Don't append anything.
+MCP servers may respond in two formats:
+MUST call route_to with one of the menu names; that child alone runs. The
+Markdown transcript, twin of PlaybookNodeRunner::renderTranscript() (PHP).
+Mirrors the platform chat's _coerceInputFiles over-escape recovery.
+Models (Claude especially) sometimes emit large documents inside tool
+NODE DEFINITION -- frozen from the workflow editor
+NODE LOGIC
+NOTE: run.emit() already tees a gate_request into the stream, but
+Native verbs: always available, no binding needed.
+Nobody attached, or nobody answered in time: fall through to the same
+Nobody attached, or nobody answered in time: same result as a
+On a timeout (A2A_GATE_TIMEOUT_S with no answer) the node run itself
+One A2A task per agent node: send, stream, answer gates, collect the
+One node run that may pause at gates.
+One task at a time: runs are serialised with a lock; a second task waits for the first.
+Only the YAML frontmatter (between leading '---' fences) is authoritative;
+Owns the agent subprocesses for one run.
+PLAYBOOK RUNTIME
+PROVENANCE
+Parse a JSON-RPC response from an MCP server.
+Parses JSON when possible and surfaces the most useful fields
+Per-node run record: event timeline (twin of the run overlay), status, write ledger.
+Playbook HR (5) -> Output (6)
+Playbook: the playbook runtime; gates go through whatever _playbook_gate the
+Pop a resolved gate's answer (None when unanswered), clearing the slot.
+Pop unconditionally, and decide on what the pop returned: an answer
+Prepends a dated header so the LLM knows "today" relative to its
+Provider/model -> LangChain chat model (same rules as the single-file script).
+Publish one protocol event. A no-op when no sink is installed.
+REMOTE NODE RUNNER
+Raise a gate: publish input-required, wait for the answer, resume. Returns the single-file gate result shape.
+Raises FileNotFoundError if the path doesn't exist, ValueError for an
+Read a file and return its contents as Markdown.
+Read back requested outputs AND stash them so the skill step can use the produced
+Reads API keys from the environment (loaded from .env at startup).
+Recognised providers (case-insensitive):
+Reducer for node_outputs -- merges dicts from parallel branches.
+Register a pending gate and return the Event the waiter blocks on.
+Remap the interpreter's virtual /outputs & /scratch in argv to real dirs.
+Repair JSON-style over-escaping in model-carried document content.
+Resume leg: point the run at this request's queue and hand over the answer.
+Return the answer data part for one gate: {decision, comment, fields?}.
+Return when the run pauses at a gate or finishes; the SDK closes this request's queue after that.
+Returns as soon as the run pauses at the next gate or finishes -- the SDK
+Returns that endpoint URL, or None when no candidate accepted the handshake.
+Returns {"text": str, "route": str|"" , "notes": str, "status": str}.
+Returns:
+Returns: dict mapping tool_name -> StructuredTool
+Routing mode (settings.routing_mode, twin of GraphWorkflowRunner) --
+Run ONE skill as a mandatory step on `prior` (the previous stage's output). A
+Run node `nid` on its A2A server. Returns {"text", "route", "notes", "status"}.
+Run the node on `request_text` (the orchestrator's framed input).
+Run the node under the lock, publish progress, deliver the result artifact.
+SDK 1.x: the executor enqueues the initial Task itself (submitted, history = the user message).
+SDK closes a request's queue as soon as execute() returns.
+Same shape the model path returns, minus notes: Jev writes no prose.
+Send initialized notification
+Sequence: init session -> send tools/call -> parse response -> extract text.
+Shared state for the workflow graph.
+Short, informative summary of a tool result for logs.
+Skill filesystem (mirrors the browser interpreter + ADK): real bucketed /outputs and
+Skill id: node-2
+Skill id: node-3
+Skill id: node-4
+Skill id: node-5
+Skills declare their PyPI deps in SKILL.md frontmatter
+Spawn every local agent whose URL is ours to serve, then wait for all cards (60 s).
+Stage input_files (e.g. HTML the skill will render) at their remapped paths.
+Start (1) -> techBuddy (2)
+Starts one python process per local agent, relays its stdout with a
+SystemMessage (the agent's instructions/persona).
+TO RUN
+TOOL BUILDER + SKILL RUNTIME (shared blocks)
+Target: LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph
+Target: LangGraph A2A orchestrator (Python) -- StateGraph over A2A tasks, one agent process per node
+Task in: one text part = the node input the orchestrator built (original prompt + parent outputs)
+Task out: artifact 'result' = text part (node output) + data part {route, notes, status}
+Terminate the agents we started (5 s grace, then kill).
+Text-native formats (HTML/MD/TXT/JSON/YAML/CSV/XML/source) are returned
+The (provider, model) pair was resolved by the generator: the
+The Agent Card served at /.well-known/agent-card.json: what this node is and how to talk to it.
+The LLM re-decides each round from the running transcript of tool calls
+The MCP protocol requires a handshake before tool calls:
+The MCP response contains a 'content' array; we extract all text items
+The agent sees this as a single HumanMessage alongside its
+The agent's base URL: env A2A_AGENT_<id>_URL wins, else the baked port shifted
+The answer a policy gives when no human is available. One definition so
+The card advertises ONE skill (this node's role); tools, prompts and credentials stay private.
+The chat model for this node, built from NODE (provider/model/sampling/thinking).
+The live SKILL.md body (progressive disclosure); frontmatter stripped.
+The node form Thinking attribute governs (platform parity):
+The orchestrator owns the graph and the human; the agents own the models,
+The run continues below, but its eventual artifact has nowhere to
+The run's own timeline AND, when a host is watching, the live stream.
+The system trust store PLUS certifi's bundle when present (httpx, which
+The whitelisted tool surface for one playbook run (twin of PlaybookActionSpace).
+This file is SELF-CONTAINED on purpose: the LLM factory, MCP client, tool
+This file is a frozen snapshot of the workflow. Edits made here are
+This file lives in <root>/; the runner .env is two levels up (python/.env).
+This file lives in <root>/agents/; the runner .env is three levels up (python/.env).
+This file serves ONE node of the workflow as an A2A agent. The orchestrator
+This function tries plain JSON first, then falls back to SSE parsing.
+Tries the /mcp-normalised URL first, then the URL exactly as registered
+True when `url` is a loopback address the supervisor can spawn and own.
+Two checks guard against silently adopting an orphaned/stale process on
+Two shapes, one question. LangGraph's package defines the sink in the same
+TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
+Unreachable by contract; treated as an error rather than trusted.
+WORKFLOW_VERSION (the same literal every agent file bakes via
+When two nodes run in parallel (e.g., diamond graph), both write to
+Which oneof field is set on this streaming response, or "" if none is.
+Wire edges; a dispatcher's menu children hang off a conditional edge (only the chosen one runs).
+Workflow: Dispatcher demo (id 44)
+[<agent>] prefix, waits for the Agent Card, stops them at the end.
+_handle_gate is SYNCHRONOUS and its server branch blocks on a
+_run_dispatcher() (which looks up parent outputs via parents(n)) finds none
+`floor` is the dispatcher's minimum
+`items`. Gemini rejects array params without `items` (400
+`session` is accepted so this signature matches api.py's run contract
+`updater` is swapped on every A2A leg (first request, then each follow-up)
+a 'dependencies:' line in the prose body is not a real declaration.
+a truthful 404 instead of answering 200 into a run that moved on.
+a2aVersion() -- see emitA2AAgentFile). A mismatch means the port
+actually run their skill instead of fabricating output.
+agent i listens on A2A_BASE_PORT + i
+agent's explicit model overrides the provider's default from
+agents run in their own processes with no sink of their own, so relaying
+alone.
+always exactly one, never both:
+and 404 or error on /mcp). The endpoint that answers is remembered.
+and ZERO real newlines. Written verbatim, the HTML/CSS is broken and the
+and falls back to state["user_prompt"] -- the orchestrator's framed input --
+and join them. If no text is found, falls back to raw JSON.
+any other gate result -- but the run's FINAL artifact can no longer be
+anything at all -> an 'error' outcome, never a raise
+approvals and acknowledges handoffs, forms/await are 'unavailable';
+arguments as an escaped single-line string: literal \n / \" sequences
+artifact. Inside this process the node runs exactly as in the single-file
+ask on the console. Otherwise PLAYBOOK_GATE_MODE: auto (default) approves
+asyncio.TimeoutError included -> an 'error' outcome (did not route)
+authoritative; A2A_BASE_PORT - 8701 is added so overriding the env var still moves
+auto (default) approves approvals and acknowledges handoffs, deny denies,
+because set_event_sink() rebinds the global after import.
+builder, skill and playbook blocks below are the same code the single-file
+by A2A_BASE_PORT. AGENTS[nid]["port"] (8701 + index, baked at generation time) is
+callable(dict) -> None, or None
+child receives the dispatcher's original input plus the notes.
+children : IT claims (3) | Human resources (4)
+children : Output (6)
+children : Playbook HR (5)
+choice travels back as the artifact's "route"; a PLAYBOOK node = the playbook
+claude → langchain_anthropic.ChatAnthropic
+closes this request's event queue right after this method returns, so a
+confidence (settings.jev_min_confidence). Never raises.
+confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
+continues -- it gets the guidance below back from this call, same as
+conversation to resume between calls.
+deepseek → ChatOpenAI on https://api.deepseek.com
+default minimum confidence (a dispatcher's jev_min_confidence overrides it)
+delivered, and POST /runs/<id>/tool-result could never be
+delivered: no A2A request is in flight to carry it (the client that
+deny denies; prompt forces the console. Every gate and answer is also
+dir-backed skill = an LLM turn instructed by SKILL.md with run_skill_script scoped to
+directly would freeze the loop: the gate_request frame is
+dispatcher : routes to one of: IT claims | Human resources
+display name -> seconds (kept for the shared dispatcher block)
+display name -> seconds of A2A round trip (RUN SUMMARY)
+document as the node output.
+endpoint. If we spawned this agent and it has already exited, the
+entry point. Verified against a2a-sdk 1.1.0.
+event stream and answers it with resolve_gate(). On an interactive terminal
+exited means the port was busy (or the agent crashed) -- a 200
+final_output: The final text result, set by the output node.
+for the interpreter's plan check -- else "llm".
+forwards to the active run's async gate and blocks the thread until the answer arrives.
+from that port, if one ever came, would be someone else's server.
+from the database, so changing a model in the editor propagates
+function. No hardcoded model fallbacks here — every value comes
+gate answer) enqueues the initial Task when context.current_task is None,
+gate onto the event stream, and block this A2A task's coroutine until
+gates), the gate bridge used by the playbook runtime, and the uvicorn
+gates, one tool per bound #Action (MCP, write-policed) and a stub per
+gates.
+gemini → langchain_google_genai.ChatGoogleGenerativeAI
+generated code prints its trace lines and nothing else changes.
+glm → ChatOpenAI on https://api.z.ai/api/paas/v4
+go: the task is still parked in input-required and there is no
+grok → ChatOpenAI on https://api.x.ai/v1
+how long a gate waits for the orchestrator's answer
+human's answer, and popping also clears the slot so a later POST gets
+in the artifact's data part and drives a LangGraph conditional edge, so only
+input-required task update in an A2A agent server).
+input-required. Re-sending on the same task id to pick the result back
+input_files as a bare dict — Gemini accepted that, and dict[str,str]
+instead of a 200 we did not send being mistaken for readiness.
+instead of raising on a missing function.
+is already serving a different generation of this workflow (or a
+is dropped (set Thinking=Off on the node to use a temperature).
+is in flight to carry it, so the task stays stuck in input-required. Re-sending on the
+is run, and an enterprise TLS-inspecting proxy's root CA lives ONLY in the
+kimi → ChatOpenAI on https://api.moonshot.ai/v1
+knowledge cutoff. Also replaces [date], [weekday], [year], [time]
+layer 0: Start
+layer 1: techBuddy
+layer 2: IT claims || Human resources (dispatcher: only the chosen one runs)
+layer 3: Playbook HR
+layer 4: Output
+leftover process from before a regenerate); raise instead of
+library unless the corresponding format is actually attached.
+list[str] (not bare list) so the generated JSON schema carries
+local (non-MCP) tool, same as the single-file script
+mandatory skill steps; a DISPATCHER node = one forced route_to call whose
+micropip; here we pip-install missing ones into the runner venv on first
+mode emits its own and skips the bare one.
+module as the interpreter; the other targets keep it in common.py and bind
+node function with the LangGraph state replaced by plain arguments.
+node_outputs. LangGraph needs a reducer to combine them. This does a
+node_outputs: Each node stores its output as {source, text}.
+non-interactive policy a run without a sink would get.
+non-interactive run, recorded so the transcript says who decided.
+off -> disabled, form temperature kept; on/default -> V4 thinking
+on a run that is waiting at a gate is a resume leg: its data part is handed
+openai → langchain_openai.ChatOpenAI
+or by PLAYBOOK_GATE_MODE when no terminal), the 'result' artifact is the node output
+other mode -- do not emit one here too.
+other outcome means the dispatcher does not route (no model fallback).
+outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
+outputs: Current node_outputs state dict
+overwritten by the next Generate: change the workflow in the editor and
+page renders unstyled (a live report shipped with 1131 literal \n).
+parent outputs), relays status updates, answers gates, and takes the
+parent_ids: Node IDs of direct predecessors (from EDGES)
+parents : Human resources (4)
+parents : Start (1)
+parents : techBuddy (2)
+pending gate answer
+pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn
+pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv
+placeholders in the prompt body with live values.
+playbook : "Time Off" -- 1 bound / 0 unbound action(s), writes ON
+port was unusable (most likely already bound by something else)
+printed as a JSON line so the app can render them.
+produced file (not the model's chatter) can become the node output.
+prompt forces the console. PLAYBOOK_GATE_MODE always wins.
+provider/model : claude / claude-sonnet-4-5 temp 0.7 max_tokens 4096 thinking default
+provider/model : deepseek / deepseek-v4-flash temp 0.7 max_tokens 4096 thinking default
+pure-Python parser. Imports are lazy so the script doesn't pull in a
+python agents/2_techbuddy.py --port 8701 # from the workflow folder; A2A_HOST/A2A_PORT also honoured
+python agents/3_it-claims.py --port 8702 # from the workflow folder; A2A_HOST/A2A_PORT also honoured
+python agents/4_human-resources.py --port 8703 # from the workflow folder; A2A_HOST/A2A_PORT also honoured
+python agents/5_playbook-hr.py --port 8704 # from the workflow folder; A2A_HOST/A2A_PORT also honoured
+python orchestrator.py "your prompt here" [--keep-serving] [--no-spawn]
+python.org macOS build has no system CA store until "Install Certificates"
+question with one of the options supplied -- never a value outside them.
+re-generate instead.
+re-raise a failure so the SDK marks the task failed
+read_outputs) when it wrote one, else the LLM's text. Inline skill = an LLM transform.
+registered server URL -> endpoint that accepted the handshake
+relayed as [<agent>] lines, an input-required status is a GATE (answered on the console,
+resolve_gate() delivers an answer or PLAYBOOK_GATE_TIMEOUT_S runs out.
+route: routes END, so none of the dispatcher's branches runs.
+run dispatches independent tasks to remote agents and has no
+run itself raised, run.task.result() re-raises here so the SDK marks the
+run overlay shows, so downstream nodes get the story either way.
+run_node() executes this node once for one request text and returns
+run_skill_script scoped to ONE skill dir: the model picks only the script + argv
+running the graph against stale agent code.
+runtime (native verbs, gates, write-policed MCP actions), whose transcript is
+same task id to pick the result back up is not supported yet.
+scheduled with loop.call_soon_threadsafe and would never be
+script carries, duplicated here so this agent can be copied to another host
+script: an AGENT node = LangChain ReAct loop over its MCP tools plus
+serialises node runs: the gate bridge relies on a single active run
+served -- every gate would time out to the policy answer.
+server: the orchestrator sends the framed input (original prompt + labelled
+set when the run enters input-required
+shallow merge where the right (newer) value wins on key conflicts.
+silently starting a second run under the same task id.
+single-file/A2A targets without the sink block
+skills : (none)
+skills : html
+so events go to the queue of the request currently being served -- the
+so the log shows *what* came back, not just the raw first 120 chars.
+stays enabled and the API rejects sampling params, so temperature
+still-running node keeps making progress in the background and reports on
+subprocess. Skills are real CPython (the browser runs them in Pyodide; here
+supported way to resume it after this point (see the docstring).
+surrounding file installed (console prompts in a modular package, an
+synthetic option that makes "I cannot tell" sayable; never a real branch
+system store -- replacing it with certifi would break every call there.
+system store, SSL_CERT_FILE, OS trust (e.g. a proxy's root CA)
+system_llm_settings, and that result is what reaches this
+task failed instead of leaving it stuck in "working".
+task id -> paused/active run
+task, streams the status updates, answers gates, and reads the result
+techBuddy (2) -> Human resources (4) (dispatcher menu: one of)
+techBuddy (2) -> IT claims (3) (dispatcher menu: one of)
+that child runs. Start and Output nodes are local (no LLM).
+that lands between the wait() timing out and this line is still the
+that module as _pb_host. Checked through the module (never a by-value copy)
+the NEXT request (another gate pause, or the terminal task update). If the
+the WHOLE range together instead of only affecting agents with no baked port.
+the auto, deny and timed-out-server paths cannot drift apart.
+the dir; the step output becomes the skill's produced deliverable file (via
+the playbook runtime calls _playbook_gate(run, kind, name, args)
+the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
+the run already completed, failed, or expired. Reject instead of
+the run currently executing (one at a time, see _RUN_LOCK)
+the same task with data {decision, comment, fields}; the run resumes in memory.
+the text part of the result.
+their status lines here is the ONLY way an A2A run streams anything but
+then starts the node run as a background asyncio task. A follow-up message
+thinking ON -> 1.0 (provider CONSTRAINT, not a preference override).
+this coroutine shares FastAPI's event loop, so calling it
+this script already needs, depends on it). The union matters both ways: a
+threading.Event for up to PLAYBOOK_GATE_TIMEOUT_S. Inside api.py
+timeout guidance, but its final artifact can no longer be delivered -- no A2A request
+to the paused run as the gate's answer instead of starting a new run.
+to_thread keeps the loop serving while the human decides (and
+tool_call_id -> {"event": threading.Event, "answer": dict | None}
+tools : (none)
+tools : get_news, run_skill_script
+tools and playbooks. Every agent node is one A2A task on that node's
+trace(line) is an async callback that reports progress to the A2A client.
+unblocks console 'prompt' mode for the same reason).
+unbound #Action. The node output is the same Markdown transcript the app's
+unsupported extension, ImportError if the format's library is missing.
+up is not supported yet; the caller must start a new task.
+urlopen's timeout bounds each socket op, not DNS or the total; this does.
+use. Cached + lock-guarded because parallel branches call skills at once.
+user_prompt: The original user input, set once at the start.
+user_prompt: The original user request
+verbatim. Binary office formats and PDFs are routed to their matching
+via the next Generate Python.
+we shell out). Registered into the catalog at startup so skill-bound agents
+what should be OUR port:
+without the tool_call_id the answer must come back on, so the server
+would add additionalProperties which Gemini may reject.
+would have answered already gave up), so the task stays stuck in
+wrap() emits the single tool_result for this call, same as every
+writes it only when the user's plan allows Jev, the stand-in
+{"text", "route", "notes", "status"}. It is the single-file script's
