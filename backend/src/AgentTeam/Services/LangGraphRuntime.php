@@ -179,12 +179,18 @@ class AgentNode(Node):
 class DispatcherNode(Node):
     """A dispatcher node: routes the request to exactly one child of its menu (Jev or one forced route_to call)."""
 
+    @cached_property
+    def dispatcher(self) -> Dispatcher:
+        """This node's Dispatcher, built once per process so its JevRouter -- and that router's
+        cached SSL context -- is reused by every run of the node instead of rebuilt per request."""
+        return Dispatcher(self.cfg)
+
     async def run(self, request: str, trace) -> dict:
         """Dispatcher: Jev or one forced route_to call (Dispatcher); the chosen child id travels back as "route"."""
         c = self.cfg
         await trace(f"{self.display!r} -- {len(self.tools)} tools (provider={c.get('provider', '?')}, model={c.get('model', '?')})")
         await trace(f"inputs: system={len(c.get('system_prompt') or '')} chars, context={len(request)} chars")
-        decision = await Dispatcher(c).route(request, self._messages(c.get("system_prompt"), request), self.llm)
+        decision = await self.dispatcher.route(request, self._messages(c.get("system_prompt"), request), lambda: self.llm)
         return asdict(decision)
 
 
@@ -465,17 +471,18 @@ class Dispatcher:
             return RoutingMode(mode)
         return RoutingMode.JEV if self.router.available() else RoutingMode.LLM
 
-    async def route(self, task: str, msgs: list, llm) -> RouteDecision:
+    async def route(self, task: str, msgs: list, make_llm) -> RouteDecision:
         """Route `task` (the dispatcher's input) to one child of the menu.
 
-        msgs is the dispatcher's model turn and llm its chat model; Jev mode uses neither.
+        msgs is the dispatcher's model turn; make_llm() returns its chat model and is
+        read only on the LLM path, so a Jev-only dispatcher needs no model key or package.
         route is "" and status "unrouted" when no child is chosen.
         """
         match self.mode():
             case RoutingMode.JEV:
                 return await self._via_jev(task)
             case _:
-                return await self._via_llm(task, msgs, llm)
+                return await self._via_llm(task, msgs, make_llm)
 
     async def _via_jev(self, task: str) -> RouteDecision:
         """Jev only: 'routed' decides; any other outcome stops the run here (no model fallback)."""
@@ -522,10 +529,10 @@ class Dispatcher:
             args_schema=route_args,
         )
 
-    async def _via_llm(self, task: str, msgs: list, llm) -> RouteDecision:
+    async def _via_llm(self, task: str, msgs: list, make_llm) -> RouteDecision:
         """The model only: one forced route_to call over the menu."""
         nid = self.cfg["id"]
-        llm = llm.bind_tools([self._route_tool()], tool_choice="any")
+        llm = make_llm().bind_tools([self._route_tool()], tool_choice="any")
         t0 = time.monotonic()
         resp = await llm.ainvoke(msgs)
         dt = time.monotonic() - t0

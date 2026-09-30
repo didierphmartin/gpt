@@ -94,7 +94,7 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertStringNotContainsString('asking the model', $runtime, "{$mode}: no hybrid");
             $this->assertStringNotContainsString('Jev declined', $runtime, "{$mode}: no hybrid");
             // The Jev path returns BEFORE the forced route_to turn.
-            $this->assertLessThan(strpos($runtime, 'llm = llm.bind_tools([self._route_tool()], tool_choice="any")'),
+            $this->assertLessThan(strpos($runtime, 'llm = make_llm().bind_tools([self._route_tool()], tool_choice="any")'),
                 strpos($runtime, 'case RoutingMode.JEV:'), "{$mode}: Jev mode is decided first");
             // techBuddy has no routing_mode saved: '' (resolved at run time), at the default floor.
             $this->assertStringContainsString('"routing_mode": "",', $node, "{$mode}: routing_mode");
