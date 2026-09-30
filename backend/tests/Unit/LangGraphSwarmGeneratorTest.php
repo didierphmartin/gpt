@@ -281,7 +281,7 @@ class LangGraphSwarmGeneratorTest extends TestCase
      * the turn when it ended -- resolved against MEMBER_NAMES (every valid
      * create_swarm() identity) with the entry agent as the fallback -- and
      * follows the DAG path's own EVENTS.emit(type="message", ...) convention
-     * (LangGraphGenerator.php:1776, :3387) rather than inventing a new one.
+     * (LangGraphGenerator's per-agent message emit and the swarm run() emit) rather than inventing a new one.
      */
     public function testRunEmitsTheAnswerAsAMessageEventNamingTheAnsweringMember(): void
     {

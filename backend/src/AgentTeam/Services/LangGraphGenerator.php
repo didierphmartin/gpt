@@ -1105,9 +1105,9 @@ class LangGraphGenerator
         return substr($s !== '' ? $s : 'node', 0, 40);
     }
 
-    /** The `_make_llm(provider, model, temperature, max_tokens, thinking)` factory, one emitted line per entry. */
     /**
-     * LangGraph no longer calls this: it emits LangGraphRuntime::llmFactoryBlock().
+     * The `_make_llm(provider, model, temperature, max_tokens, thinking)` factory, one emitted
+     * line per entry. LangGraph no longer calls this: it emits LangGraphRuntime::llmFactoryBlock().
      * PUBLIC because the playbook node needs it on every target: PlaybookEmit's
      * interpreter is a LangChain agent loop, so a target emitting a playbook
      * node emits this factory too (see PlaybookEmit::supportBlock()).
@@ -1325,6 +1325,7 @@ class LangGraphGenerator
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'from pathlib import Path';
         $L[] = 'from typing import Annotated, Awaitable, Callable, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
@@ -1368,9 +1369,13 @@ class LangGraphGenerator
         foreach ($facts['order'] as $nid) $typeMap[$nid] = isset($layout['agents'][$nid]) ? ($layout['agents'][$nid]['kind'] === 'playbook' ? 'playbook' : 'agent') : self::nodeType($facts['byId'][$nid]);
         $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $L[] = '';
+        $L[] = '';
         $L[] = self::stateBlock();
+        $L[] = '';
         $L[] = self::datetimeInjectorBlock();
+        $L[] = '';
         $L[] = self::contextBuilderBlock();
+        $L[] = '';
         $L[] = LangGraphRuntime::documentConverterBlock();
         // orchestrator.py carries no common.py, so the event sink + gate rendezvous
         // (installed by api.py, consumed by _handle_gate() below) is emitted here.
@@ -2374,10 +2379,7 @@ PY;
                 }
             }
         }
-        // The swarm target is outside the LangGraph OO refactor: its NODE keeps its old bytes,
-        // without the Thinking comment the other modes now carry.
-        $node = str_replace(',  # node form Thinking attribute', ',',
-            $this->nodeDefinitionLines($facts, $nid, 'agent', $entry['display'], $def, false));
+        $node = $this->nodeDefinitionLines($facts, $nid, 'agent', $entry['display'], $def, false);
         foreach (explode("\n", $node) as $nl) {
             $L[] = $nl;
         }
@@ -3143,6 +3145,7 @@ TXT;
         $L[] = '# GRAPH STATE + CONTEXT BUILDING (used by WorkflowGraph)';
         $L[] = $sep;
         $L[] = self::stateBlock();
+        $L[] = '';
         $L[] = self::contextBuilderBlock();
         $L[] = $sep;
         $L[] = '# ATTACHMENT CONVERTER (Start-node documents)';
@@ -3583,6 +3586,7 @@ def _merge(left: dict | None, right: dict | None) -> dict:
     out = dict(left or {})
     out.update(right or {})
     return out
+
 
 class WFState(TypedDict, total=False):
     """Shared state for the workflow graph.

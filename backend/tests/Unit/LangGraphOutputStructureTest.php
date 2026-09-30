@@ -20,6 +20,33 @@ class LangGraphOutputStructureTest extends TestCase
     private const FIXTURES = __DIR__ . '/../fixtures';
     private const DOC_BASELINE = self::FIXTURES . '/lg_doc_baseline';
 
+    /** @var string[] every temp file or tree this test created; tearDown() removes them */
+    private static array $tempPaths = [];
+
+    protected function tearDown(): void
+    {
+        foreach (self::$tempPaths as $path) {
+            if (is_dir($path)) {
+                foreach (new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+                    \RecursiveIteratorIterator::CHILD_FIRST
+                ) as $item) {
+                    $item->isDir() && !$item->isLink() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
+                }
+                @rmdir($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        self::$tempPaths = [];
+    }
+
+    /** A fresh path under the system temp dir, removed by tearDown(). */
+    private static function tempPath(string $prefix, string $suffix = ''): string
+    {
+        return self::$tempPaths[] = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(4)) . $suffix;
+    }
+
     /** name => graph: the Dispatcher demo, a plain chain (no dispatcher, no playbook), a playbook-only flow. */
     public static function graphs(): array
     {
@@ -87,7 +114,7 @@ class LangGraphOutputStructureTest extends TestCase
      */
     private static function write(array $files): array
     {
-        $root = sys_get_temp_dir() . '/lgos_' . bin2hex(random_bytes(6)) . '/python/scripts/wf';
+        $root = self::tempPath('lgos_') . '/python/scripts/wf';
         $paths = [];
         foreach ($files as $rel => $code) {
             $paths[$rel] = $root . '/' . $rel;
@@ -320,7 +347,7 @@ class LangGraphOutputStructureTest extends TestCase
         $this->assertStringContainsString(rtrim($long), $pkg['agents/it_claims.py']);
         $this->assertStringContainsString('def save_output(', $single);
         $this->assertStringContainsString('def save_output(', $pkg['common.py']);
-        $root = sys_get_temp_dir() . '/lgsave_' . bin2hex(random_bytes(4));
+        $root = self::tempPath('lgsave_');
         $names = [];
         foreach (['single' => array_values(self::write($this->files($graph, 'single'))['paths'])[0],
                   'modular' => self::write($pkg)['root']] as $mode => $target) {
@@ -354,7 +381,7 @@ class LangGraphOutputStructureTest extends TestCase
 
     public function testSkillStepOutputBecomesTheNodeOutput(): void            // Review Focus 5
     {
-        $base = sys_get_temp_dir() . '/lgskill_' . bin2hex(random_bytes(4));
+        $base = self::tempPath('lgskill_');
         @mkdir("{$base}/skills/lgtest/scripts", 0777, true);
         file_put_contents("{$base}/skills/lgtest/SKILL.md", "---\nname: lgtest\n---\nRender the input with scripts/make.py.\n");
         file_put_contents("{$base}/skills/lgtest/scripts/make.py",
@@ -423,7 +450,7 @@ class LangGraphOutputStructureTest extends TestCase
     public function testAttachmentsGoThroughTheDocumentConverter(): void
     {
         $graph = self::graphs()['linear'];
-        $doc = sys_get_temp_dir() . '/lgdoc_' . bin2hex(random_bytes(4)) . '.md';
+        $doc = self::tempPath('lgdoc_', '.md');
         file_put_contents($doc, "# Brief\nWrite about tides.");
         $graph['nodes'][0]['config']['documents'] = [['name' => 'brief.md', 'path' => $doc], ['name' => 'lost.pdf', 'path' => '']];
         $pkg = $this->files($graph, 'modular');

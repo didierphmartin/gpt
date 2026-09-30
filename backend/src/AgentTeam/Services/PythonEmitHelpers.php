@@ -282,12 +282,11 @@ PY;
      * subprocess.run with bucketed dirs, argv remap, input_files staging, SYNERGYAI_*
      * env, and read_outputs → _LAST_SKILL_OUTPUTS stash), and _read_skill_md().
      *
-     * Framework-agnostic — contains NO LangChain/langchain_core symbols.
-     * LangGraphGenerator emits RUN_SKILL_SCRIPT_TOOL (StructuredTool wrapper) in its
-     * own LangChain-specific $lgSpecific block, immediately after this shared block.
+     * Framework-agnostic — contains NO LangChain/langchain_core symbols. LangGraph no
+     * longer emits this block: LangGraphRuntime::skillRuntimeBlock() carries its own copy.
      *
      * Depends on SKILLS_DIR + _ensure_skill_deps from skillDepsBlock() being emitted
-     * first. Shared by LangGraphGenerator and MAFGenerator.
+     * first. Shared by MAFGenerator and NOOAGenerator.
      */
     public static function skillFsSyncBlock(): string
     {

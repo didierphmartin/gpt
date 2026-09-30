@@ -192,6 +192,7 @@ class DispatcherNode(Node):
         return asdict(decision)
 
 
+
 PY;
         $playbook = <<<'PY'
 class PlaybookNode(Node):
@@ -229,6 +230,7 @@ class PlaybookNode(Node):
             await trace(f"⚠ playbook failed: {e}")
         await trace(f"done -- status={run.status} ({len(run.events)} events, {time.monotonic() - t0:.1f}s)")
         return {"text": run.transcript(pb["title"], text), "route": "", "notes": "", "status": run.status}
+
 
 
 PY;
@@ -982,7 +984,6 @@ class DocumentConverter:
         Raises FileNotFoundError if the path doesn't exist, ValueError for an
         unsupported extension, ImportError if the format's library is missing.
         """
-        from pathlib import Path
         p = Path(path)
         if not p.exists():
             raise FileNotFoundError(f"document not found: {path}")
@@ -1139,6 +1140,7 @@ class McpClient:
         self._endpoints: dict[str, str] = {}   # registered server URL -> endpoint that accepted the handshake
         # One connection pool for every handshake and call; each request sets its own
         # timeout (30 s for the handshake, 180 s for a tool call).
+        # Its cookie jar is shared by every server on the same host (MCP uses headers, not cookies).
         self._http = httpx.Client()
 
     @staticmethod
@@ -1860,7 +1862,8 @@ _PB_GATE_FIELDS = {
     "await_message": {"prompt": (str, True, "What to wait for")},
 }
 
-# None: gates are answered here (a watching host, the console, or PLAYBOOK_GATE_MODE). An A2A agent server sets it to forward gates to its client.
+# None: gates are answered here (a watching host, the console, or PLAYBOOK_GATE_MODE).
+# An A2A agent server sets it to forward gates to its client.
 GATE_BRIDGE = None
 
 
@@ -1913,8 +1916,8 @@ class PlaybookRun:
                 return {"ok": True, "decision": answer}
             # Nobody attached, or nobody answered in time: same result as a
             # non-interactive run, recorded so the transcript says who decided.
-            # PlaybookToolset._wrap() emits the single tool_result for this call, same as every
-            # other mode -- do not emit one here too.
+            # PlaybookToolset._wrap() emits the single tool_result for this call, same as
+            # every other mode -- do not emit one here too.
             return self.policy_answer(kind, "no answer within PLAYBOOK_GATE_TIMEOUT_S")
         self.emit(type="gate_request", kind=kind, payload=dict(args))
         match mode:
@@ -2016,7 +2019,6 @@ class PlaybookToolset:
     def build(self) -> list[StructuredTool]:
         """The run's tools, in the order the model sees them: native verbs, human gates, #Actions."""
         tools = []
-        # Native verbs: always available, no binding needed.
         tools += self._native_tools()
         # Human gates.
         tools += self._gate_tools()

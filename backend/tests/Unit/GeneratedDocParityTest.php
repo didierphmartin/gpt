@@ -216,7 +216,7 @@ for node in ast.walk(tree):
         known.add(node.name)
     elif isinstance(node, ast.MatchMapping) and node.rest:
         known.add(node.rest)
-used ={n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 print(" ".join(sorted(used - known)))
 PYCODE;
         $checkerPath = tempnam(sys_get_temp_dir(), 'chk') . '.py';
