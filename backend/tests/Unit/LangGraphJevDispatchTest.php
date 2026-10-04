@@ -201,7 +201,7 @@ class LangGraphJevDispatchTest extends TestCase
         ];
         foreach ($graphs as $mode => $code) {
             $this->assertStringContainsString('return lambda state: state.get("routes", {}).get(nid) or END', $code, $mode);
-            $this->assertStringContainsString('sg.add_conditional_edges(nid, self._router(nid), {t: t for t in menu} | {END: END})', $code, $mode);
+            $this->assertStringContainsString('sg.add_conditional_edges(nid, router, {t: t for t in menu} | {END: END})', $code, $mode);
             $this->assertStringContainsString('route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END', $code, $mode);
         }
     }

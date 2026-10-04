@@ -30,7 +30,7 @@ final class LangGraphRuntime
      * (_make_llm, TOOLS, SKILLS, Dispatcher, the playbook runtime, ...),
      * which is why a test that patches common._make_llm after import still reaches them.
      */
-    public static function nodeClassesBlock(bool $withPlaybook): string
+    public static function nodeClassesBlock(bool $withPlaybook, bool $withCode = false): string
     {
         $base = <<<'PY'
 # ==============================================================
@@ -234,7 +234,35 @@ class PlaybookNode(Node):
 
 
 PY;
-        $factoryHead = <<<'PY'
+        $code = <<<'PY'
+class CodeNode(Node):
+    """A code node: the node's own Python run(input, call_tool) -- deterministic, no model.
+
+    The contract (input, exits, declared tools, error exit, timeout) is CODE_HARNESS's, the
+    same file the workflow editor runs, so the compiled node behaves like the debugged one.
+    """
+
+    async def run(self, request: str, trace) -> dict:
+        """request is JSON {"user_prompt", "parents"}; the chosen exit travels back as "route"."""
+        c = self.cfg
+        req = json.loads(request)
+        await trace(f"{self.display!r} code -- exits={c['exits']}, tools={c['tools']}")
+        value = CODE_HARNESS.decode_input(req["parents"], req["user_prompt"])
+        res = await asyncio.to_thread(CODE_HARNESS.execute, c["source"], value, c["exits"], c["tools"],
+                                      _code_transport, c["timeout_s"])
+        for call in res["tool_calls"]:
+            await trace(f"tool {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
+        if res["stdout"]:
+            await trace("stdout: " + res["stdout"][:2000])
+        if not res["ok"]:
+            raise RuntimeError(f"code node {self.display!r} failed: {res['error']}")
+        await trace(f"exit {res['route']!r}")
+        return {"text": res["output_text"], "route": res["route"], "notes": "", "status": "ok"}
+
+
+
+PY;
+        $kindHead = <<<'PY'
 class NodeKind(str, Enum):
     """The kinds of node make_node() builds; a node entry's "kind" holds one of these values.
 
@@ -244,6 +272,8 @@ class NodeKind(str, Enum):
     AGENT = "agent"
     DISPATCHER = "dispatcher"
     PLAYBOOK = "playbook"
+PY;
+        $makeHead = <<<'PY'
 
 
 def make_node(cfg: dict) -> Node:
@@ -261,12 +291,19 @@ PY;
             return PlaybookNode(cfg)
 
 PY;
+        $codeArm = <<<'PY'
+        case NodeKind.CODE:
+            return CodeNode(cfg)
+
+PY;
         $factoryTail = <<<'PY'
         case _:
             raise ValueError(f"unknown node kind: {cfg['kind']!r}")
 
 PY;
-        return $base . ($withPlaybook ? $playbook : '') . $factoryHead . ($withPlaybook ? $playbookArm : '') . $factoryTail;
+        return $base . ($withPlaybook ? $playbook : '') . ($withCode ? $code : '')
+            . $kindHead . "\n" . ($withCode ? "    CODE = \"code\"\n" : '') . $makeHead
+            . ($withPlaybook ? $playbookArm : '') . ($withCode ? $codeArm : '') . $factoryTail;
     }
 
     /**
@@ -558,6 +595,31 @@ PY;
     }
 
     /**
+     * The code node harness (frontend/assets/py/code_node_harness.py, the file the editor runs)
+     * embedded as a module, plus the transport its call_tool uses: MCP_SLUGS maps a server slug
+     * to its URL, McpClient.call_tool_raw makes the call.
+     */
+    public static function codeHarnessBlock(): string
+    {
+        $src = file_get_contents(__DIR__ . '/../../../../frontend/assets/py/code_node_harness.py');
+        if ($src === false) {
+            throw new \RuntimeException('code node harness not found (frontend/assets/py/code_node_harness.py)');
+        }
+        return "# ==============================================================\n"
+            . "# CODE NODE HARNESS -- the same file the workflow editor runs\n"
+            . "# ==============================================================\n"
+            . 'CODE_HARNESS_SOURCE = ' . json_encode($src, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n"
+            . "CODE_HARNESS = types.ModuleType(\"code_node_harness\")\n"
+            . "exec(CODE_HARNESS_SOURCE, CODE_HARNESS.__dict__)\n\n\n"
+            . "def _code_transport(server: str, tool: str, args: dict) -> dict:\n"
+            . "    \"\"\"call_tool's transport in a compiled script: the raw MCP result of server.tool(args).\"\"\"\n"
+            . "    url = MCP_SLUGS.get(server)\n"
+            . "    if not url:\n"
+            . "        return {\"isError\": True, \"content\": [{\"type\": \"text\", \"text\": f\"MCP server {server!r} is not in this workflow\"}]}\n"
+            . "    return MCP.call_tool_raw(url, tool, args)\n";
+    }
+
+    /**
      * WorkflowGraph: the workflow as a LangGraph StateGraph, built from the frozen
      * EDGES / ORDER / NODE_TYPES and one node table. Written once for every mode: the
      * single file and orchestrator.py carry it inline, the modular package in common.py.
@@ -633,6 +695,13 @@ class WorkflowGraph:
     def _request_for(self, nid: str, state: dict) -> str:
         """What a node receives: a playbook gets its parents' texts joined, an agent the labelled context."""
         outs = state.get("node_outputs", {})
+        if self.agents[nid]["kind"] == "code":
+            # A code node gets its parents one by one (the harness decodes them); a parent
+            # whose branch was not taken has no output and is left out.
+            return json.dumps({"user_prompt": state.get("user_prompt", ""),
+                               "parents": [{"name": outs[p]["source"], "text": outs[p]["text"],
+                                            "start": self.node_types.get(p) == "start"}
+                                           for p in self.parents(nid) if p in outs]}, ensure_ascii=False)
         if self.agents[nid]["kind"] == "playbook":
             return "\n\n".join(outs[p]["text"] for p in self.parents(nid) if p in outs) or state.get("user_prompt", "")
         return build_context(state.get("user_prompt", ""), self.parents(nid), outs)
@@ -643,6 +712,9 @@ class WorkflowGraph:
             ad = self.agents[nid]
             out = await self.run_node(nid, self._request_for(nid, state))
             result = {"node_outputs": {nid: {"source": ad["display"], "text": out["text"]}}}
+            if ad.get("kind") == "code":
+                # Code node: the exit it took selects its children (conditional edge).
+                result["routes"] = {nid: out["route"]}
             if ad.get("dispatch"):
                 # Dispatcher: the node chose a child (or none) -> conditional edge input;
                 # a request it did not route ends the run with its message.
@@ -672,6 +744,11 @@ class WorkflowGraph:
         """The conditional-edge function of dispatcher `nid`: the child it chose, or END."""
         return lambda state: state.get("routes", {}).get(nid) or END
 
+    def _code_router(self, nid: str):
+        """The conditional-edge function of code node `nid`: the children on the exit it took, or END."""
+        targets = self.agents[nid].get("exit_targets", {})
+        return lambda state: targets.get(state.get("routes", {}).get(nid), []) or END
+
     def _wire_edges(self, sg) -> None:
         """Plain edges forward in ORDER; a dispatcher's menu children only through its conditional edge."""
         # Wire edges. A dispatcher's menu children hang off a conditional edge:
@@ -679,12 +756,15 @@ class WorkflowGraph:
         pos = {n: i for i, n in enumerate(self.order)}
         sg.add_edge(START, self.order[0])
         for nid in self.order:
-            menu = {t["id"] for t in self.agents.get(nid, {}).get("dispatch", [])}
+            entry = self.agents.get(nid, {})
+            is_code = entry.get("kind") == "code"
+            menu = set(self.children(nid)) if is_code else {t["id"] for t in entry.get("dispatch", [])}
             for child in self.children(nid):
                 if child in pos and pos[child] > pos[nid] and child not in menu:
                     sg.add_edge(nid, child)
             if menu:
-                sg.add_conditional_edges(nid, self._router(nid), {t: t for t in menu} | {END: END})
+                router = self._code_router(nid) if is_code else self._router(nid)
+                sg.add_conditional_edges(nid, router, {t: t for t in menu} | {END: END})
         for nid in self.order:
             if not self.children(nid):
                 sg.add_edge(nid, END)
@@ -697,7 +777,7 @@ class WorkflowGraph:
             match ntype:
                 case "start":
                     sg.add_node(nid, self._start_node(nid))
-                case "agent" | "playbook":
+                case "agent" | "playbook" | "code":
                     sg.add_node(nid, self._module_node(nid))
                 case "output":
                     sg.add_node(nid, self._output_node(nid))
@@ -1259,6 +1339,26 @@ class McpClient:
         texts = [c.get("text", "") for c in content
                  if isinstance(c, dict) and c.get("type") == "text"]
         return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
+
+    def call_tool_raw(self, server_url: str, tool_name: str, arguments: dict) -> dict:
+        """Call a tool and return the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
+        mcp_url = self._handshake(server_url) or self.normalize_url(server_url)
+        request = {
+            "jsonrpc": "2.0", "id": int(time.time()),
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments or {}}
+        }
+        try:
+            r = self._http.post(mcp_url, json=request, headers=self.HEADERS, timeout=180)
+            r.raise_for_status()
+            data = self._parse(r.text)
+        except Exception as e:
+            return {"isError": True, "content": [{"type": "text", "text": str(e)}]}
+        if data is None:
+            return {"isError": True, "content": [{"type": "text", "text": "invalid response"}]}
+        if "error" in data:
+            return {"isError": True, "content": [{"type": "text", "text": data["error"].get("message", "unknown")}]}
+        return data.get("result") or {}
 
 
 MCP = McpClient()
