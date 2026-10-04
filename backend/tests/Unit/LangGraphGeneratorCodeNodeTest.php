@@ -115,4 +115,19 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertStringContainsString('MCP_SLUGS = ', $byPath['common.py']);
         self::assertStringContainsString('"exit_targets": {"job":["3"],"no_job":["4"]}', $byPath['workflow.py']);
     }
+
+    public function testADispatchersCodeChildIsOnItsMenu(): void
+    {
+        // A code child of a dispatcher runs only when the dispatcher picks it (as in the editor).
+        $g = $this->codeGraph();
+        $g['nodes'][] = ['id' => '9', 'node_type' => '', 'config' => ['type' => 'agent-template', 'agent_name' => 'Front desk',
+            'agent_type' => 'dispatcher', 'instructions' => 'Route.', 'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-6',
+            'tools' => [], 'settings' => ['temperature' => 0.7, 'max_tokens' => 4096]]];
+        $g['edges'] = [['from' => '1', 'to' => '9', 'from_port' => 'output_1'], ['from' => '9', 'to' => '2', 'from_port' => 'output_1'],
+                       ['from' => '2', 'to' => '3', 'from_port' => 'output_1'], ['from' => '2', 'to' => '4', 'from_port' => 'output_2']];
+        $code = $this->generate($g);
+        self::assertStringContainsString('"dispatch": [{"id": "2", "name": "Poll ServiceNow", "description": ""}]', $code);
+        $byPath = array_column($this->generateWith($g, ['modular' => true])['files'], 'code', 'path');
+        self::assertStringContainsString('"dispatch": [{"id":"2","name":"Poll ServiceNow"}]', $byPath['workflow.py']);
+    }
 }

@@ -242,6 +242,15 @@ class CodeNode(Node):
     same file the workflow editor runs, so the compiled node behaves like the debugged one.
     """
 
+    def __init__(self, cfg: dict):
+        super().__init__(cfg)
+        # Fail fast (spec §5.2): the Node is built when the script starts, so a bad import or a
+        # missing run() stops the script here, before any node of the workflow has run.
+        try:
+            CODE_HARNESS.check_code(cfg["source"])
+        except CODE_HARNESS.CodeNodeError as e:
+            raise RuntimeError(f"code node {self.display!r}: {e}") from None
+
     async def run(self, request: str, trace) -> dict:
         """request is JSON {"user_prompt", "parents"}; the chosen exit travels back as "route"."""
         c = self.cfg

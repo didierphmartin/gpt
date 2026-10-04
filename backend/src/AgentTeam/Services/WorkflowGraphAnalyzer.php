@@ -226,7 +226,7 @@ class WorkflowGraphAnalyzer
                     continue;
                 }
                 $child = $byId[$to] ?? null;
-                if (!is_array($child) || !in_array(self::typeOf($child), ['agent', 'agent-template', 'playbook'], true)) {
+                if (!is_array($child) || !in_array(self::typeOf($child), ['agent', 'agent-template', 'playbook', 'code'], true)) {
                     continue;
                 }
                 $targets[] = ['id' => $to, 'name' => self::displayNameOf($child, $analyzed, $to)];
@@ -318,7 +318,7 @@ class WorkflowGraphAnalyzer
                 $d['dispatch'] = array_values($x['dispatch']);
             } elseif (in_array($t, ['agent', 'agent-template'], true) && (string) ($c['agent_type'] ?? '') === 'dispatcher') {
                 $d['dispatch'] = array_map($nameOf, array_values(array_filter($children[$id] ?? [],
-                    fn($ch) => in_array(self::typeOf($byId[$ch] ?? []), ['agent', 'agent-template', 'playbook'], true))));
+                    fn($ch) => in_array(self::typeOf($byId[$ch] ?? []), ['agent', 'agent-template', 'playbook', 'code'], true))));
             }
             if ($t === 'playbook') {
                 $text = is_string($c['playbook'] ?? null) ? $c['playbook'] : '';

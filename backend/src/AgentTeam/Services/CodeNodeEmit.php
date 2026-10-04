@@ -38,8 +38,9 @@ final class CodeNodeEmit
     /**
      * @param array $rawEdges  the graph's edges with from/from_node_id/source and from_port
      * @param array $slugToUrl server slug -> MCP server URL (the user's registry)
+     * @param array|null $nodeIds the graph's node ids: an edge to any other id (dangling) is ignored
      */
-    public static function nodeData(array $node, array $rawEdges, array $slugToUrl): array
+    public static function nodeData(array $node, array $rawEdges, array $slugToUrl, ?array $nodeIds = null): array
     {
         $cfg = $node['config'] ?? $node['data'] ?? [];
         $cfg = is_array($cfg) ? $cfg : [];
@@ -72,10 +73,11 @@ final class CodeNodeEmit
             $fail('timeout_s must be 1 to 300 seconds');
         }
         $targets = array_fill_keys($exits, []);
+        $known = $nodeIds === null ? null : array_fill_keys(array_map('strval', $nodeIds), true);
         foreach ($rawEdges as $e) {
             $from = (string) ($e['from'] ?? $e['from_node_id'] ?? $e['source'] ?? '');
             $to = (string) ($e['to'] ?? $e['to_node_id'] ?? $e['target'] ?? '');
-            if ($from !== $nid || $to === '') {
+            if ($from !== $nid || $to === '' || ($known !== null && !isset($known[$to]))) {
                 continue;
             }
             $k = (int) preg_replace('/^output_/', '', (string) ($e['from_port'] ?? 'output_1'));

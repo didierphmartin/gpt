@@ -846,7 +846,7 @@ class LangGraphGenerator
                 }
                 $childId = self::edgeTo($e);
                 $child = $byId[$childId] ?? null;
-                if (!$child || !in_array(self::nodeType($child), ['agent', 'agent-template', 'playbook'], true)) {
+                if (!$child || !in_array(self::nodeType($child), ['agent', 'agent-template', 'playbook', 'code'], true)) {
                     continue;
                 }
                 // 'description' is what Jev reads as the option's criterion
@@ -1122,7 +1122,7 @@ class LangGraphGenerator
             if (self::nodeType($byId[$nid]) !== 'code') {
                 continue;
             }
-            $codeData[$nid] = CodeNodeEmit::nodeData($byId[$nid], $graph['edges'] ?? [], $slugToUrl);
+            $codeData[$nid] = CodeNodeEmit::nodeData($byId[$nid], $graph['edges'] ?? [], $slugToUrl, array_keys($byId));
             foreach ($codeData[$nid]['servers'] as $surl) {
                 $codeServerUrls[$surl] = true;
             }

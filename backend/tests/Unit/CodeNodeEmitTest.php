@@ -63,4 +63,12 @@ final class CodeNodeEmitTest extends TestCase
         $this->expectExceptionMessage('Code nodes are not supported by the MAF target yet');
         CodeNodeEmit::refuseUnsupported($graph, 'MAF');
     }
+
+    public function testDanglingEdgesAreIgnored(): void
+    {
+        // An edge to a node that is not in the graph must not put a missing id in exit_targets.
+        $edges = array_merge(self::EDGES, [['from' => '5', 'to' => '99', 'from_port' => 'output_3']]);
+        $d = CodeNodeEmit::nodeData($this->node([]), $edges, ['servicenow' => 'u'], ['1', '5', '6', '7', '8']);
+        self::assertSame(['job' => ['6', '8'], 'no_job' => ['7'], 'error' => []], $d['exit_targets']);
+    }
 }

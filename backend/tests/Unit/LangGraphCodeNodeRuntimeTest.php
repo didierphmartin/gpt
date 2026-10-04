@@ -44,4 +44,12 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         self::assertStringContainsString('def _code_router(self, nid: str):', $g);
         self::assertStringContainsString('"start": self.node_types.get(p) == "start"', $g);
     }
+
+    public function testCodeNodesAreCheckedAtStartup(): void
+    {
+        // spec §5.2: every code node's source passes check_code when its Node is built (single file:
+        // NODES at import; modular: each agent module's make_node at import) -- before any node runs.
+        $with = LangGraphRuntime::nodeClassesBlock(true, true);
+        self::assertMatchesRegularExpression('~class CodeNode\(Node\):.*?def __init__\(self, cfg: dict\):\n        super\(\).__init__\(cfg\)\n.*?CODE_HARNESS\.check_code\(cfg\["source"\]\)~s', $with);
+    }
 }
