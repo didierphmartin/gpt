@@ -10971,17 +10971,11 @@ class WorkflowEditor {
             console.log(`[WorkflowEditor] Node ${id} exported as:`, nodeExport);
             nodes.push(nodeExport);
 
-            // Extract connections (edges)
-            Object.values(node.outputs || {}).forEach(output => {
-                (output.connections || []).forEach(conn => {
-                    edges.push({
-                        from: id,
-                        to: conn.node,
-                        from_port: 'output_1',
-                        to_port: conn.input
-                    });
-                });
-            });
+            // Each edge on its real output port: a code node's exits are output_1..output_n,
+            // and reload (importGraphFromBackend) reconnects by from_port.
+            for (const e of window.CodeNode.edgesFrom(id, node)) {
+                edges.push({ from: id, to: e.to, from_port: e.from_port, to_port: e.to_port });
+            }
         });
 
         return {
