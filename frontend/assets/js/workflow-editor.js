@@ -13147,28 +13147,37 @@ class WorkflowEditor {
         const payload = { ...req, harness: this._codeHarnessSrc,
             api_base: window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
             token: window.authManager?.token || window.authManager?.getToken?.() || null };
-        const cold = !this._codeWorker;
-        if (cold) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261004-code-node');
-        const w = this._codeWorker;
-        const id = (this._codeSeq = (this._codeSeq || 0) + 1);
-        // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
-        const limitMs = (req.timeout_s + 5) * 1000 + (cold ? 90000 : 0);
-        return await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                w.terminate();
-                if (this._codeWorker === w) this._codeWorker = null;
-                reject(new Error(`timed out after ${req.timeout_s}s`));
-            }, limitMs);
-            const onMsg = (e) => {
-                const m = e.data || {};
-                if (m.type === 'progress' || m.id !== id) return;
-                clearTimeout(timer);
-                w.removeEventListener('message', onMsg);
-                m.ok ? resolve(m.result) : reject(new Error(m.error));
-            };
-            w.addEventListener('message', onMsg);
-            w.postMessage({ id, verb: 'runCode', payload });
-        });
+        // The worker runs Python synchronously, so jobs go through it one at a time; each job's
+        // timer starts when the job starts, not while it waits in the queue.
+        const runOne = () => {
+            const cold = !this._codeWorker || !this._codeWorkerWarm;
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261004-code-node');
+            const w = this._codeWorker;
+            const id = (this._codeSeq = (this._codeSeq || 0) + 1);
+            // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
+            const limitMs = (req.timeout_s + 5) * 1000 + (cold ? 90000 : 0);
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    w.removeEventListener('message', onMsg);
+                    w.terminate();
+                    if (this._codeWorker === w) { this._codeWorker = null; this._codeWorkerWarm = false; }
+                    reject(new Error(`timed out after ${req.timeout_s}s`));
+                }, limitMs);
+                const onMsg = (e) => {
+                    const m = e.data || {};
+                    if (m.type === 'progress' || m.id !== id) return;
+                    clearTimeout(timer);
+                    w.removeEventListener('message', onMsg);
+                    if (this._codeWorker === w) this._codeWorkerWarm = true;
+                    m.ok ? resolve(m.result) : reject(new Error(m.error));
+                };
+                w.addEventListener('message', onMsg);
+                w.postMessage({ id, verb: 'runCode', payload });
+            });
+        };
+        const job = (this._codeQueue || Promise.resolve()).then(runOne, runOne);
+        this._codeQueue = job.catch(() => {});
+        return await job;
     }
 
     /**
