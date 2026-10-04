@@ -39,6 +39,20 @@ final class LoaderMcpExecutor implements McpExecutorInterface
         return ['ok' => true, 'result' => $result];
     }
 
+    /** call() with the raw MCP result (structuredContent and isError kept), for code nodes. */
+    public function callRaw(string $server, string $tool, array $args): array
+    {
+        $entry = $this->findEntry($server, $tool);
+        if ($entry === null) {
+            return ['ok' => false, 'error' => "MCP tool '{$server}.{$tool}' not found"];
+        }
+        $r = $this->loader->executeToolRaw('mcp_' . $entry['original_name'], $args);
+        if (!empty($r['error'])) {
+            return ['ok' => false, 'error' => (string) ($r['message'] ?? 'MCP tool execution failed')];
+        }
+        return ['ok' => true, 'result' => $r['raw']];
+    }
+
     public function availableTools(): array
     {
         $tools = [];

@@ -231,6 +231,31 @@ class MCPToolsLoader
     }
 
     /**
+     * Execute a tool and return the raw MCP result ({content, structuredContent?, isError?}),
+     * for code nodes, which need structuredContent and isError (executeTool's formatted
+     * result keeps only the text). Never throws; failures are ['error' => true, 'message'].
+     */
+    public function executeToolRaw(string $toolName, array $arguments): array
+    {
+        $prefixedName = str_starts_with($toolName, 'mcp_') ? $toolName : 'mcp_' . $toolName;
+        if (!isset($this->tools[$prefixedName])) {
+            return ['error' => true, 'message' => "MCP tool '{$toolName}' not found"];
+        }
+        $tool = $this->tools[$prefixedName];
+        $call = $this->callMCPServer($tool['server_url'], $tool['original_name'], $arguments,
+            $tool['server_headers'] ?? [], $tool['server_transport'] ?? 'http');
+        $raw = $call['raw'] ?? null;
+        if (!is_array($raw)) {
+            return ['error' => true, 'message' => (string) ($call['formatted']['message'] ?? 'MCP call failed')];
+        }
+        if (isset($raw['error']) && !isset($raw['content'])) {   // a JSON-RPC error object, not a tool result
+            $msg = is_array($raw['error']) ? ($raw['error']['message'] ?? 'MCP error') : (string) $raw['error'];
+            return ['error' => true, 'message' => (string) $msg];
+        }
+        return ['error' => false, 'raw' => $raw];
+    }
+
+    /**
      * Call an MCP server to execute a tool
      */
     private function callMCPServer(string $serverUrl, string $toolName, array $arguments, array $extraHeaders = [], string $transport = 'http'): array
