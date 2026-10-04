@@ -311,6 +311,10 @@ class LangGraphGenerator
                 'temperature' => $pd['temperature'], 'max_tokens' => $pd['max_tokens'], 'thinking' => $pd['thinking'],
                 'tools' => [], 'skills' => []];
         }
+        foreach ($codeData as $nid => $cd) {
+            $docAgents[$nid] = ['name' => $cd['display'], 'provider' => '', 'model' => '', 'temperature' => null,
+                'max_tokens' => null, 'thinking' => null, 'tools' => $cd['tools'], 'skills' => []];
+        }
         $docNodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($byId, $order, $edges, $docAgents, $docExtra,
             ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);
         $docById = [];
@@ -611,6 +615,11 @@ class LangGraphGenerator
         } else {
             $lines[] = 'CODE_NODES = {';
             foreach ($codeData as $nid => $cd) {
+                if (isset($docById[$nid])) {
+                    foreach (explode("\n", PythonEmitHelpers::nodeCommentBlock($docById[$nid], '    ')) as $cl) {
+                        $lines[] = $cl;
+                    }
+                }
                 foreach (explode("\n", self::codeNodeDefinitionLines((string) $nid, $cd, '"' . $nid . '": {', '    ')) as $nl) {
                     $lines[] = $nl;
                 }
@@ -2012,6 +2021,10 @@ PY;
             $docExtra[$n]['playbook'] = ['title' => $pd['title'], 'writes' => $pd['writes_enabled'], 'bound' => $mcp, 'unbound' => count($pd['actions']) - $mcp];
             $docAgents[$n] = ['name' => $pd['display'], 'provider' => $pd['provider'], 'model' => $pd['model'], 'temperature' => $pd['temperature'],
                 'max_tokens' => $pd['max_tokens'], 'thinking' => $pd['thinking'], 'tools' => [], 'skills' => []];
+        }
+        foreach ($facts['codeData'] as $n => $cd) {
+            $docAgents[$n] = ['name' => $cd['display'], 'provider' => '', 'model' => '', 'temperature' => null,
+                'max_tokens' => null, 'thinking' => null, 'tools' => $cd['tools'], 'skills' => []];
         }
         $nodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($facts['byId'], $facts['order'], $facts['edges'], $docAgents, $docExtra,
             ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);

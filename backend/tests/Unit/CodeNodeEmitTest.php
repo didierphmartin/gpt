@@ -55,4 +55,12 @@ final class CodeNodeEmitTest extends TestCase
         $this->expectExceptionMessage('Code nodes are not supported by the ADK target yet');
         CodeNodeEmit::refuseUnsupported($graph, 'ADK');
     }
+
+    public function testEmptyNodeTypeFallsThroughToConfigType(): void
+    {
+        $graph = ['nodes' => [['id' => '5', 'node_type' => '', 'config' => ['type' => 'code']]], 'edges' => []];
+        self::assertTrue(CodeNodeEmit::hasCodeNodes($graph));
+        $this->expectExceptionMessage('Code nodes are not supported by the MAF target yet');
+        CodeNodeEmit::refuseUnsupported($graph, 'MAF');
+    }
 }

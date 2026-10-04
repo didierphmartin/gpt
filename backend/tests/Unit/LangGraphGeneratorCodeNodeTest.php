@@ -75,6 +75,8 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertStringContainsString('CODE_HARNESS = types.ModuleType("code_node_harness")', $code);
         self::assertStringContainsString('"2": "code"', $code);
         self::assertStringContainsString('{**AGENTS, **PLAYBOOKS, **CODE_NODES}', $code);
+        // the code node is documented like an agent: a comment block before its entry, with its declared tool
+        self::assertMatchesRegularExpression('~CODE_NODES = \{\n    # ---- node 2: Poll ServiceNow \(code\) -+\n    #   tools          : servicenow\.poll_jobs\n(    #[^\n]*\n)*    "2": \{~', $code);
         $file = tempnam(sys_get_temp_dir(), 'lgcn') . '.py';
         file_put_contents($file, $code);
         exec('python3 -m py_compile ' . escapeshellarg($file) . ' 2>&1', $out, $rc);

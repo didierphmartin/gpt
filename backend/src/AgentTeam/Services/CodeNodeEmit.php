@@ -90,7 +90,6 @@ final class CodeNodeEmit
 
     private static function typeOf(array $n): string
     {
-        $cfg = is_array($n['config'] ?? null) ? $n['config'] : [];
-        return (string) ($n['node_type'] ?? $n['type'] ?? $cfg['type'] ?? '');
+        return WorkflowGraphAnalyzer::typeOf($n);
     }
 }
