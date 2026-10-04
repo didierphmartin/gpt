@@ -399,6 +399,19 @@ class WorkflowEditor {
                             <div class="agent-icon">📖</div><div class="agent-info"><div class="agent-name">Playbook</div><div class="agent-type">Console-style playbook</div></div></div>
                     </div>
                 </div>
+
+                <!-- Logic Section -->
+                <div class="workflow-section">
+                    <div class="workflow-section-header" data-section="logic">
+                        <span class="section-toggle">${collapsedSections.logic ? '▶' : '▼'}</span>
+                        <span class="section-title">Logic</span>
+                        <span class="section-count">1</span>
+                    </div>
+                    <div class="workflow-section-content ${collapsedSections.logic ? 'collapsed' : ''}" data-section="logic">
+                        <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="code">
+                            <div class="agent-icon">🐍</div><div class="agent-info"><div class="agent-name">Code</div><div class="agent-type">Python run(input, call_tool)</div></div></div>
+                    </div>
+                </div>
             </div>
 
             <!-- Action Buttons — symmetric with audio workflows: execution
@@ -2548,6 +2561,12 @@ class WorkflowEditor {
                     return;
                 }
 
+                // Code nodes: own settings modal.
+                if (editBtn.dataset.code === 'true' && nodeId) {
+                    this.showCodeNodeModal(nodeId);
+                    return;
+                }
+
                 // Check if this is a realtime agent node
                 if (editBtn.dataset.rtNode === 'true' && nodeId) {
                     this.showRealtimeAgentEditForm(nodeId);
@@ -2617,6 +2636,15 @@ class WorkflowEditor {
                     const nodeId = drawflowNode.id.replace('node-', '');
                     this.showAgentEditForm(this.editor.getNodeFromId(nodeId)?.data?.agent_id || null, nodeId);
                 }
+                return;
+            }
+
+            // Code nodes: click opens the settings modal.
+            const codeNode = e.target.closest('.workflow-node.code-node');
+            if (codeNode && !e.target.closest('.node-delete-btn')) {
+                e.stopPropagation();
+                const drawflowNode = codeNode.closest('.drawflow-node');
+                if (drawflowNode) this.showCodeNodeModal(drawflowNode.id.replace('node-', ''));
                 return;
             }
 
@@ -8547,6 +8575,9 @@ class WorkflowEditor {
             case 'playbook':
                 this.addPlaybookNode(x, y);
                 break;
+            case 'code':
+                this.addCodeNode(x, y);
+                break;
             case 'realtime-start':
                 this.addRealtimeStartNode(x, y);
                 break;
@@ -8745,6 +8776,144 @@ class WorkflowEditor {
 
         this.hideHelpOverlay();
         return drawflowId;
+    }
+
+    addCodeNode(x, y, config = null) {
+        const t = window.CodeNode.TEMPLATES.poll_servicenow;
+        const defaults = { name: 'Code', code: t.code, exits: [...t.exits], mcp_tools: [...t.mcp_tools], timeout_s: 30, disabled: false };
+        const cfg = config ? { ...defaults, ...config } : { ...defaults };
+        const html = `
+            <div class="workflow-node code-node configurable ${cfg.disabled ? 'node-disabled' : ''}">
+                <div class="node-header">
+                    <span class="node-icon">🐍</span>
+                    <span class="node-title">${this.escapeHtml(cfg.name || 'Code')}</span>
+                    <button class="node-delete-btn" title="Delete node">×</button>
+                </div>
+                <div class="code-badges" style="padding:0 8px;max-width:230px;">${this._codeBadgesHtml(cfg)}</div>
+                <div class="node-body">
+                    <small class="node-config-display">${this.escapeHtml(cfg.exits.map((e, i) => `${i + 1}:${e}`).join('  '))}</small>
+                    <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
+                </div>
+            </div>`;
+        const id = this.editor.addNode('code', 1, cfg.exits.length, x, y, 'code', {
+            type: 'code', node_type: 'code', name: cfg.name, code: cfg.code, exits: [...cfg.exits],
+            mcp_tools: [...cfg.mcp_tools], timeout_s: cfg.timeout_s, disabled: !!cfg.disabled,
+        }, html);
+        this.hideHelpOverlay();
+        return id;
+    }
+
+    _codeBadgesHtml(cfg) {
+        return (cfg.mcp_tools || []).map((t) =>
+            `<span class="tool-badge" title="declared tool">${this.escapeHtml(t)}</span>`).join(' ');
+    }
+
+    _refreshCodeNode(nodeId) {
+        const d = this.editor.getNodeFromId(nodeId)?.data || {};
+        const root = document.querySelector(`#node-${nodeId} .code-node`);
+        if (!root) return;
+        root.querySelector('.node-title').textContent = d.name || 'Code';
+        root.querySelector('.code-badges').innerHTML = this._codeBadgesHtml(d);
+        root.querySelector('.node-config-display').textContent = (d.exits || []).map((e, i) => `${i + 1}:${e}`).join('  ');
+    }
+
+    /** Settings: name, code, exits, tools, timeout, template; Test runs the node in Pyodide. */
+    showCodeNodeModal(nodeId) {
+        const node = this.editor.getNodeFromId(nodeId);
+        if (!node) return;
+        const d = node.data || {};
+        const CN = window.CodeNode;
+        const overlay = document.createElement('div');
+        overlay.className = 'storage-config-overlay';
+        overlay.innerHTML = `
+            <div class="storage-config-modal" style="width:min(900px,95vw);max-height:92vh;display:flex;flex-direction:column;">
+                <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-body" style="overflow:auto;">
+                    <div class="storage-config-grid">
+                        <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text" value="${this.escapeHtml(d.name || 'Code')}"></div>
+                        <div class="storage-config-folder full"><label>Template</label>
+                            <select data-f="template"><option value="">— keep current code —</option>
+                                ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
+                        <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
+                            <textarea data-f="code" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;">${this.escapeHtml(d.code || '')}</textarea></div>
+                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order)</label><input data-f="exits" type="text" value="${this.escapeHtml((d.exits || ['next']).join(', '))}"></div>
+                        <div class="storage-config-folder"><label>Tools (server.tool, comma-separated)</label><input data-f="tools" type="text" value="${this.escapeHtml((d.mcp_tools || []).join(', '))}"></div>
+                        <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300" value="${Number(d.timeout_s) || 30}"></div>
+                        <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3"></textarea></div>
+                        <div class="storage-config-folder full"><pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:0;"></pre></div>
+                    </div>
+                </div>
+                <div class="storage-config-footer">
+                    <button class="storage-config-btn" data-act="test">Test</button>
+                    <button class="storage-config-btn cancel" data-act="close">Cancel</button>
+                    <button class="storage-config-btn save" data-act="save">Save</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        const f = (k) => overlay.querySelector(`[data-f="${k}"]`);
+        const read = () => ({
+            name: f('name').value.trim() || 'Code',
+            code: f('code').value,
+            exits: f('exits').value.split(',').map((s) => s.trim()).filter(Boolean),
+            mcp_tools: f('tools').value.split(',').map((s) => s.trim()).filter(Boolean),
+            timeout_s: Math.trunc(Number(f('timeout').value)),
+        });
+        f('code').addEventListener('keydown', (ev) => {
+            if (ev.key !== 'Tab') return;
+            ev.preventDefault();
+            const ta = ev.target; const s = ta.selectionStart;
+            ta.value = ta.value.slice(0, s) + '    ' + ta.value.slice(ta.selectionEnd);
+            ta.selectionStart = ta.selectionEnd = s + 4;
+        });
+        f('template').addEventListener('change', () => {
+            const t = CN.TEMPLATES[f('template').value];
+            if (!t) return;
+            f('code').value = t.code; f('exits').value = t.exits.join(', '); f('tools').value = t.mcp_tools.join(', ');
+        });
+        const show = (text) => { f('result').textContent = text; };
+        overlay.addEventListener('click', async (ev) => {
+            const act = ev.target?.dataset?.act;
+            if (act === 'close') { overlay.remove(); return; }
+            const cfg = read();
+            const errs = CN.validateConfig(cfg);
+            if (act === 'test') {
+                if (errs.length) { show(errs.join('\n')); return; }
+                show('Running…');
+                const sample = f('sample').value;
+                const prompt = this.lastUserPrompt || '';
+                const parents = sample ? [{ name: 'test input', text: sample, start: false }] : [];
+                try {
+                    const r = await this._codeNodeExecute({ code: cfg.code, exits: cfg.exits, tools: cfg.mcp_tools,
+                        timeout_s: cfg.timeout_s, parents, user_prompt: prompt });
+                    show(r.ok
+                        ? `exit: ${r.route}\noutput: ${r.output_text}`
+                          + (r.tool_calls.length ? `\n\ntool calls:\n${r.tool_calls.map((c) => `  ${c.server}.${c.tool} ${c.ok ? 'ok' : 'FAILED'} (${c.ms} ms)`).join('\n')}` : '')
+                          + (r.stdout ? `\n\nprinted:\n${r.stdout}` : '')
+                        : `error: ${r.error}` + (r.stdout ? `\n\nprinted:\n${r.stdout}` : ''));
+                } catch (e) { show('error: ' + (e.message || e)); }
+                return;
+            }
+            if (act === 'save') {
+                if (errs.length) { show(errs.join('\n')); return; }
+                this._applyCodeNodeConfig(nodeId, cfg);
+                overlay.remove();
+            }
+        });
+    }
+
+    /** Save settings; the node's outputs follow its exits (removed exits drop their edges). */
+    _applyCodeNodeConfig(nodeId, cfg) {
+        const node = this.editor.getNodeFromId(nodeId);
+        const before = (node.data.exits || ['next']).length;
+        const after = cfg.exits.length;
+        for (let k = before; k < after; k++) this.editor.addNodeOutput(nodeId);
+        for (let k = before; k > after; k--) {
+            const lost = (node.outputs[`output_${k}`]?.connections || []).length;
+            if (lost) this.showToast?.(`Exit ${k} removed: ${lost} connection(s) dropped`, 'warning');
+            this.editor.removeNodeOutput(nodeId, `output_${k}`);
+        }
+        this.editor.updateNodeDataFromId(nodeId, { ...node.data, ...cfg, type: 'code', node_type: 'code' });
+        this._refreshCodeNode(nodeId);
     }
 
     /**
@@ -11557,6 +11726,15 @@ class WorkflowEditor {
                         }
                         return; // next forEach iteration
                     }
+                    case 'code': {
+                        const x = node.position?.x || node.pos_x || 100;
+                        const y = node.position?.y || node.pos_y || 100;
+                        const dbNodeId = node.db_id || node.id;
+                        const drawflowId = this.addCodeNode(x, y, node.config || {});
+                        idMap[node.id] = String(drawflowId);
+                        if (dbNodeId) this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+                        return;
+                    }
                     case 'realtime-start':
                         html = this.createRealtimeStartNodeHtml();
                         inputs = 0;
@@ -12939,6 +13117,60 @@ class WorkflowEditor {
         }
     }
 
+    async _runNodeAsCodeUnit(id, nodes, userPrompt) {
+        const d = nodes[id].data || {};
+        this.highlightNode(id, 'running', id, 'agent');
+        const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes));
+        let r;
+        try {
+            r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'], tools: d.mcp_tools || [],
+                timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
+        } catch (e) {
+            r = { ok: false, error: String(e && e.message || e), stdout: '', tool_calls: [] };
+        }
+        this.nodeExecutionData[id] = { code: r };
+        if (!r.ok) {
+            this.highlightNode(id, 'error', id, 'agent');
+            return { success: false, output: r.error };
+        }
+        this.highlightNode(id, 'completed', id, 'agent');
+        return { success: true, output: r.output_text, exit: r.route };
+    }
+
+    /** One code-node run in a dedicated Pyodide worker; terminated (and recreated next time) past its timeout. */
+    async _codeNodeExecute(req) {
+        if (!this._codeHarnessSrc) {
+            const resp = await fetch('assets/py/code_node_harness.py?v=20261004-code-node');
+            if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
+            this._codeHarnessSrc = await resp.text();
+        }
+        const payload = { ...req, harness: this._codeHarnessSrc,
+            api_base: window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
+            token: window.authManager?.token || window.authManager?.getToken?.() || null };
+        const cold = !this._codeWorker;
+        if (cold) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261004-code-node');
+        const w = this._codeWorker;
+        const id = (this._codeSeq = (this._codeSeq || 0) + 1);
+        // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
+        const limitMs = (req.timeout_s + 5) * 1000 + (cold ? 90000 : 0);
+        return await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                w.terminate();
+                if (this._codeWorker === w) this._codeWorker = null;
+                reject(new Error(`timed out after ${req.timeout_s}s`));
+            }, limitMs);
+            const onMsg = (e) => {
+                const m = e.data || {};
+                if (m.type === 'progress' || m.id !== id) return;
+                clearTimeout(timer);
+                w.removeEventListener('message', onMsg);
+                m.ok ? resolve(m.result) : reject(new Error(m.error));
+            };
+            w.addEventListener('message', onMsg);
+            w.postMessage({ id, verb: 'runCode', payload });
+        });
+    }
+
     /**
      * Task 10 — the "canvas is inert" scrim shown ONLY while compiled code is
      * running (a separate Python process; no node here will ever light up).
@@ -14264,6 +14496,7 @@ class WorkflowEditor {
         if (t === 'start' || (n.class || '').includes('start-node')) return 'start';
         if (t === 'output' || (n.class || '').includes('output-node')) return 'output';
         if (t === 'playbook') return 'playbook';
+        if (t === 'code') return 'code';
         return 'agent';
     }
 
@@ -14907,7 +15140,7 @@ class WorkflowEditor {
             if (kind === 'start') { this._wfOutputs[id] = userPrompt; done.add(id); }
             else {
                 remaining.add(id);
-                if (kind === 'agent' || kind === 'playbook') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
+                if (kind === 'agent' || kind === 'playbook' || kind === 'code') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
             }
         }
 
@@ -14927,6 +15160,25 @@ class WorkflowEditor {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
+                        if (this._wfNodeKind(id, nodes) === 'code') {
+                            const res = await this._runNodeAsCodeUnit(id, nodes, userPrompt);
+                            this._wfOutputs[id] = res.output;
+                            if (res.success) {
+                                const exits = node.data.exits || ['next'];
+                                const chosen = new Set(window.CodeNode.targetsForExit(id, nodes, res.exit, exits));
+                                const unchosen = this._wfDownstreamIds(id, nodes).filter((d) => !chosen.has(String(d)));
+                                for (const s of this._wfSkipSet(unchosen, nodes)) {
+                                    if (done.has(s) || String(s) === String(id)) continue;
+                                    this._wfOutputs[s] = '';
+                                    done.add(s); remaining.delete(s);
+                                    this.highlightNode(s, 'skipped', s, 'agent');
+                                }
+                                try { onProgress?.({ type: 'route', node_id: [...chosen][0] || '', to: `exit ${res.exit}`, from: agentName, notes: '' }); } catch (_) {}
+                            } else {
+                                _wfHadError = true;
+                            }
+                            try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: res.success }); } catch (_) {}
+                        } else {
                         const dispatchTargets = (node.data.agent_type === 'dispatcher')
                             ? this._wfDispatchTargets(id, nodes) : null;
                         // Its branches are candidates from here until it answers.
@@ -14981,6 +15233,7 @@ class WorkflowEditor {
                         // _runNodeAsChatUnit already highlighted the node red on a
                         // soft failure (error/refusal text); reflect it in the run.
                         if (res && res.success === false) _wfHadError = true;
+                        }
                     }
                 } catch (e) {
                     this._wfOutputs[id] = 'Error: ' + (e?.message || e);

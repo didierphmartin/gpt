@@ -477,11 +477,50 @@ async function runSkillScript(payload) {
   };
 }
 
+// Code nodes (workflow editor): run the shared harness on one node. call_tool is a blocking
+// XHR to the backend (allowed in a worker), so the user's run() stays plain synchronous Python.
+const CODE_DRIVER = `
+import json, sys, types
+_req = json.loads(_code_req_json)
+_h = types.ModuleType("code_node_harness")
+exec(_req["harness"], _h.__dict__)
+sys.modules["code_node_harness"] = _h
+from js import XMLHttpRequest
+
+def _transport(server, tool, args):
+    xhr = XMLHttpRequest.new()
+    xhr.open("POST", _req["api_base"] + "/workflows/code-node/tool-call", False)
+    xhr.setRequestHeader("Content-Type", "application/json")
+    if _req.get("token"):
+        xhr.setRequestHeader("Authorization", "Bearer " + _req["token"])
+    xhr.send(json.dumps({"server": server, "tool": tool, "args": args}))
+    try:
+        body = json.loads(xhr.responseText or "{}")
+    except ValueError:
+        body = {}
+    if xhr.status != 200 or not body.get("ok"):
+        raise _h.ToolError(body.get("error") or f"HTTP {xhr.status}")
+    return body["result"]
+
+_res = _h.execute(_req["code"], _h.decode_input(_req["parents"], _req["user_prompt"]),
+                  _req["exits"], _req["tools"], _transport, _req["timeout_s"], threaded=False)
+_code_res_json = json.dumps(_res, ensure_ascii=False)
+`;
+
+async function runCodeNode(payload) {
+  await ensureLoaded();
+  pyodide.globals.set('_code_req_json', JSON.stringify(payload));
+  await pyodide.runPythonAsync(CODE_DRIVER);
+  return JSON.parse(pyodide.globals.get('_code_res_json'));
+}
+
 self.onmessage = async (e) => {
   const { id, verb, payload } = e.data || {};
   try {
-    if (verb !== 'runSkillScript') throw new Error(`unknown verb: ${verb}`);
-    const result = await runSkillScript(payload);
+    let result;
+    if (verb === 'runSkillScript') result = await runSkillScript(payload);
+    else if (verb === 'runCode') result = await runCodeNode(payload);
+    else throw new Error(`unknown verb: ${verb}`);
     self.postMessage({ id, ok: true, result });
   } catch (err) {
     self.postMessage({ id, ok: false, error: String(err && err.message || err) });
