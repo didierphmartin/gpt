@@ -74,7 +74,7 @@
                 if (text == null || text === '') continue;
                 const d = nodes[u]?.data || {};
                 const start = kindOf(u) === 'start';
-                res.push({ name: start ? 'start' : (d.agent_name || d.name || `node ${u}`), text: String(text), start });
+                res.push({ name: start ? 'start' : (d.agent_name || d.name || `node_${u}`), text: String(text), start });
             }
         }
         return res;
@@ -89,5 +89,76 @@
         return edges;
     }
 
-    return { EXIT_RE, TOOL_RE, TEMPLATES, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, edgesFrom };
+    /** Every child of `nodeId`, edge order (port by port), as ids. */
+    function childrenOf(nodeId, nodes) {
+        const out = [];
+        for (const o of Object.values(nodes[nodeId]?.outputs || {})) for (const c of o.connections || []) out.push(String(c.node));
+        return out;
+    }
+
+    /**
+     * A run that failed outside the harness (the editor's timer fired, or the worker failed), reported
+     * as the harness reports a failure (spec §3.4): the `error` exit when the node has one, else not ok.
+     */
+    function failureResult(exits, message) {
+        const error = `CodeNodeError: ${message}`;
+        if ((exits || []).includes('error')) {
+            return { ok: true, route: 'error', output_text: JSON.stringify({ error }), stdout: '', tool_calls: [] };
+        }
+        return { ok: false, error, stdout: '', tool_calls: [] };
+    }
+
+    /**
+     * What a code node's result means for the run: the node's output, the children on the exit it took,
+     * and the children to skip (the run then skips what is reachable only through them). A failed node
+     * skips all its children -- compiled stops there. An exit with no edge skips every child: that
+     * branch ends (spec §5.1), which is not a failure.
+     */
+    function routeAfter(nodeId, nodes, r, exits) {
+        const kids = childrenOf(nodeId, nodes);
+        if (!r.ok) return { success: false, output: 'Error: ' + r.error, exit: null, chosen: [], skip: kids };
+        const chosen = targetsForExit(nodeId, nodes, r.route, exits);
+        const keep = new Set(chosen);
+        return { success: true, output: r.output_text, exit: r.route, chosen, skip: kids.filter((d) => !keep.has(d)) };
+    }
+
+    /**
+     * Did the run succeed: nothing failed and nothing is left. An Output node that a code node's
+     * routing cut off (an unwired exit) leaves the final output '' -- as compiled returns '' -- and
+     * that is not a failure.
+     */
+    function runSucceeded({ finalOutput, hadError, remaining, outputEndedByRoute }) {
+        return !hadError && remaining === 0 && (!!finalOutput || !!outputEndedByRoute);
+    }
+
+    /**
+     * The node's connections after its exits change, matched BY NAME: a surviving exit keeps its
+     * children on its new port; a removed exit's connections are dropped. An exit's name is its only
+     * identity, so a renamed exit counts as one removed plus one added (its children are dropped).
+     * outputs: the node's Drawflow outputs before the change (output_k = old exit k).
+     */
+    function remapExits(oldExits, newExits, outputs) {
+        const connections = [], dropped = [];
+        oldExits.forEach((exit, i) => {
+            const conns = (outputs || {})[`output_${i + 1}`]?.connections || [];
+            const j = newExits.indexOf(exit);
+            if (j < 0) {
+                if (conns.length) dropped.push({ exit, count: conns.length });
+                return;
+            }
+            for (const c of conns) connections.push({ port: `output_${j + 1}`, node: String(c.node), input: c.output });
+        });
+        return { connections, dropped };
+    }
+
+    /** A loaded config whose exits / mcp_tools are null or not arrays (or exits empty) takes the defaults. */
+    function normalizeConfig(cfg, defaults) {
+        const out = { ...cfg };
+        out.exits = Array.isArray(cfg.exits) && cfg.exits.length ? cfg.exits : [...defaults.exits];
+        out.mcp_tools = Array.isArray(cfg.mcp_tools) ? cfg.mcp_tools : [...defaults.mcp_tools];
+        return out;
+    }
+
+    return { EXIT_RE, TOOL_RE, TEMPLATES, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, edgesFrom,
+             failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig };
 });

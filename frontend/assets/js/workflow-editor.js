@@ -8781,7 +8781,8 @@ class WorkflowEditor {
     addCodeNode(x, y, config = null) {
         const t = window.CodeNode.TEMPLATES.poll_servicenow;
         const defaults = { name: 'Code', code: t.code, exits: [...t.exits], mcp_tools: [...t.mcp_tools], timeout_s: 30, disabled: false };
-        const cfg = config ? { ...defaults, ...config } : { ...defaults };
+        // A loaded config may carry exits / mcp_tools that are null or not arrays: those take the defaults.
+        const cfg = window.CodeNode.normalizeConfig(config ? { ...defaults, ...config } : { ...defaults }, defaults);
         const html = `
             <div class="workflow-node code-node configurable ${cfg.disabled ? 'node-disabled' : ''}">
                 <div class="node-header">
@@ -8830,15 +8831,15 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div class="storage-config-body" style="overflow:auto;">
                     <div class="storage-config-grid">
-                        <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text" value="${this.escapeHtml(d.name || 'Code')}"></div>
+                        <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text"></div>
                         <div class="storage-config-folder full"><label>Template</label>
                             <select data-f="template"><option value="">— keep current code —</option>
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
-                            <textarea data-f="code" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;">${this.escapeHtml(d.code || '')}</textarea></div>
-                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order)</label><input data-f="exits" type="text" value="${this.escapeHtml((d.exits || ['next']).join(', '))}"></div>
-                        <div class="storage-config-folder"><label>Tools (server.tool, comma-separated)</label><input data-f="tools" type="text" value="${this.escapeHtml((d.mcp_tools || []).join(', '))}"></div>
-                        <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300" value="${Number(d.timeout_s) || 30}"></div>
+                            <textarea data-f="code" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
+                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order)</label><input data-f="exits" type="text"></div>
+                        <div class="storage-config-folder"><label>Tools (server.tool, comma-separated)</label><input data-f="tools" type="text"></div>
+                        <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                         <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3"></textarea></div>
                         <div class="storage-config-folder full"><pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:0;"></pre></div>
                     </div>
@@ -8851,6 +8852,13 @@ class WorkflowEditor {
             </div>`;
         document.body.appendChild(overlay);
         const f = (k) => overlay.querySelector(`[data-f="${k}"]`);
+        // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
+        // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
+        f('name').value = d.name || 'Code';
+        f('code').value = d.code || '';
+        f('exits').value = (Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']).join(', ');
+        f('tools').value = (Array.isArray(d.mcp_tools) ? d.mcp_tools : []).join(', ');
+        f('timeout').value = String(Number(d.timeout_s) || 30);
         const read = () => ({
             name: f('name').value.trim() || 'Code',
             code: f('code').value,
@@ -8901,16 +8909,25 @@ class WorkflowEditor {
         });
     }
 
-    /** Save settings; the node's outputs follow its exits (removed exits drop their edges). */
+    /**
+     * Save settings. The node's ports follow its exits BY NAME (CodeNode.remapExits): every
+     * connection is lifted off, the port count is resized, and each surviving exit's children are
+     * reconnected to that exit's new port. A removed exit's children lose their connection; a
+     * renamed exit is a removed exit plus a new one, so its children are dropped too.
+     */
     _applyCodeNodeConfig(nodeId, cfg) {
         const node = this.editor.getNodeFromId(nodeId);
-        const before = (node.data.exits || ['next']).length;
-        const after = cfg.exits.length;
-        for (let k = before; k < after; k++) this.editor.addNodeOutput(nodeId);
-        for (let k = before; k > after; k--) {
-            const lost = (node.outputs[`output_${k}`]?.connections || []).length;
-            if (lost) this.showToast?.(`Exit ${k} removed: ${lost} connection(s) dropped`, 'warning');
-            this.editor.removeNodeOutput(nodeId, `output_${k}`);
+        const oldExits = Array.isArray(node.data.exits) && node.data.exits.length ? node.data.exits : ['next'];
+        const plan = window.CodeNode.remapExits(oldExits, cfg.exits, node.outputs);
+        for (const [port, out] of Object.entries(node.outputs || {})) {
+            for (const c of [...(out.connections || [])]) this.editor.removeSingleConnection(nodeId, c.node, port, c.output);
+        }
+        const before = Object.keys(node.outputs || {}).length;
+        for (let k = before; k < cfg.exits.length; k++) this.editor.addNodeOutput(nodeId);
+        for (let k = before; k > cfg.exits.length; k--) this.editor.removeNodeOutput(nodeId, `output_${k}`);
+        for (const c of plan.connections) this.editor.addConnection(nodeId, c.node, c.port, c.input);
+        for (const d of plan.dropped) {
+            this.showToast?.(`Exit "${d.exit}" removed: ${d.count} connection(s) dropped`, 'warning');
         }
         this.editor.updateNodeDataFromId(nodeId, { ...node.data, ...cfg, type: 'code', node_type: 'code' });
         this._refreshCodeNode(nodeId);
@@ -11142,7 +11159,12 @@ class WorkflowEditor {
 
             // Each edge on its real output port: a code node's exits are output_1..output_n,
             // and reload (importGraphFromBackend) reconnects by from_port.
-            for (const e of window.CodeNode.edgesFrom(id, node)) {
+            // (code-node.js missing: the same loop inline, so an export never throws.)
+            const nodeEdges = window.CodeNode?.edgesFrom
+                ? window.CodeNode.edgesFrom(id, node)
+                : Object.entries(node.outputs || {}).flatMap(([port, out]) =>
+                    (out.connections || []).map((c) => ({ to: String(c.node), from_port: port, to_port: c.output })));
+            for (const e of nodeEdges) {
                 edges.push({ from: id, to: e.to, from_port: e.from_port, to_port: e.to_port });
             }
         });
@@ -13121,24 +13143,28 @@ class WorkflowEditor {
         const d = nodes[id].data || {};
         this.highlightNode(id, 'running', id, 'agent');
         const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes));
-        let r;
-        try {
-            r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'], tools: d.mcp_tools || [],
-                timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
-        } catch (e) {
-            r = { ok: false, error: String(e && e.message || e), stdout: '', tool_calls: [] };
-        }
+        // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
+        const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'], tools: d.mcp_tools || [],
+            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
         this.nodeExecutionData[id] = { code: r };
-        if (!r.ok) {
-            this.highlightNode(id, 'error', id, 'agent');
-            return { success: false, output: r.error };
-        }
-        this.highlightNode(id, 'completed', id, 'agent');
-        return { success: true, output: r.output_text, exit: r.route };
+        this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');
+        return r;
     }
 
-    /** One code-node run in a dedicated Pyodide worker; terminated (and recreated next time) past its timeout. */
+    /**
+     * One code-node run in a dedicated Pyodide worker; terminated (and recreated next time) past its
+     * timeout. Never throws: a timeout or a worker failure is reported as the harness reports any
+     * failure (spec §3.4) -- the `error` exit when the node has one (CodeNode.failureResult).
+     */
     async _codeNodeExecute(req) {
+        try {
+            return await this._codeNodeExecuteOnce(req);
+        } catch (e) {
+            return window.CodeNode.failureResult(req.exits, String(e && e.message || e));
+        }
+    }
+
+    async _codeNodeExecuteOnce(req) {
         if (!this._codeHarnessSrc) {
             const resp = await fetch('assets/py/code_node_harness.py?v=20261004-code-node');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
@@ -14343,10 +14369,10 @@ class WorkflowEditor {
         }
     }
 
-    /** Dispatcher targets: downstream AGENT nodes as [{id, name}] (edge order). */
+    /** Dispatcher targets: downstream agent and code nodes as [{id, name}] (edge order) -- compiled menus list both. */
     _wfDispatchTargets(nodeId, nodes) {
         return this._wfDownstreamIds(nodeId, nodes)
-            .filter(id => this._wfNodeKind(id, nodes) === 'agent')
+            .filter(id => ['agent', 'code'].includes(this._wfNodeKind(id, nodes)))
             .map(id => ({ id, name: nodes[id]?.data?.agent_name || nodes[id]?.data?.name || `Agent ${id}` }));
     }
 
@@ -15135,6 +15161,7 @@ class WorkflowEditor {
         this.updateStartNodeIndicator(true);
         const _wfStartedAt = Date.now();
         let _wfHadError = false;
+        const _wfEndedByRoute = new Set(); // Output ids a code node's exit cut off (an unwired exit)
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
@@ -15170,19 +15197,21 @@ class WorkflowEditor {
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
                         if (this._wfNodeKind(id, nodes) === 'code') {
-                            const res = await this._runNodeAsCodeUnit(id, nodes, userPrompt);
+                            const r = await this._runNodeAsCodeUnit(id, nodes, userPrompt);
+                            // Only the children on the exit taken run; a failed node runs none of
+                            // them (compiled stops there) and the run fails.
+                            const res = window.CodeNode.routeAfter(id, nodes, r, node.data.exits || ['next']);
                             this._wfOutputs[id] = res.output;
+                            for (const s of this._wfSkipSet(res.skip, nodes)) {
+                                if (done.has(s) || String(s) === String(id)) continue;
+                                this._wfOutputs[s] = '';
+                                done.add(s); remaining.delete(s);
+                                this.highlightNode(s, 'skipped', s, 'agent');
+                                // An Output cut off by the exit taken: that branch ended (not a failure).
+                                if (res.success && this._wfNodeKind(s, nodes) === 'output') _wfEndedByRoute.add(String(s));
+                            }
                             if (res.success) {
-                                const exits = node.data.exits || ['next'];
-                                const chosen = new Set(window.CodeNode.targetsForExit(id, nodes, res.exit, exits));
-                                const unchosen = this._wfDownstreamIds(id, nodes).filter((d) => !chosen.has(String(d)));
-                                for (const s of this._wfSkipSet(unchosen, nodes)) {
-                                    if (done.has(s) || String(s) === String(id)) continue;
-                                    this._wfOutputs[s] = '';
-                                    done.add(s); remaining.delete(s);
-                                    this.highlightNode(s, 'skipped', s, 'agent');
-                                }
-                                try { onProgress?.({ type: 'route', node_id: [...chosen][0] || '', to: `exit ${res.exit}`, from: agentName, notes: '' }); } catch (_) {}
+                                try { onProgress?.({ type: 'route', node_id: res.chosen[0] || '', to: `exit ${res.exit}`, from: agentName, notes: '' }); } catch (_) {}
                             } else {
                                 _wfHadError = true;
                             }
@@ -15262,7 +15291,10 @@ class WorkflowEditor {
         const outId = ids.find(id => this._wfNodeKind(id, nodes) === 'output');
         const finalOutput = outId ? this._wfOutputs[outId] : '';
         console.log('[wf-browser] run complete. outputs:', this._wfOutputs);
-        const success = !!finalOutput && !_wfHadError && remaining.size === 0;
+        const success = window.CodeNode
+            ? window.CodeNode.runSucceeded({ finalOutput, hadError: _wfHadError, remaining: remaining.size,
+                outputEndedByRoute: !!outId && _wfEndedByRoute.has(String(outId)) })
+            : !!finalOutput && !_wfHadError && remaining.size === 0;
         // Post-run self-heal hook (Auto mode only; debounced + threshold'd).
         try { window.healSystem?.autoAfterRun?.(); } catch (_) {}
         // Persist the final output to synergyAI/outputs/workflows/
