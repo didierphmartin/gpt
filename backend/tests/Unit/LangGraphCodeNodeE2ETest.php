@@ -158,4 +158,16 @@ class LangGraphCodeNodeE2ETest extends TestCase
             self::assertStringNotContainsString('[3] output', $text);
         }
     }
+
+    public function testBadCodeStopsTheScriptBeforeAnyNodeRuns(): void
+    {
+        // spec §5.2: check_code at startup, single file and modular.
+        $bad = $this->graph("import requests\n\ndef run(input, call_tool):\n    return {'route': 'job', 'output': 1}\n", []);
+        foreach ([[], ['modular' => true]] as $opts) {
+            [$rc, $text] = $this->runScript($this->generateWith($bad, $opts));
+            self::assertNotSame(0, $rc, $text);
+            self::assertStringContainsString("import of 'requests' is not allowed", $text);
+            self::assertStringNotContainsString('[info] Running', $text);
+        }
+    }
 }
