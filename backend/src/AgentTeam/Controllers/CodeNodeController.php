@@ -33,8 +33,7 @@ final class CodeNodeController
     {
         $userId = (int) ($request['user_id'] ?? 0);
         if ($userId <= 0) {
-            http_response_code(401);
-            return ['ok' => false, 'error' => 'Authentication required'];
+            return ['ok' => false, 'error' => 'Authentication required', 'status_code' => 401];
         }
         $body = is_array($request['body'] ?? null) ? $request['body'] : [];
         $server = $body['server'] ?? null;
@@ -42,8 +41,7 @@ final class CodeNodeController
         $args = $body['args'] ?? [];
         if (!is_string($server) || !preg_match('/^[a-z0-9_]{1,64}$/', $server)
             || !is_string($tool) || !preg_match('/^[A-Za-z0-9_.-]{1,128}$/', $tool) || !is_array($args)) {
-            http_response_code(400);
-            return ['ok' => false, 'error' => 'body must be {server: slug, tool: name, args: object}'];
+            return ['ok' => false, 'error' => 'body must be {server: slug, tool: name, args: object}', 'status_code' => 400];
         }
         return (($this->callerFor)($userId))($server, $tool, $args);
     }

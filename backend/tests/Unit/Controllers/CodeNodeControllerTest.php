@@ -38,11 +38,13 @@ final class CodeNodeControllerTest extends TestCase
 
     public function testRefusesWithoutUserOrWithBadInput(): void
     {
-        self::assertSame(['ok' => false, 'error' => 'Authentication required'], $this->controller()->toolCall(['body' => []]));
+        self::assertSame(['ok' => false, 'error' => 'Authentication required', 'status_code' => 401],
+            $this->controller()->toolCall(['body' => []]));
         foreach ([['server' => 'Service Now', 'tool' => 'x'], ['server' => 'servicenow', 'tool' => 'a b'],
                   ['server' => 'servicenow', 'tool' => 'x', 'args' => 'nope'], ['tool' => 'x']] as $body) {
             $r = $this->controller()->toolCall(['user_id' => 7, 'body' => $body]);
             self::assertFalse($r['ok'], json_encode($body));
+            self::assertSame(400, $r['status_code'], json_encode($body));
         }
         self::assertSame([], $this->calls);
     }

@@ -252,7 +252,7 @@ class MCPToolsLoader
             $msg = is_array($raw['error']) ? ($raw['error']['message'] ?? 'MCP error') : (string) $raw['error'];
             return ['error' => true, 'message' => (string) $msg];
         }
-        return ['error' => false, 'raw' => $raw];
+        return ['error' => false, 'raw' => $call['raw_object'] ?? $raw];
     }
 
     /**
@@ -301,20 +301,7 @@ class MCPToolsLoader
         ];
         $headers = array_merge($baseHeaders, $extraHeaders);
 
-        $ch = curl_init($mcpUrl);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($request),
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 180,  // Increased for larger operations
-            CURLOPT_CONNECTTIMEOUT => 15,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
+        [$response, $httpCode, $error] = $this->postJsonRpc($mcpUrl, (string) json_encode($request), $headers);
 
         if ($error) {
             return [
@@ -366,17 +353,53 @@ class MCPToolsLoader
         // Return both formatted (for AI) and raw (for UI) results
         return [
             'formatted' => $this->formatToolResult($result),
-            'raw' => $result  // Original MCP result with content/structuredContent
+            'raw' => $result,  // Original MCP result with content/structuredContent
+            // The same result with JSON objects kept as objects (an empty {} stays {} when
+            // re-encoded); executeToolRaw hands this one on, the code node's call_tool needs it.
+            'raw_object' => $this->resultObject((string) $response),
         ];
+    }
+
+    /** POST one JSON-RPC request: [body (false on transport failure), HTTP status, curl error]. */
+    protected function postJsonRpc(string $url, string $payload, array $headers): array
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 180,  // Increased for larger operations
+            CURLOPT_CONNECTTIMEOUT => 15,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        return [$response, $httpCode, $error];
+    }
+
+    /**
+     * The JSON-RPC result decoded with objects kept as objects: an array at the top level
+     * (what the raw callers index), stdClass below it. Null when the body does not parse.
+     */
+    private function resultObject(string $response): ?array
+    {
+        $parsed = $this->parseResponse($response, false);
+        if (!$parsed instanceof \stdClass) {
+            return null;
+        }
+        $result = $parsed->result ?? $parsed;
+        return $result instanceof \stdClass ? get_object_vars($result) : null;
     }
 
     /**
      * Parse response (JSON or SSE format)
      */
-    private function parseResponse(string $response): ?array
+    private function parseResponse(string $response, bool $assoc = true): array|\stdClass|null
     {
         // Try JSON first
-        $decoded = json_decode($response, true);
+        $decoded = json_decode($response, $assoc);
         if ($decoded !== null) {
             return $decoded;
         }
@@ -388,7 +411,7 @@ class MCPToolsLoader
             if (str_starts_with($line, 'data:')) {
                 $data = trim(substr($line, 5));
                 if (!empty($data)) {
-                    $parsed = json_decode($data, true);
+                    $parsed = json_decode($data, $assoc);
                     if ($parsed !== null) {
                         return $parsed;
                     }
