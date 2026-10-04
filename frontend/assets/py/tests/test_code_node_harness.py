@@ -144,6 +144,44 @@ class ErrorsAndLimits(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("timed out", r["error"])
 
+    def test_system_exit_without_error_exit_fails(self):
+        r = run("def run(i, c):\n    import sys\n    sys.exit(3)")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["error"].startswith("SystemExit"))
+
+    def test_system_exit_with_error_exit_routes_to_error(self):
+        r = run("def run(i, c):\n    import sys\n    sys.exit(3)", exits=("next", "error"))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["route"], "error")
+        self.assertIn("SystemExit", json.loads(r["output_text"])["error"])
+
+    def test_print_is_captured_per_call(self):
+        r = run("def run(i, c):\n    print('hello')\n    return 'ok'")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["stdout"], "hello\n")
+
+    def test_concurrent_print_isolation(self):
+        """Two code nodes running in parallel threads should each capture only their own prints."""
+        import threading as th
+        results = [None, None]
+
+        def run_node(idx, marker):
+            r = run(f"def run(i, c):\n    import time\n    for _ in range(20):\n        print('{marker}')\n        time.sleep(0.001)\n    return 'ok'")
+            results[idx] = r
+
+        t1 = th.Thread(target=run_node, args=(0, "A"))
+        t2 = th.Thread(target=run_node, args=(1, "B"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        # Each should have 20 lines of their own marker, no mixing
+        self.assertEqual(results[0]["stdout"].count("A\n"), 20)
+        self.assertEqual(results[1]["stdout"].count("B\n"), 20)
+        self.assertNotIn("B", results[0]["stdout"])
+        self.assertNotIn("A", results[1]["stdout"])
+
 
 if __name__ == "__main__":
     unittest.main()

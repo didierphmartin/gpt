@@ -5,7 +5,7 @@ LangGraph scripts (embedded by the generator), so both runtimes behave alike.
 Spec: docs/superpowers/specs/2026-10-04-code-node-design.md §3.
 """
 import ast
-import contextlib
+import functools
 import io
 import json
 import sys
@@ -169,7 +169,7 @@ def execute(source: str, input, exits: list, allowed_tools: list, transport, tim
 
     def body():
         check_code(source)
-        ns = {"__name__": "code_node"}
+        ns = {"__name__": "code_node", "print": functools.partial(print, file=buf)}
         exec(compile(source, "<code node>", "exec"), ns)
         run = ns.get("run")
         if not callable(run):
@@ -181,11 +181,10 @@ def execute(source: str, input, exits: list, allowed_tools: list, transport, tim
         return route, _to_text(output)
 
     try:
-        with contextlib.redirect_stdout(buf):
-            route, text = _with_timeout(body, timeout_s) if threaded else body()
+        route, text = _with_timeout(body, timeout_s) if threaded else body()
         return {"ok": True, "route": route, "output_text": text,
                 "stdout": buf.getvalue()[:STDOUT_LIMIT], "tool_calls": calls}
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         err = f"{type(e).__name__}: {e}"
         if "error" in exits:
             return {"ok": True, "route": "error", "output_text": json.dumps({"error": err}, ensure_ascii=False),
