@@ -720,6 +720,16 @@ class GraphWorkflowRunner
         return true;
     }
 
+    /** Why this runner cannot execute a node of $nodeType, or null when it can. */
+    public static function unsupportedNodeMessage(string $nodeType): ?string
+    {
+        return match ($nodeType) {
+            'playbook' => "Playbook nodes run only from the workflow editor's browser run path (server-side durable runs arrive in slice 1c).",
+            'code' => "Code nodes run only from the workflow editor's browser run path or in compiled workflows.",
+            default => null,
+        };
+    }
+
     /**
      * Execute a single node
      */
@@ -738,7 +748,7 @@ class GraphWorkflowRunner
         return match ($nodeType) {
             'agent' => $this->executeAgentNode($node, $userId, $userPrompt, $edges, $executedNodes),
             'agent-template' => throw new \RuntimeException("Unconfigured agent template node found. Please configure all agent nodes before running the workflow."),
-            'playbook' => throw new \RuntimeException("Playbook nodes run only from the workflow editor's browser run path (server-side durable runs arrive in slice 1c)."),
+            'playbook', 'code' => throw new \RuntimeException(self::unsupportedNodeMessage($nodeType)),
             'output' => $this->executeOutputNode($node, $edges, $executedNodes),
             default => ['type' => $nodeType, 'output' => null],
         };
