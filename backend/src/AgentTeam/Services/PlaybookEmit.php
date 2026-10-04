@@ -154,7 +154,7 @@ final class PlaybookEmit
             (array) ($analyzed['edges'] ?? []),
             $agents,
             $extra,
-            ['start', 'agent', 'agent-template', 'playbook', 'output']
+            ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']
         );
     }
 

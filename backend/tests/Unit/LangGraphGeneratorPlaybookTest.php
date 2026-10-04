@@ -137,7 +137,7 @@ TXT;
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         // Playbook nodes get their own Node (and so their own LLM) like agents do.
-        $this->assertStringContainsString('NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS}.items()}', $code);
+        $this->assertStringContainsString('NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS, **CODE_NODES}.items()}', $code);
     }
 
     public function testPlaybookRuntimeOmittedWithoutPlaybookNodes(): void

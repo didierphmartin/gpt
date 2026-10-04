@@ -46,6 +46,7 @@ class NOOAGenerator
                 . 'Compile it with LangGraph, or switch the workflow to "workflow" orchestration.'
             );
         }
+        CodeNodeEmit::refuseUnsupported($this->graphRepo->getGraph($workflowId), 'NOOA');
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
 

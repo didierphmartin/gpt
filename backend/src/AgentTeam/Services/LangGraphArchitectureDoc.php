@@ -116,13 +116,16 @@ final class LangGraphArchitectureDoc
         if (isset($facts['playbookData'][$nid])) {
             return 'playbook';
         }
+        if (isset($facts['codeData'][$nid])) {
+            return 'code';
+        }
         return WorkflowGraphAnalyzer::typeOf($facts['byId'][$nid] ?? []);
     }
 
     /** The node's name as the editor shows it; Start/Output by their type. */
     private static function nameOf(array $facts, string $nid): string
     {
-        $display = $facts['agentData'][$nid]['display'] ?? $facts['playbookData'][$nid]['display'] ?? null;
+        $display = $facts['agentData'][$nid]['display'] ?? $facts['playbookData'][$nid]['display'] ?? $facts['codeData'][$nid]['display'] ?? null;
         return $display ?? ucfirst(self::kindOf($facts, $nid));
     }
 
@@ -269,6 +272,7 @@ final class LangGraphArchitectureDoc
                 'start', 'output' => "([\"{$label}\"])",
                 'dispatcher' => "{\"{$label}\"}",
                 'playbook' => "[[\"{$label}\"]]",
+                'code' => "[/\"{$label}\"/]",
                 default => "[\"{$label}\"]",
             };
         }

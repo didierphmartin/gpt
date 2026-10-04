@@ -251,6 +251,10 @@ class LangGraphGenerator
     public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
         $facts = $this->analyzeForEmit($workflowId, $userId);
+        if ($facts['codeData'] !== [] && ($facts['orchestration'] ?? 'workflow') === 'swarm') {
+            throw new RuntimeException('Code nodes are not supported by the swarm packaging yet. '
+                . 'Compile this workflow as a single file or with agents in separate files.');
+        }
         if (($facts['orchestration'] ?? 'workflow') === 'swarm') {
             // §7 defers both. A2A swarm in particular is a different design —
             // handoffs crossing the network between agent servers — not a
@@ -267,6 +271,10 @@ class LangGraphGenerator
             }
             return $this->generateSwarm($facts);
         }
+        if ($facts['codeData'] !== [] && !empty($options['a2a'])) {
+            throw new RuntimeException('Code nodes are not supported by the A2A packaging yet. '
+                . 'Compile this workflow as a single file or with agents in separate files.');
+        }
         if (!empty($options['a2a'])) {
             return $this->generateA2A($facts);   // Task 4
         }
@@ -276,6 +284,8 @@ class LangGraphGenerator
         // The emitter below was written against local variables; expose the
         // facts under their original names (EXTR_SKIP: never clobber $this).
         extract($facts, EXTR_SKIP);
+        $codeData = $facts['codeData'];
+        $codeSlugs = $facts['codeSlugs'];
         // ---- emit code ----
         $lines = [];
         // Box-drawing separator used in section headers (62 '═' chars,
@@ -302,7 +312,7 @@ class LangGraphGenerator
                 'tools' => [], 'skills' => []];
         }
         $docNodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($byId, $order, $edges, $docAgents, $docExtra,
-            ['start', 'agent', 'agent-template', 'playbook', 'output']);
+            ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);
         $docById = [];
         foreach ($docNodes as $dn) {
             $docById[$dn['id']] = $dn;
@@ -334,7 +344,7 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '');
+        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
         $lines[] = 'from abc import ABC, abstractmethod';
         $lines[] = 'from dataclasses import asdict, dataclass, field';
         $lines[] = 'from enum import Enum';
@@ -384,6 +394,11 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($usedServers, true);
         $lines[] = '';
+        if ($codeData !== []) {
+            $lines[] = '# MCP_SLUGS: server slug -> URL, for code nodes\' call_tool(server, tool, args).';
+            $lines[] = 'MCP_SLUGS = ' . PythonEmitHelpers::jsonToPython($codeSlugs, true);
+            $lines[] = '';
+        }
 
         // ---------- tool catalog (baked) ----------
         $lines[] = $sep;
@@ -405,6 +420,10 @@ class LangGraphGenerator
         $lines[] = '';
         // The protocol steps and the SSE note are McpClient's class docstring.
         $lines[] = LangGraphRuntime::mcpClientBlock();
+        if ($codeData !== []) {
+            $lines[] = LangGraphRuntime::codeHarnessBlock();
+            $lines[] = '';
+        }
 
         // ---------- tool builder ----------
         $lines[] = '';
@@ -469,7 +488,7 @@ class LangGraphGenerator
 
         // ---------- node classes (one per node kind; run() builds NODES from them) ----------
         $lines[] = '';
-        $lines[] = LangGraphRuntime::nodeClassesBlock($playbookData !== []);
+        $lines[] = LangGraphRuntime::nodeClassesBlock($playbookData !== [], $codeData !== []);
 
         // ---------- document converter ----------
         $lines[] = '';
@@ -586,6 +605,19 @@ class LangGraphGenerator
             $lines[] = '}';
         }
         $lines[] = '';
+        $lines[] = '# CODE NODE DEFINITIONS -- run(input, call_tool), exits and declared tools, frozen from the editor';
+        if ($codeData === []) {
+            $lines[] = 'CODE_NODES = {}';
+        } else {
+            $lines[] = 'CODE_NODES = {';
+            foreach ($codeData as $nid => $cd) {
+                foreach (explode("\n", self::codeNodeDefinitionLines((string) $nid, $cd, '"' . $nid . '": {', '    ')) as $nl) {
+                    $lines[] = $nl;
+                }
+            }
+            $lines[] = '}';
+        }
+        $lines[] = '';
 
         // ---------- edge data ----------
         $lines[] = $sep;
@@ -595,6 +627,7 @@ class LangGraphGenerator
         $lines[] = "# ORDER: topological execution order (Kahn's algorithm).";
         $lines[] = '#        Guarantees every node runs after all its predecessors.';
         $lines[] = "# NODE_TYPES: maps node_id -> type ('start', 'agent', 'playbook', 'output').";
+        $lines[] = "#              A code node's type is 'code'.";
         $lines[] = $sep;
         $lines[] = '';
         $lines[] = 'EDGES = ' . PythonEmitHelpers::jsonToPython($edgeList);
@@ -1068,6 +1101,31 @@ class LangGraphGenerator
             }
         }
 
+        // Code nodes: validated settings, exit -> children from the edges' ports, and the MCP
+        // servers their declared tools live on (spec §5).
+        $slugToUrl = [];
+        foreach ($serverRegistry as $surl => $meta) {
+            $slugToUrl[CodeNodeEmit::slug((string) ($meta['name'] ?? ''))] = (string) $surl;
+        }
+        $codeData = [];
+        $codeServerUrls = [];
+        foreach ($order as $nid) {
+            if (self::nodeType($byId[$nid]) !== 'code') {
+                continue;
+            }
+            $codeData[$nid] = CodeNodeEmit::nodeData($byId[$nid], $graph['edges'] ?? [], $slugToUrl);
+            foreach ($codeData[$nid]['servers'] as $surl) {
+                $codeServerUrls[$surl] = true;
+            }
+        }
+        $codeSlugs = [];
+        foreach ($codeData as $cd) {
+            foreach ($cd['tools'] as $t) {
+                $slg = explode('.', $t, 2)[0];
+                $codeSlugs[$slg] = $slugToUrl[$slg];
+            }
+        }
+
         // Filter catalog to only tools actually used by agents
         $usedCatalog = [];
         foreach ($toolCatalog as $k => $v) {
@@ -1088,6 +1146,11 @@ class LangGraphGenerator
             }
         }
         foreach (array_keys($playbookServerUrls) as $surl) {
+            if (isset($serverRegistry[$surl])) {
+                $usedServers[$surl] = $serverRegistry[$surl];
+            }
+        }
+        foreach (array_keys($codeServerUrls) as $surl) {
             if (isset($serverRegistry[$surl])) {
                 $usedServers[$surl] = $serverRegistry[$surl];
             }
@@ -1117,7 +1180,7 @@ class LangGraphGenerator
         $orchestration = $workflow->getOrchestration();
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
-            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
+            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
             'orchestration');
     }
 
@@ -1951,7 +2014,7 @@ PY;
                 'max_tokens' => $pd['max_tokens'], 'thinking' => $pd['thinking'], 'tools' => [], 'skills' => []];
         }
         $nodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($facts['byId'], $facts['order'], $facts['edges'], $docAgents, $docExtra,
-            ['start', 'agent', 'agent-template', 'playbook', 'output']);
+            ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);
         foreach ($nodes as &$n) { $n['file'] = $layout['agents'][$n['id']]['file'] ?? ''; }
         return $nodes;
     }
@@ -2260,6 +2323,9 @@ PY;
             } elseif (isset($facts['playbookData'][$nid])) {
                 $kind = 'playbook';
                 $display = $facts['playbookData'][$nid]['display'];
+            } elseif (isset($facts['codeData'][$nid])) {
+                $kind = 'code';
+                $display = $facts['codeData'][$nid]['display'];
             } else {
                 continue;
             }
@@ -3122,7 +3188,7 @@ TXT;
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $withPlaybooks = $facts['playbookData'] !== [];
-        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '');
+        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '') . ($facts['codeData'] !== [] ? ', types' : '');
         $L[] = 'from abc import ABC, abstractmethod';
         $L[] = 'from dataclasses import asdict, dataclass, field';
         $L[] = 'from enum import Enum';
@@ -3164,12 +3230,19 @@ TXT;
         $L[] = '# in NODE["tool_names"]; the catalog itself is shared.';
         $L[] = $sep;
         $L[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($facts['usedServers'], true);
+        if ($facts['codeData'] !== []) {
+            $L[] = 'MCP_SLUGS = ' . PythonEmitHelpers::jsonToPython($facts['codeSlugs'], true);
+        }
         $L[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($facts['usedCatalog'], true);
         $L[] = '';
         $L[] = $sep;
         $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP';
         $L[] = $sep;
         $L[] = LangGraphRuntime::mcpClientBlock();
+        if ($facts['codeData'] !== []) {
+            $L[] = LangGraphRuntime::codeHarnessBlock();
+            $L[] = '';
+        }
         $L[] = $sep;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
@@ -3183,7 +3256,7 @@ TXT;
         if ($withPlaybooks) {
             $L[] = LangGraphRuntime::playbookBlock();
         }
-        $L[] = LangGraphRuntime::nodeClassesBlock($withPlaybooks);
+        $L[] = LangGraphRuntime::nodeClassesBlock($withPlaybooks, $facts['codeData'] !== []);
         $L[] = '';
         $L[] = $sep;
         $L[] = '# GRAPH STATE + CONTEXT BUILDING (used by WorkflowGraph)';
@@ -3228,7 +3301,11 @@ TXT;
         $entry = $layout['agents'][$nid];
         $kind = $entry['kind'];
         $isPlaybook = $kind === 'playbook';
-        $def = $isPlaybook ? $facts['playbookData'][$nid] : $facts['agentData'][$nid];
+        $def = match ($kind) {
+            'playbook' => $facts['playbookData'][$nid],
+            'code' => $facts['codeData'][$nid],
+            default => $facts['agentData'][$nid],
+        };
         $sep = '# ' . str_repeat('=', 62);
         $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
@@ -3263,7 +3340,10 @@ TXT;
                 }
             }
         }
-        foreach (explode("\n", $this->nodeDefinitionLines($facts, $nid, $kind, $entry['display'], $def, $isPlaybook)) as $nl) {
+        $defLines = $kind === 'code'
+            ? self::codeNodeDefinitionLines($nid, $def)
+            : $this->nodeDefinitionLines($facts, $nid, $kind, $entry['display'], $def, $isPlaybook);
+        foreach (explode("\n", $defLines) as $nl) {
             $L[] = $nl;
         }
         $L[] = '';
@@ -3271,6 +3351,24 @@ TXT;
         $L[] = "# subclass for this NODE's kind, and workflow.py calls its run(request_text, trace).";
         $L[] = 'run_node = make_node(NODE).run';
         return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    /** A code node's frozen settings (the NODE literal of a module, or an entry of CODE_NODES). */
+    private static function codeNodeDefinitionLines(string $nid, array $cd, string $opener = 'NODE = {', string $indent = ''): string
+    {
+        $j = fn($v) => json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $L = [];
+        $L[] = $indent . $opener;
+        $L[] = $indent . '    "id": ' . $j($nid) . ',';
+        $L[] = $indent . '    "kind": "code",';
+        $L[] = $indent . '    "display": ' . $j($cd['display']) . ',';
+        $L[] = $indent . '    "exits": ' . $j($cd['exits']) . ',';
+        $L[] = $indent . '    "tools": ' . $j($cd['tools']) . ',';
+        $L[] = $indent . '    "timeout_s": ' . (int) $cd['timeout_s'] . ',';
+        $L[] = $indent . '    "exit_targets": ' . $j((object) $cd['exit_targets']) . ',';
+        $L[] = $indent . '    "source": ' . $j($cd['source']) . ',';
+        $L[] = $indent . '}' . ($indent !== '' ? ',' : '');
+        return implode("\n", $L);
     }
 
     /**
@@ -3399,7 +3497,8 @@ TXT;
                 ? array_map(fn($t) => ['id' => (string) $t['id'], 'name' => $t['name']], $facts['agentData'][$nid]['dispatch'])
                 : [];
             $L[] = '    ' . $j((string) $nid) . ': {"display": ' . $j($e['display']) . ', "kind": ' . $j($e['kind'])
-                . ', "module": ' . $j($e['module']) . ', "dispatch": ' . $j($dispatch) . '},';
+                . ', "module": ' . $j($e['module']) . ', "dispatch": ' . $j($dispatch)
+                . ($e['kind'] === 'code' ? ', "exit_targets": ' . $j((object) $facts['codeData'][$nid]['exit_targets']) : '') . '},';
         }
         $L[] = '}';
         $L[] = '';
@@ -3726,7 +3825,7 @@ PY;
 # One Node per agent and playbook node -- provider/model come from the AGENTS
 # and PLAYBOOKS dicts, which the generator baked from each node's workflow config.
 # Each node builds its chat model on first use (Node.llm), not here.
-NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS}.items()}
+NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS, **CODE_NODES}.items()}
 NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
 
 
@@ -3746,8 +3845,8 @@ async def _run_local_node(nid: str, request: str) -> dict:
 
 
 def build_graph() -> WorkflowGraph:
-    """The workflow's graph over this file's nodes (AGENTS and PLAYBOOKS, run in this process)."""
-    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents={**AGENTS, **PLAYBOOKS},
+    """The workflow's graph over this file's nodes (AGENTS, PLAYBOOKS and CODE_NODES, run in this process)."""
+    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents={**AGENTS, **PLAYBOOKS, **CODE_NODES},
                          run_node=_run_local_node, start_documents=START_DOCUMENTS)
 
 
