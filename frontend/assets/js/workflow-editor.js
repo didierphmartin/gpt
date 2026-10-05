@@ -8835,12 +8835,12 @@ class WorkflowEditor {
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
-            <div class="storage-config-modal" style="width:min(900px,95vw);max-height:92vh;display:flex;flex-direction:column;">
+            <div class="storage-config-modal" style="width:min(900px,95vw);height:min(720px,92vh);display:flex;flex-direction:column;">
                 <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
                     ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
-                <div class="storage-config-body" style="overflow:auto;">
+                <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text"></div>
                         <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
