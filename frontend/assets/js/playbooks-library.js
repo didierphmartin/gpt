@@ -19,14 +19,18 @@ class PlaybooksLibrary {
         this.searchInput   = document.getElementById('playbooks-search');
         this.newBtn        = document.getElementById('playbooks-new-btn');
         this.contextMenu   = document.getElementById('playbooks-context-menu');
+        this.statusLine    = document.getElementById('playbooks-status');
 
         if (this.newBtn)      this.newBtn.addEventListener('click', () => this.openForm(null));
         if (this.searchInput) this.searchInput.addEventListener('input', () => this.renderTree());
         if (this.contextMenu) {
             this.contextMenu.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const action = e.target.closest('[data-action]')?.dataset.action;
+                const btn = e.target.closest('[data-action]');
+                const action = btn?.dataset.action;
                 if (!action) return;
+                // Delete is two-step: the first click arms the button and keeps the menu open.
+                if (action === 'delete' && !this.armDelete(btn)) return;
                 this.handleContextAction(action);
                 this.hideContextMenu();
             });
@@ -86,9 +90,12 @@ class PlaybooksLibrary {
                 ev.dataTransfer.effectAllowed = 'copy';
             });
         });
+        if (!this.contextMenu) return;
         this.treeContainer.querySelectorAll('.mcp-lib-menu').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                this.disarmDelete();
+                this.setStatus('');
                 this.contextTarget = parseInt(btn.dataset.playbookId, 10);
                 this.contextMenu.style.left = `${e.clientX}px`;
                 this.contextMenu.style.top  = `${e.clientY}px`;
@@ -97,20 +104,44 @@ class PlaybooksLibrary {
         });
     }
 
-    hideContextMenu() { this.contextMenu?.classList.add('hidden'); }
+    hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); }
+
+    // Arm-then-confirm delete (as the MCP library): true when this click is the confirming one.
+    armDelete(btn) {
+        if (btn.dataset.armed === '1') return true;
+        btn.dataset.armed = '1';
+        btn.textContent = this.t('playbookLibrary.confirmDelete');
+        clearTimeout(this.armTimer);
+        this.armTimer = setTimeout(() => this.disarmDelete(), 4000);
+        return false;
+    }
+    disarmDelete() {
+        clearTimeout(this.armTimer);
+        const btn = this.contextMenu?.querySelector('[data-action="delete"]');
+        if (!btn) return;
+        btn.dataset.armed = '0';
+        btn.textContent = this.t('playbookLibrary.delete');
+    }
+
+    setStatus(msg) {
+        if (!this.statusLine) return;
+        this.statusLine.textContent = msg;
+        this.statusLine.classList.toggle('hidden', !msg);
+    }
 
     async handleContextAction(action) {
         const id = this.contextTarget;
         if (id == null) return;
         if (action === 'edit') return this.openForm(id);
         if (action === 'delete') {
+            this.setStatus('');
             try {
                 await this.api.remove(id);
                 window.PlaybookCollection.cache.drop(id);
                 await this.loadTree();
             } catch (err) {
                 // The refusal names what uses the playbook.
-                alert(err.message);
+                this.setStatus(`${this.t('playbookLibrary.deleteRefused')} ${err.message}`);
             }
         }
     }
