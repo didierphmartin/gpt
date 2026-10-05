@@ -131,10 +131,14 @@ class AgentController
 
         // Playbook agents link to the collection (playbook_id); the text lives there.
         // Tools are derived from the linked playbook's bound #Actions (PlaybookAgentTools).
-        if ($agentType === 'playbook' && isset($data['playbook_id']) && $data['playbook_id'] !== null) {
-            $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $data['playbook_id']);
+        // Only a playbook agent has a playbook; any other type ignores playbook_id.
+        if ($agentType !== 'playbook') {
+            $data['playbook_id'] = null;
+        }
+        if (isset($data['playbook_id'])) {
+            $pb = $this->findPlaybook($userId, (int) $data['playbook_id']);
             if ($pb === null) {
-                return $this->error("Playbook #{$data['playbook_id']} not found", 404);
+                return $this->error('Playbook #' . (int) $data['playbook_id'] . ' not found', 404);
             }
             $data['instructions'] = '';
             $data['tools'] = \AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$userId, $pb['text']);
@@ -253,18 +257,6 @@ class AgentController
         if (isset($data['instructions'])) {
             $agent->setInstructions($data['instructions']);
         }
-        if (array_key_exists('playbook_id', $data)) {
-            if ($data['playbook_id'] === null) {
-                $agent->setPlaybookId(null);
-            } else {
-                $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $data['playbook_id']);
-                if ($pb === null) {
-                    return $this->error("Playbook #{$data['playbook_id']} not found", 404);
-                }
-                $agent->setPlaybookId((int) $data['playbook_id']);
-                $agent->setInstructions('');
-            }
-        }
         if (isset($data['tools'])) {
             $agent->setTools($data['tools']);
         }
@@ -281,13 +273,28 @@ class AgentController
             $agent->setSettings($data['settings']);
         }
 
+        // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
+        if (array_key_exists('playbook_id', $data) && $data['playbook_id'] !== null && $agent->getAgentType() === 'playbook') {
+            if ($this->findPlaybook($userId, (int) $data['playbook_id']) === null) {
+                return $this->error('Playbook #' . (int) $data['playbook_id'] . ' not found', 404);
+            }
+            $agent->setPlaybookId((int) $data['playbook_id']);
+        } elseif (array_key_exists('playbook_id', $data) && $data['playbook_id'] === null) {
+            $agent->setPlaybookId(null);
+        }
+        if ($agent->getAgentType() !== 'playbook') {
+            $agent->setPlaybookId(null);
+        }
+        if ($agent->getPlaybookId() !== null) {
+            $agent->setInstructions('');
+        }
+
         try {
             // Playbook agents: keep the tool selection in step with the text.
             if ($agent->getAgentType() === 'playbook') {
                 $text = (string) $agent->getInstructions();
                 if ($agent->getPlaybookId() !== null) {
-                    $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))
-                        ->get((int) $agent->getUserId(), $agent->getPlaybookId());
+                    $pb = $this->findPlaybook((int) $agent->getUserId(), $agent->getPlaybookId());
                     $text = $pb['text'] ?? '';
                 }
                 if (trim($text) !== '') {
@@ -811,6 +818,11 @@ class AgentController
     private function getUserId(array $request): int
     {
         return (int) ($request['user_id'] ?? 0);
+    }
+
+    private function findPlaybook(int $userId, int $id): ?array
+    {
+        return (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, $id);
     }
 
     private function getAgentId(array $request): int

@@ -43,4 +43,58 @@ final class AgentPlaybookLinkTest extends TestCase
         $this->assertSame(404, $r['status_code']);
         $this->assertSame('Playbook #99 not found', $r['error']);
     }
+
+    private function plainAgent(string $type = 'playbook', array $extra = []): int
+    {
+        $r = (new AgentController($this->db, []))->create(['user_id' => 3, 'body' => array_merge(['name' => 'A' . $type, 'agent_type' => $type], $extra)]);
+        $this->assertTrue($r['success'], json_encode($r));
+        return (int) $r['data']['id'];
+    }
+
+    private function update(int $id, array $body, int $user = 3): array
+    {
+        return (new AgentController($this->db, []))->update(['user_id' => $user, 'params' => ['id' => $id], 'agent_id' => $id, 'body' => $body]);
+    }
+
+    public function testUpdateLinksAndEmptiesInstructions(): void
+    {
+        $pb = (new PlaybookStore($this->db))->save(3, null, PlaybookStoreTest::OKTA, 'okta-reset');
+        $id = $this->plainAgent('playbook', ['instructions' => 'old text']);
+        $r = $this->update($id, ['playbook_id' => $pb['id']]);
+        $this->assertTrue($r['success'], json_encode($r));
+        $this->assertSame($pb['id'], (int) $r['data']['playbook_id']);
+        $this->assertSame('', (string) $r['data']['instructions']);
+    }
+
+    public function testUpdateWithUnknownOrForeignPlaybookIs404(): void
+    {
+        $foreign = (new PlaybookStore($this->db))->save(9, null, PlaybookStoreTest::OKTA, 'okta-reset');
+        $id = $this->plainAgent();
+        foreach ([99, $foreign['id']] as $bad) {
+            $r = $this->update($id, ['playbook_id' => $bad]);
+            $this->assertSame(404, $r['status_code']);
+            $this->assertSame("Playbook #{$bad} not found", $r['error']);
+        }
+    }
+
+    public function testLinkedAgentKeepsInstructionsEmptyOnUpdate(): void
+    {
+        $pb = (new PlaybookStore($this->db))->save(3, null, PlaybookStoreTest::OKTA, 'okta-reset');
+        $id = $this->plainAgent('playbook', ['playbook_id' => $pb['id']]);
+        $r = $this->update($id, ['instructions' => 'stale text']);
+        $this->assertTrue($r['success'], json_encode($r));
+        $this->assertSame('', (string) $r['data']['instructions']);
+        $this->assertSame($pb['id'], (int) $r['data']['playbook_id']);
+    }
+
+    public function testStandardAgentStoresNoLink(): void
+    {
+        $pb = (new PlaybookStore($this->db))->save(3, null, PlaybookStoreTest::OKTA, 'okta-reset');
+        $r = (new AgentController($this->db, []))->create(['user_id' => 3, 'body' => ['name' => 'S', 'agent_type' => 'standard', 'playbook_id' => $pb['id']]]);
+        $this->assertTrue($r['success'], json_encode($r));
+        $this->assertNull($r['data']['playbook_id']);
+        $id = (int) $r['data']['id'];
+        $u = $this->update($id, ['playbook_id' => $pb['id']]);
+        $this->assertNull($u['data']['playbook_id']);
+    }
 }
