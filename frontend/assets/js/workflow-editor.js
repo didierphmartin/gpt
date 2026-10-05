@@ -480,7 +480,8 @@ class WorkflowEditor {
             this.showSaveOverlay();
         });
         document.getElementById('workflow-run-btn')?.addEventListener('click', () => this.runWorkflow());
-        document.getElementById('workflow-clear-btn')?.addEventListener('click', () => this.clearWorkflow());
+        // Clearing leaves the workflow: its pending node edits are saved first, as loading another does.
+        document.getElementById('workflow-clear-btn')?.addEventListener('click', async () => { await this._persistIfDirty(); this.clearWorkflow(); });
         document.getElementById('workflow-reset-top-btn')?.addEventListener('click', () => this.resetWorkflowRun());
         // Top-left Save button (beside Reset): saves the workflow with spinner/"Saving…" feedback.
         document.getElementById('workflow-save-top-btn')?.addEventListener('click', async (e) => {
@@ -6920,9 +6921,10 @@ class WorkflowEditor {
 
         const modal = document.getElementById('new-workflow-type-modal');
 
-        document.getElementById('new-wf-batch').addEventListener('click', () => {
+        document.getElementById('new-wf-batch').addEventListener('click', async () => {
             modal.remove();
             this.runtimeMode = 'batch';
+            await this._persistIfDirty();   // leaving the current workflow: save its pending edits
             this.clearWorkflow(false);
             // Restore batch-specific UI elements
             const infoBox = document.getElementById('workflow-info-box');
@@ -6934,9 +6936,10 @@ class WorkflowEditor {
             this.renderAgentsPanel();
         });
 
-        document.getElementById('new-wf-realtime').addEventListener('click', () => {
+        document.getElementById('new-wf-realtime').addEventListener('click', async () => {
             modal.remove();
             this.runtimeMode = 'realtime';
+            await this._persistIfDirty();   // leaving the current workflow: save its pending edits
             this.clearWorkflow(false);
             this.setupRealtimeCanvas();
         });
@@ -9013,6 +9016,9 @@ class WorkflowEditor {
         const { mcp_tools: _dropped, ...kept } = node.data;   // mcp_tools: the old typed tool list, replaced by mcp_servers
         this.editor.updateNodeDataFromId(nodeId, { ...kept, ...cfg, type: 'code', node_type: 'code' });
         this._refreshCodeNode(nodeId);
+        // Like an agent node's form: the DB write is flushed by _persistIfDirty() (Run, Compile,
+        // loading another workflow, Clear) or by Save Workflow.
+        this._workflowDirty = true;
     }
 
     /**

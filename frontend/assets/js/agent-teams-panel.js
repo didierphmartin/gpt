@@ -2650,8 +2650,10 @@ class AgentTeamsPanel {
             // Set up "New Workflow" button in sidebar
             const newWorkflowBtn = document.getElementById('new-workflow-btn');
             if (newWorkflowBtn) {
-                newWorkflowBtn.addEventListener('click', () => {
+                newWorkflowBtn.addEventListener('click', async () => {
                     if (window.workflowEditor) {
+                        // Leaving the current workflow: save its pending node edits first.
+                        await window.workflowEditor._persistIfDirty?.();
                         window.workflowEditor.clearWorkflow();
                     }
                 });
