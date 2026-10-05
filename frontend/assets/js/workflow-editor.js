@@ -8901,20 +8901,20 @@ class WorkflowEditor {
             const known = new Set(servers.map((m) => m.name));
             const rows = servers.map((m) => ({ name: m.name, meta: m }))
                 .concat([...checked].filter((n) => !known.has(n)).map((n) => ({ name: n, meta: null })));
-            f('servers').innerHTML = rows.length ? rows.map(({ name, meta }) => {
+            // Two compact columns; the URL is the row's tooltip rather than a column of its own.
+            f('servers').innerHTML = rows.length ? `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;">${rows.map(({ name, meta }) => {
                 const off = meta && meta.effective_on === false;
                 const badges = [
-                    !meta ? '<span class="px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">not one of your servers</span>' : '',
-                    off ? '<span class="px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">disabled</span>' : '',
-                    meta?.is_mock ? '<span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-700">mock</span>' : '',
+                    !meta ? '<span class="px-1 rounded text-xs bg-red-100 text-red-700">not yours</span>' : '',
+                    off ? '<span class="px-1 rounded text-xs bg-red-100 text-red-700">disabled</span>' : '',
+                    meta?.is_mock ? '<span class="px-1 rounded text-xs bg-amber-100 text-amber-700">mock</span>' : '',
                 ].join(' ');
-                return `<label class="flex items-center gap-2 p-1.5 hover:bg-gray-100 rounded cursor-pointer">
-                    <input type="checkbox" class="w-3.5 h-3.5" data-server="${esc(name)}" ${checked.has(name) ? 'checked' : ''}>
-                    <span class="text-sm text-gray-800">🔌 ${esc(name)}</span>
-                    <code class="text-xs text-gray-400">${esc(CN.slug(name))}</code> ${badges}
-                    ${meta?.url ? `<span class="ml-auto text-xs text-gray-400 font-mono truncate" title="${esc(meta.url)}">${esc(meta.url)}</span>` : ''}
+                return `<label class="flex items-center gap-2 px-1 py-0.5 hover:bg-gray-100 rounded cursor-pointer" style="min-width:0;" title="${esc(meta?.url || '')}">
+                    <input type="checkbox" class="w-3.5 h-3.5" style="flex:none;" data-server="${esc(name)}" ${checked.has(name) ? 'checked' : ''}>
+                    <span class="text-sm text-gray-800 truncate">${esc(name)}</span>
+                    <code class="text-xs text-gray-400 truncate">${esc(CN.slug(name))}</code> ${badges}
                 </label>`;
-            }).join('') : '<p class="text-sm text-gray-400 italic">No MCP servers yet. Add one in Settings → MCP Servers.</p>';
+            }).join('')}</div>` : '<p class="text-sm text-gray-400 italic">No MCP servers yet. Add one in Settings → MCP Servers.</p>';
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
             }));
