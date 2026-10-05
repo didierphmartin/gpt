@@ -60,6 +60,11 @@ class ReturnRules(unittest.TestCase):
         r = run("def run(i, c):\n    return {'route': 'next', 'output': 'x'}")
         self.assertEqual((r["route"], r["output_text"]), ("next", "x"))
 
+    def test_route_without_exits_says_so(self):
+        r = run("def run(i, c):\n    return {'route': 'job', 'output': 1}", exits=("next",))
+        self.assertFalse(r["ok"])
+        self.assertIn("this node has no exits: return the output itself, without 'route'", r["error"])
+
     def test_unserialisable_output_fails(self):
         r = run("def run(i, c):\n    return object()")
         self.assertFalse(r["ok"])

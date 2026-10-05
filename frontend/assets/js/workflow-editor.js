@@ -8792,7 +8792,7 @@ class WorkflowEditor {
                 </div>
                 <div class="code-badges" style="padding:0 8px;max-width:230px;">${this._codeBadgesHtml(cfg)}</div>
                 <div class="node-body">
-                    <small class="node-config-display">${this.escapeHtml(cfg.exits.map((e, i) => `${i + 1}:${e}`).join('  '))}</small>
+                    <small class="node-config-display">${this.escapeHtml(window.CodeNode.exitsLabel(cfg.exits))}</small>
                     <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
                 </div>
             </div>`;
@@ -8815,7 +8815,7 @@ class WorkflowEditor {
         if (!root) return;
         root.querySelector('.node-title').textContent = d.name || 'Code';
         root.querySelector('.code-badges').innerHTML = this._codeBadgesHtml(d);
-        root.querySelector('.node-config-display').textContent = (d.exits || []).map((e, i) => `${i + 1}:${e}`).join('  ');
+        root.querySelector('.node-config-display').textContent = window.CodeNode.exitsLabel(d.exits || ['next']);
         this._updateExitTags();
     }
 
@@ -8885,7 +8885,7 @@ class WorkflowEditor {
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
         f('code').value = d.code || '';
-        f('exits').value = (Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']).join(', ');
+        f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
         f('timeout').value = String(Number(d.timeout_s) || 30);
         // The last run, as the agent tabs show it.
         const run = this.nodeExecutionData?.[nodeId];
@@ -8954,7 +8954,7 @@ class WorkflowEditor {
         f('template').addEventListener('change', () => {
             const t = CN.TEMPLATES[f('template').value];
             if (!t) return;
-            f('code').value = t.code; f('exits').value = t.exits.join(', ');
+            f('code').value = t.code; f('exits').value = CN.exitsText(t.exits);
             // The template's servers, by slug, among the user's own.
             checked = new Set(servers.filter((m) => t.servers.includes(CN.slug(m.name))).map((m) => m.name));
             renderServers();
@@ -13249,7 +13249,7 @@ class WorkflowEditor {
 
     async _codeNodeExecuteOnce(req) {
         if (!this._codeHarnessSrc) {
-            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-code-node-tabs');
+            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
@@ -13260,7 +13260,7 @@ class WorkflowEditor {
         // timer starts when the job starts, not while it waits in the queue.
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-code-node-tabs');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-no-exit');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.

@@ -121,6 +121,8 @@ def _route_output(value, exits: list):
         return value["route"], value.get("output")
     if shaped:
         if value["route"] != exits[0]:
+            if exits == ["next"]:   # the no-exit state: "next" is shown nowhere
+                raise CodeNodeError("this node has no exits: return the output itself, without 'route'")
             raise CodeNodeError(f"route must be {exits[0]!r}, the node's only exit")
         return exits[0], value.get("output")
     return exits[0], value

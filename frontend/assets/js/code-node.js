@@ -115,9 +115,25 @@
         return edges;
     }
 
-    /** One tag per link leaving a code node: the exit its port stands for (a port past the exits has none). */
+    /** The no-exit state: the single default exit, shown nowhere (the node behaves like any other). */
+    function isPlain(exits) {
+        return !exits || (exits.length === 1 && exits[0] === 'next');
+    }
+
+    /** The Exits field's text: empty in the no-exit state. */
+    function exitsText(exits) {
+        return isPlain(exits) ? '' : exits.join(', ');
+    }
+
+    /** The node card's exit line ("1:job  2:no_job"): empty in the no-exit state. */
+    function exitsLabel(exits) {
+        return isPlain(exits) ? '' : exits.map((e, i) => `${i + 1}:${e}`).join('  ');
+    }
+
+    /** One tag per link leaving a code node: the exit its port stands for (a port past the exits has none, the no-exit state none at all). */
     function exitTags(nodeId, nodes) {
         const exits = nodes[nodeId]?.data?.exits || ['next'];
+        if (isPlain(exits)) return [];
         return edgesFrom(nodeId, nodes[nodeId] || {})
             .map((e) => ({ to: e.to, port: e.from_port, exit: exitForPort(exits, e.from_port) }))
             .filter((t) => t.exit !== null);
@@ -227,6 +243,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, parseExits, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });
