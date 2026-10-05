@@ -1158,6 +1158,14 @@ class WorkflowController
         $prompt = (string) ($body['prompt'] ?? '');
 
         try {
+            // A node linked to the collection sends playbook_id; the text is read here, for its owner.
+            if (isset($nodeConfig['playbook_id'])) {
+                $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $nodeConfig['playbook_id']);
+                if ($pb === null) {
+                    throw new \RuntimeException("Playbook #{$nodeConfig['playbook_id']} not found");
+                }
+                $nodeConfig['playbook'] = $pb['text'];
+            }
             $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
             $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
 

@@ -35,6 +35,10 @@ final class PlaybookEmit
     {
         $nid = (string) ($node['id'] ?? $node['drawflow_node_id'] ?? ($node['_id'] ?? ''));
         $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        if (!empty($cfg['playbook_missing'])) {
+            $name = (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $nid);
+            throw new RuntimeException("Playbook #{$cfg['playbook_id']} not found (node {$name}).");
+        }
         $raw = $cfg['playbook'] ?? null;
         if (is_string($raw) && trim($raw) !== '') {
             $doc = \Quantis\AIPortfolioAssistant\Playbook\PlaybookDocument::fromConsoleText($raw);

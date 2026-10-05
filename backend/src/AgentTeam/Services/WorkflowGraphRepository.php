@@ -54,10 +54,36 @@ class WorkflowGraphRepository
         );
         $stmt->execute([$workflowId]);
 
-        return array_map(function($row) {
+        $rows = array_map(function($row) {
             $row['config'] = $row['config'] ? json_decode($row['config'], true) : [];
             return $row;
         }, $stmt->fetchAll(PDO::FETCH_ASSOC));
+
+        // Playbook nodes link to the collection: fill in the linked text for the workflow's
+        // owner, so every reader (compilers, docs) keeps receiving config['playbook'].
+        $owner = null;
+        foreach ($rows as &$row) {
+            $cfg = $row['config'];
+            if (($row['node_type'] ?? '') !== 'playbook' || !is_array($cfg) || !isset($cfg['playbook_id'])) {
+                continue;
+            }
+            if ($owner === null) {
+                $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
+                $st->execute([$workflowId]);
+                $owner = (int) $st->fetchColumn();
+            }
+            $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($owner, (int) $cfg['playbook_id']);
+            if ($pb === null) {
+                unset($cfg['playbook']);
+                $cfg['playbook_missing'] = true;
+            } else {
+                $cfg['playbook'] = $pb['text'];
+            }
+            $row['config'] = $cfg;
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**
