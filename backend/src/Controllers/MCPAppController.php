@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 
 /**
  * MCP App Controller
@@ -56,13 +57,6 @@ class MCPAppController
             ];
         }
 
-        // Normalize URL: servers ending in .php are already the endpoint
-        // (e.g. XAMPP-style mcp-server.php). Only append /mcp otherwise.
-        $mcpUrl = rtrim($serverUrl, '/');
-        if (!str_ends_with($mcpUrl, '/mcp') && !str_ends_with($mcpUrl, '.php')) {
-            $mcpUrl .= '/mcp';
-        }
-
         // Initialize MCP session
         $initRequest = [
             'jsonrpc' => '2.0',
@@ -78,7 +72,15 @@ class MCPAppController
             ]
         ];
 
-        $initResponse = $this->sendMCPRequest($mcpUrl, $initRequest);
+        // The endpoint is the first candidate (McpEndpoint: the URL as given,
+        // then with "/mcp" in its path) that answers initialize with JSON-RPC.
+        $initResponse = null;
+        foreach (McpEndpoint::candidates($serverUrl) as $mcpUrl) {
+            $initResponse = $this->sendMCPRequest($mcpUrl, $initRequest);
+            if (McpEndpoint::isJsonRpcReply($initResponse)) {
+                break;
+            }
+        }
         if (!$initResponse || isset($initResponse['error'])) {
             return [
                 'error' => 'Failed to initialize MCP session',

@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 
 /**
  * MCP Proxy Controller
@@ -18,6 +19,8 @@ class MCPProxyController
     private PDO $db;
     private array $config;
     private ?string $lastError = null;
+    /** @var array<string,string> "transport url" => the endpoint that answered */
+    private array $endpoints = [];
 
     public function __construct(PDO $db, array $config)
     {
@@ -198,7 +201,7 @@ class MCPProxyController
         $response = $this->sendToMCPServer($serverUrl, $initRequest, true, $extraHeaders, $transport);
 
         if ($response === null) {
-            $urlTried = self::resolveEndpointUrl($serverUrl, $transport);
+            $urlTried = implode(', ', McpEndpoint::candidates($serverUrl, $transport));
             return [
                 'success' => false,
                 'error' => $this->lastError ?? 'Failed to connect to MCP server',
@@ -313,33 +316,39 @@ class MCPProxyController
     }
 
     /**
-     * Compute the URL the proxy POSTs JSON-RPC to.
-     *  - 'sse' transport: a trailing "/sse" is replaced by "/mcp" (MCPeek's
-     *    SSEMCPClient.initializeSession behaviour). Servers that only answer
-     *    over the event stream are not supported by this proxy.
-     *  - then, for every transport: append "/mcp" unless the URL already ends
-     *    in "/mcp" or ".php" (XAMPP-style script endpoints).
-     */
-    public static function resolveEndpointUrl(string $serverUrl, string $transport = 'http'): string
-    {
-        $url = rtrim($serverUrl, '/');
-        if ($transport === 'sse' && str_ends_with($url, '/sse')) {
-            $url = substr($url, 0, -4) . '/mcp';
-        }
-        if (!str_ends_with($url, '/mcp') && !str_ends_with($url, '.php')) {
-            $url .= '/mcp';
-        }
-        return $url;
-    }
-
-    /**
-     * Send request to MCP server
+     * Send request to MCP server.
+     *
+     * Tries McpEndpoint::candidates() in order — the registered URL as given,
+     * then with "/mcp" in its path — and remembers the one that answered
+     * JSON-RPC, so the rest of the exchange (initialized, tools/list...) goes
+     * there directly. A JSON-RPC reply, even an error, means the endpoint was
+     * found: its error is reported, no further candidate is tried.
      */
     private function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = [], string $transport = 'http'): ?array
     {
-        $this->lastError = null;
+        $key = $transport . ' ' . $serverUrl;
+        $candidates = isset($this->endpoints[$key]) ? [$this->endpoints[$key]] : McpEndpoint::candidates($serverUrl, $transport);
+        $errors = [];
+        foreach ($candidates as $mcpUrl) {
+            [$reply, $isEndpoint] = $this->postJsonRpc($mcpUrl, $request, $expectResponse, $extraHeaders);
+            if ($isEndpoint) {
+                $this->endpoints[$key] = $mcpUrl;
+                return $reply;
+            }
+            $errors[] = $this->lastError;
+        }
+        $this->lastError = implode('; ', array_unique($errors));
+        return null;
+    }
 
-        $mcpUrl = self::resolveEndpointUrl($serverUrl, $transport);
+    /**
+     * POST one JSON-RPC message. Returns [reply, isEndpoint]: isEndpoint is
+     * true when the URL answered as an MCP endpoint (a JSON-RPC reply, or any
+     * 2xx to a notification); reply is null on an error, with lastError set.
+     */
+    private function postJsonRpc(string $mcpUrl, array $request, bool $expectResponse, array $extraHeaders): array
+    {
+        $this->lastError = null;
 
         $baseHeaders = [
             'Content-Type: application/json',
@@ -365,43 +374,38 @@ class MCPProxyController
         curl_close($ch);
 
         if ($error) {
-            $this->lastError = "Connection failed: $error (code: $errno)";
-            return null;
+            $this->lastError = "Connection failed at $mcpUrl: $error (code: $errno)";
+            return [null, false];
         }
 
         if ($httpCode === 0) {
             $this->lastError = "Could not connect to server at $mcpUrl";
-            return null;
+            return [null, false];
         }
 
+        // Plain JSON first, then SSE framing.
+        $decoded = json_decode((string) $response, true);
+        if (!is_array($decoded)) {
+            $decoded = $this->parseSSEResponse((string) $response);
+        }
+        $isJsonRpc = McpEndpoint::isJsonRpcReply($decoded);
+
         if ($httpCode >= 400) {
-            $errorDetails = '';
-            $parsed = json_decode($response, true);
-            if ($parsed && isset($parsed['error']['message'])) {
-                $errorDetails = ': ' . $parsed['error']['message'];
-            }
-            $this->lastError = "Server returned HTTP $httpCode$errorDetails";
-            return null;
+            $errorDetails = $isJsonRpc && isset($decoded['error']['message']) ? ': ' . $decoded['error']['message'] : '';
+            $this->lastError = "Server returned HTTP $httpCode at $mcpUrl$errorDetails";
+            return [null, $isJsonRpc];
         }
 
         if (!$expectResponse) {
-            return ['success' => true];
+            return [['success' => true], true];
         }
 
-        // Try to parse as plain JSON
-        $decoded = json_decode($response, true);
-        if ($decoded !== null) {
-            return $decoded;
+        if ($isJsonRpc) {
+            return [$decoded, true];
         }
 
-        // Try to parse as SSE format
-        $decoded = $this->parseSSEResponse($response);
-        if ($decoded !== null) {
-            return $decoded;
-        }
-
-        $this->lastError = "Server returned invalid response format";
-        return null;
+        $this->lastError = "Server at $mcpUrl did not reply with JSON-RPC";
+        return [null, false];
     }
 
     /**
