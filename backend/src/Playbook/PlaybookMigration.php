@@ -9,7 +9,7 @@ use PDO;
  * playbook collection. Runs in one transaction: committed when $write, rolled back otherwise
  * (a dry run), so the report is the same either way.
  */
-final class PlaybookMigration
+class PlaybookMigration
 {
     private PlaybookStore $store;
     private array $report;
@@ -25,8 +25,8 @@ final class PlaybookMigration
             'agents_linked' => 0, 'nodes_linked' => 0, 'errors' => []];
         $this->db->beginTransaction();
         try {
-            $migrated = $this->migrateAgents();
-            $this->migrateNodes($migrated);
+            $this->migrateAgents();
+            $this->migrateNodes();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
@@ -35,26 +35,22 @@ final class PlaybookMigration
         return $this->report;
     }
 
-    /** @return array<int,array{playbook_id:int,user_id:int}> by agent id */
-    private function migrateAgents(): array
+    private function migrateAgents(): void
     {
         $rows = $this->db->query("SELECT id, user_id, name, instructions FROM agents
             WHERE agent_type = 'playbook' AND playbook_id IS NULL AND instructions IS NOT NULL AND TRIM(instructions) <> ''
             ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-        $migrated = [];
         $upd = $this->db->prepare("UPDATE agents SET playbook_id = ?, instructions = '' WHERE id = ?");
         foreach ($rows as $r) {
             $from = "agent #{$r['id']} \"{$r['name']}\"";
             $pb = $this->create((int) $r['user_id'], (string) $r['instructions'], $from);
             if ($pb === null) continue;
             $upd->execute([$pb, $r['id']]);
-            $migrated[(int) $r['id']] = ['playbook_id' => $pb, 'user_id' => (int) $r['user_id']];
             $this->report['agents_linked']++;
         }
-        return $migrated;
     }
 
-    private function migrateNodes(array $migrated): void
+    private function migrateNodes(): void
     {
         $rows = $this->db->query("SELECT n.id, n.config, w.user_id, w.name AS wname
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
@@ -65,10 +61,8 @@ final class PlaybookMigration
             if (!is_array($cfg) || !empty($cfg['playbook_id'])) continue;
             $owner = (int) $r['user_id'];
             $from = "node #{$r['id']} \"" . ($cfg['name'] ?? 'Playbook') . "\" in workflow \"{$r['wname']}\"";
-            $agent = $migrated[(int) ($cfg['agent_id'] ?? 0)] ?? null;
-            if ($agent !== null && $agent['user_id'] === $owner) {
-                $pb = $agent['playbook_id'];
-            } else {
+            $pb = $this->agentPlaybook($owner, (int) ($cfg['agent_id'] ?? 0));
+            if ($pb === null) {
                 $pb = $this->fromNodePlaybook($owner, $cfg['playbook'] ?? null, $from);
                 if ($pb === null) continue;
             }
@@ -76,7 +70,21 @@ final class PlaybookMigration
             $cfg['playbook_id'] = $pb;
             $upd->execute([json_encode($cfg, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $r['id']]);
             $this->report['nodes_linked']++;
+            $this->nodeLinked((int) $r['id']);
         }
+    }
+
+    /** Hook after each node is linked (a test seam; does nothing). */
+    protected function nodeLinked(int $nodeId): void {}
+
+    /** The playbook already linked to the owner's own agent (migrated above or linked before); null for another user's agent. */
+    private function agentPlaybook(int $owner, int $agentId): ?int
+    {
+        if ($agentId === 0) return null;
+        $st = $this->db->prepare('SELECT playbook_id FROM agents WHERE id = ? AND user_id = ? AND playbook_id IS NOT NULL');
+        $st->execute([$agentId, $owner]);
+        $v = $st->fetchColumn();
+        return $v === false ? null : (int) $v;
     }
 
     private function fromNodePlaybook(int $owner, mixed $playbook, string $from): ?int

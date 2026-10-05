@@ -92,4 +92,68 @@ final class PlaybookMigrationTest extends TestCase
         $this->assertSame(2, $report['agents_linked']);
         $this->assertSame(4, $report['nodes_linked']);
     }
+
+    private function addNode(array $cfg): int
+    {
+        $this->db->prepare("INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (1, 'playbook', ?)")->execute([json_encode($cfg)]);
+        return (int) $this->db->lastInsertId();
+    }
+
+    private function cfg(int $id): array
+    {
+        return json_decode($this->db->query("SELECT config FROM workflow_nodes WHERE id = {$id}")->fetchColumn(), true);
+    }
+
+    public function testANodeNeverLinksToAnotherUsersAgent(): void
+    {
+        $this->db->exec("INSERT INTO agents (user_id, name, agent_type, instructions) VALUES (4, 'Other', 'playbook', 'Title: Theirs\nInstructions: x\n')");
+        $other = (int) $this->db->lastInsertId();
+        $own = $this->addNode(['name' => 'Own', 'agent_id' => $other, 'playbook' => $this->text('Mine')]);
+        $none = $this->addNode(['name' => 'None', 'agent_id' => $other]);
+        $report = (new PlaybookMigration($this->db))->run(true);
+        $theirs = (int) $this->db->query("SELECT id FROM playbooks WHERE user_id = 4")->fetchColumn();
+        $mine = $this->db->query("SELECT id, user_id FROM playbooks WHERE pkey = 'mine'")->fetch();
+        $this->assertSame(3, (int) $mine['user_id']);
+        $this->assertSame((int) $mine['id'], $this->cfg($own)['playbook_id']);
+        $this->assertNotSame($theirs, $this->cfg($own)['playbook_id']);
+        $this->assertArrayNotHasKey('playbook_id', $this->cfg($none));
+        $this->assertContains("node #{$none} \"None\" in workflow \"WF\"", array_column($report['errors'], 'from'));
+    }
+
+    public function testANodeTakesThePlaybookOfAnAlreadyLinkedAgent(): void
+    {
+        $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->save(3, null, $this->text('Linked'), null);
+        $this->db->exec("INSERT INTO agents (user_id, name, agent_type, instructions, playbook_id) VALUES (3, 'L', 'playbook', '', {$pb['id']})");
+        $agent = (int) $this->db->lastInsertId();
+        $node = $this->addNode(['name' => 'L1', 'agent_id' => $agent, 'playbook' => $this->text('Linked')]);
+        (new PlaybookMigration($this->db))->run(true);
+        $this->assertSame($pb['id'], $this->cfg($node)['playbook_id']);
+        $this->assertArrayNotHasKey('playbook', $this->cfg($node));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) FROM playbooks WHERE title = 'Linked'"));
+    }
+
+    public function testAFailureMidRunLeavesTheDatabaseUnchanged(): void
+    {
+        $snap = fn() => [
+            $this->db->query('SELECT * FROM playbooks')->fetchAll(),
+            $this->db->query('SELECT * FROM agents')->fetchAll(),
+            $this->db->query('SELECT * FROM workflow_nodes')->fetchAll(),
+        ];
+        $before = $snap();
+        $m = new class($this->db) extends PlaybookMigration {
+            private int $seen = 0;
+            protected function nodeLinked(int $nodeId): void
+            {
+                if (++$this->seen === 2) throw new \RuntimeException('boom');
+            }
+        };
+        try {
+            $m->run(true);
+            $this->fail('expected the exception to propagate');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('boom', $e->getMessage());
+        }
+        $this->assertSame($before, $snap());
+        $this->assertFalse($this->db->inTransaction());
+    }
 }
