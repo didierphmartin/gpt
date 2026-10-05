@@ -231,6 +231,7 @@
     "workflows": "Workflows",
     "fileStorage": "Almacenamiento de Archivos",
     "mcpServers": "Biblioteca de Servidores MCP",
+    "playbooks": "Biblioteca de playbooks",
     "skills": "Biblioteca de Skills",
     "agents": "Biblioteca de Agentes",
     "verifier": "Verificar Respuesta",
@@ -239,6 +240,19 @@
     "noConversations": "Aún no hay conversaciones",
     "openWorkflow": "Abrir en el editor de workflows",
     "backToConversation": "Volver a la conversación"
+  },
+  "playbookLibrary": {
+    "newPlaybook": "Nuevo playbook",
+    "search": "Buscar playbooks...",
+    "noPlaybooks": "Aún no hay playbooks",
+    "usedBy": "usado por {{count}}",
+    "delete": "Eliminar",
+    "deleteRefused": "Este playbook está en uso y no se puede eliminar: {{users}}",
+    "key": "Clave",
+    "keyHelp": "Minúsculas, dígitos y guiones simples, hasta 64 caracteres. Se fija una vez y no sigue los cambios de título.",
+    "keyInvalid": "Clave no válida: use minúsculas, dígitos y guiones simples (máx. 64).",
+    "keyTaken": "Ya tiene un playbook con esta clave.",
+    "notesHint": "Las notas libres antes de la primera sección se conservan con el playbook."
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",

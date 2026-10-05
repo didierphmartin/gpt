@@ -104,6 +104,8 @@ class ChatApp {
         // MCP servers library elements
         this.navMcpServers = document.getElementById('nav-mcp-servers');
         this.mcpServersView = document.getElementById('mcp-servers-view');
+        this.navPlaybooks = document.getElementById('nav-playbooks');
+        this.playbooksView = document.getElementById('playbooks-view');
 
         // File Storage elements
         this.navFileStorage = document.getElementById('nav-file-storage');
@@ -471,6 +473,9 @@ class ChatApp {
         }
         if (this.navMcpServers) {
             this.navMcpServers.addEventListener('click', () => this.switchView('mcp-servers'));
+        }
+        if (this.navPlaybooks) {
+            this.navPlaybooks.addEventListener('click', () => this.switchView('playbooks'));
         }
         if (this.navSkills) {
             this.navSkills.addEventListener('click', () => this.switchView('skills'));
@@ -10375,6 +10380,7 @@ class ChatApp {
         if (this.agentTeamsView) this.agentTeamsView.classList.add('hidden');
         if (this.agentsView) this.agentsView.classList.add('hidden');
         if (this.mcpServersView) this.mcpServersView.classList.add('hidden');
+        if (this.playbooksView) this.playbooksView.classList.add('hidden');
         if (this.fileStorageView) this.fileStorageView.classList.add('hidden');
         this.navConversations.classList.remove('active');
         this.navPromptLibrary.classList.remove('active');
@@ -10384,6 +10390,7 @@ class ChatApp {
         if (this.navAgentTeams) this.navAgentTeams.classList.remove('active');
         if (this.navAgents) this.navAgents.classList.remove('active');
         if (this.navMcpServers) this.navMcpServers.classList.remove('active');
+        if (this.navPlaybooks) this.navPlaybooks.classList.remove('active');
         if (this.navFileStorage) this.navFileStorage.classList.remove('active');
 
         if (view === 'conversations') {
@@ -10529,6 +10536,16 @@ class ChatApp {
             if (window.i18n && window.i18n.updateAllTranslations) {
                 window.i18n.updateAllTranslations();
             }
+        } else if (view === 'playbooks') {
+            if (this.playbooksView) this.playbooksView.classList.remove('hidden');
+            if (this.navPlaybooks) this.navPlaybooks.classList.add('active');
+            // Lazy-init the Playbooks library on first visit, then reload its list.
+            if (!window.playbooksLibrary && window.PlaybooksLibrary) {
+                window.playbooksLibrary = new window.PlaybooksLibrary((k, p) => (window.i18n?.t ? window.i18n.t(k, p) : k));
+                window.playbooksLibrary.init();
+            }
+            window.playbooksLibrary?.loadTree();
+            if (window.i18n && window.i18n.updateAllTranslations) window.i18n.updateAllTranslations();
         }
 
         // Hide agent teams content panel when switching to other views.

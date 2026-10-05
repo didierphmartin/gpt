@@ -2273,6 +2273,7 @@
                 <button data-rail-target="prompts"        class="rail-btn" title="Prompt Library"    aria-label="Prompt Library">📚</button>
                 <button data-rail-target="skills"         class="rail-btn" title="Skills Library"            aria-label="Skills Library">🎯</button>
                 <button data-rail-target="agents"         class="rail-btn" title="Agents Library"            aria-label="Agents Library">🤖</button>
+                <button data-rail-target="playbooks"      class="rail-btn" title="Playbooks Library"         aria-label="Playbooks Library">📖</button>
                 <button data-rail-target="mcp-servers"    class="rail-btn" title="MCP Servers Library"       aria-label="MCP Servers Library">🔌</button>
                 <button data-rail-target="file-storage"   class="rail-btn" title="File Storage"      aria-label="File Storage">📁</button>
             </aside>
@@ -2310,6 +2311,9 @@
                         </button>
                         <button id="nav-agents" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             🤖 <span data-i18n="sidebar.agents">Agents Library</span>
+                        </button>
+                        <button id="nav-playbooks" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
+                            📖 <span data-i18n="sidebar.playbooks">Playbooks Library</span>
                         </button>
                         <button id="nav-mcp-servers" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             🔌 <span data-i18n="sidebar.mcpServers">MCP Servers Library</span>
@@ -2359,6 +2363,21 @@
                         </div>
                         <div id="agents-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
                             <div class="text-center text-gray-400 text-xs py-6">Loading agents…</div>
+                        </div>
+                    </div>
+
+                    <!-- Playbooks View (hidden by default) -->
+                    <div id="playbooks-view" class="h-full hidden bg-gray-200 flex flex-col">
+                        <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex flex-col gap-2">
+                            <div class="flex gap-1 items-center">
+                                <button id="playbooks-new-btn" class="flex-1 text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
+                                    ➕ <span data-i18n="playbookLibrary.newPlaybook">New Playbook</span>
+                                </button>
+                            </div>
+                            <input id="playbooks-search" type="text" class="w-full text-xs border border-gray-300 rounded px-2 py-1" placeholder="Search playbooks..." data-i18n-placeholder="playbookLibrary.search">
+                        </div>
+                        <div id="playbooks-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
+                            <div class="text-center text-gray-400 text-xs py-6">Loading…</div>
                         </div>
                     </div>
 
@@ -4157,6 +4176,11 @@
         <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="mcpLibrary.delete">Delete</button>
     </div>
 
+    <div id="playbooks-context-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 140px;">
+        <button data-action="edit"   class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="mcpLibrary.edit">Edit</button>
+        <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="playbookLibrary.delete">Delete</button>
+    </div>
+
     <!-- Functions Modal -->
     <div id="functions-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div class="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] md:max-h-[80vh] overflow-hidden">
@@ -4267,12 +4291,14 @@
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
     <script src="assets/js/code-node.js?v=20261005-no-exit"></script>
+    <script src="assets/js/playbook-collection.js?v=20261005-pb-collection"></script>
+    <script src="assets/js/playbooks-library.js?v=20261005-pb-collection"></script>
     <script src="assets/js/workflow-editor.js?v=20261005-flush-on-clear"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20260904-mcplib"></script>
+    <script src="assets/js/chat.js?v=20261005-pb-collection"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');
