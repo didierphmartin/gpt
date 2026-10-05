@@ -101,6 +101,21 @@ assert.deepStrictEqual(CN.remapExits(['job', 'no_job', 'error'], ['error', 'job'
     { port: 'output_3', node: '6', input: 'input_1' }, { port: 'output_1', node: '5', input: 'input_1' }]);
 // rename = removed + added: the renamed exit's children are dropped
 assert.deepStrictEqual(CN.remapExits(['job', 'no_job', 'error'], ['job', 'idle', 'error'], outs).dropped, [{ exit: 'no_job', count: 2 }]);
+// branching removed (one exit left, e.g. Exits cleared): every link moves onto the single connector
+assert.deepStrictEqual(CN.remapExits(['job', 'no_job', 'error'], ['next'], outs), {
+    connections: [{ port: 'output_1', node: '3', input: 'input_1' }, { port: 'output_1', node: '4', input: 'input_1' },
+                  { port: 'output_1', node: '6', input: 'input_1' }, { port: 'output_1', node: '5', input: 'input_1' }],
+    dropped: [] });
+// ... a target reached from two exits is linked once
+const twice = { output_1: { connections: [{ node: '9', output: 'input_1' }] }, output_2: { connections: [{ node: '9', output: 'input_1' }] } };
+assert.deepStrictEqual(CN.remapExits(['job', 'no_job'], ['next'], twice).connections, [{ port: 'output_1', node: '9', input: 'input_1' }]);
+// branching added (one exit before): its links land on exit 1, or follow its name if it is still there
+const single = { output_1: { connections: [{ node: '7', output: 'input_1' }, { node: '8', output: 'input_1' }] } };
+assert.deepStrictEqual(CN.remapExits(['next'], ['job', 'no_job', 'error'], single), {
+    connections: [{ port: 'output_1', node: '7', input: 'input_1' }, { port: 'output_1', node: '8', input: 'input_1' }],
+    dropped: [] });
+assert.deepStrictEqual(CN.remapExits(['job'], ['no_job', 'job'], single).connections,
+    [{ port: 'output_2', node: '7', input: 'input_1' }, { port: 'output_2', node: '8', input: 'input_1' }]);
 // an exit with no children is not reported
 assert.deepStrictEqual(CN.remapExits(['job', 'spare'], ['job'], { output_1: { connections: [] } }).dropped, []);
 

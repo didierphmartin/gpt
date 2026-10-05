@@ -170,12 +170,28 @@
      * children on its new port; a removed exit's connections are dropped. An exit's name is its only
      * identity, so a renamed exit counts as one removed plus one added (its children are dropped).
      * outputs: the node's Drawflow outputs before the change (output_k = old exit k).
+     * Branching removed (one exit left, e.g. the Exits field cleared): every link moves onto the
+     * single connector instead -- a target reached from several exits is linked once.
+     * Branching added (one exit before): its links land on exit 1, unless its name is still an exit.
      */
     function remapExits(oldExits, newExits, outputs) {
         const connections = [], dropped = [];
+        if (newExits.length === 1) {
+            const seen = new Set();
+            oldExits.forEach((_, i) => {
+                for (const c of (outputs || {})[`output_${i + 1}`]?.connections || []) {
+                    const key = `${c.node}|${c.output}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    connections.push({ port: 'output_1', node: String(c.node), input: c.output });
+                }
+            });
+            return { connections, dropped };
+        }
         oldExits.forEach((exit, i) => {
             const conns = (outputs || {})[`output_${i + 1}`]?.connections || [];
-            const j = newExits.indexOf(exit);
+            // Branching added: the single exit's links land on exit 1 unless its name survives.
+            const j = oldExits.length === 1 && !newExits.includes(exit) ? 0 : newExits.indexOf(exit);
             if (j < 0) {
                 if (conns.length) dropped.push({ exit, count: conns.length });
                 return;
