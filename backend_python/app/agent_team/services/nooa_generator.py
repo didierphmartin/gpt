@@ -26,6 +26,7 @@ import re
 
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
 from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
+from app.services.mcp_endpoint import McpEndpoint
 from app.support.logger import error_log
 from app.support.phpcompat import php_coalesce as _coalesce, php_empty, php_intval, php_strval, php_trim
 
@@ -314,34 +315,59 @@ def make_llm(provider, model, max_tokens, temperature, thinking=None):
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def _normalizeMcpUrl(url: str) -> str:
-        """PHP 316-323. Mirror of the emitted-Python _normalize_mcp_url."""
-        url = url.rstrip('/')
-        if url.endswith('/mcp') or url.endswith('.php'):
-            return url
-        return url + '/mcp'
+    def _mcpEndpointFn() -> str:
+        """Emitted when some server URL has two candidate endpoints (McpEndpoint):
+        MCPManager takes one URL and does no fallback, so the module probes the
+        registered URL first, then the /mcp form, at import."""
+        return '''def _mcp_endpoint(candidates: list) -> str:
+    """The MCP endpoint for a registered server URL: the first candidate (the
+    URL as registered, then with /mcp in its path) that answers 'initialize'
+    with JSON-RPC; the last candidate when none does."""
+    import httpx
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "NOOA-Workflow", "version": "1.0.0"}}}
+    headers = {"Accept": "application/json, text/event-stream"}
+    for url in candidates[:-1]:
+        try:
+            r = httpx.post(url, json=init, headers=headers, timeout=15)
+            if r.status_code < 400 and ('"result"' in r.text or '"error"' in r.text):
+                return url
+        except Exception:
+            pass
+    return candidates[-1]'''
 
     @staticmethod
     def _mcpBlock(analyzed: dict) -> str:
-        """PHP 325-347."""
         servers = analyzed.get('usedServers') or {}
         lines: list[str] = []
         lines.append('# Server registry (metadata only, for logs/debugging).')
         lines.append('MCP_SERVERS = ' + PythonEmitHelpers.jsonToPython(servers, True))
         lines.append('')
-        lines.append('# One live connection per server; the value exposes each server tool as a')
-        lines.append('# method. tool_call_timeout matches the 180s the other targets allow.')
-        lines.append('MCP = {')
+        probe = False
+        entries: list[str] = []
         for url, meta in servers.items():
             raw_name = (meta or {}).get('name') or 'server'
             safeName = re.sub(r'[^A-Za-z0-9_-]+', '-', php_strval(raw_name))
-            normalized = NOOAGenerator._normalizeMcpUrl(php_strval(url))
-            lines.append('    ' + PythonEmitHelpers.pyStr(php_strval(url)) + ': MCPManager.create_from_server(')
-            lines.append('        ' + PythonEmitHelpers.pyStr(safeName) + ',')
-            lines.append('        url=' + PythonEmitHelpers.pyStr(normalized) + ',')
-            lines.append('        transport="streamable-http",')
-            lines.append('        tool_call_timeout=timedelta(seconds=180),')
-            lines.append('    ),')
+            candidates = McpEndpoint.candidates(php_strval(url))
+            if len(candidates) == 1:
+                endpoint = PythonEmitHelpers.pyStr(candidates[0])
+            else:
+                endpoint = '_mcp_endpoint([' + ', '.join(PythonEmitHelpers.pyStr(c) for c in candidates) + '])'
+            probe = probe or len(candidates) > 1
+            entries.append('    ' + PythonEmitHelpers.pyStr(php_strval(url)) + ': MCPManager.create_from_server(')
+            entries.append('        ' + PythonEmitHelpers.pyStr(safeName) + ',')
+            entries.append('        url=' + endpoint + ',')
+            entries.append('        transport="streamable-http",')
+            entries.append('        tool_call_timeout=timedelta(seconds=180),')
+            entries.append('    ),')
+        if probe:
+            lines.append(NOOAGenerator._mcpEndpointFn())
+            lines.append('')
+        lines.append('# One live connection per server; the value exposes each server tool as a')
+        lines.append('# method. tool_call_timeout matches the 180s the other targets allow.')
+        lines.append('MCP = {')
+        lines.extend(entries)
         lines.append('}')
         return '\n'.join(lines)
 

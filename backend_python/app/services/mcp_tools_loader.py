@@ -11,6 +11,7 @@ import time
 import httpx
 
 from app.providers._http import SHARED_SSL_CONTEXT
+from app.services.mcp_endpoint import McpEndpoint
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval
 from app.support.phpjson import dumps as json_encode
@@ -223,20 +224,11 @@ class MCPToolsLoader:
         """Call an MCP server to execute a tool."""
         extraHeaders = extraHeaders or []
 
-        # The stored server_url is used byte-for-byte — NEVER rstrip the
-        # trailing slash. Apache 301-redirects a directory-style URL
-        # requested without its trailing slash, and httpx does not follow
-        # redirects by default, so the JSON-RPC response ends up being the
-        # redirect's HTML body, which fails to parse. Several registered
-        # servers legitimately have trailing-slash URLs, so this must not be
-        # "fixed" by re-adding a rstrip.
-        #
-        # We only apply the narrower SSE rewrite (a trailing "/sse" is really
-        # the "/mcp" JSON-RPC endpoint) so SSE-transport servers stop getting
-        # POSTed at their event-stream URL.
-        mcpUrl = serverUrl
-        if transport == 'sse' and mcpUrl.rstrip('/').endswith('/sse'):
-            mcpUrl = mcpUrl.rstrip('/')[:-4] + '/mcp'
+        # Endpoint rule shared with the proxy (McpEndpoint): the stored URL
+        # as given first (byte-for-byte — NEVER rstrip it: several registered
+        # servers legitimately have trailing-slash URLs), then with "/mcp" in
+        # its path; for SSE transport a trailing "/sse" is really the "/mcp"
+        # JSON-RPC endpoint.
 
         # Ensure empty arguments is an object {} not array []. MCP servers
         # expect "arguments" to be a record/object.
@@ -261,33 +253,28 @@ class MCPToolsLoader:
                 name, value = h.split(': ', 1)
                 headers[name] = value
 
-        try:
-            response = self._http.post(mcpUrl, json=request, headers=headers)
-        except httpx.RequestError as e:
-            return {
-                'formatted': {
-                    'error': True,
-                    'message': f"MCP connection failed: {e}",
-                },
-                'raw': None,
-            }
+        parsed = None
+        failure = 'MCP server unreachable'
+        for mcpUrl in McpEndpoint.candidates(serverUrl, transport):
+            try:
+                response = self._http.post(mcpUrl, json=request, headers=headers)
+            except httpx.RequestError as e:
+                failure = f"MCP connection failed: {e}"
+                continue
 
-        if response.status_code >= 400:
-            return {
-                'formatted': {
-                    'error': True,
-                    'message': f"MCP server returned HTTP {response.status_code}",
-                },
-                'raw': None,
-            }
-
-        parsed = self._parseResponse(response.text)
+            # Parse response (may be JSON or SSE)
+            reply = self._parseResponse(response.text)
+            if McpEndpoint.isJsonRpcReply(reply):
+                parsed = reply
+                break
+            failure = (f"MCP server returned HTTP {response.status_code}" if response.status_code >= 400
+                       else "Failed to parse MCP response")
 
         if parsed is None:
             return {
                 'formatted': {
                     'error': True,
-                    'message': "Failed to parse MCP response",
+                    'message': failure,
                 },
                 'raw': None,
             }

@@ -2,7 +2,7 @@
 byte-identical SQL.
 
 PHP source: backend/src/Controllers/MCPProxyController.php (15-614) and
-MCPAppController.php (15-225). The `resolveEndpointUrl` cases are a straight
+MCPAppController.php (15-225). The `McpEndpoint` cases are a straight
 port of the PHP oracle backend/tests/Unit/McpProxyEndpointUrlTest.php.
 """
 from __future__ import annotations
@@ -13,6 +13,7 @@ from starlette.datastructures import Headers
 
 from app.controllers.mcp_app_controller import MCPAppController
 from app.controllers.mcp_proxy_controller import MCPProxyController
+from app.services.mcp_endpoint import McpEndpoint
 from app.support.http import Ctx
 
 ALL_TABLES = ('mcp_servers', 'mcp_server_tools')
@@ -78,31 +79,162 @@ def mock(handler):
 
 
 # ─── ported PHP oracle: McpProxyEndpointUrlTest.php ─────────────────────────
+# One rule for every MCP client: the registered URL is tried as given first;
+# only if that fails is "/mcp" tried, inserted into the path before any query.
 
-def test_resolve_endpoint_url_http_appends_mcp_when_missing():
-    assert MCPProxyController.resolveEndpointUrl('https://x.test', 'http') == 'https://x.test/mcp'
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/', 'http') == 'https://x.test/mcp'
-
-
-def test_resolve_endpoint_url_http_leaves_mcp_and_php_endpoints_alone():
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/mcp', 'http') == 'https://x.test/mcp'
-    assert MCPProxyController.resolveEndpointUrl('http://localhost/AI_mcp/mcp-server.php', 'http') == \
-        'http://localhost/AI_mcp/mcp-server.php'
+def test_candidates_registered_url_first_then_mcp_appended():
+    assert McpEndpoint.candidates('https://x.test', 'http') == ['https://x.test', 'https://x.test/mcp']
 
 
-def test_resolve_endpoint_url_sse_rewrites_sse_suffix_to_mcp():
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/sse', 'sse') == 'https://x.test/mcp'
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/sse/', 'sse') == 'https://x.test/mcp'
+def test_candidates_trailing_slash_is_kept_on_the_as_given_url():
+    # Apache 301-redirects a directory URL without its slash; never trim it.
+    assert McpEndpoint.candidates('http://h/srv/', 'http') == ['http://h/srv/', 'http://h/srv/mcp']
 
 
-def test_resolve_endpoint_url_sse_without_sse_suffix_behaves_like_http():
-    assert MCPProxyController.resolveEndpointUrl('https://x.test', 'sse') == 'https://x.test/mcp'
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/mcp', 'sse') == 'https://x.test/mcp'
+def test_candidates_mcp_goes_into_the_path_before_the_query():
+    assert McpEndpoint.candidates('http://localhost/servicenow/?profile=mock&toolset=jobs', 'http') == [
+        'http://localhost/servicenow/?profile=mock&toolset=jobs',
+        'http://localhost/servicenow/mcp?profile=mock&toolset=jobs',
+    ]
+    assert McpEndpoint.candidates('http://h/x?a=1#f', 'http') == ['http://h/x?a=1#f', 'http://h/x/mcp?a=1#f']
 
 
-def test_resolve_endpoint_url_http_does_not_rewrite_sse_suffix():
-    # Existing behaviour for http transport is preserved verbatim.
-    assert MCPProxyController.resolveEndpointUrl('https://x.test/sse', 'http') == 'https://x.test/sse/mcp'
+def test_candidates_mcp_and_php_endpoints_have_no_fallback():
+    assert McpEndpoint.candidates('https://x.test/mcp', 'http') == ['https://x.test/mcp']
+    assert McpEndpoint.candidates('https://x.test/mcp/', 'http') == ['https://x.test/mcp/']
+    assert McpEndpoint.candidates('http://localhost/AI_mcp/mcp-server.php', 'http') == \
+        ['http://localhost/AI_mcp/mcp-server.php']
+    assert McpEndpoint.candidates('http://h/s.php?k=1', 'http') == ['http://h/s.php?k=1']
+
+
+def test_candidates_sse_rewrites_sse_suffix_to_mcp():
+    assert McpEndpoint.candidates('https://x.test/sse', 'sse') == ['https://x.test/mcp']
+    assert McpEndpoint.candidates('https://x.test/sse/', 'sse') == ['https://x.test/mcp']
+    assert McpEndpoint.candidates('https://x.test/sse?k=1', 'sse') == ['https://x.test/mcp?k=1']
+
+
+def test_candidates_http_does_not_rewrite_sse_suffix():
+    assert McpEndpoint.candidates('https://x.test/sse', 'http') == ['https://x.test/sse', 'https://x.test/sse/mcp']
+
+
+def test_is_jsonrpc_reply():
+    assert McpEndpoint.isJsonRpcReply({'jsonrpc': '2.0', 'id': 1, 'result': {}})
+    assert McpEndpoint.isJsonRpcReply({'jsonrpc': '2.0', 'id': 1, 'error': {'code': -1}})
+    assert not McpEndpoint.isJsonRpcReply(None)
+    # Lenient servers that omit "jsonrpc" were always accepted by the loader.
+    assert McpEndpoint.isJsonRpcReply({'result': {'tools': []}})
+    assert not McpEndpoint.isJsonRpcReply({'status': 'ok'})
+    assert not McpEndpoint.isJsonRpcReply([1, 2])
+
+
+# ─── endpoint fallback in the proxy, the tools loader and the app proxy ─────
+
+def _rpc(**kw):
+    return {'jsonrpc': '2.0', 'id': 1, **kw}
+
+
+def _router(answers, hits):
+    """MockTransport handler: `answers` maps URL -> (status, json|text); other URLs refuse the connection."""
+    def handler(req):
+        url = str(req.url)
+        hits.append(url)
+        if url not in answers:
+            raise httpx.ConnectError('connection refused', request=req)
+        status, body = answers[url]
+        return httpx.Response(status, json=body) if isinstance(body, dict) else httpx.Response(status, text=body)
+    return handler
+
+
+def test_test_connection_query_addressed_server_registers_as_given(monkeypatch):
+    url = 'http://h/servicenow/?profile=mock'
+    hits = []
+    c = proxy()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(_router({url: (200, _rpc(result={'serverInfo': {'name': 'servicenow'}}))}, hits)))
+    r = c.forward(ctx({'action': 'test_connection', 'server_url': url}))
+    assert r['success'] is True and r['serverInfo'] == {'name': 'servicenow'}
+    assert hits == [url]
+
+
+def test_test_connection_falls_back_to_mcp_when_the_url_as_given_fails(monkeypatch):
+    hits = []
+    c = proxy()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(_router({
+        'http://h/srv': (404, 'nope'),
+        'http://h/srv/mcp': (200, _rpc(result={'serverInfo': {'name': 's'}})),
+    }, hits)))
+    assert c.forward(ctx({'action': 'test_connection', 'server_url': 'http://h/srv'}))['success'] is True
+    assert hits == ['http://h/srv', 'http://h/srv/mcp']
+
+
+def test_jsonrpc_error_with_http_error_status_is_the_endpoint(monkeypatch):
+    hits = []
+    c = proxy()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(_router({
+        'http://h/srv': (401, _rpc(error={'code': -32001, 'message': 'bad token'})),
+        'http://h/srv/mcp': (200, _rpc(result={})),
+    }, hits)))
+    r = c.forward(ctx({'action': 'discover_tools', 'server_url': 'http://h/srv'}))
+    assert r['success'] is False
+    assert hits == ['http://h/srv']
+
+
+def test_answering_endpoint_is_remembered_for_the_rest_of_the_exchange(monkeypatch):
+    hits = []
+    c = proxy()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(_router({
+        'http://h/srv': (200, '<html>not rpc</html>'),
+        'http://h/srv/mcp': (200, _rpc(result={'tools': []})),
+    }, hits)))
+    assert c.forward(ctx({'action': 'discover_tools', 'server_url': 'http://h/srv'}))['success'] is True
+    # initialize probes both; initialized + tools/list go straight to /mcp.
+    assert hits == ['http://h/srv', 'http://h/srv/mcp', 'http://h/srv/mcp', 'http://h/srv/mcp']
+
+
+def test_test_connection_all_candidates_failing_lists_every_url_tried(monkeypatch):
+    hits = []
+    c = proxy()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(_router({}, hits)))
+    r = c.forward(ctx({'action': 'test_connection', 'server_url': 'http://h/a/b'}))
+    assert r['success'] is False
+    assert r['url_tried'] == 'http://h/a/b, http://h/a/b/mcp'
+    assert 'http://h/a/b/mcp' in r['error']
+
+
+def test_app_proxy_query_addressed_server_is_reached_as_given(monkeypatch):
+    url = 'http://h/servicenow/?profile=mock'
+    hits = []
+
+    def handler(req):
+        import json as _json
+        hits.append(str(req.url))
+        if str(req.url) != url:
+            raise httpx.ConnectError('refused', request=req)
+        method = _json.loads(req.content)['method']
+        return httpx.Response(200, json=_rpc(error={'message': 'no such resource'}) if method == 'resources/read' else _rpc(result={}))
+
+    c = app_ctl()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
+    r = c.getResource(app_ctx({'server': url, 'resource': 'ui://none'}))
+    assert r['error'].startswith('Failed to fetch MCP resource')
+    assert set(hits) == {url}
+
+
+def test_app_proxy_falls_back_to_mcp_when_the_url_as_given_is_not_jsonrpc(monkeypatch):
+    hits = []
+
+    def handler(req):
+        import json as _json
+        hits.append(str(req.url))
+        if str(req.url) == 'http://h/srv':
+            return httpx.Response(200, text='<html>')
+        method = _json.loads(req.content)['method']
+        return httpx.Response(200, json=_rpc(result={'contents': [{'text': '<p>x</p>'}]}) if method == 'resources/read' else _rpc(result={}))
+
+    c = app_ctl()
+    monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
+    r = c.getResource(app_ctx({'server': 'http://h/srv', 'resource': 'ui://x'}))
+    assert r['status_code'] == 200
+    assert hits[0] == 'http://h/srv' and set(hits[1:]) == {'http://h/srv/mcp'}
 
 
 # ─── normalizeHeaders (PHP 500-514) ─────────────────────────────────────────
@@ -338,8 +470,8 @@ def test_test_connection_network_failure(monkeypatch):
     monkeypatch.setattr(c, '_makeClient', lambda: mock(boom))
     result = c.forward(ctx({'action': 'test_connection', 'server_url': 'http://x.test'}))
     assert result['success'] is False and result['status_code'] == 500
-    assert result['url_tried'] == 'http://x.test/mcp'
-    assert result['error'].startswith('Connection failed:')
+    assert result['url_tried'] == 'http://x.test, http://x.test/mcp'
+    assert result['error'].startswith('Connection failed at http://x.test:')
 
 
 # ─── discoverTools + cacheTools (PHP 230-313, 519-547) ──────────────────────

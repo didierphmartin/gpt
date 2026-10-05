@@ -188,18 +188,19 @@ TOOL_CATALOG = {}
 # MCP CLIENT
 # HTTP JSON-RPC client used by every generated _tool_* function.
 # ==============================================================
-def _normalize_mcp_url(url: str) -> str:
-    """Ensure the URL points to the MCP endpoint.
+def _mcp_candidates(url: str) -> list:
+    """The endpoints to try for a registered MCP server URL, in order.
 
-    - If it already ends with /mcp, leave it alone.
-    - If it ends with a .php file, it IS the endpoint already (XAMPP-style
-      MCP server scripts like mcp-server.php). Don't append anything.
-    - Otherwise, append /mcp per the MCP convention.
+    - The URL exactly as registered first (servers addressed by query or
+      mounted at their bare URL answer there, e.g. PHP endpoints).
+    - Then with /mcp inserted into the path, before any query string.
+    - A path already ending in /mcp or .php is the endpoint: no fallback.
     """
-    url = url.rstrip("/")
-    if url.endswith("/mcp") or url.endswith(".php"):
-        return url
-    return url + "/mcp"
+    cut = min([i for i in (url.find("?"), url.find("#")) if i >= 0] or [len(url)])
+    path, rest = url[:cut].rstrip("/"), url[cut:]
+    if path.endswith("/mcp") or path.endswith(".php"):
+        return [url]
+    return [url, path + "/mcp" + rest]
 
 _MCP_ENDPOINTS: dict = {}   # registered server URL -> endpoint that accepted the handshake
 
@@ -211,9 +212,8 @@ def _init_mcp_session(url: str, headers: dict) -> str | None:
     2. Server responds with its capabilities
     3. Client sends 'notifications/initialized' to confirm
 
-    Tries the /mcp-normalised URL first, then the URL exactly as registered
-    (servers mounted at their bare URL, e.g. PHP mock servers, answer there
-    and 404 or error on /mcp). The endpoint that answers is remembered.
+    Tries _mcp_candidates(url) in order: the URL exactly as registered, then
+    with /mcp in its path. The endpoint that answers is remembered.
     Returns that endpoint URL, or None when no candidate accepted the handshake.
     """
     init_req = {
@@ -225,7 +225,7 @@ def _init_mcp_session(url: str, headers: dict) -> str | None:
         }
     }
     candidates = [_MCP_ENDPOINTS[url]] if url in _MCP_ENDPOINTS else []
-    for cand in (_normalize_mcp_url(url), url):
+    for cand in _mcp_candidates(url):
         if cand not in candidates:
             candidates.append(cand)
     last_err = None
@@ -286,7 +286,7 @@ def _call_mcp_tool(server_url: str, tool_name: str,
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream, */*"}
 
-    mcp_url = _init_mcp_session(server_url, headers) or _normalize_mcp_url(server_url)
+    mcp_url = _init_mcp_session(server_url, headers) or _mcp_candidates(server_url)[-1]
 
     request = {
         "jsonrpc": "2.0", "id": int(time.time()),
