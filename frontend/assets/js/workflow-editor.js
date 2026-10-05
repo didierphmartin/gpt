@@ -8847,7 +8847,7 @@ class WorkflowEditor {
                         <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
                             <select data-f="template"><option value="">— keep current code —</option>
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
-                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order)</label><input data-f="exits" type="text"></div>
+                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order; empty = no branching)</label><input data-f="exits" type="text"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
@@ -8935,7 +8935,7 @@ class WorkflowEditor {
         const read = () => ({
             name: f('name').value.trim() || 'Code',
             code: f('code').value,
-            exits: f('exits').value.split(',').map((s) => s.trim()).filter(Boolean),
+            exits: CN.parseExits(f('exits').value),   // empty: no branching, the single exit "next"
             mcp_servers: [...checked],
             timeout_s: Math.trunc(Number(f('timeout').value)),
         });
@@ -8946,7 +8946,11 @@ class WorkflowEditor {
             ta.value = ta.value.slice(0, s) + '    ' + ta.value.slice(ta.selectionEnd);
             ta.selectionStart = ta.selectionEnd = s + 4;
         });
-        const show = (text) => { f('result').textContent = text; };
+        const show = (text, isError = false) => {
+            f('result').textContent = text;
+            f('result').style.color = isError ? '#b91c1c' : '';
+            f('result').style.fontWeight = isError ? '600' : '';
+        };
         f('template').addEventListener('change', () => {
             const t = CN.TEMPLATES[f('template').value];
             if (!t) return;
@@ -8964,7 +8968,7 @@ class WorkflowEditor {
             const cfg = read();
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
-                if (errs.length) { show(errs.join('\n')); return; }
+                if (errs.length) { show(errs.join('\n'), true); return; }
                 show('Running…');
                 const sample = f('sample').value;
                 const prompt = this.lastUserPrompt || '';
@@ -8980,7 +8984,7 @@ class WorkflowEditor {
                 } catch (e) { show('error: ' + (e.message || e)); }
                 return;
             }
-            if (errs.length) { show(errs.join('\n')); return; }
+            if (errs.length) { show(errs.join('\n'), true); return; }
             this._applyCodeNodeConfig(nodeId, cfg);
             overlay.remove();
         });

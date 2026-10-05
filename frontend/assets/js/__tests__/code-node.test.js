@@ -146,4 +146,8 @@ assert.deepStrictEqual(CN.exitTags('3', nodes), []);
 const stale = { 7: { data: { type: 'code', exits: ['next'] }, inputs: {},
     outputs: { output_1: { connections: [{ node: '8' }] }, output_2: { connections: [{ node: '9' }] } } } };
 assert.deepStrictEqual(CN.exitTags('7', stale), [{ to: '8', port: 'output_1', exit: 'next' }]);
+// the Exits field: empty means no branching, the single default exit
+assert.deepStrictEqual(CN.parseExits(''), ['next']);
+assert.deepStrictEqual(CN.parseExits('  ,  '), ['next']);
+assert.deepStrictEqual(CN.parseExits('job, no_job ,error'), ['job', 'no_job', 'error']);
 console.log('code-node.test.js: OK');

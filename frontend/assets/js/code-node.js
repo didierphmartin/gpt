@@ -67,6 +67,12 @@
         return errs;
     }
 
+    /** The Exits field: comma-separated names; empty means no branching -- the single default exit. */
+    function parseExits(text) {
+        const exits = String(text || '').split(',').map((s) => s.trim()).filter(Boolean);
+        return exits.length ? exits : ['next'];
+    }
+
     function exitForPort(exits, port) {
         const k = Number(String(port).replace(/^output_/, ''));
         return Number.isInteger(k) && k >= 1 && k <= exits.length ? exits[k - 1] : null;
@@ -205,6 +211,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, parseExits, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });
