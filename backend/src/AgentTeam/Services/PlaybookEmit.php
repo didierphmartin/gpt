@@ -294,7 +294,7 @@ async def run_playbook_node(pb: dict, request_text: str) -> str:
     except Exception as e:
         run.status = "failed"
         run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
-    return render_playbook_transcript(pb["title"], run.events, text, run.status)
+    return render_playbook_transcript(pb["title"], run.events, run.summary or text, run.status)
 PY;
         return implode("\n\n", $parts);
     }
@@ -362,6 +362,7 @@ class _PlaybookRun:
     def __init__(self, writes_enabled: bool, policy: dict):
         self.events = []
         self.status = "running"
+        self.summary = ""   # resolve_request's summary: the run's answer
         self.writes_enabled = writes_enabled
         self.policy = policy
         self.ledger = {}
@@ -499,6 +500,7 @@ def build_playbook_tools(pb: dict, run: _PlaybookRun) -> list:
 
     def resolve(**a):
         run.status = "resolved"
+        run.summary = str(a.get("summary") or "").strip()   # the run's answer, not the turn's narration
         return {"ok": True, "terminal": True}
     tools.append(wrap("resolve_request", resolve, "Mark the request as resolved",
                       model("ResolveRequest", {"outcome": (str, True, "Resolution outcome"), "summary": (str, True, "Resolution summary")})))

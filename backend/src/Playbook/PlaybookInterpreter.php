@@ -83,6 +83,7 @@ PROMPT;
             $messages[] = $this->buildAssistantMessage($text, $toolCalls);
 
             $terminal = false;
+            $summary = '';   // resolve_request's summary: the run's answer, not the turn's narration
             foreach ($toolCalls as $toolCall) {
                 $name = (string)$toolCall['name'];
                 $args = (array)($toolCall['arguments'] ?? []);
@@ -119,10 +120,13 @@ PROMPT;
                 if (($result['terminal'] ?? false) === true || ($result['gate_ended_leg'] ?? false) === true) {
                     $terminal = true;
                 }
+                if ($name === 'resolve_request') {
+                    $summary = trim((string)($args['summary'] ?? ''));
+                }
             }
 
             if ($terminal) {
-                return $this->endLeg($runId, $leg, $this->currentStatus($runId), $text ?? '');
+                return $this->endLeg($runId, $leg, $this->currentStatus($runId), $summary !== '' ? $summary : ($text ?? ''));
             }
         }
 

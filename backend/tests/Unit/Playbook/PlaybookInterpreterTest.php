@@ -179,6 +179,38 @@ PROMPT
         $this->assertSame('system', $captured[0][0]['role']);
     }
 
+    /** An LLM that resolves in its first turn, narrating alongside the call. */
+    private function resolvingLlm(array $resolveArgs): \Closure
+    {
+        return fn(array $messages, array $toolDefs) => [
+            'text' => "Now I'll document the completion and resolve:",
+            'tool_calls' => [['id' => 'c1', 'name' => 'resolve_request', 'arguments' => $resolveArgs]],
+        ];
+    }
+
+    public function testTheResolveSummaryIsTheResultNotTheNarration(): void
+    {
+        [$space] = $this->space();
+        $doc = $this->doc();
+        $id = $this->state->createRun(1, $doc, ['id' => 'req1'], []);
+        $llm = $this->resolvingLlm(['outcome' => 'completed', 'summary' => 'SCTASK0000101 - low@test - completed']);
+        $result = (new PlaybookInterpreter($space, $this->state, new PlaybookTranscript($this->dir), $llm, 40))
+            ->runLeg($id, 0, $doc, [], ['id' => 'req1'], 'job');
+        $this->assertSame('resolved', $result['status']);
+        $this->assertSame('SCTASK0000101 - low@test - completed', $result['output']);
+    }
+
+    public function testWithoutASummaryTheTurnTextStays(): void
+    {
+        [$space] = $this->space();
+        $doc = $this->doc();
+        $id = $this->state->createRun(1, $doc, ['id' => 'req1'], []);
+        $llm = $this->resolvingLlm(['outcome' => 'completed', 'summary' => '  ']);
+        $result = (new PlaybookInterpreter($space, $this->state, new PlaybookTranscript($this->dir), $llm, 40))
+            ->runLeg($id, 0, $doc, [], ['id' => 'req1'], 'job');
+        $this->assertSame("Now I'll document the completion and resolve:", $result['output']);
+    }
+
     public function testRoundBudgetExhaustionMarksFailedAndLeavesNote(): void
     {
         [$space, $mcp] = $this->space();

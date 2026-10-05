@@ -75,6 +75,7 @@ class PlaybookInterpreter:
             messages.append(self._buildAssistantMessage(text, toolCalls))
 
             terminal = False
+            summary = ''   # resolve_request's summary: the run's answer, not the turn's narration
             for toolCall in toolCalls:
                 name = str(toolCall['name'])
                 # PHP: `(array)($toolCall['arguments'] ?? [])` (PlaybookInterpreter.php:88).
@@ -110,9 +111,12 @@ class PlaybookInterpreter:
 
                 if result.get('terminal') is True or result.get('gate_ended_leg') is True:
                     terminal = True
+                if name == 'resolve_request':
+                    summary = str(args.get('summary') or '').strip() if isinstance(args, dict) else ''
 
             if terminal:
-                return self._endLeg(runId, leg, self._currentStatus(runId), text if text is not None else '')
+                return self._endLeg(runId, leg, self._currentStatus(runId),
+                                    summary if summary != '' else (text if text is not None else ''))
 
         # Round budget exhausted.
         self.state.setStatus(runId, 'failed')

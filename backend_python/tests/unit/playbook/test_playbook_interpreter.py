@@ -308,3 +308,31 @@ def test_build_assistant_message_arguments_scalar_casts_to_single_element_list()
 
 def test_build_assistant_message_arguments_list_passes_through_unchanged():
     assert _build_assistant_message_arguments(['x', 'y']) == ['x', 'y']
+
+
+# ─── the run's answer: resolve_request's summary, not the turn's narration ───
+
+def _resolving_llm(resolve_args):
+    def llm(messages, tool_defs):
+        return {'text': "Now I'll document the completion and resolve:",
+                'tool_calls': [{'id': 'c1', 'name': 'resolve_request', 'arguments': resolve_args}]}
+    return llm
+
+
+def test_the_resolve_summary_is_the_result_not_the_narration(pb_state, pb_dir):
+    space, _ = _space(pb_state)
+    doc = _doc()
+    id_ = pb_state.createRun(1, doc, {'id': 'req1'}, {})
+    llm = _resolving_llm({'outcome': 'completed', 'summary': 'SCTASK0000101 - low@test - completed'})
+    result = PlaybookInterpreter(space, pb_state, PlaybookTranscript(pb_dir), llm, 40).runLeg(id_, 0, doc, {}, {'id': 'req1'}, 'job')
+    assert result['status'] == 'resolved'
+    assert result['output'] == 'SCTASK0000101 - low@test - completed'
+
+
+def test_without_a_summary_the_turn_text_stays(pb_state, pb_dir):
+    space, _ = _space(pb_state)
+    doc = _doc()
+    id_ = pb_state.createRun(1, doc, {'id': 'req1'}, {})
+    llm = _resolving_llm({'outcome': 'completed', 'summary': '  '})
+    result = PlaybookInterpreter(space, pb_state, PlaybookTranscript(pb_dir), llm, 40).runLeg(id_, 0, doc, {}, {'id': 'req1'}, 'job')
+    assert result['output'] == "Now I'll document the completion and resolve:"

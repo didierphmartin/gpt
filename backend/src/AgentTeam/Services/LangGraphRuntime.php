@@ -229,7 +229,7 @@ class PlaybookNode(Node):
             run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
             await trace(f"⚠ playbook failed: {e}")
         await trace(f"done -- status={run.status} ({len(run.events)} events, {time.monotonic() - t0:.1f}s)")
-        return {"text": run.transcript(pb["title"], text), "route": "", "notes": "", "status": run.status}
+        return {"text": run.transcript(pb["title"], run.summary or text), "route": "", "notes": "", "status": run.status}
 
 
 
@@ -1986,6 +1986,7 @@ class PlaybookRun:
     def __init__(self, writes_enabled: bool, policy: dict, gate_bridge: Callable | None = None):
         self.events = []
         self.status = "running"
+        self.summary = ""   # resolve_request's summary: the run's answer
         self.writes_enabled = writes_enabled
         self.policy = policy
         self.ledger = {}
@@ -2188,6 +2189,7 @@ class PlaybookToolset:
 
         def resolve(**a):
             run.status = "resolved"
+            run.summary = str(a.get("summary") or "").strip()   # the run's answer, not the turn's narration
             return {"ok": True, "terminal": True}
         tools.append(self._wrap("resolve_request", resolve, "Mark the request as resolved",
                                 self._model("ResolveRequest", {"outcome": (str, True, "Resolution outcome"), "summary": (str, True, "Resolution summary")})))
