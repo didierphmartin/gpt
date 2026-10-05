@@ -447,7 +447,15 @@ def test_update_not_found():
     db = FakeDb(rowcount=0)
     out = c(db).update(ctx(body={'server_id': 5, 'name': 'n', 'url': 'http://a.com'}))
     assert out == {'success': False, 'error': 'Server not found', 'status_code': 404}
-    assert len(db.calls) == 1          # the cached-tool DELETE never runs
+    assert sqls(db)[1] == 'SELECT id FROM mcp_servers WHERE id = ? AND user_id = ?'
+    assert len(db.calls) == 2          # the cached-tool DELETE never runs
+
+
+def test_update_unchanged_is_not_not_found():
+    # MySQL counts CHANGED rows: saving a server unchanged updates 0 rows, which is not "not found".
+    db = FakeDb(rowcount=0, one=[{'id': 5}])
+    out = c(db).update(ctx(body={'server_id': 5, 'name': 'n', 'url': 'http://a.com'}))
+    assert out == {'success': True, 'message': 'Server updated successfully', 'status_code': 200}
 
 
 # ─── toggle() (PHP 453-479) ────────────────────────────────────────────────

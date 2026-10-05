@@ -54,4 +54,32 @@ final class McpServerIsMockTest extends TestCase
         $this->ctl->update(['body' => ['user_id' => '3', 'server_id' => $id, 'name' => 'S2', 'url' => 'https://x.test/mcp']]);
         $this->assertSame(1, $this->isMock($id));
     }
+
+    /** MySQL counts CHANGED rows: saving a server unchanged reports 0 rows, which is not "not found". */
+    private function mysqlLike(int $updated, $found): MCPServerController
+    {
+        $update = $this->createMock(PDOStatement::class);
+        $update->method('rowCount')->willReturn($updated);
+        $select = $this->createMock(PDOStatement::class);
+        $select->method('fetchColumn')->willReturn($found);
+        $other = $this->createMock(PDOStatement::class);
+        $db = $this->createMock(PDO::class);
+        $db->method('prepare')->willReturnCallback(fn(string $sql) =>
+            str_starts_with(ltrim($sql), 'UPDATE') ? $update : (str_starts_with(ltrim($sql), 'SELECT') ? $select : $other));
+        $ctl = (new ReflectionClass(MCPServerController::class))->newInstanceWithoutConstructor();
+        (new ReflectionProperty(MCPServerController::class, 'db'))->setValue($ctl, $db);
+        return $ctl;
+    }
+
+    public function testSavingUnchangedIsNotNotFound(): void
+    {
+        $r = $this->mysqlLike(0, 125)->update(['body' => ['user_id' => '3', 'server_id' => 125, 'name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/mock/jobs']]);
+        $this->assertTrue($r['success'], json_encode($r));
+    }
+
+    public function testAMissingServerIsStillNotFound(): void
+    {
+        $r = $this->mysqlLike(0, false)->update(['body' => ['user_id' => '3', 'server_id' => 999, 'name' => 'X', 'url' => 'https://x.test/mcp']]);
+        $this->assertSame(404, $r['status_code']);
+    }
 }

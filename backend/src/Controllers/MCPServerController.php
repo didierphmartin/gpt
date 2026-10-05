@@ -435,12 +435,18 @@ class MCPServerController
         );
         $stmt->execute($params);
 
+        // MySQL reports CHANGED rows: saving a server unchanged updates 0 rows. Only a server that
+        // isn't there (or isn't the caller's) is "not found".
         if ($stmt->rowCount() === 0) {
-            return [
-                'success' => false,
-                'error' => 'Server not found',
-                'status_code' => 404
-            ];
+            $exists = $this->db->prepare("SELECT id FROM mcp_servers WHERE id = ? AND user_id = ?");
+            $exists->execute([$serverId, $userId]);
+            if ($exists->fetchColumn() === false) {
+                return [
+                    'success' => false,
+                    'error' => 'Server not found',
+                    'status_code' => 404
+                ];
+            }
         }
 
         // Clear cached tools when URL changes

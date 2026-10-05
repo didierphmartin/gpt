@@ -394,7 +394,10 @@ class MCPServerController:
         rowCount = self.db.execute(
             "UPDATE mcp_servers SET " + ', '.join(sets) + " WHERE id = ? AND user_id = ?", params)
 
-        if rowCount == 0:
+        # MySQL reports CHANGED rows: saving a server unchanged updates 0 rows. Only a server that
+        # isn't there (or isn't the caller's) is "not found".
+        if rowCount == 0 and self.db.fetch_one(
+                "SELECT id FROM mcp_servers WHERE id = ? AND user_id = ?", [serverId, userId]) is None:
             return {
                 'success': False,
                 'error': 'Server not found',
