@@ -112,10 +112,27 @@ CREATE TABLE `agents` (
   `provider` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT 'claude',
   `model` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `instructions` text COLLATE utf8mb4_unicode_ci,
+  `playbook_id` int DEFAULT NULL,
   `tools` json DEFAULT NULL,
   `visibility` enum('personal','workspace','public') COLLATE utf8mb4_unicode_ci DEFAULT 'personal',
   `enabled` tinyint(1) DEFAULT '1',
   `settings` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `playbooks`
+--
+
+CREATE TABLE `playbooks` (
+  `id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `pkey` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `text` mediumtext COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1025,7 +1042,16 @@ ALTER TABLE `agents`
   ADD KEY `parent_agent_id` (`parent_agent_id`),
   ADD KEY `idx_team` (`team_id`),
   ADD KEY `idx_agents_order` (`team_id`,`display_order`),
-  ADD KEY `idx_agents_category` (`user_id`,`category`);
+  ADD KEY `idx_agents_category` (`user_id`,`category`),
+  ADD KEY `idx_agents_playbook` (`playbook_id`);
+
+--
+-- Indexes for table `playbooks`
+--
+ALTER TABLE `playbooks`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_playbooks_user_pkey` (`user_id`,`pkey`),
+  ADD KEY `idx_playbooks_user` (`user_id`);
 
 --
 -- Indexes for table `agent_conversations`
@@ -1424,6 +1450,12 @@ ALTER TABLE `agents`
   MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
 
 --
+-- AUTO_INCREMENT for table `playbooks`
+--
+ALTER TABLE `playbooks`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
 -- AUTO_INCREMENT for table `agent_conversations`
 --
 ALTER TABLE `agent_conversations`
@@ -1657,6 +1689,12 @@ ALTER TABLE `affiliate_sales`
 ALTER TABLE `agents`
   ADD CONSTRAINT `agents_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   ADD CONSTRAINT `agents_ibfk_2` FOREIGN KEY (`parent_agent_id`) REFERENCES `agents` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `playbooks`
+--
+ALTER TABLE `playbooks`
+  ADD CONSTRAINT `playbooks_ibfk_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `agent_conversations`
