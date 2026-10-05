@@ -38,8 +38,34 @@
         return sanitized;
     }
 
+    /** JSON text indented (2 spaces) when it parses as an object or array, else null. */
+    function indentJson(text) {
+        try {
+            const v = JSON.parse(text);
+            return v !== null && typeof v === 'object' ? JSON.stringify(v, null, 2) : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /**
+     * Pretty-print JSON in markdown source: a text that IS a JSON object or array becomes an
+     * indented ```json block, and every ```json block is re-indented. Anything that is not valid
+     * JSON is left exactly as written.
+     */
+    function prettyJsonMarkdown(text) {
+        if (!text) return text;
+        const whole = indentJson(text.trim());
+        if (whole !== null) return '```json\n' + whole + '\n```';
+        return text.replace(/```json[ \t]*\n([\s\S]*?)\n?```/gi, (m, body) => {
+            const pretty = indentJson(body.trim());
+            return pretty === null ? m : '```json\n' + pretty + '\n```';
+        });
+    }
+
     function renderMarkdown(text) {
         if (!text) return '';
+        text = prettyJsonMarkdown(text);
         if (typeof marked === 'undefined') {
             const div = document.createElement('div');
             div.textContent = text;
@@ -143,5 +169,6 @@
     }
 
     window.renderMarkdown = renderMarkdown;
+    window.prettyJsonMarkdown = prettyJsonMarkdown;
     window.sanitizeSVG = sanitizeSVG;
 })();
