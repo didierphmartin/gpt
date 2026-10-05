@@ -39,6 +39,7 @@ class AgentRepositoryCategoryTest extends TestCase
                 provider TEXT DEFAULT 'claude',
                 model TEXT DEFAULT NULL,
                 instructions TEXT,
+                playbook_id INTEGER,
                 tools TEXT,
                 visibility TEXT DEFAULT 'personal',
                 enabled INTEGER DEFAULT 1,

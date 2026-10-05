@@ -129,9 +129,17 @@ class AgentController
             return $this->error('Invalid visibility. Must be: personal, workspace, or public', 400);
         }
 
-        // Playbook agents: the tool selection is derived from the playbook's
-        // bound #Actions (see PlaybookAgentTools), not typed by hand.
-        if ($agentType === 'playbook' && trim((string)($data['instructions'] ?? '')) !== '') {
+        // Playbook agents link to the collection (playbook_id); the text lives there.
+        // Tools are derived from the linked playbook's bound #Actions (PlaybookAgentTools).
+        if ($agentType === 'playbook' && isset($data['playbook_id']) && $data['playbook_id'] !== null) {
+            $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $data['playbook_id']);
+            if ($pb === null) {
+                return $this->error("Playbook #{$data['playbook_id']} not found", 404);
+            }
+            $data['instructions'] = '';
+            $data['tools'] = \AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$userId, $pb['text']);
+        } elseif ($agentType === 'playbook' && trim((string)($data['instructions'] ?? '')) !== '') {
+            // Not yet migrated: a playbook agent still carrying its own text (removed by the migration, Task 7).
             $data['tools'] = \AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$userId, (string)$data['instructions']);
         }
 
@@ -149,6 +157,7 @@ class AgentController
             'provider' => $data['provider'] ?? 'claude',
             'model' => $data['model'] ?? null,
             'instructions' => $data['instructions'] ?? '',
+            'playbook_id' => isset($data['playbook_id']) ? (int) $data['playbook_id'] : null,
             'tools' => $data['tools'] ?? [],
             'visibility' => $visibility,
             'settings' => $data['settings'] ?? [],
@@ -244,6 +253,18 @@ class AgentController
         if (isset($data['instructions'])) {
             $agent->setInstructions($data['instructions']);
         }
+        if (array_key_exists('playbook_id', $data)) {
+            if ($data['playbook_id'] === null) {
+                $agent->setPlaybookId(null);
+            } else {
+                $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $data['playbook_id']);
+                if ($pb === null) {
+                    return $this->error("Playbook #{$data['playbook_id']} not found", 404);
+                }
+                $agent->setPlaybookId((int) $data['playbook_id']);
+                $agent->setInstructions('');
+            }
+        }
         if (isset($data['tools'])) {
             $agent->setTools($data['tools']);
         }
@@ -262,8 +283,16 @@ class AgentController
 
         try {
             // Playbook agents: keep the tool selection in step with the text.
-            if ($agent->getAgentType() === 'playbook' && trim((string)$agent->getInstructions()) !== '') {
-                $agent->setTools(\AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$agent->getUserId(), (string)$agent->getInstructions()));
+            if ($agent->getAgentType() === 'playbook') {
+                $text = (string) $agent->getInstructions();
+                if ($agent->getPlaybookId() !== null) {
+                    $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))
+                        ->get((int) $agent->getUserId(), $agent->getPlaybookId());
+                    $text = $pb['text'] ?? '';
+                }
+                if (trim($text) !== '') {
+                    $agent->setTools(\AgentTeam\Services\PlaybookAgentTools::forUser($this->db, (string)$agent->getUserId(), $text));
+                }
             }
             $updated = $this->repository->update($agent);
 

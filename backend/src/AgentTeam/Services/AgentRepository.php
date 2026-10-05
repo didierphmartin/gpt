@@ -320,12 +320,12 @@ class AgentRepository
         $sql = "INSERT INTO agents (
             user_id, team_id, category, name, description,
             agent_type, parent_agent_id, can_delegate_to, display_order,
-            provider, model, instructions,
+            provider, model, instructions, playbook_id,
             tools, visibility, enabled, settings
         ) VALUES (
             :user_id, :team_id, :category, :name, :description,
             :agent_type, :parent_agent_id, :can_delegate_to, :display_order,
-            :provider, :model, :instructions,
+            :provider, :model, :instructions, :playbook_id,
             :tools, :visibility, :enabled, :settings
         )";
 
@@ -345,6 +345,7 @@ class AgentRepository
             'provider' => $data['provider'],
             'model' => $data['model'],
             'instructions' => $data['instructions'],
+            'playbook_id' => $data['playbook_id'],
             'tools' => json_encode($data['tools']),
             'visibility' => $data['visibility'],
             'enabled' => $data['enabled'] ? 1 : 0,
@@ -372,6 +373,7 @@ class AgentRepository
             provider = :provider,
             model = :model,
             instructions = :instructions,
+            playbook_id = :playbook_id,
             tools = :tools,
             visibility = :visibility,
             enabled = :enabled,
@@ -394,6 +396,7 @@ class AgentRepository
             'provider' => $data['provider'],
             'model' => $data['model'],
             'instructions' => $data['instructions'],
+            'playbook_id' => $data['playbook_id'],
             'tools' => json_encode($data['tools']),
             'visibility' => $data['visibility'],
             'enabled' => $data['enabled'] ? 1 : 0,

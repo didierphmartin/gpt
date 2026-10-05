@@ -31,6 +31,7 @@ class Agent
     private string $provider = 'claude';
     private ?string $model = null;
     private string $instructions = '';
+    private ?int $playbookId = null;  // linked playbook (playbook agents)
 
     // Tools
     private array $tools = [];
@@ -76,6 +77,7 @@ class Agent
         $this->provider = $data['provider'] ?? 'claude';
         $this->model = $data['model'] ?? null;
         $this->instructions = $data['instructions'] ?? '';
+        $this->playbookId = isset($data['playbook_id']) ? (int) $data['playbook_id'] : null;
 
         $this->tools = $this->decodeJson($data['tools'] ?? []);
 
@@ -121,6 +123,7 @@ class Agent
             'provider' => $this->provider,
             'model' => $this->model,
             'instructions' => $this->instructions,
+            'playbook_id' => $this->playbookId,
             'tools' => $this->tools,
             'visibility' => $this->visibility,
             'enabled' => $this->enabled,
@@ -145,6 +148,7 @@ class Agent
             'provider' => $this->provider,
             'model' => $this->model,
             'instructions' => $this->instructions,
+            'playbook_id' => $this->playbookId,
             'tools' => $this->tools,
             'settings' => $this->settings,
             'visibility' => $this->visibility,
@@ -425,6 +429,17 @@ class Agent
     public function setModel(?string $model): self
     {
         $this->model = $model;
+        return $this;
+    }
+
+    public function getPlaybookId(): ?int
+    {
+        return $this->playbookId;
+    }
+
+    public function setPlaybookId(?int $id): self
+    {
+        $this->playbookId = $id;
         return $this;
     }
 
