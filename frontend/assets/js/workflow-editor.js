@@ -8816,6 +8816,7 @@ class WorkflowEditor {
         root.querySelector('.node-title').textContent = d.name || 'Code';
         root.querySelector('.code-badges').innerHTML = this._codeBadgesHtml(d);
         root.querySelector('.node-config-display').textContent = (d.exits || []).map((e, i) => `${i + 1}:${e}`).join('  ');
+        this._updateExitTags();
     }
 
     /**
@@ -14354,6 +14355,8 @@ class WorkflowEditor {
      */
     _forkBadgeFor(nodeId, nodes) {
         if (this._isSwarm()) return null;
+        // A code node's links carry their exit tags: only the exit taken runs, never "all".
+        if (this._wfNodeKind(nodeId, nodes) === 'code') return null;
         const outs = this._wfDownstreamIds(nodeId, nodes);
         if (outs.length < 2) return null;
         return {
@@ -14445,6 +14448,49 @@ class WorkflowEditor {
                 { total: badge.total }
             );
         }
+        this._updateExitTags();
+    }
+
+    /**
+     * The exit name on every link leaving a code node (the dispatcher's links got their
+     * badge; users asked for the same here). An SVG <text> inside the link's own <svg>, at
+     * the path's middle; one MutationObserver on the paths' "d" moves the tags when a
+     * node is dragged (rAF-throttled). Static: no animation on the canvas edges.
+     */
+    _updateExitTags() {
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data;
+        if (!nodes || !this.container || !window.CodeNode) return;
+        if (!this._exitTagObserver) {
+            let queued = false;
+            this._exitTagObserver = new MutationObserver(() => {
+                if (queued) return;
+                queued = true;
+                requestAnimationFrame(() => { queued = false; this._updateExitTags(); });
+            });
+            this._exitTagObserver.observe(this.container, { subtree: true, attributes: true, attributeFilter: ['d'] });
+        }
+        const live = new Set();
+        for (const id of Object.keys(nodes)) {
+            if (this._wfNodeKind(id, nodes) !== 'code') continue;
+            for (const t of window.CodeNode.exitTags(id, nodes)) {
+                const svg = this.container.querySelector(`svg.connection.node_out_node-${id}.node_in_node-${t.to}.${t.port}`);
+                const path = svg?.querySelector('path.main-path');
+                if (!path) continue;
+                let tag = svg.querySelector('text.wf-exit-tag');
+                if (!tag) {
+                    tag = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    tag.setAttribute('class', 'wf-exit-tag');
+                    tag.setAttribute('text-anchor', 'middle');
+                    svg.appendChild(tag);
+                }
+                if (tag.textContent !== t.exit) tag.textContent = t.exit;
+                const p = path.getPointAtLength(path.getTotalLength() / 2);
+                tag.setAttribute('x', String(p.x));
+                tag.setAttribute('y', String(p.y - 6));
+                live.add(tag);
+            }
+        }
+        for (const tag of this.container.querySelectorAll('text.wf-exit-tag')) if (!live.has(tag)) tag.remove();
     }
 
     /** Dispatcher targets: downstream agent and code nodes as [{id, name}] (edge order) -- compiled menus list both. */
@@ -15280,6 +15326,11 @@ class WorkflowEditor {
                             // them (compiled stops there) and the run fails.
                             const res = window.CodeNode.routeAfter(id, nodes, r, node.data.exits || ['next']);
                             this._wfOutputs[id] = res.output;
+                            if (res.success) {
+                                // An unwired exit leaves every link faint: the run ended there.
+                                this._markDispatchCandidates(id);
+                                for (const to of res.chosen) this._markDispatchChosen(id, to);
+                            }
                             for (const s of this._wfSkipSet(res.skip, nodes)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 this._wfOutputs[s] = '';

@@ -135,4 +135,15 @@ assert.deepStrictEqual(bad.activity.map((a) => a.level), ['error', 'error']);
 // the error exit is a successful run of the node that took the error route
 const errExit = CN.runData({ ok: true, route: 'error', output_text: '{"error":"x"}', stdout: '', tool_calls: [] }, { parents: [], user_prompt: '', name: 'P', ts: 0 });
 assert.deepStrictEqual(errExit.activity.map((a) => [a.level, a.message]), [['warn', 'exit: error']]);
+// exit tags: one per link leaving a code node, named by its port's exit (edge order)
+assert.deepStrictEqual(CN.exitTags('2', nodes), [
+    { to: '3', port: 'output_1', exit: 'job' },
+    { to: '5', port: 'output_1', exit: 'job' },
+    { to: '4', port: 'output_2', exit: 'no_job' },
+]);
+assert.deepStrictEqual(CN.exitTags('3', nodes), []);
+// a port past the exits (exits shrank before the ports did) gets no tag
+const stale = { 7: { data: { type: 'code', exits: ['next'] }, inputs: {},
+    outputs: { output_1: { connections: [{ node: '8' }] }, output_2: { connections: [{ node: '9' }] } } } };
+assert.deepStrictEqual(CN.exitTags('7', stale), [{ to: '8', port: 'output_1', exit: 'next' }]);
 console.log('code-node.test.js: OK');

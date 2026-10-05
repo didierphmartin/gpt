@@ -3010,3 +3010,19 @@ svg.connection.wf-edge-chosen .main-path {
         transform: translateX(0);
     }
 }
+
+/* Exit tag — a code node's exit name on each of its links (workflow-editor.js
+   _updateExitTags). Never in the way of selecting the link under it. After a
+   run the link marks above fade or bold the tag with its link. */
+svg.connection text.wf-exit-tag {
+    font-size: 10px;
+    font-weight: 700;
+    fill: #1d4ed8;
+    stroke: #ffffff;
+    stroke-width: 3px;
+    paint-order: stroke;
+    pointer-events: none;
+    user-select: none;
+}
+svg.connection.wf-edge-candidate text.wf-exit-tag { opacity: 0.4; }
+svg.connection.wf-edge-chosen text.wf-exit-tag { fill: #15803d; font-size: 11px; }

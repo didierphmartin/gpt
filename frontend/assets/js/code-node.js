@@ -109,6 +109,14 @@
         return edges;
     }
 
+    /** One tag per link leaving a code node: the exit its port stands for (a port past the exits has none). */
+    function exitTags(nodeId, nodes) {
+        const exits = nodes[nodeId]?.data?.exits || ['next'];
+        return edgesFrom(nodeId, nodes[nodeId] || {})
+            .map((e) => ({ to: e.to, port: e.from_port, exit: exitForPort(exits, e.from_port) }))
+            .filter((t) => t.exit !== null);
+    }
+
     /** Every child of `nodeId`, edge order (port by port), as ids. */
     function childrenOf(nodeId, nodes) {
         const out = [];
@@ -198,5 +206,5 @@
     }
 
     return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
-             edgesFrom, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
+             edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });
