@@ -114,7 +114,7 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('Tools selected for this node: web_search', $code);
     }
 
-    public function testMcpUrlNormalized(): void
+    public function testMcpUrlTriedAsGivenThenWithMcp(): void
     {
         $a = $this->analyzed();
         $a['usedServers'] = ['https://vector.example.com' => ['name' => 'Vector']];
@@ -124,10 +124,34 @@ final class NooaGeneratorEmitTest extends TestCase
         ]];
         $a['agents']['2']['tools'] = ['find'];
         $code = NOOAGenerator::emitNooa($a);
-        // MCPManager does no URL normalization — the /mcp suffix is baked here.
-        $this->assertStringContainsString('url="https://vector.example.com/mcp"', $code);
+        // MCPManager does no URL normalization: the endpoint is probed at import,
+        // the registered URL first, then with /mcp in its path.
+        $this->assertStringContainsString('url=_mcp_endpoint(["https://vector.example.com", "https://vector.example.com/mcp"])', $code);
+        $this->assertStringContainsString('def _mcp_endpoint(candidates: list) -> str:', $code);
         // The dict key stays the raw catalog URL (agent attrs look it up verbatim).
         $this->assertStringContainsString('MCP["https://vector.example.com"]', $code);
+    }
+
+    public function testMcpQueryUrlKeepsItsQuery(): void
+    {
+        $url = 'http://localhost/servicenow/?profile=mock&toolset=jobs';
+        $a = $this->analyzed();
+        $a['usedServers'] = [$url => ['name' => 'ServiceNow']];
+        $a['usedCatalog'] = ['poll_jobs' => ['server_url' => $url, 'tool_name' => 'poll_jobs', 'input_schema' => new \stdClass()]];
+        $a['agents']['2']['tools'] = ['poll_jobs'];
+        $code = NOOAGenerator::emitNooa($a);
+        $this->assertStringContainsString('url=_mcp_endpoint(["' . $url . '", "http://localhost/servicenow/mcp?profile=mock&toolset=jobs"])', $code);
+    }
+
+    public function testMcpEndpointUrlIsBakedAsIs(): void
+    {
+        $a = $this->analyzed();
+        $a['usedServers'] = ['https://mcp.example/mcp' => ['name' => 'Example Server']];
+        $a['usedCatalog'] = ['web_search' => ['server_url' => 'https://mcp.example/mcp', 'tool_name' => 'web_search', 'input_schema' => new \stdClass()]];
+        $a['agents']['2']['tools'] = ['web_search'];
+        $code = NOOAGenerator::emitNooa($a);
+        $this->assertStringContainsString('url="https://mcp.example/mcp"', $code);
+        $this->assertStringNotContainsString('def _mcp_endpoint', $code);
     }
 
     public function testSkillRuntimeEmittedWhenSkillPresent(): void

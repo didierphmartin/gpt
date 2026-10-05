@@ -5,6 +5,7 @@ namespace AgentTeam\Services;
 
 use RuntimeException;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 
 /**
  * Compiles a workflow DSL into a self-contained NVIDIA OO Agents (NOOA)
@@ -383,14 +384,32 @@ TXT;
     // MCP (native MCPManager) — emitted only when the workflow uses MCP tools
     // -------------------------------------------------------------------------
 
-    /** Mirror of the emitted-Python _normalize_mcp_url, applied at generation time. */
-    private static function normalizeMcpUrl(string $url): string
+    /**
+     * Emitted when some server URL has two candidate endpoints (McpEndpoint):
+     * MCPManager takes one URL and does no fallback, so the module probes the
+     * registered URL first, then the /mcp form, at import.
+     */
+    private static function mcpEndpointFn(): string
     {
-        $url = rtrim($url, '/');
-        if (str_ends_with($url, '/mcp') || str_ends_with($url, '.php')) {
-            return $url;
-        }
-        return $url . '/mcp';
+        return <<<'PY'
+def _mcp_endpoint(candidates: list) -> str:
+    """The MCP endpoint for a registered server URL: the first candidate (the
+    URL as registered, then with /mcp in its path) that answers 'initialize'
+    with JSON-RPC; the last candidate when none does."""
+    import httpx
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "NOOA-Workflow", "version": "1.0.0"}}}
+    headers = {"Accept": "application/json, text/event-stream"}
+    for url in candidates[:-1]:
+        try:
+            r = httpx.post(url, json=init, headers=headers, timeout=15)
+            if r.status_code < 400 and ('"result"' in r.text or '"error"' in r.text):
+                return url
+        except Exception:
+            pass
+    return candidates[-1]
+PY;
     }
 
     private static function mcpBlock(array $analyzed): string
@@ -400,19 +419,30 @@ TXT;
         $lines[] = '# Server registry (metadata only, for logs/debugging).';
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($servers, true);
         $lines[] = '';
+        $probe = false;
+        $entries = [];
+        foreach ($servers as $url => $meta) {
+            $safeName = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) (($meta['name'] ?? '') ?: 'server'));
+            $candidates = McpEndpoint::candidates((string) $url);
+            $endpoint = count($candidates) === 1
+                ? PythonEmitHelpers::pyStr($candidates[0])
+                : '_mcp_endpoint([' . implode(', ', array_map([PythonEmitHelpers::class, 'pyStr'], $candidates)) . '])';
+            $probe = $probe || count($candidates) > 1;
+            $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $url) . ': MCPManager.create_from_server(';
+            $entries[] = '        ' . PythonEmitHelpers::pyStr($safeName) . ',';
+            $entries[] = '        url=' . $endpoint . ',';
+            $entries[] = '        transport="streamable-http",';
+            $entries[] = '        tool_call_timeout=timedelta(seconds=180),';
+            $entries[] = '    ),';
+        }
+        if ($probe) {
+            $lines[] = self::mcpEndpointFn();
+            $lines[] = '';
+        }
         $lines[] = '# One live connection per server; the value exposes each server tool as a';
         $lines[] = '# method. tool_call_timeout matches the 180s the other targets allow.';
         $lines[] = 'MCP = {';
-        foreach ($servers as $url => $meta) {
-            $safeName = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) (($meta['name'] ?? '') ?: 'server'));
-            $normalized = self::normalizeMcpUrl((string) $url);
-            $lines[] = '    ' . PythonEmitHelpers::pyStr((string) $url) . ': MCPManager.create_from_server(';
-            $lines[] = '        ' . PythonEmitHelpers::pyStr($safeName) . ',';
-            $lines[] = '        url=' . PythonEmitHelpers::pyStr($normalized) . ',';
-            $lines[] = '        transport="streamable-http",';
-            $lines[] = '        tool_call_timeout=timedelta(seconds=180),';
-            $lines[] = '    ),';
-        }
+        array_push($lines, ...$entries);
         $lines[] = '}';
         return implode("\n", $lines);
     }

@@ -393,7 +393,7 @@ class LangGraphGenerator
         $lines[] = '#';
         $lines[] = '# The Model Context Protocol (MCP) uses JSON-RPC 2.0 over HTTP.';
         $lines[] = '# Each tool call requires:';
-        $lines[] = "#   1. URL normalization -- append /mcp if not present";
+        $lines[] = "#   1. Endpoint -- the registered URL as given, then with /mcp in its path";
         $lines[] = "#   2. Session initialization -- send 'initialize' + notification";
         $lines[] = "#   3. Tool invocation -- send 'tools/call' with name + arguments";
         $lines[] = "#   4. Response parsing -- handle plain JSON or SSE-wrapped JSON";
@@ -4349,8 +4349,8 @@ servers and tool schemas (MCP_SERVERS, TOOL_CATALOG) and the graph
   5. The Output node merges its parents' outputs verbatim (no LLM) into the
      final result.
 
-Tools are called over the MCP protocol: initialize handshake (the /mcp
-endpoint first, then the URL as registered), tools/call, JSON or SSE
+Tools are called over the MCP protocol: initialize handshake (the URL as
+registered first, then with /mcp in its path), tools/call, JSON or SSE
 response, text content back to the model.
 TXT;
     }
