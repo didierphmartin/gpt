@@ -970,7 +970,9 @@ class SettingsPanel {
         const urlInput = document.getElementById('mcp-server-url');
         const descInput = document.getElementById('mcp-server-description');
         const authInput = document.getElementById('mcp-server-auth');
+        const mockInput = document.getElementById('mcp-server-is-mock');
 
+        if (mockInput) mockInput.checked = Number(server?.is_mock) === 1;
         if (nameInput) nameInput.value = server?.name || '';
         if (urlInput) urlInput.value = server?.url || '';
         if (descInput) descInput.value = server?.description || '';
@@ -1002,6 +1004,8 @@ class SettingsPanel {
         if (urlInput) urlInput.value = '';
         if (descInput) descInput.value = '';
         if (authInput) authInput.value = '';
+        const mockInput = document.getElementById('mcp-server-is-mock');
+        if (mockInput) mockInput.checked = false;
 
         this.setMCPTestStatus('', null);
 
@@ -1091,6 +1095,7 @@ class SettingsPanel {
         const url = urlInput?.value.trim();
         const description = descInput?.value.trim();
         const authHeaders = this.getMCPAuthHeaders();
+        const isMock = !!document.getElementById('mcp-server-is-mock')?.checked;
 
         if (!name || !url) {
             this.showNotification('Name and URL are required', 'warning');
@@ -1107,9 +1112,9 @@ class SettingsPanel {
         try {
             let result;
             if (this.editingServerId) {
-                result = await window.mcpClient?.updateServer(this.editingServerId, name, url, description);
+                result = await window.mcpClient?.updateServer(this.editingServerId, name, url, description, undefined, undefined, isMock);
             } else {
-                result = await window.mcpClient?.addServer(name, url, description, authHeaders);
+                result = await window.mcpClient?.addServer(name, url, description, authHeaders, 'http', isMock);
             }
 
             if (result?.success) {

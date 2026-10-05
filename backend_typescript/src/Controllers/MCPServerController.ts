@@ -137,7 +137,8 @@ export class MCPServerController {
     try {
       const res = await db
         .insertInto('mcp_servers')
-        .values({ user_id: String(userId), name, url, description, headers: headersJson } as any)
+        // is_mock: a test double of a real service (the Settings "Mock server" box); shown as "mock".
+        .values({ user_id: String(userId), name, url, description, headers: headersJson, is_mock: input.is_mock ? 1 : 0 } as any)
         .executeTakeFirst();
       return { success: true, server_id: String(res.insertId), message: 'Server added successfully' };
     } catch (e: any) {
@@ -160,9 +161,12 @@ export class MCPServerController {
     if (!serverId) return { status_code: 400, success: false, error: 'Server ID required' };
     if (!name || !url) return { status_code: 400, success: false, error: 'Name and URL are required' };
 
+    // is_mock only when the key is present, so a form that doesn't send it keeps it (PHP parity).
+    const sets: Record<string, unknown> = { name, url, description };
+    if ('is_mock' in input) sets.is_mock = input.is_mock ? 1 : 0;
     const res = await db
       .updateTable('mcp_servers')
-      .set({ name, url, description })
+      .set(sets as any)
       .where('id', '=', Number(serverId))
       .where('user_id', '=', String(userId))
       .executeTakeFirst();

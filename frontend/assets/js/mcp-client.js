@@ -104,7 +104,7 @@ class MCPClient {
     /**
      * Add a new MCP server
      */
-    async addServer(name, url, description = '', headers = {}, transport = 'http') {
+    async addServer(name, url, description = '', headers = {}, transport = 'http', isMock = false) {
         try {
             const body = {
                 action: 'add',
@@ -112,7 +112,8 @@ class MCPClient {
                 name,
                 url,
                 description,
-                transport
+                transport,
+                is_mock: !!isMock   // a test double of a real service, shown as "mock"
             };
             if (headers && Object.keys(headers).length) {
                 body.headers = headers;
@@ -154,8 +155,9 @@ class MCPClient {
      *   doesn't send transport, and the backend only resets it when the key
      *   is present in the body — sending a default here would silently flip
      *   SSE servers back to 'http'.
+     * @param {*} isMock - true/false, or undefined to leave the stored flag untouched (same rule).
      */
-    async updateServer(serverId, name, url, description = '', headers = undefined, transport = undefined) {
+    async updateServer(serverId, name, url, description = '', headers = undefined, transport = undefined, isMock = undefined) {
         try {
             const body = {
                 user_id: this.getUserId(),
@@ -169,6 +171,9 @@ class MCPClient {
             }
             if (transport !== undefined) {
                 body.transport = transport;
+            }
+            if (isMock !== undefined) {
+                body.is_mock = !!isMock;
             }
             const data = await this.request('/mcp/servers/update', {
                 method: 'POST',

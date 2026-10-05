@@ -268,6 +268,7 @@
     "headers": "Custom headers (JSON)",
     "headersAdminManaged": "Headers for global servers are managed by an administrator.",
     "enabled": "Enabled",
+    "isMock": "Mock server (a test double of a real service)",
     "testConnection": "Test connection",
     "testing": "Testing…",
     "connected": "Connected",

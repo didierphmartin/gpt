@@ -314,9 +314,10 @@ class MCPServerController:
 
         try:
             serverId = self.db.insert("""
-                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, [userId, name, url, description, headersJson, transport])
+                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, is_mock)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, [userId, name, url, description, headersJson, transport,
+                  0 if php_empty(input_.get('is_mock')) else 1])
 
             # PDO::lastInsertId() returns a *string*; json_encode therefore quotes it.
             serverId = php_strval(serverId)
@@ -375,6 +376,11 @@ class MCPServerController:
                 }
             sets.append('transport = ?')
             params.append(transport)
+
+        # is_mock likewise: only when the key is present, so a form that doesn't send it keeps it.
+        if 'is_mock' in input_:
+            sets.append('is_mock = ?')
+            params.append(0 if php_empty(input_['is_mock']) else 1)
 
         # Headers are only touched when the key is present in the body:
         # {} or null clears them, an object replaces them.

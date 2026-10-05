@@ -340,10 +340,11 @@ class MCPServerController
 
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, is_mock)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->execute([$userId, $name, $url, $description, $headersJson, $transport]);
+            // is_mock: a test double of a real service (the Settings "Mock server" box); shown as "mock".
+            $stmt->execute([$userId, $name, $url, $description, $headersJson, $transport, empty($input['is_mock']) ? 0 : 1]);
 
             $serverId = $this->db->lastInsertId();
 
@@ -411,6 +412,12 @@ class MCPServerController
             }
             $sets[]   = 'transport = ?';
             $params[] = $transport;
+        }
+
+        // is_mock likewise: only when the key is present, so a form that doesn't send it keeps it.
+        if (array_key_exists('is_mock', $input)) {
+            $sets[]   = 'is_mock = ?';
+            $params[] = empty($input['is_mock']) ? 0 : 1;
         }
 
         // Headers are only touched when the key is present in the body:

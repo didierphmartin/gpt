@@ -224,6 +224,7 @@ class MCPLibrary {
                 <label class="mcp-field">${this.esc(t('mcpLibrary.headers'))}<textarea id="mcp-f-headers" class="mcp-input" ${dis} placeholder='{"Authorization": "Bearer ..."}'>${this.esc(headersText)}</textarea></label>
                 ${!own ? `<div class="mcp-help">${this.esc(t('mcpLibrary.headersAdminManaged'))}</div>` : ''}
                 <label class="mcp-field flex items-center gap-2"><input type="checkbox" id="mcp-f-enabled" ${dis} ${isNew || Number(server.enabled) === 1 ? 'checked' : ''}> ${this.esc(t('mcpLibrary.enabled'))}</label>
+                <label class="mcp-field flex items-center gap-2"><input type="checkbox" id="mcp-f-mock" ${dis} ${!isNew && Number(server.is_mock) === 1 ? 'checked' : ''}> ${this.esc(t('mcpLibrary.isMock'))}</label>
                 <div id="mcp-f-msg" class="mcp-msg hidden"></div>
                 <div class="flex items-center gap-2 mt-4">
                   <button id="mcp-f-test" class="mcp-btn mcp-btn-secondary">${this.esc(t('mcpLibrary.testConnection'))}</button>
@@ -287,6 +288,7 @@ class MCPLibrary {
             description: g('mcp-f-desc').value.trim(),
             transport: g('mcp-f-transport').value,
             enabled: g('mcp-f-enabled').checked,
+            isMock: g('mcp-f-mock').checked,
             headers,
         };
     }
@@ -321,12 +323,12 @@ class MCPLibrary {
         try {
             let res;
             if (isNew) {
-                res = await window.mcpClient.addServer(f.name, f.url, f.description, f.headers || {}, f.transport);
+                res = await window.mcpClient.addServer(f.name, f.url, f.description, f.headers || {}, f.transport, f.isMock);
                 if (res?.success && res.server_id && !f.enabled) {
                     await window.mcpClient.toggleServer(Number(res.server_id), false);
                 }
             } else {
-                res = await window.mcpClient.updateServer(server.id, f.name, f.url, f.description, f.headers, f.transport);
+                res = await window.mcpClient.updateServer(server.id, f.name, f.url, f.description, f.headers, f.transport, f.isMock);
                 if (res?.success && (Number(server.enabled) === 1) !== f.enabled) {
                     const toggleRes = await window.mcpClient.toggleServer(server.id, f.enabled);
                     if (!toggleRes?.success) return this.showMsg(this.t('mcpLibrary.saveFailed'), false);

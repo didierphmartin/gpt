@@ -2966,6 +2966,12 @@
                                 <input type="text" id="mcp-server-auth"
                                        placeholder="Bearer ufs_xxx…  (only for servers that need a key)">
                             </div>
+                            <div class="mcp-form-row">
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:normal;">
+                                    <input type="checkbox" id="mcp-server-is-mock" style="width:auto;">
+                                    Mock server (a test double of a real service, labelled "mock" everywhere)
+                                </label>
+                            </div>
                             <div class="mcp-form-actions">
                                 <span id="mcp-test-status" class="mcp-test-status" role="status" aria-live="polite"></span>
                                 <button id="mcp-cancel-add" class="mcp-btn mcp-btn-secondary" data-i18n="common.cancel">Cancel</button>
@@ -4221,12 +4227,12 @@
     <script src="assets/js/audio-streamer.js"></script>
     <script src="assets/js/gemini-live-client.js"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/mcp-client.js?v=20260904-mcplib"></script>
+    <script src="assets/js/mcp-client.js?v=20261005-is-mock"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260921-runner"></script>
-    <script src="assets/js/settings-panel.js?v=20260930-jev-keys"></script>
+    <script src="assets/js/settings-panel.js?v=20261005-is-mock"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4264,7 +4270,7 @@
     <script src="assets/js/workflow-editor.js?v=20261005-flush-on-clear"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
-    <script src="assets/js/mcp-library.js?v=20260904-mcplib"></script>
+    <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
     <script src="assets/js/chat.js?v=20260904-mcplib"></script>
     <script>

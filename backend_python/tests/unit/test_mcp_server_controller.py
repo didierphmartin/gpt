@@ -340,8 +340,8 @@ def test_get_all_tools_sql_decode_and_cascade():
 # ─── create() (PHP 301-366) ────────────────────────────────────────────────
 
 CREATE_SQL = """
-                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, is_mock)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """
 
 
@@ -367,9 +367,15 @@ def test_create_inserts_and_returns_a_string_id():
     out = c(db).create(ctx(body={'name': ' n ', 'url': 'http://127.0.0.1:1/mcp', 'description': ' d ',
                                  'headers': {'A': 'b'}, 'transport': 'SSE'}))
     assert sqls(db)[0] == CREATE_SQL
-    assert db.calls[0][1] == [3, 'n', 'http://127.0.0.1:1/mcp', 'd', '{"A":"b"}', 'sse']
+    assert db.calls[0][1] == [3, 'n', 'http://127.0.0.1:1/mcp', 'd', '{"A":"b"}', 'sse', 0]
     # PDO::lastInsertId() is a string, so json_encode quotes it.
     assert out == {'success': True, 'server_id': '42', 'message': 'Server added successfully', 'status_code': 200}
+
+
+def test_create_as_mock():
+    db = FakeDb()
+    c(db).create(ctx(body={'name': 'n', 'url': 'http://a.com', 'is_mock': True}))
+    assert db.calls[0][1][6] == 1
 
 
 def test_create_empty_headers_object_stores_null():
@@ -423,6 +429,18 @@ def test_update_sets_transport_and_headers_when_present():
     assert sqls(db)[0] == ('UPDATE mcp_servers SET name = ?, url = ?, description = ?, transport = ?, headers = ? '
                            'WHERE id = ? AND user_id = ?')
     assert db.calls[0][1] == ['n', 'http://a.com', '', 'sse', None, 5, 3]
+
+
+def test_update_sets_is_mock_only_when_present():
+    db = FakeDb(rowcount=1)
+    c(db).update(ctx(body={'server_id': 5, 'name': 'n', 'url': 'http://a.com',
+                           'transport': 'sse', 'is_mock': True, 'headers': None}))
+    assert sqls(db)[0] == ('UPDATE mcp_servers SET name = ?, url = ?, description = ?, transport = ?, is_mock = ?, '
+                           'headers = ? WHERE id = ? AND user_id = ?')
+    assert db.calls[0][1] == ['n', 'http://a.com', '', 'sse', 1, None, 5, 3]
+    db = FakeDb(rowcount=1)
+    c(db).update(ctx(body={'server_id': 5, 'name': 'n', 'url': 'http://a.com', 'is_mock': False}))
+    assert db.calls[0][1] == ['n', 'http://a.com', '', 0, 5, 3]
 
 
 def test_update_not_found():
