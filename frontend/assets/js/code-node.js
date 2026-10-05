@@ -8,13 +8,32 @@
     else root.CodeNode = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
     const EXIT_RE = /^[a-z][a-z0-9_]{0,31}$/;
-    const TOOL_RE = /^[a-z0-9_]{1,64}\.[A-Za-z0-9_.-]{1,128}$/;
 
+    // Templates name the servers they need by slug; picking one checks the user's servers with that slug.
     const TEMPLATES = {
+        blank: {
+            label: 'Blank (pass-through)',
+            exits: ['next'],
+            servers: [],
+            code: [
+                'def run(input, call_tool):',
+                '    # input: what the parent node(s) produced (the Start prompt when wired to Start).',
+                '    #   One parent: its text, or the decoded value when it is JSON.',
+                '    #   Several parents: a dict {parent name: value}.',
+                '    #',
+                '    # call_tool(server, tool, args) calls a tool on a server checked in "MCP Servers";',
+                '    #   server is its name in lowercase, other characters as _ (e.g. "My Server" -> "my_server").',
+                '    #',
+                '    # Return the output. With several exits, return {"route": "<exit>", "output": ...}',
+                '    #   to choose which exit the run continues on.',
+                '    return input',
+                '',
+            ].join('\n'),
+        },
         poll_servicenow: {
-            label: 'Poll ServiceNow jobs',
+            label: 'Example: poll ServiceNow jobs',
             exits: ['job', 'no_job', 'error'],
-            mcp_tools: ['servicenow.poll_jobs'],
+            servers: ['servicenow'],
             code: [
                 'def run(input, call_tool):',
                 '    # Oldest open, unclaimed SynergyAI task (optionally: {"tag": "okta-reset"}).',
@@ -26,13 +45,13 @@
                 '',
             ].join('\n'),
         },
-        passthrough: {
-            label: 'Pass-through',
-            exits: ['next'],
-            mcp_tools: [],
-            code: 'def run(input, call_tool):\n    return input\n',
-        },
     };
+    const DEFAULT_TEMPLATE = 'blank';
+
+    /** The server slug call_tool uses: twin of CodeNodeEmit::slug. */
+    function slug(serverName) {
+        return String(serverName).replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    }
 
     function validateConfig(cfg) {
         const errs = [];
@@ -41,7 +60,8 @@
         if (exits.length < 1 || exits.length > 8) errs.push('A code node has 1 to 8 exits.');
         exits.forEach((e) => { if (!EXIT_RE.test(e)) errs.push(`Exit "${e}": lowercase letters, digits and _ only.`); });
         if (new Set(exits).size !== exits.length) errs.push('Exit names must be unique.');
-        (cfg.mcp_tools || []).forEach((t) => { if (!TOOL_RE.test(t)) errs.push(`Tool "${t}": write server.tool, e.g. servicenow.poll_jobs.`); });
+        if (!Array.isArray(cfg.mcp_servers)) errs.push('MCP servers: a list of server names.');
+        else cfg.mcp_servers.forEach((n) => { if (typeof n !== 'string' || !n.trim()) errs.push('MCP servers: an empty server name.'); });
         const t = Number(cfg.timeout_s);
         if (!Number.isInteger(t) || t < 1 || t > 300) errs.push('Timeout: 1 to 300 seconds.');
         return errs;
@@ -151,14 +171,32 @@
         return { connections, dropped };
     }
 
-    /** A loaded config whose exits / mcp_tools are null or not arrays (or exits empty) takes the defaults. */
+    /** A loaded config whose exits / mcp_servers are null or not arrays (or exits empty) takes the defaults. */
     function normalizeConfig(cfg, defaults) {
         const out = { ...cfg };
         out.exits = Array.isArray(cfg.exits) && cfg.exits.length ? cfg.exits : [...defaults.exits];
-        out.mcp_tools = Array.isArray(cfg.mcp_tools) ? cfg.mcp_tools : [...defaults.mcp_tools];
+        out.mcp_servers = Array.isArray(cfg.mcp_servers) ? cfg.mcp_servers : [...defaults.mcp_servers];
         return out;
     }
 
-    return { EXIT_RE, TOOL_RE, TEMPLATES, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, edgesFrom,
-             failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig };
+    /**
+     * A run's record in the agent nodes' shape (nodeExecutionData), so the Input, Output and Logs
+     * tabs show it: input as the node received it, output (the error on failure), and one activity
+     * line per tool call, the printed text and the exit taken. `r` stays whole under `code`.
+     */
+    function runData(r, { parents, user_prompt, name, ts }) {
+        const input = !parents.length ? String(user_prompt || '')
+            : parents.length === 1 ? parents[0].text
+            : parents.map((p) => `## ${p.name}\n${p.text}`).join('\n\n');
+        const at = (level, message) => ({ ts, level, phase: level === 'error' ? 'error' : 'step', message });
+        const activity = (r.tool_calls || []).map((c) => at(c.ok ? 'info' : 'error',
+            `call_tool ${c.server}.${c.tool} ${JSON.stringify(c.args || {})} → ${c.ok ? 'ok' : 'failed'} (${c.ms} ms)`));
+        if (r.stdout) activity.push(at('info', 'printed:\n' + r.stdout.replace(/\n$/, '')));
+        if (r.ok) activity.push(at(r.route === 'error' ? 'warn' : 'info', `exit: ${r.route}`));
+        else activity.push(at('error', r.error));
+        return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
+    }
+
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+             edgesFrom, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });

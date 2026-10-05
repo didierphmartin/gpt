@@ -503,7 +503,7 @@ def _transport(server, tool, args):
     return body["result"]
 
 _res = _h.execute(_req["code"], _h.decode_input(_req["parents"], _req["user_prompt"]),
-                  _req["exits"], _req["tools"], _transport, _req["timeout_s"], threaded=False)
+                  _req["exits"], _req["servers"], _transport, _req["timeout_s"], threaded=False)
 _code_res_json = json.dumps(_res, ensure_ascii=False)
 `;
 

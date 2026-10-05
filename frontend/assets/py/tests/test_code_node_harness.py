@@ -13,9 +13,9 @@ def ok_result(data):
     return {"content": [{"type": "text", "text": json.dumps(data)}], "structuredContent": data}
 
 
-def run(source, input=None, exits=("next",), tools=(), transport=None, timeout_s=5, threaded=True):
+def run(source, input=None, exits=("next",), servers=(), transport=None, timeout_s=5, threaded=True):
     transport = transport or (lambda s, t, a: ok_result({}))
-    return h.execute(source, input, list(exits), list(tools), transport, timeout_s, threaded=threaded)
+    return h.execute(source, input, list(exits), list(servers), transport, timeout_s, threaded=threaded)
 
 
 class DecodeInput(unittest.TestCase):
@@ -71,27 +71,33 @@ class CallTool(unittest.TestCase):
 
     def test_declared_tool_returns_structured_content(self):
         seen = []
-        r = run(self.SRC, tools=("servicenow.poll_jobs",),
+        r = run(self.SRC, servers=("servicenow",),
                 transport=lambda s, t, a: seen.append((s, t, a)) or ok_result({"job": None}))
         self.assertEqual(json.loads(r["output_text"]), {"job": None})
         self.assertEqual(seen, [("servicenow", "poll_jobs", {"tag": "x"})])
         self.assertEqual([(c["server"], c["tool"], c["ok"]) for c in r["tool_calls"]], [("servicenow", "poll_jobs", True)])
 
     def test_text_result_decoded_when_json(self):
-        r = run(self.SRC, tools=("servicenow.poll_jobs",),
+        r = run(self.SRC, servers=("servicenow",),
                 transport=lambda s, t, a: {"content": [{"type": "text", "text": '{"a": 2}'}]})
         self.assertEqual(json.loads(r["output_text"]), {"a": 2})
 
-    def test_undeclared_tool_is_refused_without_calling(self):
+    def test_unchecked_server_is_refused_without_calling(self):
         seen = []
-        r = run(self.SRC, tools=(), transport=lambda s, t, a: seen.append(1) or ok_result({}))
+        r = run(self.SRC, servers=("okta",), transport=lambda s, t, a: seen.append(1) or ok_result({}))
         self.assertFalse(r["ok"])
         self.assertIn("ToolError", r["error"])
-        self.assertIn("not declared", r["error"])
+        self.assertIn("MCP server servicenow is not checked on this node", r["error"])
         self.assertEqual(seen, [])
 
+    def test_any_tool_of_a_checked_server_is_allowed(self):
+        src = "def run(i, call_tool):\n    return [call_tool('servicenow', 'poll_jobs'), call_tool('servicenow', 'claim_job', {'task': 't'})]"
+        r = run(src, servers=("servicenow",), transport=lambda s, t, a: ok_result({"t": t}))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(json.loads(r["output_text"]), [{"t": "poll_jobs"}, {"t": "claim_job"}])
+
     def test_is_error_raises_tool_error(self):   # review focus 3
-        r = run(self.SRC, tools=("servicenow.poll_jobs",),
+        r = run(self.SRC, servers=("servicenow",),
                 transport=lambda s, t, a: {"isError": True, "content": [{"type": "text", "text": "not_claimable: closed"}]})
         self.assertFalse(r["ok"])
         self.assertIn("not_claimable: closed", r["error"])
@@ -100,7 +106,7 @@ class CallTool(unittest.TestCase):
     def test_transport_exception_becomes_tool_error(self):
         def boom(s, t, a):
             raise OSError("connection refused")
-        r = run(self.SRC, tools=("servicenow.poll_jobs",), transport=boom)
+        r = run(self.SRC, servers=("servicenow",), transport=boom)
         self.assertIn("ToolError", r["error"])
         self.assertIn("connection refused", r["error"])
 

@@ -11,7 +11,7 @@ final class CodeNodeEmitTest extends TestCase
     {
         return ['id' => '5', 'node_type' => 'code', 'config' => $cfg + ['type' => 'code', 'name' => 'Poll',
             'code' => "def run(i, c):\n    return {'route': 'job', 'output': 1}", 'exits' => ['job', 'no_job', 'error'],
-            'mcp_tools' => ['servicenow.poll_jobs'], 'timeout_s' => 20]];
+            'mcp_servers' => ['ServiceNow'], 'timeout_s' => 20]];
     }
 
     private const EDGES = [
@@ -27,6 +27,7 @@ final class CodeNodeEmitTest extends TestCase
         self::assertSame('code', $d['kind']);
         self::assertSame(['job' => ['6', '8'], 'no_job' => ['7'], 'error' => []], $d['exit_targets']);
         self::assertSame(['http://localhost/servicenow/'], $d['servers']);
+        self::assertSame(['servicenow'], $d['mcp_servers']);
         self::assertSame(20, $d['timeout_s']);
         self::assertSame('Poll', $d['display']);
     }
@@ -36,8 +37,8 @@ final class CodeNodeEmitTest extends TestCase
         $d = CodeNodeEmit::nodeData(['id' => '5', 'node_type' => 'code', 'config' => ['type' => 'code', 'code' => "def run(i, c):\n    return i"]], [], []);
         self::assertSame(['next'], $d['exits']);
         self::assertSame(30, $d['timeout_s']);
-        foreach ([['exits' => ['Bad']], ['exits' => ['a', 'a']], ['exits' => []], ['mcp_tools' => ['servicenow']],
-                  ['mcp_tools' => ['okta.reset']], ['timeout_s' => 0]] as $bad) {
+        foreach ([['exits' => ['Bad']], ['exits' => ['a', 'a']], ['exits' => []], ['mcp_servers' => ['Okta']],
+                  ['mcp_servers' => [5]], ['mcp_servers' => 'ServiceNow'], ['timeout_s' => 0]] as $bad) {
             try {
                 CodeNodeEmit::nodeData($this->node($bad), [], ['servicenow' => 'u']);
                 self::fail('accepted ' . json_encode($bad));

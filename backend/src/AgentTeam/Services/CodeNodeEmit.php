@@ -9,7 +9,6 @@ use RuntimeException;
 final class CodeNodeEmit
 {
     private const EXIT_RE = '/^[a-z][a-z0-9_]{0,31}$/';
-    private const TOOL_RE = '/^([a-z0-9_]{1,64})\.([A-Za-z0-9_.-]{1,128})$/';
 
     /** The playbook node's server slug rule (LoaderMcpExecutor::slug). */
     public static function slug(string $serverName): string
@@ -57,16 +56,21 @@ final class CodeNodeEmit
                 $fail('exit names are lowercase letters, digits and _ (got ' . json_encode($e) . ')');
             }
         }
-        $tools = $cfg['mcp_tools'] ?? [];
+        // The MCP servers checked on the node (names, as the agent nodes keep them); call_tool may
+        // reach any tool on them, by the server's slug.
+        $names = $cfg['mcp_servers'] ?? [];
+        if (!is_array($names)) {
+            $fail('mcp_servers must be a list of MCP server names');
+        }
+        $slugs = [];
         $servers = [];
-        foreach (is_array($tools) ? $tools : [] as $t) {
-            if (!is_string($t) || !preg_match(self::TOOL_RE, $t, $m)) {
-                $fail('tools are "server.tool" (got ' . json_encode($t) . ')');
+        foreach ($names as $name) {
+            $slug = is_string($name) ? self::slug($name) : '';
+            if (!isset($slugToUrl[$slug])) {
+                $fail('MCP server ' . json_encode($name) . ' is not one of your MCP servers');
             }
-            if (!isset($slugToUrl[$m[1]])) {
-                $fail("MCP server '{$m[1]}' is not one of your MCP servers");
-            }
-            $servers[$slugToUrl[$m[1]]] = true;
+            $slugs[$slug] = true;
+            $servers[$slugToUrl[$slug]] = true;
         }
         $timeout = $cfg['timeout_s'] ?? 30;
         if (!is_int($timeout) || $timeout < 1 || $timeout > 300) {
@@ -86,7 +90,7 @@ final class CodeNodeEmit
             }
         }
         return ['display' => $display, 'kind' => 'code', 'source' => (string) ($cfg['code'] ?? ''),
-            'exits' => array_values($exits), 'tools' => array_values($tools ?: []), 'timeout_s' => $timeout,
+            'exits' => array_values($exits), 'mcp_servers' => array_keys($slugs), 'timeout_s' => $timeout,
             'exit_targets' => $targets, 'servers' => array_keys($servers)];
     }
 

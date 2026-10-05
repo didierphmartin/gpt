@@ -19,7 +19,7 @@ FORBIDDEN_MODULES = frozenset({"subprocess", "socket", "ctypes", "multiprocessin
 
 
 class ToolError(Exception):
-    """A call_tool failure: undeclared tool, transport failure, or a tool result with isError."""
+    """A call_tool failure: a server not checked on the node, transport failure, or a tool result with isError."""
 
 
 class CodeNodeError(Exception):
@@ -85,11 +85,11 @@ def _result_of(raw: dict):
     return _decode(_text_of(raw))
 
 
-def _make_call_tool(allowed: set, transport, calls: list, deadline: float, timeout_s: int):
+def _make_call_tool(servers: set, transport, calls: list, deadline: float, timeout_s: int):
     def call_tool(server: str, tool: str, args: dict = None):
         key = f"{server}.{tool}"
-        if key not in allowed:
-            raise ToolError(f"tool {key} is not declared on this node")
+        if server not in servers:
+            raise ToolError(f"MCP server {server} is not checked on this node")
         if time.monotonic() > deadline:
             raise CodeNodeError(f"timed out after {timeout_s}s")
         args = dict(args or {})
@@ -154,7 +154,7 @@ def _with_timeout(fn, timeout_s: int):
     return box["value"]
 
 
-def execute(source: str, input, exits: list, allowed_tools: list, transport, timeout_s: int,
+def execute(source: str, input, exits: list, servers: list, transport, timeout_s: int,
             threaded: bool = True) -> dict:
     """Run the code's run(input, call_tool) once under the contract (spec §3).
 
@@ -165,7 +165,7 @@ def execute(source: str, input, exits: list, allowed_tools: list, transport, tim
         return {"ok": False, "error": "CodeNodeError: the node has no exits", "stdout": "", "tool_calls": []}
     calls, buf = [], io.StringIO()
     deadline = time.monotonic() + timeout_s
-    call_tool = _make_call_tool(set(allowed_tools), transport, calls, deadline, timeout_s)
+    call_tool = _make_call_tool(set(servers), transport, calls, deadline, timeout_s)
 
     def body():
         check_code(source)

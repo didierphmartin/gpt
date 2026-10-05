@@ -36,14 +36,27 @@ assert.deepStrictEqual(CN.edgesFrom('2', nodes[2]), [
 ]);
 
 // config validation
-assert.deepStrictEqual(CN.validateConfig({ code: 'def run(i, c):\n    return i', exits: ['next'], mcp_tools: [], timeout_s: 30 }), []);
-const errs = CN.validateConfig({ code: '', exits: ['Job', 'job', 'job'], mcp_tools: ['servicenow'], timeout_s: 0 });
+assert.deepStrictEqual(CN.validateConfig({ code: 'def run(i, c):\n    return i', exits: ['next'], mcp_servers: ['ServiceNow'], timeout_s: 30 }), []);
+const errs = CN.validateConfig({ code: '', exits: ['Job', 'job', 'job'], mcp_servers: [''], timeout_s: 0 });
 assert.ok(errs.length >= 4, JSON.stringify(errs));
+assert.ok(CN.validateConfig({ code: 'def run(i, c):\n    return i', exits: ['next'], mcp_servers: 'x', timeout_s: 30 }).length === 1);
+
+// the server slug call_tool uses: twin of CodeNodeEmit::slug
+assert.strictEqual(CN.slug('ServiceNow'), 'servicenow');
+assert.strictEqual(CN.slug('Service Now (prod)'), 'service_now_prod_');
 
 // templates
+// the default is generic: one exit, no server, code that explains the contract and passes input on
+assert.strictEqual(CN.DEFAULT_TEMPLATE, 'blank');
+assert.deepStrictEqual(CN.TEMPLATES.blank.exits, ['next']);
+assert.deepStrictEqual(CN.TEMPLATES.blank.servers, []);
+assert.ok(CN.TEMPLATES.blank.code.includes('def run(input, call_tool):'));
+assert.ok(CN.TEMPLATES.blank.code.includes('return input'));
+assert.ok(!/servicenow/i.test(CN.TEMPLATES.blank.code));
+// ServiceNow polling stays as an example, naming the server it needs by slug
 assert.deepStrictEqual(CN.TEMPLATES.poll_servicenow.exits, ['job', 'no_job', 'error']);
-assert.deepStrictEqual(CN.TEMPLATES.poll_servicenow.mcp_tools, ['servicenow.poll_jobs']);
-assert.ok(CN.TEMPLATES.passthrough.code.includes('return input'));
+assert.deepStrictEqual(CN.TEMPLATES.poll_servicenow.servers, ['servicenow']);
+assert.ok(!('mcp_tools' in CN.TEMPLATES.poll_servicenow));
 
 // parent naming parity with compiled (LangGraphGenerator::displayName -> node_<id>)
 const anon = { 7: { data: { type: 'code' }, inputs: { input_1: { connections: [{ node: '8', input: 'output_1' }] } }, outputs: {} },
@@ -92,8 +105,34 @@ assert.deepStrictEqual(CN.remapExits(['job', 'no_job', 'error'], ['job', 'idle',
 assert.deepStrictEqual(CN.remapExits(['job', 'spare'], ['job'], { output_1: { connections: [] } }).dropped, []);
 
 // a loaded config with null / non-array exits or tools falls back to the defaults
-assert.deepStrictEqual(CN.normalizeConfig({ exits: null, mcp_tools: 'x', name: 'P' }, { exits: ['next'], mcp_tools: [] }),
-    { exits: ['next'], mcp_tools: [], name: 'P' });
-assert.deepStrictEqual(CN.normalizeConfig({ exits: [], mcp_tools: ['a.b'] }, { exits: ['next'], mcp_tools: [] }),
-    { exits: ['next'], mcp_tools: ['a.b'] });
+assert.deepStrictEqual(CN.normalizeConfig({ exits: null, mcp_servers: 'x', name: 'P' }, { exits: ['next'], mcp_servers: [] }),
+    { exits: ['next'], mcp_servers: [], name: 'P' });
+assert.deepStrictEqual(CN.normalizeConfig({ exits: [], mcp_servers: ['ServiceNow'] }, { exits: ['next'], mcp_servers: [] }),
+    { exits: ['next'], mcp_servers: ['ServiceNow'] });
+
+// run data in the agent nodes' shape, so the Input / Output / Logs tabs show a code node's run
+const okRun = { ok: true, route: 'job', output_text: '{"task":"t1"}', stdout: 'hello\n',
+    tool_calls: [{ server: 'servicenow', tool: 'poll_jobs', args: {}, ok: true, ms: 12 }] };
+const rd = CN.runData(okRun, { parents: [{ name: 'start', text: 'poll', start: true }], user_prompt: 'poll', name: 'Poll', ts: 1000 });
+assert.strictEqual(rd.input, 'poll');
+assert.strictEqual(rd.output, '{"task":"t1"}');
+assert.strictEqual(rd.success, true);
+assert.strictEqual(rd.agentName, 'Poll');
+assert.strictEqual(rd.code, okRun);
+assert.deepStrictEqual(rd.activity.map((a) => [a.level, a.message]), [
+    ['info', 'call_tool servicenow.poll_jobs {} → ok (12 ms)'],
+    ['info', 'printed:\nhello'],
+    ['info', 'exit: job'],
+]);
+const two = CN.runData(okRun, { parents: [{ name: 'A', text: 'x', start: false }, { name: 'B', text: 'y', start: false }], user_prompt: '', name: 'P', ts: 0 });
+assert.strictEqual(two.input, '## A\nx\n\n## B\ny');
+const bad = CN.runData({ ok: false, error: 'ToolError: MCP server okta is not checked on this node', stdout: '',
+    tool_calls: [{ server: 'okta', tool: 'reset', args: { u: 1 }, ok: false, ms: 0 }] }, { parents: [], user_prompt: 'go', name: 'P', ts: 0 });
+assert.strictEqual(bad.success, false);
+assert.strictEqual(bad.input, 'go');
+assert.strictEqual(bad.output, 'ToolError: MCP server okta is not checked on this node');
+assert.deepStrictEqual(bad.activity.map((a) => a.level), ['error', 'error']);
+// the error exit is a successful run of the node that took the error route
+const errExit = CN.runData({ ok: true, route: 'error', output_text: '{"error":"x"}', stdout: '', tool_calls: [] }, { parents: [], user_prompt: '', name: 'P', ts: 0 });
+assert.deepStrictEqual(errExit.activity.map((a) => [a.level, a.message]), [['warn', 'exit: error']]);
 console.log('code-node.test.js: OK');

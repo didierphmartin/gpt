@@ -313,7 +313,7 @@ class LangGraphGenerator
         }
         foreach ($codeData as $nid => $cd) {
             $docAgents[$nid] = ['name' => $cd['display'], 'provider' => '', 'model' => '', 'temperature' => null,
-                'max_tokens' => null, 'thinking' => null, 'tools' => $cd['tools'], 'skills' => []];
+                'max_tokens' => null, 'thinking' => null, 'tools' => array_map(fn($slg) => "{$slg}.*", $cd['mcp_servers']), 'skills' => []];
         }
         $docNodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($byId, $order, $edges, $docAgents, $docExtra,
             ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);
@@ -1129,8 +1129,7 @@ class LangGraphGenerator
         }
         $codeSlugs = [];
         foreach ($codeData as $cd) {
-            foreach ($cd['tools'] as $t) {
-                $slg = explode('.', $t, 2)[0];
+            foreach ($cd['mcp_servers'] as $slg) {
                 $codeSlugs[$slg] = $slugToUrl[$slg];
             }
         }
@@ -2024,7 +2023,7 @@ PY;
         }
         foreach ($facts['codeData'] as $n => $cd) {
             $docAgents[$n] = ['name' => $cd['display'], 'provider' => '', 'model' => '', 'temperature' => null,
-                'max_tokens' => null, 'thinking' => null, 'tools' => $cd['tools'], 'skills' => []];
+                'max_tokens' => null, 'thinking' => null, 'tools' => array_map(fn($slg) => "{$slg}.*", $cd['mcp_servers']), 'skills' => []];
         }
         $nodes = \AgentTeam\Services\WorkflowGraphAnalyzer::docNodes($facts['byId'], $facts['order'], $facts['edges'], $docAgents, $docExtra,
             ['start', 'agent', 'agent-template', 'playbook', 'code', 'output']);
@@ -3376,7 +3375,7 @@ TXT;
         $L[] = $indent . '    "kind": "code",';
         $L[] = $indent . '    "display": ' . $j($cd['display']) . ',';
         $L[] = $indent . '    "exits": ' . $j($cd['exits']) . ',';
-        $L[] = $indent . '    "tools": ' . $j($cd['tools']) . ',';
+        $L[] = $indent . '    "mcp_servers": ' . $j($cd['mcp_servers']) . ',';
         $L[] = $indent . '    "timeout_s": ' . (int) $cd['timeout_s'] . ',';
         $L[] = $indent . '    "exit_targets": ' . $j((object) $cd['exit_targets']) . ',';
         $L[] = $indent . '    "source": ' . $j($cd['source']) . ',';

@@ -8779,9 +8779,9 @@ class WorkflowEditor {
     }
 
     addCodeNode(x, y, config = null) {
-        const t = window.CodeNode.TEMPLATES.poll_servicenow;
-        const defaults = { name: 'Code', code: t.code, exits: [...t.exits], mcp_tools: [...t.mcp_tools], timeout_s: 30, disabled: false };
-        // A loaded config may carry exits / mcp_tools that are null or not arrays: those take the defaults.
+        const t = window.CodeNode.TEMPLATES[window.CodeNode.DEFAULT_TEMPLATE];
+        const defaults = { name: 'Code', code: t.code, exits: [...t.exits], mcp_servers: [], timeout_s: 30, disabled: false };
+        // A loaded config may carry exits / mcp_servers that are null or not arrays: those take the defaults.
         const cfg = window.CodeNode.normalizeConfig(config ? { ...defaults, ...config } : { ...defaults }, defaults);
         const html = `
             <div class="workflow-node code-node configurable ${cfg.disabled ? 'node-disabled' : ''}">
@@ -8798,15 +8798,15 @@ class WorkflowEditor {
             </div>`;
         const id = this.editor.addNode('code', 1, cfg.exits.length, x, y, 'code', {
             type: 'code', node_type: 'code', name: cfg.name, code: cfg.code, exits: [...cfg.exits],
-            mcp_tools: [...cfg.mcp_tools], timeout_s: cfg.timeout_s, disabled: !!cfg.disabled,
+            mcp_servers: [...cfg.mcp_servers], timeout_s: cfg.timeout_s, disabled: !!cfg.disabled,
         }, html);
         this.hideHelpOverlay();
         return id;
     }
 
     _codeBadgesHtml(cfg) {
-        return (cfg.mcp_tools || []).map((t) =>
-            `<span class="tool-badge" title="declared tool">${this.escapeHtml(t)}</span>`).join(' ');
+        return (cfg.mcp_servers || []).map((n) =>
+            `<span class="tool-badge" title="MCP server checked on this node">🔌 ${this.escapeHtml(n)}</span>`).join(' ');
     }
 
     _refreshCodeNode(nodeId) {
@@ -8818,31 +8818,49 @@ class WorkflowEditor {
         root.querySelector('.node-config-display').textContent = (d.exits || []).map((e, i) => `${i + 1}:${e}`).join('  ');
     }
 
-    /** Settings: name, code, exits, tools, timeout, template; Test runs the node in Pyodide. */
+    /**
+     * The code node's window, tabbed like the agent form: Settings (name, template, exits, timeout),
+     * Code (the code, a test input and Test, which runs the node in Pyodide), MCP Servers (the
+     * user's servers as checkboxes; call_tool may reach any tool on a checked one), and the last
+     * run's Input, Output and Logs -- the agent tabs' own renderers over nodeExecutionData.
+     */
     showCodeNodeModal(nodeId) {
         const node = this.editor.getNodeFromId(nodeId);
         if (!node) return;
         const d = node.data || {};
         const CN = window.CodeNode;
+        const tab = (k, label) => `<button data-tab="${k}" class="agent-modal-tab px-4 py-2 text-sm font-medium border-b-2 -mb-px">${label}</button>`;
+        const pane = (k, html) => `<div data-pane="${k}" style="display:none;">${html}</div>`;
+        const pre = (k) => `<pre data-f="${k}" class="whitespace-pre-wrap text-sm text-gray-800 font-mono bg-white border border-gray-200 rounded p-3" style="min-height:300px;margin:0;"></pre>`;
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
             <div class="storage-config-modal" style="width:min(900px,95vw);max-height:92vh;display:flex;flex-direction:column;">
                 <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="flex border-b border-gray-200" style="padding:0 16px;">
+                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                </div>
                 <div class="storage-config-body" style="overflow:auto;">
-                    <div class="storage-config-grid">
+                    ${pane('settings', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text"></div>
-                        <div class="storage-config-folder full"><label>Template</label>
+                        <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
                             <select data-f="template"><option value="">— keep current code —</option>
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
-                        <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
-                            <textarea data-f="code" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in port order)</label><input data-f="exits" type="text"></div>
-                        <div class="storage-config-folder"><label>Tools (server.tool, comma-separated)</label><input data-f="tools" type="text"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
+                    </div>`)}
+                    ${pane('code', `<div class="storage-config-grid">
+                        <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
+                            <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
                         <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3"></textarea></div>
-                        <div class="storage-config-folder full"><pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:0;"></pre></div>
-                    </div>
+                    </div>`)}
+                    ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
+                        <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
+                        <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('input', pre('input'))}
+                    ${pane('output', pre('output'))}
+                    ${pane('logs', '<div data-f="logs"></div>')}
+                    <pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:12px 0 0;"></pre>
                 </div>
                 <div class="storage-config-footer">
                     <button class="storage-config-btn" data-act="test">Test</button>
@@ -8852,18 +8870,72 @@ class WorkflowEditor {
             </div>`;
         document.body.appendChild(overlay);
         const f = (k) => overlay.querySelector(`[data-f="${k}"]`);
+        const showTab = (k) => {
+            overlay.querySelectorAll('[data-tab]').forEach((b) => {
+                const on = b.dataset.tab === k;
+                b.classList.toggle('text-blue-600', on); b.classList.toggle('border-blue-600', on);
+                b.classList.toggle('text-gray-500', !on); b.classList.toggle('border-transparent', !on);
+            });
+            overlay.querySelectorAll('[data-pane]').forEach((p) => { p.style.display = p.dataset.pane === k ? '' : 'none'; });
+        };
+        overlay.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+        showTab('settings');
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
         f('code').value = d.code || '';
         f('exits').value = (Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']).join(', ');
-        f('tools').value = (Array.isArray(d.mcp_tools) ? d.mcp_tools : []).join(', ');
         f('timeout').value = String(Number(d.timeout_s) || 30);
+        // The last run, as the agent tabs show it.
+        const run = this.nodeExecutionData?.[nodeId];
+        f('input').textContent = run?.input ?? '(No run yet. Run the workflow to see what this node received.)';
+        f('output').textContent = run ? (run.output ?? '') : '(No run yet. Run the workflow to see what this node returned.)';
+        f('logs').innerHTML = this.getNodeLogsHtml(nodeId);
+        f('logs').querySelector('#logs-close-btn')?.addEventListener('click', () => overlay.remove());
+
+        // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
+        let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
+        let servers = [];
+        const renderServers = () => {
+            const esc = (v) => this.escapeHtml(String(v ?? ''));
+            const known = new Set(servers.map((m) => m.name));
+            const rows = servers.map((m) => ({ name: m.name, meta: m }))
+                .concat([...checked].filter((n) => !known.has(n)).map((n) => ({ name: n, meta: null })));
+            f('servers').innerHTML = rows.length ? rows.map(({ name, meta }) => {
+                const off = meta && meta.effective_on === false;
+                const badges = [
+                    !meta ? '<span class="px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">not one of your servers</span>' : '',
+                    off ? '<span class="px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">disabled</span>' : '',
+                    meta?.is_mock ? '<span class="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-700">mock</span>' : '',
+                ].join(' ');
+                return `<label class="flex items-center gap-2 p-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                    <input type="checkbox" class="w-3.5 h-3.5" data-server="${esc(name)}" ${checked.has(name) ? 'checked' : ''}>
+                    <span class="text-sm text-gray-800">🔌 ${esc(name)}</span>
+                    <code class="text-xs text-gray-400">${esc(CN.slug(name))}</code> ${badges}
+                    ${meta?.url ? `<span class="ml-auto text-xs text-gray-400 font-mono truncate" title="${esc(meta.url)}">${esc(meta.url)}</span>` : ''}
+                </label>`;
+            }).join('') : '<p class="text-sm text-gray-400 italic">No MCP servers yet. Add one in Settings → MCP Servers.</p>';
+            f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
+                if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
+            }));
+        };
+        (async () => {
+            if (!this._mcpServersMeta) {
+                try {
+                    const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
+                    const j = await r.json();
+                    this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
+                } catch (_) { this._mcpServersMeta = []; }
+            }
+            servers = this._mcpServersMeta;
+            renderServers();
+        })();
+
         const read = () => ({
             name: f('name').value.trim() || 'Code',
             code: f('code').value,
             exits: f('exits').value.split(',').map((s) => s.trim()).filter(Boolean),
-            mcp_tools: f('tools').value.split(',').map((s) => s.trim()).filter(Boolean),
+            mcp_servers: [...checked],
             timeout_s: Math.trunc(Number(f('timeout').value)),
         });
         f('code').addEventListener('keydown', (ev) => {
@@ -8873,15 +8945,21 @@ class WorkflowEditor {
             ta.value = ta.value.slice(0, s) + '    ' + ta.value.slice(ta.selectionEnd);
             ta.selectionStart = ta.selectionEnd = s + 4;
         });
+        const show = (text) => { f('result').textContent = text; };
         f('template').addEventListener('change', () => {
             const t = CN.TEMPLATES[f('template').value];
             if (!t) return;
-            f('code').value = t.code; f('exits').value = t.exits.join(', '); f('tools').value = t.mcp_tools.join(', ');
+            f('code').value = t.code; f('exits').value = t.exits.join(', ');
+            // The template's servers, by slug, among the user's own.
+            checked = new Set(servers.filter((m) => t.servers.includes(CN.slug(m.name))).map((m) => m.name));
+            renderServers();
+            const missing = t.servers.filter((sl) => !servers.some((m) => CN.slug(m.name) === sl));
+            show(missing.length ? `This template calls ${missing.join(', ')}: add an MCP server with that name in Settings → MCP Servers.` : '');
         });
-        const show = (text) => { f('result').textContent = text; };
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
+            if (act !== 'test' && act !== 'save') return;
             const cfg = read();
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
@@ -8891,7 +8969,7 @@ class WorkflowEditor {
                 const prompt = this.lastUserPrompt || '';
                 const parents = sample ? [{ name: 'test input', text: sample, start: false }] : [];
                 try {
-                    const r = await this._codeNodeExecute({ code: cfg.code, exits: cfg.exits, tools: cfg.mcp_tools,
+                    const r = await this._codeNodeExecute({ code: cfg.code, exits: cfg.exits, servers: cfg.mcp_servers.map(CN.slug),
                         timeout_s: cfg.timeout_s, parents, user_prompt: prompt });
                     show(r.ok
                         ? `exit: ${r.route}\noutput: ${r.output_text}`
@@ -8901,11 +8979,9 @@ class WorkflowEditor {
                 } catch (e) { show('error: ' + (e.message || e)); }
                 return;
             }
-            if (act === 'save') {
-                if (errs.length) { show(errs.join('\n')); return; }
-                this._applyCodeNodeConfig(nodeId, cfg);
-                overlay.remove();
-            }
+            if (errs.length) { show(errs.join('\n')); return; }
+            this._applyCodeNodeConfig(nodeId, cfg);
+            overlay.remove();
         });
     }
 
@@ -8929,7 +9005,8 @@ class WorkflowEditor {
         for (const d of plan.dropped) {
             this.showToast?.(`Exit "${d.exit}" removed: ${d.count} connection(s) dropped`, 'warning');
         }
-        this.editor.updateNodeDataFromId(nodeId, { ...node.data, ...cfg, type: 'code', node_type: 'code' });
+        const { mcp_tools: _dropped, ...kept } = node.data;   // mcp_tools: the old typed tool list, replaced by mcp_servers
+        this.editor.updateNodeDataFromId(nodeId, { ...kept, ...cfg, type: 'code', node_type: 'code' });
         this._refreshCodeNode(nodeId);
     }
 
@@ -13144,9 +13221,10 @@ class WorkflowEditor {
         this.highlightNode(id, 'running', id, 'agent');
         const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes));
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
-        const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'], tools: d.mcp_tools || [],
-            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
-        this.nodeExecutionData[id] = { code: r };
+        const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'],
+            servers: (d.mcp_servers || []).map(window.CodeNode.slug), timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
+        // The agent nodes' record shape: the modal's Input, Output and Logs tabs read it.
+        this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents, user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
         this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');
         return r;
     }
@@ -13166,7 +13244,7 @@ class WorkflowEditor {
 
     async _codeNodeExecuteOnce(req) {
         if (!this._codeHarnessSrc) {
-            const resp = await fetch('assets/py/code_node_harness.py?v=20261004-code-node');
+            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-code-node-tabs');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
@@ -13177,7 +13255,7 @@ class WorkflowEditor {
         // timer starts when the job starts, not while it waits in the queue.
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261004-code-node');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-code-node-tabs');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.

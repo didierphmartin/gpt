@@ -64,13 +64,13 @@ class LangGraphCodeNodeE2ETest extends TestCase
         }
     }
 
-    private function graph(string $code, array $tools): array
+    private function graph(string $code, array $servers): array
     {
         return [
             'nodes' => [
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'poll']],
                 ['id' => '2', 'node_type' => 'code', 'config' => ['type' => 'code', 'name' => 'Poll ServiceNow jobs',
-                    'code' => $code, 'exits' => ['job', 'no_job'], 'mcp_tools' => $tools, 'timeout_s' => 30]],
+                    'code' => $code, 'exits' => ['job', 'no_job'], 'mcp_servers' => $servers, 'timeout_s' => 30]],
                 ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
                 ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ],
@@ -84,7 +84,7 @@ class LangGraphCodeNodeE2ETest extends TestCase
 
     private function pollGraph(): array
     {
-        return $this->graph("def run(input, call_tool):\n    r = call_tool('servicenow', 'poll_jobs', {})\n    if r.get('job') is None:\n        return {'route': 'no_job', 'output': None}\n    return {'route': 'job', 'output': r['job']}\n", ['servicenow.poll_jobs']);
+        return $this->graph("def run(input, call_tool):\n    r = call_tool('servicenow', 'poll_jobs', {})\n    if r.get('job') is None:\n        return {'route': 'no_job', 'output': None}\n    return {'route': 'job', 'output': r['job']}\n", ['ServiceNow']);
     }
 
     private function noJobGraph(): array

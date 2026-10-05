@@ -53,7 +53,7 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'poll']],
                 ['id' => '2', 'node_type' => 'code', 'config' => ['type' => 'code', 'name' => 'Poll ServiceNow',
                     'code' => "def run(input, call_tool):\n    r = call_tool('servicenow', 'poll_jobs', {})\n    if r.get('job') is None:\n        return {'route': 'no_job', 'output': None}\n    return {'route': 'job', 'output': r['job']}\n",
-                    'exits' => ['job', 'no_job'], 'mcp_tools' => ['servicenow.poll_jobs'], 'timeout_s' => 30]],
+                    'exits' => ['job', 'no_job'], 'mcp_servers' => ['ServiceNow'], 'timeout_s' => 30]],
                 ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
                 ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ],
@@ -76,7 +76,7 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertStringContainsString('"2": "code"', $code);
         self::assertStringContainsString('{**AGENTS, **PLAYBOOKS, **CODE_NODES}', $code);
         // the code node is documented like an agent: a comment block before its entry, with its declared tool
-        self::assertMatchesRegularExpression('~CODE_NODES = \{\n    # ---- node 2: Poll ServiceNow \(code\) -+\n    #   tools          : servicenow\.poll_jobs\n(    #[^\n]*\n)*    "2": \{~', $code);
+        self::assertMatchesRegularExpression('~CODE_NODES = \{\n    # ---- node 2: Poll ServiceNow \(code\) -+\n    #   tools          : servicenow\.\*\n(    #[^\n]*\n)*    "2": \{~', $code);
         $file = tempnam(sys_get_temp_dir(), 'lgcn') . '.py';
         file_put_contents($file, $code);
         exec('python3 -m py_compile ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
