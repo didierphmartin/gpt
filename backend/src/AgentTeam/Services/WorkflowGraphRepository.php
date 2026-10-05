@@ -62,6 +62,7 @@ class WorkflowGraphRepository
         // Playbook nodes link to the collection: fill in the linked text for the workflow's
         // owner, so every reader (compilers, docs) keeps receiving config['playbook'].
         $owner = null;
+        $store = new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db);
         foreach ($rows as &$row) {
             $cfg = $row['config'];
             if (($row['node_type'] ?? '') !== 'playbook' || !is_array($cfg) || !isset($cfg['playbook_id'])) {
@@ -72,11 +73,12 @@ class WorkflowGraphRepository
                 $st->execute([$workflowId]);
                 $owner = (int) $st->fetchColumn();
             }
-            $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($owner, (int) $cfg['playbook_id']);
+            $pb = $store->get($owner, (int) $cfg['playbook_id']);
             if ($pb === null) {
                 unset($cfg['playbook']);
                 $cfg['playbook_missing'] = true;
             } else {
+                unset($cfg['playbook_missing']);
                 $cfg['playbook'] = $pb['text'];
             }
             $row['config'] = $cfg;
@@ -130,6 +132,10 @@ class WorkflowGraphRepository
         if (!isset($config['type'])) {
             $config['type'] = $nodeType;
         }
+        // A linked playbook node stores only the link; the text and the missing flag are derived on read.
+        if (isset($config['playbook_id'])) {
+            unset($config['playbook'], $config['playbook_missing']);
+        }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)
         // Strings like "node_3" are not valid - treat them as null
@@ -173,6 +179,10 @@ class WorkflowGraphRepository
         $config = $nodeData['config'] ?? $nodeData['data'] ?? [];
         if (!isset($config['type'])) {
             $config['type'] = $nodeType;
+        }
+        // A linked playbook node stores only the link; the text and the missing flag are derived on read.
+        if (isset($config['playbook_id'])) {
+            unset($config['playbook'], $config['playbook_missing']);
         }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)
