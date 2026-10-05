@@ -392,6 +392,15 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // bindings against the caller's MCP tools/agents, no run created.
         $r->post('/api/v1/playbooks/validate', ['PlaybookController', 'validate']);
 
+        // The playbook collection (PlaybooksController, over PlaybookStore). The static
+        // /playbooks/validate route above stays first; {id} routes are numeric only.
+        $r->get('/api/v1/playbooks', ['PlaybooksController', 'index']);
+        $r->post('/api/v1/playbooks', ['PlaybooksController', 'create']);
+        $r->get('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'show']);
+        $r->put('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'update']);
+        $r->delete('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'destroy']);
+        $r->get('/api/v1/playbooks/{id:\d+}/used-by', ['PlaybooksController', 'usedBy']);
+
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);
         $r->get('/api/v1/workflows/{id:\d+}/outputs/{filename}', ['AgentTeam:WorkflowController', 'getOutput']);
