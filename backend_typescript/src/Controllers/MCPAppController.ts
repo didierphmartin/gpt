@@ -1,4 +1,5 @@
 import { Ctx } from '../Support/Http';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /** Raw (non-JSON) response: the route handler writes raw_body with these headers/status. */
 export interface RawResult {
@@ -39,15 +40,9 @@ export class MCPAppController {
     if (!serverUrl) return textErr('Missing server parameter', 400);
     if (!resourceUri) return textErr('Missing resource parameter', 400);
 
-    // Normalize URL: servers ending in .php are already the endpoint
-    // (e.g. XAMPP-style mcp-server.php). Only append /mcp otherwise.
-    let mcpUrl = serverUrl.replace(/\/+$/, '');
-    if (!mcpUrl.endsWith('/mcp') && !mcpUrl.endsWith('.php')) {
-      mcpUrl += '/mcp';
-    }
-
-    // Initialize MCP session
-    const initResponse = await this.sendMCPRequest(mcpUrl, {
+    // The endpoint is the first candidate (McpEndpoint: the URL as given,
+    // then with "/mcp" in its path) that answers initialize with JSON-RPC.
+    const initRequest = {
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
@@ -56,7 +51,14 @@ export class MCPAppController {
         clientInfo: { name: 'GPT-Chatbot-MCP-App-Proxy', version: '1.0.0' },
         capabilities: {},
       },
-    });
+    };
+    let mcpUrl = serverUrl;
+    let initResponse: any = null;
+    for (const candidate of McpEndpoint.candidates(serverUrl)) {
+      mcpUrl = candidate;
+      initResponse = await this.sendMCPRequest(mcpUrl, initRequest);
+      if (McpEndpoint.isJsonRpcReply(initResponse)) break;
+    }
     if (!initResponse || initResponse.error) {
       return textErr('Failed to initialize MCP session', 502);
     }

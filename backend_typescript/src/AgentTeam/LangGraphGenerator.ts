@@ -769,7 +769,7 @@ export class LangGraphGenerator {
     push('#');
     push('# The Model Context Protocol (MCP) uses JSON-RPC 2.0 over HTTP.');
     push('# Each tool call requires:');
-    push('#   1. URL normalization -- append /mcp if not present');
+    push('#   1. Endpoint -- the registered URL as given, then with /mcp in its path');
     push("#   2. Session initialization -- send 'initialize' + notification");
     push("#   3. Tool invocation -- send 'tools/call' with name + arguments");
     push('#   4. Response parsing -- handle plain JSON or SSE-wrapped JSON');
