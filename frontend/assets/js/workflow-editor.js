@@ -8847,7 +8847,7 @@ class WorkflowEditor {
                         <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
                             <select data-f="template"><option value="">— keep current code —</option>
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
-                        <div class="storage-config-folder"><label>Exits (comma-separated, in port order; empty = no branching)</label><input data-f="exits" type="text"></div>
+                        <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
@@ -8935,7 +8935,7 @@ class WorkflowEditor {
         const read = () => ({
             name: f('name').value.trim() || 'Code',
             code: f('code').value,
-            exits: CN.parseExits(f('exits').value),   // empty: no branching, the single exit "next"
+            exits: CN.parseExits(f('exits').value),   // empty: the default, the output goes to the next node
             mcp_servers: [...checked],
             timeout_s: Math.trunc(Number(f('timeout').value)),
         });
