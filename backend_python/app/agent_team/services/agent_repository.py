@@ -216,12 +216,12 @@ class AgentRepository:
             "INSERT INTO agents (\n"
             "            user_id, team_id, category, name, description,\n"
             "            agent_type, parent_agent_id, can_delegate_to, display_order,\n"
-            "            provider, model, instructions,\n"
+            "            provider, model, instructions, playbook_id,\n"
             "            tools, visibility, enabled, settings\n"
             "        ) VALUES (\n"
             "            :user_id, :team_id, :category, :name, :description,\n"
             "            :agent_type, :parent_agent_id, :can_delegate_to, :display_order,\n"
-            "            :provider, :model, :instructions,\n"
+            "            :provider, :model, :instructions, :playbook_id,\n"
             "            :tools, :visibility, :enabled, :settings\n"
             "        )"
         )
@@ -241,6 +241,7 @@ class AgentRepository:
             'provider': data['provider'],
             'model': data['model'],
             'instructions': data['instructions'],
+            'playbook_id': data['playbook_id'],
             'tools': php_json_encode(data['tools']),
             'visibility': data['visibility'],
             'enabled': 1 if data['enabled'] else 0,
@@ -264,6 +265,7 @@ class AgentRepository:
             "            provider = :provider,\n"
             "            model = :model,\n"
             "            instructions = :instructions,\n"
+            "            playbook_id = :playbook_id,\n"
             "            tools = :tools,\n"
             "            visibility = :visibility,\n"
             "            enabled = :enabled,\n"
@@ -286,6 +288,7 @@ class AgentRepository:
             'provider': data['provider'],
             'model': data['model'],
             'instructions': data['instructions'],
+            'playbook_id': data['playbook_id'],
             'tools': php_json_encode(data['tools']),
             'visibility': data['visibility'],
             'enabled': 1 if data['enabled'] else 0,

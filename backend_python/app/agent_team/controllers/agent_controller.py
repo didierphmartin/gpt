@@ -134,10 +134,19 @@ class AgentController:
             return self.error('Invalid visibility. Must be: personal, workspace, or public', 400)
 
         tools = data.get('tools') if data.get('tools') is not None else []
-        # Playbook agents: the tool selection is derived from the playbook's
-        # bound #Actions (see PlaybookAgentTools), not typed by hand.
         instructions = data.get('instructions') if data.get('instructions') is not None else ''
-        if agentType == 'playbook' and php_trim(php_strval(instructions)) != '':
+        # Playbook agents link to the collection (playbook_id); the text lives there.
+        # Tools are derived from the linked playbook's bound #Actions (PlaybookAgentTools).
+        # Only a playbook agent has a playbook; any other type ignores playbook_id.
+        playbookId = data.get('playbook_id') if agentType == 'playbook' else None
+        if playbookId is not None:
+            pb = self._findPlaybook(userId, php_intval(playbookId))
+            if pb is None:
+                return self.error('Playbook #' + str(php_intval(playbookId)) + ' not found', 404)
+            instructions = ''
+            tools = self._playbookAgentToolsForUser(userId, pb['text'])
+        elif agentType == 'playbook' and php_trim(php_strval(instructions)) != '':
+            # Not yet migrated: a playbook agent still carrying its own text (removed by the migration, Task 7).
             tools = self._playbookAgentToolsForUser(userId, php_strval(instructions))
 
         agent = Agent({
@@ -153,6 +162,7 @@ class AgentController:
             'provider': data.get('provider') if data.get('provider') is not None else 'claude',
             'model': data.get('model'),
             'instructions': instructions,
+            'playbook_id': php_intval(playbookId) if playbookId is not None else None,
             'tools': tools,
             'visibility': visibility,
             'settings': data.get('settings') if data.get('settings') is not None else [],
@@ -239,10 +249,27 @@ class AgentController:
         if data.get('settings') is not None:
             agent.setSettings(data['settings'])
 
+        # Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
+        if 'playbook_id' in data and data['playbook_id'] is not None and agent.getAgentType() == 'playbook':
+            if self._findPlaybook(userId, php_intval(data['playbook_id'])) is None:
+                return self.error('Playbook #' + str(php_intval(data['playbook_id'])) + ' not found', 404)
+            agent.setPlaybookId(php_intval(data['playbook_id']))
+        elif 'playbook_id' in data and data['playbook_id'] is None:
+            agent.setPlaybookId(None)
+        if agent.getAgentType() != 'playbook':
+            agent.setPlaybookId(None)
+        if agent.getPlaybookId() is not None:
+            agent.setInstructions('')
+
         try:
             # Playbook agents: keep the tool selection in step with the text.
-            if agent.getAgentType() == 'playbook' and php_trim(php_strval(agent.getInstructions())) != '':
-                agent.setTools(self._playbookAgentToolsForUser(agent.getUserId(), php_strval(agent.getInstructions())))
+            if agent.getAgentType() == 'playbook':
+                text = php_strval(agent.getInstructions())
+                if agent.getPlaybookId() is not None:
+                    pb = self._findPlaybook(php_intval(agent.getUserId()), agent.getPlaybookId())
+                    text = pb['text'] if pb is not None else ''
+                if php_trim(text) != '':
+                    agent.setTools(self._playbookAgentToolsForUser(agent.getUserId(), text))
             updated = self.repository.update(agent)
 
             return {
@@ -768,6 +795,11 @@ class AgentController:
     def getUserId(self, request) -> int:
         """PHP 782-785."""
         return php_intval(request.get('user_id') if request.get('user_id') is not None else 0)
+
+    def _findPlaybook(self, userId: int, id: int):
+        """PHP findPlaybook: the user's own playbook row, or None."""
+        from app.playbook.playbook_store import PlaybookStore
+        return PlaybookStore(self.db).get(userId, id)
 
     def _playbookAgentToolsForUser(self, user_id: int, text: str) -> list:
         """Port of PlaybookAgentTools::forUser (backend/src/AgentTeam/Services/

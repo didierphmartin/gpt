@@ -9,6 +9,7 @@ import time
 
 import pymysql
 
+from app.playbook.playbook_store import PlaybookStore
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval
 from app.support.phpjson import php_json_decode, php_json_encode
@@ -55,6 +56,27 @@ class WorkflowGraphRepository:
             row = dict(row)
             row['config'] = _decode_config(row.get('config'))
             result.append(row)
+
+        # Playbook nodes link to the collection: fill in the linked text for the workflow's
+        # owner, so every reader (compilers, docs) keeps receiving config['playbook'].
+        owner = None
+        store = PlaybookStore(self.db)
+        for row in result:
+            cfg = row['config']
+            if row.get('node_type') != 'playbook' or not isinstance(cfg, dict) or cfg.get('playbook_id') is None:
+                continue
+            if owner is None:
+                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
+                owner = php_intval(ownerRow['user_id']) if ownerRow else 0
+            pb = store.get(owner, php_intval(cfg['playbook_id']))
+            if pb is None:
+                cfg.pop('playbook', None)
+                cfg['playbook_missing'] = True
+            else:
+                cfg.pop('playbook_missing', None)
+                cfg['playbook'] = pb['text']
+            row['config'] = cfg
+
         return result
 
     def getEdges(self, workflow_id: int) -> list[dict]:
@@ -87,6 +109,9 @@ class WorkflowGraphRepository:
 
         # Ensure type is also stored in config for redundancy
         config = self._resolveConfig(node_data, node_type)
+        # A linked playbook node stores only the link; the text and the missing flag are derived on read.
+        if config.get('playbook_id') is not None:
+            config = {k: v for k, v in config.items() if k not in ('playbook', 'playbook_missing')}
 
         # Validate agent_id: must be null or a valid integer (foreign key constraint)
         # Strings like "node_3" are not valid - treat them as null
@@ -118,6 +143,9 @@ class WorkflowGraphRepository:
             )
 
         config = self._resolveConfig(node_data, node_type)
+        # A linked playbook node stores only the link; the text and the missing flag are derived on read.
+        if config.get('playbook_id') is not None:
+            config = {k: v for k, v in config.items() if k not in ('playbook', 'playbook_missing')}
         agent_id = self._resolveAgentId(node_data)
 
         sql = (

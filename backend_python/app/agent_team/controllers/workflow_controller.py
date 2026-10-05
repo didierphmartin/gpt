@@ -56,6 +56,7 @@ from app.agent_team.services.workflow_output_storage import WorkflowOutputStorag
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.agent_team.services.workflow_runner import WorkflowRunner
+from app.playbook.playbook_store import PlaybookStore
 from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.config import PHP_BACKEND
 from app.controllers.chat_attachment_controller import ChatAttachmentController as _ChatAttachmentController
@@ -890,6 +891,12 @@ class WorkflowController:
             sse.send_data(event)
 
         try:
+            # A node linked to the collection sends playbook_id; the text is read here, for its owner.
+            if nodeConfig.get('playbook_id') is not None:
+                pb = PlaybookStore(self.db).get(userId, php_intval(nodeConfig['playbook_id']))
+                if pb is None:
+                    raise RuntimeError(f"Playbook #{nodeConfig['playbook_id']} not found")
+                nodeConfig = {**nodeConfig, 'playbook': pb['text']}
             runner = PlaybookNodeRunner(self.config)
             result = runner.run(userId, nodeConfig, prompt, sseCallback)
 

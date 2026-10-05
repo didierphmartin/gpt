@@ -1342,6 +1342,9 @@ class LangGraphGenerator:
         nid = LangGraphGenerator._nodeId(node)
         cfg = node.get('config')
         cfg = cfg if isinstance(cfg, dict) else {}
+        if not php_empty(cfg.get('playbook_missing')):
+            name = php_strval(cfg.get('name') if cfg.get('name') is not None else (cfg.get('agent_name') if cfg.get('agent_name') is not None else nid))
+            raise RuntimeError(f"Playbook #{cfg.get('playbook_id')} not found (node {name}).")
         raw = cfg.get('playbook')
         if isinstance(raw, str) and php_trim(raw) != '':
             doc = PlaybookDocument.fromConsoleText(raw)

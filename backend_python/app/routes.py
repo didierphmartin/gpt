@@ -29,6 +29,7 @@ from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
 from app.controllers.playbook_controller import PlaybookController
+from app.controllers.playbooks_controller import PlaybooksController
 from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.root_controller import RootController
@@ -75,6 +76,7 @@ CONTROLLERS = {
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
     'PlaybookController': PlaybookController,
+    'PlaybooksController': PlaybooksController,
     'PromptLibraryController': PromptLibraryController,
     'ProviderController': ProviderController,
     'RootController': RootController,
@@ -398,6 +400,15 @@ ROUTES = [
     # bindings against the caller's MCP tools/agents, no run created.
     # routes.php:386-388.
     ('POST', '/api/v1/playbooks/validate', ('PlaybookController', 'validate')),
+    # The playbook collection (PlaybooksController, over PlaybookStore). The static
+    # /playbooks/validate route above stays first; {id} routes are numeric only.
+    # routes.php:395-402.
+    ('GET', '/api/v1/playbooks', ('PlaybooksController', 'index')),
+    ('POST', '/api/v1/playbooks', ('PlaybooksController', 'create')),
+    ('GET', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'show')),
+    ('PUT', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'update')),
+    ('DELETE', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'destroy')),
+    ('GET', '/api/v1/playbooks/{id:\\d+}/used-by', ('PlaybooksController', 'usedBy')),
     # WORKFLOW SCHEMAS (routes.php:395-399)
     ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
     ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),

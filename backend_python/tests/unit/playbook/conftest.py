@@ -93,3 +93,25 @@ def pb_dir(tmp_path) -> str:
 @pytest.fixture
 def pb_state(pb_db, pb_dir) -> PlaybookRunState:
     return PlaybookRunState(pb_db, PlaybookTranscript(pb_dir))
+
+
+PLAYBOOKS_DDL = [
+    'CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL, '
+    'title TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))',
+    'CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, '
+    "agent_type TEXT DEFAULT 'standard', instructions TEXT, playbook_id INTEGER)",
+    'CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)',
+    'CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, agent_id INTEGER, config TEXT)',
+]
+
+OKTA = ("A note for colleagues: Okta prod tenant only.\n\nTitle: Okta password reset\nTrigger: A user is locked out.\n"
+        "Instructions:\n1. #Search Okta Users with the email.\n2. #Reset Okta Password.\n\n"
+        "(Ask Identity Team before changing step 2.)\nTools used: Okta\nActions used: #Search Okta Users; #Reset Okta Password\n")
+
+
+@pytest.fixture
+def pbc_db():
+    db = make_sqlite_db()
+    for ddl in PLAYBOOKS_DDL:
+        db.execute(ddl)
+    return db

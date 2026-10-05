@@ -256,7 +256,7 @@ def test_to_array_key_order(standard_agent):
     assert list(standard_agent.toArray().keys()) == [
         'id', 'user_id', 'team_id', 'category', 'name', 'description',
         'agent_type', 'parent_agent_id', 'can_delegate_to', 'display_order',
-        'provider', 'model', 'instructions', 'tools', 'visibility', 'enabled',
+        'provider', 'model', 'instructions', 'playbook_id', 'tools', 'visibility', 'enabled',
         'settings', 'created_at', 'updated_at',
     ]
 
@@ -279,7 +279,7 @@ def test_to_api_array(standard_agent):
 def test_to_api_array_key_order(standard_agent):
     assert list(standard_agent.toApiArray().keys()) == [
         'id', 'name', 'description', 'category', 'agent_type', 'display_order',
-        'provider', 'model', 'instructions', 'tools', 'settings', 'visibility',
+        'provider', 'model', 'instructions', 'playbook_id', 'tools', 'settings', 'visibility',
         'enabled', 'created_at',
     ]
 

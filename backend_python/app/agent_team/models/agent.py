@@ -47,6 +47,7 @@ class Agent:
         self.provider: str = 'claude'
         self.model: str | None = None
         self.instructions: str = ''
+        self.playbookId: int | None = None  # linked playbook (playbook agents)
 
         self.tools: list = []
 
@@ -79,6 +80,7 @@ class Agent:
         self.provider = data.get('provider') if data.get('provider') is not None else 'claude'
         self.model = data.get('model') if data.get('model') is not None else None
         self.instructions = data.get('instructions') if data.get('instructions') is not None else ''
+        self.playbookId = php_intval(data['playbook_id']) if data.get('playbook_id') is not None else None
 
         tools = data.get('tools')
         self.tools = _decode_json(tools if tools is not None else [])
@@ -110,6 +112,7 @@ class Agent:
             'provider': self.provider,
             'model': self.model,
             'instructions': self.instructions,
+            'playbook_id': self.playbookId,
             'tools': php_array(self.tools),
             'visibility': self.visibility,
             'enabled': self.enabled,
@@ -129,6 +132,7 @@ class Agent:
             'provider': self.provider,
             'model': self.model,
             'instructions': self.instructions,
+            'playbook_id': self.playbookId,
             'tools': php_array(self.tools),
             'settings': php_array(self.settings),
             'visibility': self.visibility,
@@ -305,6 +309,13 @@ class Agent:
 
     def setModel(self, model: str | None) -> 'Agent':
         self.model = model
+        return self
+
+    def getPlaybookId(self) -> int | None:
+        return self.playbookId
+
+    def setPlaybookId(self, id: int | None) -> 'Agent':
+        self.playbookId = id
         return self
 
     def setInstructions(self, instructions: str) -> 'Agent':
