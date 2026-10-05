@@ -13249,7 +13249,7 @@ class WorkflowEditor {
 
     async _codeNodeExecuteOnce(req) {
         if (!this._codeHarnessSrc) {
-            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit');
+            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit-2');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
@@ -13260,7 +13260,7 @@ class WorkflowEditor {
         // timer starts when the job starts, not while it waits in the queue.
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-no-exit');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-no-exit-2');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
