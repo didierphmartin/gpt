@@ -2374,6 +2374,10 @@
                                     ➕ <span data-i18n="playbookLibrary.newPlaybook">New Playbook</span>
                                 </button>
                             </div>
+                            <div id="playbooks-tabs" class="hidden flex gap-1 text-xs border-b border-gray-300">
+                                <button type="button" data-pb-tab="mine" class="px-3 py-1 font-medium border-b-2 border-blue-600 text-blue-600" data-i18n="playbookLibrary.tabMine">My playbooks</button>
+                                <button type="button" data-pb-tab="robot" class="px-3 py-1 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-i18n="playbookLibrary.tabRobot">Robot</button>
+                            </div>
                             <input id="playbooks-search" type="text" class="w-full text-xs border border-gray-300 rounded px-2 py-1" placeholder="Search playbooks..." data-i18n-placeholder="playbookLibrary.search">
                         </div>
                         <div id="playbooks-status" class="hidden flex-shrink-0 px-2 py-1 text-xs text-red-600 bg-red-50 border-b border-red-200"></div>
@@ -4179,6 +4183,9 @@
 
     <div id="playbooks-context-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 140px;">
         <button data-action="edit"   class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="mcpLibrary.edit">Edit</button>
+        <button data-action="publish"   class="hidden block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.publish">Publish</button>
+        <button data-action="republish" class="hidden block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.republish">Republish</button>
+        <button data-action="unpublish" class="hidden block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.unpublish">Unpublish</button>
         <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="playbookLibrary.delete">Delete</button>
     </div>
 
@@ -4292,9 +4299,9 @@
     <script src="assets/js/agent-turn.js?v=20260903-reasoning"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
     <script src="assets/js/code-node.js?v=20261005-no-exit"></script>
-    <script src="assets/js/playbook-collection.js?v=20261005-pb-final1"></script>
-    <script src="assets/js/playbooks-library.js?v=20261005-pb-final1"></script>
-    <script src="assets/js/workflow-editor.js?v=20261006-robot-merge"></script>
+    <script src="assets/js/playbook-collection.js?v=20261006-robot-pub"></script>
+    <script src="assets/js/playbooks-library.js?v=20261006-robot-pub"></script>
+    <script src="assets/js/workflow-editor.js?v=20261006-robot-pub"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>

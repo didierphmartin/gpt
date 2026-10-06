@@ -42,14 +42,15 @@
 
     class PlaybookApi {
         constructor(apiBase, getAuthHeaders) { this.base = apiBase; this.headers = getAuthHeaders; }
-        async call(method, path, body) {
-            const resp = await fetch(`${this.base}/playbooks${path}`, {
+        call(method, path, body) { return this.request(method, `/playbooks${path}`, body); }
+        async request(method, path, body) {
+            const resp = await fetch(`${this.base}${path}`, {
                 method, credentials: 'include',
                 headers: { ...this.headers(), 'Content-Type': 'application/json' },
                 body: body === undefined ? undefined : JSON.stringify(body),
             });
             const json = await resp.json().catch(() => ({ success: false, error: `HTTP ${resp.status}` }));
-            if (!json.success) { const e = new Error(json.error || `HTTP ${resp.status}`); e.kind = json.kind; e.status = resp.status; throw e; }
+            if (!json.success) { const e = new Error(json.error || `HTTP ${resp.status}`); e.kind = json.kind; e.status = resp.status; e.data = json.data; throw e; }
             return json;
         }
         list() { return this.call('GET', ''); }
@@ -58,6 +59,42 @@
         update(id, row) { return this.call('PUT', `/${id}`, row); }
         remove(id) { return this.call('DELETE', `/${id}`); }
         usedBy(id) { return this.call('GET', `/${id}/used-by`); }
+        // Publishing to the robot: a frozen copy of the playbook (a 409 `replaces` until confirmReplace).
+        publish(id, confirmReplace) { return this.call('POST', `/${id}/publish`, { confirm_replace: !!confirmReplace }); }
+        robot() { return this.request('GET', '/robot'); }
+        robotPlaybooks() { return this.request('GET', '/robot/playbooks'); }
+        unpublish(robotId) { return this.request('DELETE', `/robot/playbooks/${robotId}`); }
+    }
+
+    // English fallbacks for the pure helpers below (the UI passes its i18n t()).
+    const EN = {
+        'playbookLibrary.published': 'Published',
+        'playbookLibrary.publishedChanged': 'Published (changed since)',
+        'playbookLibrary.replacesConfirm': 'Replaces {{key}} published by {{name}} on {{date}}',
+    };
+    const enT = (k, p) => String(EN[k] || k).replace(/\{\{(\w+)\}\}/g, (_, n) => (p && p[n] != null ? String(p[n]) : ''));
+    // A row's publish badge ('' when not published, or the caller can't use the robot).
+    function publishLabel(row, canUse, t = enT) {
+        if (!canUse || !row) return '';
+        if (row.published === 'published') return t('playbookLibrary.published');
+        if (row.published === 'changed') return t('playbookLibrary.publishedChanged');
+        return '';
+    }
+    // The Publish button's replace confirmation (no browser dialog). State: {armed, key, message}.
+    // {type:'click', key} -> confirmReplace only when armed for that same key;
+    // {type:'error', error, key} -> a `replaces` answer arms with the message, any other error disarms and says it;
+    // {type:'ok'} -> disarmed, published.
+    function publishStep(state, ev, t = enT) {
+        const s = state || { armed: false, key: null, message: '' };
+        if (ev.type === 'click') return { ...s, confirmReplace: !!s.armed && s.key === ev.key };
+        if (ev.type === 'ok') return { armed: false, key: null, message: '', published: true };
+        const err = ev.error || {};
+        if (err.kind === 'replaces') {
+            const d = err.data || {};
+            return { armed: true, key: ev.key, message: t('playbookLibrary.replacesConfirm',
+                { key: ev.key, name: d.published_by || '', date: String(d.published_at || '').slice(0, 10) }) };
+        }
+        return { armed: false, key: null, message: err.message || String(err) };
     }
 
     // A playbook node on the canvas links to the collection by playbook_id. A node saved before the
@@ -142,5 +179,5 @@
     }
 
     return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
-        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction };
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep };
 });

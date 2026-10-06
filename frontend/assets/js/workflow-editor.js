@@ -18894,6 +18894,7 @@ Based on the analysis...
             if (!keyEl || !pbStatus) return;
             const problem = PC.keyProblem(keyEl.value.trim(), this.editingAgent?.playbook_id ?? null);
             pbStatus.textContent = problem ? this.t('playbookLibrary.' + problem) : '';
+            pbStatus.style.color = '#ef4444';
         };
         keyEl?.addEventListener('input', () => { keyEl.dataset.typed = '1'; checkKey(); });
         // Retry a failed collection load: until it succeeds the form is read-only for
@@ -19410,6 +19411,57 @@ Based on the analysis...
         document.querySelectorAll('#agent-edit-modal .agent-modal-tab')
             .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
         this.switchAgentModalTab('system-prompt');
+        await this._addPlaybookPublishButton();
+    }
+
+    /** The form's Publish button, next to Save, only when the caller can use the robot. */
+    async _addPlaybookPublishButton() {
+        const robot = await window.playbooksLibrary?.robotInfo?.();
+        const save = document.getElementById('save-agent-btn');
+        if (!robot?.can_use || !save || document.getElementById('agent-pb-publish-btn') || !this._playbookFormOnly) return;
+        save.insertAdjacentHTML('beforebegin', `<button type="button" id="agent-pb-publish-btn"
+            class="px-4 py-2 text-blue-700 bg-blue-50 border border-blue-300 rounded-lg hover:bg-blue-100 text-sm font-medium transition">${this.escapeHtml(this.t('playbookLibrary.publish'))}</button>`);
+        this._pbPublishState = null;
+        document.getElementById('agent-pb-publish-btn').addEventListener('click', () => this._publishPlaybookFromForm());
+    }
+
+    /**
+     * Publish from the form: save first (as Save does), then publish. A `replaces` answer arms the
+     * button with "Replaces <key> published by <name> on <date>"; a second click confirms. Errors and
+     * the result show inline in #agent-pb-status.
+     */
+    async _publishPlaybookFromForm() {
+        const PC = window.PlaybookCollection;
+        const btn = document.getElementById('agent-pb-publish-btn');
+        const status = document.getElementById('agent-pb-status');
+        if (!btn || btn.dataset.busy === '1') return;
+        const say = (msg, ok) => { if (status) { status.textContent = msg; status.style.color = ok ? '#16a34a' : '#ef4444'; } };
+        const id = this.editingAgent?.playbook_id ?? null;
+        const act = PC.saveAction(id, document.getElementById('agent-instructions-input')?.value);
+        if (act === 'unloaded') { this._showPlaybookSaveError(new Error(this.t('playbookLibrary.loadFailed'))); return; }
+        btn.dataset.busy = '1';
+        say('', false);
+        let key = null;
+        try {
+            const row = await this._savePlaybookFromForm(act === 'update' ? id : null);
+            this.editingAgent.playbook_id = Number(row.id);
+            key = row.pkey;
+            const keyEl = document.getElementById('agent-pb-key');
+            if (keyEl && !keyEl.value.trim()) keyEl.value = row.pkey; // the key the server derived
+            const step = PC.publishStep(this._pbPublishState, { type: 'click', key });
+            await this._playbookApi().publish(row.id, step.confirmReplace);
+            this._pbPublishState = PC.publishStep(step, { type: 'ok' });
+            btn.textContent = this.t('playbookLibrary.publish');
+            say(this.t('playbookLibrary.publishedOk'), true);
+            window.playbooksLibrary?.loadTree?.();
+        } catch (e) {
+            this._pbPublishState = PC.publishStep(this._pbPublishState, { type: 'error', error: e, key: key }, this.t.bind(this));
+            btn.textContent = this._pbPublishState.armed ? this._pbPublishState.message : this.t('playbookLibrary.publish');
+            if (!this._pbPublishState.armed) say(this._pbPublishState.message, false);
+            this.switchAgentModalTab('system-prompt');
+        } finally {
+            btn.dataset.busy = '0';
+        }
     }
 
     /** Save the form's text + key to the collection (create when id is null); returns the saved row.
@@ -19441,7 +19493,7 @@ Based on the analysis...
     /** A refused playbook save (invalid_text / invalid_key / key_taken / not found): say why in the form. */
     _showPlaybookSaveError(err) {
         const el = document.getElementById('agent-pb-status');
-        if (el) el.textContent = err?.message || String(err);
+        if (el) { el.textContent = err?.message || String(err); el.style.color = '#ef4444'; }
         this.switchAgentModalTab('system-prompt');
     }
 

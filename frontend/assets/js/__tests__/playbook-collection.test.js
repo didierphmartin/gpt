@@ -79,6 +79,33 @@ assert.strictEqual(PC.saveAction(null, '  '), 'skip');
 assert.strictEqual(PC.saveAction(99, text), 'create');
 assert.strictEqual(PC.saveAction(99, ''), 'skip');
 
+// Publishing labels: only for a caller who can use the robot.
+assert.strictEqual(PC.publishLabel({ published: 'published' }, true), 'Published');
+assert.strictEqual(PC.publishLabel({ published: 'changed' }, true), 'Published (changed since)');
+assert.strictEqual(PC.publishLabel({ published: null }, true), '');
+assert.strictEqual(PC.publishLabel({}, true), '');
+assert.strictEqual(PC.publishLabel({ published: 'published' }, false), '');
+assert.strictEqual(PC.publishLabel({ published: 'changed' }, true, (k) => 'T:' + k), 'T:playbookLibrary.publishedChanged');
+
+// The replace confirmation: first click publishes plainly; a `replaces` answer arms with the message;
+// the second click (same key) confirms; any other answer disarms.
+let st = PC.publishStep(null, { type: 'click', key: 'okta-reset' });
+assert.strictEqual(st.confirmReplace, false);
+const replaces = Object.assign(new Error('The robot already has "okta-reset"'), { kind: 'replaces', status: 409,
+    data: { published_by: 'Ada Lovelace', published_at: '2026-10-05 14:03:00' } });
+st = PC.publishStep(st, { type: 'error', error: replaces, key: 'okta-reset' });
+assert.deepStrictEqual(st, { armed: true, key: 'okta-reset',
+    message: 'Replaces okta-reset published by Ada Lovelace on 2026-10-05' });
+st = PC.publishStep(st, { type: 'click', key: 'okta-reset' });
+assert.strictEqual(st.confirmReplace, true);
+assert.strictEqual(PC.publishStep({ armed: true, key: 'okta-reset', message: 'x' }, { type: 'click', key: 'other' }).confirmReplace, false);
+st = PC.publishStep(st, { type: 'ok' });
+assert.deepStrictEqual(st, { armed: false, key: null, message: '', published: true });
+st = PC.publishStep({ armed: true, key: 'k', message: 'x' }, { type: 'error', error: new Error("Your role can't publish to the robot"), key: 'k' });
+assert.deepStrictEqual(st, { armed: false, key: null, message: "Your role can't publish to the robot" });
+st = PC.publishStep(null, { type: 'error', error: replaces, key: 'k' }, (k, p) => `${k}|${p.key}|${p.name}|${p.date}`);
+assert.strictEqual(st.message, 'playbookLibrary.replacesConfirm|k|Ada Lovelace|2026-10-05');
+
 (async () => {
     // A failed load is remembered: a linked id that is not cached is "unloaded", not "not found".
     await assert.rejects(PC.cache.load({ list: async () => { throw new Error('HTTP 500'); } }));
