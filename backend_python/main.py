@@ -5,6 +5,7 @@ import asyncio
 import os
 import tempfile
 import traceback
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -25,12 +26,16 @@ METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
 SSE_HEADERS = {'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'}
 
 
-def create_app(config: dict | None = None, *, controllers: dict | None = None, routes: list | None = None) -> FastAPI:
+def create_app(config: dict | None = None, *, controllers: dict | None = None, routes: list | None = None,
+               db_factory: Callable | None = None) -> FastAPI:
+    """db_factory: opens the per-request Db (default: the configured primary database);
+    tests pass one that never reaches a real server."""
     config = config or load_config()
+    open_db = db_factory or (lambda: open_primary(config))
     get_logger()
     registry = controllers if controllers is not None else CONTROLLERS
     dispatcher = Dispatcher(routes if routes is not None else ROUTES)
-    processor = MiddlewareProcessor(config, lambda: open_primary(config))
+    processor = MiddlewareProcessor(config, open_db)
     executor = ThreadPoolExecutor(max_workers=int(config.get('py_workers', 100)), thread_name_prefix='req')
 
     @asynccontextmanager
@@ -69,7 +74,7 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
         ctx = mw['request']
 
         try:
-            db = open_primary(config)
+            db = open_db()
         except Exception as e:  # noqa: BLE001
             error_log(f'[Backend] Database connection failed: {e}')
             return with_cors(json_response(500, {'success': False, 'error': 'Database connection failed'}))
