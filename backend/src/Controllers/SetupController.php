@@ -100,7 +100,13 @@ class SetupController
         if (!Edition::isCorporate($this->config)) {
             return false;
         }
-        return (int) $this->db->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0;
+        try {
+            // People only: the robot service user exists from the first boot.
+            return (int) $this->db->query("SELECT COUNT(*) FROM users WHERE kind = 'person'")->fetchColumn() === 0;
+        } catch (\PDOException) {
+            // A database that has not been migrated to carry `kind` yet.
+            return (int) $this->db->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0;
+        }
     }
 
     private function accounts(): ?LoginAccounts

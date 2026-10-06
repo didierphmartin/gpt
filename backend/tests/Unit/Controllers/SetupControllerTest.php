@@ -8,6 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\SetupController;
 use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 
 class SetupControllerTest extends TestCase
 {
@@ -20,8 +21,9 @@ class SetupControllerTest extends TestCase
         $this->gpt->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->gpt->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $this->gpt->exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE,
-            password TEXT, first_name TEXT, last_name TEXT, role TEXT, plan TEXT, provider TEXT,
+            password TEXT, first_name TEXT, last_name TEXT, role TEXT, plan TEXT, provider TEXT, kind TEXT DEFAULT \'person\',
             email_verified INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)');
+        $this->gpt->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER DEFAULT 0, capabilities TEXT, updated_at TEXT)');
 
         $this->login = new PDO('sqlite::memory:');
         $this->login->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -47,6 +49,13 @@ class SetupControllerTest extends TestCase
         $this->assertFalse($this->controller('individual')->status([])['needs_setup']);
         $this->assertFalse($this->controller('')->status([])['needs_setup']);
         $this->assertSame('corporate', $this->controller()->status([])['edition']);
+    }
+
+    public function test_the_robot_service_user_does_not_end_first_run_setup(): void
+    {
+        RobotAccount::ensure($this->gpt);
+        $this->assertTrue($this->controller()->status([])['needs_setup']);
+        $this->assertTrue($this->create(['email' => 'boss@corp.test', 'password' => 'correct-horse-1'])['success']);
     }
 
     public function test_create_admin_writes_both_databases(): void
