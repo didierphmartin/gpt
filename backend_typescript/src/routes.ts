@@ -360,9 +360,6 @@ router.put('/api/v1/teams/:id(\\d+)', handle((ctx) => teams.update(ctx)));
 router.delete('/api/v1/teams/:id(\\d+)', handle((ctx) => teams.destroy(ctx)));
 router.get('/api/v1/teams/:id(\\d+)/agents', handle((ctx) => teams.agents(ctx)));
 
-// Agents (protected) — the AgentTeam module's agent management. Literal sub-paths
-// (tools/reorder/categories/categories/rename) are registered BEFORE the :id param routes
-// so they aren't shadowed. executions is a plain DB read; run/chat need the execution engine.
 // Playbook collection (protected): CRUD + used-by; {id} routes are numeric only.
 router.get('/api/v1/playbooks', handle((ctx) => playbooks.index(ctx)));
 router.post('/api/v1/playbooks', handle((ctx) => playbooks.create(ctx)));
@@ -371,6 +368,9 @@ router.put('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.update(ctx))
 router.delete('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.destroy(ctx)));
 router.get('/api/v1/playbooks/:id(\\d+)/used-by', handle((ctx) => playbooks.usedBy(ctx)));
 
+// Agents (protected) — the AgentTeam module's agent management. Literal sub-paths
+// (tools/reorder/categories/categories/rename) are registered BEFORE the :id param routes
+// so they aren't shadowed. executions is a plain DB read; run/chat need the execution engine.
 router.get('/api/v1/agents', handle((ctx) => agents.index(ctx)));
 router.post('/api/v1/agents', handle((ctx) => agents.create(ctx)));
 router.get('/api/v1/agents/tools', handle((ctx) => agents.listTools(ctx)));

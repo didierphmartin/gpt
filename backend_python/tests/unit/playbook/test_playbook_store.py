@@ -22,6 +22,8 @@ def test_key_from_title_and_format():
     assert PlaybookStore.keyFromTitle('Okta password reset') == 'okta-password-reset'
     assert PlaybookStore.keyFromTitle('  Time off & leave!! ') == 'time-off-leave'
     assert PlaybookStore.keyFromTitle('###') == 'playbook'
+    assert PlaybookStore.keyFromTitle('Réinitialisation') == 'reinitialisation'
+    assert PlaybookStore.keyFromTitle('Ça va') == 'ca-va'
     assert len(PlaybookStore.keyFromTitle('abcd' * 20)) == 64
     assert PlaybookStore.isValidKey('okta-reset')
     for bad in ['Okta', 'okta--reset', '-okta', 'okta_reset', '', 'a' * 65]:
@@ -95,3 +97,13 @@ def test_delete_an_unused_playbook(store):
     id_ = int(store.save(3, None, OKTA, 'okta-reset')['id'])
     store.delete(3, id_)
     assert store.get(3, id_) is None
+
+
+def test_a_title_longer_than_255_is_refused(store):
+    long = OKTA.replace('Title: Okta password reset', 'Title: ' + 'x' * 256)
+    e = error(lambda: store.save(3, None, long, 'long'))
+    assert e.kind == 'invalid_text'
+    assert e.status == 422
+    assert 'longer than 255' in str(e)
+    ok = OKTA.replace('Title: Okta password reset', 'Title: ' + 'é' * 255)
+    assert len(store.save(3, None, ok, 'ok')['title']) == 255

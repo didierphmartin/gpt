@@ -7,6 +7,7 @@ the title is copied from the text on every save. Owner-scoped throughout.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from app.playbook.playbook_document import PlaybookDocument
 from app.support.phpcompat import php_intval
@@ -29,6 +30,7 @@ _COLS = 'id, pkey, title, text, updated_at'
 class PlaybookStore:
     KEY_RE = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')
     KEY_MAX = 64
+    TITLE_MAX = 255
 
     def __init__(self, db):
         self.db = db
@@ -36,7 +38,9 @@ class PlaybookStore:
     @staticmethod
     def keyFromTitle(title: str) -> str:
         """PHP 21-26. "Okta password reset" -> "okta-password-reset" (at most 64
-        characters; "playbook" when nothing is left). strtolower is ASCII-only."""
+        characters; "playbook" when nothing is left). Accents are dropped first (NFD,
+        marks removed: "Ça va" -> "ca-va"). strtolower is ASCII-only."""
+        title = ''.join(c for c in unicodedata.normalize('NFD', title) if not unicodedata.category(c).startswith('M'))
         lowered = ''.join(c.lower() if c.isascii() else c for c in title)
         key = re.sub(r'[^a-z0-9]+', '-', lowered).strip('-')
         key = key[:PlaybookStore.KEY_MAX].rstrip('-')
@@ -46,6 +50,16 @@ class PlaybookStore:
     def isValidKey(key: str) -> bool:
         """PHP 28-31 (fullmatch: PHP's `$` would also let a trailing newline through)."""
         return len(key) <= PlaybookStore.KEY_MAX and PlaybookStore.KEY_RE.fullmatch(key) is not None
+
+    def freeKey(self, userId: int, base: str) -> str:
+        """base when the user has no playbook with it, else base-2, base-3… (still at most 64 characters)."""
+        key = base
+        i = 2
+        while self.getByKey(userId, key) is not None:
+            suffix = f'-{i}'
+            key = base[:self.KEY_MAX - len(suffix)].rstrip('-') + suffix
+            i += 1
+        return key
 
     def list(self, userId: int) -> list:
         """PHP 33-43."""
@@ -76,6 +90,9 @@ class PlaybookStore:
             title = PlaybookDocument.fromConsoleText(text).title
         except ValueError as e:
             raise PlaybookStoreError('invalid_text', str(e), 422)
+        if len(title) > self.TITLE_MAX:
+            raise PlaybookStoreError(
+                'invalid_text', f'The title is longer than 255 characters ({len(title)}); shorten the "Title:" line.', 422)
         current = None if id is None else self.get(userId, id)
         if id is not None and current is None:
             raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)

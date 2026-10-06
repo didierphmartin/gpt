@@ -41,6 +41,9 @@ final class PlaybookStoreTest extends TestCase
 
     public function testKeyFromTitleAndFormat(): void
     {
+        $this->assertSame('reinitialisation', PlaybookStore::keyFromTitle('Réinitialisation'));
+        $this->assertSame('ca-va', PlaybookStore::keyFromTitle('Ça va'));
+        $this->assertFalse(PlaybookStore::isValidKey("okta-reset\n"));
         $this->assertSame('okta-password-reset', PlaybookStore::keyFromTitle('Okta password reset'));
         $this->assertSame('time-off-leave', PlaybookStore::keyFromTitle('  Time off & leave!! '));
         $this->assertSame('playbook', PlaybookStore::keyFromTitle('###'));
@@ -126,5 +129,16 @@ final class PlaybookStoreTest extends TestCase
         $id = (int) $this->store->save(3, null, self::OKTA, 'okta-reset')['id'];
         $this->store->delete(3, $id);
         $this->assertNull($this->store->get(3, $id));
+    }
+
+    public function testATitleLongerThan255IsRefused(): void
+    {
+        $long = str_replace('Title: Okta password reset', 'Title: ' . str_repeat('x', 256), self::OKTA);
+        $e = $this->error(fn() => $this->store->save(3, null, $long, 'long'));
+        $this->assertSame('invalid_text', $e->kind);
+        $this->assertSame(422, $e->status);
+        $this->assertStringContainsString('longer than 255', $e->getMessage());
+        $ok = str_replace('Title: Okta password reset', 'Title: ' . str_repeat('é', 255), self::OKTA);
+        $this->assertSame(255, mb_strlen($this->store->save(3, null, $ok, 'ok')['title']));
     }
 }

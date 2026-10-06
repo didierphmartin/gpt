@@ -20,6 +20,8 @@ Tools used: okta.reset
 test('keyFromTitle slugs a title', () => {
   assert.equal(keyFromTitle('Okta password reset'), 'okta-password-reset');
   assert.equal(keyFromTitle('###'), 'playbook');
+  assert.equal(keyFromTitle('Réinitialisation'), 'reinitialisation');
+  assert.equal(keyFromTitle('Ça va'), 'ca-va');
 });
 
 test('keyFromTitle caps at 64 with no trailing dash', () => {
@@ -51,4 +53,10 @@ test('parseTitle refuses a missing Title or Instructions', () => {
     e instanceof PlaybookStoreError && e.kind === 'invalid_text' && e.status === 422 &&
     e.message.includes('Missing "Title:" and "Instructions:" section') && e.message.includes('Recognized sections: Trigger'));
   assert.throws(() => parseTitle('Title: T\n'), (e: any) => e.message.startsWith('Missing "Instructions:" section. Recognized sections: Title.'));
+});
+
+test('parseTitle refuses a title longer than 255 characters', () => {
+  assert.throws(() => parseTitle(OKTA.replace('Title: Okta password reset', 'Title: ' + 'x'.repeat(256))), (e: any) =>
+    e instanceof PlaybookStoreError && e.kind === 'invalid_text' && e.status === 422 && e.message.includes('longer than 255'));
+  assert.equal(parseTitle(OKTA.replace('Title: Okta password reset', 'Title: ' + 'é'.repeat(255))).length, 255);
 });

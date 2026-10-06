@@ -10,6 +10,7 @@ export class PlaybookStoreError extends Error {
 
 const KEY_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const KEY_MAX = 64;
+const TITLE_MAX = 255;
 /** Port of PlaybookDocument::SECTION_HEADER_RE. */
 const SECTION_HEADER_RE = /^\s*(\d+[.)]|[-*•]|#{1,6})?\s*\**(Title|Trigger|Instructions|Tools used|Actions used|Domain)\**\s*:\**\s*(.*)$/i;
 const LABELS: Record<string, string> = {
@@ -17,9 +18,10 @@ const LABELS: Record<string, string> = {
   'tools used': 'Tools used', 'actions used': 'Actions used', 'domain': 'Domain',
 };
 
-/** "Okta password reset" -> "okta-password-reset" (at most 64 characters; "playbook" when nothing is left). */
+/** "Okta password reset" -> "okta-password-reset", "Ça va" -> "ca-va" (accents dropped; at most 64 characters;
+ *  "playbook" when nothing is left). */
 export function keyFromTitle(title: string): string {
-  let key = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  let key = title.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   key = key.slice(0, KEY_MAX).replace(/-+$/, '');
   return key === '' ? 'playbook' : key;
 }
@@ -52,7 +54,12 @@ export function parseTitle(text: string): string {
       `Missing "${missing.join(':" and "')}:" section. Recognized sections: ${found.length ? found.join(', ') : 'none'}. ` +
       `Each section must start on its own line as "${missing[0]}: …" (a list number, "##" or "**" before the keyword is fine).`, 422);
   }
-  return sections['title'].trim();
+  const title = sections['title'].trim();
+  const len = [...title].length;
+  if (len > TITLE_MAX) {
+    throw new PlaybookStoreError('invalid_text', `The title is longer than 255 characters (${len}); shorten the "Title:" line.`, 422);
+  }
+  return title;
 }
 
 export type PlaybookRow = { id: number; pkey: string; title: string; text: string; updated_at: string };

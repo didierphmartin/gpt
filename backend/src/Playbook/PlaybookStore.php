@@ -11,14 +11,18 @@ use PDO;
  */
 final class PlaybookStore
 {
-    private const KEY_RE = '/^[a-z0-9]+(-[a-z0-9]+)*$/';
+    private const KEY_RE = '/^[a-z0-9]+(-[a-z0-9]+)*\z/';
     private const KEY_MAX = 64;
+    private const TITLE_MAX = 255;
 
     public function __construct(private readonly PDO $db) {}
 
-    /** "Okta password reset" -> "okta-password-reset" (at most 64 characters; "playbook" when nothing is left). */
+    /** "Okta password reset" -> "okta-password-reset", "Ça va" -> "ca-va" (accents dropped; at most 64 characters;
+     *  "playbook" when nothing is left). */
     public static function keyFromTitle(string $title): string
     {
+        $nfd = \Normalizer::normalize($title, \Normalizer::FORM_D);
+        $title = (string) preg_replace('/\p{M}+/u', '', $nfd === false ? $title : $nfd);
         $key = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($title)), '-');
         $key = rtrim(substr($key, 0, self::KEY_MAX), '-');
         return $key === '' ? 'playbook' : $key;
@@ -27,6 +31,17 @@ final class PlaybookStore
     public static function isValidKey(string $key): bool
     {
         return strlen($key) <= self::KEY_MAX && preg_match(self::KEY_RE, $key) === 1;
+    }
+
+    /** $base when the user has no playbook with it, else $base-2, $base-3… (still at most 64 characters). */
+    public function freeKey(int $userId, string $base): string
+    {
+        $key = $base;
+        for ($i = 2; $this->getByKey($userId, $key) !== null; $i++) {
+            $suffix = "-{$i}";
+            $key = rtrim(substr($base, 0, self::KEY_MAX - strlen($suffix)), '-') . $suffix;
+        }
+        return $key;
     }
 
     public function list(int $userId): array
@@ -39,6 +54,7 @@ final class PlaybookStore
             $used = $this->usedBy($userId, $r['id']);
             $r['used_by'] = count($used['agents']) + count($used['nodes']);
         }
+        unset($r);
         return $rows;
     }
 
@@ -65,6 +81,9 @@ final class PlaybookStore
             $title = PlaybookDocument::fromConsoleText($text)->title;
         } catch (\InvalidArgumentException $e) {
             throw new PlaybookStoreError('invalid_text', $e->getMessage(), 422);
+        }
+        if (mb_strlen($title) > self::TITLE_MAX) {
+            throw new PlaybookStoreError('invalid_text', "The title is longer than 255 characters (" . mb_strlen($title) . "); shorten the \"Title:\" line.", 422);
         }
         $current = $id === null ? null : $this->get($userId, $id);
         if ($id !== null && $current === null) {
