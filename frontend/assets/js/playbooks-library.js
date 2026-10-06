@@ -41,6 +41,8 @@ class PlaybooksLibrary {
                 const btn = e.target.closest('[data-action]');
                 const action = btn?.dataset.action;
                 if (!action) return;
+                // Dependencies opens its list inside the menu; the menu stays open.
+                if (action === 'dependencies') { this.toggleDependencies(); return; }
                 // Delete is two-step: the first click arms the button and keeps the menu open.
                 if (action === 'delete' && !this.armDelete(btn)) return;
                 // Unpublish too: the robot copy may be someone's scheduled run, or have no source left.
@@ -132,7 +134,6 @@ class PlaybooksLibrary {
                 <span>📖</span>
                 <span class="mcp-lib-name font-semibold">${this.esc(r.title || r.pkey)}</span>
                 <code class="text-gray-500">${this.esc(r.pkey)}</code>
-                ${tools ? `<span class="mcp-badge mcp-badge-transport">${this.esc(tools)}</span>` : ''}
                 ${pub ? `<span class="mcp-badge ${pubCls}" data-pb-published="${this.esc(r.published)}">${this.esc(pub)}</span>` : ''}
                 ${used ? `<span class="mcp-lib-count">${this.esc(this.t('playbookLibrary.usedBy', { count: used }))}</span>` : ''}
                 <button class="mcp-lib-menu" data-playbook-id="${r.id}" title="More">⋮</button>
@@ -204,11 +205,29 @@ class PlaybooksLibrary {
                 this.setStatus('');
                 this.contextTarget = parseInt(btn.dataset.playbookId, 10);
                 this.showPublishItems(this.rows.find(r => Number(r.id) === this.contextTarget));
+                this.toggleDependencies(false);
                 this.contextMenu.style.left = `${e.clientX}px`;
                 this.contextMenu.style.top  = `${e.clientY}px`;
                 this.contextMenu.classList.remove('hidden');
             });
         });
+    }
+
+    // The MCP servers the playbook's "Tools used" line names, listed under the menu's Dependencies item.
+    toggleDependencies(open) {
+        const list = this.contextMenu?.querySelector('[data-pb-dependencies]');
+        if (!list) return;
+        const show = open ?? list.classList.contains('hidden');
+        list.classList.toggle('hidden', !show);
+        if (!show) return;
+        const row = this.rows.find(r => Number(r.id) === Number(this.contextTarget));
+        const deps = window.PlaybookCollection.toolsUsedOf(row?.text);
+        list.replaceChildren(...(deps.length ? deps : [this.t('playbookLibrary.noDependencies')]).map((name) => {
+            const line = document.createElement('div');
+            line.className = deps.length ? 'px-5 py-0.5 text-gray-600' : 'px-5 py-0.5 text-gray-400 italic';
+            line.textContent = deps.length ? `• ${name}` : name;
+            return line;
+        }));
     }
 
     hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); this.disarmUnpublish(); }
