@@ -19,6 +19,20 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 ---
 
+## Three ways to use it
+
+| | **Individual** | **Corporate** | **Hosted service** |
+|---|---|---|---|
+| **Who it's for** | One person, noncommercial use | A company and its staff | Us, or anyone running a classic web host |
+| **How it's delivered** | Docker container on your own machine | Docker container on the company intranet | Apache + PHP + MySQL, no container |
+| **LLM access** | Your own provider keys, **or** an account with us: a subscription or prepaid credits | Your own provider keys, **or** an account with us: a subscription or prepaid credits, shared by all staff | Keys configured by whoever runs the server |
+| **Admin app** | Not included | Included: manage users, roles, LLM settings, MCP servers and usage | — |
+| **Sign-in** | Your own account on your own machine | One account per person, with a single sign-in shared by the app and the admin app | — |
+| **What you set up** | Docker, then the [setup wizard](#the-setup-wizard) | Docker on an intranet server, then the same [setup wizard](#the-setup-wizard) | The manual install |
+| **Install guide** | [Individual install](#individual-install-docker) | [Corporate install](#corporate-install-docker-on-your-intranet) | [Manual install](#manual-install-apache--php) |
+
+---
+
 ## What it does
 
 - **One chat API, many providers.** Talk to **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi, GLM**
@@ -124,24 +138,144 @@ gpt/
 
 ## Installation
 
-### Quickest path: Docker
+The individual and corporate installs are the same Docker stack and use the
+same setup wizard. They differ in two ways: where the server runs (your own
+computer, or a server on your company's intranet), and the **admin app**, which
+comes only with the corporate package.
 
-Needs only Docker Desktop (or Docker Engine + Compose v2).
+### The setup wizard
 
-```bash
-git clone https://github.com/didierphmartin/gpt.git && cd gpt
-docker compose up -d --build
-docker compose logs web | tail -20     # prints the generated admin password
-```
+On an individual install, the wizard starts the first time you sign in. On a
+corporate install, it starts the first time anyone opens the app's address,
+before any account exists.
 
-Open **http://localhost:8080/gpt/** and sign in with the credentials from that
-log line. Then add an LLM key under *Settings → Admin → LLM settings* — the
-stack deliberately ships without one, and chat does nothing until you add yours.
+1. **The admin account** (corporate install only). Enter the admin's email and
+   choose a password. That one account signs in to both the app and the admin
+   app (`gpt_admin`), and it is the account that creates everyone else's.
+2. **How to access the LLMs.** Choose one:
+   - **Use your own keys.** Enter an API key for each provider you want
+     (Claude, OpenAI, Gemini, …). You pay each provider directly.
+   - **Create an account with us.** Then either **subscribe** (a monthly plan
+     that covers every LLM we support, up to a token limit) or **buy credits**
+     (pay as you go). No provider keys needed.
 
-Copy `.env.example` to `.env` first if you want a different port, database
-credentials or admin email.
+   You can switch later under *Settings → Admin → LLM settings*. The containers
+   ship without any keys, and chat does nothing until this step is done.
+3. **A local folder.** Everything the app reads or writes lives there
+   (`skills/`, `outputs/`, `python/`).
 
-**What the container does not include, on purpose:**
+With an account, the server needs outbound HTTPS to our service, which relays
+LLM calls and counts tokens against your subscription or credits. No inbound
+access from outside is needed.
+
+### Individual install (Docker)
+
+For one person on their own computer.
+
+**You need:** Docker Desktop (or Docker Engine + Compose v2), and either your
+own LLM provider keys or an account with us (you can create one in the wizard).
+
+1. **Get the files and start the app.**
+
+   ```bash
+   git clone https://github.com/didierphmartin/gpt.git && cd gpt
+   docker compose up -d --build
+   docker compose logs web | tail -20     # prints the generated admin password
+   ```
+
+   Copy `.env.example` to `.env` first if you want a different port, database
+   credentials or admin email.
+
+2. **Sign in.** Open **http://localhost:8080/gpt/** and use the email and
+   password from that log line.
+
+3. **Run the [setup wizard](#the-setup-wizard).** Enter your own keys, or
+   create an account to subscribe or buy credits, then choose a local folder.
+
+4. **Optional: install the local runner** if you want to run compiled
+   workflows. See *First run* below.
+
+### Corporate install (Docker on your intranet)
+
+For a company. The server runs on your intranet, and your staff use it from
+their browsers. The steps are the same as the individual install, plus the
+choices a shared server needs.
+
+The corporate package also includes the **admin app** (`gpt_admin`), which is
+not part of this repository or the individual package. The people who manage the
+installation use it to:
+- create and manage user accounts;
+- assign roles and control which features each role gets;
+- configure LLM providers and settings;
+- add MCP servers (connections to external tools) for everyone or for
+  particular users;
+- follow token usage and costs, per user and for the whole company.
+
+**Sign-in and access.** The corporate package also includes a **login
+service** that gives the app and the admin app one shared sign-in:
+- **Every user signs in.** Each person gets their own account, and nobody can
+  use the app without signing in. That way every conversation, setting and
+  token counted belongs to a named user.
+- **One account for both apps.** A single sign-in works for the app and the
+  admin app, so admins don't need a second password.
+- **Only admins reach the admin app.** Other users who sign in get the app
+  only.
+
+We send you the admin app and the login service with your corporate package.
+
+**You need:**
+- An intranet server (Linux recommended) with Docker Engine + Compose v2.
+- Either your company's own LLM provider keys, or a company account with us
+  (created in the wizard) with a subscription or credits.
+- With an account: outbound HTTPS from the server to our service.
+
+1. **Get the files and choose your settings.**
+
+   ```bash
+   git clone https://github.com/didierphmartin/gpt.git && cd gpt
+   cp .env.example .env
+   ```
+
+   Edit `.env` before the first start. The database passwords are created
+   from it:
+   - Replace `MYSQL_PASSWORD` and `MYSQL_ROOT_PASSWORD` with strong passwords.
+   - Change `GPT_PORT` if 8080 is already in use on the server.
+
+2. **Start the app.**
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+   The containers restart on their own when the server reboots.
+
+3. **Open the app** at `http://<server-name>:8080/gpt/`, from any machine on
+   the intranet. The [setup wizard](#the-setup-wizard) starts, since no
+   account exists yet.
+
+4. **Run the wizard.**
+   - **Create the admin account.** Enter the admin's email and a password.
+     This account signs in to both the app and `gpt_admin`.
+   - **Choose LLM access.** Enter the company's own keys, or create a company
+     account to subscribe or buy credits. Whichever you choose applies to
+     every user on the server: the subscription's token limit or the credits
+     are shared by the whole company, and you can see usage in `gpt_admin`.
+
+5. **Create your staff's accounts.** Sign in to `gpt_admin` with the admin
+   account and add one account per person. Only the admin can create
+   accounts; nobody can sign themselves up.
+
+6. **Give your staff the address.** Each person signs in with their own
+   account from their own browser. Anyone who runs compiled workflows
+   installs the local runner on *their own* computer (see *First run* below),
+   because workflows run on the user's machine, not on the server.
+
+We recommend putting the server behind your company's HTTPS reverse proxy, so
+passwords and conversations are encrypted on the network.
+
+### What the containers leave out, on purpose
+
+These apply to both Docker installs:
 
 - **The local Python runner.** Compiled workflows run as *you*, on *your*
   machine, so they can read your files and ask you questions mid-run. Your
@@ -150,7 +284,9 @@ credentials or admin email.
   below in *First run*.
 - **Browser Skills.** They execute as Python in your browser against a folder
   you grant. Nothing server-side to package.
-- **LLM keys.** Yours, entered in the app, never in an image or an env var.
+- **LLM keys.** Your provider keys, or your account with us, are set up in
+  the wizard and stored in the database. They never go in an image or an
+  environment variable.
 
 **Handy commands**
 
@@ -182,8 +318,11 @@ never touches a real install's stack or its data -- but it does run
 `docker compose down -v` inside that project, so don't point `COMPOSE_PROJECT_NAME`
 or `GPT_PORT` at anything you care about when invoking it.
 
-Prefer to install the pieces yourself, or already run Apache and MySQL? Carry on
-below.
+### Manual install (Apache + PHP)
+
+This is how our hosted service runs: directly on Apache + PHP + MySQL, with no
+container. Use it to install on a hosted web server, or if you already run
+Apache and MySQL and prefer to install the parts yourself.
 
 **Prerequisites**
 
@@ -266,8 +405,10 @@ anything placed here is **served to the browser** — it is not a secret store.
 
 ### 5. First run
 
-Open `http://localhost/gpt/frontend/index.html` and sign in. A setup wizard asks for a **local folder**;
-everything the app reads or writes lives there (`skills/`, `outputs/`, `python/`).
+Open `http://localhost/gpt/frontend/index.html` and sign in. The [setup wizard](#the-setup-wizard) asks how
+you want to access the LLMs (your own keys, or an account to subscribe or buy credits) and for a
+**local folder**. Everything the app reads or
+writes lives in that folder (`skills/`, `outputs/`, `python/`).
 
 The wizard also installs the Python runner into `<your folder>/python/`. To finish it — a browser cannot
 create a virtual environment — run once, in that folder:
@@ -352,12 +493,22 @@ this repository. Ask the maintainer if you need them.
 
 ## License
 
-**[PolyForm Noncommercial 1.0.0](LICENSE)** — use it, change it, build on it and share it freely for
-any **noncommercial** purpose: personal projects, study, research, hobby work, and use by charities,
-schools, public research, health, environmental and government bodies. **Selling it, or using it to
-run a commercial product or service, is not permitted** without a separate licence — ask.
+**[SynergyAI Software Licence](LICENSE)**. In short:
 
-This is source-available, not OSI "open source": the restriction on commercial use is exactly what
-that definition excludes. Third-party dependencies keep their own licences. Releases up to and
-including commit `3fff3e5` were published under MIT, and that grant cannot be withdrawn for copies
-already obtained under it; these terms apply from here on.
+- **Individual users** may use it free of charge for personal, noncommercial
+  purposes, with their own LLM keys or an account with us (subscription or
+  credits). They may not sell it, modify it or redistribute it without written
+  permission.
+- **Corporate users** may run it on their own intranet for their own staff,
+  with their own LLM keys or an account with us (subscription or credits).
+  Only the corporate package includes the admin app and the login service.
+  They may not offer it outside the organisation, sell it, modify it or
+  redistribute it without written permission.
+- **Containers** (including the PHP backend inside them) may be run, but not
+  copied, extracted, modified or reverse engineered.
+
+The source is published so you can see what you're running. This is not open
+source. Third-party dependencies keep their own licences. Releases up to and
+including commit `3fff3e5` were published under MIT, and copies obtained under
+earlier terms keep those terms. The [LICENSE](LICENSE) file is the binding
+text; this summary is not.
