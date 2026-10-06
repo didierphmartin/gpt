@@ -22,7 +22,7 @@ class PlaybookMigration
     public function run(bool $write): array
     {
         $this->report = ['created' => [], 'suffixed' => [], 'dropped_bindings' => [],
-            'agents_linked' => 0, 'nodes_linked' => 0, 'errors' => []];
+            'dropped_policy' => [], 'agents_linked' => 0, 'nodes_linked' => 0, 'errors' => []];
         $this->db->beginTransaction();
         try {
             $this->migrateAgents();
@@ -52,7 +52,7 @@ class PlaybookMigration
 
     private function migrateNodes(): void
     {
-        $rows = $this->db->query("SELECT n.id, n.config, w.user_id, w.name AS wname
+        $rows = $this->db->query("SELECT n.id, n.agent_id, n.config, w.user_id, w.name AS wname
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
             WHERE n.node_type = 'playbook' ORDER BY n.id")->fetchAll(PDO::FETCH_ASSOC);
         $upd = $this->db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = ?');
@@ -61,10 +61,13 @@ class PlaybookMigration
             if (!is_array($cfg) || !empty($cfg['playbook_id'])) continue;
             $owner = (int) $r['user_id'];
             $from = "node #{$r['id']} \"" . ($cfg['name'] ?? 'Playbook') . "\" in workflow \"{$r['wname']}\"";
-            $pb = $this->agentPlaybook($owner, (int) ($cfg['agent_id'] ?? 0));
+            // The config's agent_id, else the node row's agent_id column.
+            $pb = $this->agentPlaybook($owner, (int) ($cfg['agent_id'] ?? $r['agent_id'] ?? 0));
             if ($pb === null) {
-                $pb = $this->fromNodePlaybook($owner, $cfg['playbook'] ?? null, $from);
+                $runSettings = [];
+                $pb = $this->fromNodePlaybook($owner, $cfg['playbook'] ?? null, $from, $runSettings);
                 if ($pb === null) continue;
+                $cfg = $runSettings + $cfg; // policy / approvers of a JSON playbook: run settings live on the node
             }
             unset($cfg['playbook'], $cfg['playbook_missing']);
             $cfg['playbook_id'] = $pb;
@@ -87,7 +90,11 @@ class PlaybookMigration
         return $v === false ? null : (int) $v;
     }
 
-    private function fromNodePlaybook(int $owner, mixed $playbook, string $from): ?int
+    private const DEFAULT_POLICY = ['writes_enabled' => false, 'on_unbound' => 'handoff', 'on_failure' => 'continue_then_handoff'];
+
+    /** The collection playbook for a node's own playbook; a JSON one with a non-default policy or approvers
+     *  reports them (dropped_policy) and hands them back in $runSettings for the node config. */
+    private function fromNodePlaybook(int $owner, mixed $playbook, string $from, array &$runSettings = []): ?int
     {
         if (is_array($playbook)) {
             try {
@@ -100,6 +107,10 @@ class PlaybookMigration
                 if ($tool !== null && $tool !== '') {
                     $this->report['dropped_bindings'][] = ['title' => $doc->title, 'action' => (string) $action, 'tool' => (string) $tool];
                 }
+            }
+            if ($doc->policy != self::DEFAULT_POLICY || $doc->approvers !== []) {
+                $this->report['dropped_policy'][] = ['title' => $doc->title, 'policy' => $doc->policy, 'approvers' => $doc->approvers];
+                $runSettings = ['policy' => $doc->policy, 'approvers' => $doc->approvers];
             }
             return $this->create($owner, self::render($doc), $from);
         }
@@ -128,11 +139,7 @@ class PlaybookMigration
             return null;
         }
         $base = PlaybookStore::keyFromTitle($title);
-        $key = $base;
-        for ($i = 2; $this->store->getByKey($userId, $key) !== null; $i++) {
-            $suffix = "-{$i}";
-            $key = rtrim(substr($base, 0, 64 - strlen($suffix)), '-') . $suffix;
-        }
+        $key = $this->store->freeKey($userId, $base);
         $row = $this->store->save($userId, null, $text, $key);
         if ($key !== $base) {
             $this->report['suffixed'][] = ['title' => $title, 'pkey' => $key];

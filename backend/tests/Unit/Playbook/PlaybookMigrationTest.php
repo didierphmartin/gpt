@@ -156,4 +156,31 @@ final class PlaybookMigrationTest extends TestCase
         $this->assertSame($before, $snap());
         $this->assertFalse($this->db->inTransaction());
     }
+
+    public function testAJsonNodeKeepsItsPolicyAndApproversOnTheNodeAndTheReportSaysSo(): void
+    {
+        $node = $this->addNode(['name' => 'P', 'playbook' => [
+            'title' => 'Gated', 'instructions' => '1. Do it.',
+            'policy' => ['writes_enabled' => true, 'on_failure' => 'stop'], 'approvers' => ['alice'],
+        ]]);
+        $report = (new PlaybookMigration($this->db))->run(true);
+        $policy = ['writes_enabled' => true, 'on_unbound' => 'handoff', 'on_failure' => 'stop'];
+        $this->assertSame([['title' => 'Gated', 'policy' => $policy, 'approvers' => ['alice']]], $report['dropped_policy']);
+        $cfg = $this->cfg($node);
+        $this->assertIsInt($cfg['playbook_id']);
+        $this->assertSame($policy, $cfg['policy']);
+        $this->assertSame(['alice'], $cfg['approvers']);
+        // A JSON node with the default policy and no approvers reports nothing (N4 of setUp).
+        $this->assertNotContains('Json one', array_column($report['dropped_policy'], 'title'));
+    }
+
+    public function testANodeFallsBackToItsAgentIdColumn(): void
+    {
+        $this->db->prepare("INSERT INTO workflow_nodes (workflow_id, node_type, agent_id, config) VALUES (1, 'playbook', ?, ?)")
+            ->execute([$this->firstAgent, json_encode(['name' => 'Col'])]);
+        $node = (int) $this->db->lastInsertId();
+        (new PlaybookMigration($this->db))->run(true);
+        $a1 = (int) $this->db->query("SELECT playbook_id FROM agents WHERE id = {$this->firstAgent}")->fetchColumn();
+        $this->assertSame($a1, $this->cfg($node)['playbook_id']);
+    }
 }
