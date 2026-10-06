@@ -28,3 +28,9 @@ services:
     environment:
       GPT_EDITION: corporate
       LOGIN_DB_NAME: ${LOGIN_DB_NAME:-gpt_login}
+  backend-node:
+    environment:
+      GPT_EDITION: corporate
+  backend-python:
+    environment:
+      GPT_EDITION: corporate

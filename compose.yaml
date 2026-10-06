@@ -92,6 +92,8 @@ services:
       web:
         condition: service_healthy
     environment:
+      # Same edition as web (see there): the robot rules read it.
+      GPT_EDITION: ${GPT_EDITION-individual}
       DB_HOST: db
       CTX_DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
@@ -128,6 +130,8 @@ services:
       web:
         condition: service_healthy
     environment:
+      # Same edition as web (see there): the robot rules read it.
+      GPT_EDITION: ${GPT_EDITION-individual}
       DB_HOST: db
       CTX_DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
