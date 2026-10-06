@@ -253,7 +253,11 @@
     "keyHelp": "Lowercase letters, digits and single hyphens, up to 64 characters. Set once, it does not follow title changes.",
     "keyInvalid": "Invalid key: use lowercase letters, digits and single hyphens (max 64).",
     "keyTaken": "You already have a playbook with this key.",
-    "notesHint": "Notes outside the sections are kept for people; only the sections reach the model."
+    "notesHint": "Notes outside the sections are kept for people; only the sections reach the model.",
+    "loadFailed": "Could not load playbooks",
+    "loadFailedReadOnly": "The text is read-only until the playbooks load.",
+    "retry": "Retry",
+    "missingRecreate": "Playbook #{{id}} not found. Type or paste a playbook and save to create a new one."
   },
   "mcpLibrary": {
     "newServer": "New Server",

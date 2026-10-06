@@ -253,7 +253,11 @@
     "keyHelp": "Minúsculas, dígitos y guiones simples, hasta 64 caracteres. Se fija una vez y no sigue los cambios de título.",
     "keyInvalid": "Clave no válida: use minúsculas, dígitos y guiones simples (máx. 64).",
     "keyTaken": "Ya tiene un playbook con esta clave.",
-    "notesHint": "Las notas fuera de las secciones se conservan para las personas; solo las secciones llegan al modelo."
+    "notesHint": "Las notas fuera de las secciones se conservan para las personas; solo las secciones llegan al modelo.",
+    "loadFailed": "No se pudieron cargar los playbooks",
+    "loadFailedReadOnly": "El texto es de solo lectura hasta que se carguen los playbooks.",
+    "retry": "Reintentar",
+    "missingRecreate": "Playbook #{{id}} no encontrado. Escriba o pegue un playbook y guarde para crear uno nuevo."
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",

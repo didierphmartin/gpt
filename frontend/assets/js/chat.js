@@ -3509,7 +3509,11 @@ class ChatApp {
                     const api = new PC.PlaybookApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', () => this.getAuthHeaders());
                     let row = null;
                     try {
-                        row = (await api.create({ text: playbook, pkey: PC.keyFromTitle(name) })).data;
+                        // A retry after a failed agent save reuses the playbook already saved
+                        // with this exact text instead of saving it again.
+                        const saved = (await api.list()).data || [];
+                        row = saved.find(r => r.text === playbook)
+                            || (await api.create({ text: playbook, pkey: PC.keyFromTitle(name) })).data;
                     } catch (e) {
                         payload = e?.kind === 'key_taken'
                             ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct name.' }
@@ -3532,7 +3536,11 @@ class ChatApp {
                         const id = data?.data?.id ?? data?.id;
                         payload = (resp.ok && id)
                             ? { success: true, agent_id: id, playbook_id: row.id, pkey: row.pkey, name, category: 'Playbooks', hint: 'Drag the card from the Agents list onto a workflow canvas to use it.' }
-                            : { success: false, playbook_id: row.id, pkey: row.pkey, error: data?.error || `agents endpoint returned ${resp.status}` };
+                            : {
+                                success: false, playbook_id: row.id, pkey: row.pkey,
+                                error: `The playbook is already saved in the collection (playbook_id ${row.id}, key "${row.pkey}"), but creating its agent failed: ${data?.error || `agents endpoint returned ${resp.status}`}`,
+                                hint: 'Do not save the playbook again. Fix the agent problem (for example a name that is already taken) and call save_playbook_agent again with the same playbook text: the saved playbook is reused and only the agent is created.',
+                            };
                         if (resp.ok) { try { await window.agentsLibrary?.loadTree?.(); } catch (_) {} }
                     }
                 }

@@ -8754,7 +8754,7 @@ class WorkflowEditor {
                 </div>
                 <div class="playbook-badges" style="padding:0 8px;display:flex;flex-wrap:wrap;max-width:230px;">${this._playbookBadgesHtml(nodeConfig)}</div>
                 <div class="node-body">
-                    <small class="node-config-display" style="${summary.missing ? 'color:#ef4444;' : ''}">${this.escapeHtml(summary.text)}</small>
+                    <small class="node-config-display" style="${summary.missing ? 'color:#ef4444;' : ''}">${this.escapeHtml(this._playbookSummaryText(summary))}</small>
                     <button class="node-edit-btn" data-playbook="true" title="Edit">✏️</button>
                 </div>
             </div>
@@ -8771,15 +8771,9 @@ class WorkflowEditor {
         );
 
         // Linked but not in the cache yet (e.g. dropped from an agent card before the
-        // collection was loaded): load it once, then redraw the summary and badges.
+        // collection was loaded): load it once; the load redraws every playbook card.
         if (summary.missing) {
             this._pbCacheReload = this._pbCacheReload || this._loadPlaybookCache().finally(() => { this._pbCacheReload = null; });
-            this._pbCacheReload.then(() => {
-                const data = this.editor.drawflow.drawflow.Home.data[String(drawflowId)]?.data;
-                if (!data) return;
-                this._refreshPlaybookSummary(drawflowId, data);
-                this._refreshPlaybookBadges(drawflowId, data);
-            });
         }
 
         this.hideHelpOverlay();
@@ -9136,15 +9130,20 @@ class WorkflowEditor {
      *  Title (read from the collection cache), else its first non-blank line;
      *  "Playbook #<id> not found" when the id is not in the collection. */
     _playbookNodeSummary(config) {
-        return window.PlaybookCollection.nodeSummary(config).text;
+        return this._playbookSummaryText(window.PlaybookCollection.nodeSummary(config));
     }
 
-    /** Write a playbook node's summary line in place (red when its playbook is missing). */
+    /** A nodeSummary() result as shown: a failed collection load reads "Could not load playbooks" (i18n). */
+    _playbookSummaryText(summary) {
+        return summary.loadFailed ? this.t('playbookLibrary.loadFailed') : summary.text;
+    }
+
+    /** Write a playbook node's summary line in place (red when its playbook is missing or unloaded). */
     _refreshPlaybookSummary(nodeId, config) {
         const disp = document.getElementById(`node-${nodeId}`)?.querySelector('.node-config-display');
         if (!disp) return;
         const s = window.PlaybookCollection.nodeSummary(config);
-        disp.textContent = s.text;
+        disp.textContent = this._playbookSummaryText(s);
         disp.style.color = s.missing ? '#ef4444' : '';
     }
 
@@ -11767,7 +11766,15 @@ class WorkflowEditor {
         try {
             await window.PlaybookCollection.cache.load(this._playbookApi());
         } catch (e) {
+            // cache.loadFailed() now says so: cards read "Could not load playbooks", forms go read-only.
             console.warn('[WorkflowEditor] playbook collection load failed:', e?.message || e);
+        }
+        // Redraw the playbook cards on the canvas against what is (or is not) loaded now.
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        for (const [id, n] of Object.entries(nodes)) {
+            if (n.data?.type !== 'playbook' && n.data?.node_type !== 'playbook') continue;
+            this._refreshPlaybookSummary(id, n.data);
+            this._refreshPlaybookBadges(id, n.data);
         }
     }
 
@@ -17223,6 +17230,10 @@ class WorkflowEditor {
         const tpb = (key) => this.t('playbookLibrary.' + key);
         const pbRow = agent.playbook_id ? window.PlaybookCollection.cache.get(agent.playbook_id) : null;
         const pbKey = pbRow?.pkey || window.PlaybookCollection.keyFromTitle(window.PlaybookCollection.titleOf(agent.instructions || ''));
+        // Linked but not cached: the collection did not load (text unknown → read-only, Retry),
+        // or the playbook is gone (typing a new one and saving creates a new entry).
+        const pbUnloaded = !!agent.playbook_id && !pbRow && window.PlaybookCollection.cache.loadFailed();
+        const pbMissing = !!agent.playbook_id && !pbRow && !pbUnloaded;
         const modalHTML = `
             <div id="agent-edit-modal" class="fixed inset-0 z-[200] flex items-center justify-center" style="background-color: rgba(0, 0, 0, 0.5);">
                 <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
@@ -17485,8 +17496,12 @@ class WorkflowEditor {
                                 <div class="flex items-center gap-2">
                                     <label for="agent-pb-key" class="text-sm font-medium text-gray-700">${tpb('key')}</label>
                                     <input type="text" id="agent-pb-key" class="flex-1 px-2 py-1 border border-gray-300 rounded text-sm font-mono"
-                                           value="${this.escapeHtml(pbKey)}" title="${this.escapeHtml(tpb('keyHelp'))}" ${pbRow ? 'data-typed="1"' : ''}>
+                                           value="${this.escapeHtml(pbUnloaded ? '' : pbKey)}" title="${this.escapeHtml(tpb('keyHelp'))}" ${pbRow ? 'data-typed="1"' : ''} ${pbUnloaded ? 'disabled' : ''}>
                                 </div>
+                                <p id="agent-pb-load-status" class="text-xs mt-1 ${pbUnloaded || pbMissing ? '' : 'hidden'}" style="color:#ef4444;">
+                                    <span id="agent-pb-load-msg">${pbUnloaded ? this.escapeHtml(tpb('loadFailed') + ' ' + tpb('loadFailedReadOnly')) : (pbMissing ? this.escapeHtml(this.t('playbookLibrary.missingRecreate', { id: String(agent.playbook_id) })) : '')}</span>
+                                    <button type="button" id="agent-pb-retry" class="ml-2 underline ${pbUnloaded ? '' : 'hidden'}">${tpb('retry')}</button>
+                                </p>
                                 <p id="agent-pb-status" class="text-xs mt-1" style="color:#ef4444;"></p>
                                 <p class="text-xs text-gray-500 mt-1">${tpb('notesHint')}</p>
                             </div>
@@ -17494,7 +17509,7 @@ class WorkflowEditor {
                             <div id="agent-pb-validate-result" class="hidden mt-3 text-sm"></div>
                             <textarea id="agent-instructions-input" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
                                       placeholder="${agent.agent_type === 'playbook' ? tf('playbookPlaceholder') : tf('systemPromptPlaceholder')}"
-                                      style="min-height: 500px; resize: vertical; line-height: 1.5;">${this.escapeHtml(agent.instructions || '')}</textarea>
+                                      style="min-height: 500px; resize: vertical; line-height: 1.5;" ${pbUnloaded ? 'readonly' : ''}>${this.escapeHtml(agent.instructions || '')}</textarea>
                         </div>
 
                         <!-- MCP Servers tab (playbook agents): the servers whose functions the playbook binds to -->
@@ -18848,6 +18863,27 @@ Based on the analysis...
             pbStatus.textContent = problem ? this.t('playbookLibrary.' + problem) : '';
         };
         keyEl?.addEventListener('input', () => { keyEl.dataset.typed = '1'; checkKey(); });
+        // Retry a failed collection load: until it succeeds the form is read-only for
+        // its playbook (saving would overwrite a text it never saw).
+        document.getElementById('agent-pb-retry')?.addEventListener('click', async () => {
+            const id = this.editingAgent?.playbook_id;
+            await this._loadPlaybookCache();
+            if (!id || PC.cache.loadFailed()) return; // still unloaded: the message stays
+            const row = PC.cache.get(id);
+            if (ta) ta.readOnly = false;
+            if (keyEl) keyEl.disabled = false;
+            document.getElementById('agent-pb-retry')?.classList.add('hidden');
+            if (row) {
+                if (ta) ta.value = row.text;
+                if (keyEl) { keyEl.value = row.pkey; keyEl.dataset.typed = '1'; }
+                this.editingAgent.instructions = row.text;
+                document.getElementById('agent-pb-load-status')?.classList.add('hidden');
+            } else {
+                const msg = document.getElementById('agent-pb-load-msg');
+                if (msg) msg.textContent = this.t('playbookLibrary.missingRecreate', { id: String(id) });
+            }
+            checkKey();
+        });
         ta?.addEventListener('input', () => {
             if (keyEl && !keyEl.dataset.typed) { keyEl.value = PC.keyFromTitle(PC.titleOf(ta.value)); checkKey(); }
         });
@@ -19374,8 +19410,16 @@ Based on the analysis...
 
         // Playbook-only form (Playbooks Library): the collection row is all there is to save.
         if (this._playbookFormOnly) {
+            const id = this.editingAgent?.playbook_id ?? null;
+            const act = window.PlaybookCollection.saveAction(id, document.getElementById('agent-instructions-input')?.value);
+            if (act === 'unloaded') {
+                this._showPlaybookSaveError(new Error(this.t('playbookLibrary.loadFailed')));
+                return;
+            }
             try {
-                await this._savePlaybookFromForm(this.editingAgent?.playbook_id ?? null);
+                // A new or missing playbook is created; one with nothing typed is refused by the API.
+                const row = await this._savePlaybookFromForm(act === 'update' ? id : null);
+                this.editingAgent.playbook_id = Number(row.id);
             } catch (e) {
                 this._showPlaybookSaveError(e);
                 return;
@@ -19548,12 +19592,16 @@ Based on the analysis...
                 if (nodeData) {
                     // Playbook node: the form's text IS the linked collection playbook.
                     // Save it first (a palette node's first save creates the entry); a
-                    // refusal stays in the form. A fresh node with nothing typed stays unlinked.
+                    // refusal stays in the form. Nothing typed for a new or missing
+                    // playbook, or a collection that did not load: no collection write,
+                    // the run settings still apply and the node keeps its reference.
+                    // New text for a missing playbook creates a new entry and relinks.
                     const isPlaybookNode = (nodeData.data.type === 'playbook' || nodeData.data.node_type === 'playbook' || agentData.agent_type === 'playbook');
                     let pbRow = null;
-                    if (isPlaybookNode && (nodeData.data.playbook_id || agentData.instructions.trim())) {
+                    const pbAct = isPlaybookNode ? window.PlaybookCollection.saveAction(nodeData.data.playbook_id || null, agentData.instructions) : 'skip';
+                    if (pbAct === 'update' || pbAct === 'create') {
                         try {
-                            pbRow = await this._savePlaybookFromForm(nodeData.data.playbook_id || null);
+                            pbRow = await this._savePlaybookFromForm(pbAct === 'update' ? nodeData.data.playbook_id : null);
                         } catch (e) {
                             this._showPlaybookSaveError(e);
                             return;
@@ -19708,15 +19756,23 @@ Based on the analysis...
 
             // A playbook agent links to the collection: save the playbook first;
             // the agent keeps playbook_id and the run settings, no text.
+            // Same rules as a node: nothing typed for a new or missing playbook, or an
+            // unloaded collection, writes no playbook (the agent keeps its link).
             if (agentData.agent_type === 'playbook') {
-                let pbRow;
-                try {
-                    pbRow = await this._savePlaybookFromForm(this.editingAgent?.playbook_id ?? null);
-                } catch (e) {
-                    this._showPlaybookSaveError(e);
-                    return;
+                const pbId = this.editingAgent?.playbook_id ?? null;
+                const pbAct = window.PlaybookCollection.saveAction(pbId, agentData.instructions);
+                if (pbAct === 'update' || pbAct === 'create') {
+                    let pbRow;
+                    try {
+                        pbRow = await this._savePlaybookFromForm(pbAct === 'update' ? pbId : null);
+                    } catch (e) {
+                        this._showPlaybookSaveError(e);
+                        return;
+                    }
+                    agentData.playbook_id = Number(pbRow.id);
+                    // A retry after a failed agent save updates this row (or saves nothing), never creates again.
+                    if (this.editingAgent) this.editingAgent.playbook_id = Number(pbRow.id);
                 }
-                agentData.playbook_id = Number(pbRow.id);
                 agentData.instructions = '';
             }
 

@@ -24,8 +24,15 @@
     }
 
     const rows = new Map();
+    let loadFailed = false; // the last load failed: a missing id may only be unloaded, not "not found"
     const cache = {
-        async load(api) { const body = await api.list(); rows.clear(); for (const r of body.data || []) rows.set(Number(r.id), r); return [...rows.values()]; },
+        async load(api) {
+            let body;
+            try { body = await api.list(); } catch (e) { loadFailed = true; throw e; }
+            loadFailed = false;
+            rows.clear(); for (const r of body.data || []) rows.set(Number(r.id), r); return [...rows.values()];
+        },
+        loadFailed() { return loadFailed; },
         get(id) { return rows.get(Number(id)) || null; },
         put(row) { rows.set(Number(row.id), row); },
         drop(id) { rows.delete(Number(id)); },
@@ -61,7 +68,7 @@
             agent_id: c.agent_id ? Number(c.agent_id) : null, // set when dropped from a playbook agent card
             agent_provider: c.agent_provider || '', model: c.model || '',
             mcp_servers: Array.isArray(c.mcp_servers) ? c.mcp_servers : [],
-            writes_enabled: !!c.writes_enabled, disabled: !!c.disabled,
+            writes_enabled: c.writes_enabled !== false, disabled: !!c.disabled,
         };
     }
     // The node's text from the cache: '' when unlinked (a fresh palette node), null when the id is not there.
@@ -70,9 +77,11 @@
         const row = cache.get(data.playbook_id);
         return row ? String(row.text || '') : null;
     }
-    // One line for the node body: the Title, else the first non-blank line; a missing playbook says so.
+    // One line for the node body: the Title, else the first non-blank line; a missing playbook says so,
+    // and a failed collection load says that instead (loadFailed: the caller shows its own message).
     function nodeSummary(data) {
         const text = nodeText(data);
+        if (text === null && loadFailed) return { text: 'Could not load playbooks', missing: true, loadFailed: true };
         if (text === null) return { text: `Playbook #${data.playbook_id} not found`, missing: true };
         const line = (titleOf(text) || text.split('\n').map((l) => l.trim()).find((l) => l) || '').trim();
         if (!line) return { text: 'No playbook pasted yet', missing: false };
@@ -92,6 +101,15 @@
             writes_enabled: !!d.writes_enabled,
         };
     }
+    // What a form save does with the collection for a (possibly linked) id and the form's text:
+    // 'update' the cached row; 'create' a new row (unlinked, or the linked one is gone: the recovery path);
+    // 'skip' (nothing typed for a new or missing playbook); 'unloaded' (the collection did not load:
+    // the text is unknown and must not be written).
+    function saveAction(id, text) {
+        if (id && cache.get(id)) return 'update';
+        if (id && loadFailed) return 'unloaded';
+        return String(text || '').trim() ? 'create' : 'skip';
+    }
     // The form's key check: the i18n key of the problem (playbookLibrary.*), or null. Empty = server derives it.
     function keyProblem(key, ownId) {
         if (!key) return null;
@@ -101,5 +119,5 @@
     }
 
     return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
-        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem };
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction };
 });

@@ -46,4 +46,28 @@ assert.strictEqual(PC.keyProblem('okta-reset', '7'), null);
 assert.strictEqual(PC.keyProblem('fresh-key', null), null);
 assert.strictEqual(PC.keyProblem('', null), null);
 PC.cache.drop(7);
-console.log('playbook-collection.test.js: OK');
+// writes_enabled follows the form: only an explicit false turns writes off.
+assert.strictEqual(PC.nodeData({ writes_enabled: undefined }).writes_enabled, true);
+assert.strictEqual(PC.nodeData({ writes_enabled: 0 }).writes_enabled, true);
+
+// Save decisions: update a cached row, create when unlinked or the link is gone, skip when nothing typed.
+PC.cache.put({ id: 8, pkey: 'eight', title: 'Eight', text });
+assert.strictEqual(PC.saveAction(8, ''), 'update');
+assert.strictEqual(PC.saveAction(null, text), 'create');
+assert.strictEqual(PC.saveAction(null, '  '), 'skip');
+assert.strictEqual(PC.saveAction(99, text), 'create');
+assert.strictEqual(PC.saveAction(99, ''), 'skip');
+
+(async () => {
+    // A failed load is remembered: a linked id that is not cached is "unloaded", not "not found".
+    await assert.rejects(PC.cache.load({ list: async () => { throw new Error('HTTP 500'); } }));
+    assert.strictEqual(PC.cache.loadFailed(), true);
+    assert.strictEqual(PC.saveAction(99, text), 'unloaded');
+    assert.strictEqual(PC.saveAction(8, text), 'update'); // a failed load keeps the rows it had
+    assert.deepStrictEqual(PC.nodeSummary({ playbook_id: 99 }), { text: 'Could not load playbooks', missing: true, loadFailed: true });
+    await PC.cache.load({ list: async () => ({ data: [{ id: 5, pkey: 'five', title: 'Five', text }] }) });
+    assert.strictEqual(PC.cache.loadFailed(), false);
+    assert.deepStrictEqual(PC.nodeSummary({ playbook_id: 99 }), { text: 'Playbook #99 not found', missing: true });
+    assert.strictEqual(PC.cache.get(8), null);
+    console.log('playbook-collection.test.js: OK');
+})().catch((e) => { console.error(e); process.exit(1); });
