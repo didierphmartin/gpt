@@ -27,6 +27,7 @@ class PlaybooksLibrary {
         this.searchInput   = document.getElementById('playbooks-search');
         this.newBtn        = document.getElementById('playbooks-new-btn');
         this.contextMenu   = document.getElementById('playbooks-context-menu');
+        this.robotMenu     = document.getElementById('playbooks-robot-menu');
         this.statusLine    = document.getElementById('playbooks-status');
         this.tabsBar       = document.getElementById('playbooks-tabs');
 
@@ -56,6 +57,18 @@ class PlaybooksLibrary {
                 this.hideContextMenu();
             });
         }
+        // The Robot tab's ⋮ menu: Info (who published it, when, from what) and Unpublish.
+        this.robotMenu?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const btn = e.target.closest('[data-action]');
+            const action = btn?.dataset.action;
+            if (action === 'info') { this.toggleRobotInfo(); return; }
+            if (action !== 'unpublish') return;
+            const row = this.robotRows.find(r => Number(r.id) === Number(this.robotTarget));
+            if (!this.armUnpublish(btn, `robot:${this.robotTarget}`, row?.pkey)) return;
+            this.hideContextMenu();
+            await this.unpublishRobotRow(Number(this.robotTarget));
+        });
         document.addEventListener('click', () => this.hideContextMenu());
     }
 
@@ -150,27 +163,47 @@ class PlaybooksLibrary {
             this.treeContainer.innerHTML = `<div class="text-center text-gray-400 text-xs py-6">${this.esc(this.t('playbookLibrary.robotEmpty'))}</div>`;
             return;
         }
-        this.treeContainer.innerHTML = visible.map(r => {
-            const from = r.source_title ? this.t('playbookLibrary.robotFrom', { title: r.source_title }) : this.t('playbookLibrary.robotSourceGone');
-            const by = this.t('playbookLibrary.robotPublishedBy', { name: r.published_by_name || '?', date: String(r.published_at || '').slice(0, 10) });
-            return `
-            <div class="mcp-lib-item" data-robot-playbook-id="${r.id}" style="cursor:default; flex-wrap:wrap;">
+        this.treeContainer.innerHTML = visible.map(r => `
+            <div class="mcp-lib-item" data-robot-playbook-id="${r.id}" style="cursor:default;">
                 <span>🤖</span>
-                <span class="mcp-lib-name font-semibold">${this.esc(r.title || r.pkey)}</span>
-                <code class="text-gray-500">${this.esc(r.pkey)}</code>
-                <span class="mcp-lib-count">${this.esc(by)} · ${this.esc(from)}</span>
-                <button class="pb-robot-unpublish ml-auto text-red-600 hover:underline" data-robot-playbook-id="${r.id}">${this.esc(this.t('playbookLibrary.unpublish'))}</button>
-            </div>`;
-        }).join('');
-        this.treeContainer.querySelectorAll('.pb-robot-unpublish').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+                <code class="mcp-lib-name text-gray-700">${this.esc(r.pkey)}</code>
+                <button class="mcp-lib-menu" data-robot-playbook-id="${r.id}" title="More">⋮</button>
+            </div>`).join('');
+        this.treeContainer.querySelectorAll('.mcp-lib-menu').forEach(btn => {
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const robotId = parseInt(btn.dataset.robotPlaybookId, 10);
-                const row = this.robotRows.find(r => Number(r.id) === robotId);
-                if (!this.armUnpublish(btn, `robot:${robotId}`, row?.pkey)) return;
-                await this.unpublishRobotRow(robotId);
+                this.hideContextMenu();
+                this.setStatus('');
+                this.robotTarget = parseInt(btn.dataset.robotPlaybookId, 10);
+                this.toggleRobotInfo(false);
+                this.menuAt = { x: e.clientX, y: e.clientY };
+                this.robotMenu?.classList.remove('hidden');
+                this.placeMenu(this.robotMenu);
             });
         });
+    }
+
+    // Who published the robot copy, when, and from which playbook, under the menu's Info item.
+    toggleRobotInfo(open) {
+        const box = this.robotMenu?.querySelector('[data-pb-robot-info]');
+        if (!box) return;
+        const show = open ?? box.classList.contains('hidden');
+        box.classList.toggle('hidden', !show);
+        if (show) {
+            const r = this.robotRows.find(x => Number(x.id) === Number(this.robotTarget)) || {};
+            const lines = [
+                r.title || r.pkey || '',
+                this.t('playbookLibrary.robotPublishedBy', { name: r.published_by_name || '?', date: String(r.published_at || '').slice(0, 10) }),
+                r.source_title ? this.t('playbookLibrary.robotFrom', { title: r.source_title }) : this.t('playbookLibrary.robotSourceGone'),
+            ];
+            box.replaceChildren(...lines.map((text, i) => {
+                const line = document.createElement('div');
+                line.className = i === 0 ? 'px-5 py-0.5 font-semibold text-gray-700' : 'px-5 py-0.5 text-gray-600';
+                line.textContent = text;
+                return line;
+            }));
+        }
+        this.placeMenu(this.robotMenu);
     }
 
     async unpublishRobotRow(robotId) {
@@ -214,8 +247,8 @@ class PlaybooksLibrary {
     }
 
     // At the click, moved up (and left) when it would run past the window's edge.
-    placeMenu() {
-        const m = this.contextMenu;
+    placeMenu(menu = this.contextMenu) {
+        const m = menu;
         if (!m || !this.menuAt) return;
         const r = m.getBoundingClientRect();
         m.style.left = `${Math.max(4, Math.min(this.menuAt.x, window.innerWidth - r.width - 4))}px`;
@@ -240,7 +273,7 @@ class PlaybooksLibrary {
         this.placeMenu();
     }
 
-    hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); this.disarmUnpublish(); }
+    hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.robotMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); this.disarmUnpublish(); }
 
     // Arm-then-confirm Unpublish (as Delete): true when this click is the confirming one.
     armUnpublish(btn, target, key) {

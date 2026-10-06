@@ -273,7 +273,8 @@
     "robotFrom": "de « {{title}} »",
     "robotSourceGone": "source supprimée",
     "dependencies": "Dépendances",
-    "noDependencies": "Aucune dépendance"
+    "noDependencies": "Aucune dépendance",
+    "info": "Infos"
   },
   "mcpLibrary": {
     "newServer": "Nouveau serveur",

@@ -4181,6 +4181,12 @@
         <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="mcpLibrary.delete">Delete</button>
     </div>
 
+    <div id="playbooks-robot-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 160px; max-width: 280px;">
+        <button data-action="info" class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.info">Info</button>
+        <div data-pb-robot-info class="hidden pb-1"></div>
+        <button data-action="unpublish" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="playbookLibrary.unpublish">Unpublish</button>
+    </div>
+
     <div id="playbooks-context-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 140px;">
         <button data-action="edit"   class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="mcpLibrary.edit">Edit</button>
         <button data-action="dependencies" class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.dependencies">Dependencies</button>
@@ -4302,7 +4308,7 @@
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
     <script src="assets/js/code-node.js?v=20261005-no-exit"></script>
     <script src="assets/js/playbook-collection.js?v=20261006-robot-pub2"></script>
-    <script src="assets/js/playbooks-library.js?v=20261006-pb-deps2"></script>
+    <script src="assets/js/playbooks-library.js?v=20261006-pb-info"></script>
     <script src="assets/js/workflow-editor.js?v=20261006-robot-pub"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
