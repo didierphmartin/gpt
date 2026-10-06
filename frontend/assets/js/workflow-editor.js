@@ -449,7 +449,21 @@ class WorkflowEditor {
                 this.agentsPanel.classList.add('collapsed');
             }
             applyToggleState();
+
+            // Hover peek: while collapsed, the panel opens over the canvas as long as the mouse is on it (and stays
+            // open while a node is dragged out of it). Bound once per panel element — this method re-runs on every
+            // render. The toggle below still pins it; a peek never changes the saved state.
+            if (window.hoverPeek && !this.agentsPanel._hoverPeek) {
+                this.agentsPanel._hoverPeek = window.hoverPeek({
+                    panel: this.agentsPanel,
+                    zones: [this.agentsPanel],
+                    canPeek: () => this.agentsPanel.classList.contains('collapsed'),
+                });
+            }
+
             panelToggleBtn.onclick = () => {
+                // Pinning or closing replaces any hover peek.
+                if (this.agentsPanel._hoverPeek) this.agentsPanel._hoverPeek.unpeek();
                 const nowCollapsed = this.agentsPanel.classList.toggle('collapsed');
                 localStorage.setItem('workflowPanelHidden', nowCollapsed ? '1' : '0');
                 applyToggleState();

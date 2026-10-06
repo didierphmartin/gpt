@@ -59,14 +59,25 @@
 .workflow-agents-panel.collapsed {
     width: 40px;
 }
-.workflow-agents-panel.collapsed .panel-title,
-.workflow-agents-panel.collapsed .workflow-agents-list,
-.workflow-agents-panel.collapsed .workflow-actions {
+.workflow-agents-panel.collapsed:not(.peek) .panel-title,
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agents-list,
+.workflow-agents-panel.collapsed:not(.peek) .workflow-actions {
     display: none;
 }
-.workflow-agents-panel.collapsed .workflow-panel-header {
+.workflow-agents-panel.collapsed:not(.peek) .workflow-panel-header {
     justify-content: center;
     padding: 12px 0;
+}
+
+/* Hover peek (hover-peek.js): the collapsed panel opens OVER the canvas while the mouse rests on it. Full width
+   plus a negative left margin of the difference keeps its place in the flex row at the rail's 40px, so the canvas
+   does not resize or redraw. */
+.workflow-agents-panel.collapsed.peek {
+    width: 260px;
+    margin-left: -220px;
+    position: relative;
+    z-index: 30;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.15);
 }
 
 /* Panel header bar holding the collapse/expand toggle */

@@ -505,6 +505,23 @@ class ChatApp {
             });
         });
 
+        // Hover peek (desktop): while the sidebar is collapsed, resting the mouse on the rail opens the sidebar over
+        // the page, and it closes again when the mouse leaves the rail and the sidebar. The toggle and the rail
+        // icons still pin it open; a peek never changes the saved state. The overlay itself is CSS (`.peek`).
+        const sidebarRail = document.getElementById('sidebar-rail');
+        if (window.hoverPeek && this.contextsSidebar && sidebarRail) {
+            this.sidebarPeek = window.hoverPeek({
+                panel: this.contextsSidebar,
+                zones: [sidebarRail, this.contextsSidebar],
+                canPeek: () => this.sidebarCollapsed && window.innerWidth >= 768,
+                // The prompt tree's context menu sits outside the sidebar; the peek waits for it to close.
+                keepOpen: () => !!this.promptContextMenu && !this.promptContextMenu.classList.contains('hidden'),
+                // Peek at the width the user last gave the sidebar (the resizer keeps it inline).
+                onPeek: () => this.contextsSidebar.style.setProperty(
+                    '--peek-width', this.contextsSidebar.style.width || '250px'),
+            });
+        }
+
         // Context menu listeners
         document.addEventListener('click', () => {
             this.hideContextMenu();
@@ -9526,6 +9543,8 @@ class ChatApp {
      * Toggle sidebar collapsed/expanded state
      */
     toggleSidebar() {
+        // Pinning or closing replaces any hover peek.
+        if (this.sidebarPeek) this.sidebarPeek.unpeek();
         this.sidebarCollapsed = !this.sidebarCollapsed;
         const isMobile = window.innerWidth < 768;
         const resizer = document.getElementById('sidebar-resizer');

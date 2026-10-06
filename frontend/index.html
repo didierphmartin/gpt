@@ -71,7 +71,7 @@
     <link rel="stylesheet" href="assets/css/mcp-library.css?v=20260904-mcplib">
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
-    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261005-exit-tags">
+    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261006-hover-peek">
     <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect3">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
@@ -499,6 +499,18 @@
 
             #contexts-sidebar:not(.collapsed) {
                 opacity: 1;
+            }
+
+            /* Hover peek (hover-peek.js): a collapsed sidebar opens OVER the page while the mouse rests on the
+               rail or on it. The negative margin cancels its width in the flex row, so nothing to its right moves. */
+            #contexts-sidebar.collapsed.peek {
+                width: var(--peek-width, 250px) !important;
+                min-width: var(--peek-width, 250px) !important;
+                margin-right: calc(-1 * var(--peek-width, 250px));
+                opacity: 1 !important;
+                border-right: 1px solid #e5e7eb !important;
+                z-index: 45;
+                box-shadow: 6px 0 18px rgba(0, 0, 0, 0.18);
             }
         }
 
@@ -4294,12 +4306,13 @@
     <script src="assets/js/code-node.js?v=20261005-no-exit"></script>
     <script src="assets/js/playbook-collection.js?v=20261005-pb-final1"></script>
     <script src="assets/js/playbooks-library.js?v=20261005-pb-final1"></script>
-    <script src="assets/js/workflow-editor.js?v=20261005-pb-final1"></script>
+    <script src="assets/js/hover-peek.js?v=20261006-hover-peek"></script>
+    <script src="assets/js/workflow-editor.js?v=20261006-hover-peek"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261005-pb-final1"></script>
+    <script src="assets/js/chat.js?v=20261006-hover-peek"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');
