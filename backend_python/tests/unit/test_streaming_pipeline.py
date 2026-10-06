@@ -60,9 +60,9 @@ ROUTES = [('POST', '/t/stream', ('StreamCtl', 'go')), ('POST', '/t/boom', ('Stre
 
 
 @pytest.fixture(scope='module')
-def app_client(config):
-    from main import create_app
-    return TestClient(create_app(config, controllers={'StreamCtl': StreamCtl}, routes=ROUTES))
+def app_client(create_app, config, db_factory):
+    return TestClient(create_app(config, controllers={'StreamCtl': StreamCtl}, routes=ROUTES,
+                                 db_factory=db_factory))
 
 
 def _auth(config):

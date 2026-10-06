@@ -3,39 +3,19 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
 
 final class ADKPackageTest extends TestCase
 {
     /**
-     * Brief's Step 1 constructs `new ADKGenerator()` with no arguments, but the
-     * real constructor takes (PDO $db, WorkflowRepository, WorkflowGraphRepository,
-     * AgentRepository) -- there is no zero-arg form. generatePackage(44) needs a
-     * real workflow row (the "Dispatcher demo" fixture, spec §8 / plan Finding 2),
-     * so this connects to the CONTEXTS db the same way the repo's own
-     * tests/CheckExistingWorkflows.php does, rather than a zero-arg construction
-     * that cannot compile.
+     * generatePackage() of the "Dispatcher demo" workflow, built in an
+     * in-memory SQLite database by DispatcherDemoFixture and read through the
+     * real repositories -- never the database configured in backend/.env.
      */
     private function pkg(): array
     {
-        $config = require dirname(__DIR__, 2) . '/config/ai_config.php';
-        $dbConfig = $config['contexts_database'] ?? $config['database'];
-        $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['database']};charset={$dbConfig['charset']}";
-        $db = new \PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
-            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-        ]);
-
-        $workflowRepo = new \AgentTeam\Services\WorkflowRepository($db);
-        $graphRepo = new \AgentTeam\Services\WorkflowGraphRepository($db);
-        $agentRepo = new \AgentTeam\Services\AgentRepository($db);
-
-        $wf = $workflowRepo->findById(44);
-        if (!$wf) {
-            $this->markTestSkipped('Workflow 44 (the "Dispatcher demo" fixture) was not found in the DB.');
-        }
-
-        $gen = new \AgentTeam\Services\ADKGenerator($db, $workflowRepo, $graphRepo, $agentRepo);
-        return $gen->generatePackage(44);   // the dispatcher demo fixture workflow
+        $gen = DispatcherDemoFixture::generator(\AgentTeam\Services\ADKGenerator::class, DispatcherDemoFixture::pdo());
+        return $gen->generatePackage(DispatcherDemoFixture::WORKFLOW_ID);
     }
 
     public function testEmitsTheFourPackageFiles(): void

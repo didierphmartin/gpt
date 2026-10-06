@@ -3,47 +3,23 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
 
 final class NOOAPackageTest extends TestCase
 {
-    /**
-     * Brief's Step 1 constructs `new NOOAGenerator()` with no arguments, but the
-     * real constructor takes (PDO $db, WorkflowRepository, WorkflowGraphRepository,
-     * AgentRepository) -- there is no zero-arg form. generatePackage(44) needs a
-     * real workflow row (the "Dispatcher demo" fixture, spec §8 / plan Finding 2),
-     * so this connects to the CONTEXTS db the same way ADKPackageTest/MAFPackageTest
-     * (Tasks 3/4) do, rather than a zero-arg construction that cannot compile.
-     */
-    private function pdo(): \PDO
-    {
-        $config = require dirname(__DIR__, 2) . '/config/ai_config.php';
-        $dbConfig = $config['contexts_database'] ?? $config['database'];
-        $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['database']};charset={$dbConfig['charset']}";
-        return new \PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
-            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-        ]);
-    }
-
     private function generator(\PDO $db): \AgentTeam\Services\NOOAGenerator
     {
-        $workflowRepo = new \AgentTeam\Services\WorkflowRepository($db);
-        $graphRepo = new \AgentTeam\Services\WorkflowGraphRepository($db);
-        $agentRepo = new \AgentTeam\Services\AgentRepository($db);
-        return new \AgentTeam\Services\NOOAGenerator($db, $workflowRepo, $graphRepo, $agentRepo);
+        return DispatcherDemoFixture::generator(\AgentTeam\Services\NOOAGenerator::class, $db);
     }
 
+    /**
+     * The package files of the "Dispatcher demo" workflow, built in an
+     * in-memory SQLite database by DispatcherDemoFixture and read through the
+     * real repositories -- never the database configured in backend/.env.
+     */
     private function files(): array
     {
-        $db = $this->pdo();
-        $workflowRepo = new \AgentTeam\Services\WorkflowRepository($db);
-        $wf = $workflowRepo->findById(44);
-        if (!$wf) {
-            $this->markTestSkipped('Workflow 44 (the "Dispatcher demo" fixture) was not found in the DB.');
-        }
-
-        $gen = $this->generator($db);
-        return array_column($gen->generatePackage(44)['files'], 'code', 'path');
+        return DispatcherDemoFixture::packageFiles(\AgentTeam\Services\NOOAGenerator::class);
     }
 
     public function testExposesTheContract(): void
@@ -70,7 +46,7 @@ final class NOOAPackageTest extends TestCase
      * orchestration is "swarm" must make generate() throw, exactly as
      * ADKGenerator/MAFGenerator do (a RuntimeException from generate()).
      *
-     * A real swarm-orchestration row isn't part of the workflow-44 fixture
+     * A real swarm-orchestration row isn't part of the Dispatcher-demo fixture
      * this suite otherwise relies on, and standing up a full swarm graph
      * (LangGraphSwarmGeneratorTest's twoAgentSwarm() harness) is more
      * machinery than this refusal check needs -- the check in
