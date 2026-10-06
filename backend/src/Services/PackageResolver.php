@@ -22,8 +22,6 @@ use PDO;
  */
 class PackageResolver
 {
-    private const VALID_ROLES = ['guest', 'prospect', 'user', 'admin'];
-
     private PDO $db;
     private array $cache = [];
 
@@ -59,7 +57,7 @@ class PackageResolver
         $stmt->execute([':id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$row || !in_array($row['role'], self::VALID_ROLES, true)) {
+        if (!$row || !(new RoleStore($this->db))->exists((string) $row['role'])) {
             return 'guest';
         }
 
@@ -71,19 +69,17 @@ class PackageResolver
      */
     public function loadPackage(string $role): array
     {
-        if (!in_array($role, self::VALID_ROLES, true)) {
-            $role = 'guest';
-        }
-
         if (isset($this->cache[$role])) {
             return $this->cache[$role];
         }
+        $requested = $role;
 
-        $stmt = $this->db->prepare(
-            'SELECT capabilities, updated_at FROM packages WHERE role = :role LIMIT 1'
-        );
-        $stmt->execute([':role' => $role]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = $this->packageRow($role);
+        if (!$row && $role !== 'guest' && !in_array($role, RoleStore::BUILTIN, true)) {
+            // An unknown role resolves to the guest package.
+            $role = 'guest';
+            $row = $this->packageRow($role);
+        }
 
         if (!$row) {
             // Seed row is missing; fall through to an empty-but-valid shape so
@@ -110,16 +106,25 @@ class PackageResolver
             'updated_at' => $updatedAt,
         ];
 
-        $this->cache[$role] = $package;
+        $this->cache[$requested] = $package;
         return $package;
     }
 
-    /**
-     * @return array<int,string> The canonical list of roles.
-     */
-    public static function validRoles(): array
+    private function packageRow(string $role): array|false
     {
-        return self::VALID_ROLES;
+        $stmt = $this->db->prepare(
+            'SELECT capabilities, updated_at FROM packages WHERE role = :role LIMIT 1'
+        );
+        $stmt->execute([':role' => $role]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * @return array<int,string> The keys of every role (built-in and custom).
+     */
+    public function validRoles(): array
+    {
+        return array_column((new RoleStore($this->db))->list(), 'role');
     }
 
     /**

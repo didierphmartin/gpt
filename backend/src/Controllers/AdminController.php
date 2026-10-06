@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\RoleStore;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
@@ -219,9 +220,13 @@ class AdminController
             ];
         }
 
-        // Validate role
-        if (!in_array($role, ['guest', 'prospect', 'user', 'admin'])) {
-            $role = 'user';
+        // Validate role: any existing role; an unknown one is refused, not swapped for 'user'.
+        if (!is_string($role) || !(new RoleStore($this->db))->exists($role)) {
+            return [
+                'success' => false,
+                'error' => 'Invalid role',
+                'status_code' => 400
+            ];
         }
 
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
@@ -315,7 +320,7 @@ class AdminController
         }
 
         // Validate role if provided
-        if ($role !== null && !in_array($role, ['guest', 'prospect', 'user', 'admin'])) {
+        if ($role !== null && (!is_string($role) || !(new RoleStore($this->db))->exists($role))) {
             return [
                 'success' => false,
                 'error' => 'Invalid role',

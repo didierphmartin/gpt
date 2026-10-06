@@ -63,8 +63,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // ============================================
         $r->get('/api/v1/me/package', ['PackageController', 'me']);
         $r->get('/api/v1/admin/packages', ['PackageController', 'adminList']);
-        $r->get('/api/v1/admin/packages/{role:[a-z]+}', ['PackageController', 'adminGet']);
-        $r->put('/api/v1/admin/packages/{role:[a-z]+}', ['PackageController', 'adminUpdate']);
+        $r->get('/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['PackageController', 'adminGet']);
+        $r->put('/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['PackageController', 'adminUpdate']);
+        $r->get('/api/v1/admin/roles', ['RolesController', 'index']);
+        $r->post('/api/v1/admin/roles', ['RolesController', 'create']);
+        $r->put('/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['RolesController', 'rename']);
+        $r->delete('/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['RolesController', 'destroy']);
 
         // ============================================
         // AFFILIATE ROUTES
