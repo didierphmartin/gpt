@@ -4,6 +4,8 @@ const PC = require('../playbook-collection.js');
 assert.strictEqual(PC.keyFromTitle('Okta password reset'), 'okta-password-reset');
 assert.strictEqual(PC.keyFromTitle('  Time off & leave!! '), 'time-off-leave');
 assert.strictEqual(PC.keyFromTitle('###'), 'playbook');
+assert.strictEqual(PC.keyFromTitle('Réinitialisation'), 'reinitialisation');
+assert.strictEqual(PC.keyFromTitle('Ça va'), 'ca-va');
 assert.strictEqual(PC.keyFromTitle('abcd'.repeat(20)).length, 64);
 assert.ok(PC.isValidKey('okta-reset'));
 for (const bad of ['Okta', 'okta--reset', '-okta', 'okta_reset', '', 'a'.repeat(65)]) assert.ok(!PC.isValidKey(bad), bad);
@@ -37,6 +39,25 @@ assert.deepStrictEqual(PC.nodeServerNames({ playbook_id: 99 }), []);
 // The run sends the reference, never the text.
 assert.deepStrictEqual(PC.runNodeConfig({ ...nd, playbook: 'x', agent_provider: 'claude' }),
     { playbook_id: 7, agent_provider: 'claude', model: 'm', name: 'Okta', writes_enabled: true });
+
+// Ruling 12: an unlinked node (saved before the collection) keeps, shows and runs its text.
+const legacy = PC.nodeData({ name: 'Old', playbook: text, policy: { on_failure: 'stop' }, approvers: ['alice'] });
+assert.strictEqual(legacy.playbook_id, null);
+assert.strictEqual(legacy.playbook, text);
+assert.deepStrictEqual(legacy.policy, { on_failure: 'stop' });
+assert.deepStrictEqual(legacy.approvers, ['alice']);
+assert.strictEqual(PC.nodeText(legacy), text);
+assert.deepStrictEqual(PC.nodeSummary(legacy), { text: 'Okta password reset', missing: false });
+assert.deepStrictEqual(PC.nodeServerNames(legacy), ['Okta', 'ServiceNow']);
+assert.deepStrictEqual(PC.runNodeConfig(legacy),
+    { playbook_id: null, playbook: text, agent_provider: '', model: '', name: 'Old', writes_enabled: true });
+assert.strictEqual(PC.saveAction(legacy.playbook_id, PC.nodeText(legacy)), 'create');
+// A linked node drops a stale text copy; a JSON-object node playbook reads as console text.
+assert.ok(!('playbook' in nd));
+const objNode = PC.nodeData({ playbook: { title: 'Obj', trigger: { description: 'asked' }, instructions: '1. do it', tools_used: ['Okta'], actions_used: ['#Do'] } });
+assert.strictEqual(PC.nodeText(objNode), 'Title: Obj\nTrigger: asked\nInstructions:\n1. do it\nTools used: Okta\nActions used: #Do\n');
+assert.strictEqual(PC.nodeSummary(objNode).text, 'Obj');
+assert.deepStrictEqual(PC.runNodeConfig(objNode).playbook, objNode.playbook);
 
 // Key checks for the form: invalid, taken by ANOTHER cached playbook, or fine.
 assert.strictEqual(PC.keyProblem('Bad Key', null), 'keyInvalid');

@@ -326,6 +326,7 @@ class ChatApp {
                     description: { type: 'string', description: 'One line — use the Trigger.' },
                     playbook: { type: 'string', description: 'The full playbook text exactly as create.py printed it.' },
                     provider: { type: 'string', description: 'Optional LLM provider key for the node (defaults to the current one).' },
+                    pkey: { type: 'string', description: 'Optional collection key (lowercase letters, digits, single hyphens, max 64). Defaults to one derived from the playbook Title.' },
                 },
                 required: ['name', 'playbook'],
             },
@@ -3513,10 +3514,10 @@ class ChatApp {
                         // with this exact text instead of saving it again.
                         const saved = (await api.list()).data || [];
                         row = saved.find(r => r.text === playbook)
-                            || (await api.create({ text: playbook, pkey: PC.keyFromTitle(name) })).data;
+                            || (await api.create({ text: playbook, pkey: String(input.pkey || '').trim() || PC.keyFromTitle(PC.titleOf(playbook) || name) })).data;
                     } catch (e) {
                         payload = e?.kind === 'key_taken'
-                            ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct name.' }
+                            ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct pkey.' }
                             : { success: false, error: e?.message || String(e) };
                     }
                     if (row) {

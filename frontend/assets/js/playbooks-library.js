@@ -141,7 +141,7 @@ class PlaybooksLibrary {
                 await this.loadTree();
             } catch (err) {
                 // The refusal names what uses the playbook.
-                this.setStatus(`${this.t('playbookLibrary.deleteRefused')} ${err.message}`);
+                this.setStatus(err.message);
             }
         }
     }
@@ -149,7 +149,6 @@ class PlaybooksLibrary {
     async openForm(id) {
         const editor = await this.ensureWorkflowEditor();
         if (editor && typeof editor.showPlaybookForm === 'function') {
-            editor._libraryOnSave = () => this.loadTree();
             await editor.showPlaybookForm(id);
         }
     }

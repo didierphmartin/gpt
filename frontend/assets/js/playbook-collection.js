@@ -12,7 +12,8 @@
     const header = (name) => new RegExp(`^\\s*(?:\\d+[.)]|[-*•]|#{1,6})?\\s*\\**${name}\\**\\s*:\\**\\s*(.*)$`, 'im');
 
     function keyFromTitle(title) {
-        let key = String(title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        // Accents are dropped first (NFD, marks removed): "Ça va" -> "ca-va" (twin of PlaybookStore::keyFromTitle).
+        let key = String(title || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         key = key.slice(0, 64).replace(/-+$/, '');
         return key || 'playbook';
     }
@@ -59,10 +60,11 @@
         usedBy(id) { return this.call('GET', `/${id}/used-by`); }
     }
 
-    // A playbook node on the canvas links to the collection by playbook_id; its data never holds the text.
+    // A playbook node on the canvas links to the collection by playbook_id. A node saved before the
+    // collection (unlinked) keeps its own `playbook` (text, or a JSON object) until its first save links it.
     function nodeData(config) {
         const c = { name: 'Playbook', agent_provider: '', model: '', writes_enabled: true, ...(config || {}) };
-        return {
+        const d = {
             type: 'playbook', node_type: 'playbook', name: c.name || 'Playbook',
             playbook_id: c.playbook_id ? Number(c.playbook_id) : null,
             agent_id: c.agent_id ? Number(c.agent_id) : null, // set when dropped from a playbook agent card
@@ -70,10 +72,28 @@
             mcp_servers: Array.isArray(c.mcp_servers) ? c.mcp_servers : [],
             writes_enabled: c.writes_enabled !== false, disabled: !!c.disabled,
         };
+        if (!d.playbook_id && c.playbook && (typeof c.playbook === 'string' || typeof c.playbook === 'object')) d.playbook = c.playbook;
+        if (c.policy !== undefined) d.policy = c.policy;       // run settings carried by the migration
+        if (c.approvers !== undefined) d.approvers = c.approvers;
+        return d;
     }
-    // The node's text from the cache: '' when unlinked (a fresh palette node), null when the id is not there.
+    // A JSON-object node playbook as console text (twin of PlaybookMigration::render).
+    function renderDoc(o) {
+        const list = (v) => (Array.isArray(v) ? v : []).map((x) => String(x).trim()).join('; ');
+        let out = `Title: ${String(o.title || '').trim()}\nTrigger: ${(o.trigger && o.trigger.description) || ''}\n`
+            + `Instructions:\n${String(o.instructions || '').trim()}\nTools used: ${list(o.tools_used)}\nActions used: ${list(o.actions_used)}\n`;
+        const domain = String(o.domain || '').trim();
+        return domain ? `${out}Domain: ${domain}\n` : out;
+    }
+    // The node's text: from the cache when linked (null when the id is not there); an unlinked node's own
+    // text ('' for a fresh palette node).
     function nodeText(data) {
-        if (!data || !data.playbook_id) return '';
+        if (!data) return '';
+        if (!data.playbook_id) {
+            const p = data.playbook;
+            if (p && typeof p === 'object') return renderDoc(p);
+            return typeof p === 'string' ? p : '';
+        }
         const row = cache.get(data.playbook_id);
         return row ? String(row.text || '') : null;
     }
@@ -92,14 +112,17 @@
         if (data && Array.isArray(data.mcp_servers) && data.mcp_servers.length) return data.mcp_servers;
         return toolsUsedOf(nodeText(data) || '');
     }
-    // node_config for POST /workflows/playbook-node/run: the reference, the server reads the text.
+    // node_config for POST /workflows/playbook-node/run: the reference (the server reads the text), or an
+    // unlinked node's own playbook.
     function runNodeConfig(data) {
         const d = data || {};
-        return {
+        const cfg = {
             playbook_id: d.playbook_id ? Number(d.playbook_id) : null,
             agent_provider: d.agent_provider || '', model: d.model || '', name: d.name || '',
             writes_enabled: !!d.writes_enabled,
         };
+        if (!cfg.playbook_id && d.playbook) cfg.playbook = d.playbook; // unlinked: the server runs the text itself
+        return cfg;
     }
     // What a form save does with the collection for a (possibly linked) id and the form's text:
     // 'update' the cached row; 'create' a new row (unlinked, or the linked one is gone: the recovery path);

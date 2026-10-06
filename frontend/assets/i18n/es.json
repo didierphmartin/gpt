@@ -248,7 +248,6 @@
     "usedBy": "usado por {{count}}",
     "delete": "Eliminar",
     "confirmDelete": "Pulse de nuevo para eliminar",
-    "deleteRefused": "Este playbook está en uso y no se puede eliminar:",
     "key": "Clave",
     "keyHelp": "Minúsculas, dígitos y guiones simples, hasta 64 caracteres. Se fija una vez y no sigue los cambios de título.",
     "keyInvalid": "Clave no válida: use minúsculas, dígitos y guiones simples (máx. 64).",
@@ -257,7 +256,8 @@
     "loadFailed": "No se pudieron cargar los playbooks",
     "loadFailedReadOnly": "El texto es de solo lectura hasta que se carguen los playbooks.",
     "retry": "Reintentar",
-    "missingRecreate": "Playbook #{{id}} no encontrado. Escriba o pegue un playbook y guarde para crear uno nuevo."
+    "missingRecreate": "Playbook #{{id}} no encontrado. Escriba o pegue un playbook y guarde para crear uno nuevo.",
+    "sharedHint": "Usado por {{count}}: editarlo lo cambia en todas partes."
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",

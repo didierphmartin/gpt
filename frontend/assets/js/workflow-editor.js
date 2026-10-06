@@ -8557,6 +8557,8 @@ class WorkflowEditor {
                     this.addPlaybookNode(x, y, {
                         name: agentName || pa.name || 'Playbook',
                         playbook_id: pa.playbook_id || null,
+                        // An agent not yet linked to the collection: the node carries its text (linked on first save).
+                        ...(pa.playbook_id ? {} : { playbook: pa.instructions || '' }),
                         agent_provider: agentProvider || pa.provider || '',
                         model: pa.model || '',
                         agent_id: agentId ? parseInt(agentId, 10) : null,
@@ -17139,7 +17141,8 @@ class WorkflowEditor {
                         agent_type: 'playbook',
                         provider: data.agent_provider ?? '',
                         model: data.model ?? '',
-                        instructions: '',
+                        // An unlinked node (saved before the collection) shows its own text; the first save links it.
+                        instructions: data.playbook_id ? '' : window.PlaybookCollection.nodeText({ playbook: data.playbook }),
                         tools: Array.isArray(data.tools) ? data.tools : [],
                         settings: { ...(data.settings || {}), writes_enabled: data.writes_enabled !== false },
                         merge_strategy: 'labeled', output_schema_id: null, output_schema: null,
@@ -17503,6 +17506,7 @@ class WorkflowEditor {
                                     <button type="button" id="agent-pb-retry" class="ml-2 underline ${pbUnloaded ? '' : 'hidden'}">${tpb('retry')}</button>
                                 </p>
                                 <p id="agent-pb-status" class="text-xs mt-1" style="color:#ef4444;"></p>
+                                ${pbRow && Number(pbRow.used_by) > 0 ? `<p id="agent-pb-shared" class="text-xs mt-1" style="color:#b45309;">${this.escapeHtml(this.t('playbookLibrary.sharedHint', { count: String(pbRow.used_by) }))}</p>` : ''}
                                 <p class="text-xs text-gray-500 mt-1">${tpb('notesHint')}</p>
                             </div>
                             <div id="agent-pb-pretty" class="hidden border border-gray-200 rounded-lg bg-white p-4 text-sm" style="min-height: 500px; max-height: 60vh; overflow-y: auto;"></div>
@@ -19364,7 +19368,7 @@ Based on the analysis...
         const row = id ? PC.cache.get(id) : null;
         this.editingNodeId = null;
         this.pendingTemplateNodeId = null;
-        // A missing id stays the target: its Save reports "Playbook #<id> not found" instead of creating a copy.
+        // A missing id stays shown (missingRecreate); new text saved for it creates a new entry (saveAction 'create').
         this.editingAgent = {
             id: null, playbook_id: id ? Number(id) : null, name: row?.title || '', description: '',
             agent_type: 'playbook', provider: '', model: '', instructions: row?.text || '',
@@ -19391,7 +19395,18 @@ Based on the analysis...
         const body = id ? await api.update(id, { text, pkey }) : await api.create({ text, pkey });
         PC.cache.put(body.data);
         window.playbooksLibrary?.loadTree?.();
+        this._refreshPlaybookCards(body.data.id);
         return body.data;
+    }
+
+    /** Redraw every canvas card linked to playbook #id (a saved playbook is shared by all of them). */
+    _refreshPlaybookCards(id) {
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        for (const [nid, n] of Object.entries(nodes)) {
+            if (n.data?.type !== 'playbook' && n.data?.node_type !== 'playbook') continue;
+            if (Number(n.data.playbook_id) !== Number(id)) continue;
+            try { this._refreshPlaybookSummary(nid, n.data); this._refreshPlaybookBadges(nid, n.data); } catch (_) { /* cosmetic */ }
+        }
     }
 
     /** A refused playbook save (invalid_text / invalid_key / key_taken / not found): say why in the form. */
@@ -19424,7 +19439,7 @@ Based on the analysis...
                 this._showPlaybookSaveError(e);
                 return;
             }
-            this._libraryOnSave = null; // _savePlaybookFromForm already reloaded the library
+            this._libraryOnSave = null; // no stale Agents Library callback may fire on a later save
             this.closeAgentEditModal();
             return;
         }
@@ -19970,7 +19985,7 @@ Based on the analysis...
                     ...(agentData.playbook_id ? { playbook_id: agentData.playbook_id } : {}),
                     writes_enabled: agentData.settings?.writes_enabled !== false,
                 };
-                delete node.data.playbook;
+                if (node.data.playbook_id) delete node.data.playbook; // an unlinked node keeps its text
                 const titleEl = document.getElementById(`node-${nodeId}`)?.querySelector('.node-title');
                 if (titleEl) titleEl.textContent = node.data.name;
                 this._refreshPlaybookSummary(nodeId, node.data);
