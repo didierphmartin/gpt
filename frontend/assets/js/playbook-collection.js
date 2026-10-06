@@ -52,5 +52,54 @@
         usedBy(id) { return this.call('GET', `/${id}/used-by`); }
     }
 
-    return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi };
+    // A playbook node on the canvas links to the collection by playbook_id; its data never holds the text.
+    function nodeData(config) {
+        const c = { name: 'Playbook', agent_provider: '', model: '', writes_enabled: true, ...(config || {}) };
+        return {
+            type: 'playbook', node_type: 'playbook', name: c.name || 'Playbook',
+            playbook_id: c.playbook_id ? Number(c.playbook_id) : null,
+            agent_id: c.agent_id ? Number(c.agent_id) : null, // set when dropped from a playbook agent card
+            agent_provider: c.agent_provider || '', model: c.model || '',
+            mcp_servers: Array.isArray(c.mcp_servers) ? c.mcp_servers : [],
+            writes_enabled: !!c.writes_enabled, disabled: !!c.disabled,
+        };
+    }
+    // The node's text from the cache: '' when unlinked (a fresh palette node), null when the id is not there.
+    function nodeText(data) {
+        if (!data || !data.playbook_id) return '';
+        const row = cache.get(data.playbook_id);
+        return row ? String(row.text || '') : null;
+    }
+    // One line for the node body: the Title, else the first non-blank line; a missing playbook says so.
+    function nodeSummary(data) {
+        const text = nodeText(data);
+        if (text === null) return { text: `Playbook #${data.playbook_id} not found`, missing: true };
+        const line = (titleOf(text) || text.split('\n').map((l) => l.trim()).find((l) => l) || '').trim();
+        if (!line) return { text: 'No playbook pasted yet', missing: false };
+        return { text: line.length > 60 ? line.slice(0, 60) + '…' : line, missing: false };
+    }
+    // Server badges: the servers saved by the last Validate, else the text's "Tools used:" line.
+    function nodeServerNames(data) {
+        if (data && Array.isArray(data.mcp_servers) && data.mcp_servers.length) return data.mcp_servers;
+        return toolsUsedOf(nodeText(data) || '');
+    }
+    // node_config for POST /workflows/playbook-node/run: the reference, the server reads the text.
+    function runNodeConfig(data) {
+        const d = data || {};
+        return {
+            playbook_id: d.playbook_id ? Number(d.playbook_id) : null,
+            agent_provider: d.agent_provider || '', model: d.model || '', name: d.name || '',
+            writes_enabled: !!d.writes_enabled,
+        };
+    }
+    // The form's key check: the i18n key of the problem (playbookLibrary.*), or null. Empty = server derives it.
+    function keyProblem(key, ownId) {
+        if (!key) return null;
+        if (!isValidKey(key)) return 'keyInvalid';
+        const other = cache.all().find((r) => r.pkey === key && Number(r.id) !== Number(ownId));
+        return other ? 'keyTaken' : null;
+    }
+
+    return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem };
 });
