@@ -247,13 +247,18 @@ class WebAuthnController
 
         // Look up credential
         $stmt = $this->db->prepare("
-            SELECT wc.*, u.id as uid, u.email, u.first_name, u.last_name, u.role, u.plan, u.ledger_user_id, u.provider, u.last_login, u.created_at
+            SELECT wc.*, u.id as uid, u.email, u.first_name, u.last_name, u.kind, u.role, u.plan, u.ledger_user_id, u.provider, u.last_login, u.created_at
             FROM webauthn_credentials wc
             JOIN users u ON wc.user_id = u.id
             WHERE wc.credential_id = ?
         ");
         $stmt->execute([$credentialId]);
         $credential = $stmt->fetch();
+
+        // The robot is a service row: answer as for an unknown credential.
+        if ($credential && ($credential['kind'] ?? 'person') === 'service') {
+            $credential = false;
+        }
 
         if (!$credential) {
             return [

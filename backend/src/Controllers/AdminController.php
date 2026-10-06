@@ -56,7 +56,7 @@ class AdminController
             return $err;
         }
 
-        $sql = "SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users ORDER BY id";
+        $sql = "SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id";
         $stmt = $this->db->query($sql);
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -84,7 +84,7 @@ class AdminController
             ];
         }
 
-        $sql = "SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE id = :id";
+        $sql = "SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE id = :id AND kind <> 'service'";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':id' => $userId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -124,7 +124,7 @@ class AdminController
         try {
             $sql = "SELECT id, email, phone, first_name, last_name, role, plan,
                            provider, email_verified, firebase_uid, last_login, created_at
-                    FROM users WHERE id = :id";
+                    FROM users WHERE id = :id AND kind <> 'service'";
             $stmt = $this->db->prepare($sql);
             $stmt->execute([':id' => $userId]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -328,6 +328,10 @@ class AdminController
             ];
         }
 
+        if ($this->isServiceUser($userId)) {
+            return $this->userNotFound();
+        }
+
         if ($role !== null && $role !== 'admin' && $this->isLastAdmin($userId)) {
             return $this->lastAdminRefusal();
         }
@@ -400,6 +404,10 @@ class AdminController
             ];
         }
 
+        if ($this->isServiceUser($userId)) {
+            return $this->userNotFound();
+        }
+
         if ($this->isLastAdmin($userId)) {
             return $this->lastAdminRefusal();
         }
@@ -450,6 +458,19 @@ class AdminController
             return false;
         }
         return (int) $this->db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() === 1;
+    }
+
+    /** The robot's service row is not a managed account: it answers as an unknown user. */
+    private function isServiceUser(int $userId): bool
+    {
+        $stmt = $this->db->prepare('SELECT kind FROM users WHERE id = :id');
+        $stmt->execute([':id' => $userId]);
+        return $stmt->fetchColumn() === 'service';
+    }
+
+    private function userNotFound(): array
+    {
+        return ['success' => false, 'error' => 'User not found', 'status_code' => 404];
     }
 
     private function lastAdminRefusal(): array

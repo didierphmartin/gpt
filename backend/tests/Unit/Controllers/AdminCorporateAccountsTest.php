@@ -23,7 +23,7 @@ class AdminCorporateAccountsTest extends TestCase
         $this->gpt->sqliteCreateFunction('NOW', $now, 0);
         $this->gpt->exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE,
             password TEXT, first_name TEXT, last_name TEXT, role TEXT, plan TEXT, provider TEXT,
-            email_verified INTEGER DEFAULT 0, app_key_prefix TEXT, app_key_created_at TEXT,
+            kind TEXT NOT NULL DEFAULT "person", email_verified INTEGER DEFAULT 0, app_key_prefix TEXT, app_key_created_at TEXT,
             created_at TEXT, updated_at TEXT)');
         $this->gpt->exec("INSERT INTO users (id, email, role) VALUES (1, 'boss@corp.test', 'admin')");
 
@@ -124,7 +124,7 @@ class AdminCorporateAccountsTest extends TestCase
         // gpt write fails at execute() time, after the login row already exists.
         $broken->exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE,
             password TEXT, first_name TEXT, last_name TEXT, role TEXT, plan TEXT, provider TEXT,
-            email_verified INTEGER DEFAULT 0, app_key_prefix TEXT, app_key_created_at TEXT,
+            kind TEXT NOT NULL DEFAULT "person", email_verified INTEGER DEFAULT 0, app_key_prefix TEXT, app_key_created_at TEXT,
             created_at TEXT, updated_at TEXT)');
         $broken->exec("INSERT INTO users (id, email, role) VALUES (1, 'boss@corp.test', 'admin')");
         $broken->exec("CREATE TRIGGER forced_insert_failure BEFORE INSERT ON users
