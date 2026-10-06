@@ -26,6 +26,10 @@ export interface DbConfig {
 export const config = {
   port: intEnv('PORT', 3001),
 
+  // Which edition this backend runs as (PHP config['edition'] from GPT_EDITION):
+  // 'individual', 'corporate', or '' (hosted). The container entrypoint sets it.
+  edition: process.env.GPT_EDITION ?? '',
+
   // Main app DB (PHP env DB_*).
   database: {
     host: required('DB_HOST'),

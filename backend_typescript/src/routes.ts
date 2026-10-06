@@ -39,6 +39,9 @@ import { DriveController } from './Controllers/DriveController';
 import { FileStorageController } from './Controllers/FileStorageController';
 import { GenesisController } from './Controllers/GenesisController';
 import { AgentMCPController } from './Controllers/AgentMCPController';
+import { RolesController } from './Controllers/RolesController';
+import { RobotController } from './Controllers/RobotController';
+import { roleKeyPath, withRoleParam } from './Support/RoleKeyRoute';
 
 export const router = Router();
 
@@ -59,6 +62,8 @@ const userMemories = new UserMemoryController();
 const teams = new TeamController();
 const agents = new AgentController();
 const playbooks = new PlaybooksController();
+const roles = new RolesController();
+const robot = new RobotController();
 const workflows = new WorkflowController();
 const schedules = new ScheduledWorkflowController();
 const workflowSchemas = new WorkflowSchemaController();
@@ -297,10 +302,16 @@ router.post('/api/v1/admin/mcp/servers/refresh', handle((ctx) => admin.refreshMC
 router.delete('/api/v1/admin/mcp/servers/:id(\\d+)', handle((ctx) => admin.deleteMCPServer(ctx)));
 
 // Admin — capability packages (protected; PackageController gates on role=admin, unlike AdminController).
-// :role is letters-only ([a-z]+) so the list route isn't shadowed.
+// :role is a role key ([a-z0-9]+(?:-[a-z0-9]+)*, case-sensitive as in PHP), a RegExp route (see RoleKeyRoute).
 router.get('/api/v1/admin/packages', handle((ctx) => pkg.adminList(ctx)));
-router.get('/api/v1/admin/packages/:role([a-z]+)', handle((ctx) => pkg.adminGet(ctx)));
-router.put('/api/v1/admin/packages/:role([a-z]+)', handle((ctx) => pkg.adminUpdate(ctx)));
+router.get(roleKeyPath('/api/v1/admin/packages'), handle((ctx) => pkg.adminGet(withRoleParam(ctx))));
+router.put(roleKeyPath('/api/v1/admin/packages'), handle((ctx) => pkg.adminUpdate(withRoleParam(ctx))));
+
+// Admin — roles (protected; RolesController checks the caller's admin role in the database).
+router.get('/api/v1/admin/roles', handle((ctx) => roles.index(ctx)));
+router.post('/api/v1/admin/roles', handle((ctx) => roles.create(ctx)));
+router.put(roleKeyPath('/api/v1/admin/roles'), handle((ctx) => roles.rename(withRoleParam(ctx))));
+router.delete(roleKeyPath('/api/v1/admin/roles'), handle((ctx) => roles.destroy(withRoleParam(ctx))));
 
 // Admin — app keys (protected; AppKeyController gates on role=admin, except whoami which requires
 // app-key auth). Scoped, revocable `ak_` credentials. Literal sub-paths (/whoami, /workflows,
@@ -367,6 +378,12 @@ router.get('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.show(ctx)));
 router.put('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.update(ctx)));
 router.delete('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.destroy(ctx)));
 router.get('/api/v1/playbooks/:id(\\d+)/used-by', handle((ctx) => playbooks.usedBy(ctx)));
+router.post('/api/v1/playbooks/:id(\\d+)/publish', handle((ctx) => playbooks.publish(ctx)));
+
+// The robot (protected): status, its published playbooks, unpublish.
+router.get('/api/v1/robot', handle((ctx) => robot.show(ctx)));
+router.get('/api/v1/robot/playbooks', handle((ctx) => robot.playbooks(ctx)));
+router.delete('/api/v1/robot/playbooks/:id(\\d+)', handle((ctx) => robot.unpublish(ctx)));
 
 // Agents (protected) — the AgentTeam module's agent management. Literal sub-paths
 // (tools/reorder/categories/categories/rename) are registered BEFORE the :id param routes

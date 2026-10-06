@@ -1,7 +1,8 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
-import { PackageResolver } from '../Services/PackageResolver';
+import { PackageResolver, ResolvedPackage } from '../Services/PackageResolver';
+import { Role, RoleStore } from '../Services/RoleStore';
 
 /**
  * Mirrors src/Controllers/PackageController.php — `me` + the admin CRUD (adminList/adminGet/adminUpdate).
@@ -19,14 +20,14 @@ export class PackageController {
     return { success: true, role: pkg.role, capabilities: pkg.capabilities, updated_at: pkg.updated_at };
   }
 
-  /** GET /api/v1/admin/packages — all packages (admin only). */
+  /** GET /api/v1/admin/packages — every package (admin only), each with its role's name and builtin flag. */
   async adminList(ctx: Ctx): Promise<ControllerResult> {
     const err = await this.requireAdmin(ctx);
     if (err) return err;
     const resolver = new PackageResolver();
     const packages = [];
-    for (const role of PackageResolver.validRoles()) {
-      packages.push(await resolver.loadPackage(role));
+    for (const row of await new RoleStore().list()) {
+      packages.push(this.withRoleInfo(await resolver.loadPackage(row.role), row));
     }
     return { success: true, packages };
   }
@@ -36,10 +37,11 @@ export class PackageController {
     const err = await this.requireAdmin(ctx);
     if (err) return err;
     const role = String(ctx.params.role ?? '');
-    if (!PackageResolver.validRoles().includes(role)) {
+    const row = await new RoleStore().get(role);
+    if (row === null) {
       return { success: false, error: 'Invalid role', status_code: 400 };
     }
-    return { success: true, package: await new PackageResolver().loadPackage(role) };
+    return { success: true, package: this.withRoleInfo(await new PackageResolver().loadPackage(role), row) };
   }
 
   /** PUT /api/v1/admin/packages/:role — replace a package's capabilities (admin only). */
@@ -47,7 +49,7 @@ export class PackageController {
     const err = await this.requireAdmin(ctx);
     if (err) return err;
     const role = String(ctx.params.role ?? '');
-    if (!PackageResolver.validRoles().includes(role)) {
+    if (!(await new RoleStore().exists(role))) {
       return { success: false, error: 'Invalid role', status_code: 400 };
     }
 
@@ -74,7 +76,16 @@ export class PackageController {
       ON DUPLICATE KEY UPDATE capabilities = VALUES(capabilities), updated_by = VALUES(updated_by)`.execute(db);
 
     // Fresh resolver → reads the just-written row (not a stale cache entry).
-    return { success: true, package: await new PackageResolver().loadPackage(role) };
+    return {
+      success: true,
+      package: this.withRoleInfo(await new PackageResolver().loadPackage(role), (await new RoleStore().get(role)) ?? {}),
+    };
+  }
+
+  /** The package plus its role's display name and builtin flag (gpt_admin renders role tabs from them). */
+  private withRoleInfo(pkg: ResolvedPackage, row: Partial<Role>): ResolvedPackage & { name: string; builtin: boolean } {
+    const role = String(pkg.role);
+    return { ...pkg, name: row.name ?? (role === '' ? role : role[0].toUpperCase() + role.slice(1)), builtin: Boolean(row.builtin ?? false) };
   }
 
   /** Mirrors PackageController.php validateCapabilities: returns an error string or null. */

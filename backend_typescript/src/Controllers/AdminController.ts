@@ -5,6 +5,7 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { PackageResolver } from '../Services/PackageResolver';
+import { RoleStore } from '../Services/RoleStore';
 
 /**
  * Mirrors src/Controllers/AdminController.php — the admin dashboard's user management over the
@@ -209,12 +210,10 @@ function nameOrUnknown(first: any, last: any): string {
 }
 
 export class AdminController {
-  private static readonly VALID_ROLES = ['guest', 'prospect', 'user', 'admin'];
-
   /** GET /api/v1/admin/users — list all users. Mirrors listUsers(). */
   async listUsers(_ctx: Ctx): Promise<ControllerResult> {
     const users = (
-      await sql<any>`SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users ORDER BY id`.execute(
+      await sql<any>`SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id`.execute(
         db
       )
     ).rows;
@@ -235,7 +234,7 @@ export class AdminController {
     }
 
     const user = (
-      await sql<any>`SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE id = ${userId}`.execute(
+      await sql<any>`SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE id = ${userId} AND kind <> 'service'`.execute(
         db
       )
     ).rows[0];
@@ -259,7 +258,7 @@ export class AdminController {
       const user = (
         await sql<any>`SELECT id, email, phone, first_name, last_name, role, plan,
                            provider, email_verified, firebase_uid, last_login, created_at
-                    FROM users WHERE id = ${userId}`.execute(db)
+                    FROM users WHERE id = ${userId} AND kind <> 'service'`.execute(db)
       ).rows[0];
 
       if (!user) {
@@ -327,15 +326,15 @@ export class AdminController {
     const lastName = phpTrim(input.last_name ?? '');
     const email = phpTrim(input.email ?? '');
     const password = input.password ?? '';
-    let role = input.role ?? 'user';
+    const role = input.role ?? 'user';
 
     if (phpEmpty(email) || phpEmpty(password)) {
       return { success: false, error: 'Email and password are required', status_code: 400 };
     }
 
-    // Validate role
-    if (!AdminController.VALID_ROLES.includes(role)) {
-      role = 'user';
+    // Validate role: any existing role; an unknown one is refused, not swapped for 'user'.
+    if (typeof role !== 'string' || !(await new RoleStore().exists(role))) {
+      return { success: false, error: 'Invalid role', status_code: 400 };
     }
 
     // Hash password
@@ -376,8 +375,12 @@ export class AdminController {
     }
 
     // Validate role if provided
-    if (role !== null && !AdminController.VALID_ROLES.includes(role)) {
+    if (role !== null && (typeof role !== 'string' || !(await new RoleStore().exists(role)))) {
       return { success: false, error: 'Invalid role', status_code: 400 };
+    }
+
+    if (await this.isServiceUser(userId)) {
+      return this.userNotFound();
     }
 
     // Build update query — column set mirrors PHP's $fields/$params assembly order.
@@ -409,6 +412,10 @@ export class AdminController {
       return { success: false, error: 'Invalid user ID', status_code: 400 };
     }
 
+    if (await this.isServiceUser(userId)) {
+      return this.userNotFound();
+    }
+
     const res = await sql`DELETE FROM users WHERE id = ${userId}`.execute(db);
 
     if (Number(res.numAffectedRows ?? 0) === 0) {
@@ -416,6 +423,16 @@ export class AdminController {
     }
 
     return { success: true, message: 'User deleted', status_code: 200 };
+  }
+
+  /** The robot's service row is not a managed account: it answers as an unknown user. */
+  private async isServiceUser(userId: number): Promise<boolean> {
+    const row = (await sql<{ kind: string }>`SELECT kind FROM users WHERE id = ${userId}`.execute(db)).rows[0];
+    return row?.kind === 'service';
+  }
+
+  private userNotFound(): ControllerResult {
+    return { success: false, error: 'User not found', status_code: 404 };
   }
 
   // ============================================

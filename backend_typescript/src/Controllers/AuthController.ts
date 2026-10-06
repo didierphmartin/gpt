@@ -4,6 +4,12 @@ import crypto from 'crypto';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { isServiceUser } from '../Services/RobotAccount';
+
+/** A paid plan presented on re-sign-in promotes only a guest/prospect to 'user': custom roles are kept. */
+export function promotesOnPlanUpgrade(role: string | null | undefined): boolean {
+  return role === 'guest' || role === 'prospect';
+}
 
 /** Mirrors src/Controllers/AuthController.php (JWT, app-key, and Firebase helpers folded in). */
 export class AuthController {
@@ -107,7 +113,9 @@ export class AuthController {
     if (!email || !password) return { status_code: 400, success: false, message: 'Email and password are required' };
 
     const lookup = String(email).trim().toLowerCase();
-    const user = await db.selectFrom('users').selectAll().where('email', '=', lookup).executeTakeFirst();
+    let user = await db.selectFrom('users').selectAll().where('email', '=', lookup).executeTakeFirst();
+    // The robot is a service row, never a person: answer as for an unknown account.
+    if (user && isServiceUser(user)) user = undefined;
     if (!user || !user.password) return { status_code: 401, success: false, message: 'Invalid email or password' };
 
     const ok = await bcrypt.compare(String(password), user.password.replace(/^\$2y\$/, '$2b$'));
@@ -220,6 +228,10 @@ export class AuthController {
     return { success: true, message: `Plan upgraded to ${plan}`, plan, role };
   }
 
+  private async isServiceUserId(userId: number): Promise<boolean> {
+    return isServiceUser(await db.selectFrom('users').select('kind').where('id', '=', userId).executeTakeFirst());
+  }
+
   private requireJwt(ctx: Ctx): ControllerResult | null {
     if (!ctx.user_id || ctx.auth_type !== 'jwt') return { status_code: 401, success: false, message: 'Authentication required' };
     return null;
@@ -228,6 +240,7 @@ export class AuthController {
   async generateAppKey(ctx: Ctx): Promise<ControllerResult> {
     const guard = this.requireJwt(ctx);
     if (guard) return guard;
+    if (await this.isServiceUserId(ctx.user_id!)) return { status_code: 404, success: false, message: 'User not found' };
     const { key, prefix, hash } = this.generateAppKeyMaterial();
     const now = this.nowString();
     await db.updateTable('users').set({ app_key_hash: hash, app_key_prefix: prefix, app_key_created_at: now }).where('id', '=', ctx.user_id!).execute();
@@ -258,8 +271,8 @@ export class AuthController {
     if (guard) return guard;
     const targetUserId = parseInt(String(ctx.body.user_id ?? 0), 10) || 0;
     if (targetUserId <= 0) return { status_code: 400, success: false, message: 'user_id is required' };
-    const target = await db.selectFrom('users').select('id').where('id', '=', targetUserId).executeTakeFirst();
-    if (!target) return { status_code: 404, success: false, message: 'User not found' };
+    const target = await db.selectFrom('users').select(['id', 'kind']).where('id', '=', targetUserId).executeTakeFirst();
+    if (!target || isServiceUser(target)) return { status_code: 404, success: false, message: 'User not found' };
     const { key, prefix, hash } = this.generateAppKeyMaterial();
     const now = this.nowString();
     await db.updateTable('users').set({ app_key_hash: hash, app_key_prefix: prefix, app_key_created_at: now }).where('id', '=', targetUserId).execute();
@@ -315,6 +328,9 @@ export class AuthController {
         return eb.or(ors);
       })
       .executeTakeFirst();
+    if (existing && isServiceUser(existing)) {
+      return { status_code: 401, success: false, message: 'Invalid or expired authentication token' };
+    }
 
     let userId: number;
     let respUser: any;
@@ -326,10 +342,17 @@ export class AuthController {
       userId = existing.id;
       let rPlan = existing.plan ?? 'free';
       let rRole = existing.role ?? 'prospect';
+      // Apply a paid plan presented on re-auth, but only as an UPGRADE: a normal login presents 'free' (must not
+      // downgrade) and admins are never touched. The plan is recorded for everyone else, but only a guest/prospect
+      // is promoted to 'user': custom roles are kept.
       if (plan !== 'free' && (existing.role ?? '') !== 'admin' && this.planRank(plan) > this.planRank(existing.plan ?? 'free')) {
-        await db.updateTable('users').set({ plan, role: role as any }).where('id', '=', existing.id).execute();
+        if (promotesOnPlanUpgrade(existing.role)) {
+          await db.updateTable('users').set({ plan, role }).where('id', '=', existing.id).execute();
+          rRole = role;
+        } else {
+          await db.updateTable('users').set({ plan }).where('id', '=', existing.id).execute();
+        }
         rPlan = plan;
-        rRole = role as any;
       }
       respUser = { ...existing, plan: rPlan, role: rRole };
     } else {

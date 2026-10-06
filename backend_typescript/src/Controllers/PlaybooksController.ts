@@ -1,12 +1,43 @@
+import { config } from '../config/env';
 import { PlaybookStore, PlaybookStoreError } from '../Playbook/PlaybookStore';
+import { EditionConfig } from '../Services/Edition';
+import { RobotAccount } from '../Services/RobotAccount';
+import { RobotPolicy } from '../Services/RobotPolicy';
 import { Ctx, ControllerResult } from '../Support/Http';
 
-/** /api/v1/playbooks — the playbook collection (CRUD + used-by), over PlaybookStore. Mirrors PlaybooksController.php. */
+/** /api/v1/playbooks — the playbook collection (CRUD + used-by + publish to the robot), over PlaybookStore. Mirrors PlaybooksController.php. */
 export class PlaybooksController {
   private store = new PlaybookStore();
 
+  constructor(private readonly cfg: EditionConfig = config) {}
+
+  /** A fresh policy per request (its PackageResolver caches per instance; this controller is a singleton). */
+  private policy(): RobotPolicy {
+    return new RobotPolicy(this.cfg);
+  }
+
+  /** The user's playbooks; each row carries `published` (null | 'published' | 'changed') when the user can use the robot. */
   async index(ctx: Ctx): Promise<ControllerResult> {
-    return this.guard(ctx, async (u) => ({ success: true, data: await this.store.list(u) }));
+    return this.guard(ctx, async (u) => {
+      const rows = await this.store.list(u);
+      if (await this.policy().canUse(u)) {
+        const robotId = await RobotAccount.id();
+        const status = robotId === null ? {} : await this.store.publishStatus(u, robotId);
+        for (const r of rows) r.published = (status as Record<number, string>)[r.id] ?? null;
+      }
+      return { success: true, data: rows };
+    });
+  }
+
+  /** POST /api/v1/playbooks/:id/publish {confirm_replace?} — a frozen copy for the robot. */
+  async publish(ctx: Ctx): Promise<ControllerResult> {
+    return this.guard(ctx, async (u) => {
+      if (!(await this.policy().canUse(u))) {
+        throw new PlaybookStoreError('forbidden', "Your role can't publish to the robot", 403);
+      }
+      const row = await this.store.publish(u, this.id(ctx), await RobotAccount.ensure(), (ctx.body as any)?.confirm_replace === true);
+      return { success: true, data: row };
+    });
   }
 
   async show(ctx: Ctx): Promise<ControllerResult> {
@@ -65,7 +96,9 @@ export class PlaybooksController {
     try {
       return await action(userId);
     } catch (e) {
-      if (e instanceof PlaybookStoreError) return { success: false, error: e.message, kind: e.kind, status_code: e.status };
+      if (e instanceof PlaybookStoreError) {
+        return { success: false, error: e.message, kind: e.kind, status_code: e.status, ...(Object.keys(e.data).length ? { data: e.data } : {}) };
+      }
       throw e;
     }
   }
