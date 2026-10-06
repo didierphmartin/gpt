@@ -122,20 +122,51 @@ final class PlaybookStore
         if ($src === null) {
             throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
         }
-        $existing = $this->getByKey($robotId, $src['pkey']);
-        if ($existing !== null) {
+        $own = $this->db->prepare('SELECT id FROM playbooks WHERE user_id = ? AND source_id = ? ORDER BY id LIMIT 1');
+        $own->execute([$robotId, $id]);
+        $ownId = $own->fetchColumn();
+        $ownId = $ownId === false ? null : (int) $ownId;
+        $holder = $this->getByKey($robotId, $src['pkey']);
+        if ($holder !== null && $holder['id'] === $ownId) {
+            $holder = null; // the key is already ours
+        }
+        $targetId = $ownId;
+        if ($holder !== null) {
             $held = $this->db->prepare('SELECT source_id, published_by, published_at FROM playbooks WHERE id = ?');
-            $held->execute([$existing['id']]);
+            $held->execute([$holder['id']]);
             $meta = $held->fetch(PDO::FETCH_ASSOC);
-            if (($meta['source_id'] === null || (int) $meta['source_id'] !== $id) && !$confirmReplace) {
+            $sameSource = $ownId === null && $meta['source_id'] !== null && (int) $meta['source_id'] === $id;
+            if ($sameSource) {
+                $targetId = $holder['id'];
+            } elseif (!$confirmReplace) {
                 throw new PlaybookStoreError('replaces',
                     "The robot already has \"{$src['pkey']}\", published by " . $this->personName($meta['published_by']) . '.',
                     409, ['published_by' => $this->personName($meta['published_by']), 'published_at' => $meta['published_at']]);
+            } elseif ($ownId === null) {
+                $targetId = $holder['id'];
             }
         }
-        $row = $this->save($robotId, $existing['id'] ?? null, $src['text'], $src['pkey']);
-        $this->db->prepare('UPDATE playbooks SET published_by = ?, published_at = CURRENT_TIMESTAMP, source_id = ? WHERE id = ? AND user_id = ?')
-            ->execute([$userId, $id, $row['id'], $robotId]);
+        $outer = !$this->db->inTransaction();
+        if ($outer) {
+            $this->db->beginTransaction();
+        }
+        try {
+            if ($holder !== null && $targetId === $ownId && $ownId !== null) {
+                // our copy moves onto a key another copy holds: that copy goes
+                $this->db->prepare('DELETE FROM playbooks WHERE id = ? AND user_id = ?')->execute([$holder['id'], $robotId]);
+            }
+            $row = $this->save($robotId, $targetId, $src['text'], $src['pkey']);
+            $this->db->prepare('UPDATE playbooks SET published_by = ?, published_at = CURRENT_TIMESTAMP, source_id = ? WHERE id = ? AND user_id = ?')
+                ->execute([$userId, $id, $row['id'], $robotId]);
+            if ($outer) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($outer && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
         $st = $this->db->prepare('SELECT id, pkey, title, text, updated_at, published_by, published_at, source_id FROM playbooks WHERE id = ?');
         $st->execute([$row['id']]);
         $out = $st->fetch(PDO::FETCH_ASSOC);
@@ -170,7 +201,7 @@ final class PlaybookStore
     public function publishStatus(int $userId, int $robotId): array
     {
         $st = $this->db->prepare('SELECT s.id, s.text AS source_text, r.text AS robot_text
-            FROM playbooks r JOIN playbooks s ON s.id = r.source_id AND s.user_id = ? WHERE r.user_id = ?');
+            FROM playbooks r JOIN playbooks s ON s.id = r.source_id AND s.user_id = ? WHERE r.user_id = ? ORDER BY r.id');
         $st->execute([$userId, $robotId]);
         $map = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {

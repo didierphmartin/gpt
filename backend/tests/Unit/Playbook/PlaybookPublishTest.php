@@ -117,4 +117,37 @@ final class PlaybookPublishTest extends TestCase
         $this->assertSame(404, $e->status);
         $this->assertSame("Playbook #{$a['id']} not found", $e->getMessage());
     }
+
+    public function testRenamingTheKeyThenRepublishingMovesTheSingleCopy(): void
+    {
+        $a = $this->store->save(3, null, PlaybookStoreTest::OKTA, null);
+        $first = $this->store->publish(3, $a['id'], self::ROBOT, false);
+        $this->store->save(3, $a['id'], PlaybookStoreTest::OKTA, 'okta-renamed');
+        $again = $this->store->publish(3, $a['id'], self::ROBOT, false);
+        $this->assertSame($first['id'], $again['id']);
+        $list = $this->store->robotList(self::ROBOT);
+        $this->assertCount(1, $list);
+        $this->assertSame('okta-renamed', $list[0]['pkey']);
+        $this->assertSame([$a['id'] => 'published'], $this->store->publishStatus(3, self::ROBOT));
+    }
+
+    public function testRenamingOntoAnotherPublishedKeyNeedsConfirmationThenReplacesIt(): void
+    {
+        $a = $this->store->save(3, null, PlaybookStoreTest::OKTA, null);
+        $b = $this->store->save(4, null, PlaybookStoreTest::OKTA, 'okta-other');
+        $mine = $this->store->publish(3, $a['id'], self::ROBOT, false);
+        $theirs = $this->store->publish(4, $b['id'], self::ROBOT, false);
+        $this->store->save(3, $a['id'], PlaybookStoreTest::OKTA, 'okta-other');
+        $e = $this->error(fn() => $this->store->publish(3, $a['id'], self::ROBOT, false));
+        $this->assertSame('replaces', $e->kind);
+        $this->assertSame('bob@x.test', $e->data['published_by']);
+        $this->assertCount(2, $this->store->robotList(self::ROBOT));
+        $row = $this->store->publish(3, $a['id'], self::ROBOT, true);
+        $list = $this->store->robotList(self::ROBOT);
+        $this->assertCount(1, $list);
+        $this->assertSame('okta-other', $list[0]['pkey']);
+        $this->assertSame($a['id'], (int) $list[0]['source_id']);
+        $this->assertSame($row['id'], $list[0]['id']);
+        $this->assertNull($this->store->get(self::ROBOT, $theirs['id']));
+    }
 }
