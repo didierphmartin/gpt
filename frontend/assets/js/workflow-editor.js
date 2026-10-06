@@ -8552,11 +8552,11 @@ class WorkflowEditor {
             case 'agent': {
                 if (agentType === 'playbook') {
                     // A playbook agent (library card) drops as a PLAYBOOK node
-                    // preloaded with its text and linked back by agent_id.
+                    // linked to the agent's collection playbook and back to the agent.
                     const pa = this.agents.find(a => String(a.id) === String(agentId)) || {};
                     this.addPlaybookNode(x, y, {
                         name: agentName || pa.name || 'Playbook',
-                        playbook: pa.instructions || pa.system_prompt || '',
+                        playbook_id: pa.playbook_id || null,
                         agent_provider: agentProvider || pa.provider || '',
                         model: pa.model || '',
                         agent_id: agentId ? parseInt(agentId, 10) : null,
@@ -8575,9 +8575,13 @@ class WorkflowEditor {
             case 'vectorstore':
                 this.addIngestionNode(x, y, nodeType);
                 break;
-            case 'playbook':
-                this.addPlaybookNode(x, y);
+            case 'playbook': {
+                // A Playbooks Library row carries its id; the palette node does not (first save creates one).
+                const pbId = e.dataTransfer.getData('playbook-id');
+                const row = pbId ? window.PlaybookCollection?.cache.get(pbId) : null;
+                this.addPlaybookNode(x, y, pbId ? { name: row?.title || 'Playbook', playbook_id: parseInt(pbId, 10) } : null);
                 break;
+            }
             case 'code':
                 this.addCodeNode(x, y);
                 break;
@@ -8735,11 +8739,11 @@ class WorkflowEditor {
      * pipeline position, connects like any other agent-workflow node.
      */
     addPlaybookNode(x, y, config = null) {
-        // writes_enabled defaults ON for new nodes (user request 2026-09-02);
-        // the checkbox stays the way to turn a node read-only.
-        const defaults = { playbook: '', agent_provider: '', model: '', name: 'Playbook', writes_enabled: true };
-        const nodeConfig = config ? { ...defaults, ...config } : { ...defaults };
-        const summary = this._playbookNodeSummary(nodeConfig);
+        // The node links to the collection by playbook_id (no copy of the text;
+        // PlaybookCollection.nodeData). writes_enabled defaults ON for new nodes
+        // (user request 2026-09-02); the checkbox stays the way to turn a node read-only.
+        const nodeConfig = window.PlaybookCollection.nodeData(config);
+        const summary = window.PlaybookCollection.nodeSummary(nodeConfig);
 
         const html = `
             <div class="workflow-node playbook-node configurable ${nodeConfig.disabled ? 'node-disabled' : ''}">
@@ -8750,7 +8754,7 @@ class WorkflowEditor {
                 </div>
                 <div class="playbook-badges" style="padding:0 8px;display:flex;flex-wrap:wrap;max-width:230px;">${this._playbookBadgesHtml(nodeConfig)}</div>
                 <div class="node-body">
-                    <small class="node-config-display">${this.escapeHtml(summary)}</small>
+                    <small class="node-config-display" style="${summary.missing ? 'color:#ef4444;' : ''}">${this.escapeHtml(summary.text)}</small>
                     <button class="node-edit-btn" data-playbook="true" title="Edit">✏️</button>
                 </div>
             </div>
@@ -8762,20 +8766,21 @@ class WorkflowEditor {
             1, // outputs
             x, y,
             'playbook',
-            {
-                type: 'playbook',
-                node_type: 'playbook',
-                name: nodeConfig.name,
-                playbook: nodeConfig.playbook,
-                agent_provider: nodeConfig.agent_provider,
-                model: nodeConfig.model,
-                agent_id: nodeConfig.agent_id || null, // set when dropped from a playbook agent card
-                mcp_servers: Array.isArray(nodeConfig.mcp_servers) ? nodeConfig.mcp_servers : [],
-                writes_enabled: !!nodeConfig.writes_enabled,
-                disabled: !!nodeConfig.disabled,
-            },
+            nodeConfig,
             html
         );
+
+        // Linked but not in the cache yet (e.g. dropped from an agent card before the
+        // collection was loaded): load it once, then redraw the summary and badges.
+        if (summary.missing) {
+            this._pbCacheReload = this._pbCacheReload || this._loadPlaybookCache().finally(() => { this._pbCacheReload = null; });
+            this._pbCacheReload.then(() => {
+                const data = this.editor.drawflow.drawflow.Home.data[String(drawflowId)]?.data;
+                if (!data) return;
+                this._refreshPlaybookSummary(drawflowId, data);
+                this._refreshPlaybookBadges(drawflowId, data);
+            });
+        }
 
         this.hideHelpOverlay();
         return drawflowId;
@@ -9127,37 +9132,30 @@ class WorkflowEditor {
         return `<div style="font-size:13px;line-height:1.55;">${h.join('')}</div>`;
     }
 
-    /** One-line summary shown on a playbook node's body: the playbook's Title
-     *  when present (the preamble first line was meaningless on the canvas),
-     *  else the first non-blank line. */
+    /** One-line summary shown on a playbook node's body: the linked playbook's
+     *  Title (read from the collection cache), else its first non-blank line;
+     *  "Playbook #<id> not found" when the id is not in the collection. */
     _playbookNodeSummary(config) {
-        const raw = config?.playbook;
-        if (raw && typeof raw === 'object' && raw.title) return String(raw.title);
-        const text = typeof raw === 'string' ? raw : (raw ? JSON.stringify(raw) : '');
-        const m = text.match(/^\s*Title\s*:\s*(.+)$/mi);
-        const line = (m ? m[1] : (text.split('\n').map(l => l.trim()).find(l => l) || '')).trim();
-        if (!line) return 'No playbook pasted yet';
-        return line.length > 60 ? line.slice(0, 60) + '…' : line;
+        return window.PlaybookCollection.nodeSummary(config).text;
+    }
+
+    /** Write a playbook node's summary line in place (red when its playbook is missing). */
+    _refreshPlaybookSummary(nodeId, config) {
+        const disp = document.getElementById(`node-${nodeId}`)?.querySelector('.node-config-display');
+        if (!disp) return;
+        const s = window.PlaybookCollection.nodeSummary(config);
+        disp.textContent = s.text;
+        disp.style.color = s.missing ? '#ef4444' : '';
     }
 
     /**
      * MCP server names a playbook uses (Console-style service badges).
      * Preference order: servers persisted from the last Validate
-     * (config.mcp_servers, derived from bound targets), else the document's
-     * "Tools used:" line (Console text) or tools_used (JSON).
+     * (config.mcp_servers, derived from bound targets), else the linked
+     * playbook's "Tools used:" line.
      */
     _playbookServerNames(config) {
-        if (Array.isArray(config?.mcp_servers) && config.mcp_servers.length) {
-            return config.mcp_servers;
-        }
-        const raw = config?.playbook;
-        if (raw && typeof raw === 'object' && Array.isArray(raw.tools_used)) {
-            return raw.tools_used.map(t => String(t).trim()).filter(Boolean);
-        }
-        const text = typeof raw === 'string' ? raw : '';
-        const m = text.match(/^Tools used:\s*(.+)$/mi);
-        if (m) return m[1].split(/[;,]/).map(t => t.trim()).filter(Boolean);
-        return [];
+        return window.PlaybookCollection.nodeServerNames(config);
     }
 
     /** Pill-row HTML for the node header badges ('' when no servers known). */
@@ -11718,6 +11716,8 @@ class WorkflowEditor {
             // Import graph if available
             if (workflowData.graph && workflowData.graph.nodes && workflowData.graph.nodes.length > 0) {
                 console.log('[WorkflowEditor] Importing graph with', workflowData.graph.nodes.length, 'nodes');
+                // Playbook nodes read their text from the collection: load it once per workflow load.
+                if (workflowData.graph.nodes.some(n => (n.type || n.node_type || n.config?.type) === 'playbook')) await this._loadPlaybookCache();
                 this.importGraphFromBackend(workflowData.graph);
 
                 // Restore prompt from start node if saved
@@ -11760,6 +11760,20 @@ class WorkflowEditor {
         } finally {
             overlay.close();
         }
+    }
+
+    /** Load the user's playbook collection into PlaybookCollection.cache (a failure leaves it as it was). */
+    async _loadPlaybookCache() {
+        try {
+            await window.PlaybookCollection.cache.load(this._playbookApi());
+        } catch (e) {
+            console.warn('[WorkflowEditor] playbook collection load failed:', e?.message || e);
+        }
+    }
+
+    /** The /playbooks API client for this editor's backend and auth. */
+    _playbookApi() {
+        return new window.PlaybookCollection.PlaybookApi(this.apiBase, () => this.getAuthHeaders());
     }
 
     /**
@@ -11826,6 +11840,8 @@ class WorkflowEditor {
                     case 'playbook': {
                         // Playbook nodes manage their own addNode() call (custom
                         // HTML + config modal), same as ingestion nodes above.
+                        // The saved config links by playbook_id; addPlaybookNode
+                        // keeps the reference only (the text is in the cache).
                         const x = node.position?.x || node.pos_x || 100;
                         const y = node.position?.y || node.pos_y || 100;
                         const dbNodeId = node.db_id || node.id;
@@ -13133,13 +13149,8 @@ class WorkflowEditor {
             this._pbOverlayOpen(dfId, data.name || 'Playbook', this._playbookServerNames(data), inputText);
         }
 
-        const nodeConfig = {
-            playbook: data.playbook,
-            agent_provider: data.agent_provider || '',
-            model: data.model || '',
-            name: data.name || '',
-            writes_enabled: !!data.writes_enabled,
-        };
+        // The reference only: the server reads the text from the collection.
+        const nodeConfig = window.PlaybookCollection.runNodeConfig(data);
 
         try {
             const resp = await fetch(`${this.apiBase}/workflows/playbook-node/run`, {
@@ -17025,6 +17036,7 @@ class WorkflowEditor {
      * @param {string|null} nodeId - The workflow node ID (if editing a node's config)
      */
     async showAgentEditForm(agentId, nodeId = null) {
+        this._playbookFormOnly = false;
         // Load providers, tools, and (when editing a node) workflow schemas
         const loadPromises = [this.loadProviders(), this.loadTools()];
         if (nodeId) {
@@ -17109,16 +17121,18 @@ class WorkflowEditor {
                 const useOnlyNodeData = data.isTemplate === false;
 
                 if (data.type === 'playbook' || data.node_type === 'playbook') {
-                    // Playbook node: one facet of a playbook agent. The text lives in
-                    // data.playbook, the write policy in data.writes_enabled.
+                    // Playbook node: one facet of a playbook agent. The text lives in the
+                    // collection (data.playbook_id, filled in below), the write policy in
+                    // data.writes_enabled.
                     agent = {
                         id: data.agent_id ?? null,
+                        playbook_id: data.playbook_id ?? null,
                         name: data.name ?? 'Playbook',
                         description: data.description ?? '',
                         agent_type: 'playbook',
                         provider: data.agent_provider ?? '',
                         model: data.model ?? '',
-                        instructions: typeof data.playbook === 'string' ? data.playbook : JSON.stringify(data.playbook ?? '', null, 2),
+                        instructions: '',
                         tools: Array.isArray(data.tools) ? data.tools : [],
                         settings: { ...(data.settings || {}), writes_enabled: data.writes_enabled !== false },
                         merge_strategy: 'labeled', output_schema_id: null, output_schema: null,
@@ -17167,6 +17181,13 @@ class WorkflowEditor {
             }
         }
 
+        // A playbook agent or node holds only playbook_id: the form shows the collection's text.
+        if (agent.agent_type === 'playbook' && agent.playbook_id) {
+            const PC = window.PlaybookCollection;
+            if (!PC.cache.get(agent.playbook_id)) await this._loadPlaybookCache();
+            agent = { ...agent, instructions: PC.cache.get(agent.playbook_id)?.text ?? '' };
+        }
+
         this.editingAgent = agent;
 
         // Create and show modal
@@ -17198,6 +17219,10 @@ class WorkflowEditor {
         `).join('');
 
         const tf = (key) => this.t('workflow.agentForm.' + key);
+        // Playbook Key: the linked row's key, else derived from the Title until the user types one.
+        const tpb = (key) => this.t('playbookLibrary.' + key);
+        const pbRow = agent.playbook_id ? window.PlaybookCollection.cache.get(agent.playbook_id) : null;
+        const pbKey = pbRow?.pkey || window.PlaybookCollection.keyFromTitle(window.PlaybookCollection.titleOf(agent.instructions || ''));
         const modalHTML = `
             <div id="agent-edit-modal" class="fixed inset-0 z-[200] flex items-center justify-center" style="background-color: rgba(0, 0, 0, 0.5);">
                 <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
@@ -17455,6 +17480,15 @@ class WorkflowEditor {
                                         <button type="button" id="agent-pb-preview" class="px-2 py-1 hover:bg-gray-100">${tf('pbPreview')}</button>
                                     </span>
                                 </div>
+                            </div>
+                            <div id="agent-pb-key-block" class="${agent.agent_type === 'playbook' ? '' : 'hidden'} mb-2">
+                                <div class="flex items-center gap-2">
+                                    <label for="agent-pb-key" class="text-sm font-medium text-gray-700">${tpb('key')}</label>
+                                    <input type="text" id="agent-pb-key" class="flex-1 px-2 py-1 border border-gray-300 rounded text-sm font-mono"
+                                           value="${this.escapeHtml(pbKey)}" title="${this.escapeHtml(tpb('keyHelp'))}" ${pbRow ? 'data-typed="1"' : ''}>
+                                </div>
+                                <p id="agent-pb-status" class="text-xs mt-1" style="color:#ef4444;"></p>
+                                <p class="text-xs text-gray-500 mt-1">${tpb('notesHint')}</p>
                             </div>
                             <div id="agent-pb-pretty" class="hidden border border-gray-200 rounded-lg bg-white p-4 text-sm" style="min-height: 500px; max-height: 60vh; overflow-y: auto;"></div>
                             <div id="agent-pb-validate-result" class="hidden mt-3 text-sm"></div>
@@ -18780,6 +18814,7 @@ Based on the analysis...
             document.getElementById('tab-schema')?.classList.toggle('hidden', pb);
             document.getElementById('agent-writes-block')?.classList.toggle('hidden', !pb);
             document.getElementById('agent-pb-toolbar')?.classList.toggle('hidden', !pb);
+            document.getElementById('agent-pb-key-block')?.classList.toggle('hidden', !pb);
             // Identical Settings on both facets: no "Save as template" for playbooks
             // (the agent row IS the template; a linked node syncs to it on save).
             document.getElementById('save-as-template-checkbox')?.closest('.border-t')?.classList.toggle('hidden', pb);
@@ -18801,6 +18836,22 @@ Based on the analysis...
         };
         editBtn?.addEventListener('click', () => setView(false));
         prevBtn?.addEventListener('click', () => setView(true));
+
+        // Key: follows the Title until the user types in it; the status line says
+        // when it is invalid or another playbook of the collection has it.
+        const PC = window.PlaybookCollection;
+        const keyEl = document.getElementById('agent-pb-key');
+        const pbStatus = document.getElementById('agent-pb-status');
+        const checkKey = () => {
+            if (!keyEl || !pbStatus) return;
+            const problem = PC.keyProblem(keyEl.value.trim(), this.editingAgent?.playbook_id ?? null);
+            pbStatus.textContent = problem ? this.t('playbookLibrary.' + problem) : '';
+        };
+        keyEl?.addEventListener('input', () => { keyEl.dataset.typed = '1'; checkKey(); });
+        ta?.addEventListener('input', () => {
+            if (keyEl && !keyEl.dataset.typed) { keyEl.value = PC.keyFromTitle(PC.titleOf(ta.value)); checkKey(); }
+        });
+        checkKey();
 
         document.getElementById('agent-pb-validate')?.addEventListener('click', async () => {
             const statusEl = document.getElementById('agent-pb-validate-status');
@@ -19261,6 +19312,57 @@ Based on the analysis...
         this.editingAgent = null;
         this.editingNodeId = null; // Clear node editing state
         this.pendingTemplateNodeId = null; // Clear any pending workflow node link
+        this._playbookFormOnly = false;
+    }
+
+    /**
+     * The agent form in playbook-only mode, for a Playbooks Library row (or a new
+     * playbook when id is null): no node, no agent, only the Playbook tab (Key +
+     * Text). Run settings belong to the playbook agent / node, never to the
+     * collection. Save writes the collection row (saveAgent → _savePlaybookFromForm).
+     */
+    async showPlaybookForm(id) {
+        await Promise.all([this.loadProviders(), this.loadTools()]);
+        const PC = window.PlaybookCollection;
+        if (id && !PC.cache.get(id)) await this._loadPlaybookCache();
+        const row = id ? PC.cache.get(id) : null;
+        this.editingNodeId = null;
+        this.pendingTemplateNodeId = null;
+        // A missing id stays the target: its Save reports "Playbook #<id> not found" instead of creating a copy.
+        this.editingAgent = {
+            id: null, playbook_id: id ? Number(id) : null, name: row?.title || '', description: '',
+            agent_type: 'playbook', provider: '', model: '', instructions: row?.text || '',
+            tools: [], settings: { writes_enabled: true },
+        };
+        this.createAgentEditModal(this.editingAgent);
+        this._playbookFormOnly = true;
+        const typeSel = document.getElementById('agent-type-select');
+        if (typeSel) typeSel.disabled = true;
+        document.querySelectorAll('#agent-edit-modal .agent-modal-tab')
+            .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
+        this.switchAgentModalTab('system-prompt');
+    }
+
+    /** Save the form's text + key to the collection (create when id is null); returns the saved row.
+     *  An unchanged text and key saves nothing. Rejects with the API error (.kind / .status). */
+    async _savePlaybookFromForm(id) {
+        const PC = window.PlaybookCollection;
+        const text = document.getElementById('agent-instructions-input')?.value || '';
+        const pkey = (document.getElementById('agent-pb-key')?.value || '').trim() || null;
+        const current = id ? PC.cache.get(id) : null;
+        if (current && current.text === text && (pkey === null || current.pkey === pkey)) return current;
+        const api = this._playbookApi();
+        const body = id ? await api.update(id, { text, pkey }) : await api.create({ text, pkey });
+        PC.cache.put(body.data);
+        window.playbooksLibrary?.loadTree?.();
+        return body.data;
+    }
+
+    /** A refused playbook save (invalid_text / invalid_key / key_taken / not found): say why in the form. */
+    _showPlaybookSaveError(err) {
+        const el = document.getElementById('agent-pb-status');
+        if (el) el.textContent = err?.message || String(err);
+        this.switchAgentModalTab('system-prompt');
     }
 
     /**
@@ -19269,6 +19371,19 @@ Based on the analysis...
     async saveAgent() {
         const modal = document.getElementById('agent-edit-modal');
         if (!modal) return;
+
+        // Playbook-only form (Playbooks Library): the collection row is all there is to save.
+        if (this._playbookFormOnly) {
+            try {
+                await this._savePlaybookFromForm(this.editingAgent?.playbook_id ?? null);
+            } catch (e) {
+                this._showPlaybookSaveError(e);
+                return;
+            }
+            this._libraryOnSave = null; // _savePlaybookFromForm already reloaded the library
+            this.closeAgentEditModal();
+            return;
+        }
 
         // Check if "Save as Template" is checked
         const saveAsTemplate = document.getElementById('save-as-template-checkbox')?.checked || false;
@@ -19431,6 +19546,20 @@ Based on the analysis...
                 console.log('[WorkflowEditor] saveAgent - nodeData before update:', JSON.stringify(nodeData?.data));
 
                 if (nodeData) {
+                    // Playbook node: the form's text IS the linked collection playbook.
+                    // Save it first (a palette node's first save creates the entry); a
+                    // refusal stays in the form. A fresh node with nothing typed stays unlinked.
+                    const isPlaybookNode = (nodeData.data.type === 'playbook' || nodeData.data.node_type === 'playbook' || agentData.agent_type === 'playbook');
+                    let pbRow = null;
+                    if (isPlaybookNode && (nodeData.data.playbook_id || agentData.instructions.trim())) {
+                        try {
+                            pbRow = await this._savePlaybookFromForm(nodeData.data.playbook_id || null);
+                        } catch (e) {
+                            this._showPlaybookSaveError(e);
+                            return;
+                        }
+                    }
+
                     // Build the new data object with all agent-related fields
                     const newNodeData = {
                         ...nodeData.data,  // Preserve existing data
@@ -19462,15 +19591,16 @@ Based on the analysis...
                         // Disabled flag for node-level skip
                         disabled: agentData.disabled
                     };
-                    // Playbook node: the form's instructions ARE the playbook text.
-                    const isPlaybookNode = (nodeData.data.type === 'playbook' || nodeData.data.node_type === 'playbook' || agentData.agent_type === 'playbook');
+                    // Playbook node: linked by playbook_id, no copy of the text.
                     if (isPlaybookNode) {
                         Object.assign(newNodeData, {
                             type: 'playbook', node_type: 'playbook',
                             name: agentData.name || 'Playbook',
-                            playbook: agentData.instructions,
+                            playbook_id: pbRow ? Number(pbRow.id) : (nodeData.data.playbook_id || null),
+                            instructions: '',
                             writes_enabled: agentData.settings?.writes_enabled !== false,
                         });
+                        delete newNodeData.playbook;
                     }
 
                     // Update node locally in Drawflow
@@ -19494,7 +19624,7 @@ Based on the analysis...
                         try {
                             const el = document.getElementById('node-' + this.editingNodeId);
                             const titleEl = el?.querySelector('.node-title'); if (titleEl) titleEl.textContent = newNodeData.name;
-                            const disp = el?.querySelector('.node-config-display'); if (disp) disp.textContent = this._playbookNodeSummary(newNodeData);
+                            this._refreshPlaybookSummary(this.editingNodeId, newNodeData);
                             this._refreshPlaybookBadges(this.editingNodeId, newNodeData);
                         } catch (_) { /* cosmetics must never block persistence */ }
                     } else {
@@ -19513,10 +19643,17 @@ Based on the analysis...
                                 ? `${this.apiBase}/agents/${agentData.id}`
                                 : `${this.apiBase}/agents`;
 
+                            // A linked playbook agent shares the node's collection playbook
+                            // (spec §4.3): it gets the reference and run settings, never the text.
+                            const agentBody = isPlaybookNode ? {
+                                name: agentData.name, description: agentData.description, agent_type: 'playbook',
+                                provider: agentData.provider, model: agentData.model, settings: agentData.settings,
+                                ...(newNodeData.playbook_id ? { playbook_id: newNodeData.playbook_id } : {}),
+                            } : agentData;
                             const response = await fetch(url, {
                                 method: agentData.id ? 'PUT' : 'POST',
                                 headers: this.getAuthHeaders(),
-                                body: JSON.stringify(agentData)
+                                body: JSON.stringify(agentBody)
                             });
 
                             if (response.ok) {
@@ -19567,6 +19704,20 @@ Based on the analysis...
                 // Users author them by editing SKILL.md directly on disk.
 
                 return;
+            }
+
+            // A playbook agent links to the collection: save the playbook first;
+            // the agent keeps playbook_id and the run settings, no text.
+            if (agentData.agent_type === 'playbook') {
+                let pbRow;
+                try {
+                    pbRow = await this._savePlaybookFromForm(this.editingAgent?.playbook_id ?? null);
+                } catch (e) {
+                    this._showPlaybookSaveError(e);
+                    return;
+                }
+                agentData.playbook_id = Number(pbRow.id);
+                agentData.instructions = '';
             }
 
             const isNew = !agentData.id;
@@ -19752,6 +19903,24 @@ Based on the analysis...
 
         for (const nodeId of Object.keys(nodes)) {
             const node = nodes[nodeId];
+            if (node.data?.agent_id && String(node.data.agent_id) === String(agentId)
+                && (node.data.type === 'playbook' || node.data.node_type === 'playbook')) {
+                // Playbook node: link to the agent's collection playbook (no text copy) + its run settings.
+                node.data = {
+                    ...node.data,
+                    name: agentData.name || node.data.name,
+                    agent_provider: agentData.provider,
+                    model: agentData.model,
+                    ...(agentData.playbook_id ? { playbook_id: agentData.playbook_id } : {}),
+                    writes_enabled: agentData.settings?.writes_enabled !== false,
+                };
+                delete node.data.playbook;
+                const titleEl = document.getElementById(`node-${nodeId}`)?.querySelector('.node-title');
+                if (titleEl) titleEl.textContent = node.data.name;
+                this._refreshPlaybookSummary(nodeId, node.data);
+                this._refreshPlaybookBadges(nodeId, node.data);
+                continue;
+            }
             if (node.data?.agent_id && String(node.data.agent_id) === String(agentId)) {
                 console.log('[WorkflowEditor] Syncing template to node:', nodeId);
 

@@ -253,7 +253,7 @@
     "keyHelp": "Minúsculas, dígitos y guiones simples, hasta 64 caracteres. Se fija una vez y no sigue los cambios de título.",
     "keyInvalid": "Clave no válida: use minúsculas, dígitos y guiones simples (máx. 64).",
     "keyTaken": "Ya tiene un playbook con esta clave.",
-    "notesHint": "Las notas libres antes de la primera sección se conservan con el playbook."
+    "notesHint": "Las notas fuera de las secciones se conservan para las personas; solo las secciones llegan al modelo."
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",

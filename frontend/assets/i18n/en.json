@@ -253,7 +253,7 @@
     "keyHelp": "Lowercase letters, digits and single hyphens, up to 64 characters. Set once, it does not follow title changes.",
     "keyInvalid": "Invalid key: use lowercase letters, digits and single hyphens (max 64).",
     "keyTaken": "You already have a playbook with this key.",
-    "notesHint": "Free notes before the first section are kept with the playbook."
+    "notesHint": "Notes outside the sections are kept for people; only the sections reach the model."
   },
   "mcpLibrary": {
     "newServer": "New Server",

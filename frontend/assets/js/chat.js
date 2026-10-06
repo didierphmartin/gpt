@@ -3493,9 +3493,10 @@ class ChatApp {
         // optional reference material rather than a binding contract,
         // which is what we kept observing on the failed retests.
         if (call.name === 'save_playbook_agent') {
-            // playbook-author skill → POST /agents (agent_type playbook). The
-            // card appears in the Agents list under "Playbooks" and drops onto a
-            // workflow canvas as a Playbook node.
+            // playbook-author skill → POST /playbooks (the collection keeps the
+            // text), then POST /agents (agent_type playbook, linked by
+            // playbook_id). The card appears in the Agents list under
+            // "Playbooks" and drops onto a workflow canvas as a Playbook node.
             const input = call.input || {};
             let payload;
             try {
@@ -3504,22 +3505,36 @@ class ChatApp {
                 if (!name || !/Title:\s*\S/.test(playbook) || !/Instructions:/.test(playbook)) {
                     payload = { success: false, error: 'save_playbook_agent needs a name and the full playbook text (with Title: and Instructions:).' };
                 } else {
-                    const resp = await fetch(window.apiUrl('/agents'), {
-                        method: 'POST',
-                        headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            name, agent_type: 'playbook', category: 'Playbooks',
-                            description: String(input.description || '').slice(0, 500),
-                            provider: String(input.provider || this.currentProvider || 'claude'),
-                            instructions: playbook,
-                        }),
-                    });
-                    const data = await resp.json().catch(() => ({}));
-                    const id = data?.data?.id ?? data?.id;
-                    payload = (resp.ok && id)
-                        ? { success: true, agent_id: id, name, category: 'Playbooks', hint: 'Drag the card from the Agents list onto a workflow canvas to use it.' }
-                        : { success: false, error: data?.error || `agents endpoint returned ${resp.status}` };
-                    if (resp.ok) { try { await window.agentsLibrary?.loadTree?.(); } catch (_) {} }
+                    const PC = window.PlaybookCollection;
+                    const api = new PC.PlaybookApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', () => this.getAuthHeaders());
+                    let row = null;
+                    try {
+                        row = (await api.create({ text: playbook, pkey: PC.keyFromTitle(name) })).data;
+                    } catch (e) {
+                        payload = e?.kind === 'key_taken'
+                            ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct name.' }
+                            : { success: false, error: e?.message || String(e) };
+                    }
+                    if (row) {
+                        PC.cache.put(row);
+                        try { await window.playbooksLibrary?.loadTree?.(); } catch (_) {}
+                        const resp = await fetch(window.apiUrl('/agents'), {
+                            method: 'POST',
+                            headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name, agent_type: 'playbook', category: 'Playbooks',
+                                description: String(input.description || '').slice(0, 500),
+                                provider: String(input.provider || this.currentProvider || 'claude'),
+                                playbook_id: row.id, instructions: '',
+                            }),
+                        });
+                        const data = await resp.json().catch(() => ({}));
+                        const id = data?.data?.id ?? data?.id;
+                        payload = (resp.ok && id)
+                            ? { success: true, agent_id: id, playbook_id: row.id, pkey: row.pkey, name, category: 'Playbooks', hint: 'Drag the card from the Agents list onto a workflow canvas to use it.' }
+                            : { success: false, playbook_id: row.id, pkey: row.pkey, error: data?.error || `agents endpoint returned ${resp.status}` };
+                        if (resp.ok) { try { await window.agentsLibrary?.loadTree?.(); } catch (_) {} }
+                    }
                 }
             } catch (e) {
                 payload = { success: false, error: `save_playbook_agent failed: ${e?.message || e}` };

@@ -253,7 +253,7 @@
     "keyHelp": "Minuscules, chiffres et tirets simples, 64 caractères au plus. Fixée une fois, elle ne suit pas les changements de titre.",
     "keyInvalid": "Clé invalide : minuscules, chiffres et tirets simples (64 max).",
     "keyTaken": "Vous avez déjà un playbook avec cette clé.",
-    "notesHint": "Les notes libres avant la première section sont conservées avec le playbook."
+    "notesHint": "Les notes hors des sections sont conservées pour les lecteurs ; seules les sections parviennent au modèle."
   },
   "mcpLibrary": {
     "newServer": "Nouveau serveur",
