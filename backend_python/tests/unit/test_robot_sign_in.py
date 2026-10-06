@@ -156,3 +156,32 @@ def test_admin_create_and_update_refuse_an_unknown_role(db, robot_id):
                                                 'role': 'it-ops-2'}})['success'] is True
     r = a.updateUser({'user_id': 1, 'body': {'user_id': 1, 'email': 'boss@x.test', 'role': ['admin']}})
     assert r['status_code'] == 400 and r['error'] == 'Invalid role'
+
+
+def test_upgrade_plan_promotes_only_guest_and_prospect(db, auth, robot_id):
+    db.execute("""INSERT INTO users (email, role, plan) VALUES
+        ('ops@x.test', 'it-ops-2', 'free'), ('u@x.test', 'user', 'free'), ('p@x.test', 'prospect', 'free'),
+        ('g@x.test', 'guest', 'free'), ('a@x.test', 'admin', 'free'), ('af@x.test', 'affiliate', 'free')""")
+    expect = {'ops@x.test': 'it-ops-2', 'u@x.test': 'user', 'p@x.test': 'user', 'g@x.test': 'user',
+              'a@x.test': 'admin', 'af@x.test': 'affiliate'}
+    for email, role in expect.items():
+        uid = db.fetch_column('SELECT id FROM users WHERE email = ?', [email])[0]
+        r = auth.upgradePlan({'user_id': uid, 'body': {'plan': 'standard'}})
+        assert r['success'] is True, email
+        assert r['role'] == role, email
+        got = db.fetch_one('SELECT role, plan FROM users WHERE id = ?', [uid])
+        assert got['role'] == role, email
+        assert got['plan'] == 'standard', email
+
+
+def test_admin_users_api_refuses_the_robot_role_for_a_person(db, robot_id):
+    db.execute("INSERT INTO users (id, email, role, plan) VALUES (5, 'ada@x.test', 'user', 'free')")
+    a = AdminController(db, {})
+    for r in (
+        a.createUser({'user_id': 1, 'body': {'email': 'new@x.test', 'password': 'pw', 'role': 'robot'}}),
+        a.updateUser({'user_id': 1, 'body': {'user_id': 5, 'email': 'ada@x.test', 'role': 'robot'}}),
+    ):
+        assert r['status_code'] == 400
+        assert r['error'] == "The robot role can't be given to a person"
+    assert db.fetch_column('SELECT role FROM users WHERE id = 5') == ['user']
+    assert db.fetch_column("SELECT id FROM users WHERE email = 'new@x.test'") == []

@@ -13,6 +13,7 @@ let RA: typeof import('../src/Services/RobotAccount');
 let PS: typeof import('../src/Playbook/PlaybookStore');
 let RR: typeof import('../src/Support/RoleKeyRoute');
 let AC: typeof import('../src/Controllers/AuthController');
+let AD: typeof import('../src/Controllers/AdminController');
 before(async () => {
   RS = await import('../src/Services/RoleStore');
   RP = await import('../src/Services/RobotPolicy');
@@ -21,6 +22,7 @@ before(async () => {
   PS = await import('../src/Playbook/PlaybookStore');
   RR = await import('../src/Support/RoleKeyRoute');
   AC = await import('../src/Controllers/AuthController');
+  AD = await import('../src/Controllers/AdminController');
 });
 
 // ---- RoleStore (pure parts) -------------------------------------------------
@@ -113,6 +115,19 @@ test('a paid-plan re-sign-in promotes only guest/prospect', () => {
   assert.equal(AC.promotesOnPlanUpgrade('guest'), true);
   assert.equal(AC.promotesOnPlanUpgrade('prospect'), true);
   for (const r of ['user', 'admin', 'ops', 'robot', '', null]) assert.equal(AC.promotesOnPlanUpgrade(r), false);
+});
+
+test('POST /auth/upgrade-plan: only guest/prospect become user; every other role is kept', () => {
+  assert.equal(AC.roleAfterPlanUpgrade('guest', 'standard'), 'user');
+  assert.equal(AC.roleAfterPlanUpgrade('prospect', 'premium'), 'user');
+  for (const r of ['user', 'admin', 'affiliate', 'it-ops-2']) assert.equal(AC.roleAfterPlanUpgrade(r, 'premium'), r);
+  assert.equal(AC.roleAfterPlanUpgrade(null, 'premium'), null);
+});
+
+test('admin Users API: the robot role is refused for a person, other roles pass', () => {
+  assert.deepEqual(AD.robotRoleRefusal('robot'),
+    { success: false, error: "The robot role can't be given to a person", status_code: 400 });
+  for (const r of ['user', 'admin', 'it-ops-2', null, undefined]) assert.equal(AD.robotRoleRefusal(r), null);
 });
 
 // ---- Publishing (pure decision) ---------------------------------------------

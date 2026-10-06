@@ -6,6 +6,7 @@ import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { PackageResolver } from '../Services/PackageResolver';
 import { RoleStore } from '../Services/RoleStore';
+import { RobotAccount } from '../Services/RobotAccount';
 
 /**
  * Mirrors src/Controllers/AdminController.php — the admin dashboard's user management over the
@@ -27,6 +28,12 @@ import { RoleStore } from '../Services/RoleStore';
  *    getUser therefore need no casts. getUserAccount casts id (int)/email_verified (bool) exactly as
  *    PHP does. SUM(...) aggregates come back as strings from mysql2; PHP casts them (int).
  */
+
+/** The robot role belongs to the service user alone: a person is never given it (400). */
+export function robotRoleRefusal(role: unknown): ControllerResult | null {
+  if (role !== RobotAccount.ROLE) return null;
+  return { success: false, error: "The robot role can't be given to a person", status_code: 400 };
+}
 
 // PHP trim() default character mask (" \t\n\r\0\x0B").
 function phpTrim(v: any): string {
@@ -337,6 +344,9 @@ export class AdminController {
       return { success: false, error: 'Invalid role', status_code: 400 };
     }
 
+    const robotRefused = robotRoleRefusal(role);
+    if (robotRefused) return robotRefused;
+
     // Hash password
     const hashedPassword = bcrypt.hashSync(String(password), 10);
 
@@ -382,6 +392,9 @@ export class AdminController {
     if (await this.isServiceUser(userId)) {
       return this.userNotFound();
     }
+
+    const robotRefused = robotRoleRefusal(role);
+    if (robotRefused) return robotRefused;
 
     // Build update query — column set mirrors PHP's $fields/$params assembly order.
     const setFragments = [

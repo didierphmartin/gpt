@@ -26,6 +26,7 @@ import httpx
 from app.controllers.auth_controller import password_hash
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.package_resolver import PackageResolver
+from app.services.robot_account import RobotAccount
 from app.services.role_store import RoleStore
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
@@ -182,6 +183,9 @@ class AdminController:
         if not isinstance(role, str) or not RoleStore(self.db).exists(role):
             return {'success': False, 'error': 'Invalid role', 'status_code': 400}
 
+        if role == RobotAccount.ROLE:
+            return self._robot_role_refusal()
+
         hashedPassword = password_hash(php_strval(password))
 
         sql = ("INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)"
@@ -217,6 +221,9 @@ class AdminController:
 
         if self._is_service_user(userId):
             return self._user_not_found()
+
+        if role == RobotAccount.ROLE:
+            return self._robot_role_refusal()
 
         fields = ['email = :email', 'first_name = :first_name', 'last_name = :last_name', 'updated_at = NOW()']
         params = {':id': userId, ':email': email, ':first_name': firstName, ':last_name': lastName}
@@ -257,6 +264,11 @@ class AdminController:
     @staticmethod
     def _user_not_found() -> dict:
         return {'success': False, 'error': 'User not found', 'status_code': 404}
+
+    @staticmethod
+    def _robot_role_refusal() -> dict:
+        """The robot role belongs to the service user alone; a person never holds it."""
+        return {'success': False, 'error': "The robot role can't be given to a person", 'status_code': 400}
 
     # ─── provider settings — avatar/voice (AdminController.php:317-690;
     #     routes.php 181-185) ────────────────────────────────────────────────

@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
 use Quantis\AIPortfolioAssistant\Services\RoleStore;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
@@ -229,6 +230,10 @@ class AdminController
             ];
         }
 
+        if ($role === RobotAccount::ROLE) {
+            return $this->robotRoleRefusal();
+        }
+
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
         // Corporate: the login service holds the credential, gpt holds the role.
@@ -330,6 +335,10 @@ class AdminController
 
         if ($this->isServiceUser($userId)) {
             return $this->userNotFound();
+        }
+
+        if ($role === RobotAccount::ROLE) {
+            return $this->robotRoleRefusal();
         }
 
         if ($role !== null && $role !== 'admin' && $this->isLastAdmin($userId)) {
@@ -471,6 +480,12 @@ class AdminController
     private function userNotFound(): array
     {
         return ['success' => false, 'error' => 'User not found', 'status_code' => 404];
+    }
+
+    /** The robot role belongs to the service user alone; a person never holds it. */
+    private function robotRoleRefusal(): array
+    {
+        return ['success' => false, 'error' => "The robot role can't be given to a person", 'status_code' => 400];
     }
 
     private function lastAdminRefusal(): array

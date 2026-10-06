@@ -354,8 +354,16 @@ class AuthController:
         plan = normalize_plan(plan)
         if plan not in ('standard', 'premium'):
             return {'success': False, 'message': 'Invalid plan. Must be standard or premium.', 'status_code': 400}
-        role = role_for_plan(plan)
-        self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
+        # Same rule as the Firebase paid-plan path: the plan is recorded for everyone, but only a
+        # guest/prospect is promoted to the paid role. Any other role (user, admin, affiliate, custom) is kept.
+        row = self.db.fetch_one("SELECT role FROM users WHERE id = ?", [user_id])
+        current = None if row is None or row.get('role') is None else str(row.get('role'))
+        if current in ('guest', 'prospect'):
+            role = role_for_plan(plan)
+            self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
+        else:
+            role = current
+            self.db.execute("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?", [plan, user_id])
         error_log(f'[AuthController] Plan upgraded: user_id={user_id}, plan={plan}, role={role}')
         return {'success': True, 'message': f'Plan upgraded to {plan}', 'plan': plan, 'role': role, 'status_code': 200}
 

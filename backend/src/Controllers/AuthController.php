@@ -823,10 +823,22 @@ class AuthController
             ];
         }
 
-        // Keep role in step with the plan so the paid capability package applies.
-        $role = $this->roleForPlan($plan);
-        $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$plan, $role, $userId]);
+        // Same rule as the Firebase paid-plan path: the plan is recorded for
+        // everyone, but only a guest/prospect is promoted to the paid role.
+        // Any other role (user, admin, affiliate, custom) is kept.
+        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $current = $stmt->fetchColumn();
+        $current = $current === false ? null : (string)$current;
+        if (in_array($current, ['guest', 'prospect'], true)) {
+            $role = $this->roleForPlan($plan);
+            $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$plan, $role, $userId]);
+        } else {
+            $role = $current;
+            $stmt = $this->db->prepare("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$plan, $userId]);
+        }
 
         error_log("[AuthController] Plan upgraded: user_id=$userId, plan=$plan, role=$role");
 

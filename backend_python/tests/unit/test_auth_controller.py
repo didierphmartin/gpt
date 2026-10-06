@@ -150,7 +150,7 @@ def test_php_empty_semantics_on_string_zero():
 
 
 def test_upgrade_plan_and_link_phone():
-    db = FakeDb()
+    db = FakeDb(one=[{'role': 'prospect'}])
     c = AuthController(db, CONFIG)
     assert c.upgradePlan(ctx({'plan': 'gold'}, user_id=3))['message'] == 'Invalid plan. Must be standard or premium.'
     r = c.upgradePlan(ctx({'plan': 'app_premium'}, user_id=3))

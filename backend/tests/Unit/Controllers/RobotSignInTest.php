@@ -119,6 +119,39 @@ class RobotSignInTest extends TestCase
         }
     }
 
+    public function test_upgrade_plan_promotes_only_guest_and_prospect(): void
+    {
+        $this->db->exec("INSERT INTO users (email, role, plan) VALUES
+            ('ops@x.test', 'it-ops-2', 'free'), ('u@x.test', 'user', 'free'), ('p@x.test', 'prospect', 'free'),
+            ('g@x.test', 'guest', 'free'), ('a@x.test', 'admin', 'free'), ('af@x.test', 'affiliate', 'free')");
+        $expect = ['ops@x.test' => 'it-ops-2', 'u@x.test' => 'user', 'p@x.test' => 'user', 'g@x.test' => 'user',
+            'a@x.test' => 'admin', 'af@x.test' => 'affiliate'];
+        foreach ($expect as $email => $role) {
+            $id = (int) $this->db->query("SELECT id FROM users WHERE email = '$email'")->fetchColumn();
+            $r = $this->auth()->upgradePlan(['user_id' => $id, 'body' => ['plan' => 'standard']]);
+            $this->assertTrue($r['success'], $email);
+            $this->assertSame($role, $r['role'], $email);
+            $got = $this->db->query("SELECT role, plan FROM users WHERE id = $id")->fetch();
+            $this->assertSame($role, $got['role'], $email);
+            $this->assertSame('standard', $got['plan'], $email);
+        }
+    }
+
+    public function test_admin_users_api_refuses_the_robot_role_for_a_person(): void
+    {
+        $this->db->exec("INSERT INTO users (id, email, role, plan) VALUES (5, 'ada@x.test', 'user', 'free')");
+        $a = new AdminController($this->db, []);
+        foreach ([
+            $a->createUser(['user_id' => 1, 'body' => ['email' => 'new@x.test', 'password' => 'pw', 'role' => 'robot']]),
+            $a->updateUser(['user_id' => 1, 'body' => ['user_id' => 5, 'email' => 'ada@x.test', 'role' => 'robot']]),
+        ] as $r) {
+            $this->assertSame(400, $r['status_code']);
+            $this->assertSame("The robot role can't be given to a person", $r['error']);
+        }
+        $this->assertSame('user', $this->db->query('SELECT role FROM users WHERE id = 5')->fetchColumn());
+        $this->assertFalse($this->db->query("SELECT id FROM users WHERE email = 'new@x.test'")->fetchColumn());
+    }
+
     public function test_no_personal_app_key_for_the_robot(): void
     {
         $r = $this->auth()->generateAppKey(['user_id' => $this->robotId, 'auth_type' => 'jwt']);

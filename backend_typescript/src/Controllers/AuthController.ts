@@ -11,6 +11,12 @@ export function promotesOnPlanUpgrade(role: string | null | undefined): boolean 
   return role === 'guest' || role === 'prospect';
 }
 
+/** POST /auth/upgrade-plan follows the same rule: only a guest/prospect is promoted; any other role is kept. */
+export function roleAfterPlanUpgrade(current: string | null | undefined, plan: string): string | null {
+  if (promotesOnPlanUpgrade(current)) return plan === 'free' ? 'prospect' : 'user';
+  return current ?? null;
+}
+
 /** Mirrors src/Controllers/AuthController.php (JWT, app-key, and Firebase helpers folded in). */
 export class AuthController {
   // ---- helpers --------------------------------------------------------------
@@ -223,8 +229,13 @@ export class AuthController {
     if (!ctx.user_id) return { status_code: 401, success: false, message: 'Authentication required' };
     const plan = this.normalizePlan(ctx.body.plan);
     if (plan !== 'standard' && plan !== 'premium') return { status_code: 400, success: false, message: 'Invalid plan. Must be standard or premium.' };
-    const role = this.roleForPlan(plan);
-    await db.updateTable('users').set({ plan, role: role as any }).where('id', '=', ctx.user_id).execute();
+    const current = (await db.selectFrom('users').select('role').where('id', '=', ctx.user_id).executeTakeFirst())?.role ?? null;
+    const role = roleAfterPlanUpgrade(current, plan);
+    if (promotesOnPlanUpgrade(current)) {
+      await db.updateTable('users').set({ plan, role: role as any }).where('id', '=', ctx.user_id).execute();
+    } else {
+      await db.updateTable('users').set({ plan }).where('id', '=', ctx.user_id).execute();
+    }
     return { success: true, message: `Plan upgraded to ${plan}`, plan, role };
   }
 
