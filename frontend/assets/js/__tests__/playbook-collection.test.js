@@ -106,6 +106,12 @@ assert.deepStrictEqual(st, { armed: false, key: null, message: "Your role can't 
 st = PC.publishStep(null, { type: 'error', error: replaces, key: 'k' }, (k, p) => `${k}|${p.key}|${p.name}|${p.date}`);
 assert.strictEqual(st.message, 'playbookLibrary.replacesConfirm|k|Ada Lovelace|2026-10-05');
 
+// Unpublish arms on the first click of a target and fires on the second click of the SAME target.
+let arm = PC.armClick(null, 'robot:5');
+assert.deepStrictEqual(arm, { fire: false, armed: 'robot:5' });
+assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:6'), { fire: false, armed: 'robot:6' });
+assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:5'), { fire: true, armed: null });
+
 (async () => {
     // A failed load is remembered: a linked id that is not cached is "unloaded", not "not found".
     await assert.rejects(PC.cache.load({ list: async () => { throw new Error('HTTP 500'); } }));

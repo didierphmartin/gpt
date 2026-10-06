@@ -263,6 +263,7 @@
     "publish": "Publier",
     "republish": "Republier",
     "unpublish": "Dépublier",
+    "confirmUnpublish": "Cliquez à nouveau pour dépublier {{key}}",
     "replacesConfirm": "Remplace {{key}} publié par {{name}} le {{date}}",
     "publishedOk": "Publié sur le robot.",
     "tabMine": "Mes playbooks",

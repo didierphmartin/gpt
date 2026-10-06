@@ -178,6 +178,12 @@
         return other ? 'keyTaken' : null;
     }
 
+    // Second-click confirmation (no browser dialog): the first click on a target arms it, a second click
+    // on the same target fires; a click on another target arms that one instead.
+    function armClick(armed, target) {
+        return armed === target ? { fire: true, armed: null } : { fire: false, armed: target };
+    }
+
     return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
-        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep };
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep, armClick };
 });

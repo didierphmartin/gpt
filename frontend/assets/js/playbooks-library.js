@@ -17,6 +17,7 @@ class PlaybooksLibrary {
         this.robotRows = [];
         this.tab = 'mine';        // 'mine' | 'robot'
         this.publishState = null; // the menu's Publish replace confirmation (PlaybookCollection.publishStep)
+        this.unpublishArmed = null; // the armed Unpublish target ('menu:<id>' | 'robot:<robotId>'), PlaybookCollection.armClick
         const base = window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1';
         this.api = new window.PlaybookCollection.PlaybookApi(base, () => window.chatApp?.getAuthHeaders?.() || {});
     }
@@ -42,6 +43,11 @@ class PlaybooksLibrary {
                 if (!action) return;
                 // Delete is two-step: the first click arms the button and keeps the menu open.
                 if (action === 'delete' && !this.armDelete(btn)) return;
+                // Unpublish too: the robot copy may be someone's scheduled run, or have no source left.
+                if (action === 'unpublish') {
+                    const row = this.rows.find(r => Number(r.id) === Number(this.contextTarget));
+                    if (!this.armUnpublish(btn, `menu:${this.contextTarget}`, row?.pkey)) return;
+                }
                 // Publish keeps the menu open: a `replaces` answer arms the button, a second click confirms.
                 if (action === 'publish' || action === 'republish') { this.publishFromMenu(btn); return; }
                 this.handleContextAction(action);
@@ -102,6 +108,7 @@ class PlaybooksLibrary {
 
     renderTree() {
         if (!this.treeContainer) return;
+        this.disarmUnpublish();
         if (this.tab === 'robot') return this.renderRobotTree();
         const q = (this.searchInput?.value || '').toLowerCase().trim();
         const visible = q
@@ -157,7 +164,10 @@ class PlaybooksLibrary {
         this.treeContainer.querySelectorAll('.pb-robot-unpublish').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                await this.unpublishRobotRow(parseInt(btn.dataset.robotPlaybookId, 10));
+                const robotId = parseInt(btn.dataset.robotPlaybookId, 10);
+                const row = this.robotRows.find(r => Number(r.id) === robotId);
+                if (!this.armUnpublish(btn, `robot:${robotId}`, row?.pkey)) return;
+                await this.unpublishRobotRow(robotId);
             });
         });
     }
@@ -190,6 +200,7 @@ class PlaybooksLibrary {
                 e.stopPropagation();
                 this.disarmDelete();
                 this.disarmPublish();
+                this.disarmUnpublish();
                 this.setStatus('');
                 this.contextTarget = parseInt(btn.dataset.playbookId, 10);
                 this.showPublishItems(this.rows.find(r => Number(r.id) === this.contextTarget));
@@ -200,7 +211,25 @@ class PlaybooksLibrary {
         });
     }
 
-    hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); }
+    hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); this.disarmUnpublish(); }
+
+    // Arm-then-confirm Unpublish (as Delete): true when this click is the confirming one.
+    armUnpublish(btn, target, key) {
+        const step = window.PlaybookCollection.armClick(this.unpublishArmed, target);
+        this.disarmUnpublish();
+        if (step.fire) return true;
+        this.unpublishArmed = step.armed;
+        this.unpublishBtn = btn;
+        btn.textContent = this.t('playbookLibrary.confirmUnpublish', { key: key || '' });
+        this.unpublishTimer = setTimeout(() => this.disarmUnpublish(), 4000);
+        return false;
+    }
+    disarmUnpublish() {
+        clearTimeout(this.unpublishTimer);
+        this.unpublishArmed = null;
+        if (this.unpublishBtn) this.unpublishBtn.textContent = this.t('playbookLibrary.unpublish');
+        this.unpublishBtn = null;
+    }
 
     // Publish when not published; Republish + Unpublish when it is; none without "use the robot".
     showPublishItems(row) {
