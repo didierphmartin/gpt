@@ -5,20 +5,47 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 use PDO;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStore;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 
 /** /api/v1/playbooks — the playbook collection (CRUD + used-by), over PlaybookStore. */
 final class PlaybooksController
 {
     private PlaybookStore $store;
+    private RobotPolicy $policy;
 
-    public function __construct(PDO $db, array $config)
+    public function __construct(private readonly PDO $db, array $config)
     {
         $this->store = new PlaybookStore($db);
+        $this->policy = new RobotPolicy($db, $config);
     }
 
     public function index(array $request): array
     {
-        return $this->guard($request, fn(int $u) => ['success' => true, 'data' => $this->store->list($u)]);
+        return $this->guard($request, function (int $u) {
+            $rows = $this->store->list($u);
+            if ($this->policy->canUse($u)) {
+                $robotId = RobotAccount::id($this->db);
+                $status = $robotId === null ? [] : $this->store->publishStatus($u, $robotId);
+                foreach ($rows as &$r) {
+                    $r['published'] = $status[$r['id']] ?? null;
+                }
+                unset($r);
+            }
+            return ['success' => true, 'data' => $rows];
+        });
+    }
+
+    public function publish(array $request): array
+    {
+        return $this->guard($request, function (int $u) use ($request) {
+            if (!$this->policy->canUse($u)) {
+                throw new PlaybookStoreError('forbidden', "Your role can't publish to the robot", 403);
+            }
+            $row = $this->store->publish($u, (int) ($request['params']['id'] ?? 0), RobotAccount::ensure($this->db),
+                ($request['body']['confirm_replace'] ?? false) === true);
+            return ['success' => true, 'data' => $row];
+        });
     }
 
     public function show(array $request): array
@@ -85,7 +112,8 @@ final class PlaybooksController
         try {
             return $action($userId);
         } catch (PlaybookStoreError $e) {
-            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
+            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status]
+                + ($e->data === [] ? [] : ['data' => $e->data]);
         }
     }
 }

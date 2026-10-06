@@ -408,6 +408,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->put('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'update']);
         $r->delete('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'destroy']);
         $r->get('/api/v1/playbooks/{id:\d+}/used-by', ['PlaybooksController', 'usedBy']);
+        $r->post('/api/v1/playbooks/{id:\d+}/publish', ['PlaybooksController', 'publish']);
+        $r->get('/api/v1/robot', ['RobotController', 'show']);
+        $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
+        $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
 
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);
