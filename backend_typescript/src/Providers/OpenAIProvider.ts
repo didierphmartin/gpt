@@ -205,13 +205,13 @@ export class OpenAIProvider extends LLMProvider {
       body.temperature = 0.6;
       body.top_p = 0.95;
     }
-    // DeepSeek-V4 (deepseek-v4-*) is also a thinking model, and a FORCED tool_choice hits the same
+    // DeepSeek-V4 (deepseek-v4-*, and deepseek-flash, which replaced deepseek-v4-flash) is also a thinking model, and a FORCED tool_choice hits the same
     // 400 ("Thinking mode does not support this tool_choice"). Mirror PHP's dedicated DeepSeekProvider,
     // which disables V4 thinking for the tool-picking call: when a specific tool is forced (skill
     // nodes force run_skill_script via SkillToolChoice), turn thinking off. Normal deepseek-v4 calls
     // (tool_choice auto/absent) keep thinking on.
     const forcedTool = toolChoice !== undefined && toolChoice !== null && toolChoice !== 'auto';
-    if (model.startsWith('deepseek-v4') && forcedTool) {
+    if ((model.startsWith('deepseek-v4') || model.startsWith('deepseek-flash')) && forcedTool) {
       body.thinking = { type: 'disabled' };
     }
     // o1/o3 don't support tools.

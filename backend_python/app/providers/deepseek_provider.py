@@ -78,6 +78,13 @@ class DeepSeekProvider(
     """Port of backend/src/Providers/DeepSeekProvider.php."""
 
     BASE_URL = 'https://api.deepseek.com'
+
+    @staticmethod
+    def isThinkingModel(model: str) -> bool:
+        """Whether a model id runs in DeepSeek V4 thinking mode: the deepseek-v4-*
+        ids and deepseek-flash (DeepSeek-V4.1-Flash, the id that replaced
+        deepseek-v4-flash)."""
+        return model.startswith(('deepseek-v4', 'deepseek-flash'))
     CHAT_ENDPOINT = '/chat/completions'
 
     def __init__(self, config: Configuration):
@@ -315,7 +322,7 @@ class DeepSeekProvider(
         # when thinking is enabled. We always send `thinking: {type:
         # enabled}` for V4 and omit the unsupported sampling fields. Older
         # models (V3, R1) keep the legacy temperature behaviour.
-        isV4 = self.model.startswith('deepseek-v4')
+        isV4 = DeepSeekProvider.isThinkingModel(self.model)
 
         payload = {
             'model': self.model,
@@ -894,7 +901,7 @@ class DeepSeekProvider(
 
         # V4 runs in thinking mode and rejects sampling params; legacy
         # models keep the OpenAI-compatible temperature behaviour.
-        if model.startswith('deepseek-v4'):
+        if DeepSeekProvider.isThinkingModel(model):
             payload['thinking'] = {'type': 'enabled'}
         else:
             payload['temperature'] = temperature

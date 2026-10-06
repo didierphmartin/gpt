@@ -1,4 +1,6 @@
+import { readFileSync } from 'fs';
 import { sql, Kysely, Transaction } from 'kysely';
+import { config } from '../config/env';
 import { db } from '../db/pools';
 import { DB } from '../db/types';
 import { Ctx, ControllerResult } from '../Support/Http';
@@ -19,6 +21,27 @@ import { ROUTER_FORMAT, routerPairingError, ROUTER_KEYS } from '../Services/Prov
  *    produce empty results — exactly matching live PHP. The full loops/seedProvider upsert are still
  *    ported for fidelity (they'd behave identically if the config ever carried provider blocks again).
  */
+
+/**
+ * [input, output] price per 1M tokens for a model from resources/model_catalog.json;
+ * [null, null] when the catalog does not list the model (or cannot be read).
+ * Mirrors PHP catalogPrices().
+ */
+export function catalogPrices(providerKey: string, model: string): [number | null, number | null] {
+  let data: any;
+  try {
+    data = JSON.parse(readFileSync(config.modelCatalogPath, 'utf8'));
+  } catch {
+    return [null, null];
+  }
+  const entries = data?.providers?.[providerKey];
+  const entry = Array.isArray(entries) ? entries.find((m: any) => m?.id === model) : undefined;
+  if (!entry) return [null, null];
+  return [
+    entry.input !== undefined && entry.input !== null ? phpFloatVal(entry.input) : null,
+    entry.output !== undefined && entry.output !== null ? phpFloatVal(entry.output) : null,
+  ];
+}
 
 // PHP (float) cast semantics (leading-numeric, else 0; bool→1/0).
 function phpFloatVal(v: any): number {
@@ -54,7 +77,7 @@ export class SystemSettingsController {
   private static readonly ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ROUTER_FORMAT];
 
   // Top-level provider keys that have dedicated config sections (::TOP_LEVEL_PROVIDERS).
-  private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4'];
+  private static readonly TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
 
   // Mirrors PHP's $this->config (the ai_config.php array) for provider-seeding purposes. The array
   // no longer carries provider blocks nor a 'providers' entry (now DB-loaded), so this is empty —
@@ -152,7 +175,9 @@ export class SystemSettingsController {
       claude: {
         display_name: 'Claude',
         base_url: 'https://api.anthropic.com',
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-5',
+        price_input_per_1m: 2.00,
+        price_output_per_1m: 10.00,
         max_tokens: 64000,
         api_format: 'anthropic',
         chat_endpoint: '/v1/messages',
@@ -160,7 +185,9 @@ export class SystemSettingsController {
       openai: {
         display_name: 'OpenAI',
         base_url: 'https://api.openai.com',
-        model: 'gpt-4o',
+        model: 'gpt-5.6-terra',
+        price_input_per_1m: 2.00,
+        price_output_per_1m: 12.00,
         max_tokens: 4096,
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
@@ -168,7 +195,9 @@ export class SystemSettingsController {
       gemini: {
         display_name: 'Gemini',
         base_url: 'https://generativelanguage.googleapis.com',
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.6-flash',
+        price_input_per_1m: 0.75,
+        price_output_per_1m: 3.75,
         max_tokens: 8192,
         api_format: 'gemini',
         chat_endpoint: '/v1beta/models',
@@ -176,7 +205,9 @@ export class SystemSettingsController {
       grok: {
         display_name: 'Grok',
         base_url: 'https://api.x.ai',
-        model: 'grok-2-latest',
+        model: 'grok-4.6',
+        price_input_per_1m: 2.00,
+        price_output_per_1m: 6.00,
         max_tokens: 4096,
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
@@ -184,7 +215,9 @@ export class SystemSettingsController {
       deepseek: {
         display_name: 'DeepSeek',
         base_url: 'https://api.deepseek.com',
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-pro',
+        price_input_per_1m: 0.66,
+        price_output_per_1m: 1.98,
         max_tokens: 4096,
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
@@ -192,7 +225,9 @@ export class SystemSettingsController {
       kimi: {
         display_name: 'Kimi',
         base_url: 'https://api.moonshot.cn',
-        model: 'moonshot-v1-auto',
+        model: 'kimi-k2.6',
+        price_input_per_1m: 0.95,
+        price_output_per_1m: 4.00,
         max_tokens: 4096,
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
@@ -201,9 +236,21 @@ export class SystemSettingsController {
         display_name: 'Gamma4',
         base_url: 'https://g4eb.yellowbrickroad.info',
         model: 'Gemma-4-E4B-it',
+        price_input_per_1m: 0.00,
+        price_output_per_1m: 0.00,
         max_tokens: 4096,
         api_format: 'openai',
         chat_endpoint: '/v1/chat/completions',
+      },
+      glm: {
+        display_name: 'GLM 5.2',
+        base_url: 'https://api.z.ai/api/paas/v4',
+        model: 'glm-5.2',
+        price_input_per_1m: 1.40,
+        price_output_per_1m: 4.40,
+        max_tokens: 4096,
+        api_format: 'openai',
+        chat_endpoint: '/chat/completions',
       },
     };
 
@@ -212,14 +259,19 @@ export class SystemSettingsController {
       if (this.phpConfig[key] !== undefined) {
         const cfg = this.phpConfig[key];
         const defaults = providerDefaults[key] ?? {};
-        const prices: [number | null, number | null] = [null, null];
+        // The default prices belong to the default model only; a model set in
+        // config gets its own catalog price (or none).
+        const model = cfg.model ?? defaults.model ?? '';
+        const prices: [number | null, number | null] = model === defaults.model
+          ? [defaults.price_input_per_1m ?? null, defaults.price_output_per_1m ?? null]
+          : catalogPrices(key, String(model));
         providers.push({
           id: null,
           provider_key: key,
           display_name: cfg.display_name ?? defaults.display_name ?? ucfirst(key),
           api_key: cfg.api_key ?? '',
           api_key_masked: this.maskApiKey(cfg.api_key ?? ''),
-          model: cfg.model ?? defaults.model ?? '',
+          model,
           base_url: cfg.base_url ?? defaults.base_url ?? '',
           max_tokens: phpIntVal(cfg.max_tokens ?? defaults.max_tokens ?? 4096),
           temperature: phpFloatVal(cfg.temperature ?? 0.7),

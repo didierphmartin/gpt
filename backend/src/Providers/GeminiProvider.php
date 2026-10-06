@@ -54,21 +54,20 @@ class GeminiProvider implements AIProviderInterface, HttpRequestBuilderInterface
     // Diverging the two leads to "model X is in the dropdown but the
     // backend rejects it" — confusing for admins who just configured it.
     private const SUPPORTED_MODELS = [
-        // Gemini 3 (preview)
-        'gemini-3-pro-preview',
+        // Current Gemini 3.x (catalog order: newest Flash first)
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-flash-lite',
+        // Legacy, still served
         'gemini-3-flash-preview',
-        'gemini-3-flash-lite-preview',
-        // Gemini 2.5
+        // Gemini 2.5 (access limited to prior users)
         'gemini-2.5-pro',
         'gemini-2.5-flash',
         'gemini-2.5-flash-lite',
-        // Gemini 2.0
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        // Gemini 1.5 (legacy — kept for backwards-compatibility with users
-        // who set up before Gemini 2.x existed)
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
     ];
 
     public function __construct(Configuration $config)

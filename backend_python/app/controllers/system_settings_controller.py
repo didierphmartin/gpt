@@ -25,6 +25,9 @@ constraint.
 """
 from __future__ import annotations
 
+import json
+
+from app.controllers.model_catalog_controller import CATALOG_PATH
 from app.services.provider_kinds import ROUTER_FORMAT, ROUTER_KEYS, router_pairing_error
 from app.support.db_presence import DbPresence
 from app.support.phpcompat import (
@@ -53,7 +56,9 @@ class SystemSettingsController:
         'claude': {
             'display_name': 'Claude',
             'base_url': 'https://api.anthropic.com',
-            'model': 'claude-sonnet-4-5',
+            'model': 'claude-sonnet-5',
+            'price_input_per_1m': 2.00,
+            'price_output_per_1m': 10.00,
             'max_tokens': 64000,
             'api_format': 'anthropic',
             'chat_endpoint': '/v1/messages',
@@ -61,7 +66,9 @@ class SystemSettingsController:
         'openai': {
             'display_name': 'OpenAI',
             'base_url': 'https://api.openai.com',
-            'model': 'gpt-4o',
+            'model': 'gpt-5.6-terra',
+            'price_input_per_1m': 2.00,
+            'price_output_per_1m': 12.00,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/v1/chat/completions',
@@ -69,7 +76,9 @@ class SystemSettingsController:
         'gemini': {
             'display_name': 'Gemini',
             'base_url': 'https://generativelanguage.googleapis.com',
-            'model': 'gemini-2.0-flash',
+            'model': 'gemini-3.6-flash',
+            'price_input_per_1m': 0.75,
+            'price_output_per_1m': 3.75,
             'max_tokens': 8192,
             'api_format': 'gemini',
             'chat_endpoint': '/v1beta/models',
@@ -77,7 +86,9 @@ class SystemSettingsController:
         'grok': {
             'display_name': 'Grok',
             'base_url': 'https://api.x.ai',
-            'model': 'grok-2-latest',
+            'model': 'grok-4.6',
+            'price_input_per_1m': 2.00,
+            'price_output_per_1m': 6.00,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/v1/chat/completions',
@@ -85,7 +96,9 @@ class SystemSettingsController:
         'deepseek': {
             'display_name': 'DeepSeek',
             'base_url': 'https://api.deepseek.com',
-            'model': 'deepseek-chat',
+            'model': 'deepseek-v4-pro',
+            'price_input_per_1m': 0.66,
+            'price_output_per_1m': 1.98,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/v1/chat/completions',
@@ -93,7 +106,9 @@ class SystemSettingsController:
         'kimi': {
             'display_name': 'Kimi',
             'base_url': 'https://api.moonshot.cn',
-            'model': 'moonshot-v1-auto',
+            'model': 'kimi-k2.6',
+            'price_input_per_1m': 0.95,
+            'price_output_per_1m': 4.00,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/v1/chat/completions',
@@ -102,6 +117,8 @@ class SystemSettingsController:
             'display_name': 'Gamma4',
             'base_url': 'https://g4eb.yellowbrickroad.info',
             'model': 'Gemma-4-E4B-it',
+            'price_input_per_1m': 0.00,
+            'price_output_per_1m': 0.00,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/v1/chat/completions',
@@ -110,6 +127,8 @@ class SystemSettingsController:
             'display_name': 'GLM 5.2',
             'base_url': 'https://api.z.ai/api/paas/v4',
             'model': 'glm-5.2',
+            'price_input_per_1m': 1.40,
+            'price_output_per_1m': 4.40,
             'max_tokens': 4096,
             'api_format': 'openai',
             'chat_endpoint': '/chat/completions',
@@ -182,6 +201,25 @@ class SystemSettingsController:
 
     # ─── getProvidersFromConfig (php:146-289) ───────────────────────────
 
+    @staticmethod
+    def _catalog_prices(provider_key: str, model: str) -> tuple:
+        """(input, output) price per 1M tokens for a model from
+        resources/model_catalog.json; (None, None) when the catalog does not
+        list the model (or cannot be read). Mirrors PHP catalogPrices()."""
+        try:
+            data = json.loads(CATALOG_PATH.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return (None, None)
+        providers = data.get('providers') if isinstance(data, dict) else None
+        entries = providers.get(provider_key) if isinstance(providers, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get('id') == model:
+                return (
+                    float(entry['input']) if entry.get('input') is not None else None,
+                    float(entry['output']) if entry.get('output') is not None else None,
+                )
+        return (None, None)
+
     def _get_providers_from_config(self) -> dict:
         providers = []
         sort_order = 0
@@ -191,21 +229,30 @@ class SystemSettingsController:
             if cfg is None:
                 continue
             defaults = self._PROVIDER_DEFAULTS.get(key, {})
+            # The default prices belong to the default model only; a model
+            # set in config gets its own catalog price (or none).
+            model = php_coalesce(cfg.get('model'), defaults.get('model'), '')
+            if model == defaults.get('model'):
+                prices = (defaults.get('price_input_per_1m'), defaults.get('price_output_per_1m'))
+            else:
+                prices = self._catalog_prices(key, str(model))
             providers.append({
                 'id': None,
                 'provider_key': key,
                 'display_name': php_coalesce(cfg.get('display_name'), defaults.get('display_name'), ucfirst(key)),
                 'api_key': php_coalesce(cfg.get('api_key'), ''),
                 'api_key_masked': self._mask_api_key(cfg.get('api_key') if cfg.get('api_key') is not None else ''),
-                'model': php_coalesce(cfg.get('model'), defaults.get('model'), ''),
+                'model': model,
                 'base_url': php_coalesce(cfg.get('base_url'), defaults.get('base_url'), ''),
                 'max_tokens': php_intval(php_coalesce(cfg.get('max_tokens'), defaults.get('max_tokens'), 4096)),
                 'temperature': php_floatval(php_coalesce(cfg.get('temperature'), 0.7)),
                 'price_input_per_1m': (
-                    php_floatval(cfg['price_input_per_1m']) if cfg.get('price_input_per_1m') is not None else None
+                    php_floatval(cfg['price_input_per_1m']) if cfg.get('price_input_per_1m') is not None
+                    else prices[0]
                 ),
                 'price_output_per_1m': (
-                    php_floatval(cfg['price_output_per_1m']) if cfg.get('price_output_per_1m') is not None else None
+                    php_floatval(cfg['price_output_per_1m']) if cfg.get('price_output_per_1m') is not None
+                    else prices[1]
                 ),
                 'chat_endpoint': php_coalesce(cfg.get('chat_endpoint'), defaults.get('chat_endpoint'),
                                               '/v1/chat/completions'),

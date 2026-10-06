@@ -8,6 +8,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
  * Authentication Controller
@@ -231,6 +232,10 @@ class AuthController
      */
     public function login(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $email = $request['body']['email'] ?? '';
         $password = $request['body']['password'] ?? '';
 
@@ -390,6 +395,10 @@ class AuthController
      */
     public function register(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $email = strtolower(trim($request['body']['email'] ?? ''));
         $password = $request['body']['password'] ?? '';
         $firstName = trim($request['body']['first_name'] ?? '');
@@ -485,6 +494,10 @@ class AuthController
      */
     public function firebaseAuth(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $provider = $request['body']['provider'] ?? '';
         $idToken = $request['body']['idToken'] ?? '';
         $userData = $request['body']['userData'] ?? [];

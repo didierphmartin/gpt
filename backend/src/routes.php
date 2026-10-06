@@ -228,6 +228,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/admin/login/app-users/role', ['LoginAdminController', 'setAppUserRole']);
         $r->post('/api/v1/admin/login/app-users/add', ['LoginAdminController', 'addAppMember']);
 
+        // Corporate first-run setup (public: before setup nobody can sign in).
+        $r->get('/api/v1/setup/status', ['SetupController', 'status']);
+        $r->post('/api/v1/setup/admin', ['SetupController', 'createAdmin']);
+
         // Admin MCP Server Management
         $r->get('/api/v1/admin/mcp/servers', ['AdminController', 'listMCPServers']);
         $r->post('/api/v1/admin/mcp/servers', ['AdminController', 'createMCPServer']);

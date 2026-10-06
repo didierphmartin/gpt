@@ -172,8 +172,23 @@ def test_response_body_is_truncated_like_guzzle_body_summary(streaming):
     assert 'X' * 120 + ' (truncated...)' in msg and 'TAIL' not in msg
 
 
+def test_thinking_model_ids():
+    # deepseek-flash replaced deepseek-v4-flash and still runs in V4 thinking mode.
+    assert DeepSeekProvider.isThinkingModel('deepseek-v4-pro')
+    assert DeepSeekProvider.isThinkingModel('deepseek-v4-flash')
+    assert DeepSeekProvider.isThinkingModel('deepseek-flash')
+    assert not DeepSeekProvider.isThinkingModel('deepseek-chat')
+    assert not DeepSeekProvider.isThinkingModel('deepseek-reasoner')
+
+
+def test_legacy_model_keeps_temperature():
+    r = DeepSeekProvider.buildHttpRequest('deepseek-chat', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
+    assert 'thinking' not in r['payload'] and r['payload']['temperature'] == 0.1
+
+
 def test_static_builder_and_parser():
-    r = DeepSeekProvider.buildHttpRequest('deepseek-v4-flash', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
+    r = DeepSeekProvider.buildHttpRequest('deepseek-flash', [{'role': 'user', 'content': 'hi'}], [], {'api_key': 'K'}, 50, 0.1)
     assert r['url'] == 'https://api.deepseek.com/chat/completions' and r['payload']['thinking'] == {'type': 'enabled'}
+    assert 'temperature' not in r['payload']
     parsed = DeepSeekProvider.parseHttpResponse({'choices': [{'message': {'content': '', 'reasoning_content': 'r'}}], 'usage': {}})
     assert parsed['text'] == 'r'

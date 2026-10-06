@@ -11,6 +11,12 @@ cd "$(dirname "$0")/../.."
 
 export COMPOSE_PROJECT_NAME=gpt-test
 export GPT_PORT=18080
+# Override any GPT_EDITION a developer's own gitignored .env sets (the
+# .env.example this repo ships now defaults it to "individual"). Without
+# this, every phase below -- including no-keys-test.sh and
+# persistence-test.sh, whose whole point is the HOSTED behaviour -- silently
+# runs as individual instead, and nothing catches it.
+export GPT_EDITION=
 
 # Always tear down, including on failure. Without this, `set -e` aborts the
 # run at the failing test and the final `down -v` at the bottom never executes
@@ -22,6 +28,7 @@ trap 'docker compose down -v >/dev/null 2>&1 || true; docker rm -f gpt-image-tes
 echo "== static checks (no Docker needed) =="
 ./docker/tests/schema-test.sh
 ./docker/tests/seed-test.sh
+./docker/tests/wizard-keys-test.sh
 
 echo
 echo "== image =="
@@ -49,7 +56,13 @@ for i in $(seq 1 60); do
 done
 
 ./docker/tests/no-keys-test.sh
+./docker/tests/runner-source-test.sh
 ./docker/tests/persistence-test.sh
+
+echo
+echo "== editions =="
+./docker/tests/edition-test.sh
+./docker/tests/corporate-test.sh
 
 echo
 echo "== cleaning up =="

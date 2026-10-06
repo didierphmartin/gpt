@@ -978,7 +978,7 @@ def _deepseek(model, temperature, max_tokens, thinking):
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    if model.startswith("deepseek-v4"):
+    if model.startswith(("deepseek-v4", "deepseek-flash")):
         # The node form Thinking attribute governs (platform parity):
         # off -> disabled, form temperature kept; on/default -> V4 thinking
         # stays enabled and the API rejects sampling params, so temperature

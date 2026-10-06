@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\Edition;
+use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 use PDO;
 use Exception;
@@ -20,11 +22,28 @@ class AdminController
 
     private PDO $db;
     private array $config;
+    private ?LoginAccounts $accounts;
+    private bool $accountsInjected;
 
-    public function __construct(PDO $db, array $config)
+    public function __construct(PDO $db, array $config, ?LoginAccounts $accounts = null)
     {
         $this->db = $db;
         $this->config = $config;
+        $this->accounts = $accounts;
+        $this->accountsInjected = func_num_args() >= 3;
+    }
+
+    /** Only on a corporate install; throws if the login database is unreachable. */
+    private function loginAccounts(): ?LoginAccounts
+    {
+        if (!Edition::isCorporate($this->config)) {
+            return null;
+        }
+        if (!$this->accountsInjected) {
+            $this->accounts = LoginAccounts::fromConfig($this->config);
+            $this->accountsInjected = true;
+        }
+        return $this->accounts;
     }
 
     /**
@@ -188,7 +207,7 @@ class AdminController
 
         $firstName = trim($input['first_name'] ?? '');
         $lastName = trim($input['last_name'] ?? '');
-        $email = trim($input['email'] ?? '');
+        $email = strtolower(trim($input['email'] ?? ''));
         $password = $input['password'] ?? '';
         $role = $input['role'] ?? 'user';
 
@@ -205,19 +224,51 @@ class AdminController
             $role = 'user';
         }
 
-        // Hash password
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
-        $sql = "INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)
-                VALUES (:email, :password, :first_name, :last_name, :role, 'email', NOW(), NOW())";
+        // Corporate: the login service holds the credential, gpt holds the role.
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if (Edition::isCorporate($this->config) && $accounts === null) {
+            return ['success' => false, 'error' => 'The login service is not configured', 'status_code' => 503];
+        }
+
+        $loginRowExisted = false;
+        if ($accounts !== null) {
+            // Refuse before writing anything if a gpt user already owns this email —
+            // otherwise upsertVerified would overwrite an existing login credential
+            // and the later gpt INSERT would fail on the UNIQUE email constraint,
+            // which would then delete the login row we just clobbered.
+            $existing = $this->db->prepare('SELECT 1 FROM users WHERE email = :email');
+            $existing->execute([':email' => $email]);
+            if ($existing->fetchColumn() !== false) {
+                return ['success' => false, 'error' => 'A user with that email already exists', 'status_code' => 409];
+            }
+            $loginRowExisted = $accounts->exists($email);
+            $accounts->upsertVerified($email, password_hash($password, PASSWORD_BCRYPT), $firstName, $lastName);
+        }
+
+        $sql = "INSERT INTO users (email, password, first_name, last_name, role, provider, email_verified, created_at, updated_at)
+                VALUES (:email, :password, :first_name, :last_name, :role, 'email', :verified, NOW(), NOW())";
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([
-            ':email' => $email,
-            ':password' => $hashedPassword,
-            ':first_name' => $firstName,
-            ':last_name' => $lastName,
-            ':role' => $role
-        ]);
+        try {
+            $stmt->execute([
+                ':email' => $email,
+                ':password' => $accounts !== null ? null : $hashedPassword,
+                ':first_name' => $firstName,
+                ':last_name' => $lastName,
+                ':role' => $role,
+                ':verified' => $accounts !== null ? 1 : 0,
+            ]);
+        } catch (\Throwable $e) {
+            if ($accounts !== null && !$loginRowExisted) {
+                $accounts->delete($email);   // don't leave a login account with no gpt account
+            }
+            throw $e;
+        }
 
         $newUserId = $this->db->lastInsertId();
 
@@ -243,7 +294,7 @@ class AdminController
         $userId = (int)($input['user_id'] ?? 0);
         $firstName = trim($input['first_name'] ?? '');
         $lastName = trim($input['last_name'] ?? '');
-        $email = trim($input['email'] ?? '');
+        $email = strtolower(trim($input['email'] ?? ''));
         $password = $input['password'] ?? '';
         $role = $input['role'] ?? null;
 
@@ -270,6 +321,31 @@ class AdminController
                 'error' => 'Invalid role',
                 'status_code' => 400
             ];
+        }
+
+        if ($role !== null && $role !== 'admin' && $this->isLastAdmin($userId)) {
+            return $this->lastAdminRefusal();
+        }
+
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if ($accounts !== null) {
+            $current = $this->db->prepare('SELECT email FROM users WHERE id = :id');
+            $current->execute([':id' => $userId]);
+            $currentEmail = strtolower((string) $current->fetchColumn());
+            // sso_exchange matches the login account to the gpt account by email.
+            if ($currentEmail !== strtolower($email)) {
+                return ['success' => false,
+                    'error' => 'The email of an account cannot be changed on a corporate installation',
+                    'status_code' => 400];
+            }
+            if (!empty($password)) {
+                $accounts->setPassword($currentEmail, password_hash($password, PASSWORD_BCRYPT));
+            }
+            $password = '';   // gpt keeps no password on a corporate install
         }
 
         // Build update query
@@ -319,6 +395,24 @@ class AdminController
             ];
         }
 
+        if ($this->isLastAdmin($userId)) {
+            return $this->lastAdminRefusal();
+        }
+
+        try {
+            $accounts = $this->loginAccounts();
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'The login service database is not reachable', 'status_code' => 503];
+        }
+        if ($accounts !== null) {
+            $row = $this->db->prepare('SELECT email FROM users WHERE id = :id');
+            $row->execute([':id' => $userId]);
+            $emailToDelete = (string) $row->fetchColumn();
+            if ($emailToDelete !== '') {
+                $accounts->delete($emailToDelete);
+            }
+        }
+
         $sql = "DELETE FROM users WHERE id = :id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':id' => $userId]);
@@ -335,6 +429,30 @@ class AdminController
             'success' => true,
             'message' => 'User deleted',
             'status_code' => 200
+        ];
+    }
+
+    /**
+     * Whether $userId is the only admin. Removing or demoting it would leave
+     * nobody able to administer the install (and on corporate, would once
+     * have reopened first-run setup).
+     */
+    private function isLastAdmin(int $userId): bool
+    {
+        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = :id");
+        $stmt->execute([':id' => $userId]);
+        if ($stmt->fetchColumn() !== 'admin') {
+            return false;
+        }
+        return (int) $this->db->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() === 1;
+    }
+
+    private function lastAdminRefusal(): array
+    {
+        return [
+            'success' => false,
+            'error' => 'The last administrator cannot be removed or demoted',
+            'status_code' => 409
         ];
     }
 
@@ -2812,8 +2930,9 @@ class AdminController
             $updated = 0;
             $errors = [];
 
-            // Process each category
-            foreach (['llm', 'voice', 'avatar'] as $category) {
+            // Process each category. LLM prices come from the model catalog,
+            // so no AI refresh is spent on them.
+            foreach (['voice', 'avatar'] as $category) {
                 foreach ($allCosts[$category] as $provider) {
                     try {
                         $updatedProvider = $this->fetchProviderPricing($provider);
@@ -3523,16 +3642,14 @@ Return ONLY the JSON array, no explanation or markdown.";
     private function getDefaultCosts(): array
     {
         return [
+            // LLM prices live in backend/resources/model_catalog.json; these
+            // entries only name the provider and its pricing page.
             'llm' => [
                 [
                     'provider' => 'claude',
                     'displayName' => 'Claude (Anthropic)',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'Claude 3.5 Sonnet', 'price' => '$3.00', 'unit' => '/ 1M input tokens', 'details' => '$15.00 / 1M output tokens'],
-                        ['name' => 'Claude 3.5 Haiku', 'price' => '$0.80', 'unit' => '/ 1M input tokens', 'details' => '$4.00 / 1M output tokens'],
-                        ['name' => 'Claude 3 Opus', 'price' => '$15.00', 'unit' => '/ 1M input tokens', 'details' => '$75.00 / 1M output tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://www.anthropic.com/pricing',
                     'lastUpdated' => null
                 ],
@@ -3540,11 +3657,7 @@ Return ONLY the JSON array, no explanation or markdown.";
                     'provider' => 'openai',
                     'displayName' => 'OpenAI',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'GPT-4o', 'price' => '$2.50', 'unit' => '/ 1M input tokens', 'details' => '$10.00 / 1M output tokens'],
-                        ['name' => 'GPT-4o mini', 'price' => '$0.15', 'unit' => '/ 1M input tokens', 'details' => '$0.60 / 1M output tokens'],
-                        ['name' => 'GPT-4 Turbo', 'price' => '$10.00', 'unit' => '/ 1M input tokens', 'details' => '$30.00 / 1M output tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://openai.com/api/pricing',
                     'lastUpdated' => null
                 ],
@@ -3552,11 +3665,7 @@ Return ONLY the JSON array, no explanation or markdown.";
                     'provider' => 'gemini',
                     'displayName' => 'Gemini (Google)',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'Gemini 1.5 Pro', 'price' => '$1.25', 'unit' => '/ 1M input tokens', 'details' => '$5.00 / 1M output tokens'],
-                        ['name' => 'Gemini 1.5 Flash', 'price' => '$0.075', 'unit' => '/ 1M input tokens', 'details' => '$0.30 / 1M output tokens'],
-                        ['name' => 'Gemini 2.0 Flash', 'price' => '$0.10', 'unit' => '/ 1M input tokens', 'details' => '$0.40 / 1M output tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://ai.google.dev/pricing',
                     'lastUpdated' => null
                 ],
@@ -3564,10 +3673,7 @@ Return ONLY the JSON array, no explanation or markdown.";
                     'provider' => 'grok',
                     'displayName' => 'Grok (xAI)',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'Grok-2', 'price' => '$2.00', 'unit' => '/ 1M input tokens', 'details' => '$10.00 / 1M output tokens'],
-                        ['name' => 'Grok-2 mini', 'price' => '$0.20', 'unit' => '/ 1M input tokens', 'details' => '$1.00 / 1M output tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://x.ai/api',
                     'lastUpdated' => null
                 ],
@@ -3575,10 +3681,7 @@ Return ONLY the JSON array, no explanation or markdown.";
                     'provider' => 'deepseek',
                     'displayName' => 'DeepSeek',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'DeepSeek-V3', 'price' => '$0.27', 'unit' => '/ 1M input tokens', 'details' => '$1.10 / 1M output tokens'],
-                        ['name' => 'DeepSeek-R1', 'price' => '$0.55', 'unit' => '/ 1M input tokens', 'details' => '$2.19 / 1M output tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://platform.deepseek.com/api-docs/pricing',
                     'lastUpdated' => null
                 ],
@@ -3586,11 +3689,7 @@ Return ONLY the JSON array, no explanation or markdown.";
                     'provider' => 'kimi',
                     'displayName' => 'Kimi (Moonshot)',
                     'category' => 'llm',
-                    'tiers' => [
-                        ['name' => 'Moonshot-v1-8k', 'price' => '$0.012', 'unit' => '/ 1K tokens'],
-                        ['name' => 'Moonshot-v1-32k', 'price' => '$0.024', 'unit' => '/ 1K tokens'],
-                        ['name' => 'Moonshot-v1-128k', 'price' => '$0.06', 'unit' => '/ 1K tokens'],
-                    ],
+                    'tiers' => [],
                     'pricingUrl' => 'https://platform.moonshot.cn/docs/pricing',
                     'lastUpdated' => null
                 ],

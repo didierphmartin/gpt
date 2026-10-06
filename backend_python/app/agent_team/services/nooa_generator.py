@@ -270,7 +270,7 @@ def make_llm(provider, model, max_tokens, temperature, thinking=None):
     * kimi-k2.*  -- thinking OFF (default): API accepts ONLY temperature
       0.6. Thinking ON: the API requires temperature 1.0.
     * glm        -- default OFF (answers directly); ON honored.
-    * deepseek-v4.* -- provider default is thinking ON, which REJECTS
+    * deepseek-v4.* / deepseek-flash -- provider default is thinking ON, which REJECTS
       sampling params — temperature is dropped in that mode.
     """
     p = (provider or "claude").lower()
@@ -292,7 +292,7 @@ def make_llm(provider, model, max_tokens, temperature, thinking=None):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     elif p == "glm":
         kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking == "on" else "disabled"}}
-    elif p == "deepseek" and str(model).startswith("deepseek-v4"):
+    elif p == "deepseek" and str(model).startswith(("deepseek-v4", "deepseek-flash")):
         if thinking == "off":
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         else:

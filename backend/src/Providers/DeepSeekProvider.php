@@ -19,7 +19,8 @@ use Quantis\AIPortfolioAssistant\Services\DebugLogger;
 /**
  * DeepSeek AI Provider
  *
- * Dedicated provider for DeepSeek V4 models (deepseek-v4-pro, deepseek-v4-flash).
+ * Dedicated provider for DeepSeek V4 models (deepseek-v4-pro, and deepseek-flash,
+ * which replaced the retired deepseek-v4-flash id).
  * Uses OpenAI-compatible API format with reasoning_content support.
  *
  * V4 quirks (per https://api-docs.deepseek.com):
@@ -36,6 +37,16 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
     use \Quantis\AIPortfolioAssistant\Providers\Traits\ClientSideToolsTrait;
 
     private const BASE_URL = 'https://api.deepseek.com';
+
+    /**
+     * Whether a model id runs in DeepSeek V4 thinking mode: the deepseek-v4-*
+     * ids and deepseek-flash (DeepSeek-V4.1-Flash, the id that replaced
+     * deepseek-v4-flash).
+     */
+    public static function isThinkingModel(string $model): bool
+    {
+        return str_starts_with($model, 'deepseek-v4') || str_starts_with($model, 'deepseek-flash');
+    }
     private const CHAT_ENDPOINT = '/chat/completions';
 
     private Configuration $config;
@@ -310,7 +321,7 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
         // when thinking is enabled. We always send `thinking: {type: enabled}`
         // for V4 and omit the unsupported sampling fields. Older models (V3,
         // R1) keep the legacy temperature behaviour.
-        $isV4 = str_starts_with($this->model, 'deepseek-v4');
+        $isV4 = self::isThinkingModel($this->model);
 
         $payload = [
             'model' => $this->model,
@@ -892,7 +903,7 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
 
         // V4 runs in thinking mode and rejects sampling params; legacy models
         // keep the OpenAI-compatible temperature behaviour.
-        if (str_starts_with($model, 'deepseek-v4')) {
+        if (self::isThinkingModel($model)) {
             $payload['thinking'] = ['type' => 'enabled'];
         } else {
             $payload['temperature'] = $temperature;

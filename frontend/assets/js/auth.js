@@ -113,6 +113,9 @@ class AuthManager {
     }
 
     async setupLoginPage() {
+        if (window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION === 'corporate') {
+            return this.setupCorporateLoginPage();
+        }
         // Email/Password login form
         const loginForm = document.getElementById('login-form');
         if (loginForm) {
@@ -173,6 +176,78 @@ class AuthManager {
                 console.log('Token verification failed, clearing auth data');
                 this.clearAuthData();
             }
+        }
+    }
+
+    /**
+     * Corporate edition: the login service is the only credential store.
+     * Password → login service → token → gpt sso_exchange → gpt session.
+     * Same origin, so no app key or redirect is involved.
+     */
+    async setupCorporateLoginPage() {
+        ['gpt-edition-social', 'forgot-password-link'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+        try {
+            const res = await fetch(`${this.apiBaseUrl}/setup/status`);
+            const status = await res.json();
+            if (status && status.needs_setup) {
+                this.showSetupPending();
+                return;
+            }
+        } catch (e) {
+            // Status unknown: offer sign-in anyway rather than a dead page.
+        }
+        const form = document.getElementById('login-form');
+        if (form) form.addEventListener('submit', (e) => this.handleCorporateLogin(e));
+    }
+
+    showSetupPending() {
+        const form = document.getElementById('login-form');
+        if (!form) return;
+        form.innerHTML =
+            '<p class="text-sm text-gray-700">This installation has not been set up yet.</p>' +
+            '<p class="text-sm text-gray-700 mt-2">Administrator: open ' +
+            '<a class="text-blue-600 underline" href="/gpt_admin/">the admin app</a> ' +
+            'to create the administrator account.</p>';
+    }
+
+    async handleCorporateLogin(e) {
+        e.preventDefault();
+        const email = document.getElementById('email').value.trim().toLowerCase();
+        const password = document.getElementById('password').value;
+        const button = document.getElementById('login-button');
+        button.disabled = true;
+        try {
+            const loginRes = await fetch('/login/backend/api/v1/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password }),
+            });
+            const login = await loginRes.json();
+            if (!login.success) {
+                this.showError(login.message || 'Invalid email or password');
+                return;
+            }
+            const exRes = await fetch(`${this.apiBaseUrl}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'sso_exchange', login_token: login.data.access_token }),
+            });
+            const exchanged = await exRes.json();
+            if (!exchanged.success) {
+                this.showError(exchanged.message || 'Sign-in failed');
+                return;
+            }
+            this.saveAuthData(exchanged.data);
+            sessionStorage.setItem('showSplash', 'true');
+            window.location.href = 'index.html';
+        } catch (err) {
+            console.error('Corporate login error:', err);
+            this.showError('Sign-in failed. Please try again.');
+        } finally {
+            button.disabled = false;
         }
     }
 

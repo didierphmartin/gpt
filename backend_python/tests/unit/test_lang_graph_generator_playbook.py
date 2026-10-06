@@ -48,7 +48,7 @@ _GLOBAL_NEWS = {
 }
 _LLM_ROWS = [
     {'provider_key': 'claude', 'model': 'claude-sonnet-4-6'},
-    {'provider_key': 'deepseek', 'model': 'deepseek-v4-flash'},
+    {'provider_key': 'deepseek', 'model': 'deepseek-flash'},
 ]
 
 
@@ -108,7 +108,7 @@ def playbook_graph() -> dict:
             {'id': '1', 'node_type': 'start', 'config': {'type': 'start', 'prompt': 'I want to take some vacations'}},
             {'id': '2', 'node_type': 'playbook', 'config': {
                 'type': 'playbook', 'name': 'Playbook HR', 'playbook': PLAYBOOK,
-                'agent_provider': 'deepseek', 'model': 'deepseek-v4-flash', 'writes_enabled': True,
+                'agent_provider': 'deepseek', 'model': 'deepseek-flash', 'writes_enabled': True,
             }},
             {'id': '3', 'node_type': 'output', 'config': {'type': 'output'}},
         ],
@@ -150,7 +150,9 @@ def test_playbook_node_binds_actions_against_user_registry():
     assert '"unbound__frobnicate"' in code
     assert '"#Request Approval"' not in code
     assert '"provider": "deepseek"' in code
-    assert '"model": "deepseek-v4-flash"' in code
+    assert '"model": "deepseek-flash"' in code
+    # deepseek-flash (the renamed deepseek-v4-flash) keeps the V4 thinking rules.
+    assert 'if model.startswith(("deepseek-v4", "deepseek-flash")):' in code
     assert '"writes_enabled": True' in code
     assert '"display": "Playbook HR"' in code
     assert '"title": "Time Off & Leave"' in code

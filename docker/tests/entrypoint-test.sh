@@ -58,3 +58,35 @@ run_ep 'gpt-entrypoint true >/dev/null 2>&1;
   || fail "frontend config files not created"
 
 echo "PASS: secrets generated once, persisted, never re-rolled"
+
+# --- edition validation ------------------------------------------------------
+# A value that is not an edition must stop the container, not run as corporate.
+run_edition() {
+  docker run --rm -v gpt-ep-secrets:/run/gpt \
+    -e MYSQL_HOST=db -e MYSQL_DATABASE=gpt_chatbot \
+    -e MYSQL_USER=gpt -e MYSQL_PASSWORD=gpt \
+    -e GPT_SKIP_ADMIN=1 -e GPT_EDITION="$1" \
+    gpt-web:test gpt-entrypoint true 2>&1
+}
+
+for bad in Corporate corp hosted; do
+  if out=$(run_edition "$bad"); then
+    fail "GPT_EDITION=$bad started instead of being refused"
+  fi
+  echo "$out" | grep -q "is not an edition" \
+    || fail "GPT_EDITION=$bad was refused without saying why: $out"
+done
+
+# The base image has no gpt_admin, so corporate must be refused there.
+if out=$(run_edition corporate); then
+  fail "GPT_EDITION=corporate started in an image without gpt_admin"
+fi
+echo "$out" | grep -q "has no gpt_admin" \
+  || fail "corporate without gpt_admin was refused without saying why: $out"
+
+# The valid values still start.
+for good in individual ''; do
+  run_edition "$good" >/dev/null || fail "GPT_EDITION='$good' was refused"
+done
+
+echo "PASS: unknown editions and corporate without gpt_admin are refused"
