@@ -97,4 +97,23 @@ final class AgentPlaybookLinkTest extends TestCase
         $u = $this->update($id, ['playbook_id' => $pb['id']]);
         $this->assertNull($u['data']['playbook_id']);
     }
+
+    public function testDuplicatingToAnotherOwnerCopiesThePlaybookIntoTheirCollection(): void
+    {
+        $store = new PlaybookStore($this->db);
+        $pb = $store->save(3, null, PlaybookStoreTest::OKTA, 'okta-reset');
+        $store->save(4, null, PlaybookStoreTest::OKTA, null); // user 4 already has key okta-password-reset
+        $id = $this->plainAgent('playbook', ['playbook_id' => $pb['id']]);
+        $repo = new \AgentTeam\Services\AgentRepository($this->db);
+
+        $copy = $repo->duplicate($id, 4, 'Mine');
+        $copied = $store->get(4, (int) $copy->getPlaybookId());
+        $this->assertNotNull($copied, 'the copy links to a playbook its owner can read');
+        $this->assertSame('okta-password-reset-2', $copied['pkey']);
+        $this->assertSame(PlaybookStoreTest::OKTA, $copied['text']);
+
+        $same = $repo->duplicate($id, 3, 'Again');
+        $this->assertSame($pb['id'], $same->getPlaybookId());
+        $this->assertSame(2, (int) $this->db->query('SELECT COUNT(*) FROM playbooks WHERE user_id = 4')->fetchColumn());
+    }
 }

@@ -6,6 +6,7 @@ namespace AgentTeam\Services;
 
 use AgentTeam\Models\Agent;
 use PDO;
+use Quantis\AIPortfolioAssistant\Playbook\PlaybookStore;
 use PDOException;
 
 /**
@@ -579,6 +580,16 @@ class AgentRepository
         $copy->setUserId($newUserId);
         $copy->setName($newName ?? $original->getName() . ' (Copy)');
         $copy->setVisibility('personal');
+
+        // A playbook is owner-scoped: a copy for another user gets its own copy of the text in
+        // their collection (key from the title, suffixed on a clash); the same owner keeps the link.
+        $pbId = $original->getPlaybookId();
+        if ($pbId !== null && $newUserId !== $original->getUserId()) {
+            $store = new PlaybookStore($this->db);
+            $pb = $store->get($original->getUserId(), $pbId);
+            $copy->setPlaybookId($pb === null ? null
+                : (int) $store->save($newUserId, null, $pb['text'], $store->freeKey($newUserId, PlaybookStore::keyFromTitle($pb['title'])))['id']);
+        }
 
         return $this->create($copy);
     }

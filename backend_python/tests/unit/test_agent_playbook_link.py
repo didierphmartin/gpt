@@ -110,3 +110,22 @@ def test_standard_agent_stores_no_link(db):
     assert r['data']['playbook_id'] is None
     u = update(db, int(r['data']['id']), {'playbook_id': pb['id']})
     assert u['data']['playbook_id'] is None
+
+
+def test_duplicating_to_another_owner_copies_the_playbook_into_their_collection(db):
+    from app.agent_team.services.agent_repository import AgentRepository
+    store = PlaybookStore(db)
+    pb = store.save(3, None, OKTA, 'okta-reset')
+    store.save(4, None, OKTA, None)  # user 4 already has key okta-password-reset
+    id_ = plain_agent(db, 'playbook', playbook_id=pb['id'])
+    repo = AgentRepository(db)
+
+    copy = repo.duplicate(id_, 4, 'Mine')
+    copied = store.get(4, int(copy.getPlaybookId()))
+    assert copied is not None, 'the copy links to a playbook its owner can read'
+    assert copied['pkey'] == 'okta-password-reset-2'
+    assert copied['text'] == OKTA
+
+    same = repo.duplicate(id_, 3, 'Again')
+    assert same.getPlaybookId() == pb['id']
+    assert db.fetch_one('SELECT COUNT(*) AS n FROM playbooks WHERE user_id = 4')['n'] == 2

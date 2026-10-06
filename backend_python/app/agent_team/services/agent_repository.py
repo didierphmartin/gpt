@@ -7,6 +7,7 @@ from __future__ import annotations
 import pymysql
 
 from app.agent_team.models.agent import Agent
+from app.playbook.playbook_store import PlaybookStore
 from app.support.logger import error_log
 from app.support.phpcompat import php_empty, php_intval
 from app.support.phpjson import php_json_encode
@@ -398,7 +399,7 @@ class AgentRepository:
         }
 
     def duplicate(self, agent_id: int, new_user_id: int, new_name: str | None = None) -> Agent | None:
-        """PHP 568-581."""
+        """PHP 571-595."""
         original = self.findById(agent_id)
         if not original:
             return None
@@ -407,6 +408,15 @@ class AgentRepository:
         copy.setUserId(new_user_id)
         copy.setName(new_name if new_name is not None else original.getName() + ' (Copy)')
         copy.setVisibility('personal')
+
+        # A playbook is owner-scoped: a copy for another user gets its own copy of the text in
+        # their collection (key from the title, suffixed on a clash); the same owner keeps the link.
+        pb_id = original.getPlaybookId()
+        if pb_id is not None and new_user_id != original.getUserId():
+            store = PlaybookStore(self.db)
+            pb = store.get(original.getUserId(), pb_id)
+            copy.setPlaybookId(None if pb is None else int(
+                store.save(new_user_id, None, pb['text'], store.freeKey(new_user_id, PlaybookStore.keyFromTitle(pb['title'])))['id']))
 
         return self.create(copy)
 
