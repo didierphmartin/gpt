@@ -32,6 +32,8 @@ from app.controllers.playbook_controller import PlaybookController
 from app.controllers.playbooks_controller import PlaybooksController
 from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
+from app.controllers.robot_controller import RobotController
+from app.controllers.roles_controller import RolesController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
 from app.controllers.system_settings_controller import SystemSettingsController
@@ -79,6 +81,8 @@ CONTROLLERS = {
     'PlaybooksController': PlaybooksController,
     'PromptLibraryController': PromptLibraryController,
     'ProviderController': ProviderController,
+    'RobotController': RobotController,
+    'RolesController': RolesController,
     'RootController': RootController,
     'SettingsController': SettingsController,
     'SystemSettingsController': SystemSettingsController,
@@ -123,8 +127,12 @@ ROUTES = [
     # PACKAGE ROUTES
     ('GET', '/api/v1/me/package', ('PackageController', 'me')),
     ('GET', '/api/v1/admin/packages', ('PackageController', 'adminList')),
-    ('GET', '/api/v1/admin/packages/{role:[a-z]+}', ('PackageController', 'adminGet')),
-    ('PUT', '/api/v1/admin/packages/{role:[a-z]+}', ('PackageController', 'adminUpdate')),
+    ('GET', '/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ('PackageController', 'adminGet')),
+    ('PUT', '/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ('PackageController', 'adminUpdate')),
+    ('GET', '/api/v1/admin/roles', ('RolesController', 'index')),
+    ('POST', '/api/v1/admin/roles', ('RolesController', 'create')),
+    ('PUT', '/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ('RolesController', 'rename')),
+    ('DELETE', '/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ('RolesController', 'destroy')),
     # AFFILIATES (routes.php:73-93)
     # Admin (existing admin JWT / role=admin enforced in controller)
     ('GET', '/api/v1/admin/affiliates', ('AffiliateController', 'adminList')),
@@ -409,6 +417,10 @@ ROUTES = [
     ('PUT', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'update')),
     ('DELETE', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'destroy')),
     ('GET', '/api/v1/playbooks/{id:\\d+}/used-by', ('PlaybooksController', 'usedBy')),
+    ('POST', '/api/v1/playbooks/{id:\\d+}/publish', ('PlaybooksController', 'publish')),
+    ('GET', '/api/v1/robot', ('RobotController', 'show')),
+    ('GET', '/api/v1/robot/playbooks', ('RobotController', 'playbooks')),
+    ('DELETE', '/api/v1/robot/playbooks/{id:\\d+}', ('RobotController', 'unpublish')),
     # WORKFLOW SCHEMAS (routes.php:395-399)
     ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
     ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),

@@ -105,6 +105,7 @@ def load_config(env_file: str | None = '__default__') -> dict:
             'api_key': _e('GEMINI_VOICE_API_KEY'),
             'model': 'gemini-2.5-flash-native-audio-preview-12-2025', 'default_voice': 'Zephyr',
         },
+        'edition': _e('GPT_EDITION'),   # ai_config.php: 'individual' | 'corporate' | '' (hosted)
         'scheduler': {'token': _e('SCHEDULER_TOKEN'), 'max_concurrent': 5, 'timeout_minutes': 30},
         'storage': {'default_provider': 's3'},
         # Python-only: CORS origin allowlist (comma-separated). Unset → every Origin is

@@ -30,8 +30,10 @@ def test_load_package_defaults_and_cache():
                                                   'sidebar': [], 'quota_tokens': None, 'voice': False, 'avatar': False},
                  'updated_at': None}
     assert r.loadPackage('user') is p and len(db.calls) == 1
-    db2 = FakeDb(one=[{'capabilities': '{"providers":{"claude":{"enabled":true}},"sidebar":{},"mcp_servers":["a",3]}',
-                       'updated_at': '2026-01-01 00:00:00'}])
+    guest = {'capabilities': '{"providers":{"claude":{"enabled":true}},"sidebar":{},"mcp_servers":["a",3]}',
+             'updated_at': '2026-01-01 00:00:00'}
+    # 'bogus' has no packages row (None), so it resolves to the guest row; the cache is keyed by the asked role.
+    db2 = FakeDb(one=[None, guest, guest])
     r2 = PackageResolver(db2)
     assert r2.loadPackage('bogus')['role'] == 'guest'
     assert r2.allowedMcpServers(None) == ['a']
@@ -60,7 +62,7 @@ def test_me_and_admin_gates():
         'success': False, 'error': 'Authentication required', 'status_code': 401}
     assert PackageController(FakeDb(one=[{'role': 'user'}]), {}).adminList(ctx()) == {
         'success': False, 'error': 'Admin access required', 'status_code': 403}
-    assert PackageController(FakeDb(one=[{'role': 'admin'}]), {}).adminGet(ctx(), 'nope') == {
+    assert PackageController(FakeDb(one=[{'role': 'admin'}, None]), {}).adminGet(ctx(), 'nope') == {
         'success': False, 'error': 'Invalid role', 'status_code': 400}
 
 
@@ -70,3 +72,60 @@ def test_admin_update_validation():
     assert c().adminUpdate(ctx({'capabilities': {'providers': {}}}), 'user')['error'] == 'capabilities.sidebar must be an object'
     assert c().adminUpdate(ctx({'capabilities': {'providers': {}, 'sidebar': {}, 'skills': 'x'}}), 'user')['error'] == 'capabilities.skills must be null or an array'
     assert c().adminUpdate(ctx({'capabilities': {'providers': {}, 'sidebar': {}, 'quota_tokens': 1.5}}), 'user')['error'] == 'capabilities.quota_tokens must be null or an integer'
+
+
+# ─── PackageControllerMeTest.php (custom roles; sqlite) ──────────────────────
+
+import json  # noqa: E402
+
+from tests.unit.playbook.conftest import sqlite_db  # noqa: E402
+
+
+def _me_db():
+    db = sqlite_db('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT DEFAULT "person")',
+                   'CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER DEFAULT 0, '
+                   'capabilities TEXT, updated_at TEXT)')
+    db.execute("INSERT INTO users (id, role) VALUES (7, 'user')")
+    return db
+
+
+def test_a_custom_roles_user_gets_that_rows_capabilities():
+    db = _me_db()
+    db.execute("INSERT INTO users (id, role) VALUES (8, 'it-ops-2')")
+    db.execute('INSERT INTO packages (role, name, capabilities) VALUES (?, ?, ?)',
+               ['it-ops-2', 'IT Ops', json.dumps({'providers': [], 'sidebar': [], 'quota_tokens': 42})])
+    out = PackageController(db, {}).me({'user_id': 8})
+    assert out['role'] == 'it-ops-2'
+    assert out['capabilities']['quota_tokens'] == 42
+
+
+def test_a_role_without_a_row_resolves_to_guest():
+    db = _me_db()
+    db.execute("INSERT INTO users (id, role) VALUES (9, 'affiliate')")
+    db.execute('INSERT INTO packages (role, capabilities) VALUES (?, ?)',
+               ['guest', json.dumps({'providers': [], 'sidebar': [], 'quota_tokens': 7})])
+    out = PackageController(db, {}).me({'user_id': 9})
+    assert out['role'] == 'guest'
+    assert out['capabilities']['quota_tokens'] == 7
+
+
+def test_admin_list_and_get_carry_name_and_builtin():
+    db = _me_db()
+    db.execute("INSERT INTO users (id, role) VALUES (1, 'admin')")
+    db.execute('INSERT INTO packages (role, name, builtin, capabilities) VALUES (?, ?, 0, ?)', ['it-ops-2', 'IT Ops', '{}'])
+    c = PackageController(db, {})
+    by_role = {p['role']: p for p in c.adminList({'user_id': 1})['packages']}
+    assert by_role['it-ops-2']['name'] == 'IT Ops'
+    assert by_role['it-ops-2']['builtin'] is False
+    assert by_role['user']['name'] == 'User'
+    got = c.adminGet({'user_id': 1, 'params': {'role': 'it-ops-2'}})
+    assert got['package']['name'] == 'IT Ops'
+    assert c.adminGet({'user_id': 1, 'params': {'role': 'nope'}})['status_code'] == 400
+
+
+def test_an_all_digit_role_key_arrives_as_int_and_still_resolves():
+    # main.py casts numeric route params to int, as index.php does: the key is read back as a string.
+    db = _me_db()
+    db.execute("INSERT INTO users (id, role) VALUES (1, 'admin')")
+    db.execute("INSERT INTO packages (role, name, builtin, capabilities) VALUES ('2024', 'Numeric', 0, '{}')")
+    assert PackageController(db, {}).adminGet({'user_id': 1, 'params': {'role': '2024'}}, 2024)['package']['name'] == 'Numeric'

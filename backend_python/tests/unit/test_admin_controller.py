@@ -75,7 +75,7 @@ def test_list_users_sql_and_payload():
     db = FakeDb(all_=[[{'id': 1, 'email': 'a@b.com'}]])
     r = c(db).listUsers(ctx())
     assert r == {'success': True, 'users': [{'id': 1, 'email': 'a@b.com'}], 'status_code': 200}
-    assert sqls(db) == [f'SELECT {USER_COLS} FROM users ORDER BY id']
+    assert sqls(db) == [f"SELECT {USER_COLS} FROM users WHERE kind <> 'service' ORDER BY id"]
     assert db.calls[0][1] is None
 
 
@@ -95,7 +95,7 @@ def test_get_user_found_sql():
     db = FakeDb(one=[{'id': 7, 'email': 'x@y.com'}])
     r = c(db).getUser(ctx(), 7)
     assert r == {'success': True, 'user': {'id': 7, 'email': 'x@y.com'}, 'status_code': 200}
-    assert sqls(db) == [f'SELECT {USER_COLS} FROM users WHERE id = :id']
+    assert sqls(db) == [f"SELECT {USER_COLS} FROM users WHERE id = :id AND kind <> 'service'"]
     assert db.calls[0][1] == {':id': 7}
 
 
@@ -123,7 +123,7 @@ def test_get_user_account_skips_tokens_when_table_absent():
     assert r['account']['free_quota_percent'] is None
     assert sqls(db) == [
         ('SELECT id, email, phone, first_name, last_name, role, plan,'
-         ' provider, email_verified, firebase_uid, last_login, created_at FROM users WHERE id = :id'),
+         " provider, email_verified, firebase_uid, last_login, created_at FROM users WHERE id = :id AND kind <> 'service'"),
     ]
 
 
@@ -143,7 +143,7 @@ def test_get_user_account_computes_free_quota_percent():
     assert a['email_verified'] is True
     assert sqls(db) == [
         ('SELECT id, email, phone, first_name, last_name, role, plan,'
-         ' provider, email_verified, firebase_uid, last_login, created_at FROM users WHERE id = :id'),
+         " provider, email_verified, firebase_uid, last_login, created_at FROM users WHERE id = :id AND kind <> 'service'"),
         ('SELECT COALESCE(SUM(prompt_tokens), 0) AS tokens_in, COALESCE(SUM(completion_tokens), 0) AS tokens_out'
          ' FROM llm_usage_transactions WHERE user_id = :user_id'),
     ]
@@ -167,11 +167,12 @@ def test_create_user_requires_email_and_password():
     assert c().createUser(ctx({'password': 'pw'}))['error'] == 'Email and password are required'
 
 
-def test_create_user_invalid_role_coerced_to_user():
+def test_create_user_invalid_role_is_refused():
+    # An unknown role is refused (any role with a packages row, or a built-in, is valid), not swapped for 'user'.
     db = FakeDb(insert_id=9)
     r = c(db).createUser(ctx({'email': 'a@b.com', 'password': 'pw', 'role': 'superadmin'}))
-    assert r == {'success': True, 'message': 'User created', 'user_id': 9, 'status_code': 200}
-    assert db.calls[0][1][':role'] == 'user'
+    assert r == {'success': False, 'error': 'Invalid role', 'status_code': 400}
+    assert sqls(db) == ['SELECT 1 FROM packages WHERE role = ?']
 
 
 @pytest.mark.parametrize('role', ['guest', 'prospect', 'user', 'admin'])
@@ -220,18 +221,20 @@ def test_update_user_minimal_fields_sql():
     r = c(db).updateUser(ctx({'user_id': 3, 'email': 'a@b.com'}))
     assert r == {'success': True, 'message': 'User updated', 'status_code': 200}
     assert sqls(db) == [
+        'SELECT kind FROM users WHERE id = :id',
         'UPDATE users SET email = :email, first_name = :first_name, last_name = :last_name, updated_at = NOW()'
         ' WHERE id = :id']
-    assert db.calls[0][1] == {':id': 3, ':email': 'a@b.com', ':first_name': '', ':last_name': ''}
+    assert db.calls[1][1] == {':id': 3, ':email': 'a@b.com', ':first_name': '', ':last_name': ''}
 
 
 def test_update_user_with_role_and_password_sql():
     db = FakeDb()
     c(db).updateUser(ctx({'user_id': 3, 'email': 'a@b.com', 'role': 'admin', 'password': 'newpw'}))
     assert sqls(db) == [
+        'SELECT kind FROM users WHERE id = :id',
         'UPDATE users SET email = :email, first_name = :first_name, last_name = :last_name, updated_at = NOW(),'
         ' role = :role, password = :password WHERE id = :id']
-    params = db.calls[0][1]
+    params = db.calls[1][1]
     assert params[':role'] == 'admin'
     assert password_verify('newpw', params[':password']) is True
 
@@ -241,10 +244,10 @@ def test_update_user_blank_password_not_updated():
     c(db).updateUser(ctx({'user_id': 3, 'email': 'a@b.com', 'password': '   '}))
     # php_empty(' ')  is False (only '', '0' are empty strings) -> password IS updated in PHP too;
     # only a genuinely empty/'0' password is skipped.
-    assert ':password' in db.calls[0][1]
+    assert ':password' in db.calls[1][1]
     db2 = FakeDb()
     c(db2).updateUser(ctx({'user_id': 3, 'email': 'a@b.com', 'password': ''}))
-    assert ':password' not in db2.calls[0][1]
+    assert ':password' not in db2.calls[1][1]
 
 
 # ─── deleteUser (285) ────────────────────────────────────────────────────────
@@ -262,8 +265,8 @@ def test_delete_user_success_sql():
     db = FakeDb(rowcount=1)
     r = c(db).deleteUser(ctx(), 5)
     assert r == {'success': True, 'message': 'User deleted', 'status_code': 200}
-    assert sqls(db) == ['DELETE FROM users WHERE id = :id']
-    assert db.calls[0][1] == {':id': 5}
+    assert sqls(db) == ['SELECT kind FROM users WHERE id = :id', 'DELETE FROM users WHERE id = :id']
+    assert db.calls[1][1] == {':id': 5}
 
 
 # ─── getProviderSettings (317) ───────────────────────────────────────────────

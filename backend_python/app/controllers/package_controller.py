@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 
 from app.services.package_resolver import PackageResolver
-from app.support.phpcompat import is_numeric
+from app.services.role_store import RoleStore
+from app.support.phpcompat import is_numeric, php_bool, ucfirst
 
 
 class PackageController:
@@ -23,21 +24,25 @@ class PackageController:
         err = self._require_admin(request)
         if err:
             return err
-        return {'success': True, 'packages': [self.resolver.loadPackage(r) for r in PackageResolver.validRoles()]}
+        return {'success': True, 'packages': [self._with_role_info(self.resolver.loadPackage(row['role']), row)
+                                              for row in RoleStore(self.db).list()]}
 
-    def adminGet(self, request, role: str) -> dict:
+    def adminGet(self, request, role=None) -> dict:
         err = self._require_admin(request)
         if err:
             return err
-        if role not in PackageResolver.validRoles():
+        role = self._role_key(request, role)
+        row = RoleStore(self.db).get(role)
+        if row is None:
             return {'success': False, 'error': 'Invalid role', 'status_code': 400}
-        return {'success': True, 'package': self.resolver.loadPackage(role)}
+        return {'success': True, 'package': self._with_role_info(self.resolver.loadPackage(role), row)}
 
-    def adminUpdate(self, request, role: str) -> dict:
+    def adminUpdate(self, request, role=None) -> dict:
         err = self._require_admin(request)
         if err:
             return err
-        if role not in PackageResolver.validRoles():
+        role = self._role_key(request, role)
+        if not RoleStore(self.db).exists(role):
             return {'success': False, 'error': 'Invalid role', 'status_code': 400}
         caps = (request.get('body') or {}).get('capabilities')
         if not isinstance(caps, (dict, list)):
@@ -52,7 +57,22 @@ class PackageController:
             ' ON DUPLICATE KEY UPDATE capabilities = VALUES(capabilities), updated_by = VALUES(updated_by)',
             {':role': role, ':caps': encoded, ':uid': admin_id})
         self.resolver = PackageResolver(self.db)   # PHP re-reads because loadPackage cache is per request
-        return {'success': True, 'package': self.resolver.loadPackage(role)}
+        return {'success': True, 'package': self._with_role_info(self.resolver.loadPackage(role),
+                                                                 RoleStore(self.db).get(role) or {})}
+
+    @staticmethod
+    def _role_key(request, fallback) -> str:
+        """The role key as a string: main.py casts all-digit route params to int."""
+        params = request.get('params') or {}
+        key = params.get('role') if params.get('role') is not None else fallback
+        return str(key) if key is not None else ''
+
+    @staticmethod
+    def _with_role_info(package: dict, row: dict) -> dict:
+        package = dict(package)
+        package['name'] = row['name'] if row.get('name') is not None else ucfirst(str(package['role']))
+        package['builtin'] = php_bool(row.get('builtin') if row.get('builtin') is not None else False)
+        return package
 
     def _require_admin(self, request) -> dict | None:
         uid = request.get('user_id')

@@ -9,7 +9,10 @@ from tests.unit.playbook.conftest import OKTA
 
 @pytest.fixture
 def c(pbc_db):
-    return PlaybooksController(pbc_db, {})
+    pbc_db.execute('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)')
+    pbc_db.execute('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)')
+    # Hosted rules, whatever GPT_EDITION the shell exports (PHP's config always carries the key).
+    return PlaybooksController(pbc_db, {'edition': ''})
 
 
 def req(body=None, params=None, user=3):

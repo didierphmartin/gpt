@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-VALID_ROLES = ['guest', 'prospect', 'user', 'admin']
+from app.services.role_store import RoleStore
 
 
 class PackageResolver:
@@ -18,16 +18,19 @@ class PackageResolver:
         if user_id is None:
             return 'guest'
         row = self.db.fetch_one('SELECT role FROM users WHERE id = :id LIMIT 1', {':id': user_id})
-        if not row or row.get('role') not in VALID_ROLES:
+        if not row or not RoleStore(self.db).exists(str(row.get('role'))):
             return 'guest'
         return str(row['role'])
 
     def loadPackage(self, role: str) -> dict:
-        if role not in VALID_ROLES:
-            role = 'guest'
         if role in self._cache:
             return self._cache[role]
-        row = self.db.fetch_one('SELECT capabilities, updated_at FROM packages WHERE role = :role LIMIT 1', {':role': role})
+        requested = role
+        row = self._package_row(role)
+        if not row and role != 'guest' and role not in RoleStore.BUILTIN:
+            # An unknown role resolves to the guest package.
+            role = 'guest'
+            row = self._package_row(role)
         if not row:
             capabilities = {'providers': [], 'mcp_servers': None, 'skills': None, 'sidebar': [],
                             'quota_tokens': None, 'voice': False, 'avatar': False}
@@ -40,12 +43,15 @@ class PackageResolver:
             capabilities = decoded if isinstance(decoded, (dict, list)) else []
             updated_at = row['updated_at']
         package = {'role': role, 'capabilities': capabilities, 'updated_at': updated_at}
-        self._cache[role] = package
+        self._cache[requested] = package
         return package
 
-    @classmethod
-    def validRoles(cls) -> list[str]:
-        return list(VALID_ROLES)
+    def _package_row(self, role: str):
+        return self.db.fetch_one('SELECT capabilities, updated_at FROM packages WHERE role = :role LIMIT 1', {':role': role})
+
+    def validRoles(self) -> list[str]:
+        """The keys of every role (built-in and custom)."""
+        return [r['role'] for r in RoleStore(self.db).list()]
 
     def allowedMcpServers(self, user_id: int | None) -> list[str] | None:
         capabilities = self.resolveForUser(user_id).get('capabilities') or {}

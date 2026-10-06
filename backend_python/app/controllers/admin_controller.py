@@ -26,6 +26,7 @@ import httpx
 from app.controllers.auth_controller import password_hash
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.package_resolver import PackageResolver
+from app.services.role_store import RoleStore
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -46,7 +47,6 @@ from app.support.phpcompat import (
 )
 from app.support.phpjson import php_json_decode, php_json_encode
 
-VALID_ROLES = ['guest', 'prospect', 'user', 'admin']
 VALID_CATEGORIES = ('avatar', 'voice')
 VALID_KEY_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi']
 
@@ -87,7 +87,7 @@ class AdminController:
 
     def listUsers(self, request) -> dict:
         sql = ("SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix,"
-               " app_key_created_at, created_at, updated_at FROM users ORDER BY id")
+               " app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id")
         users = self.db.fetch_all(sql)
         return {'success': True, 'users': users, 'status_code': 200}
 
@@ -96,7 +96,7 @@ class AdminController:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
         sql = ("SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix,"
-               " app_key_created_at, created_at, updated_at FROM users WHERE id = :id")
+               " app_key_created_at, created_at, updated_at FROM users WHERE id = :id AND kind <> 'service'")
         user = self.db.fetch_one(sql, {':id': userId})
 
         if not user:
@@ -111,7 +111,7 @@ class AdminController:
         try:
             sql = ("SELECT id, email, phone, first_name, last_name, role, plan,"
                    " provider, email_verified, firebase_uid, last_login, created_at"
-                   " FROM users WHERE id = :id")
+                   " FROM users WHERE id = :id AND kind <> 'service'")
             user = self.db.fetch_one(sql, {':id': userId})
 
             if not user:
@@ -178,8 +178,9 @@ class AdminController:
         if php_empty(email) or php_empty(password):
             return {'success': False, 'error': 'Email and password are required', 'status_code': 400}
 
-        if role not in VALID_ROLES:
-            role = 'user'
+        # Validate role: any existing role; an unknown one is refused, not swapped for 'user'.
+        if not isinstance(role, str) or not RoleStore(self.db).exists(role):
+            return {'success': False, 'error': 'Invalid role', 'status_code': 400}
 
         hashedPassword = password_hash(php_strval(password))
 
@@ -211,8 +212,11 @@ class AdminController:
         if php_empty(email):
             return {'success': False, 'error': 'Email is required', 'status_code': 400}
 
-        if role is not None and role not in VALID_ROLES:
+        if role is not None and (not isinstance(role, str) or not RoleStore(self.db).exists(role)):
             return {'success': False, 'error': 'Invalid role', 'status_code': 400}
+
+        if self._is_service_user(userId):
+            return self._user_not_found()
 
         fields = ['email = :email', 'first_name = :first_name', 'last_name = :last_name', 'updated_at = NOW()']
         params = {':id': userId, ':email': email, ':first_name': firstName, ':last_name': lastName}
@@ -234,6 +238,9 @@ class AdminController:
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
+        if self._is_service_user(userId):
+            return self._user_not_found()
+
         sql = 'DELETE FROM users WHERE id = :id'
         rowcount = self.db.execute(sql, {':id': userId})
 
@@ -241,6 +248,15 @@ class AdminController:
             return {'success': False, 'error': 'User not found', 'status_code': 404}
 
         return {'success': True, 'message': 'User deleted', 'status_code': 200}
+
+    def _is_service_user(self, userId: int) -> bool:
+        """The robot's service row is not a managed account: it answers as an unknown user."""
+        row = self.db.fetch_one('SELECT kind FROM users WHERE id = :id', {':id': userId})
+        return row is not None and row.get('kind') == 'service'
+
+    @staticmethod
+    def _user_not_found() -> dict:
+        return {'success': False, 'error': 'User not found', 'status_code': 404}
 
     # ─── provider settings — avatar/voice (AdminController.php:317-690;
     #     routes.php 181-185) ────────────────────────────────────────────────
