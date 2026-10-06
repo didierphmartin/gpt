@@ -206,11 +206,20 @@ class PlaybooksLibrary {
                 this.contextTarget = parseInt(btn.dataset.playbookId, 10);
                 this.showPublishItems(this.rows.find(r => Number(r.id) === this.contextTarget));
                 this.toggleDependencies(false);
-                this.contextMenu.style.left = `${e.clientX}px`;
-                this.contextMenu.style.top  = `${e.clientY}px`;
+                this.menuAt = { x: e.clientX, y: e.clientY };
                 this.contextMenu.classList.remove('hidden');
+                this.placeMenu();
             });
         });
+    }
+
+    // At the click, moved up (and left) when it would run past the window's edge.
+    placeMenu() {
+        const m = this.contextMenu;
+        if (!m || !this.menuAt) return;
+        const r = m.getBoundingClientRect();
+        m.style.left = `${Math.max(4, Math.min(this.menuAt.x, window.innerWidth - r.width - 4))}px`;
+        m.style.top  = `${Math.max(4, Math.min(this.menuAt.y, window.innerHeight - r.height - 4))}px`;
     }
 
     // The MCP servers the playbook's "Tools used" line names, listed under the menu's Dependencies item.
@@ -219,7 +228,7 @@ class PlaybooksLibrary {
         if (!list) return;
         const show = open ?? list.classList.contains('hidden');
         list.classList.toggle('hidden', !show);
-        if (!show) return;
+        if (!show) return this.placeMenu();
         const row = this.rows.find(r => Number(r.id) === Number(this.contextTarget));
         const deps = window.PlaybookCollection.toolsUsedOf(row?.text);
         list.replaceChildren(...(deps.length ? deps : [this.t('playbookLibrary.noDependencies')]).map((name) => {
@@ -228,6 +237,7 @@ class PlaybooksLibrary {
             line.textContent = deps.length ? `• ${name}` : name;
             return line;
         }));
+        this.placeMenu();
     }
 
     hideContextMenu() { this.contextMenu?.classList.add('hidden'); this.disarmDelete(); this.disarmPublish(); this.disarmUnpublish(); }
