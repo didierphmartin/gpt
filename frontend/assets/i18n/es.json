@@ -271,7 +271,9 @@
     "robotEmpty": "El robot aún no tiene playbooks",
     "robotPublishedBy": "publicado por {{name}} el {{date}}",
     "robotFrom": "de “{{title}}”",
-    "robotSourceGone": "origen eliminado"
+    "robotSourceGone": "origen eliminado",
+    "dependencies": "Dependencias",
+    "noDependencies": "Sin dependencias"
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",
