@@ -1,0 +1,36 @@
+# Corporate overlay. Use with:
+#   docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
+#   docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+#   docker build -t gpt-login-src:latest -f docker/login/Dockerfile "$GPT_LOGIN_SRC"
+#   docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
+#
+# Adds gpt_admin and the login service (/login/, its own database) to the web
+# image and turns auto-login off, so users sign in. No admin is created from
+# .env: on first visit, the setup wizard in gpt_admin creates it, once, and
+# that admin is how every other user gets created.
+#
+# gpt_admin and the login service are separate private repositories, each
+# built beforehand into its own image (gpt-admin-dist:latest, see
+# docker/gptadmin/Dockerfile; gpt-login-src:latest, see docker/login/Dockerfile);
+# this overlay's Dockerfile.corporate copies them in.
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: docker/db/Dockerfile.corporate
+    environment:
+      LOGIN_DB_NAME: ${LOGIN_DB_NAME:-gpt_login}
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile.corporate
+    environment:
+      GPT_EDITION: corporate
+      LOGIN_DB_NAME: ${LOGIN_DB_NAME:-gpt_login}
+  backend-node:
+    environment:
+      GPT_EDITION: corporate
+  backend-python:
+    environment:
+      GPT_EDITION: corporate

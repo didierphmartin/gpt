@@ -15,7 +15,8 @@ export interface UsersTable {
   last_name: string | null;
   firebase_uid: string | null;
   provider: 'email' | 'google' | 'facebook';
-  role: 'guest' | 'prospect' | 'user' | 'admin' | 'affiliate';
+  role: string; // a role key: built-in (guest, prospect, user, admin, robot) or custom (packages.role); 'affiliate' has no row
+  kind: Generated<'person' | 'service'>; // 'service' = the robot account (never signs in)
   ledger_user_id: string | null;
   plan: string;
   profile_picture: string | null;

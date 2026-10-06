@@ -23,6 +23,7 @@
 !backend
 !frontend
 !docker
+!langchain_runner
 !index.html
 !.htaccess
 !README.md
@@ -59,10 +60,22 @@ frontend/assets/js/config.js
 frontend/voice/config.json
 frontend/voice/assets
 
-# Note on what is NOT allowed back in: backend_typescript/, backend_python/
-# and langchain_runner/ are absent on purpose. The web image is the PHP
-# backend; the optional node/python compose profiles BIND-MOUNT their source
-# at run time rather than baking it in, and the local runner is installed on
-# the host by the setup wizard. Leaving them out keeps a developer's
-# langchain_runner/.env out of the image by construction rather than by a
-# pattern someone has to remember to maintain.
+# Note on what is NOT allowed back in: backend_typescript/ and backend_python/
+# are absent on purpose. The web image is the PHP backend; the optional
+# node/python compose profiles BIND-MOUNT their source at run time rather than
+# baking it in.
+#
+# langchain_runner/ IS allowed in, and has to be. An earlier version of this
+# file excluded it "because the local runner is installed on the host by the
+# setup wizard" -- which had the direction backwards. The wizard installs the
+# runner by FETCHING it from this app over HTTP: local-fs.js deployRunner reads
+# langchain_runner/install-manifest.json and writes each runtime file into the
+# folder you grant it. A page cannot read the host's disk, so the server is the
+# only place those files can come from. Excluding the directory made that fetch
+# 404, the wizard reported "Could not install the Python runner here", and
+# compiled workflows had no runtime at all.
+#
+# The secret that motivated the exclusion, langchain_runner/.env (where the
+# workflow editor writes provider keys), is already denied by the `**/.env`
+# rule above -- along with .venv/ and __pycache__/. The directory is 412K of
+# source otherwise.

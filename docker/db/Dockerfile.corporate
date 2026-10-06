@@ -1,0 +1,7 @@
+# The corporate database image: gpt's schema and seed, plus an empty database
+# for the login service (docker/db/03-login-db.sh).
+FROM mysql:8.4
+COPY backend/schema/chatbot.sql /docker-entrypoint-initdb.d/01-schema.sql
+COPY docker/db/02-seed.sql      /docker-entrypoint-initdb.d/02-seed.sql
+COPY docker/db/03-login-db.sh   /docker-entrypoint-initdb.d/03-login-db.sh
+RUN chmod 755 /docker-entrypoint-initdb.d/03-login-db.sh

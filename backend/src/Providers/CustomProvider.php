@@ -308,11 +308,11 @@ class CustomProvider implements AIProviderInterface, HttpRequestBuilderInterface
     {
         $this->sendProgress("Connecting to {$this->displayName} API...");
 
-        // DeepSeek V4 (deepseek-v4-pro / deepseek-v4-flash) runs in thinking mode
+        // DeepSeek V4 (deepseek-v4-pro / deepseek-flash) runs in thinking mode
         // by default and rejects temperature/top_p/penalty params. Drop those
         // fields and send `thinking: {type: enabled}` explicitly. Other OpenAI-
         // compatible providers keep the legacy temperature behaviour.
-        $isDeepSeekV4 = $this->name === 'deepseek' && str_starts_with($this->model, 'deepseek-v4');
+        $isDeepSeekV4 = $this->name === 'deepseek' && DeepSeekProvider::isThinkingModel($this->model);
 
         $payload = [
             'model' => $this->model,

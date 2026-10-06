@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
  * Login microservice admin controller (gpt_admin "Login" card).
@@ -48,6 +49,20 @@ class LoginAdminController
             return ['success' => false, 'error' => 'Admin access required', 'status_code' => 403];
         }
         return null;
+    }
+
+    /**
+     * On a corporate install AdminController (the Users screen) is the only
+     * writer of the login database: it keeps each login row in step with its
+     * gpt row. Checked before any database access.
+     */
+    private function refuseWriteOnCorporate(): ?array
+    {
+        if (!Edition::isCorporate($this->config)) {
+            return null;
+        }
+        return ['success' => false, 'error' => 'Manage accounts from the Users screen on this installation',
+            'status_code' => 403];
     }
 
     /** PDO to the login DB, or null if unconfigured/unreachable. */
@@ -134,6 +149,7 @@ class LoginAdminController
     /** POST /api/v1/admin/login/users — create a user (no password; provider=email). */
     public function createUser(array $request): array
     {
+        if ($err = $this->refuseWriteOnCorporate()) return $err;
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'message' => 'Login DB not reachable'];
@@ -156,6 +172,7 @@ class LoginAdminController
      *  verification). Roles are per-app (app_user_roles), not editable here. */
     public function updateUser(array $request): array
     {
+        if ($err = $this->refuseWriteOnCorporate()) return $err;
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'message' => 'Login DB not reachable'];
@@ -184,6 +201,7 @@ class LoginAdminController
      *  An admin cannot delete their own account. */
     public function deleteUser(array $request): array
     {
+        if ($err = $this->refuseWriteOnCorporate()) return $err;
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'message' => 'Login DB not reachable'];
@@ -276,6 +294,7 @@ class LoginAdminController
      *  Body: { app, user_id, role }. Empty/"none" role revokes access. */
     public function setAppUserRole(array $request): array
     {
+        if ($err = $this->refuseWriteOnCorporate()) return $err;
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'message' => 'Login DB not reachable'];
@@ -310,6 +329,7 @@ class LoginAdminController
      *  Body: { app, email, first_name?, last_name?, role }. */
     public function addAppMember(array $request): array
     {
+        if ($err = $this->refuseWriteOnCorporate()) return $err;
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'message' => 'Login DB not reachable'];

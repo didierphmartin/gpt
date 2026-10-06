@@ -139,7 +139,7 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
             api_base="https://api.deepseek.com",
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
         )
-        if model.startswith("deepseek-v4"):
+        if model.startswith(("deepseek-v4", "deepseek-flash")):
             # The node form's Thinking attribute governs (platform parity):
             # 'off' -> disabled (form temperature accepted); 'on'/default ->
             # V4's server default stays ON (sampling params are dropped at the

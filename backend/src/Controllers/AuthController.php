@@ -8,6 +8,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
  * Authentication Controller
@@ -130,7 +131,7 @@ class AuthController
      * NEVER from client-supplied userData (which a caller can forge to
      * impersonate any account).
      */
-    private function verifyFirebaseIdToken(string $idToken): ?array
+    protected function verifyFirebaseIdToken(string $idToken): ?array
     {
         try {
             $keys = $this->googleSecureTokenKeys();
@@ -152,6 +153,30 @@ class AuthController
             error_log('[AuthController] Firebase ID token verification failed: ' . $e->getMessage());
             return null;
         }
+    }
+
+    /** True for the robot's service row (never a person: no token, no app key). */
+    private function isServiceUser(array $user): bool
+    {
+        return ($user['kind'] ?? 'person') === 'service';
+    }
+
+    private function isServiceUserId(int $userId): bool
+    {
+        $stmt = $this->db->prepare('SELECT kind FROM users WHERE id = ?');
+        $stmt->execute([$userId]);
+        return $stmt->fetchColumn() === 'service';
+    }
+
+    /** Connection to the login service's database (overridable seam for tests). */
+    protected function loginDbConnection(array $ld): PDO
+    {
+        return new PDO(
+            sprintf('mysql:host=%s;dbname=%s;charset=utf8mb4', $ld['host'] ?? '', $ld['database'] ?? ''),
+            (string) ($ld['username'] ?? ''),
+            (string) ($ld['password'] ?? ''),
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5]
+        );
     }
 
     /**
@@ -231,6 +256,10 @@ class AuthController
      */
     public function login(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $email = $request['body']['email'] ?? '';
         $password = $request['body']['password'] ?? '';
 
@@ -247,7 +276,12 @@ class AuthController
         $stmt->execute([strtolower(trim($email))]);
         $user = $stmt->fetch();
 
-        if (!$user || !password_verify($password, $user['password'])) {
+        // The robot is a service row, never a person: answer as for an unknown account.
+        if ($user && $this->isServiceUser($user)) {
+            $user = false;
+        }
+
+        if (!$user || !password_verify($password, (string) $user['password'])) {
             return [
                 'success' => false,
                 'message' => 'Invalid email or password',
@@ -325,12 +359,7 @@ class AuthController
         // Login JWTs carry no email — resolve it from the shared login DB.
         $ld = $this->config['login_db'] ?? [];
         try {
-            $ldb = new PDO(
-                sprintf('mysql:host=%s;dbname=%s;charset=utf8mb4', $ld['host'] ?? '', $ld['database'] ?? ''),
-                (string) ($ld['username'] ?? ''),
-                (string) ($ld['password'] ?? ''),
-                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5]
-            );
+            $ldb = $this->loginDbConnection($ld);
             $stmt = $ldb->prepare('SELECT email, email_verified FROM users WHERE id = ?');
             $stmt->execute([(int) $claims['sub']]);
             $loginUser = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
@@ -352,6 +381,9 @@ class AuthController
         $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ?');
         $stmt->execute([$email]);
         $user = $stmt->fetch();
+        if ($user && $this->isServiceUser($user)) {
+            $user = false;
+        }
         if (!$user) {
             return ['success' => false, 'message' => "No account for $email — sign up first", 'status_code' => 403];
         }
@@ -390,6 +422,10 @@ class AuthController
      */
     public function register(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $email = strtolower(trim($request['body']['email'] ?? ''));
         $password = $request['body']['password'] ?? '';
         $firstName = trim($request['body']['first_name'] ?? '');
@@ -485,6 +521,10 @@ class AuthController
      */
     public function firebaseAuth(array $request): array
     {
+        if ($refused = Edition::refuseLocalSignIn($this->config)) {
+            return $refused;
+        }
+
         $provider = $request['body']['provider'] ?? '';
         $idToken = $request['body']['idToken'] ?? '';
         $userData = $request['body']['userData'] ?? [];
@@ -535,6 +575,13 @@ class AuthController
         $stmt = $this->db->prepare("SELECT * FROM users WHERE email = ? OR firebase_uid = ? OR phone = ?");
         $stmt->execute([$email, $firebaseUid, $phoneNumber]);
         $user = $stmt->fetch();
+        if ($user && $this->isServiceUser($user)) {
+            return [
+                'success' => false,
+                'message' => 'Invalid or expired authentication token',
+                'status_code' => 401
+            ];
+        }
 
         // Ledger user ID and plan from registration flow
         $ledgerUserId = trim($userData['ledger_user_id'] ?? $request['body']['ledger_user_id'] ?? '');
@@ -555,15 +602,21 @@ class AuthController
             $userId = (int)$user['id'];
 
             // Apply a paid plan presented on re-auth, but only as an UPGRADE:
-            // a normal login presents 'free' (must not downgrade), and admins
-            // are never touched.
+            // a normal login presents 'free' (must not downgrade) and admins
+            // are never touched. The plan is recorded for everyone else, but
+            // only a guest/prospect is promoted to 'user': custom roles are kept.
             if ($plan !== 'free'
                 && ($user['role'] ?? '') !== 'admin'
                 && $this->planRank($plan) > $this->planRank($user['plan'] ?? 'free')) {
-                $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$plan, $role, $userId]);
+                if (in_array($user['role'] ?? '', ['guest', 'prospect'], true)) {
+                    $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$plan, $role, $userId]);
+                    $user['role'] = $role;
+                } else {
+                    $stmt = $this->db->prepare("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$plan, $userId]);
+                }
                 $user['plan'] = $plan;
-                $user['role'] = $role;
             }
         } else {
             // New user via social auth - require ledger_user_id
@@ -770,10 +823,22 @@ class AuthController
             ];
         }
 
-        // Keep role in step with the plan so the paid capability package applies.
-        $role = $this->roleForPlan($plan);
-        $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$plan, $role, $userId]);
+        // Same rule as the Firebase paid-plan path: the plan is recorded for
+        // everyone, but only a guest/prospect is promoted to the paid role.
+        // Any other role (user, admin, affiliate, custom) is kept.
+        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $current = $stmt->fetchColumn();
+        $current = $current === false ? null : (string)$current;
+        if (in_array($current, ['guest', 'prospect'], true)) {
+            $role = $this->roleForPlan($plan);
+            $stmt = $this->db->prepare("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$plan, $role, $userId]);
+        } else {
+            $role = $current;
+            $stmt = $this->db->prepare("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$plan, $userId]);
+        }
 
         error_log("[AuthController] Plan upgraded: user_id=$userId, plan=$plan, role=$role");
 
@@ -814,6 +879,9 @@ class AuthController
         $userId = $request['user_id'] ?? null;
         if (!$userId || ($request['auth_type'] ?? null) !== 'jwt') {
             return ['success' => false, 'message' => 'Authentication required', 'status_code' => 401];
+        }
+        if ($this->isServiceUserId((int) $userId)) {
+            return ['success' => false, 'message' => 'User not found', 'status_code' => 404];
         }
         $material = $this->generateAppKeyMaterial();
         $stmt = $this->db->prepare(
@@ -868,9 +936,10 @@ class AuthController
         if ($targetUserId <= 0) {
             return ['success' => false, 'message' => 'user_id is required', 'status_code' => 400];
         }
-        $stmt = $this->db->prepare("SELECT id FROM users WHERE id = ?");
+        $stmt = $this->db->prepare("SELECT id, kind FROM users WHERE id = ?");
         $stmt->execute([$targetUserId]);
-        if (!$stmt->fetch()) {
+        $target = $stmt->fetch();
+        if (!$target || $this->isServiceUser($target)) {
             return ['success' => false, 'message' => 'User not found', 'status_code' => 404];
         }
         $material = $this->generateAppKeyMaterial();

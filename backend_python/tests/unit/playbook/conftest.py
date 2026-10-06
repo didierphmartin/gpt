@@ -9,6 +9,8 @@ runs unmodified against it — see app/playbook/playbook_run_state.py.
 from __future__ import annotations
 
 import sqlite3
+import time
+from collections.abc import Mapping
 
 import pytest
 
@@ -24,29 +26,64 @@ class SqliteDb:
 
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
+        self._in_tx = False
+
+    @staticmethod
+    def _params(params):
+        # PDO-style named params ({':id': 1}) as the app's Db accepts them; sqlite3 wants {'id': 1}.
+        if isinstance(params, Mapping):
+            return {k.lstrip(':'): v for k, v in params.items()}
+        return params or []
+
+    def _run(self, sql, params):
+        return self.conn.execute(sql, self._params(params))
+
+    def _autocommit(self):
+        if not self._in_tx:
+            self.conn.commit()
 
     def fetch_one(self, sql, params=None):
-        cur = self.conn.execute(sql, params or [])
-        row = cur.fetchone()
+        row = self._run(sql, params).fetchone()
         return dict(row) if row is not None else None
 
     def fetch_all(self, sql, params=None):
-        cur = self.conn.execute(sql, params or [])
-        return [dict(r) for r in cur.fetchall()]
+        return [dict(r) for r in self._run(sql, params).fetchall()]
 
     def fetch_column(self, sql, params=None):
-        cur = self.conn.execute(sql, params or [])
-        return [row[0] for row in cur.fetchall()]
+        return [row[0] for row in self._run(sql, params).fetchall()]
 
     def execute(self, sql, params=None):
-        cur = self.conn.execute(sql, params or [])
-        self.conn.commit()
+        cur = self._run(sql, params)
+        self._autocommit()
         return cur.rowcount
 
     def insert(self, sql, params=None):
-        cur = self.conn.execute(sql, params or [])
-        self.conn.commit()
+        cur = self._run(sql, params)
+        self._autocommit()
         return cur.lastrowid
+
+    def begin(self):
+        self.conn.commit()
+        self._in_tx = True
+
+    def commit(self):
+        self._in_tx = False
+        self.conn.commit()
+
+    def rollback(self):
+        self._in_tx = False
+        self.conn.rollback()
+
+
+def sqlite_db(*ddl: str) -> SqliteDb:
+    """An in-memory SqliteDb with MySQL's NOW() and the given tables (the PHP tests' sqlite PDO)."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.create_function('NOW', 0, lambda: time.strftime('%Y-%m-%d %H:%M:%S'))
+    for statement in ddl:
+        conn.execute(statement)
+    conn.commit()
+    return SqliteDb(conn)
 
 
 def make_sqlite_db() -> SqliteDb:
@@ -97,7 +134,8 @@ def pb_state(pb_db, pb_dir) -> PlaybookRunState:
 
 PLAYBOOKS_DDL = [
     'CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL, '
-    'title TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))',
+    'title TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT, updated_at TEXT, '
+    'published_by INTEGER NULL, published_at TEXT NULL, source_id INTEGER NULL, UNIQUE (user_id, pkey))',
     'CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, '
     "agent_type TEXT DEFAULT 'standard', instructions TEXT, playbook_id INTEGER)",
     'CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)',

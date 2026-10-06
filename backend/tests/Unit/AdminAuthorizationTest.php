@@ -43,6 +43,7 @@ class AdminAuthorizationTest extends TestCase
                 role TEXT,
                 plan TEXT,
                 provider TEXT,
+                kind TEXT NOT NULL DEFAULT "person",
                 app_key_prefix TEXT,
                 app_key_created_at TEXT,
                 created_at TEXT,

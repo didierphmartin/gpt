@@ -126,3 +126,8 @@ def test_mcp_tools_emitted():
     # FunctionTool wrapper.
     assert 'FunctionTool(' not in code
     assert '"web_search": _tool_web_search' in code
+
+
+def test_deepseek_flash_gets_v4_thinking_rules():
+    code = MAFGenerator.emitMaf(_analyzed())
+    assert 'elif p == "deepseek" and str(model).startswith(("deepseek-v4", "deepseek-flash")):' in code

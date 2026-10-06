@@ -1271,7 +1271,7 @@ class LangGraphGenerator
         $lines[] = '                temperature=temperature,';
         $lines[] = '                max_tokens=max_tokens,';
         $lines[] = '            )';
-        $lines[] = '            if model.startswith("deepseek-v4"):';
+        $lines[] = '            if model.startswith(("deepseek-v4", "deepseek-flash")):';
         $lines[] = '                # The node form Thinking attribute governs (platform parity):';
         $lines[] = '                # off -> disabled, form temperature kept; on/default -> V4 thinking';
         $lines[] = '                # stays enabled and the API rejects sampling params, so temperature';

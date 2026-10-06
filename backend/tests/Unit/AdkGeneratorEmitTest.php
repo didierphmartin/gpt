@@ -211,6 +211,21 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('generate_content_config', $code2);
     }
 
+    public function testDeepSeekFlashGetsV4ThinkingRules(): void
+    {
+        // deepseek-flash replaced deepseek-v4-flash and still runs in thinking
+        // mode: the model factory enables thinking and the generator drops
+        // the temperature the API would reject.
+        $a = $this->analyzed();
+        $a['agents']['2']['provider'] = 'deepseek';
+        $a['agents']['2']['model'] = 'deepseek-flash';
+        $a['agents']['2']['temperature'] = 0.7;
+        $code = ADKGenerator::emitAdk($a);
+        $this->assertStringContainsString('if model.startswith(("deepseek-v4", "deepseek-flash")):', $code);
+        $this->assertStringContainsString('temperature 0.7 dropped (deepseek-v4 thinking mode', $code);
+        $this->assertStringNotContainsString('temperature=0.7', $code);
+    }
+
     public function testRunSkillScriptToolInAgentToolsList(): void
     {
         // Fixture updated for Task 4: needsSkills is now gated on the 'skills' list, not

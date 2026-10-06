@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
+use Quantis\AIPortfolioAssistant\Services\RoleStore;
 use PDO;
 
 /**
@@ -15,7 +16,7 @@ use PDO;
  *
  * Routes:
  *   GET  /api/v1/me/package                - current user's effective package
- *   GET  /api/v1/admin/packages            - all 4 packages (admin only)
+ *   GET  /api/v1/admin/packages            - every package (admin only)
  *   GET  /api/v1/admin/packages/{role}     - single package (admin only)
  *   PUT  /api/v1/admin/packages/{role}     - update capabilities (admin only)
  */
@@ -74,7 +75,7 @@ class PackageController
     }
 
     /**
-     * List all 4 packages. Admin only.
+     * List every package. Admin only.
      */
     public function adminList(array $request): array
     {
@@ -83,8 +84,8 @@ class PackageController
         }
 
         $packages = [];
-        foreach (PackageResolver::validRoles() as $role) {
-            $packages[] = $this->resolver->loadPackage($role);
+        foreach ((new RoleStore($this->db))->list() as $row) {
+            $packages[] = $this->withRoleInfo($this->resolver->loadPackage($row['role']), $row);
         }
 
         return [
@@ -96,13 +97,15 @@ class PackageController
     /**
      * Get a single package by role. Admin only.
      */
-    public function adminGet(array $request, string $role): array
+    public function adminGet(array $request, string|int|null $role = null): array
     {
         if ($err = $this->requireAdmin($request)) {
             return $err;
         }
 
-        if (!in_array($role, PackageResolver::validRoles(), true)) {
+        $role = $this->roleKey($request, $role);
+        $row = (new RoleStore($this->db))->get($role);
+        if ($row === null) {
             return [
                 'success' => false,
                 'error' => 'Invalid role',
@@ -112,7 +115,7 @@ class PackageController
 
         return [
             'success' => true,
-            'package' => $this->resolver->loadPackage($role),
+            'package' => $this->withRoleInfo($this->resolver->loadPackage($role), $row),
         ];
     }
 
@@ -120,13 +123,14 @@ class PackageController
      * Replace the capabilities JSON for a role. Admin only.
      * Expects body: { "capabilities": { ... } }
      */
-    public function adminUpdate(array $request, string $role): array
+    public function adminUpdate(array $request, string|int|null $role = null): array
     {
         if ($err = $this->requireAdmin($request)) {
             return $err;
         }
 
-        if (!in_array($role, PackageResolver::validRoles(), true)) {
+        $role = $this->roleKey($request, $role);
+        if (!(new RoleStore($this->db))->exists($role)) {
             return [
                 'success' => false,
                 'error' => 'Invalid role',
@@ -190,12 +194,25 @@ class PackageController
             ':uid' => $adminId,
         ]);
 
+        $this->resolver = new PackageResolver($this->db);
         return [
             'success' => true,
-            'package' => $this->resolver->loadPackage($role),
+            'package' => $this->withRoleInfo($this->resolver->loadPackage($role), (new RoleStore($this->db))->get($role) ?? []),
         ];
     }
 
+    /** The role key as a string: index.php casts all-digit route params to int. */
+    private function roleKey(array $request, string|int|null $fallback): string
+    {
+        return (string) ($request['params']['role'] ?? $fallback ?? '');
+    }
+
+    private function withRoleInfo(array $package, array $row): array
+    {
+        $package['name'] = $row['name'] ?? ucfirst((string) $package['role']);
+        $package['builtin'] = (bool) ($row['builtin'] ?? false);
+        return $package;
+    }
 
     /**
      * Shallow shape check. Deeper validation stays loose so gpt_admin can add

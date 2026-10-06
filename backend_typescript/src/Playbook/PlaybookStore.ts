@@ -1,9 +1,12 @@
-import { sql } from 'kysely';
+import { Kysely, sql } from 'kysely';
 import { db } from '../db/pools';
+import { DB } from '../db/types';
 
-/** A refused collection operation: kind (not_found, invalid_text, invalid_key, key_taken, in_use) and its HTTP status. */
+/** A refused collection operation: kind (not_found, invalid_text, invalid_key, key_taken, in_use, replaces), its HTTP status,
+ *  and optional data for the client. */
 export class PlaybookStoreError extends Error {
-  constructor(public readonly kind: string, message: string, public readonly status: number) {
+  constructor(public readonly kind: string, message: string, public readonly status: number,
+    public readonly data: Record<string, any> = {}) {
     super(message);
   }
 }
@@ -70,10 +73,36 @@ function norm(r: any): PlaybookRow {
   return { ...r, id: Number(r.id) };
 }
 
+/** First + last name, else the email; '' when the user is gone. */
+export function personName(u: { email?: any; first_name?: any; last_name?: any } | null | undefined): string {
+  if (!u) return '';
+  const name = (String(u.first_name ?? '').trim() + ' ' + String(u.last_name ?? '').trim()).trim();
+  return name !== '' ? name : String(u.email ?? '');
+}
+
+/**
+ * Where a publish writes (PHP PlaybookStore::publish, before its transaction). `ownId` is the robot copy of this
+ * source (found by source_id); `holder` is the robot row holding the source's key. Returns the row to save into
+ * (null = a new row) and a row to delete first (another copy on the key ours moves to), or 'replaces' when the
+ * key is held by another (or a deleted) source and the replacement was not confirmed.
+ */
+export function publishPlan(sourceId: number, ownId: number | null, holder: { id: number; source_id: number | null } | null,
+  confirmReplace: boolean): { targetId: number | null; deleteId: number | null } | 'replaces' {
+  if (holder === null || holder.id === ownId) return { targetId: ownId, deleteId: null }; // the key is free, or already ours
+  const sameSource = ownId === null && holder.source_id !== null && Number(holder.source_id) === sourceId;
+  if (sameSource) return { targetId: holder.id, deleteId: null };
+  if (!confirmReplace) return 'replaces';
+  if (ownId === null) return { targetId: holder.id, deleteId: null };
+  return { targetId: ownId, deleteId: holder.id };
+}
+
 /** The playbook collection: the only code that touches the `playbooks` table. Owner-scoped throughout. */
 export class PlaybookStore {
+  /** `ex` is the pool, or the transaction a publish runs in. */
+  constructor(private readonly ex: Kysely<DB> = db) {}
+
   async list(userId: number): Promise<any[]> {
-    const rows = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE user_id = ${userId} ORDER BY title`.execute(db)).rows.map(norm);
+    const rows = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE user_id = ${userId} ORDER BY title`.execute(this.ex)).rows.map(norm);
     const out: any[] = [];
     for (const r of rows) {
       const used = await this.usedBy(userId, r.id);
@@ -83,12 +112,12 @@ export class PlaybookStore {
   }
 
   async get(userId: number, id: number): Promise<PlaybookRow | null> {
-    const r = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(db)).rows[0];
+    const r = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex)).rows[0];
     return r ? norm(r) : null;
   }
 
   async getByKey(userId: number, pkey: string): Promise<PlaybookRow | null> {
-    const r = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE pkey = ${pkey} AND user_id = ${userId}`.execute(db)).rows[0];
+    const r = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE pkey = ${pkey} AND user_id = ${userId}`.execute(this.ex)).rows[0];
     return r ? norm(r) : null;
   }
 
@@ -108,13 +137,86 @@ export class PlaybookStore {
     }
     if (id === null) {
       const res = await sql`INSERT INTO playbooks (user_id, pkey, title, text, created_at, updated_at)
-        VALUES (${userId}, ${key}, ${title}, ${text}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`.execute(db);
+        VALUES (${userId}, ${key}, ${title}, ${text}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`.execute(this.ex);
       id = Number(res.insertId);
     } else {
       await sql`UPDATE playbooks SET pkey = ${key}, title = ${title}, text = ${text}, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ${id} AND user_id = ${userId}`.execute(db);
+        WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex);
     }
     return (await this.get(userId, id))!;
+  }
+
+  /**
+   * Publish the user's playbook to the robot as a frozen copy (one version). A source has at most one robot copy:
+   * republishing updates it (moving it to the source's current key). A key held by another (or a deleted) source
+   * is refused with `replaces` unless confirmReplace, then that row goes and ours takes the key.
+   */
+  async publish(userId: number, id: number, robotId: number, confirmReplace: boolean): Promise<Record<string, any>> {
+    const src = await this.get(userId, id);
+    if (src === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
+    const own = (await sql<any>`SELECT id FROM playbooks WHERE user_id = ${robotId} AND source_id = ${id} ORDER BY id LIMIT 1`.execute(this.ex)).rows[0];
+    const ownId = own ? Number(own.id) : null;
+    const byKey = await this.getByKey(robotId, src.pkey);
+    let holder: { id: number; source_id: number | null } | null = null;
+    let meta: any = null;
+    if (byKey !== null && byKey.id !== ownId) {
+      meta = (await sql<any>`SELECT source_id, published_by, published_at FROM playbooks WHERE id = ${byKey.id}`.execute(this.ex)).rows[0];
+      holder = { id: byKey.id, source_id: meta?.source_id == null ? null : Number(meta.source_id) };
+    }
+    const plan = publishPlan(id, ownId, holder, confirmReplace);
+    if (plan === 'replaces') {
+      const by = await this.personNameOf(meta?.published_by ?? null);
+      throw new PlaybookStoreError('replaces', `The robot already has "${src.pkey}", published by ${by}.`, 409,
+        { published_by: by, published_at: meta?.published_at ?? null });
+    }
+    const write = async (store: PlaybookStore): Promise<number> => {
+      if (plan.deleteId !== null) {
+        // our copy moves onto a key another copy holds: that copy goes
+        await sql`DELETE FROM playbooks WHERE id = ${plan.deleteId} AND user_id = ${robotId}`.execute(store.ex);
+      }
+      const row = await store.save(robotId, plan.targetId, src.text, src.pkey);
+      await sql`UPDATE playbooks SET published_by = ${userId}, published_at = CURRENT_TIMESTAMP, source_id = ${id}
+        WHERE id = ${row.id} AND user_id = ${robotId}`.execute(store.ex);
+      return row.id;
+    };
+    const rowId = this.ex.isTransaction ? await write(this) : await this.ex.transaction().execute((trx) => write(new PlaybookStore(trx)));
+    const out = (await sql<any>`SELECT id, pkey, title, text, updated_at, published_by, published_at, source_id
+      FROM playbooks WHERE id = ${rowId}`.execute(this.ex)).rows[0];
+    return { ...out, id: Number(out.id) };
+  }
+
+  /** The robot's collection with who published each and the title of its source (null when the source is gone). */
+  async robotList(robotId: number): Promise<any[]> {
+    const rows = (await sql<any>`SELECT p.id, p.pkey, p.title, p.text, p.updated_at, p.published_by, p.published_at, p.source_id,
+        s.title AS source_title
+      FROM playbooks p LEFT JOIN playbooks s ON s.id = p.source_id WHERE p.user_id = ${robotId} ORDER BY p.title`.execute(this.ex)).rows;
+    const out: any[] = [];
+    for (const r of rows) {
+      out.push({ ...r, id: Number(r.id), published_by_name: r.published_by === null ? null : await this.personNameOf(r.published_by) });
+    }
+    return out;
+  }
+
+  async unpublish(robotId: number, robotPlaybookId: number): Promise<void> {
+    if ((await this.get(robotId, robotPlaybookId)) === null) {
+      throw new PlaybookStoreError('not_found', `Playbook #${robotPlaybookId} not found`, 404);
+    }
+    await sql`DELETE FROM playbooks WHERE id = ${robotPlaybookId} AND user_id = ${robotId}`.execute(this.ex);
+  }
+
+  /** source playbook id => 'published' (robot copy equals the source) | 'changed' (the source was edited since). */
+  async publishStatus(userId: number, robotId: number): Promise<Record<number, 'published' | 'changed'>> {
+    const rows = (await sql<any>`SELECT s.id, s.text AS source_text, r.text AS robot_text
+      FROM playbooks r JOIN playbooks s ON s.id = r.source_id AND s.user_id = ${userId} WHERE r.user_id = ${robotId} ORDER BY r.id`.execute(this.ex)).rows;
+    const map: Record<number, 'published' | 'changed'> = {};
+    for (const r of rows) map[Number(r.id)] = r.source_text === r.robot_text ? 'published' : 'changed';
+    return map;
+  }
+
+  private async personNameOf(userId: any): Promise<string> {
+    if (userId === null || userId === undefined) return '';
+    const u = (await sql<any>`SELECT email, first_name, last_name FROM users WHERE id = ${userId}`.execute(this.ex)).rows[0];
+    return personName(u);
   }
 
   async delete(userId: number, id: number): Promise<void> {
@@ -125,7 +227,7 @@ export class PlaybookStore {
       ...used.nodes.map((n) => `node "${n.node_name}" in workflow "${n.workflow_name}"`),
     ];
     if (names.length) throw new PlaybookStoreError('in_use', 'This playbook is used by ' + names.join(', ') + '.', 409);
-    await sql`DELETE FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(db);
+    await sql`DELETE FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex);
   }
 
   /** The agents and workflow nodes (the user's own) that link to the playbook. */
@@ -133,12 +235,12 @@ export class PlaybookStore {
     agents: { id: number; name: string }[];
     nodes: { workflow_id: number; workflow_name: string; node_name: string }[];
   }> {
-    const ag = (await sql<any>`SELECT id, name FROM agents WHERE user_id = ${userId} AND playbook_id = ${id} ORDER BY name`.execute(db)).rows;
+    const ag = (await sql<any>`SELECT id, name FROM agents WHERE user_id = ${userId} AND playbook_id = ${id} ORDER BY name`.execute(this.ex)).rows;
     const agents = ag.map((a) => ({ id: Number(a.id), name: String(a.name) }));
     // The node's link lives in its config JSON: decoded here, so the query stays portable.
     const rows = (await sql<any>`SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
       FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-      WHERE w.user_id = ${String(userId)} AND n.node_type = 'playbook' ORDER BY w.name, n.id`.execute(db)).rows;
+      WHERE w.user_id = ${String(userId)} AND n.node_type = 'playbook' ORDER BY w.name, n.id`.execute(this.ex)).rows;
     const nodes: { workflow_id: number; workflow_name: string; node_name: string }[] = [];
     for (const r of rows) {
       let cfg: any = null;

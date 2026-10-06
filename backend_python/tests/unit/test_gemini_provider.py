@@ -141,3 +141,10 @@ def test_static_builder_and_parser():
     # top-level 'name', so the assertion follows PHP.
     assert parsed['text'] == '' and parsed['tool_calls'][0]['function']['name'] == 'echo' and parsed['usage']['prompt_tokens'] == 20
     assert parsed['tool_calls'][0]['thought_signature'] == 'sig1' and json.loads(parsed['tool_calls'][0]['function']['arguments']) == {'x': '1'}
+
+
+def test_supported_models_match_the_catalog():
+    import json
+    from app.controllers.model_catalog_controller import CATALOG_PATH
+    ids = [m['id'] for m in json.loads(CATALOG_PATH.read_text())['providers']['gemini']]
+    assert GeminiProvider.SUPPORTED_MODELS == ids

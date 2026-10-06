@@ -257,7 +257,21 @@
     "loadFailedReadOnly": "El texto es de solo lectura hasta que se carguen los playbooks.",
     "retry": "Reintentar",
     "missingRecreate": "Playbook #{{id}} no encontrado. Escriba o pegue un playbook y guarde para crear uno nuevo.",
-    "sharedHint": "Usado por {{count}}: editarlo lo cambia en todas partes."
+    "sharedHint": "Usado por {{count}}: editarlo lo cambia en todas partes.",
+    "published": "Publicado",
+    "publishedChanged": "Publicado (modificado desde entonces)",
+    "publish": "Publicar",
+    "republish": "Volver a publicar",
+    "unpublish": "Retirar",
+    "confirmUnpublish": "Pulse de nuevo para retirar {{key}}",
+    "replacesConfirm": "Reemplaza {{key}} publicado por {{name}} el {{date}}",
+    "publishedOk": "Publicado en el robot.",
+    "tabMine": "Mis playbooks",
+    "tabRobot": "Robot",
+    "robotEmpty": "El robot aún no tiene playbooks",
+    "robotPublishedBy": "publicado por {{name}} el {{date}}",
+    "robotFrom": "de “{{title}}”",
+    "robotSourceGone": "origen eliminado"
   },
   "mcpLibrary": {
     "newServer": "Nuevo servidor",

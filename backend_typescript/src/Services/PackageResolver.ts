@@ -1,5 +1,6 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
+import { RoleStore } from './RoleStore';
 
 /**
  * Mirrors src/Services/PackageResolver.php.
@@ -20,12 +21,11 @@ export interface ResolvedPackage {
 }
 
 export class PackageResolver {
-  static readonly VALID_ROLES = ['guest', 'prospect', 'user', 'admin'];
-
   private cache: Record<string, ResolvedPackage> = {};
 
-  static validRoles(): string[] {
-    return PackageResolver.VALID_ROLES;
+  /** The keys of every role (built-in and custom). */
+  async validRoles(): Promise<string[]> {
+    return (await new RoleStore().list()).map((r) => r.role);
   }
 
   /** Resolve the effective package for the given user. null → guest package. */
@@ -34,7 +34,7 @@ export class PackageResolver {
     return this.loadPackage(role);
   }
 
-  /** Look up just the role. Returns 'guest' when the id is null or the user no longer exists. */
+  /** Look up just the role. Returns 'guest' when the id is null, the user no longer exists, or the role is unknown. */
   async resolveRole(userId: number | null): Promise<string> {
     if (userId === null) {
       return 'guest';
@@ -44,7 +44,7 @@ export class PackageResolver {
       await sql<{ role: string | null }>`SELECT role FROM users WHERE id = ${userId} LIMIT 1`.execute(db)
     ).rows[0];
 
-    if (!row || !PackageResolver.VALID_ROLES.includes(row.role as string)) {
+    if (!row || !(await new RoleStore().exists(String(row.role ?? '')))) {
       return 'guest';
     }
 
@@ -53,17 +53,17 @@ export class PackageResolver {
 
   /** Load + decode the capabilities row for a role. Cached per-instance. */
   async loadPackage(role: string): Promise<ResolvedPackage> {
-    if (!PackageResolver.VALID_ROLES.includes(role)) {
-      role = 'guest';
-    }
-
     if (this.cache[role] !== undefined) {
       return this.cache[role];
     }
+    const requested = role;
 
-    const row = (
-      await sql<{ capabilities: any; updated_at: any }>`SELECT capabilities, updated_at FROM packages WHERE role = ${role} LIMIT 1`.execute(db)
-    ).rows[0];
+    let row = await this.packageRow(role);
+    if (!row && role !== 'guest' && !RoleStore.BUILTIN.includes(role)) {
+      // An unknown role resolves to the guest package.
+      role = 'guest';
+      row = await this.packageRow(role);
+    }
 
     let capabilities: Record<string, any>;
     let updatedAt: any;
@@ -88,8 +88,14 @@ export class PackageResolver {
     }
 
     const pkg: ResolvedPackage = { role, capabilities, updated_at: updatedAt };
-    this.cache[role] = pkg;
+    this.cache[requested] = pkg;
     return pkg;
+  }
+
+  private async packageRow(role: string): Promise<{ capabilities: any; updated_at: any } | undefined> {
+    return (
+      await sql<{ capabilities: any; updated_at: any }>`SELECT capabilities, updated_at FROM packages WHERE role = ${role} LIMIT 1`.execute(db)
+    ).rows[0];
   }
 
   /**

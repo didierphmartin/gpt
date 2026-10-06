@@ -46,8 +46,21 @@ services:
       GPT_ADMIN_EMAIL: ${GPT_ADMIN_EMAIL:-admin@localhost}
       GPT_ADMIN_PASSWORD: ${GPT_ADMIN_PASSWORD:-}
       GPT_PORT: ${GPT_PORT:-8080}
+      # The edition is chosen by the compose files, not by .env: this file is
+      # the individual edition, and compose.corporate.yaml overrides it with
+      # corporate (the only build that contains gpt_admin).
+      #
+      # No colon on purpose: UNSET gives individual, but an explicitly EMPTY
+      # value (GPT_EDITION= , as docker/tests/run-all.sh exports) still gives
+      # the hosted behaviour, which must stay byte-identical -- every frontend
+      # branch tests for this being present, so production (which never sets
+      # it) takes no new code path.
+      GPT_EDITION: ${GPT_EDITION-individual}
     ports:
-      - "${GPT_PORT:-8080}:80"
+      # GPT_BIND defaults to 0.0.0.0 (every interface) to match prior
+      # behaviour. Set GPT_BIND=127.0.0.1 in .env to restrict this to
+      # localhost -- see the warning in .env.example and the README.
+      - "${GPT_BIND:-0.0.0.0}:${GPT_PORT:-8080}:80"
     volumes:
       # Per-install JWT_SECRET / APP_KEY_SECRET. Without this they would be
       # re-rolled on every recreate, invalidating every session and app key.
@@ -79,6 +92,8 @@ services:
       web:
         condition: service_healthy
     environment:
+      # Same edition as web (see there): the robot rules read it.
+      GPT_EDITION: ${GPT_EDITION-individual}
       DB_HOST: db
       CTX_DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}
@@ -115,6 +130,8 @@ services:
       web:
         condition: service_healthy
     environment:
+      # Same edition as web (see there): the robot rules read it.
+      GPT_EDITION: ${GPT_EDITION-individual}
       DB_HOST: db
       CTX_DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE:-gpt_chatbot}

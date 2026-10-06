@@ -21,8 +21,8 @@ final class PackageControllerMeTest extends TestCase
     {
         $this->db = new PDO('sqlite::memory:');
         $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->db->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
-        $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, capabilities TEXT, updated_at TEXT)');
+        $this->db->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT DEFAULT "person")');
+        $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER DEFAULT 0, capabilities TEXT, updated_at TEXT)');
         $this->db->exec("INSERT INTO users (id, role) VALUES (7, 'user')");
         $caps = [
             'providers' => [
@@ -55,7 +55,43 @@ final class PackageControllerMeTest extends TestCase
     public function testAdminGetStillReturnsTheKeys(): void
     {
         $this->db->exec("INSERT INTO users (id, role) VALUES (1, 'admin')");
-        $out = (new PackageController($this->db, []))->adminGet(['user_id' => 1], 'user');
+        $out = (new PackageController($this->db, []))->adminGet(['user_id' => 1, 'params' => ['role' => 'user']], 'user');
         $this->assertStringContainsString('jev-pkg-key', json_encode($out));
+    }
+
+    public function testACustomRolesUserGetsThatRowsCapabilities(): void
+    {
+        $this->db->exec("INSERT INTO users (id, role) VALUES (8, 'it-ops-2')");
+        $this->db->prepare('INSERT INTO packages (role, name, capabilities) VALUES (?, ?, ?)')
+            ->execute(['it-ops-2', 'IT Ops', json_encode(['providers' => [], 'sidebar' => [], 'quota_tokens' => 42])]);
+        $out = (new PackageController($this->db, []))->me(['user_id' => 8]);
+        $this->assertSame('it-ops-2', $out['role']);
+        $this->assertSame(42, $out['capabilities']['quota_tokens']);
+    }
+
+    public function testARoleWithoutARowResolvesToGuest(): void
+    {
+        $this->db->exec("INSERT INTO users (id, role) VALUES (9, 'affiliate')");
+        $this->db->prepare('INSERT INTO packages (role, capabilities) VALUES (?, ?)')
+            ->execute(['guest', json_encode(['providers' => [], 'sidebar' => [], 'quota_tokens' => 7])]);
+        $out = (new PackageController($this->db, []))->me(['user_id' => 9]);
+        $this->assertSame('guest', $out['role']);
+        $this->assertSame(7, $out['capabilities']['quota_tokens']);
+    }
+
+    public function testAdminListAndGetCarryNameAndBuiltin(): void
+    {
+        $this->db->exec("INSERT INTO users (id, role) VALUES (1, 'admin')");
+        $this->db->prepare('INSERT INTO packages (role, name, builtin, capabilities) VALUES (?, ?, 0, ?)')
+            ->execute(['it-ops-2', 'IT Ops', '{}']);
+        $c = new PackageController($this->db, []);
+        $list = $c->adminList(['user_id' => 1])['packages'];
+        $byRole = array_column($list, null, 'role');
+        $this->assertSame('IT Ops', $byRole['it-ops-2']['name']);
+        $this->assertFalse($byRole['it-ops-2']['builtin']);
+        $this->assertSame('User', $byRole['user']['name']);
+        $got = $c->adminGet(['user_id' => 1, 'params' => ['role' => 'it-ops-2']]);
+        $this->assertSame('IT Ops', $got['package']['name']);
+        $this->assertSame(400, $c->adminGet(['user_id' => 1, 'params' => ['role' => 'nope']])['status_code']);
     }
 }

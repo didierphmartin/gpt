@@ -1,0 +1,32 @@
+# Corporate edition = the base image plus gpt_admin and the login service.
+#
+# Deliberately a SECOND image rather than a flag on the first: the public repo
+# ships the individual edition, and the entire commercial gating rests on the
+# public artifact not containing the admin application. A flag on one image
+# would put gpt_admin in everyone's hands.
+#
+# gpt_admin lives in its own private repository and is built as its own image
+# (docker/gptadmin/Dockerfile, using gpt_admin's own directory as the build
+# context) BEFORE this Dockerfile is built. Docker's COPY cannot reach outside
+# this build's own context, so gpt_admin's sources can't be pulled in directly
+# here -- COPY --from=<image> pulls the already-built dist/ out of that image
+# instead, which needs no registry.
+#
+# Build order:
+#   docker build -t gpt-web-base:latest -f docker/web/Dockerfile .
+#   docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+#   docker build -t gpt-login-src:latest -f docker/login/Dockerfile "$GPT_LOGIN_SRC"
+#   docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
+
+FROM gpt-web-base:latest
+# base: './' in gpt_admin's vite config means the bundle works from any path,
+# so it can live beside gpt. Same origin => shared localStorage => the admin
+# signs in once and is authenticated in both applications.
+COPY --from=gpt-admin-dist:latest /admin/dist /var/www/html/gpt_admin
+RUN chown -R www-data:www-data /var/www/html/gpt_admin
+
+# The login service: one account for gpt and gpt_admin (same origin, /login/).
+COPY --from=gpt-login-src:latest /login /var/www/html/login
+COPY docker/web/apache-corporate.conf /etc/apache2/conf-available/gpt-corporate.conf
+RUN a2enconf gpt-corporate \
+ && chown -R www-data:www-data /var/www/html/login

@@ -4,6 +4,7 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { isServiceUser } from '../Services/RobotAccount';
 
 /**
  * Mirrors src/Controllers/WebAuthnController.php — passkey/biometric login.
@@ -118,12 +119,15 @@ export class WebAuthnController {
       return { success: false, message: 'Credential ID and signature are required', status_code: 400 };
     }
 
-    const cred = (
+    let cred = (
       await sql<any>`
-        SELECT u.id AS uid, u.email, u.first_name, u.last_name, u.role, u.plan, u.provider, u.created_at
+        SELECT u.id AS uid, u.email, u.first_name, u.last_name, u.kind, u.role, u.plan, u.provider, u.created_at
         FROM webauthn_credentials wc JOIN users u ON wc.user_id = u.id
         WHERE wc.credential_id = ${credentialId}`.execute(db)
     ).rows[0];
+
+    // The robot is a service row: answer as for an unknown credential.
+    if (cred && isServiceUser(cred)) cred = undefined;
 
     if (!cred) {
       return { success: false, message: 'Credential not found', code: 'CREDENTIAL_NOT_FOUND', status_code: 404 };

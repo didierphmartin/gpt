@@ -26,6 +26,8 @@ import httpx
 from app.controllers.auth_controller import password_hash
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.package_resolver import PackageResolver
+from app.services.robot_account import RobotAccount
+from app.services.role_store import RoleStore
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -46,7 +48,6 @@ from app.support.phpcompat import (
 )
 from app.support.phpjson import php_json_decode, php_json_encode
 
-VALID_ROLES = ['guest', 'prospect', 'user', 'admin']
 VALID_CATEGORIES = ('avatar', 'voice')
 VALID_KEY_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi']
 
@@ -87,7 +88,7 @@ class AdminController:
 
     def listUsers(self, request) -> dict:
         sql = ("SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix,"
-               " app_key_created_at, created_at, updated_at FROM users ORDER BY id")
+               " app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id")
         users = self.db.fetch_all(sql)
         return {'success': True, 'users': users, 'status_code': 200}
 
@@ -96,7 +97,7 @@ class AdminController:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
         sql = ("SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix,"
-               " app_key_created_at, created_at, updated_at FROM users WHERE id = :id")
+               " app_key_created_at, created_at, updated_at FROM users WHERE id = :id AND kind <> 'service'")
         user = self.db.fetch_one(sql, {':id': userId})
 
         if not user:
@@ -111,7 +112,7 @@ class AdminController:
         try:
             sql = ("SELECT id, email, phone, first_name, last_name, role, plan,"
                    " provider, email_verified, firebase_uid, last_login, created_at"
-                   " FROM users WHERE id = :id")
+                   " FROM users WHERE id = :id AND kind <> 'service'")
             user = self.db.fetch_one(sql, {':id': userId})
 
             if not user:
@@ -178,8 +179,12 @@ class AdminController:
         if php_empty(email) or php_empty(password):
             return {'success': False, 'error': 'Email and password are required', 'status_code': 400}
 
-        if role not in VALID_ROLES:
-            role = 'user'
+        # Validate role: any existing role; an unknown one is refused, not swapped for 'user'.
+        if not isinstance(role, str) or not RoleStore(self.db).exists(role):
+            return {'success': False, 'error': 'Invalid role', 'status_code': 400}
+
+        if role == RobotAccount.ROLE:
+            return self._robot_role_refusal()
 
         hashedPassword = password_hash(php_strval(password))
 
@@ -211,8 +216,14 @@ class AdminController:
         if php_empty(email):
             return {'success': False, 'error': 'Email is required', 'status_code': 400}
 
-        if role is not None and role not in VALID_ROLES:
+        if role is not None and (not isinstance(role, str) or not RoleStore(self.db).exists(role)):
             return {'success': False, 'error': 'Invalid role', 'status_code': 400}
+
+        if self._is_service_user(userId):
+            return self._user_not_found()
+
+        if role == RobotAccount.ROLE:
+            return self._robot_role_refusal()
 
         fields = ['email = :email', 'first_name = :first_name', 'last_name = :last_name', 'updated_at = NOW()']
         params = {':id': userId, ':email': email, ':first_name': firstName, ':last_name': lastName}
@@ -234,6 +245,9 @@ class AdminController:
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
+        if self._is_service_user(userId):
+            return self._user_not_found()
+
         sql = 'DELETE FROM users WHERE id = :id'
         rowcount = self.db.execute(sql, {':id': userId})
 
@@ -241,6 +255,20 @@ class AdminController:
             return {'success': False, 'error': 'User not found', 'status_code': 404}
 
         return {'success': True, 'message': 'User deleted', 'status_code': 200}
+
+    def _is_service_user(self, userId: int) -> bool:
+        """The robot's service row is not a managed account: it answers as an unknown user."""
+        row = self.db.fetch_one('SELECT kind FROM users WHERE id = :id', {':id': userId})
+        return row is not None and row.get('kind') == 'service'
+
+    @staticmethod
+    def _user_not_found() -> dict:
+        return {'success': False, 'error': 'User not found', 'status_code': 404}
+
+    @staticmethod
+    def _robot_role_refusal() -> dict:
+        """The robot role belongs to the service user alone; a person never holds it."""
+        return {'success': False, 'error': "The robot role can't be given to a person", 'status_code': 400}
 
     # ─── provider settings — avatar/voice (AdminController.php:317-690;
     #     routes.php 181-185) ────────────────────────────────────────────────
@@ -2116,7 +2144,9 @@ class AdminController:
             updated = 0
             errors = []
 
-            for category in ('llm', 'voice', 'avatar'):
+            # LLM prices come from the model catalog, so no AI refresh is
+            # spent on them.
+            for category in ('voice', 'avatar'):
                 for provider in allCosts[category]:
                     try:
                         updatedProvider = self.fetchProviderPricing(provider)
@@ -2398,70 +2428,37 @@ class AdminController:
     def getDefaultCosts(self) -> dict:
         """AdminController.php:3376-3550."""
         return {
+            # LLM prices live in resources/model_catalog.json; these entries
+            # only name the provider and its pricing page.
             'llm': [
                 {
                     'provider': 'claude', 'displayName': 'Claude (Anthropic)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Claude 3.5 Sonnet', 'price': '$3.00', 'unit': '/ 1M input tokens',
-                         'details': '$15.00 / 1M output tokens'},
-                        {'name': 'Claude 3.5 Haiku', 'price': '$0.80', 'unit': '/ 1M input tokens',
-                         'details': '$4.00 / 1M output tokens'},
-                        {'name': 'Claude 3 Opus', 'price': '$15.00', 'unit': '/ 1M input tokens',
-                         'details': '$75.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://www.anthropic.com/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'openai', 'displayName': 'OpenAI', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'GPT-4o', 'price': '$2.50', 'unit': '/ 1M input tokens',
-                         'details': '$10.00 / 1M output tokens'},
-                        {'name': 'GPT-4o mini', 'price': '$0.15', 'unit': '/ 1M input tokens',
-                         'details': '$0.60 / 1M output tokens'},
-                        {'name': 'GPT-4 Turbo', 'price': '$10.00', 'unit': '/ 1M input tokens',
-                         'details': '$30.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://openai.com/api/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'gemini', 'displayName': 'Gemini (Google)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Gemini 1.5 Pro', 'price': '$1.25', 'unit': '/ 1M input tokens',
-                         'details': '$5.00 / 1M output tokens'},
-                        {'name': 'Gemini 1.5 Flash', 'price': '$0.075', 'unit': '/ 1M input tokens',
-                         'details': '$0.30 / 1M output tokens'},
-                        {'name': 'Gemini 2.0 Flash', 'price': '$0.10', 'unit': '/ 1M input tokens',
-                         'details': '$0.40 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://ai.google.dev/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'grok', 'displayName': 'Grok (xAI)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Grok-2', 'price': '$2.00', 'unit': '/ 1M input tokens',
-                         'details': '$10.00 / 1M output tokens'},
-                        {'name': 'Grok-2 mini', 'price': '$0.20', 'unit': '/ 1M input tokens',
-                         'details': '$1.00 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://x.ai/api', 'lastUpdated': None,
                 },
                 {
                     'provider': 'deepseek', 'displayName': 'DeepSeek', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'DeepSeek-V3', 'price': '$0.27', 'unit': '/ 1M input tokens',
-                         'details': '$1.10 / 1M output tokens'},
-                        {'name': 'DeepSeek-R1', 'price': '$0.55', 'unit': '/ 1M input tokens',
-                         'details': '$2.19 / 1M output tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://platform.deepseek.com/api-docs/pricing', 'lastUpdated': None,
                 },
                 {
                     'provider': 'kimi', 'displayName': 'Kimi (Moonshot)', 'category': 'llm',
-                    'tiers': [
-                        {'name': 'Moonshot-v1-8k', 'price': '$0.012', 'unit': '/ 1K tokens'},
-                        {'name': 'Moonshot-v1-32k', 'price': '$0.024', 'unit': '/ 1K tokens'},
-                        {'name': 'Moonshot-v1-128k', 'price': '$0.06', 'unit': '/ 1K tokens'},
-                    ],
+                    'tiers': [],
                     'pricingUrl': 'https://platform.moonshot.cn/docs/pricing', 'lastUpdated': None,
                 },
             ],

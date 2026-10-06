@@ -2774,7 +2774,7 @@ class GraphWorkflowRunner
                     return null;
                 }
 
-                $geminiModel = $model ?: ($providerConfig['model'] ?? 'gemini-2.0-flash');
+                $geminiModel = $model ?: ($providerConfig['model'] ?? 'gemini-3.6-flash');
                 $payload = [
                     'contents' => [
                         ['role' => 'user', 'parts' => [['text' => $systemPrompt . "\n\n" . $task]]],

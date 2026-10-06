@@ -63,8 +63,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // ============================================
         $r->get('/api/v1/me/package', ['PackageController', 'me']);
         $r->get('/api/v1/admin/packages', ['PackageController', 'adminList']);
-        $r->get('/api/v1/admin/packages/{role:[a-z]+}', ['PackageController', 'adminGet']);
-        $r->put('/api/v1/admin/packages/{role:[a-z]+}', ['PackageController', 'adminUpdate']);
+        $r->get('/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['PackageController', 'adminGet']);
+        $r->put('/api/v1/admin/packages/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['PackageController', 'adminUpdate']);
+        $r->get('/api/v1/admin/roles', ['RolesController', 'index']);
+        $r->post('/api/v1/admin/roles', ['RolesController', 'create']);
+        $r->put('/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['RolesController', 'rename']);
+        $r->delete('/api/v1/admin/roles/{role:[a-z0-9]+(?:-[a-z0-9]+)*}', ['RolesController', 'destroy']);
 
         // ============================================
         // AFFILIATE ROUTES
@@ -227,6 +231,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/admin/login/app-users', ['LoginAdminController', 'getAppUsers']);
         $r->post('/api/v1/admin/login/app-users/role', ['LoginAdminController', 'setAppUserRole']);
         $r->post('/api/v1/admin/login/app-users/add', ['LoginAdminController', 'addAppMember']);
+
+        // Corporate first-run setup (public: before setup nobody can sign in).
+        $r->get('/api/v1/setup/status', ['SetupController', 'status']);
+        $r->post('/api/v1/setup/admin', ['SetupController', 'createAdmin']);
 
         // Admin MCP Server Management
         $r->get('/api/v1/admin/mcp/servers', ['AdminController', 'listMCPServers']);
@@ -400,6 +408,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->put('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'update']);
         $r->delete('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'destroy']);
         $r->get('/api/v1/playbooks/{id:\d+}/used-by', ['PlaybooksController', 'usedBy']);
+        $r->post('/api/v1/playbooks/{id:\d+}/publish', ['PlaybooksController', 'publish']);
+        $r->get('/api/v1/robot', ['RobotController', 'show']);
+        $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
+        $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
 
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);

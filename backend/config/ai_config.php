@@ -82,6 +82,9 @@ return [
         'charset' => 'utf8mb4',
     ],
 
+    // 'individual' | 'corporate' | '' (hosted). See Services\Edition.
+    'edition' => $_ENV['GPT_EDITION'] ?? '',
+
     // Read-only access to the shared login-service DB (email lookup for SSO).
     'login_db' => [
         'host'     => $_ENV['LOGIN_DB_HOST'] ?? ($_ENV['DB_HOST'] ?? ''),

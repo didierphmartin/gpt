@@ -8,6 +8,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SEED="$HERE/../db/02-seed.sql"
 CONTROLLER="$HERE/../../backend/src/Controllers/SystemSettingsController.php"
 KIMI_PROVIDER="$HERE/../../backend/src/Providers/KimiProvider.php"
+CATALOG="$HERE/../../backend/resources/model_catalog.json"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -44,8 +45,8 @@ jev_row=$(grep -E "^\('jev'," "$SEED" || true)
 echo "$jev_row" | grep -q "'router'" || fail "jev row must use api_format 'router'"
 echo "$jev_row" | grep -qE "^\('jev', '[^']*', '', 'jev-latest', NULL," \
   || fail "jev row must have an empty api_key, model jev-latest and base_url NULL"
-# Jev is priced by its vendor ($0.042 per 1M input, output free); the seed's
-# INSERT has no price columns, so a separate UPDATE must set them.
+# Jev is priced by its vendor ($0.042 per 1M input, output free), not by the
+# model catalog; its row carries NULL prices, so a separate UPDATE must set them.
 grep -qE "price_input_per_1m. = 0\.042, .price_output_per_1m. = 0" "$SEED" \
   || fail "seed must price the jev row: input 0.042, output 0"
 grep -qE "provider_key. = 'jev'" "$SEED" \
@@ -60,12 +61,12 @@ grep -qE "provider_key. = 'jev'" "$SEED" \
 # (Plain indexed arrays, not associative -- macOS ships bash 3.2, which
 # has no declare -A.)
 PROVIDERS_MODEL=(
-  "claude:claude-sonnet-4-5"
-  "openai:gpt-4o"
-  "gemini:gemini-2.0-flash"
-  "grok:grok-2-latest"
-  "deepseek:deepseek-chat"
-  "kimi:moonshot-v1-auto"
+  "claude:claude-sonnet-5"
+  "openai:gpt-5.6-terra"
+  "gemini:gemini-3.6-flash"
+  "grok:grok-4.6"
+  "deepseek:deepseek-v4-pro"
+  "kimi:kimi-k2.6"
   "gamma4:Gemma-4-E4B-it"
   "glm:glm-5.2"
 )
@@ -112,6 +113,89 @@ if grep -E "^\(" "$SEED" | grep -qi "api.moonshot.cn"; then
   fail "seed must not use the moonshot.cn (China) endpoint for kimi"
 fi
 
+# Catalog guard: every seeded model must be a model_catalog.json entry for
+# its provider, and the seeded prices must be that entry's prices -- the
+# admin UI and the user Settings panel both read prices from the catalog,
+# so a seed that disagrees shows one price and bills another.
+[ -f "$CATALOG" ] || fail "missing $CATALOG"
+command -v python3 >/dev/null || fail "python3 is required for the catalog check"
+catalog_errors=$(python3 - "$SEED" "$CATALOG" "$CONTROLLER" <<'PY'
+import json, re, sys
+seed, catalog = open(sys.argv[1]).read(), json.load(open(sys.argv[2]))["providers"]
+controller = open(sys.argv[3]).read()
+row = re.compile(r"^\('([a-z0-9]+)', '[^']*', '', '([^']+)', '[^']*', \d+, [0-9.]+, ([0-9.]+|NULL), ([0-9.]+|NULL), ", re.M)
+rows = row.findall(seed)
+expected = {"claude", "openai", "gemini", "grok", "deepseek", "kimi", "gamma4", "glm"}
+matched = [r[0] for r in rows]
+if len(matched) != len(expected) or set(matched) != expected:
+    print(f"expected exactly one row per provider {sorted(expected)} in the expected column layout, matched {matched}")
+for key, model, pin, pout in rows:
+    entry = next((m for m in catalog.get(key, []) if m["id"] == model), None)
+    if entry is None:
+        print(f"{key}: seeded model {model} is not in model_catalog.json")
+    elif pin == "NULL" or pout == "NULL" or float(pin) != float(entry["input"]) or float(pout) != float(entry["output"]):
+        print(f"{key}: seeded prices {pin}/{pout} for {model} differ from the catalog's {entry['input']}/{entry['output']}")
+
+# The PHP fallback table ($providerDefaults) must bill the same prices the
+# seed and the catalog show, not only name the same model.
+block = re.search(r"\$providerDefaults = \[(.*?)\n        \];", controller, re.S)
+if block is None:
+    print("could not find $providerDefaults in SystemSettingsController.php")
+else:
+    php = {}
+    for m in re.finditer(r"'([a-z0-9]+)' => \[(.*?)\n            \]", block.group(1), re.S):
+        body = m.group(2)
+        get = lambda f, pat: (re.search(r"'" + f + r"' => " + pat, body) or [None, None])[1]
+        php[m.group(1)] = (get("model", r"'([^']*)'"),
+                           get("price_input_per_1m", r"([0-9.]+)"),
+                           get("price_output_per_1m", r"([0-9.]+)"))
+    for key, model, pin, pout in rows:
+        if key not in php:
+            print(f"{key}: no entry in SystemSettingsController.php $providerDefaults")
+            continue
+        pmodel, ppin, ppout = php[key]
+        if pmodel != model:
+            print(f"{key}: $providerDefaults model {pmodel} differs from the seeded {model}")
+        if ppin is None or ppout is None or pin == "NULL" or pout == "NULL" \
+                or float(ppin) != float(pin) or float(ppout) != float(pout):
+            print(f"{key}: $providerDefaults prices {ppin}/{ppout} differ from the seeded {pin}/{pout}")
+        entry = next((m for m in catalog.get(key, []) if m["id"] == pmodel), None)
+        if entry is not None and ppin is not None and ppout is not None and \
+                (float(ppin) != float(entry["input"]) or float(ppout) != float(entry["output"])):
+            print(f"{key}: $providerDefaults prices {ppin}/{ppout} for {pmodel} differ from the catalog's {entry['input']}/{entry['output']}")
+PY
+)
+[ -z "$catalog_errors" ] || fail "seed disagrees with model_catalog.json: $catalog_errors"
+
+# The three backends each ship a copy of the catalog; they must be one file.
+for copy in "$HERE/../../backend_typescript/resources/model_catalog.json" \
+            "$HERE/../../backend_python/resources/model_catalog.json"; do
+  cmp -s "$CATALOG" "$copy" || fail "catalog copy differs from backend/resources/model_catalog.json: $copy"
+done
+
+# Promotional prices expire. A catalog entry with "promo_ends" carries a
+# price that stops being true after that date, so once today is past it the
+# catalog (and the seed, if the model is a default) must be refreshed.
+# SEED_TEST_TODAY=YYYY-MM-DD overrides today's date, to exercise this check.
+TODAY="${SEED_TEST_TODAY:-$(date +%F)}"
+[[ "$TODAY" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]] \
+  || fail "SEED_TEST_TODAY must be a date in YYYY-MM-DD form, got: $TODAY"
+promo_errors=$(python3 - "$CATALOG" "$TODAY" <<'PY'
+import json, re, sys
+catalog, today = json.load(open(sys.argv[1]))["providers"], sys.argv[2]
+for key, models in catalog.items():
+    for m in models:
+        end = m.get("promo_ends")
+        if end is None:
+            continue
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(end)):
+            print(f"{key}/{m['id']}: promo_ends {end!r} is not YYYY-MM-DD")
+        elif today > end:
+            print(f"{key}/{m['id']}: promotional price {m['input']}/{m['output']} ended {end}; refresh the catalog price for {m['id']}")
+PY
+)
+[ -z "$promo_errors" ] || fail "expired promotional prices in model_catalog.json (today $TODAY): $promo_errors"
+
 # Every row must be enabled, or the provider picker will look empty. Row
 # tuples end in "...enabled, sort_order)" followed by either ',' (every row
 # but the last) or ';' (only the last) -- anchoring on ");" alone would only
@@ -120,4 +204,4 @@ if grep -qE ", *0, *[0-9]+\)[,;]" "$SEED"; then
   fail "a row appears to have enabled=0"
 fi
 
-echo "PASS: seed defines all 8 providers + the jev router row, carries no keys, and matches the app's defaults"
+echo "PASS: seed defines all 8 providers + the jev router row, carries no keys, matches the app's defaults (models and prices) and the model catalog, and no promotional price has expired"

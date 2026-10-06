@@ -107,6 +107,21 @@ class AuthController:
         return {'key': key, 'prefix': key[:12], 'hash': hash_user_app_key(key, self._app_key_pepper())}
 
     @staticmethod
+    def _is_service_user(user: dict) -> bool:
+        """True for the robot's service row (never a person: no token, no app key)."""
+        return (user.get('kind') or 'person') == 'service'
+
+    def _is_service_user_id(self, user_id) -> bool:
+        row = self.db.fetch_one('SELECT kind FROM users WHERE id = ?', [user_id])
+        return row is not None and row.get('kind') == 'service'
+
+    def _login_db_connection(self, ld: dict):
+        """Connection to the login service's database (overridable seam for tests)."""
+        return Db.connect({'host': ld.get('host', ''), 'database': ld.get('database', ''),
+                           'username': ld.get('username', ''), 'password': ld.get('password', ''),
+                           'charset': 'utf8mb4'}, timeout=5)
+
+    @staticmethod
     def _auth_required() -> dict:
         return {'success': False, 'message': 'Authentication required', 'status_code': 401}
 
@@ -137,6 +152,9 @@ class AuthController:
         if php_empty(email) or php_empty(password):
             return {'success': False, 'message': 'Email and password are required', 'status_code': 400}
         user = self.db.fetch_one("SELECT * FROM users WHERE email = ?", [str(email).strip().lower()])
+        # The robot is a service row, never a person: answer as for an unknown account.
+        if user and self._is_service_user(user):
+            user = None
         if not user or not password_verify(str(password), user.get('password')):
             return {'success': False, 'message': 'Invalid email or password', 'status_code': 401}
         tokens = self._tokens(int(user['id']))
@@ -165,9 +183,7 @@ class AuthController:
             return {'success': False, 'message': 'Invalid SSO token', 'status_code': 401}
         ld = self.config.get('login_db') or {}
         try:
-            ldb = Db.connect({'host': ld.get('host', ''), 'database': ld.get('database', ''),
-                              'username': ld.get('username', ''), 'password': ld.get('password', ''),
-                              'charset': 'utf8mb4'}, timeout=5)
+            ldb = self._login_db_connection(ld)
             try:
                 login_user = ldb.fetch_one('SELECT email, email_verified FROM users WHERE id = ?',
                                            [int(claims['sub'])]) or {}
@@ -181,6 +197,8 @@ class AuthController:
         if not login_user.get('email_verified'):
             return {'success': False, 'message': 'SSO account email not verified', 'status_code': 403}
         user = self.db.fetch_one('SELECT * FROM users WHERE email = ?', [email])
+        if user and self._is_service_user(user):
+            user = None
         if not user:
             return {'success': False, 'message': f'No account for {email} — sign up first', 'status_code': 403}
         tokens = self._tokens(int(user['id']))
@@ -251,6 +269,8 @@ class AuthController:
         last_name = user_data.get('last_name', '') or ''
         user = self.db.fetch_one("SELECT * FROM users WHERE email = ? OR firebase_uid = ? OR phone = ?",
                                  [email, firebase_uid, phone_number])
+        if user and self._is_service_user(user):
+            return {'success': False, 'message': 'Invalid or expired authentication token', 'status_code': 401}
         ledger_user_id = str(user_data.get('ledger_user_id') or b.get('ledger_user_id') or '').strip()
         plan = normalize_plan(user_data.get('plan') or b.get('plan') or 'free')
         role = role_for_plan(plan)
@@ -259,9 +279,18 @@ class AuthController:
                 "UPDATE users SET last_login = NOW(), firebase_uid = COALESCE(firebase_uid, ?), provider = ?,"
                 " phone = COALESCE(phone, ?) WHERE id = ?", [firebase_uid, provider, phone_number, user['id']])
             user_id = int(user['id'])
+            # Apply a paid plan presented on re-auth, but only as an UPGRADE: a normal login
+            # presents 'free' (must not downgrade) and admins are never touched. The plan is
+            # recorded for everyone else, but only a guest/prospect is promoted to 'user':
+            # custom roles are kept.
             if plan != 'free' and (user.get('role') or '') != 'admin' and plan_rank(plan) > plan_rank(user.get('plan') or 'free'):
-                self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
-                user = dict(user); user['plan'] = plan; user['role'] = role
+                user = dict(user)
+                if (user.get('role') or '') in ('guest', 'prospect'):
+                    self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
+                    user['role'] = role
+                else:
+                    self.db.execute("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?", [plan, user_id])
+                user['plan'] = plan
         else:
             if not ledger_user_id:
                 return {'success': False,
@@ -325,8 +354,16 @@ class AuthController:
         plan = normalize_plan(plan)
         if plan not in ('standard', 'premium'):
             return {'success': False, 'message': 'Invalid plan. Must be standard or premium.', 'status_code': 400}
-        role = role_for_plan(plan)
-        self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
+        # Same rule as the Firebase paid-plan path: the plan is recorded for everyone, but only a
+        # guest/prospect is promoted to the paid role. Any other role (user, admin, affiliate, custom) is kept.
+        row = self.db.fetch_one("SELECT role FROM users WHERE id = ?", [user_id])
+        current = None if row is None or row.get('role') is None else str(row.get('role'))
+        if current in ('guest', 'prospect'):
+            role = role_for_plan(plan)
+            self.db.execute("UPDATE users SET plan = ?, role = ?, updated_at = NOW() WHERE id = ?", [plan, role, user_id])
+        else:
+            role = current
+            self.db.execute("UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?", [plan, user_id])
         error_log(f'[AuthController] Plan upgraded: user_id={user_id}, plan={plan}, role={role}')
         return {'success': True, 'message': f'Plan upgraded to {plan}', 'plan': plan, 'role': role, 'status_code': 200}
 
@@ -340,6 +377,8 @@ class AuthController:
         user_id = request.get('user_id')
         if not user_id or request.get('auth_type') != 'jwt':
             return self._auth_required()
+        if self._is_service_user_id(user_id):
+            return {'success': False, 'message': 'User not found', 'status_code': 404}
         m = self._generate_app_key_material()
         self.db.execute("UPDATE users SET app_key_hash = ?, app_key_prefix = ?, app_key_created_at = NOW(), updated_at = NOW() WHERE id = ?",
                         [m['hash'], m['prefix'], user_id])
@@ -371,7 +410,8 @@ class AuthController:
         target = php_intval(request['body'].get('user_id'))
         if target <= 0:
             return {'success': False, 'message': 'user_id is required', 'status_code': 400}
-        if not self.db.fetch_one("SELECT id FROM users WHERE id = ?", [target]):
+        target_row = self.db.fetch_one("SELECT id, kind FROM users WHERE id = ?", [target])
+        if not target_row or self._is_service_user(target_row):
             return {'success': False, 'message': 'User not found', 'status_code': 404}
         m = self._generate_app_key_material()
         self.db.execute("UPDATE users SET app_key_hash = ?, app_key_prefix = ?, app_key_created_at = NOW(), updated_at = NOW() WHERE id = ?",

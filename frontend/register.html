@@ -630,5 +630,17 @@
     <!-- Firebase Config -->
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/config.js"></script>
+
+    <script>
+      /* gpt-edition-guard: hiding the link is not enough — the URL can still be
+         typed or bookmarked. In a self-hosted edition there is no subscription
+         to buy, so send the visitor back to the login page. In the corporate
+         edition an admin creates accounts in gpt_admin; in the individual
+         edition auto-login means they should never arrive here at all. */
+      (function () {
+        if (!window.APP_CONFIG || !window.APP_CONFIG.GPT_EDITION) { return; }
+        location.replace('login.html');
+      })();
+    </script>
 </body>
 </html>

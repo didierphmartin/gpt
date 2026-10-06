@@ -33,38 +33,55 @@
     // expose their list via config, so we ship sensible defaults and let the
     // "Custom…" option cover anything else the deployment has configured.
     const MODELS_BY_PROVIDER = {
+        // Claude / OpenAI: backend/resources/model_catalog.json ids
+        // (2026-09-28), platform default first.
         claude: [
-            'claude-sonnet-4-5-20250929',
-            'claude-3-5-sonnet-20241022',
-            'claude-3-opus-20240229',
-            'claude-3-sonnet-20240229',
-            'claude-3-haiku-20240307',
+            'claude-sonnet-5',
+            'claude-opus-5-5',
+            'claude-sonnet-5-5',
+            'claude-opus-5',
+            'claude-sonnet-4-5',
+            'claude-haiku-4-5-20251001',
         ],
         openai: [
+            'gpt-5.6-terra',
+            'gpt-5.6-sol',
+            'gpt-5.6-luna',
+            'gpt-5.5',
+            'gpt-4.1',
             'gpt-4o',
             'gpt-4o-mini',
-            'gpt-4-turbo',
-            'gpt-4-turbo-preview',
-            'gpt-4',
-            'gpt-3.5-turbo',
         ],
+        // Gemini: the backend/resources/model_catalog.json gemini ids
+        // (2026-09-28), platform default first.
         gemini: [
+            'gemini-3.6-flash',
+            'gemini-3.8-flash',
+            'gemini-3.7-flash',
+            'gemini-3.5-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.1-pro-preview',
+            'gemini-3.1-flash-lite',
+            'gemini-3-flash-preview',
+            'gemini-2.5-pro',
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
-            'gemini-2.5-pro',
-            'gemini-2.0-flash',
-            'gemini-2.0-flash-lite',
-            'gemini-3-flash-preview',
-            'gemini-3-flash-lite-preview',
-            'gemini-3-pro-preview',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
         ],
         grok:     ['grok-4-1-fast-reasoning'],
         deepseek: ['deepseek-v4-pro'],
         kimi:     ['kimi-k2.6'],
     };
     const PROVIDERS = Object.keys(MODELS_BY_PROVIDER);
+    // Ids these lists used to offer and no longer do (retired or not in the
+    // catalog). A saved pick of one falls back to the provider's default;
+    // any other unlisted id is a Custom… pick and is kept.
+    const RETIRED_MODELS = new Set([
+        'claude-sonnet-4-5-20250929', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229',
+        'claude-3-sonnet-20240229', 'claude-3-haiku-20240307',
+        'gpt-4-turbo', 'gpt-4-turbo-preview', 'gpt-4', 'gpt-3.5-turbo',
+        'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3-flash-lite-preview',
+        'gemini-3-pro-preview', 'gemini-1.5-flash', 'gemini-1.5-pro',
+    ]);
     function defaultModelFor(provider) {
         const list = MODELS_BY_PROVIDER[provider] || [];
         return list[0] || '';
@@ -77,9 +94,9 @@
         loopType: 'body',                          // 'body' | 'description'
         provider: 'claude',
         modelByProvider: {
-            claude:   'claude-sonnet-4-5-20250929',
-            openai:   'gpt-4o',
-            gemini:   'gemini-2.5-flash',
+            claude:   'claude-sonnet-5',
+            openai:   'gpt-5.6-terra',
+            gemini:   'gemini-3.6-flash',
             grok:     'grok-4-1-fast-reasoning',
             deepseek: 'deepseek-v4-pro',
             kimi:     'kimi-k2.6',
@@ -106,6 +123,11 @@
             // a single field; pin it to whichever provider was selected.
             if (raw.model && typeof raw.model === 'string' && raw.provider) {
                 merged.modelByProvider[raw.provider] = raw.model;
+            }
+            // A saved model this panel no longer lists falls back to the
+            // provider's default instead of being sent to the vendor.
+            for (const [p, m] of Object.entries(merged.modelByProvider)) {
+                if (RETIRED_MODELS.has(m)) merged.modelByProvider[p] = defaultModelFor(p);
             }
             return merged;
         } catch { return { ...DEFAULTS, modelByProvider: { ...DEFAULTS.modelByProvider } }; }

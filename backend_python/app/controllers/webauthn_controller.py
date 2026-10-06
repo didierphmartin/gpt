@@ -90,9 +90,12 @@ class WebAuthnController:
         if php_empty(credential_id) or php_empty(signature):
             return {'success': False, 'message': 'Credential ID and signature are required', 'status_code': 400}
         cred = self.db.fetch_one(
-            "SELECT wc.*, u.id as uid, u.email, u.first_name, u.last_name, u.role, u.plan, u.ledger_user_id, u.provider,"
+            "SELECT wc.*, u.id as uid, u.email, u.first_name, u.last_name, u.kind, u.role, u.plan, u.ledger_user_id, u.provider,"
             " u.last_login, u.created_at FROM webauthn_credentials wc JOIN users u ON wc.user_id = u.id"
             " WHERE wc.credential_id = ?", [credential_id])
+        # The robot is a service row: answer as for an unknown credential.
+        if cred and (cred.get('kind') or 'person') == 'service':
+            cred = None
         if not cred:
             return {'success': False, 'message': 'Credential not found', 'code': 'CREDENTIAL_NOT_FOUND', 'status_code': 404}
         if php_empty(authenticator_data) or php_empty(signature):

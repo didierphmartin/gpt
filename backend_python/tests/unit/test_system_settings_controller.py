@@ -186,7 +186,9 @@ def test_get_llm_providers_falls_back_to_config_when_db_empty():
     assert keys == ['claude', 'custom1']
     claude = r['providers'][0]
     assert claude['display_name'] == 'Claude'
-    assert claude['model'] == 'claude-sonnet-4-5'
+    assert claude['model'] == 'claude-sonnet-5'
+    assert claude['price_input_per_1m'] == 2.0
+    assert claude['price_output_per_1m'] == 10.0
     assert claude['max_tokens'] == 64000
     assert claude['api_format'] == 'anthropic'
     assert claude['enabled'] is True
@@ -537,6 +539,29 @@ def test_seed_rolls_back_on_error():
 ])
 def test_mask_api_key(key, expected):
     assert c()._mask_api_key(key) == expected
+
+
+# ─── config fallback prices follow the model ────────────────────────────
+
+def _fallback(config):
+    r = c(_admin_db(all_=[[]]), config).getLLMProviders(ctx())
+    return {p['provider_key']: p for p in r['providers']}
+
+
+def test_config_fallback_catalog_model_gets_its_catalog_prices():
+    p = _fallback({'claude': {'model': 'claude-opus-5-5'}})['claude']
+    assert p['model'] == 'claude-opus-5-5'
+    assert (p['price_input_per_1m'], p['price_output_per_1m']) == (4.0, 20.0)
+
+
+def test_config_fallback_model_outside_catalog_has_no_prices():
+    p = _fallback({'openai': {'model': 'not-a-catalog-model'}})['openai']
+    assert (p['price_input_per_1m'], p['price_output_per_1m']) == (None, None)
+
+
+def test_config_fallback_configured_prices_still_win():
+    p = _fallback({'gemini': {'model': 'gemini-3.5-flash', 'price_input_per_1m': 9, 'price_output_per_1m': 8}})['gemini']
+    assert (p['price_input_per_1m'], p['price_output_per_1m']) == (9.0, 8.0)
 
 
 # ─── router rows (Jev) ───────────────────────────────────────────────────

@@ -16,6 +16,8 @@ final class PlaybooksControllerTest extends TestCase
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         PlaybookStoreTest::schema($db);
+        $db->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
+        $db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
         $this->c = new PlaybooksController($db, []);
     }
 

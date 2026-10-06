@@ -2236,7 +2236,7 @@ class GraphWorkflowRunner:
                 error_log("[GraphWorkflowRunner] No Gemini API key configured")
                 return None
 
-            geminiModel = model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'gemini-2.0-flash')
+            geminiModel = model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'gemini-3.6-flash')
             payload = {
                 'contents': [{'role': 'user', 'parts': [{'text': systemPrompt + "\n\n" + task}]}],
                 'generationConfig': {

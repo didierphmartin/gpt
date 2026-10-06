@@ -134,7 +134,10 @@ CREATE TABLE `playbooks` (
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `text` mediumtext COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `published_by` int DEFAULT NULL,
+  `published_at` timestamp NULL DEFAULT NULL,
+  `source_id` int DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -471,7 +474,9 @@ CREATE TABLE `mcp_server_tools` (
 --
 
 CREATE TABLE `packages` (
-  `role` enum('guest','prospect','user','admin') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `role` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `builtin` tinyint(1) NOT NULL DEFAULT '0',
   `capabilities` json NOT NULL,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `updated_by` bigint DEFAULT NULL
@@ -710,7 +715,8 @@ CREATE TABLE `users` (
   `last_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `firebase_uid` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Firebase UID for social authentication',
   `provider` enum('email','google','facebook') COLLATE utf8mb4_unicode_ci DEFAULT 'email' COMMENT 'Authentication provider',
-  `role` enum('guest','prospect','user','admin','affiliate') COLLATE utf8mb4_unicode_ci DEFAULT 'prospect',
+  `role` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT 'prospect',
+  `kind` enum('person','service') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'person',
   `ledger_user_id` varchar(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `plan` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT 'free',
   `profile_picture` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'URL to user profile picture',

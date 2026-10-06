@@ -69,6 +69,12 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('https://api.moonshot.ai/v1', $code);
     }
 
+    public function testDeepSeekFlashGetsV4ThinkingRules(): void
+    {
+        $code = NOOAGenerator::emitNooa($this->analyzed());
+        $this->assertStringContainsString('elif p == "deepseek" and str(model).startswith(("deepseek-v4", "deepseek-flash")):', $code);
+    }
+
     public function testNodeClassEmitted(): void
     {
         $code = NOOAGenerator::emitNooa($this->analyzed());

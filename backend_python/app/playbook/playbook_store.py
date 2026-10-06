@@ -10,18 +10,20 @@ import re
 import unicodedata
 
 from app.playbook.playbook_document import PlaybookDocument
-from app.support.phpcompat import php_intval
+from app.support.phpcompat import php_intval, php_trim
 from app.support.phpjson import php_json_decode
 
 
 class PlaybookStoreError(RuntimeError):
     """PlaybookStoreError.php: a refused collection operation: kind (not_found,
-    invalid_text, invalid_key, key_taken, in_use) and its HTTP status."""
+    invalid_text, invalid_key, key_taken, in_use, replaces), its HTTP status, and
+    optional data for the client."""
 
-    def __init__(self, kind: str, message: str, status: int):
+    def __init__(self, kind: str, message: str, status: int, data: dict | None = None):
         super().__init__(message)
         self.kind = kind
         self.status = status
+        self.data = data or {}
 
 
 _COLS = 'id, pkey, title, text, updated_at'
@@ -115,6 +117,83 @@ class PlaybookStore:
                 'WHERE id = ? AND user_id = ?',
                 [key, title, text, id, userId])
         return self.get(userId, id)
+
+    def publish(self, userId: int, id: int, robotId: int, confirmReplace: bool) -> dict:
+        """Publish the user's playbook to the robot as a frozen copy (one version). A source
+        has at most one robot copy: republishing finds it by source_id and moves it to the
+        current key. A key held by another robot row (another or a deleted source) is
+        refused with `replaces` unless confirmReplace; then that row goes and ours takes the key."""
+        src = self.get(userId, id)
+        if src is None:
+            raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)
+        own = self.db.fetch_one('SELECT id FROM playbooks WHERE user_id = ? AND source_id = ? ORDER BY id LIMIT 1',
+                                [robotId, id])
+        ownId = None if own is None else int(own['id'])
+        holder = self.getByKey(robotId, src['pkey'])
+        if holder is not None and holder['id'] == ownId:
+            holder = None   # the key is already ours
+        targetId = ownId
+        if holder is not None:
+            meta = self.db.fetch_one('SELECT source_id, published_by, published_at FROM playbooks WHERE id = ?',
+                                     [holder['id']])
+            sameSource = ownId is None and meta['source_id'] is not None and int(meta['source_id']) == id
+            if sameSource:
+                targetId = holder['id']
+            elif not confirmReplace:
+                by = self._person_name(meta['published_by'])
+                raise PlaybookStoreError('replaces', f'The robot already has "{src["pkey"]}", published by {by}.', 409,
+                                         {'published_by': by, 'published_at': meta['published_at']})
+            elif ownId is None:
+                targetId = holder['id']
+        self.db.begin()
+        try:
+            if holder is not None and targetId == ownId and ownId is not None:
+                # our copy moves onto a key another copy holds: that copy goes
+                self.db.execute('DELETE FROM playbooks WHERE id = ? AND user_id = ?', [holder['id'], robotId])
+            row = self.save(robotId, targetId, src['text'], src['pkey'])
+            self.db.execute('UPDATE playbooks SET published_by = ?, published_at = CURRENT_TIMESTAMP, source_id = ? '
+                            'WHERE id = ? AND user_id = ?', [userId, id, row['id'], robotId])
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        out = self.db.fetch_one('SELECT id, pkey, title, text, updated_at, published_by, published_at, source_id '
+                                'FROM playbooks WHERE id = ?', [row['id']])
+        return {**out, 'id': int(out['id'])}
+
+    def robotList(self, robotId: int) -> list:
+        """The robot's collection with who published each and the title of its source (None when the source is gone)."""
+        rows = self.db.fetch_all(
+            'SELECT p.id, p.pkey, p.title, p.text, p.updated_at, p.published_by, p.published_at, p.source_id, '
+            's.title AS source_title '
+            'FROM playbooks p LEFT JOIN playbooks s ON s.id = p.source_id WHERE p.user_id = ? ORDER BY p.title',
+            [robotId])
+        return [{**r, 'id': int(r['id']),
+                 'published_by_name': None if r['published_by'] is None else self._person_name(r['published_by'])}
+                for r in rows]
+
+    def unpublish(self, robotId: int, robotPlaybookId: int) -> None:
+        if self.get(robotId, robotPlaybookId) is None:
+            raise PlaybookStoreError('not_found', f'Playbook #{robotPlaybookId} not found', 404)
+        self.db.execute('DELETE FROM playbooks WHERE id = ? AND user_id = ?', [robotPlaybookId, robotId])
+
+    def publishStatus(self, userId: int, robotId: int) -> dict:
+        """source playbook id -> 'published' (robot copy equals the source) | 'changed' (the source was edited since)."""
+        rows = self.db.fetch_all(
+            'SELECT s.id, s.text AS source_text, r.text AS robot_text '
+            'FROM playbooks r JOIN playbooks s ON s.id = r.source_id AND s.user_id = ? WHERE r.user_id = ? ORDER BY r.id',
+            [userId, robotId])
+        return {int(r['id']): 'published' if r['source_text'] == r['robot_text'] else 'changed' for r in rows}
+
+    def _person_name(self, userId) -> str:
+        """First + last name, else the email; '' when the user is gone."""
+        if userId is None:
+            return ''
+        u = self.db.fetch_one('SELECT email, first_name, last_name FROM users WHERE id = ?', [userId])
+        if u is None:
+            return ''
+        name = php_trim(php_trim(str(u['first_name'] or '')) + ' ' + php_trim(str(u['last_name'] or '')))
+        return name if name != '' else str(u['email'] or '')
 
     def delete(self, userId: int, id: int) -> None:
         """PHP 92-107."""

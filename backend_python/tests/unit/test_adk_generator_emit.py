@@ -414,3 +414,15 @@ def test_skill_helpers_emitted_when_agent_has_skills_list():
               'skills': [{'dir': 'GEO/geo-report'}], 'output_schema_id': None, 'documents': []}}})
     code = ADKGenerator.emitAdk(a)
     assert 'def _make_skill_tool(' in code
+
+
+def test_deepseek_flash_gets_v4_thinking_rules():
+    # deepseek-flash replaced deepseek-v4-flash and still runs in thinking
+    # mode: the model factory enables thinking and the generator drops the
+    # temperature the API would reject.
+    a = _analyzed()
+    a['agents']['2'].update({'provider': 'deepseek', 'model': 'deepseek-flash', 'temperature': 0.7})
+    code = ADKGenerator.emitAdk(a)
+    assert 'if model.startswith(("deepseek-v4", "deepseek-flash")):' in code
+    assert 'temperature 0.7 dropped (deepseek-v4 thinking mode' in code
+    assert 'temperature=0.7' not in code

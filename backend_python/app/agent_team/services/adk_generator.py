@@ -265,7 +265,7 @@ class ADKGenerator:
             api_base="https://api.deepseek.com",
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
         )
-        if model.startswith("deepseek-v4"):
+        if model.startswith(("deepseek-v4", "deepseek-flash")):
             # The node form's Thinking attribute governs (platform parity):
             # 'off' -> disabled (form temperature accepted); 'on'/default ->
             # V4's server default stays ON (sampling params are dropped at the
@@ -575,7 +575,7 @@ class _SkillCaptureAgent(BaseAgent):
                         'temperature ' + php_strval(ag['temperature']) + ' -> ' + php_strval(want)
                         + ' (kimi-k2 ' + ('thinking' if thinking == 'on' else 'non-thinking') + ' constraint)')
                     ag['temperature'] = want
-            if (provKey == 'deepseek' and modelStr.startswith('deepseek-v4')
+            if (provKey == 'deepseek' and modelStr.startswith(('deepseek-v4', 'deepseek-flash'))
                     and thinking != 'off' and ag.get('temperature') is not None):
                 clampNotes.append(
                     'temperature ' + php_strval(ag['temperature']) + ' dropped (deepseek-v4 thinking mode '

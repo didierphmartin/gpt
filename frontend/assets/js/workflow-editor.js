@@ -4632,6 +4632,35 @@ class WorkflowEditor {
     get _langgraphRunnerBase() { return 'http://127.0.0.1:8765'; }
 
     /**
+     * A `cd` into the runner's folder that works on any machine.
+     *
+     * The commands in these modals used to hardcode ~/Documents/synergyAI,
+     * which is one developer's layout. Anyone who picked a different folder in
+     * the setup wizard got a command that fails with "no such file or
+     * directory" at the moment they were told to run it.
+     *
+     * We cannot print an absolute path -- the File System Access API withholds
+     * it and the handle exposes only a name -- so the command locates the
+     * folder by that name, which we do know (localFolderName, set from the
+     * handle and restored with it). The find stops at the first match rather
+     * than walking all of $HOME, and skips dot-directories such as Library
+     * caches.
+     *
+     * @param {string} subpath appended inside the python/ folder, e.g. 'scripts/foo'
+     */
+    _runnerCd(subpath = '') {
+        // 'Selected folder' is a display placeholder from _connectLocalFs, not
+        // a real directory name; fall back to the documented default.
+        const name = (this.localFolderName && this.localFolderName !== 'Selected folder')
+            ? this.localFolderName
+            : 'synergyAI';
+        const quoted = "'" + String(name).replace(/'/g, "'\\''") + "'";
+        const tail = subpath ? '/' + subpath : '';
+        return 'cd "$(find ~ -maxdepth 6 -type d -name ' + quoted +
+               " -not -path '*/.*' -print -quit)/python" + tail + '"';
+    }
+
+    /**
      * Info modal — explains where the runtime lives and how to use it.
      * Pure documentation, no side effects. Mirrors the layout used by
      * _showRunnerSetupModal for visual consistency.
@@ -4878,7 +4907,7 @@ class WorkflowEditor {
             // and uvicorn does not reload. Say so — a bare "Not Found" here sends
             // people looking for a bug in the workflow instead of restarting.
             throw new Error('the local runner is running an older version (no workflow-server route). '
-                + 'Restart it — stop the running runner, then: cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py');
+                + `Restart it — stop the running runner, then: ${this._runnerCd()} && ./.venv/bin/python main.py`);
         }
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
@@ -5726,9 +5755,9 @@ class WorkflowEditor {
      * The direct command is offered second, for a run without the UI.
      */
     _showCompiledRunnerNotRunningModal(root, framework = null) {
-        const startCmd = 'cd ~/Documents/synergyAI/python && ./.venv/bin/python main.py';
+        const startCmd = `${this._runnerCd()} && ./.venv/bin/python main.py`;
         const directCmd = root
-            ? `cd ~/Documents/synergyAI/python/scripts/${root} && ../../.venv/bin/python workflow.py`
+            ? `${this._runnerCd(`scripts/${root}`)} && ../../.venv/bin/python workflow.py`
             : '';
         const t = (k, fallback) => this.escapeHtml(this.t(k) || fallback);
         const backdrop = document.createElement('div');
@@ -5816,7 +5845,7 @@ class WorkflowEditor {
         // as the backend generator) — mirrors the MAF modal fix.
         const lgFile = ((this.currentWorkflowName || 'workflow')
             .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_langgraph.py';
-        const directCmd = `cd ~/Documents/synergyAI/python && ./.venv/bin/python scripts/${lgFile}`;
+        const directCmd = `${this._runnerCd()} && ./.venv/bin/python scripts/${lgFile}`;
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -18879,6 +18908,7 @@ Based on the analysis...
             if (!keyEl || !pbStatus) return;
             const problem = PC.keyProblem(keyEl.value.trim(), this.editingAgent?.playbook_id ?? null);
             pbStatus.textContent = problem ? this.t('playbookLibrary.' + problem) : '';
+            pbStatus.style.color = '#ef4444';
         };
         keyEl?.addEventListener('input', () => { keyEl.dataset.typed = '1'; checkKey(); });
         // Retry a failed collection load: until it succeeds the form is read-only for
@@ -19395,6 +19425,57 @@ Based on the analysis...
         document.querySelectorAll('#agent-edit-modal .agent-modal-tab')
             .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
         this.switchAgentModalTab('system-prompt');
+        await this._addPlaybookPublishButton();
+    }
+
+    /** The form's Publish button, next to Save, only when the caller can use the robot. */
+    async _addPlaybookPublishButton() {
+        const robot = await window.playbooksLibrary?.robotInfo?.();
+        const save = document.getElementById('save-agent-btn');
+        if (!robot?.can_use || !save || document.getElementById('agent-pb-publish-btn') || !this._playbookFormOnly) return;
+        save.insertAdjacentHTML('beforebegin', `<button type="button" id="agent-pb-publish-btn"
+            class="px-4 py-2 text-blue-700 bg-blue-50 border border-blue-300 rounded-lg hover:bg-blue-100 text-sm font-medium transition">${this.escapeHtml(this.t('playbookLibrary.publish'))}</button>`);
+        this._pbPublishState = null;
+        document.getElementById('agent-pb-publish-btn').addEventListener('click', () => this._publishPlaybookFromForm());
+    }
+
+    /**
+     * Publish from the form: save first (as Save does), then publish. A `replaces` answer arms the
+     * button with "Replaces <key> published by <name> on <date>"; a second click confirms. Errors and
+     * the result show inline in #agent-pb-status.
+     */
+    async _publishPlaybookFromForm() {
+        const PC = window.PlaybookCollection;
+        const btn = document.getElementById('agent-pb-publish-btn');
+        const status = document.getElementById('agent-pb-status');
+        if (!btn || btn.dataset.busy === '1') return;
+        const say = (msg, ok) => { if (status) { status.textContent = msg; status.style.color = ok ? '#16a34a' : '#ef4444'; } };
+        const id = this.editingAgent?.playbook_id ?? null;
+        const act = PC.saveAction(id, document.getElementById('agent-instructions-input')?.value);
+        if (act === 'unloaded') { this._showPlaybookSaveError(new Error(this.t('playbookLibrary.loadFailed'))); return; }
+        btn.dataset.busy = '1';
+        say('', false);
+        let key = null;
+        try {
+            const row = await this._savePlaybookFromForm(act === 'update' ? id : null);
+            this.editingAgent.playbook_id = Number(row.id);
+            key = row.pkey;
+            const keyEl = document.getElementById('agent-pb-key');
+            if (keyEl && !keyEl.value.trim()) keyEl.value = row.pkey; // the key the server derived
+            const step = PC.publishStep(this._pbPublishState, { type: 'click', key });
+            await this._playbookApi().publish(row.id, step.confirmReplace);
+            this._pbPublishState = PC.publishStep(step, { type: 'ok' });
+            btn.textContent = this.t('playbookLibrary.publish');
+            say(this.t('playbookLibrary.publishedOk'), true);
+            window.playbooksLibrary?.loadTree?.();
+        } catch (e) {
+            this._pbPublishState = PC.publishStep(this._pbPublishState, { type: 'error', error: e, key: key }, this.t.bind(this));
+            btn.textContent = this._pbPublishState.armed ? this._pbPublishState.message : this.t('playbookLibrary.publish');
+            if (!this._pbPublishState.armed) say(this._pbPublishState.message, false);
+            this.switchAgentModalTab('system-prompt');
+        } finally {
+            btn.dataset.busy = '0';
+        }
     }
 
     /** Save the form's text + key to the collection (create when id is null); returns the saved row.
@@ -19426,7 +19507,7 @@ Based on the analysis...
     /** A refused playbook save (invalid_text / invalid_key / key_taken / not found): say why in the form. */
     _showPlaybookSaveError(err) {
         const el = document.getElementById('agent-pb-status');
-        if (el) el.textContent = err?.message || String(err);
+        if (el) { el.textContent = err?.message || String(err); el.style.color = '#ef4444'; }
         this.switchAgentModalTab('system-prompt');
     }
 
