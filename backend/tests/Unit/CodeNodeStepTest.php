@@ -45,33 +45,53 @@ final class CodeNodeStepTest extends TestCase
         self::assertSame([3], $r['skip']);
     }
 
+    private static function summarize(array $outputs, array $edges = self::EDGES, array $nodes = self::NODES): array
+    {
+        return CodeNodeStep::summarize($outputs, $edges, $nodes);
+    }
+
     public function testQuietAndDrain(): void
     {
-        $codeOnly = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'idle', 'success' => true]];
-        self::assertSame(['quiet' => true, 'drain' => false], CodeNodeStep::summarize($codeOnly));
-        $work = $codeOnly + [3 => ['type' => 'agent'], 4 => ['type' => 'output']];
-        self::assertSame(['quiet' => false, 'drain' => true], CodeNodeStep::summarize($work));
+        $codeOnly = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'no_mail', 'success' => true]];
+        self::assertSame(['quiet' => true, 'drain' => false], self::summarize($codeOnly));
+        $work = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'new_mail', 'success' => true],
+            3 => ['type' => 'agent'], 4 => ['type' => 'output']];
+        self::assertSame(['quiet' => false, 'drain' => true], self::summarize($work));
         $plain = [1 => ['type' => 'start'], 3 => ['type' => 'agent'], 4 => ['type' => 'output']];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($plain));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($plain));
+    }
+
+    public function testWorkBesideThePollDoesNotDrain(): void
+    {
+        // Start -> Poll(2) and Start -> Agent(5) in parallel; the poll found no mail.
+        $edges = [...self::EDGES, ['from_node_id' => 1, 'to_node_id' => 5, 'from_port' => 'output_1']];
+        $nodes = self::NODES + [5 => ['id' => 5, 'node_type' => 'agent', 'config' => ['agent_name' => 'Beside']]];
+        $out = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'no_mail', 'success' => true], 5 => ['type' => 'agent']];
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($out, $edges, $nodes),
+            'the agent beside the poll ran (not quiet) but is not behind its exit (no drain)');
+        // The same graph when the poll found mail: the agent behind new_mail drains.
+        $out = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'new_mail', 'success' => true],
+            5 => ['type' => 'agent'], 3 => ['type' => 'agent'], 4 => ['type' => 'output']];
+        self::assertSame(['quiet' => false, 'drain' => true], self::summarize($out, $edges, $nodes));
     }
 
     public function testACodeNodeThatTookNoExitDidNotRun(): void
     {
         // A disabled code node: the generic sentinel, no exit taken. Neither quiet nor drain.
         $disabled = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'output' => 'disabled node', 'success' => true]];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($disabled));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($disabled));
         $disabledThenWork = $disabled + [3 => ['type' => 'agent'], 4 => ['type' => 'output']];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($disabledThenWork));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($disabledThenWork));
     }
 
     public function testErrorExitIsNeverQuietAndDoesNotDrain(): void
     {
         $errored = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'error']];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($errored));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($errored));
         $failed = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'success' => false]];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($failed));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($failed));
         $erroredThenWork = $errored + [3 => ['type' => 'agent']];
-        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($erroredThenWork));
+        self::assertSame(['quiet' => false, 'drain' => false], self::summarize($erroredThenWork));
     }
 
     public function testEmptyAgentNameFallsThroughToName(): void

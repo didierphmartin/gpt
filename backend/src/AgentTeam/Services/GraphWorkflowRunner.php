@@ -558,7 +558,7 @@ class GraphWorkflowRunner
 
             // A poll that found nothing (a code node ran, no work node did) leaves no trace:
             // no execution row, no run log. An error exit or a failed code node is never quiet.
-            $summary = CodeNodeStep::summarize($this->nodeOutputs);
+            $summary = CodeNodeStep::summarize($this->nodeOutputs, $edges, $nodes);
             if ($summary['quiet']) {
                 $this->ensureDbConnection();
                 $this->db->prepare('DELETE FROM agent_workflow_executions WHERE id = ?')->execute([$this->executionId]);

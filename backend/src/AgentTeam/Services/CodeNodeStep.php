@@ -51,19 +51,26 @@ final class CodeNodeStep
     }
 
     /**
-     * quiet: a code node ran, did not error, and no work node ran. drain: a code node ran, the run did
-     * real work, and nothing errored. A code node "ran" only when it took an exit: a disabled one (no
-     * exit) neither quiets nor drains the run. An error exit or a failed code node is never quiet and
-     * never drains: errors are always recorded.
+     * quiet: a code node ran, did not error, and no work node ran. drain: a code node ran, a work node
+     * downstream of the exit it took ran, and nothing errored (a work node beside the poll, fed by Start,
+     * runs every tick and must not make a no-work run drain). A code node "ran" only when it took an
+     * exit: a disabled one (no exit) neither quiets nor drains the run. An error exit or a failed code
+     * node is never quiet and never drains: errors are always recorded.
+     *
+     * @param array $edges the graph's edges (from_node_id, to_node_id, from_port)
+     * @param array $nodes the graph's nodes by id (a code node's config carries its exits)
      */
-    public static function summarize(array $nodeOutputs): array
+    public static function summarize(array $nodeOutputs, array $edges, array $nodes): array
     {
-        $types = [];
         $codeRan = false;
         $errored = false;
-        foreach ($nodeOutputs as $o) {
+        $worked = false;
+        $behindExit = [];   // node ids downstream of an exit a code node took
+        foreach ($nodeOutputs as $id => $o) {
             $type = $o['type'] ?? '';
-            $types[] = $type;
+            if (in_array($type, self::WORK_TYPES, true)) {
+                $worked = true;
+            }
             if ($type !== 'code') {
                 continue;
             }
@@ -71,9 +78,46 @@ final class CodeNodeStep
                 $errored = true;
             } elseif (is_string($o['exit'] ?? null)) {
                 $codeRan = true;
+                $behindExit += self::downstreamOfExit((int) $id, $o['exit'], $edges, $nodes);
             }
         }
-        $worked = (bool) array_intersect($types, self::WORK_TYPES);
-        return ['quiet' => $codeRan && !$errored && !$worked, 'drain' => $codeRan && !$errored && $worked];
+        $workedBehindExit = false;
+        foreach (array_keys($behindExit) as $id) {
+            if (in_array($nodeOutputs[$id]['type'] ?? '', self::WORK_TYPES, true)) {
+                $workedBehindExit = true;
+            }
+        }
+        return ['quiet' => $codeRan && !$errored && !$worked, 'drain' => $codeRan && !$errored && $workedBehindExit];
+    }
+
+    /** Every node reachable from the children on code node $id's $exit port (ids as keys). */
+    private static function downstreamOfExit(int $id, string $exit, array $edges, array $nodes): array
+    {
+        $exits = array_values((array) ($nodes[$id]['config']['exits'] ?? ['next']));
+        $k = array_search($exit, $exits, true);
+        if ($k === false) {
+            return [];
+        }
+        $port = 'output_' . ($k + 1);
+        $todo = [];
+        foreach ($edges as $e) {
+            if ((int) $e['from_node_id'] === $id && ($e['from_port'] ?? 'output_1') === $port) {
+                $todo[] = (int) $e['to_node_id'];
+            }
+        }
+        $seen = [];
+        while ($todo) {
+            $n = array_pop($todo);
+            if (isset($seen[$n])) {
+                continue;
+            }
+            $seen[$n] = true;
+            foreach ($edges as $e) {
+                if ((int) $e['from_node_id'] === $n) {
+                    $todo[] = (int) $e['to_node_id'];
+                }
+            }
+        }
+        return $seen;
     }
 }

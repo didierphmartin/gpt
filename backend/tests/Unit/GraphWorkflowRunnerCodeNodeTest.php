@@ -50,7 +50,7 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         return $env ?: (is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3');
     }
 
-    private function run_(string $code, array $exits, array $config = [], array $nodeConfig = []): array
+    private function run_(string $code, array $exits, array $config = [], array $nodeConfig = [], ?array $edges = null): array
     {
         $nodes = [
             ['id' => 1, 'node_type' => 'start', 'config' => []],
@@ -58,7 +58,7 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
                 'mcp_servers' => [], 'timeout_s' => 10] + $nodeConfig],
             ['id' => 3, 'node_type' => 'output', 'config' => []],
         ];
-        $edges = [
+        $edges ??= [
             ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
             ['from_node_id' => 2, 'to_node_id' => 3, 'from_port' => 'output_1'],
         ];
@@ -112,6 +112,20 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertCount(1, $rows);
         self::assertSame('completed', $rows[0]['status']);
         self::assertCount(1, $this->runLogs());
+    }
+
+    public function testWorkBesideThePollDoesNotDrain(): void
+    {
+        // Start -> Code(2) and Start -> Output(3) in parallel: the Output runs every tick, the poll found nothing.
+        $edges = [
+            ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
+            ['from_node_id' => 1, 'to_node_id' => 3, 'from_port' => 'output_1'],
+        ];
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'idle', 'output': 'none'}\n", ['work', 'idle'], [], [], $edges);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertArrayHasKey(3, $out['node_outputs'], 'the Output beside the poll ran');
+        self::assertFalse($out['quiet']);
+        self::assertFalse($out['drain'], 'work beside the poll must not make the scheduler re-run the workflow');
     }
 
     public function testAnUnwiredErrorExitIsKeptAndNeverQuiet(): void
