@@ -3489,6 +3489,7 @@ class SettingsPanel {
                 this.userKeys = data.keys || {};
                 this.userModels = data.models || {};
                 this.userSystemPrompts = data.system_prompts || {};
+                this.userEndpoints = data.endpoints || {};
                 // Per-provider lock + package model fallback. The model
                 // dropdown is locked when the user is on the package's API
                 // key (locked[provider] === true); the package's default
@@ -3501,6 +3502,7 @@ class SettingsPanel {
                 this.renderJevModelInfo();
                 this.renderModelSelections();
                 this.renderSystemPrompts();
+                this.renderEndpoints();
             }
         } catch (error) {
             console.error('Error loading API keys:', error);
@@ -3516,6 +3518,19 @@ class SettingsPanel {
             const ta = document.getElementById(`system-prompt-${provider}`);
             if (!ta) continue;
             ta.value = (this.userSystemPrompts && this.userSystemPrompts[provider]) || '';
+        }
+    }
+
+    /**
+     * Prefill the per-provider endpoint inputs with the user's own entry
+     * points. Empty = the vendor link shown as placeholder.
+     */
+    renderEndpoints() {
+        // keyProviders: Jev can sit behind a gateway too.
+        for (const provider of this.keyProviders) {
+            const input = document.getElementById(`endpoint-${provider}`);
+            if (!input) continue;
+            input.value = (this.userEndpoints && this.userEndpoints[provider]) || '';
         }
     }
 
@@ -3733,9 +3748,20 @@ class SettingsPanel {
                 }
             }
 
+            // Collect per-provider entry points; '' clears an override, like
+            // system prompts. Only providers with an input on the page.
+            const endpoints = {};
+            for (const provider of this.keyProviders) {
+                const input = document.getElementById(`endpoint-${provider}`);
+                if (input) {
+                    endpoints[provider] = input.value.trim();
+                }
+            }
+
             if (Object.keys(keys).length === 0
                 && Object.keys(models).length === 0
-                && Object.keys(systemPrompts).length === 0) {
+                && Object.keys(systemPrompts).length === 0
+                && Object.keys(endpoints).length === 0) {
                 this.showNotification('No changes to save', 'warning');
                 return;
             }
@@ -3749,15 +3775,17 @@ class SettingsPanel {
                 body: JSON.stringify({
                     keys: keys,
                     models: models,
-                    system_prompts: systemPrompts
+                    system_prompts: systemPrompts,
+                    endpoints: endpoints
                 })
             });
 
+            // Read the body even on 4xx: an invalid endpoint comes back as a
+            // 400 whose `error` names the provider.
+            const data = await response.json().catch(() => ({}));
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                throw new Error(data.error || `HTTP ${response.status}`);
             }
-
-            const data = await response.json();
 
             if (data.success) {
                 this.showNotification('API keys saved successfully', 'success');

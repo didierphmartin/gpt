@@ -34,6 +34,9 @@ export class LLMProviderResolver {
   // reason; the generic TS default of 4096 is too small for Grok's reasoning models. Mirror PHP.
   private static readonly OPENAI_COMPAT_DEFAULTS: Record<string, { base_url: string; chat_endpoint: string; max_tokens?: number }> = {
     grok: { base_url: 'https://api.x.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 16384 },
+    // DeepSeekProvider.php / KimiProvider.php vendor defaults (BASE_URL, CHAT_ENDPOINT, maxTokens).
+    deepseek: { base_url: 'https://api.deepseek.com', chat_endpoint: '/chat/completions', max_tokens: 8192 },
+    kimi: { base_url: 'https://api.moonshot.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 32768 },
   };
 
   static async getProviderConfig(provider: string): Promise<ProviderConfig | null> {
@@ -53,7 +56,9 @@ export class LLMProviderResolver {
     const rowBaseUrl = (row.base_url ?? '').trim();
     const rowChatEndpoint = (row.chat_endpoint ?? '').trim();
     const base_url = (rowBaseUrl || defaults?.base_url || '').replace(/\/+$/, '');
-    const chat_endpoint = rowChatEndpoint || defaults?.chat_endpoint || '/v1/messages';
+    // Blank stays blank for the rest: each provider class applies its own vendor default (Claude
+    // /v1/messages, OpenAI /v1/chat/completions), as the PHP providers do.
+    const chat_endpoint = rowChatEndpoint || defaults?.chat_endpoint || '';
     // For providers with parity defaults (OpenAI-compatible), pin the format so the factory
     // routes to OpenAIProvider even if the row's api_format is blank or a legacy name.
     const api_format = defaults ? 'openai' : (row.api_format ?? 'openai');

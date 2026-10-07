@@ -585,6 +585,8 @@ TXT;
             """
 
             # provider -> (env var for the API key, base_url or None for the default)
+            # <PREFIX>_BASE_URL in .env overrides the base_url (see make);
+            # Claude's AnthropicClient reads ANTHROPIC_BASE_URL itself.
             OPENAI_COMPATIBLE = {
                 "openai":   ("OPENAI_API_KEY",   None),
                 "gemini":   ("GOOGLE_API_KEY",   "https://generativelanguage.googleapis.com/v1beta/openai/"),
@@ -616,6 +618,9 @@ TXT;
                     return AnthropicClient(model=model, api_key=os.environ.get("ANTHROPIC_API_KEY"))
                 if p in cls.OPENAI_COMPATIBLE:
                     env_key, base_url = cls.OPENAI_COMPATIBLE[p]
+                    # An entry point (gateway) replaces the vendor link:
+                    # XAI_API_KEY -> XAI_BASE_URL, KIMI_API_KEY -> KIMI_BASE_URL, ...
+                    base_url = os.environ.get(env_key.replace("_API_KEY", "_BASE_URL")) or base_url
                     kwargs = {"model": model, "api_key": os.environ.get(env_key)}
                     if base_url:
                         kwargs["base_url"] = base_url

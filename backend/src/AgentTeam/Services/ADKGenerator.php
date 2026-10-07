@@ -350,13 +350,13 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
         case "grok" | "xai":
             return LiteLlm(
                 model="openai/" + model,
-                api_base="https://api.x.ai/v1",
+                api_base=os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1",
                 api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
             )
         case "deepseek":
             kwargs = dict(
                 model="openai/" + model,
-                api_base="https://api.deepseek.com",
+                api_base=os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
                 api_key=os.environ.get("DEEPSEEK_API_KEY"),
             )
             if model.startswith(("deepseek-v4", "deepseek-flash")):
@@ -370,7 +370,7 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
         case "kimi":
             kwargs = dict(
                 model="openai/" + model,
-                api_base="https://api.moonshot.ai/v1",
+                api_base=os.environ.get("KIMI_BASE_URL") or "https://api.moonshot.ai/v1",
                 api_key=os.environ.get("KIMI_API_KEY"),
             )
             if model.startswith("kimi-k2"):
@@ -384,7 +384,7 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
             # answers directly; the node form's Thinking attribute can enable it.
             return LiteLlm(
                 model="openai/" + model,
-                api_base="https://api.z.ai/api/paas/v4",
+                api_base=os.environ.get("GLM_BASE_URL") or "https://api.z.ai/api/paas/v4",
                 api_key=os.environ.get("GLM_API_KEY"),
                 extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
             )

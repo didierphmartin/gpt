@@ -87,7 +87,22 @@ OPENAI_API_KEY=
 GOOGLE_API_KEY=        # for Gemini (langchain-google-genai)
 XAI_API_KEY=           # for Grok (api.x.ai)
 DEEPSEEK_API_KEY=      # for DeepSeek (api.deepseek.com)
-KIMI_API_KEY=          # for Kimi / Moonshot (api.moonshot.cn)
+KIMI_API_KEY=          # for Kimi / Moonshot (api.moonshot.ai)
+GLM_API_KEY=           # for GLM (api.z.ai)
+TYPESAFE_API_KEY=      # for Jev dispatcher routing (api.typesafe.ai)
+
+# === Optional entry points (gateways) ===
+# When one entry point serves several providers, set its URL here; the
+# key above is still sent. Uncomment only the ones you use -- an empty
+# ANTHROPIC_/OPENAI_BASE_URL breaks those clients. Give the base the
+# client expects (OpenAI-compatible ones usually end in /v1).
+# ANTHROPIC_BASE_URL=
+# OPENAI_BASE_URL=
+# XAI_BASE_URL=          # default https://api.x.ai/v1
+# DEEPSEEK_BASE_URL=     # default https://api.deepseek.com
+# KIMI_BASE_URL=         # default https://api.moonshot.ai/v1
+# GLM_BASE_URL=          # default https://api.z.ai/api/paas/v4
+# TYPESAFE_BASE_URL=     # full Jev URL, default https://api.typesafe.ai/v1/systemone
 
 # === Optional global override ===
 # Setting MODEL_NAME forces every agent in every script to use this

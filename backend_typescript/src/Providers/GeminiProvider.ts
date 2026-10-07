@@ -113,7 +113,11 @@ export class GeminiProvider extends LLMProvider {
   }
 
   private url(): string {
-    return `${this.config.base_url}/models/${this.config.model}:generateContent?key=${encodeURIComponent(this.config.api_key)}`;
+    // Vendor default unless configured (a gateway); like PHP, a base without a version gets /v1beta
+    // (the seeded row stores the bare host 'https://generativelanguage.googleapis.com').
+    let base = (this.config.base_url || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+    if (!base.includes('/v1beta') && !base.includes('/v1')) base += '/v1beta';
+    return `${base}/models/${this.config.model}:generateContent?key=${encodeURIComponent(this.config.api_key)}`;
   }
 
   /** One non-streaming `:generateContent` call. Emits "Connecting...". Mirrors makeRequest. */

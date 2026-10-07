@@ -80,7 +80,12 @@ class GeminiProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->model = $geminiConfig['model'] ?? 'gemini-2.5-flash';
         $this->maxTokens = $geminiConfig['max_tokens'] ?? 4096;
         $this->temperature = $geminiConfig['temperature'] ?? 0.7;
-        $this->baseUrl = rtrim($geminiConfig['base_url'] ?? 'https://generativelanguage.googleapis.com/v1beta', '/');
+        $this->baseUrl = rtrim(($geminiConfig['base_url'] ?? '') ?: 'https://generativelanguage.googleapis.com/v1beta', '/');
+        // A base without an API version (gpt_admin's URL field stores just the
+        // origin) gets /v1beta, the same rule as the parallel request builder.
+        if (strpos($this->baseUrl, '/v1beta') === false && strpos($this->baseUrl, '/v1') === false) {
+            $this->baseUrl .= '/v1beta';
+        }
         $this->apiKey = $geminiConfig['api_key'] ?? '';
         $this->maxRecursionDepth = $config->get('max_recursion_depth', 10);
 

@@ -93,6 +93,43 @@ def test_apply_user_api_keys_decrypts_and_applies_models_only_for_owned_keys():
     assert ChatController(Db([]), cfg)._applyUserApiKeys(cfg, 'demo-user') == cfg
 
 
+def test_apply_user_api_keys_applies_endpoint_only_with_the_users_own_key():
+    cfg = {'auth': {'jwt_secret': 'S'},
+           'claude': {'api_key': 'pkg', 'base_url': 'https://api.anthropic.com'},
+           'openai': {'api_key': 'pkg-o', 'base_url': 'https://api.openai.com'},
+           'providers': {'kimi': {'api_key': 'pkg-k'}, 'grok': {'api_key': 'pkg-g'}}}
+    db = Db([[{'Tables_in_x': 'user_api_keys'}],
+             [# Own (encrypted) key + gateway: both travel together.
+              {'provider': 'claude', 'api_key': _enc('sk-own', 'S'), 'system_prompt': None,
+               'base_url': ' https://gw.corp/anthropic ', 'chat_endpoint': '', 'enabled': 1},
+              # Endpoint without a key: the package key must NOT go to that URL.
+              {'provider': 'openai', 'api_key': '', 'system_prompt': None,
+               'base_url': 'https://evil.example', 'chat_endpoint': '/x', 'enabled': 1},
+              # Clear key (gpt_admin) on a nested provider, old install (no columns).
+              {'provider': 'kimi', 'api_key': ' sk-clear ', 'system_prompt': None},
+              # Switched off by an admin: ignored entirely.
+              {'provider': 'grok', 'api_key': 'sk-off', 'system_prompt': None,
+               'base_url': 'https://gw.corp/xai', 'enabled': 0}],
+             [],                                                                    # no user_model_selections
+             ])
+    out = ChatController(db, cfg)._applyUserApiKeys(cfg, '3')
+    assert 'SELECT * FROM user_api_keys' in db.calls[1][0]
+    assert out['claude'] == {'api_key': 'sk-own', 'base_url': 'https://gw.corp/anthropic'}
+    assert out['openai'] == {'api_key': 'pkg-o', 'base_url': 'https://api.openai.com'}
+    assert out['providers']['kimi'] == {'api_key': 'sk-clear'}
+    assert out['providers']['grok'] == {'api_key': 'pkg-g'}
+
+
+def test_apply_user_api_keys_ignores_endpoint_when_the_key_will_not_open():
+    # A blob encrypted under a rotated secret is unusable -> package key stays,
+    # and so does the package endpoint.
+    cfg = {'auth': {'jwt_secret': 'S'}, 'claude': {'api_key': 'pkg'}}
+    db = Db([[{'Tables_in_x': 'user_api_keys'}],
+             [{'provider': 'claude', 'api_key': _enc('sk-own', 'OLD'), 'base_url': 'https://gw.corp'}],
+             []])
+    assert ChatController(db, cfg)._applyUserApiKeys(cfg, '3')['claude'] == {'api_key': 'pkg'}
+
+
 def test_apply_package_defaults_and_quota():
     cfg = {'claude': {'api_key': '', 'model': 'm'}, 'providers': {'kimi': {'api_key': 'x'}}}
     db = Db([{'role': 'user'}, {'capabilities': '{"providers":{"claude":{"enabled":true,"default_api_key":" K ","default_model":"M"},"kimi":{"enabled":false,"default_api_key":"Z"},"ghost":{"enabled":true,"default_api_key":"G"}}}', 'updated_at': None}])

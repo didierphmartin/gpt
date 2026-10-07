@@ -86,6 +86,14 @@ export class OpenAIProvider extends LLMProvider {
     return OpenAIProvider.CLIENT_SIDE_TOOL_NAMES.includes(name) || (opts.client_tool_names ?? []).includes(name);
   }
 
+  // Vendor default unless the admin (system_llm_settings) or the user (their own key + endpoint)
+  // points this provider at a gateway. Absolute URL: base_url + path keeps a gateway's path prefix.
+  // Grok/DeepSeek/Kimi get their vendor base from LLMProviderResolver's OPENAI_COMPAT_DEFAULTS.
+  private endpoint(): string {
+    const base = (this.config.base_url || 'https://api.openai.com').replace(/\/+$/, '');
+    return base + (this.config.chat_endpoint || '/v1/chat/completions');
+  }
+
   private headers(): Record<string, string> {
     return { 'Content-Type': 'application/json', Authorization: `Bearer ${this.config.api_key}` };
   }
@@ -264,7 +272,7 @@ export class OpenAIProvider extends LLMProvider {
     const prog = this.progress;
     sse.send('progress', prog.connect);
 
-    const res = await fetch(this.config.base_url + this.config.chat_endpoint, {
+    const res = await fetch(this.endpoint(), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(this.buildBody(messages, toolDefs, true, toolChoice)),
@@ -456,7 +464,7 @@ export class OpenAIProvider extends LLMProvider {
         temperature: reqBody.temperature,
         tool_count: Array.isArray(reqBody.tools) ? reqBody.tools.length : 0,
       });
-      const res = await fetch(this.config.base_url + this.config.chat_endpoint, {
+      const res = await fetch(this.endpoint(), {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(reqBody),

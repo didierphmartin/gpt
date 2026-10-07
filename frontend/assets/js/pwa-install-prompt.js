@@ -43,15 +43,18 @@
 
     // The eight providers the container seeds into system_llm_settings with an
     // empty api_key. This step fills those rows in; it does not create them.
+    // `url` is the vendor link each row is seeded with -- shown as the
+    // endpoint placeholder; entering an entry point (a gateway serving
+    // several providers) replaces it.
     const KEY_PROVIDERS = [
-        { key: 'claude',   label: 'Claude',   where: 'console.anthropic.com' },
-        { key: 'openai',   label: 'OpenAI',   where: 'platform.openai.com/api-keys' },
-        { key: 'gemini',   label: 'Gemini',   where: 'aistudio.google.com/apikey' },
-        { key: 'grok',     label: 'Grok',     where: 'console.x.ai' },
-        { key: 'deepseek', label: 'DeepSeek', where: 'platform.deepseek.com' },
-        { key: 'kimi',     label: 'Kimi',     where: 'platform.moonshot.ai' },
-        { key: 'glm',      label: 'GLM 5.2',  where: 'z.ai' },
-        { key: 'gamma4',   label: 'Gamma4',   where: 'self-hosted' },
+        { key: 'claude',   label: 'Claude',   where: 'console.anthropic.com',       url: 'https://api.anthropic.com' },
+        { key: 'openai',   label: 'OpenAI',   where: 'platform.openai.com/api-keys', url: 'https://api.openai.com' },
+        { key: 'gemini',   label: 'Gemini',   where: 'aistudio.google.com/apikey',  url: 'https://generativelanguage.googleapis.com/v1beta' },
+        { key: 'grok',     label: 'Grok',     where: 'console.x.ai',                url: 'https://api.x.ai' },
+        { key: 'deepseek', label: 'DeepSeek', where: 'platform.deepseek.com',       url: 'https://api.deepseek.com' },
+        { key: 'kimi',     label: 'Kimi',     where: 'platform.moonshot.ai',        url: 'https://api.moonshot.ai' },
+        { key: 'glm',      label: 'GLM 5.2',  where: 'z.ai',                        url: 'https://api.z.ai/api/paas/v4' },
+        { key: 'gamma4',   label: 'Gamma4',   where: 'self-hosted',                 url: 'https://g4eb.yellowbrickroad.info' },
     ];
 
     // ---- translations ---------------------------------------------
@@ -102,6 +105,9 @@
             'keys.save':      'Save and finish',
             'keys.saved':     'Saved.',
             'keys.failed':    'Could not save those keys — you can add them later in Settings.',
+            'keys.endpoint':  'Endpoint (optional)',
+            'keys.endpointHint': 'The field under each key is optional: enter your own entry point (for example a gateway serving several providers) to replace the vendor link shown.',
+            'keys.badEndpoint': 'An endpoint must start with http:// or https://.',
             'back':           'Back',
             'close':          'Close',
             'testBanner':     'Test mode — wizard shown every visit for iteration.'
@@ -152,6 +158,9 @@
             'keys.save':      'Enregistrer et terminer',
             'keys.saved':     'Enregistré.',
             'keys.failed':    'Impossible d\'enregistrer ces clés — vous pourrez les ajouter plus tard dans les Paramètres.',
+            'keys.endpoint':  'Point d\'accès (facultatif)',
+            'keys.endpointHint': 'Le champ sous chaque clé est facultatif : saisissez votre propre point d\'entrée (par exemple une passerelle desservant plusieurs fournisseurs) pour remplacer le lien du fournisseur affiché.',
+            'keys.badEndpoint': 'Un point d\'accès doit commencer par http:// ou https://.',
             'back':           'Retour',
             'close':          'Fermer',
             'testBanner':     "Mode test — l'assistant s'affiche à chaque visite pour itération."
@@ -202,6 +211,9 @@
             'keys.save':      'Guardar y terminar',
             'keys.saved':     'Guardado.',
             'keys.failed':    'No se pudieron guardar esas claves — puedes añadirlas más tarde en Ajustes.',
+            'keys.endpoint':  'Endpoint (opcional)',
+            'keys.endpointHint': 'El campo bajo cada clave es opcional: introduce tu propio punto de entrada (por ejemplo, una pasarela que sirve a varios proveedores) para reemplazar el enlace del proveedor mostrado.',
+            'keys.badEndpoint': 'Un endpoint debe empezar por http:// o https://.',
             'back':           'Atrás',
             'close':          'Cerrar',
             'testBanner':     'Modo de prueba: el asistente se muestra en cada visita para iterar.'
@@ -620,13 +632,17 @@
                 </label>
                 <input id="pwa-key-${esc(p.key)}" type="password" autocomplete="off" spellcheck="false" data-provider="${esc(p.key)}"
                     class="w-full px-3 py-2 text-sm bg-zinc-900 text-gray-100 placeholder-gray-500 border border-zinc-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input id="pwa-endpoint-${esc(p.key)}" type="url" autocomplete="off" spellcheck="false" data-endpoint="${esc(p.key)}"
+                    placeholder="${esc(p.url)}" title="${esc(t('keys.endpoint'))}" aria-label="${esc(p.label)} — ${esc(t('keys.endpoint'))}"
+                    class="w-full mt-1 px-3 py-1 text-xs font-mono bg-zinc-900 text-gray-300 placeholder-gray-600 border border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
         `).join('');
 
         return `
             ${header('keys.title')}
             <p class="text-sm text-gray-300 mb-2">${esc(t('keys.intro'))}</p>
-            <p class="text-xs text-gray-400 mb-4">${esc(t('keys.where'))}</p>
+            <p class="text-xs text-gray-400 mb-1">${esc(t('keys.where'))}</p>
+            <p class="text-xs text-gray-400 mb-4">${esc(t('keys.endpointHint'))}</p>
             <div class="max-h-64 overflow-y-auto pr-1 mb-2">${rows}</div>
             <p class="text-xs mb-3 min-h-[1em]" data-pwa-keys-msg></p>
             <div class="flex justify-between items-center">
@@ -838,12 +854,27 @@
             const msgEl = e.currentTarget?.querySelector('[data-pwa-keys-msg]');
             if (msgEl) msgEl.textContent = '…';
 
-            const inputs = document.querySelectorAll('#pwa-install-overlay input[data-provider]');
+            // Per provider: a key, an entry point, or both. Empty endpoint
+            // keeps the row's seeded vendor link.
             const pending = [];
-            inputs.forEach((el) => {
-                const v = (el.value || '').trim();
-                if (v) pending.push({ provider_key: el.dataset.provider, api_key: v });
+            let badUrl = false;
+            KEY_PROVIDERS.forEach((p) => {
+                const keyEl = document.getElementById(`pwa-key-${p.key}`);
+                const urlEl = document.getElementById(`pwa-endpoint-${p.key}`);
+                const changes = {};
+                const k = (keyEl && keyEl.value || '').trim();
+                const u = (urlEl && urlEl.value || '').trim().replace(/\/+$/, '');
+                if (k) changes.api_key = k;
+                if (u) {
+                    if (!/^https?:\/\/\S+$/i.test(u)) badUrl = true;
+                    changes.base_url = u;
+                }
+                if (Object.keys(changes).length) pending.push({ provider_key: p.key, changes });
             });
+            if (badUrl) {
+                if (msgEl) msgEl.textContent = t('keys.badEndpoint');
+                return;
+            }
 
             if (!pending.length) {
                 wizardState.step = 'install';
@@ -863,7 +894,7 @@
             // clobbering the seeded config down to just the key.
             let ok = true;
             try {
-                const results = await Promise.all(pending.map(async ({ provider_key, api_key }) => {
+                const results = await Promise.all(pending.map(async ({ provider_key, changes }) => {
                     try {
                         const getRes = await fetch(`${base}/admin/llm-settings/${encodeURIComponent(provider_key)}`, {
                             headers: { 'Authorization': `Bearer ${token}` },
@@ -879,7 +910,7 @@
                                 'Content-Type': 'application/json',
                                 'Authorization': `Bearer ${token}`,
                             },
-                            body: JSON.stringify({ ...provider, api_key }),
+                            body: JSON.stringify({ ...provider, ...changes }),
                         });
                         return { ok: putRes.ok };
                     } catch {

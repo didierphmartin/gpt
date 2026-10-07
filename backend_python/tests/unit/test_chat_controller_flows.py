@@ -56,7 +56,7 @@ class FakeAssistant:
 
 def test_regular_chat_builds_options_and_logs_usage(monkeypatch):
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     db = Db(); c = ChatController(db, CFG)
     r = c.chat(ctx({'message': 'hi', 'provider': 'claude', 'tools': [], 'memory': False, 'return_context': True, 'system_prompt': ' SP ', 'max_tokens': '512', 'temperature': '0.2'}))
     assert r['success'] is True and r['text'] == 'reply' and r['provider'] == 'claude' and r['status_code'] == 200
@@ -70,7 +70,7 @@ def test_regular_chat_schedules_memory_update_after_response(monkeypatch):
     ran = []
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
     monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater',
-                        lambda db, key: type('U', (), {'run': lambda s, *a: ran.append(a)})())
+                        lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: ran.append(a)})())
     c = ChatController(Db(), CFG)
     request = ctx({'message': 'hi', 'provider': 'claude', 'tools': [], 'memory': True})
     r = c.chat(request)
@@ -84,7 +84,7 @@ def test_regular_chat_schedules_memory_update_after_response(monkeypatch):
 
 def test_streaming_chat_event_sequence(monkeypatch):
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     async def run():
         loop = asyncio.get_running_loop(); s = SseStream(loop)
         c = ChatController(Db(), CFG)
@@ -105,7 +105,7 @@ def test_streaming_chat_event_sequence(monkeypatch):
 
 def test_streaming_chat_returns_context_when_asked(monkeypatch):
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     async def run():
         loop = asyncio.get_running_loop(); s = SseStream(loop)
         c = ChatController(Db(), CFG)
@@ -170,7 +170,7 @@ def test_regular_chat_closes_assistant_on_success(monkeypatch):
     on every exit path. AIPortfolioAssistant.close() is the aggregation point;
     assert the controller calls it after a successful regular-chat turn."""
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     FakeAssistant.instances.clear()
     c = ChatController(Db(), CFG)
     r = c.chat(ctx({'message': 'hi', 'provider': 'claude', 'tools': [], 'memory': False}))
@@ -182,7 +182,7 @@ def test_streaming_chat_closes_assistant_on_success(monkeypatch):
     """Important #2, streaming twin: close() must run without disturbing the
     SSE event sequence or the position of sse.end()."""
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     FakeAssistant.instances.clear()
     async def run():
         loop = asyncio.get_running_loop(); s = SseStream(loop)
@@ -219,7 +219,7 @@ def test_streaming_chat_resets_contextvar_after_request(monkeypatch):
     checked from the SAME thread that ran the request (a plain threading.Thread,
     not asyncio.run_in_executor, so nothing else could reset it)."""
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
 
     loop = asyncio.new_event_loop()
     s = SseStream(loop)
@@ -278,7 +278,7 @@ def test_tools_filter_executor_is_attached_to_every_enabled_provider(monkeypatch
             super().__init__(config)
             self.llm = type('L', (), {'getProvider': lambda s, n: providers.get(n)})()
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', Assistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     monkeypatch.setattr(ChatController, '_getEnabledProviderKeys', lambda self: ['claude', 'kimi', 'gemini'])
     c = ChatController(Db(), CFG)
     r = c.chat(ctx({'message': 'hi', 'provider': 'claude', 'tools': ['get_trending_assets'], 'memory': False}))
@@ -290,7 +290,7 @@ def test_tools_filter_executor_is_attached_to_every_enabled_provider(monkeypatch
 
 def test_non_claude_provider_request_reaches_assistant_with_provider_option(monkeypatch):
     monkeypatch.setattr('app.controllers.chat_controller.AIPortfolioAssistant', FakeAssistant)
-    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key: type('U', (), {'run': lambda s, *a: None})())
+    monkeypatch.setattr('app.controllers.chat_controller.MemoryAutoUpdater', lambda db, key, base_url='', chat_endpoint='': type('U', (), {'run': lambda s, *a: None})())
     c = ChatController(Db(), CFG)
     r = c.chat(ctx({'message': 'hi', 'provider': 'kimi', 'tools': [], 'memory': False}))
     assert r['success'] is True and FakeAssistant.last[3]['provider'] == 'kimi'

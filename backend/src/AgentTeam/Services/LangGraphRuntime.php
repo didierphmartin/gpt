@@ -352,7 +352,7 @@ class JevRouter:
 
     Same request body, same 'unclear' option, same floor and outcomes. route() never raises.
     """
-    URL = "https://api.typesafe.ai/v1/systemone"
+    URL = "https://api.typesafe.ai/v1/systemone"   # TYPESAFE_BASE_URL in .env overrides it (a gateway)
     MODEL = "jev-latest"
     UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
     UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
@@ -419,7 +419,7 @@ class JevRouter:
             "questions": {"route": {"type": "choice", "instructions": question, "criteria": criteria}},
         }
         req = urllib.request.Request(
-            self.URL, data=json.dumps(body).encode("utf-8"), method="POST",
+            os.environ.get("TYPESAFE_BASE_URL") or self.URL, data=json.dumps(body).encode("utf-8"), method="POST",
             headers={"Authorization": "Bearer " + key, "Accept": "application/json",
                      "Content-Type": "application/json"})
         t0 = time.monotonic()
@@ -907,6 +907,9 @@ def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: i
       glm        → ChatOpenAI on https://api.z.ai/api/paas/v4
 
     Reads API keys from the environment (loaded from .env at startup).
+    An entry point (gateway) replaces a vendor link via <PREFIX>_BASE_URL:
+    XAI_/DEEPSEEK_/KIMI_/GLM_BASE_URL here; ANTHROPIC_BASE_URL and
+    OPENAI_BASE_URL are read by the Anthropic / OpenAI clients themselves.
     """
     p = (provider or "claude").lower()
     if MODEL_NAME_OVERRIDE:
@@ -961,7 +964,7 @@ def _grok(model, temperature, max_tokens):
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(
         model=model,
-        base_url="https://api.x.ai/v1",
+        base_url=os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1",
         api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
         temperature=temperature,
         max_tokens=max_tokens,
@@ -973,7 +976,7 @@ def _deepseek(model, temperature, max_tokens, thinking):
     from langchain_openai import ChatOpenAI
     kwargs = dict(
         model=model,
-        base_url="https://api.deepseek.com",
+        base_url=os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
         api_key=os.environ.get("DEEPSEEK_API_KEY"),
         temperature=temperature,
         max_tokens=max_tokens,
@@ -1008,7 +1011,7 @@ def _kimi(model, temperature, max_tokens, thinking):
             temperature = _want
     kwargs = dict(
         model=model,
-        base_url="https://api.moonshot.ai/v1",
+        base_url=os.environ.get("KIMI_BASE_URL") or "https://api.moonshot.ai/v1",
         api_key=os.environ.get("KIMI_API_KEY"),
         temperature=temperature,
         max_tokens=max_tokens,
@@ -1025,7 +1028,7 @@ def _glm(model, temperature, max_tokens):
     # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.
     return ChatOpenAI(
         model=model,
-        base_url="https://api.z.ai/api/paas/v4",
+        base_url=os.environ.get("GLM_BASE_URL") or "https://api.z.ai/api/paas/v4",
         api_key=os.environ.get("GLM_API_KEY"),
         temperature=temperature,
         max_tokens=max_tokens,

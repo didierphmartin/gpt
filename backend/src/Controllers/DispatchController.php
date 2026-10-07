@@ -69,7 +69,8 @@ class DispatchController
         }
 
         $resolved = JevKeyResolver::resolve($this->db, $this->config, $this->userId($request));
-        $out = (new JevRouter($resolved['key'], $this->http, $floor))->route($text, $targets, $question);
+        $url = JevKeyResolver::url($this->db, $resolved, $this->userId($request));
+        $out = (new JevRouter($resolved['key'], $this->http, $floor, $url))->route($text, $targets, $question);
         if ($resolved['key'] === '') {
             $out['reason'] = JevKeyResolver::unavailableReason($resolved['source']);
         }

@@ -317,6 +317,8 @@ TXT;
     {
         return <<<'PY'
         # provider -> (env var for the API key, base_url or None for the default)
+        # <PREFIX>_BASE_URL in .env overrides the base_url (see make_llm);
+        # litellm reads ANTHROPIC_BASE_URL for Claude itself.
         # Claude routes natively through litellm; every other provider speaks the
         # OpenAI-compatible /chat/completions dialect via `openai/<model>` + api_base.
         OPENAI_COMPATIBLE = {
@@ -372,6 +374,9 @@ TXT;
                 return get_llm_client(str(model), api_key=os.environ.get("ANTHROPIC_API_KEY"), **kwargs)
             if p in OPENAI_COMPATIBLE:
                 env_key, base = OPENAI_COMPATIBLE[p]
+                # An entry point (gateway) replaces the vendor link:
+                # XAI_API_KEY -> XAI_BASE_URL, KIMI_API_KEY -> KIMI_BASE_URL, ...
+                base = os.environ.get(env_key.replace("_API_KEY", "_BASE_URL")) or base
                 if base:
                     return get_llm_client("openai/" + str(model), api_base=base,
                                           api_key=os.environ.get(env_key), **kwargs)

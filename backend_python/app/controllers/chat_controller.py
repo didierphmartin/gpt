@@ -22,6 +22,7 @@ from app.agent_team.services.memory_auto_updater import MemoryAutoUpdater
 from app.agent_team.services.session_search_service import SessionSearchService
 from app.agent_team.services.user_memory_repository import UserMemoryRepository
 from app.exceptions import ProviderException
+from app.services.api_key_crypto import ApiKeyCrypto
 from app.services.combined_tools_executor import CombinedToolsExecutor
 from app.services.filtered_tools_executor import FilteredToolsExecutor
 from app.services.mcp_tools_loader import MCPToolsLoader
@@ -30,13 +31,9 @@ from app.services.provider_kinds import ROUTER_FORMAT
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.sse_hub_client import SSEHubClient
 from app.services.usage_logger import UsageLogger
-from app.support.crypto import aes256cbc_decrypt
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_date, php_empty, php_intval, php_uniqid
 from app.support.phpjson import dumps
-
-import base64
-import hashlib
 
 
 class ChatController:
@@ -784,8 +781,10 @@ class ChatController:
 
             numeric_user_id = php_intval(userId) if is_numeric(userId) else php_crc32(userId)
 
+            # SELECT *: base_url / chat_endpoint are added by later migrations;
+            # an install without them must still get its users' keys.
             keys = self.db.fetch_all(
-                "SELECT provider, api_key, system_prompt FROM user_api_keys WHERE user_id = :user_id",
+                "SELECT * FROM user_api_keys WHERE user_id = :user_id",
                 {':user_id': numeric_user_id},
             )
 
@@ -819,20 +818,34 @@ class ChatController:
             # override wins over the admin global (system_llm_settings) which
             # already won over ai_config.php in applyDatabaseProviderSettings.
             for key_row in keys:
+                # An admin can switch a user's override off in gpt_admin.
+                if 'enabled' in key_row and key_row['enabled'] is not None and not php_intval(key_row['enabled']):
+                    continue
+
                 key_provider = key_row['provider']
-                encrypted_key = key_row['api_key']
                 user_system_prompt = key_row.get('system_prompt')
 
-                decrypted_key = self._decryptApiKey(encrypted_key, encryption_key)
+                # Encrypted (user Settings) or in the clear (gpt_admin).
+                decrypted_key = ApiKeyCrypto.reveal(str(key_row.get('api_key') or ''), encryption_key)
 
                 if not php_empty(decrypted_key):
                     user_owned_key_providers[key_provider] = True
+                    # The user's own entry point (a gateway serving several
+                    # providers) travels with the user's own key only: on the
+                    # package/admin key it is ignored, so that key is never
+                    # sent to a URL the user picked.
+                    override = {'api_key': decrypted_key}
+                    for field in ('base_url', 'chat_endpoint'):
+                        value = str(key_row.get(field) or '').strip()
+                        if value != '':
+                            override[field] = value
+                    endpoint_note = f", endpoint: {override['base_url']}" if 'base_url' in override else ''
                     if isinstance(config.get(key_provider), dict):
-                        config[key_provider]['api_key'] = decrypted_key
-                        error_log(f"[ChatController] Using custom API key for provider: {key_provider}, user: {numeric_user_id}")
+                        config[key_provider].update(override)
+                        error_log(f"[ChatController] Using custom API key for provider: {key_provider}, user: {numeric_user_id}{endpoint_note}")
                     elif isinstance(config.get('providers'), dict) and isinstance(config['providers'].get(key_provider), dict):
-                        config['providers'][key_provider]['api_key'] = decrypted_key
-                        error_log(f"[ChatController] Using custom API key for nested provider: {key_provider}, user: {numeric_user_id}")
+                        config['providers'][key_provider].update(override)
+                        error_log(f"[ChatController] Using custom API key for nested provider: {key_provider}, user: {numeric_user_id}{endpoint_note}")
 
                 # System prompt override is independent of the API key — a
                 # user can override the prompt without a custom key.
@@ -932,29 +945,6 @@ class ChatController:
             error_log("[ChatController] Error checking free trial quota: " + str(e))
 
         return None
-
-    def _decryptApiKey(self, encryptedKey: str, encryptionKey: str) -> str | None:
-        try:
-            try:
-                data = base64.b64decode(encryptedKey, validate=False)
-            except Exception:  # noqa: BLE001
-                return None
-            if data is False or len(data) < 17:
-                return None
-
-            key = hashlib.sha256(encryptionKey.encode()).digest()
-            iv = data[:16]
-            encrypted = data[16:]
-
-            decrypted = aes256cbc_decrypt(encrypted, key, iv)
-            if decrypted is None:
-                return None
-            try:
-                return decrypted.decode('utf-8')
-            except Exception:  # noqa: BLE001
-                return None
-        except Exception:  # noqa: BLE001
-            return None
 
     def _applyDatabaseProviderSettings(self, config: dict) -> dict:
         """Delegates to LLMProviderResolver — kept as a thin wrapper because
@@ -2213,7 +2203,7 @@ class ChatController:
                     # auto-extraction. Use the merged $config instead.
                     apiKey = _claude_api_key(config)
                     if apiKey != '':
-                        updater = MemoryAutoUpdater(self.db, apiKey)
+                        updater = MemoryAutoUpdater(self.db, apiKey, _claude_cfg_str(config, 'base_url'), _claude_cfg_str(config, 'chat_endpoint'))
                         updater.run(php_intval(userId), sessionId, str(message), str(response['text']))
                     else:
                         error_log('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env')
@@ -2797,7 +2787,7 @@ class ChatController:
                     try:
                         apiKey = _claude_api_key(configRef)
                         if apiKey != '':
-                            updater = MemoryAutoUpdater(dbRef, apiKey)
+                            updater = MemoryAutoUpdater(dbRef, apiKey, _claude_cfg_str(configRef, 'base_url'), _claude_cfg_str(configRef, 'chat_endpoint'))
                             updater.run(uidRef, sidRef, msgRef, textRef)
                         else:
                             error_log('[ChatController] MemoryAutoUpdater skipped (streaming): no Claude API key in merged config or ANTHROPIC_API_KEY env')
@@ -2955,6 +2945,14 @@ def _claude_api_key(config: dict) -> str:
     if key is None:
         key = os.environ.get('ANTHROPIC_API_KEY')
     return '' if php_empty(key) else str(key)
+
+
+def _claude_cfg_str(config: dict, field: str) -> str:
+    """PHP: (string) ($config['claude'][$field] ?? '') — the base_url /
+    chat_endpoint the memory extractor posts to; '' = vendor default."""
+    claude = config.get('claude')
+    value = claude.get(field) if isinstance(claude, dict) else None
+    return '' if value is None else str(value)
 
 
 def _blen(s: str) -> int:

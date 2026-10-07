@@ -136,8 +136,11 @@ class GeminiProvider(
         self.model = geminiConfig.get('model') if geminiConfig.get('model') is not None else 'gemini-2.5-flash'
         self.maxTokens = geminiConfig.get('max_tokens') if geminiConfig.get('max_tokens') is not None else 4096
         self.temperature = geminiConfig.get('temperature') if geminiConfig.get('temperature') is not None else 0.7
-        baseUrl = geminiConfig.get('base_url') if geminiConfig.get('base_url') is not None else 'https://generativelanguage.googleapis.com/v1beta'
-        self.baseUrl = baseUrl.rstrip('/')
+        self.baseUrl = (geminiConfig.get('base_url') or 'https://generativelanguage.googleapis.com/v1beta').rstrip('/')
+        # A base without an API version (gpt_admin's URL field stores just the
+        # origin) gets /v1beta, the same rule as the parallel request builder.
+        if '/v1beta' not in self.baseUrl and '/v1' not in self.baseUrl:
+            self.baseUrl += '/v1beta'
         self.apiKey = geminiConfig.get('api_key') if geminiConfig.get('api_key') is not None else ''
         self.maxRecursionDepth = config.get('max_recursion_depth', 10)
 

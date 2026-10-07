@@ -196,7 +196,7 @@ class SystemSettingsController
             ],
             'kimi' => [
                 'display_name' => 'Kimi',
-                'base_url' => 'https://api.moonshot.cn',
+                'base_url' => 'https://api.moonshot.ai',
                 'model' => 'kimi-k2.6',
                 'price_input_per_1m' => 0.95,
                 'price_output_per_1m' => 4.00,
@@ -418,7 +418,9 @@ class SystemSettingsController
         }
         if ($isRouterKey) {
             // No chat endpoint, no streaming, no tools: whatever the form sent.
-            $body['base_url'] = null;
+            // base_url is kept: the full Jev URL when routing goes through a
+            // gateway, empty = the vendor URL (JevRouter::URL).
+            $body['base_url'] = trim((string) ($body['base_url'] ?? '')) ?: null;
             $body['chat_endpoint'] = null;
             $body['streaming'] = 0;
             $body['supports_tools'] = 0;

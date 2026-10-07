@@ -26,6 +26,14 @@ export class ClaudeProvider extends LLMProvider {
   private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task'];
   private static readonly MAX_RECURSION_DEPTH = 10;
 
+  // Vendor default unless the admin (system_llm_settings) or the user (their own key + endpoint)
+  // points Claude at a gateway. gpt_admin splits a full URL into origin (base_url) + path
+  // (chat_endpoint), so a gateway's path prefix lives in chat_endpoint.
+  private endpoint(): string {
+    const base = (this.config.base_url || 'https://api.anthropic.com').replace(/\/+$/, '');
+    return base + (this.config.chat_endpoint || '/v1/messages');
+  }
+
   private headers(): Record<string, string> {
     return { 'Content-Type': 'application/json', 'x-api-key': this.config.api_key, 'anthropic-version': '2023-06-01' };
   }
@@ -180,7 +188,7 @@ export class ClaudeProvider extends LLMProvider {
       if (toolChoice) body.tool_choice = toolChoice;
     }
 
-    const res = await fetch(this.config.base_url + this.config.chat_endpoint, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
+    const res = await fetch(this.endpoint(), { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
     if (!res.ok || !res.body) {
       const errText = await res.text().catch(() => '');
       throw new Error(`Claude API error: ${res.status} ${errText}`);
@@ -346,7 +354,7 @@ export class ClaudeProvider extends LLMProvider {
       if (toolChoice) body.tool_choice = toolChoice;
     }
 
-    const res = await fetch(this.config.base_url + this.config.chat_endpoint, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
+    const res = await fetch(this.endpoint(), { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
     const json: any = await res.json().catch(() => null);
     if (!res.ok || !json) {
       throw new Error(`Claude API error: ${res.status} ${json ? JSON.stringify(json) : ''}`);

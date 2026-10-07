@@ -2029,7 +2029,7 @@ class ChatController
                     // auto-extraction. Use the merged $config instead.
                     $apiKey = (string) ($config['claude']['api_key'] ?? getenv('ANTHROPIC_API_KEY') ?: '');
                     if ($apiKey !== '') {
-                        $updater = new \AgentTeam\Services\MemoryAutoUpdater($this->db, $apiKey);
+                        $updater = new \AgentTeam\Services\MemoryAutoUpdater($this->db, $apiKey, (string) ($config['claude']['base_url'] ?? ''), (string) ($config['claude']['chat_endpoint'] ?? ''));
                         $updater->run((int) $userId, $sessionId, (string) $message, (string) $response['text']);
                     } else {
                         error_log('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env');
@@ -2606,7 +2606,7 @@ class ChatController
                     try {
                         $apiKey = (string) ($configRef['claude']['api_key'] ?? getenv('ANTHROPIC_API_KEY') ?: '');
                         if ($apiKey !== '') {
-                            $updater = new \AgentTeam\Services\MemoryAutoUpdater($dbRef, $apiKey);
+                            $updater = new \AgentTeam\Services\MemoryAutoUpdater($dbRef, $apiKey, (string) ($configRef['claude']['base_url'] ?? ''), (string) ($configRef['claude']['chat_endpoint'] ?? ''));
                             $updater->run($uidRef, $sidRef, $msgRef, $textRef);
                         } else {
                             error_log('[ChatController] MemoryAutoUpdater skipped (streaming): no Claude API key in merged config or ANTHROPIC_API_KEY env');
@@ -2796,7 +2796,9 @@ class ChatController
 
             $numericUserId = is_numeric($userId) ? (int)$userId : abs(crc32($userId));
 
-            $sql = "SELECT provider, api_key, system_prompt FROM user_api_keys WHERE user_id = :user_id";
+            // SELECT *: base_url / chat_endpoint are added by later migrations;
+            // an install without them must still get its users' keys.
+            $sql = "SELECT * FROM user_api_keys WHERE user_id = :user_id";
             $stmt = $this->db->prepare($sql);
             $stmt->execute([':user_id' => $numericUserId]);
             $keys = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -2832,20 +2834,36 @@ class ChatController
             // override wins over the admin global (system_llm_settings) which
             // already won over ai_config.php in applyDatabaseProviderSettings.
             foreach ($keys as $keyRow) {
+                // An admin can switch a user's override off in gpt_admin.
+                if (isset($keyRow['enabled']) && !(int)$keyRow['enabled']) {
+                    continue;
+                }
+
                 $keyProvider = $keyRow['provider'];
-                $encryptedKey = $keyRow['api_key'];
                 $userSystemPrompt = $keyRow['system_prompt'] ?? null;
 
-                $decryptedKey = $this->decryptApiKey($encryptedKey, $encryptionKey);
+                // Encrypted (user Settings) or in the clear (gpt_admin).
+                $decryptedKey = ApiKeyCrypto::reveal((string)($keyRow['api_key'] ?? ''), $encryptionKey);
 
                 if ($decryptedKey) {
                     $userOwnedKeyProviders[$keyProvider] = true;
+                    // The user's own entry point (a gateway serving several
+                    // providers) travels with the user's own key only: on the
+                    // package/admin key it is ignored, so that key is never
+                    // sent to a URL the user picked.
+                    $override = ['api_key' => $decryptedKey];
+                    foreach (['base_url', 'chat_endpoint'] as $field) {
+                        $value = trim((string)($keyRow[$field] ?? ''));
+                        if ($value !== '') {
+                            $override[$field] = $value;
+                        }
+                    }
                     if (isset($config[$keyProvider])) {
-                        $config[$keyProvider]['api_key'] = $decryptedKey;
-                        error_log("[ChatController] Using custom API key for provider: {$keyProvider}, user: {$numericUserId}");
+                        $config[$keyProvider] = array_merge($config[$keyProvider], $override);
+                        error_log("[ChatController] Using custom API key for provider: {$keyProvider}, user: {$numericUserId}" . (isset($override['base_url']) ? ", endpoint: {$override['base_url']}" : ''));
                     } elseif (isset($config['providers'][$keyProvider])) {
-                        $config['providers'][$keyProvider]['api_key'] = $decryptedKey;
-                        error_log("[ChatController] Using custom API key for nested provider: {$keyProvider}, user: {$numericUserId}");
+                        $config['providers'][$keyProvider] = array_merge($config['providers'][$keyProvider], $override);
+                        error_log("[ChatController] Using custom API key for nested provider: {$keyProvider}, user: {$numericUserId}" . (isset($override['base_url']) ? ", endpoint: {$override['base_url']}" : ''));
                     }
                 }
 
@@ -2892,9 +2910,6 @@ class ChatController
         return $config;
     }
 
-    /**
-     * Decrypt an API key
-     */
     /**
      * Check if a free trial user has exceeded their token quota
      * Returns an error response array if quota exceeded, null if OK
@@ -2968,11 +2983,6 @@ class ChatController
         }
 
         return null;
-    }
-
-    private function decryptApiKey(string $encryptedKey, string $encryptionKey): ?string
-    {
-        return ApiKeyCrypto::decrypt($encryptedKey, $encryptionKey);
     }
 
     /**

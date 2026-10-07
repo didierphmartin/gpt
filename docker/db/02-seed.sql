@@ -13,12 +13,9 @@
 -- the app after install; this file is structurally incapable of carrying
 -- one -- do not hand-add a value here.
 --
--- Do not "fix" the kimi base_url below to match the controller's
--- 'https://api.moonshot.cn' fallback. That is a deliberate divergence
--- (ruling R7b): KimiProvider.php:38 is what the runtime actually calls,
--- and it uses 'https://api.moonshot.ai' ('.cn' is the China endpoint).
--- The controller's inconsistency is flagged for a later review, not fixed
--- here.
+-- The kimi base_url is 'https://api.moonshot.ai' (international); '.cn' is
+-- the China endpoint. Every provider honours its row's base_url, so this is
+-- the vendor default an admin may repoint at a gateway.
 --
 -- The last row, `jev`, is NOT a chat provider. It is a router row
 -- (api_format 'router'): TypeSafe's Jev routes dispatcher nodes, and this row

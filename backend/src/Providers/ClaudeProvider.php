@@ -35,6 +35,9 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
     private int $maxTokens;
     private float $temperature;
     private string $baseUrl;
+    // gpt_admin's "API URL" field stores origin + path split, so a gateway's
+    // prefix lives in chat_endpoint; '/v1/messages' when unset.
+    private string $chatEndpoint;
     private string $apiVersion;
     private int $maxRecursionDepth;
     private bool $streamingEnabled;
@@ -66,7 +69,8 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->model = $claudeConfig['model'] ?? 'claude-sonnet-4-5-20250929';
         $this->maxTokens = $claudeConfig['max_tokens'] ?? 4000;
         $this->temperature = $claudeConfig['temperature'] ?? 0.7;
-        $this->baseUrl = rtrim($claudeConfig['base_url'] ?? 'https://api.anthropic.com', '/');
+        $this->baseUrl = rtrim(($claudeConfig['base_url'] ?? '') ?: 'https://api.anthropic.com', '/');
+        $this->chatEndpoint = ($claudeConfig['chat_endpoint'] ?? '') ?: '/v1/messages';
         $this->apiVersion = $claudeConfig['api_version'] ?? '2023-06-01';
         $this->streamingEnabled = $claudeConfig['streaming'] ?? true;
         $this->maxRecursionDepth = $config->get('max_recursion_depth', 10);
@@ -614,7 +618,7 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
             error_log("📤 [ClaudeProvider] Sending request with body length: " . strlen($jsonPayload));
 
             // Use body instead of json to ensure we control the exact payload
-            $response = $this->httpClient->post('/v1/messages', [
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'x-api-key' => $apiKey,
@@ -789,7 +793,7 @@ class ClaudeProvider implements AIProviderInterface, HttpRequestBuilderInterface
             error_log("📤 [ClaudeProvider:streaming] Sending request with body length: " . strlen($jsonPayload));
 
             // Make streaming request - use body instead of json to ensure exact payload
-            $response = $this->httpClient->post('/v1/messages', [
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'x-api-key' => $apiKey,
@@ -1790,11 +1794,11 @@ PROMPT;
         // Convert empty arrays to objects, but preserve 'required' arrays
         $payload = self::convertEmptyArraysToObjectsForClaude($payload);
 
-        $baseUrl = $config['base_url'] ?? 'https://api.anthropic.com';
+        $baseUrl = !empty($config['base_url']) ? $config['base_url'] : 'https://api.anthropic.com';
         $apiVersion = $config['api_version'] ?? '2023-06-01';
 
         return [
-            'url' => rtrim($baseUrl, '/') . '/v1/messages',
+            'url' => rtrim($baseUrl, '/') . (!empty($config['chat_endpoint']) ? $config['chat_endpoint'] : '/v1/messages'),
             'headers' => [
                 'Content-Type: application/json',
                 'x-api-key: ' . $config['api_key'],

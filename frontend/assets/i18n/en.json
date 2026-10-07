@@ -468,6 +468,8 @@
     "jevModelDesc": "Picks one branch for a dispatcher; never writes text",
     "systemPrompts": "System prompts (advanced)",
     "systemPromptsDescription": "Override the system prompt sent to each provider. Leave empty to use the admin/default prompt.",
+    "endpoint": "Endpoint",
+    "endpointsDescription": "Endpoint: reach a provider through your own entry point (for example a gateway serving several providers). Leave empty to use the vendor link shown. Applies only with your own API key for that provider.",
     "systemPromptPlaceholder": "Default system prompt",
     "loadingUsage": "Loading usage data...",
     "saveKeys": "Save API Keys",

@@ -40,6 +40,10 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
 
     private Configuration $config;
     private Client $httpClient;
+    // Vendor default unless the admin (system_llm_settings) or the user
+    // (their own key + endpoint) points this provider at a gateway.
+    private string $baseUrl;
+    private string $chatEndpoint;
     private ?FunctionExecutorInterface $functionExecutor = null;
     private ?UsageTrackerInterface $usageTracker = null;
     private ?StreamingClientInterface $sseClient = null;
@@ -72,8 +76,11 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->supportedModels = $providerConfig['supported_models'] ?? [$this->model];
         $this->streamingEnabled = $providerConfig['streaming'] ?? true;
 
+        $this->baseUrl = rtrim(($providerConfig['base_url'] ?? '') ?: self::BASE_URL, '/');
+        $this->chatEndpoint = ($providerConfig['chat_endpoint'] ?? '') ?: self::CHAT_ENDPOINT;
+
         $this->httpClient = new Client([
-            'base_uri' => self::BASE_URL,
+            'base_uri' => $this->baseUrl,
             'timeout' => 600,
         ]);
 
@@ -311,11 +318,11 @@ class KimiProvider implements AIProviderInterface, HttpRequestBuilderInterface
             ];
         }
 
-        $this->logger?->logApiRequest('kimi', self::CHAT_ENDPOINT, $payload);
+        $this->logger?->logApiRequest('kimi', $this->chatEndpoint, $payload);
         error_log("[KimiProvider] Request model=" . $this->model . " max_tokens=" . $this->maxTokens . " has_tools=" . (!empty($tools) ? 'yes' : 'no'));
 
         try {
-            $response = $this->httpClient->post(self::CHAT_ENDPOINT, [
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'Authorization' => 'Bearer ' . $this->apiKey,

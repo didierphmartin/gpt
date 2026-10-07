@@ -252,7 +252,7 @@ class SettingsController
         $this->ensureApiKeysTableExists();
         $this->ensureUserModelsTableExists();
 
-        $sql = "SELECT provider, api_key, system_prompt, created_at, updated_at
+        $sql = "SELECT provider, api_key, system_prompt, base_url, created_at, updated_at
                 FROM user_api_keys
                 WHERE user_id = :user_id";
 
@@ -262,6 +262,7 @@ class SettingsController
 
         $result = [];
         $systemPrompts = [];
+        $endpoints = [];
         foreach ($keys as $key) {
             $decrypted = $this->decryptApiKey($key['api_key']);
             $masked = $decrypted ? '****' . substr($decrypted, -4) : null;
@@ -277,6 +278,12 @@ class SettingsController
             // override → using admin global or file default".
             if (!empty($key['system_prompt'])) {
                 $systemPrompts[$key['provider']] = $key['system_prompt'];
+            }
+
+            // The user's own entry point; applied at chat time only with the
+            // user's own key (ChatController::applyUserApiKeys).
+            if (!empty($key['base_url'])) {
+                $endpoints[$key['provider']] = $key['base_url'];
             }
         }
 
@@ -326,6 +333,7 @@ class SettingsController
             'package_models' => $packageModels,
             'locked' => $locked,
             'system_prompts' => $systemPrompts,
+            'endpoints' => $endpoints,
             // Admin-set rates for the decision-model rows (Jev); null = unpriced.
             'rates' => self::routerRates(new PricingResolver($this->db)),
             'status_code' => 200
@@ -344,6 +352,10 @@ class SettingsController
         // override (falls back to admin global / file default). Missing entry
         // leaves the existing value untouched.
         $systemPrompts = $request['body']['system_prompts'] ?? [];
+        // Per-provider entry points (base URL of a gateway that fronts several
+        // providers). Same contract as system_prompts: '' clears, missing
+        // leaves untouched.
+        $endpoints = $request['body']['endpoints'] ?? [];
 
         $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
         // Router keys (Jev) are stored like LLM keys, encrypted the same way,
@@ -351,12 +363,24 @@ class SettingsController
         // `keys` only.
         $validKeyProviders = array_merge($validProviders, ProviderKinds::ROUTER_KEYS);
 
-        if (empty($keys) && empty($models) && empty($systemPrompts)) {
+        if (empty($keys) && empty($models) && empty($systemPrompts) && empty($endpoints)) {
             return [
                 'success' => false,
-                'error' => 'No keys, models, or system_prompts provided',
+                'error' => 'No keys, models, system_prompts or endpoints provided',
                 'status_code' => 400
             ];
+        }
+
+        // Validate endpoints before writing anything, so a bad URL saves nothing.
+        foreach ($endpoints as $provider => $url) {
+            $value = is_string($url) ? trim($url) : '';
+            if ($value !== '' && !preg_match('#^https?://[^\s/]+#i', $value)) {
+                return [
+                    'success' => false,
+                    'error' => "Invalid endpoint for {$provider}: must start with http:// or https://",
+                    'status_code' => 400
+                ];
+            }
         }
 
         $this->ensureApiKeysTableExists();
@@ -458,12 +482,39 @@ class SettingsController
             $promptCount++;
         }
 
+        // Save per-provider entry points. Validated as http(s) URLs; stored
+        // without a trailing slash since providers append their own path.
+        $endpointCount = 0;
+        foreach ($endpoints as $provider => $url) {
+            // Router keys too: Jev can sit behind a gateway (full Jev URL).
+            if (!in_array($provider, $validKeyProviders) || !is_string($url)) {
+                continue;
+            }
+            $value = rtrim(trim($url), '/');
+
+            $sql = "INSERT INTO user_api_keys (user_id, provider, api_key, base_url, created_at, updated_at)
+                    VALUES (:user_id, :provider, '', :base_url, NOW(), NOW())
+                    ON DUPLICATE KEY UPDATE
+                        base_url = VALUES(base_url),
+                        updated_at = NOW()";
+
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([
+                ':user_id' => $userId,
+                ':provider' => $provider,
+                ':base_url' => $value === '' ? null : $value
+            ]);
+
+            $endpointCount++;
+        }
+
         return [
             'success' => true,
-            'message' => "Saved $savedCount API key(s), $modelCount model(s), $promptCount system prompt(s)",
+            'message' => "Saved $savedCount API key(s), $modelCount model(s), $promptCount system prompt(s), $endpointCount endpoint(s)",
             'saved_count' => $savedCount,
             'model_count' => $modelCount,
             'prompt_count' => $promptCount,
+            'endpoint_count' => $endpointCount,
             'status_code' => 200
         ];
     }
@@ -808,6 +859,8 @@ class SettingsController
             `provider` varchar(50) NOT NULL,
             `api_key` text NOT NULL COMMENT 'Encrypted API key',
             `system_prompt` text NULL COMMENT 'User override for this provider system prompt; null = use default',
+            `base_url` varchar(500) DEFAULT NULL COMMENT 'User entry point (gateway); null = vendor/admin default',
+            `chat_endpoint` varchar(500) DEFAULT NULL,
             `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
             `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`user_id`, `provider`),
@@ -817,11 +870,14 @@ class SettingsController
 
         $this->db->exec($sql);
 
-        // Idempotent ALTER for existing installs that predate the column.
-        try {
-            $this->db->exec("ALTER TABLE `user_api_keys` ADD COLUMN `system_prompt` TEXT NULL AFTER `api_key`");
-        } catch (\PDOException $e) {
-            // Column already exists — ignore.
+        // Idempotent ALTERs for existing installs that predate the columns.
+        $alters = [
+            "ALTER TABLE `user_api_keys` ADD COLUMN `system_prompt` TEXT NULL AFTER `api_key`",
+            "ALTER TABLE `user_api_keys` ADD COLUMN `base_url` varchar(500) DEFAULT NULL",
+            "ALTER TABLE `user_api_keys` ADD COLUMN `chat_endpoint` varchar(500) DEFAULT NULL",
+        ];
+        foreach ($alters as $alter) {
+            try { $this->db->exec($alter); } catch (\PDOException $e) { /* column exists */ }
         }
     }
 
@@ -904,11 +960,12 @@ class SettingsController
     }
 
     /**
-     * Decrypt API key from storage
+     * The usable key from storage: encrypted here, in the clear when set
+     * from gpt_admin. '' = none (same rule as the chat path).
      */
-    private function decryptApiKey(string $encryptedKey): ?string
+    private function decryptApiKey(string $encryptedKey): string
     {
-        return ApiKeyCrypto::decrypt($encryptedKey, $this->encryptionKey);
+        return ApiKeyCrypto::reveal($encryptedKey, $this->encryptionKey);
     }
 
     /**

@@ -56,7 +56,7 @@ use GuzzleHttp\Exception\GuzzleException;
 final class JevRouter
 {
     /** POST target. Captured from typesafe-sdk 0.7.2 rather than inferred. */
-    private const URL = 'https://api.typesafe.ai/v1/systemone';
+    public const URL = 'https://api.typesafe.ai/v1/systemone';
 
     /** Pinned by name, not by version: the API resolves it (answered jev-1.13.0 when written). */
     private const MODEL = 'jev-latest';
@@ -77,12 +77,15 @@ final class JevRouter
     public function __construct(
         private ?string $apiKey = null,
         private ?Client $http = null,
-        private float $confidenceFloor = self::DEFAULT_CONFIDENCE_FLOOR
+        private float $confidenceFloor = self::DEFAULT_CONFIDENCE_FLOOR,
+        // A gateway in front of TypeSafe (JevKeyResolver::url); '' = URL.
+        private string $url = ''
     ) {
         // null = not configured. The key comes from JevKeyResolver (user row,
         // else the global router row); .env TYPESAFE_API_KEY is deliberately
         // NOT read, or it would bypass that precedence.
         $this->apiKey ??= '';
+        $this->url = trim($this->url) !== '' ? trim($this->url) : self::URL;
         // 10s: a measured p50 of ~160ms and max of 385ms means a request still
         // running after ten seconds is broken, not slow. Failing fast matters
         // because the caller's fallback is a working LLM route, not an error.
@@ -150,7 +153,7 @@ final class JevRouter
 
         $t0 = microtime(true);
         try {
-            $res = $this->http->post(self::URL, [
+            $res = $this->http->post($this->url, [
                 'headers' => ['Authorization' => 'Bearer ' . $this->apiKey, 'Accept' => 'application/json'],
                 'json' => $body,
             ]);

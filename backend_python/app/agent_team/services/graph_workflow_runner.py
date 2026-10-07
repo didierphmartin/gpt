@@ -2188,6 +2188,16 @@ class GraphWorkflowRunner:
 
             return configSettings
 
+        # The provider's endpoint: vendor default unless system_llm_settings
+        # points it at a gateway (one entry point serving several providers).
+        def baseUrlOf(cfg, default: str) -> str:
+            return (_pc(cfg, 'base_url') or default).rstrip('/')
+
+        # base_url + path. gpt_admin's "API URL" field stores origin + path
+        # split, so a gateway's prefix lives in chat_endpoint.
+        def urlOf(cfg, defaultBase: str, defaultPath: str) -> str:
+            return baseUrlOf(cfg, defaultBase) + (_pc(cfg, 'chat_endpoint') or defaultPath)
+
         if provider == 'openai':
             providerConfig = getProviderConfig('openai')
             apiKey = _coalesce(_pc(providerConfig, 'api_key'), os.environ.get('OPENAI_API_KEY'))
@@ -2204,7 +2214,7 @@ class GraphWorkflowRunner:
                 'max_completion_tokens': maxTokens,
             }
             return {
-                'url': 'https://api.openai.com/v1/chat/completions',
+                'url': urlOf(providerConfig, 'https://api.openai.com', '/v1/chat/completions'),
                 'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
                 'payload': payload, 'provider': 'openai',
             }
@@ -2224,7 +2234,7 @@ class GraphWorkflowRunner:
                 'messages': claudeMessages,
             }
             return {
-                'url': 'https://api.anthropic.com/v1/messages',
+                'url': urlOf(providerConfig, 'https://api.anthropic.com', '/v1/messages'),
                 'headers': ['Content-Type: application/json', f'x-api-key: {apiKey}', 'anthropic-version: 2023-06-01'],
                 'payload': payload, 'provider': 'claude',
             }
@@ -2237,6 +2247,10 @@ class GraphWorkflowRunner:
                 return None
 
             geminiModel = model if not php_empty(model) else _coalesce(_pc(providerConfig, 'model'), 'gemini-3.6-flash')
+            # Same rule as GeminiProvider: a base without a version gets /v1beta.
+            geminiBase = baseUrlOf(providerConfig, 'https://generativelanguage.googleapis.com/v1beta')
+            if '/v1beta' not in geminiBase and '/v1' not in geminiBase:
+                geminiBase += '/v1beta'
             payload = {
                 'contents': [{'role': 'user', 'parts': [{'text': systemPrompt + "\n\n" + task}]}],
                 'generationConfig': {
@@ -2245,7 +2259,7 @@ class GraphWorkflowRunner:
                 },
             }
             return {
-                'url': f"https://generativelanguage.googleapis.com/v1beta/models/{geminiModel}:generateContent?key={apiKey}",
+                'url': geminiBase + f"/models/{geminiModel}:generateContent?key={apiKey}",
                 'headers': ['Content-Type: application/json'],
                 'payload': payload, 'provider': 'gemini',
             }
@@ -2264,7 +2278,7 @@ class GraphWorkflowRunner:
                 'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
             }
             return {
-                'url': 'https://api.deepseek.com/v1/chat/completions',
+                'url': urlOf(providerConfig, 'https://api.deepseek.com', '/v1/chat/completions'),
                 'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
                 'payload': payload, 'provider': 'deepseek',
             }
@@ -2282,9 +2296,8 @@ class GraphWorkflowRunner:
                 'temperature': _coalesce(settings.get('temperature'), 0.7),
                 'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
             }
-            baseUrl = _coalesce(_pc(providerConfig, 'base_url'), 'https://api.x.ai')
             return {
-                'url': baseUrl.rstrip('/') + '/v1/chat/completions',
+                'url': urlOf(providerConfig, 'https://api.x.ai', '/v1/chat/completions'),
                 'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
                 'payload': payload, 'provider': 'grok',
             }
@@ -2302,9 +2315,8 @@ class GraphWorkflowRunner:
                 'messages': messages,
                 'max_tokens': _coalesce(settings.get('max_tokens'), 4096),
             }
-            baseUrl = _coalesce(_pc(providerConfig, 'base_url'), 'https://api.moonshot.cn')
             return {
-                'url': baseUrl.rstrip('/') + '/v1/chat/completions',
+                'url': urlOf(providerConfig, 'https://api.moonshot.ai', '/v1/chat/completions'),
                 'headers': ['Content-Type: application/json', f'Authorization: Bearer {apiKey}'],
                 'payload': payload, 'provider': 'kimi',
             }

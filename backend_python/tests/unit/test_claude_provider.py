@@ -37,6 +37,23 @@ def test_basics():
     assert p.getDefaultSystemPrompt().startswith('You are')      # resources/prompts/portfolio_assistant.txt
 
 
+def test_gateway_prefix_in_chat_endpoint_reaches_claude():
+    # gpt_admin's "API URL" stores origin + path split: the gateway prefix
+    # lives in chat_endpoint and the request goes to base_url + chat_endpoint.
+    seen = {}
+    def handler(req):
+        seen['url'] = str(req.url)
+        return httpx.Response(200, json={'content': [{'type': 'text', 'text': 'ok'}], 'usage': {'input_tokens': 1, 'output_tokens': 1}, 'stop_reason': 'end_turn'})
+    p = ClaudeProvider(Configuration({'claude': {'api_key': 'K', 'streaming': False, 'max_tokens': 100,
+                                                 'base_url': 'https://gw.corp/', 'chat_endpoint': '/llm/anthropic/v1/messages'}}))
+    p.httpClient = httpx.Client(transport=httpx.MockTransport(handler))
+    p.chat('hello', [], {'user_id': 3})
+    assert seen['url'] == 'https://gw.corp/llm/anthropic/v1/messages'
+    # '' counts as unset.
+    q = ClaudeProvider(Configuration({'claude': {'api_key': 'K', 'base_url': '', 'chat_endpoint': ''}}))
+    assert q.baseUrl + q.chatEndpoint == 'https://api.anthropic.com/v1/messages'; q.close()
+
+
 def test_chat_non_streaming_text_and_usage():
     seen = {}
     def handler(req):
@@ -163,3 +180,17 @@ def test_close_closes_http_client():
     assert p.httpClient.is_closed is False
     p.close()
     assert p.httpClient.is_closed is True
+
+
+def test_build_http_request_and_gemini_base_honour_split_api_url():
+    from app.providers.gemini_provider import GeminiProvider
+    r = ClaudeProvider.buildHttpRequest('m', [{'role': 'user', 'content': 'x'}], [],
+                                        {'api_key': 'K', 'base_url': 'https://gw.corp', 'chat_endpoint': '/llm/anthropic/v1/messages'}, 100, 0.7)
+    assert r['url'] == 'https://gw.corp/llm/anthropic/v1/messages'
+    assert ClaudeProvider.buildHttpRequest('m', [{'role': 'user', 'content': 'x'}], [], {'api_key': 'K', 'chat_endpoint': ''}, 100, 0.7)['url'] == \
+        'https://api.anthropic.com/v1/messages'
+    # A Gemini origin-only base gets /v1beta; a versioned one is kept.
+    g = GeminiProvider(Configuration({'providers': {'gemini': {'api_key': 'K', 'base_url': 'https://gw.corp/'}}}))
+    assert g.baseUrl == 'https://gw.corp/v1beta'; g.close()
+    g = GeminiProvider(Configuration({'providers': {'gemini': {'api_key': 'K', 'base_url': 'https://gw.corp/v1'}}}))
+    assert g.baseUrl == 'https://gw.corp/v1'; g.close()

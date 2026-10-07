@@ -18,16 +18,19 @@ use GuzzleHttp\Exception\GuzzleException;
  */
 class MemoryExtractor
 {
-    private const ENDPOINT = 'https://api.anthropic.com/v1/messages';
+    private const DEFAULT_BASE_URL = 'https://api.anthropic.com';
     private const API_VERSION = '2023-06-01';
     private const MAX_TOKENS = 512;
 
     private string $apiKey;
+    private string $endpoint;
     private Client $http;
 
-    public function __construct(string $apiKey)
+    /** $baseUrl / $chatEndpoint: the resolved Claude config (a gateway when configured). */
+    public function __construct(string $apiKey, string $baseUrl = '', string $chatEndpoint = '')
     {
         $this->apiKey = $apiKey;
+        $this->endpoint = rtrim($baseUrl ?: self::DEFAULT_BASE_URL, '/') . ($chatEndpoint ?: '/v1/messages');
         $this->http = new Client(['timeout' => 30]);
     }
 
@@ -49,7 +52,7 @@ class MemoryExtractor
         $userContent = $this->buildUserContent($currentMemory, $currentUser, $lastUserMsg, $lastAssistantMsg);
 
         try {
-            $response = $this->http->post(self::ENDPOINT, [
+            $response = $this->http->post($this->endpoint, [
                 'headers' => [
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => self::API_VERSION,
@@ -109,7 +112,7 @@ class MemoryExtractor
         $userContent = "EXISTING MEMORY:\n{$currentContent}\n\nCANDIDATES:\n" . implode("\n", $candidateLines);
 
         try {
-            $response = $this->http->post(self::ENDPOINT, [
+            $response = $this->http->post($this->endpoint, [
                 'headers' => [
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => self::API_VERSION,
@@ -179,7 +182,7 @@ class MemoryExtractor
         $userContent = "REQUIRED (keep verbatim):\n{$requiredBlock}\n\nEXISTING (may be trimmed):\n{$content}";
 
         try {
-            $response = $this->http->post(self::ENDPOINT, [
+            $response = $this->http->post($this->endpoint, [
                 'headers' => [
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => self::API_VERSION,

@@ -222,6 +222,43 @@ final class JevKeyStorageTest extends TestCase
 
     // ------------------------------------------------------------ precedence
 
+    // ------------------------------------------------------------ gateway URL
+
+    public function testTheVendorUrlWhenNoneIsConfigured(): void
+    {
+        $this->allowJev();
+        $this->seedGlobalJev();
+        $resolved = JevKeyResolver::resolve($this->db, $this->config(), 2);
+        $this->assertSame('', JevKeyResolver::url($this->db, $resolved, 2));
+    }
+
+    public function testTheGlobalUrlGoesWithTheGlobalKey(): void
+    {
+        $this->allowJev();
+        $this->seedGlobalJev();
+        $this->db->exec("UPDATE system_llm_settings SET base_url = 'https://gw.corp/jev' WHERE provider_key = 'jev'");
+        $resolved = JevKeyResolver::resolve($this->db, $this->config(), 2);
+        $this->assertSame('https://gw.corp/jev', JevKeyResolver::url($this->db, $resolved, 2));
+    }
+
+    public function testTheUsersUrlGoesWithTheUsersOwnKeyOnly(): void
+    {
+        $this->allowJev();
+        $this->seedGlobalJev();
+        $this->db->exec("UPDATE system_llm_settings SET base_url = 'https://gw.corp/jev' WHERE provider_key = 'jev'");
+        $this->seedUserJev(2, ApiKeyCrypto::encrypt('user-jev-key', self::SECRET));
+        $this->db->exec("UPDATE user_api_keys SET base_url = 'https://mine.example/jev' WHERE user_id = 2");
+        $own = JevKeyResolver::resolve($this->db, $this->config(), 2);
+        $this->assertSame('https://mine.example/jev', JevKeyResolver::url($this->db, $own, 2));
+
+        // A URL with no key of the user's own: the global key keeps the global URL.
+        $this->db->exec("UPDATE user_api_keys SET api_key = '' WHERE user_id = 2");
+        $global = JevKeyResolver::resolve($this->db, $this->config(), 2);
+        $this->assertSame('global', $global['source']);
+        $this->assertSame('https://gw.corp/jev', JevKeyResolver::url($this->db, $global, 2));
+    }
+
+
     public function testUserKeyWinsOverGlobal(): void
     {
         $this->allowJev();
@@ -355,13 +392,16 @@ final class JevKeyStorageTest extends TestCase
         $out = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
             'provider_key' => 'jev', 'display_name' => 'Jev (dispatcher routing)',
             'model' => 'jev-latest', 'api_format' => 'router', 'api_key' => 'global-jev-key',
-            'base_url' => 'https://should-not-be-kept', 'streaming' => 1, 'supports_tools' => 1,
+            'base_url' => 'https://gw.corp/jev', 'chat_endpoint' => '/should-not-be-kept',
+            'streaming' => 1, 'supports_tools' => 1,
         ]]);
         $this->assertTrue($out['success'], $out['error'] ?? '');
 
         $row = $this->db->query("SELECT * FROM system_llm_settings WHERE provider_key = 'jev'")->fetch(PDO::FETCH_ASSOC);
         $this->assertSame('router', $row['api_format']);
-        $this->assertNull($row['base_url'], 'a router row has no chat endpoint');
+        // The full Jev URL is kept (a gateway); a chat endpoint is not.
+        $this->assertSame('https://gw.corp/jev', $row['base_url']);
+        $this->assertNull($row['chat_endpoint'], 'a router row has no chat endpoint');
         $this->assertSame(0, (int) $row['streaming']);
         $this->assertSame(0, (int) $row['supports_tools']);
     }

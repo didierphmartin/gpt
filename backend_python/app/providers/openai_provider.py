@@ -96,8 +96,8 @@ class OpenAIProvider(
         self.model = openaiConfig.get('model') if openaiConfig.get('model') is not None else 'gpt-4-turbo-preview'
         self.maxTokens = openaiConfig.get('max_tokens') if openaiConfig.get('max_tokens') is not None else 4096
         self.temperature = openaiConfig.get('temperature') if openaiConfig.get('temperature') is not None else 0.7
-        baseUrl = openaiConfig.get('base_url') if openaiConfig.get('base_url') is not None else 'https://api.openai.com'
-        self.baseUrl = baseUrl.rstrip('/')
+        self.baseUrl = (openaiConfig.get('base_url') or 'https://api.openai.com').rstrip('/')
+        self.chatEndpoint = openaiConfig.get('chat_endpoint') or '/v1/chat/completions'
         self.maxRecursionDepth = config.get('max_recursion_depth', 10)
 
         self.httpClient = httpx.Client(
@@ -354,7 +354,7 @@ class OpenAIProvider(
         error_log("[OpenAIProvider] Full payload: " + dumps(payload))
 
         if self.logger:
-            self.logger.logApiRequest('openai', '/v1/chat/completions', payload)
+            self.logger.logApiRequest('openai', self.chatEndpoint, payload)
 
         try:
             headers = {
@@ -364,7 +364,7 @@ class OpenAIProvider(
             jsonPayload = dumps(payload).encode('utf-8')
 
             if streaming:
-                with self.httpClient.stream('POST', '/v1/chat/completions', headers=headers, content=jsonPayload) as response:
+                with self.httpClient.stream('POST', self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload) as response:
                     try:
                         response.raise_for_status()
                     except httpx.HTTPStatusError as statusError:
@@ -376,7 +376,7 @@ class OpenAIProvider(
 
                     return self._handleStreamingResponse(response)
             else:
-                response = self.httpClient.post('/v1/chat/completions', headers=headers, content=jsonPayload)
+                response = self.httpClient.post(self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload)
                 response.raise_for_status()
                 body = _json_decode(response.text)
                 if self.logger:

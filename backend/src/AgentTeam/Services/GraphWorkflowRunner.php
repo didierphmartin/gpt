@@ -1047,7 +1047,8 @@ class GraphWorkflowRunner
                 // The key the plan allows (user row, package key, global row);
                 // none = "did not route", with the reason saying why.
                 $resolvedJev ??= JevKeyResolver::resolve($this->db, $this->config, $userId);
-                $jev = $this->makeJevRouter($resolvedJev['key'], $floor);
+                $jev = $this->makeJevRouter($resolvedJev['key'], $floor,
+                    JevKeyResolver::url($this->db, $resolvedJev, $userId));
                 $jevOut = $jev->route($task, $dispatchTargets,
                     DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
                 if ($resolvedJev['key'] === '') {
@@ -1178,9 +1179,9 @@ class GraphWorkflowRunner
      * The Jev router for one dispatcher decision. A seam so tests can replace
      * the HTTP transport; production always talks to the real service.
      */
-    protected function makeJevRouter(string $key, float $floor): JevRouter
+    protected function makeJevRouter(string $key, float $floor, string $url = ''): JevRouter
     {
-        return new JevRouter($key !== '' ? $key : null, null, $floor);
+        return new JevRouter($key !== '' ? $key : null, null, $floor, $url);
     }
 
     /** Test seam: where an answered Jev call is written as usage. */
@@ -2702,6 +2703,15 @@ class GraphWorkflowRunner
             return $configSettings;
         };
 
+        // The provider's endpoint: vendor default unless system_llm_settings
+        // points it at a gateway (one entry point serving several providers).
+        $baseUrl = static fn(?array $cfg, string $default): string =>
+            rtrim((($cfg['base_url'] ?? '') ?: $default), '/');
+        // Full request URL: gpt_admin stores a gateway as origin (base_url) +
+        // path (chat_endpoint), so the configured path wins over the default.
+        $url = static fn(?array $cfg, string $defaultBase, string $defaultPath): string =>
+            $baseUrl($cfg, $defaultBase) . (($cfg['chat_endpoint'] ?? '') ?: $defaultPath);
+
         // Get API configuration based on provider
         switch ($provider) {
             case 'openai':
@@ -2724,7 +2734,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => 'https://api.openai.com/v1/chat/completions',
+                    'url' => $url($providerConfig, 'https://api.openai.com', '/v1/chat/completions'),
                     'headers' => [
                         'Content-Type: application/json',
                         'Authorization: Bearer ' . $apiKey,
@@ -2755,7 +2765,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => 'https://api.anthropic.com/v1/messages',
+                    'url' => $url($providerConfig, 'https://api.anthropic.com', '/v1/messages'),
                     'headers' => [
                         'Content-Type: application/json',
                         'x-api-key: ' . $apiKey,
@@ -2775,6 +2785,11 @@ class GraphWorkflowRunner
                 }
 
                 $geminiModel = $model ?: ($providerConfig['model'] ?? 'gemini-3.6-flash');
+                // Same rule as GeminiProvider: a base without a version gets /v1beta.
+                $geminiBase = $baseUrl($providerConfig, 'https://generativelanguage.googleapis.com/v1beta');
+                if (strpos($geminiBase, '/v1beta') === false && strpos($geminiBase, '/v1') === false) {
+                    $geminiBase .= '/v1beta';
+                }
                 $payload = [
                     'contents' => [
                         ['role' => 'user', 'parts' => [['text' => $systemPrompt . "\n\n" . $task]]],
@@ -2786,7 +2801,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => "https://generativelanguage.googleapis.com/v1beta/models/{$geminiModel}:generateContent?key={$apiKey}",
+                    'url' => $geminiBase . "/models/{$geminiModel}:generateContent?key={$apiKey}",
                     'headers' => [
                         'Content-Type: application/json',
                     ],
@@ -2810,7 +2825,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => 'https://api.deepseek.com/v1/chat/completions',
+                    'url' => $url($providerConfig, 'https://api.deepseek.com', '/v1/chat/completions'),
                     'headers' => [
                         'Content-Type: application/json',
                         'Authorization: Bearer ' . $apiKey,
@@ -2835,7 +2850,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => rtrim($providerConfig['base_url'] ?? 'https://api.x.ai', '/') . '/v1/chat/completions',
+                    'url' => $url($providerConfig, 'https://api.x.ai', '/v1/chat/completions'),
                     'headers' => [
                         'Content-Type: application/json',
                         'Authorization: Bearer ' . $apiKey,
@@ -2860,7 +2875,7 @@ class GraphWorkflowRunner
                 ];
 
                 return [
-                    'url' => rtrim($providerConfig['base_url'] ?? 'https://api.moonshot.cn', '/') . '/v1/chat/completions',
+                    'url' => $url($providerConfig, 'https://api.moonshot.ai', '/v1/chat/completions'),
                     'headers' => [
                         'Content-Type: application/json',
                         'Authorization: Bearer ' . $apiKey,

@@ -91,11 +91,15 @@ def test_encrypt_round_trips_and_uses_php_iv_layout():
     assert ctl.encryptApiKey(PHP_PLAINTEXT) != blob
 
 
-def test_decrypt_rejects_short_and_garbage_payloads():
+def test_decrypt_api_key_reveals_clear_or_unopenable_keys():
+    # decryptApiKey is ApiKeyCrypto::reveal since gpt_admin stores per-user
+    # keys in the clear: '' = none, a value not shaped like a blob is a clear
+    # key, a blob that will not open (rotated secret) is unusable.
     ctl = c()
-    assert ctl.decryptApiKey('') is None                 # strlen($data) < 17
-    assert ctl.decryptApiKey(base64.b64encode(b'x' * 16).decode()) is None
-    assert ctl.decryptApiKey('!!!not base64!!!') is None
+    assert ctl.decryptApiKey('') == ''
+    assert ctl.decryptApiKey(base64.b64encode(b'x' * 16).decode()) == base64.b64encode(b'x' * 16).decode()
+    assert ctl.decryptApiKey('!!!not base64!!!') == '!!!not base64!!!'
+    assert SettingsController(FakeDb(), {'auth': {'jwt_secret': 'other-secret'}}).decryptApiKey(PHP_CIPHERTEXT) == ''
 
 
 def test_encryption_key_falls_back_to_php_default():
@@ -182,7 +186,7 @@ def test_get_keys_masks_and_collects_prompts():
     ctl = c()
     blob = ctl.encryptApiKey('sk-abcdEFGH')
     db = _keys_db(
-        [{'provider': 'kimi', 'api_key': blob, 'system_prompt': 'be terse',
+        [{'provider': 'kimi', 'api_key': blob, 'system_prompt': 'be terse', 'base_url': 'https://gw.corp/kimi',
           'created_at': '2026-01-01 00:00:00', 'updated_at': '2026-01-02 00:00:00'},
          {'provider': 'grok', 'api_key': '', 'system_prompt': None,
           'created_at': '2026-01-01 00:00:00', 'updated_at': '2026-01-02 00:00:00'}],
@@ -193,10 +197,11 @@ def test_get_keys_masks_and_collects_prompts():
         'kimi': {'has_custom_key': True, 'masked_key': '****EFGH', 'updated_at': '2026-01-02 00:00:00'},
         'grok': {'has_custom_key': False, 'masked_key': None, 'updated_at': '2026-01-02 00:00:00'}}
     assert r['system_prompts'] == {'kimi': 'be terse'}
+    assert r['endpoints'] == {'kimi': 'https://gw.corp/kimi'}
     assert r['models'] == {'kimi': 'kimi-k2.6'}
     assert r['status_code'] == 200
     assert sqls(db)[:2] == [
-        ("SELECT provider, api_key, system_prompt, created_at, updated_at"
+        ("SELECT provider, api_key, system_prompt, base_url, created_at, updated_at"
          " FROM user_api_keys WHERE user_id = :user_id"),
         "SELECT provider, model FROM user_model_selections WHERE user_id = :user_id",
     ]
@@ -210,7 +215,7 @@ def test_get_keys_drops_system_prompt_when_column_absent():
     r = SettingsController(db, CONFIG).getKeys(ctx())
     assert sqls(db)[0] == ("SELECT provider, api_key, created_at, updated_at"
                            " FROM user_api_keys WHERE user_id = :user_id")
-    assert r['system_prompts'] == []
+    assert r['system_prompts'] == [] and r['endpoints'] == []
 
 
 def test_get_provider_settings_drops_enabled_when_column_absent():
@@ -253,9 +258,9 @@ def test_get_keys_survives_package_lookup_failure():
 
 def test_save_keys_empty_payload_error_string():
     assert c().saveKeys(ctx({})) == {
-        'success': False, 'error': 'No keys, models, or system_prompts provided', 'status_code': 400}
+        'success': False, 'error': 'No keys, models, system_prompts or endpoints provided', 'status_code': 400}
     assert c().saveKeys(ctx({'keys': {}, 'models': {}, 'system_prompts': {}}))['error'] == \
-        'No keys, models, or system_prompts provided'
+        'No keys, models, system_prompts or endpoints provided'
 
 
 def test_save_keys_null_key_is_trimmed_away_not_stringified():
@@ -264,7 +269,7 @@ def test_save_keys_null_key_is_trimmed_away_not_stringified():
     db = FakeDb()
     r = c(db).saveKeys(ctx({'keys': {'openai': None}}))
     assert r['saved_count'] == 0 and db.calls == []
-    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s)'
+    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s), 0 endpoint(s)'
 
 
 def test_save_keys_bool_model_follows_php_string_cast():
@@ -287,7 +292,7 @@ def test_save_keys_skips_unknown_provider_and_blank_key():
     db = FakeDb()
     r = c(db).saveKeys(ctx({'keys': {'nope': 'x', 'kimi': '   '}}))
     assert r['saved_count'] == 0 and db.calls == []
-    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s)'
+    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s), 0 endpoint(s)'
 
 
 def test_save_keys_writes_php_sql_and_encrypts():
@@ -296,8 +301,8 @@ def test_save_keys_writes_php_sql_and_encrypts():
     r = ctl.saveKeys(ctx({'keys': {'kimi': '  sk-live  '},
                           'models': {'kimi': ' kimi-k2.6 ', 'bogus': 'x'},
                           'system_prompts': {'grok': '  be terse ', 'claude': '', 'gemini': 7}}))
-    assert r == {'success': True, 'message': 'Saved 1 API key(s), 1 model(s), 2 system prompt(s)',
-                 'saved_count': 1, 'model_count': 1, 'prompt_count': 2, 'status_code': 200}
+    assert r == {'success': True, 'message': 'Saved 1 API key(s), 1 model(s), 2 system prompt(s), 0 endpoint(s)',
+                 'saved_count': 1, 'model_count': 1, 'prompt_count': 2, 'endpoint_count': 0, 'status_code': 200}
     assert sqls(db) == [
         ("INSERT INTO user_api_keys (user_id, provider, api_key, created_at, updated_at)"
          " VALUES (:user_id, :provider, :api_key, NOW(), NOW())"
@@ -681,3 +686,32 @@ def test_php_json_encode_matches_php_defaults():
 
 def test_php_array_empty_map_encodes_as_list():
     assert php_array({}) == [] and php_array({'a': 1}) == {'a': 1}
+
+
+# ─── endpoints (user entry point / gateway) ─────────────────────────────────
+
+def test_save_keys_rejects_a_bad_endpoint_before_writing_anything():
+    db = FakeDb()
+    r = c(db).saveKeys(ctx({'keys': {'claude': 'sk-live'}, 'system_prompts': {'claude': 'P'},
+                            'endpoints': {'openai': 'https://gw.corp', 'claude': 'gw.corp/anthropic'}}))
+    assert r == {'success': False,
+                 'error': 'Invalid endpoint for claude: must start with http:// or https://',
+                 'status_code': 400}
+    assert db.calls == []
+
+
+def test_save_keys_endpoints_upsert_clear_and_skip():
+    db = FakeDb()
+    r = c(db).saveKeys(ctx({'endpoints': {'claude': ' https://gw.corp/anthropic/ ', 'openai': '',
+                                          'nope': 'https://x', 'kimi': None}}))
+    assert r['endpoint_count'] == 2 and r['saved_count'] == 0
+    assert r['message'] == 'Saved 0 API key(s), 0 model(s), 0 system prompt(s), 2 endpoint(s)'
+    assert db.calls[0][0] == ("INSERT INTO user_api_keys (user_id, provider, api_key, base_url, created_at, updated_at)"
+                              " VALUES (:user_id, :provider, '', :base_url, NOW(), NOW())"
+                              " ON DUPLICATE KEY UPDATE"
+                              " base_url = VALUES(base_url),"
+                              " updated_at = NOW()")
+    assert [p for _, p in db.calls] == [
+        {':user_id': 3, ':provider': 'claude', ':base_url': 'https://gw.corp/anthropic'},
+        {':user_id': 3, ':provider': 'openai', ':base_url': None},   # '' clears
+    ]

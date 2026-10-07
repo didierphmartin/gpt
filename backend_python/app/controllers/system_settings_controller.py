@@ -37,6 +37,7 @@ from app.support.phpcompat import (
     php_floatval,
     php_intval,
     php_items,
+    php_trim,
     ucfirst,
 )
 from app.support.phpjson import php_json_decode, php_json_encode
@@ -105,7 +106,7 @@ class SystemSettingsController:
         },
         'kimi': {
             'display_name': 'Kimi',
-            'base_url': 'https://api.moonshot.cn',
+            'base_url': 'https://api.moonshot.ai',
             'model': 'kimi-k2.6',
             'price_input_per_1m': 0.95,
             'price_output_per_1m': 4.00,
@@ -377,7 +378,11 @@ class SystemSettingsController:
             return {'success': False, 'error': pairing_error, 'status_code': 400}
         if provider_key in ROUTER_KEYS:
             # No chat endpoint, no streaming, no tools: whatever the form sent.
-            body = {**body, 'base_url': None, 'chat_endpoint': None, 'streaming': 0, 'supports_tools': 0}
+            # base_url is kept: the full Jev URL when routing goes through a
+            # gateway, empty = the vendor URL (PHP JevRouter::URL).
+            base_url = body.get('base_url')
+            base_url = php_trim(base_url) if isinstance(base_url, str) and php_trim(base_url) != '' else None
+            body = {**body, 'base_url': base_url, 'chat_endpoint': None, 'streaming': 0, 'supports_tools': 0}
 
         try:
             self._ensure_price_columns()

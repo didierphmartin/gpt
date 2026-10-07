@@ -47,3 +47,9 @@ def test_close_closes_http_client():
     assert e.http.is_closed is False
     e.close()
     assert e.http.is_closed is True
+
+
+def test_endpoint_honours_gateway_base_url_and_chat_endpoint():
+    assert MemoryExtractor('K').endpoint == 'https://api.anthropic.com/v1/messages'
+    assert MemoryExtractor('K', 'https://gw.corp/', '').endpoint == 'https://gw.corp/v1/messages'
+    assert MemoryExtractor('K', 'https://gw.corp', '/llm/anthropic/v1/messages').endpoint == 'https://gw.corp/llm/anthropic/v1/messages'

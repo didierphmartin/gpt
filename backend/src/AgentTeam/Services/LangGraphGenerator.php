@@ -1233,6 +1233,9 @@ class LangGraphGenerator
         $lines[] = '      glm        → ChatOpenAI on https://api.z.ai/api/paas/v4';
         $lines[] = '';
         $lines[] = '    Reads API keys from the environment (loaded from .env at startup).';
+        $lines[] = '    An entry point (gateway) replaces a vendor link via <PREFIX>_BASE_URL:';
+        $lines[] = '    XAI_/DEEPSEEK_/KIMI_/GLM_BASE_URL here; ANTHROPIC_BASE_URL and';
+        $lines[] = '    OPENAI_BASE_URL are read by the Anthropic / OpenAI clients themselves.';
         $lines[] = '    """';
         $lines[] = '    p = (provider or "claude").lower()';
         $lines[] = '    if MODEL_NAME_OVERRIDE:';
@@ -1257,7 +1260,7 @@ class LangGraphGenerator
         $lines[] = '            from langchain_openai import ChatOpenAI';
         $lines[] = '            return ChatOpenAI(';
         $lines[] = '                model=model,';
-        $lines[] = '                base_url="https://api.x.ai/v1",';
+        $lines[] = '                base_url=os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1",';
         $lines[] = '                api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),';
         $lines[] = '                temperature=temperature,';
         $lines[] = '                max_tokens=max_tokens,';
@@ -1266,7 +1269,7 @@ class LangGraphGenerator
         $lines[] = '            from langchain_openai import ChatOpenAI';
         $lines[] = '            kwargs = dict(';
         $lines[] = '                model=model,';
-        $lines[] = '                base_url="https://api.deepseek.com",';
+        $lines[] = '                base_url=os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",';
         $lines[] = '                api_key=os.environ.get("DEEPSEEK_API_KEY"),';
         $lines[] = '                temperature=temperature,';
         $lines[] = '                max_tokens=max_tokens,';
@@ -1298,7 +1301,7 @@ class LangGraphGenerator
         $lines[] = '                    temperature = _want';
         $lines[] = '            kwargs = dict(';
         $lines[] = '                model=model,';
-        $lines[] = '                base_url="https://api.moonshot.ai/v1",';
+        $lines[] = '                base_url=os.environ.get("KIMI_BASE_URL") or "https://api.moonshot.ai/v1",';
         $lines[] = '                api_key=os.environ.get("KIMI_API_KEY"),';
         $lines[] = '                temperature=temperature,';
         $lines[] = '                max_tokens=max_tokens,';
@@ -1312,7 +1315,7 @@ class LangGraphGenerator
         $lines[] = '            # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible.';
         $lines[] = '            return ChatOpenAI(';
         $lines[] = '                model=model,';
-        $lines[] = '                base_url="https://api.z.ai/api/paas/v4",';
+        $lines[] = '                base_url=os.environ.get("GLM_BASE_URL") or "https://api.z.ai/api/paas/v4",';
         $lines[] = '                api_key=os.environ.get("GLM_API_KEY"),';
         $lines[] = '                temperature=temperature,';
         $lines[] = '                max_tokens=max_tokens,';

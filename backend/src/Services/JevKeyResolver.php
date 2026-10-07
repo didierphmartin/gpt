@@ -49,6 +49,47 @@ final class JevKeyResolver
         return ['key' => '', 'source' => 'none'];
     }
 
+    /**
+     * The Jev URL that goes with a resolved key, '' = the vendor default
+     * (JevRouter::URL). Same rule as the LLM providers: a user's own entry
+     * point (a gateway) is used only with the user's own key; the package and
+     * global keys use the global row's URL, so an admin/package key is never
+     * sent to an address a user picked.
+     *
+     * @param array{key: string, source: string} $resolved from resolve()
+     */
+    public static function url(PDO $db, array $resolved, ?int $userId): string
+    {
+        if ($resolved['key'] === '') {
+            return '';
+        }
+        if ($resolved['source'] === 'user' && $userId !== null && $userId > 0) {
+            $own = self::column($db,
+                "SELECT * FROM user_api_keys WHERE user_id = :u AND provider = :p AND enabled = 1 LIMIT 1",
+                [':u' => $userId, ':p' => ProviderKinds::JEV_KEY], 'base_url');
+            if ($own !== '') {
+                return $own;
+            }
+        }
+        return self::column($db,
+            "SELECT * FROM system_llm_settings WHERE provider_key = :p AND enabled = 1 LIMIT 1",
+            [':p' => ProviderKinds::JEV_KEY], 'base_url');
+    }
+
+    /** One trimmed column of the first matching row; '' when absent (SELECT * tolerates an install without it). */
+    private static function column(PDO $db, string $sql, array $params, string $name): string
+    {
+        try {
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return is_array($row) ? trim((string) ($row[$name] ?? '')) : '';
+        } catch (Throwable $e) {
+            error_log('[JevKeyResolver] ' . $name . ' lookup failed: ' . $e->getMessage());
+            return '';
+        }
+    }
+
     /** Why a resolved-empty key cannot route, in the words the user sees. */
     public static function unavailableReason(string $source): string
     {
@@ -98,15 +139,7 @@ final class JevKeyResolver
             return '';
         }
 
-        $plain = ApiKeyCrypto::decrypt($stored, $secret);
-        if ($plain !== null && trim($plain) !== '') {
-            return trim($plain);
-        }
-        // AdminController::saveApiKeys stores per-user keys in the clear. A
-        // value that is not even shaped like an encrypted blob is such a key;
-        // one that IS shaped like a blob but will not open (rotated secret) is
-        // unusable, and the global key takes over.
-        return ApiKeyCrypto::looksEncrypted($stored) ? '' : $stored;
+        return ApiKeyCrypto::reveal($stored, $secret);
     }
 
     private static function globalKey(PDO $db): string

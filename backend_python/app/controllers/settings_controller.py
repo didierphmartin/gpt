@@ -13,11 +13,13 @@ import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from app.config import PHP_BACKEND
+from app.services.api_key_crypto import ApiKeyCrypto
 from app.services.package_resolver import PackageResolver
-from app.support.crypto import aes256cbc_decrypt, aes256cbc_encrypt
+from app.support.crypto import aes256cbc_encrypt
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -183,21 +185,22 @@ class SettingsController:
         self.ensureApiKeysTableExists()
         self.ensureUserModelsTableExists()
 
-        if self._presence.column('user_api_keys', 'system_prompt'):
-            sql = ("SELECT provider, api_key, system_prompt, created_at, updated_at"
-                   " FROM user_api_keys"
-                   " WHERE user_id = :user_id")
-        else:
-            # ensureApiKeysTableExists() ALTERs the column in for PHP before this
-            # SELECT runs, so PHP reads NULL for every row; drop it and do the same.
-            sql = ("SELECT provider, api_key, created_at, updated_at"
-                   " FROM user_api_keys"
-                   " WHERE user_id = :user_id")
+        # ensureApiKeysTableExists() ALTERs system_prompt / base_url in for PHP
+        # before this SELECT runs, so PHP reads NULL for every row of a column
+        # the install lacks; drop a missing one from the list and do the same.
+        columns = ['provider', 'api_key']
+        for optional in ('system_prompt', 'base_url'):
+            if self._presence.column('user_api_keys', optional):
+                columns.append(optional)
+        sql = ("SELECT " + ', '.join(columns) + ", created_at, updated_at"
+               " FROM user_api_keys"
+               " WHERE user_id = :user_id")
 
         keys = self.db.fetch_all(sql, {':user_id': userId})
 
         result = {}
         systemPrompts = {}
+        endpoints = {}
         for key in keys:
             decrypted = self.decryptApiKey(key['api_key'])
             masked = '****' + decrypted[-4:] if not php_empty(decrypted) else None
@@ -213,6 +216,11 @@ class SettingsController:
             # override → using admin global or file default".
             if not php_empty(key.get('system_prompt')):
                 systemPrompts[key['provider']] = key['system_prompt']
+
+            # The user's own entry point; applied at chat time only with the
+            # user's own key (ChatController._applyUserApiKeys).
+            if not php_empty(key.get('base_url')):
+                endpoints[key['provider']] = key['base_url']
 
         # Load user model selections
         modelSql = "SELECT provider, model FROM user_model_selections WHERE user_id = :user_id"
@@ -258,6 +266,7 @@ class SettingsController:
             'package_models': php_array(packageModels),
             'locked': php_array(locked),
             'system_prompts': php_array(systemPrompts),
+            'endpoints': php_array(endpoints),
             'status_code': 200,
         }
 
@@ -271,15 +280,29 @@ class SettingsController:
         # override (falls back to admin global / file default). Missing entry
         # leaves the existing value untouched.
         systemPrompts = body['system_prompts'] if body.get('system_prompts') is not None else []
+        # Per-provider entry points (base URL of a gateway that fronts several
+        # providers). Same contract as system_prompts: '' clears, missing
+        # leaves untouched.
+        endpoints = body['endpoints'] if body.get('endpoints') is not None else []
 
         validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi']
 
-        if php_empty(keys) and php_empty(models) and php_empty(systemPrompts):
+        if php_empty(keys) and php_empty(models) and php_empty(systemPrompts) and php_empty(endpoints):
             return {
                 'success': False,
-                'error': 'No keys, models, or system_prompts provided',
+                'error': 'No keys, models, system_prompts or endpoints provided',
                 'status_code': 400,
             }
+
+        # Validate endpoints before writing anything, so a bad URL saves nothing.
+        for provider, url in php_items(endpoints):
+            value = php_trim(url) if isinstance(url, str) else ''
+            if value != '' and not re.match(r'^https?://[^\s/]+', value, re.IGNORECASE):
+                return {
+                    'success': False,
+                    'error': f'Invalid endpoint for {provider}: must start with http:// or https://',
+                    'status_code': 400,
+                }
 
         self.ensureApiKeysTableExists()
         self.ensureUserModelsTableExists()
@@ -368,12 +391,35 @@ class SettingsController:
 
             promptCount += 1
 
+        # Save per-provider entry points. Validated as http(s) URLs; stored
+        # without a trailing slash since providers append their own path.
+        endpointCount = 0
+        for provider, url in php_items(endpoints):
+            if provider not in validProviders or not isinstance(url, str):
+                continue
+            value = php_trim(url).rstrip('/')
+
+            sql = ("INSERT INTO user_api_keys (user_id, provider, api_key, base_url, created_at, updated_at)"
+                   " VALUES (:user_id, :provider, '', :base_url, NOW(), NOW())"
+                   " ON DUPLICATE KEY UPDATE"
+                   " base_url = VALUES(base_url),"
+                   " updated_at = NOW()")
+
+            self.db.execute(sql, {
+                ':user_id': userId,
+                ':provider': provider,
+                ':base_url': None if value == '' else value,
+            })
+
+            endpointCount += 1
+
         return {
             'success': True,
-            'message': f'Saved {savedCount} API key(s), {modelCount} model(s), {promptCount} system prompt(s)',
+            'message': f'Saved {savedCount} API key(s), {modelCount} model(s), {promptCount} system prompt(s), {endpointCount} endpoint(s)',
             'saved_count': savedCount,
             'model_count': modelCount,
             'prompt_count': promptCount,
+            'endpoint_count': endpointCount,
             'status_code': 200,
         }
 
@@ -664,10 +710,12 @@ class SettingsController:
     # ─── ensure* (no runtime DDL — presence check + error_log only) ────────
 
     def ensureApiKeysTableExists(self) -> None:
-        """PHP CREATEs `user_api_keys` (+ the idempotent system_prompt ALTER) on demand;
-        the Python port never issues DDL — it only reports what is missing."""
+        """PHP CREATEs `user_api_keys` (+ the idempotent system_prompt / base_url /
+        chat_endpoint ALTERs) on demand; the Python port never issues DDL — it
+        only reports what is missing."""
         if self._presence.table('user_api_keys'):
-            self._presence.column('user_api_keys', 'system_prompt')
+            for column in ('system_prompt', 'base_url', 'chat_endpoint'):
+                self._presence.column('user_api_keys', column)
 
     def ensureUserModelsTableExists(self) -> None:
         self._presence.table('user_model_selections')
@@ -703,29 +751,10 @@ class SettingsController:
         encrypted = aes256cbc_encrypt(apiKey.encode('utf-8'), key, iv)
         return base64.b64encode(iv + encrypted).decode('ascii')
 
-    def decryptApiKey(self, encryptedKey: str) -> str | None:
-        """Decrypt API key from storage."""
-        try:
-            try:
-                data = base64.b64decode(encryptedKey, validate=False)
-            except Exception:  # noqa: BLE001 — base64_decode() === false
-                return None
-            if len(data) < 17:
-                return None
-
-            key = hashlib.sha256(self.encryptionKey.encode()).digest()
-            iv = data[:16]
-            encrypted = data[16:]
-
-            decrypted = aes256cbc_decrypt(encrypted, key, iv)
-            if decrypted is None:
-                return None
-            try:
-                return decrypted.decode('utf-8')
-            except Exception:  # noqa: BLE001
-                return None
-        except Exception:  # noqa: BLE001
-            return None
+    def decryptApiKey(self, encryptedKey: str) -> str:
+        """The usable key from storage: encrypted here, in the clear when set
+        from gpt_admin. '' = none (same rule as the chat path)."""
+        return ApiKeyCrypto.reveal(encryptedKey, self.encryptionKey)
 
     # ─── Auto-heal settings (self-healing mode + cost guards) ───────────────
     # Persisted per-user as columns on `users` (mirrors storage settings).

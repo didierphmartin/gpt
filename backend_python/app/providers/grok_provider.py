@@ -6,8 +6,9 @@ become `_name`). PHP semantics are reproduced with the helpers in
 app.support.phpcompat (`php_empty` for `empty()`, `x.get(k) if ... is not
 None else d` for `??`, dict-or-list for `is_array()`).
 
-Grok is NOT a copy of OpenAIProvider: constants for base URL/endpoint (a
-`base_url` in config is ignored, PHP:30-31/1004), `streaming` flows through
+Grok is NOT a copy of OpenAIProvider: constants for the vendor base
+URL/endpoint (defaults; a configured `base_url`/`chat_endpoint` — a gateway —
+wins, PHP:30-31/1004), `streaming` flows through
 as a parameter/option rather than an SSE-client-driven flag, error handling
 disables Guzzle's automatic HTTP-error exceptions and checks status codes
 manually (PHP:311-332) with a second mapping block for genuine transport
@@ -141,9 +142,13 @@ class GrokProvider(
         self.supportedModels = providerConfig.get('supported_models') if providerConfig.get('supported_models') is not None else [self.model]
         self.streamingEnabled = providerConfig.get('streaming') if providerConfig.get('streaming') is not None else True
 
-        # PHP constant base_uri — a `base_url` in providerConfig is ignored.
+        # Vendor default unless the admin (system_llm_settings) or the user
+        # (their own key + endpoint) points this provider at a gateway.
+        self.baseUrl = (providerConfig.get('base_url') or self.BASE_URL).rstrip('/')
+        self.chatEndpoint = providerConfig.get('chat_endpoint') or self.CHAT_ENDPOINT
+
         self.httpClient = httpx.Client(
-            base_url=self.BASE_URL,
+            base_url=self.baseUrl,
             timeout=600,
             # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
             # per Client, and every enabled provider is constructed per chat request.
@@ -358,7 +363,7 @@ class GrokProvider(
             payload['stream_options'] = {'include_usage': True}
 
         if self.logger:
-            self.logger.logApiRequest('grok', self.CHAT_ENDPOINT, payload)
+            self.logger.logApiRequest('grok', self.chatEndpoint, payload)
 
         headers = {
             'Content-Type': 'application/json',
@@ -368,7 +373,7 @@ class GrokProvider(
 
         try:
             if streaming:
-                with self.httpClient.stream('POST', self.CHAT_ENDPOINT, headers=headers, content=jsonPayload) as response:
+                with self.httpClient.stream('POST', self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload) as response:
                     statusCode = response.status_code
 
                     if statusCode >= 400:
@@ -388,7 +393,7 @@ class GrokProvider(
 
                     return self._handleStreamingResponse(response)
             else:
-                response = self.httpClient.post(self.CHAT_ENDPOINT, headers=headers, content=jsonPayload)
+                response = self.httpClient.post(self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload)
                 statusCode = response.status_code
 
                 if statusCode >= 400:

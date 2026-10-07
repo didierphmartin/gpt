@@ -87,12 +87,15 @@ def _to_array(v):
 
 
 class MemoryExtractor:
-    ENDPOINT = 'https://api.anthropic.com/v1/messages'
+    DEFAULT_BASE_URL = 'https://api.anthropic.com'
     API_VERSION = '2023-06-01'
     MAX_TOKENS = 512
 
-    def __init__(self, apiKey: str):
+    def __init__(self, apiKey: str, baseUrl: str = '', chatEndpoint: str = ''):
+        """baseUrl / chatEndpoint: the resolved Claude base_url and chat_endpoint
+        (a gateway when configured; its prefix may live in chatEndpoint)."""
         self.apiKey = apiKey
+        self.endpoint = (baseUrl or self.DEFAULT_BASE_URL).rstrip('/') + (chatEndpoint or '/v1/messages')
         self.http = httpx.Client(timeout=30)
 
     def close(self) -> None:
@@ -116,7 +119,7 @@ class MemoryExtractor:
 
         try:
             response = self.http.post(
-                self.ENDPOINT,
+                self.endpoint,
                 headers={
                     'x-api-key': self.apiKey,
                     'anthropic-version': self.API_VERSION,
@@ -166,7 +169,7 @@ class MemoryExtractor:
 
         try:
             response = self.http.post(
-                self.ENDPOINT,
+                self.endpoint,
                 headers={
                     'x-api-key': self.apiKey,
                     'anthropic-version': self.API_VERSION,
@@ -233,7 +236,7 @@ class MemoryExtractor:
 
         try:
             response = self.http.post(
-                self.ENDPOINT,
+                self.endpoint,
                 headers={
                     'x-api-key': self.apiKey,
                     'anthropic-version': self.API_VERSION,

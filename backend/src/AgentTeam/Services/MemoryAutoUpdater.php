@@ -20,14 +20,18 @@ class MemoryAutoUpdater
 
     private PDO $db;
     private string $apiKey;
+    private string $baseUrl;
+    private string $chatEndpoint;
     private UserMemoryRepository $memoryRepo;
     private UserMemoryEventsRepository $eventsRepo;
     private UserMemorySettingsRepository $settingsRepo;
 
-    public function __construct(PDO $db, string $apiKey)
+    public function __construct(PDO $db, string $apiKey, string $baseUrl = '', string $chatEndpoint = '')
     {
         $this->db = $db;
         $this->apiKey = $apiKey;
+        $this->baseUrl = $baseUrl;
+        $this->chatEndpoint = $chatEndpoint;
         $this->memoryRepo = new UserMemoryRepository($db);
         $this->eventsRepo = new UserMemoryEventsRepository($db);
         $this->settingsRepo = new UserMemorySettingsRepository($db);
@@ -55,7 +59,7 @@ class MemoryAutoUpdater
         $currentMemory = $current[UserMemoryRepository::SCOPE_MEMORY];
         $currentUser = $current[UserMemoryRepository::SCOPE_USER];
 
-        $extractor = new MemoryExtractor($this->apiKey);
+        $extractor = new MemoryExtractor($this->apiKey, $this->baseUrl, $this->chatEndpoint);
         $result = $extractor->extract(
             $settings['model'],
             $currentMemory,

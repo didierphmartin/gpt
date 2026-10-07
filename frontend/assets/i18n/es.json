@@ -468,6 +468,8 @@
     "jevModelDesc": "Elige una rama para un despachador; nunca escribe texto",
     "systemPrompts": "Prompts del sistema (avanzado)",
     "systemPromptsDescription": "Reemplaza el prompt del sistema enviado a cada proveedor. Deja vacío para usar el prompt del administrador/predeterminado.",
+    "endpoint": "Endpoint",
+    "endpointsDescription": "Endpoint: accede a un proveedor a través de tu propio punto de entrada (por ejemplo, una pasarela que sirve a varios proveedores). Deja vacío para usar el enlace del proveedor mostrado. Solo se aplica con tu propia clave API para ese proveedor.",
     "systemPromptPlaceholder": "Prompt del sistema predeterminado",
     "loadingUsage": "Cargando datos de uso...",
     "saveKeys": "Guardar Claves API",

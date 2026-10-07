@@ -39,10 +39,24 @@ def test_basics_and_constants():
     assert p.getName() == 'grok' and p.getDisplayName() == 'Grok' and p.getModel() == 'grok-4-1-fast-reasoning' and p.isAvailable()
     assert p.getSupportedModels() == ['grok-4-1-fast-reasoning'] and GrokProvider.getApiFamily() == 'openai'
     assert GrokProvider.BASE_URL == 'https://api.x.ai' and GrokProvider.CHAT_ENDPOINT == '/v1/chat/completions'
-    # a base_url in the settings row is ignored, like PHP's constant
-    q = GrokProvider(Configuration({'providers': {'grok': {'api_key': 'K', 'base_url': 'https://elsewhere.example'}}}))
-    assert str(q.httpClient.base_url).rstrip('/') == 'https://api.x.ai'; q.close()
+    # the constants are the vendor default; '' counts as unset
+    q = GrokProvider(Configuration({'providers': {'grok': {'api_key': 'K', 'base_url': '', 'chat_endpoint': ''}}}))
+    assert q.baseUrl == 'https://api.x.ai' and q.chatEndpoint == '/v1/chat/completions'; q.close()
     assert not _provider(lambda r: None, key='').isAvailable()
+
+
+def test_configured_gateway_keeps_its_path_prefix():
+    # A gateway serving several providers: the request goes to the ABSOLUTE
+    # base_url + chat_endpoint, so the gateway's '/llm/xai' prefix survives.
+    seen = {}
+    def handler(req):
+        seen['url'] = str(req.url)
+        return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'ok'}, 'finish_reason': 'stop'}],
+                                         'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}})
+    p = _provider(handler, streaming=False, extra={'base_url': 'https://gw.corp/llm/xai/', 'chat_endpoint': '/chat'})
+    assert p.baseUrl == 'https://gw.corp/llm/xai' and p.chatEndpoint == '/chat'
+    p.chat('hello', [], {'user_id': 3})
+    assert seen['url'] == 'https://gw.corp/llm/xai/chat'
 
 
 def test_chat_non_streaming_payload_and_result():

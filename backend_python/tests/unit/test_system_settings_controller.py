@@ -94,7 +94,7 @@ def sqls(db):
 
 PROVIDER_ROW = {
     'id': 1, 'provider_key': 'kimi', 'display_name': 'Kimi', 'api_key': 'sk-1234567890ab',
-    'model': 'moonshot-v1-auto', 'base_url': 'https://api.moonshot.cn', 'max_tokens': 4096,
+    'model': 'moonshot-v1-auto', 'base_url': 'https://api.moonshot.ai', 'max_tokens': 4096,
     'temperature': '0.70', 'price_input_per_1m': '1.2000', 'price_output_per_1m': '3.4000',
     'chat_endpoint': '/v1/chat/completions', 'streaming': 1, 'supports_tools': 1,
     'supported_models': '["moonshot-v1-8k"]', 'api_format': 'openai', 'system_prompt': None,
@@ -587,5 +587,6 @@ def test_save_router_row_accepted_and_stripped_of_chat_settings():
     assert r['success'] is True and r['status_code'] == 201
     params = db.calls[-1][1]
     assert params[':api_format'] == 'router'
-    assert params[':base_url'] is None and params[':chat_endpoint'] is None
+    # The full Jev URL is kept (a gateway); a chat endpoint is not.
+    assert params[':base_url'] == 'https://x' and params[':chat_endpoint'] is None
     assert params[':streaming'] == 0 and params[':supports_tools'] == 0

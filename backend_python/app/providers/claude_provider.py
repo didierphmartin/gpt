@@ -94,8 +94,10 @@ class ClaudeProvider(
         self.model = claudeConfig.get('model') if claudeConfig.get('model') is not None else 'claude-sonnet-4-5-20250929'
         self.maxTokens = claudeConfig.get('max_tokens') if claudeConfig.get('max_tokens') is not None else 4000
         self.temperature = claudeConfig.get('temperature') if claudeConfig.get('temperature') is not None else 0.7
-        baseUrl = claudeConfig.get('base_url') if claudeConfig.get('base_url') is not None else 'https://api.anthropic.com'
-        self.baseUrl = baseUrl.rstrip('/')
+        self.baseUrl = (claudeConfig.get('base_url') or 'https://api.anthropic.com').rstrip('/')
+        # gpt_admin's "API URL" field stores origin + path split, so a gateway's
+        # prefix lives in chat_endpoint; '/v1/messages' when unset.
+        self.chatEndpoint = claudeConfig.get('chat_endpoint') or '/v1/messages'
         self.apiVersion = claudeConfig.get('api_version') if claudeConfig.get('api_version') is not None else '2023-06-01'
         self.streamingEnabled = claudeConfig.get('streaming') if claudeConfig.get('streaming') is not None else True
         self.maxRecursionDepth = config.get('max_recursion_depth', 10)
@@ -577,7 +579,7 @@ class ClaudeProvider(
             error_log("📤 [ClaudeProvider] Sending request with body length: " + str(len(jsonPayload.encode('utf-8'))))
 
             # Use body instead of json to ensure we control the exact payload
-            response = self.httpClient.post('/v1/messages', headers={
+            response = self.httpClient.post(self.baseUrl + self.chatEndpoint, headers={
                 'Content-Type': 'application/json',
                 'x-api-key': apiKey,
                 'anthropic-version': self.apiVersion,
@@ -739,7 +741,7 @@ class ClaudeProvider(
             error_log("📤 [ClaudeProvider:streaming] Sending request with body length: " + str(len(jsonPayload.encode('utf-8'))))
 
             # Make streaming request - use body instead of json to ensure exact payload
-            with self.httpClient.stream('POST', '/v1/messages', headers={
+            with self.httpClient.stream('POST', self.baseUrl + self.chatEndpoint, headers={
                 'Content-Type': 'application/json',
                 'x-api-key': apiKey,
                 'anthropic-version': self.apiVersion,
@@ -1632,11 +1634,11 @@ KEY RULES:
         # Convert empty arrays to objects, but preserve 'required' arrays
         payload = ClaudeProvider.convertEmptyArraysToObjectsForClaude(payload)
 
-        baseUrl = config.get('base_url') if config.get('base_url') is not None else 'https://api.anthropic.com'
+        baseUrl = config['base_url'] if not php_empty(config.get('base_url')) else 'https://api.anthropic.com'
         apiVersion = config.get('api_version') if config.get('api_version') is not None else '2023-06-01'
 
         return {
-            'url': baseUrl.rstrip('/') + '/v1/messages',
+            'url': baseUrl.rstrip('/') + (config['chat_endpoint'] if not php_empty(config.get('chat_endpoint')) else '/v1/messages'),
             'headers': [
                 'Content-Type: application/json',
                 'x-api-key: ' + config['api_key'],

@@ -1098,8 +1098,9 @@ class AdminController
                 if (!array_key_exists($inputKey, $entry)) {
                     continue;
                 }
-                // A router has no model, endpoint, prompt or sampling to set.
-                if ($isRouter && $inputKey !== 'enabled') {
+                // A router has no model, prompt or sampling to set; its URL
+                // (base_url, a gateway in front of Jev) it does.
+                if ($isRouter && !in_array($inputKey, ['enabled', 'base_url'], true)) {
                     continue;
                 }
                 $cols[] = $col;

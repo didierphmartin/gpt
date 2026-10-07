@@ -52,7 +52,7 @@
     <script src="assets/js/api-config.js?v=20260916-switch"></script>
     <!-- Install prompt overlay. Self-contained — captures beforeinstallprompt
          and surfaces a styled dialog a few seconds in. -->
-    <script src="assets/js/pwa-install-prompt.js?v=20260925-copycmd2" defer></script>
+    <script src="assets/js/pwa-install-prompt.js?v=20261007-endpoints" defer></script>
     <!-- Settings → Account "App installation" panel: shows install status and
          platform-specific uninstall steps. -->
     <script src="assets/js/pwa-uninstall-info.js?v=20260426-1" defer></script>
@@ -1634,6 +1634,28 @@
             border-color: #3b82f6;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
         }
+        /* Per-provider entry point: its own full-width line in the row. */
+        .api-key-row .endpoint-line {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .api-key-row .endpoint-line input {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            background: #fff;
+        }
+        .api-key-row .endpoint-line input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
         .api-key-row .console-link {
             display: inline-flex;
             align-items: center;
@@ -2775,6 +2797,9 @@
                         <p class="text-xs text-gray-500 mb-4" data-i18n="settings.apiKeysDescription">
                             Override default API keys with your own subscriptions. Leave empty to use shared keys.
                         </p>
+                        <p class="text-xs text-gray-500 -mt-2 mb-4" data-i18n="settings.endpointsDescription">
+                            Endpoint: reach a provider through your own entry point (for example a gateway serving several providers). Leave empty to use the vendor link shown. Applies only with your own API key for that provider.
+                        </p>
                         <div id="api-keys-container">
                             <!-- Claude -->
                             <div class="api-key-row">
@@ -2786,6 +2811,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-claude">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-claude" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-claude" placeholder="https://api.anthropic.com" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- OpenAI -->
                             <div class="api-key-row">
@@ -2797,6 +2826,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-openai">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-openai" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-openai" placeholder="https://api.openai.com" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- Kimi -->
                             <div class="api-key-row">
@@ -2808,6 +2841,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-kimi">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-kimi" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-kimi" placeholder="https://api.moonshot.ai" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- Gemini -->
                             <div class="api-key-row">
@@ -2819,6 +2856,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-gemini">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-gemini" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-gemini" placeholder="https://generativelanguage.googleapis.com/v1beta" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- Grok -->
                             <div class="api-key-row">
@@ -2830,6 +2871,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-grok">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-grok" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-grok" placeholder="https://api.x.ai" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- DeepSeek -->
                             <div class="api-key-row">
@@ -2841,6 +2886,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-deepseek">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-deepseek" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-deepseek" placeholder="https://api.deepseek.com" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                             <!-- Gamma4 -->
                             <div class="api-key-row">
@@ -2884,6 +2933,10 @@
                                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                 </a>
                                 <span class="key-status default" id="key-status-jev">Default</span>
+                                <div class="endpoint-line">
+                                    <label for="endpoint-jev" data-i18n="settings.endpoint">Endpoint</label>
+                                    <input type="url" id="endpoint-jev" placeholder="https://api.typesafe.ai/v1/systemone" autocomplete="off" spellcheck="false">
+                                </div>
                             </div>
                         </div>
                         <!-- Advanced: per-provider system prompt overrides.
@@ -4284,7 +4337,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20260925-runnerurl"></script>
-    <script src="assets/js/settings-panel.js?v=20261005-is-mock"></script>
+    <script src="assets/js/settings-panel.js?v=20261007-endpoints-jev"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>

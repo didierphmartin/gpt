@@ -1,8 +1,8 @@
-import crypto from 'crypto';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { PackageResolver } from '../Services/PackageResolver';
+import { ApiKeyCrypto } from '../Services/ApiKeyCrypto';
 import { Ctx, ControllerResult } from '../Support/Http';
 
 /**
@@ -12,7 +12,8 @@ import { Ctx, ControllerResult } from '../Support/Http';
  *
  * Notes on faithful divergence:
  *  - Runtime DDL (ensure*TableExists / ensure*ColumnsExist) is NOT replicated — the schema already
- *    exists (parity-tracker #7). Queries assume the columns are present.
+ *    exists (parity-tracker #7). Queries assume the columns are present — including
+ *    user_api_keys.base_url / chat_endpoint, which PHP's ensureApiKeysTableExists ALTERs in.
  *  - PackageResolver is not ported, so getKeys returns empty package_models/locked (fail-open),
  *    matching MCPServerController's treatment of the same missing dependency.
  *  - saveStorageSettings updates the DB faithfully but does NOT create the physical universalFS
@@ -25,29 +26,17 @@ export class SettingsController {
   private static readonly VALID_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
   private static readonly VALID_STORAGE = ['local', 's3', 'gdrive', 'onedrive'];
 
-  // Encryption key = sha256(jwt_secret) raw bytes — identical to PHP's hash('sha256', key, true).
-  private static readonly ENC_KEY = crypto.createHash('sha256').update(config.auth.jwtSecret).digest();
-
+  // Encryption secret = auth.jwt_secret; the cipher itself lives in ApiKeyCrypto (shared with PHP's).
   private encryptApiKey(plain: string): string {
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', SettingsController.ENC_KEY, iv);
-    const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-    return Buffer.concat([iv, enc]).toString('base64');
+    return ApiKeyCrypto.encrypt(plain, config.auth.jwtSecret);
   }
 
-  private decryptApiKey(encB64: string | null): string | null {
-    if (!encB64) return null;
-    try {
-      const data = Buffer.from(encB64, 'base64');
-      if (data.length < 17) return null;
-      const iv = data.subarray(0, 16);
-      const enc = data.subarray(16);
-      const decipher = crypto.createDecipheriv('aes-256-cbc', SettingsController.ENC_KEY, iv);
-      const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
-      return dec.toString('utf8');
-    } catch {
-      return null;
-    }
+  /**
+   * The usable key from storage: encrypted here, in the clear when set from gpt_admin.
+   * '' = none (same rule as the chat path).
+   */
+  private decryptApiKey(stored: string | null): string {
+    return ApiKeyCrypto.reveal(stored ?? '', config.auth.jwtSecret);
   }
 
   /** GET /api/v1/settings/phone */
@@ -154,17 +143,28 @@ export class SettingsController {
     const userId = ctx.user_id;
 
     const keys = (
-      await sql<{ provider: string; api_key: string | null; system_prompt: string | null; created_at: string | null; updated_at: string | null }>`
-        SELECT provider, api_key, system_prompt, created_at, updated_at FROM user_api_keys WHERE user_id = ${userId}`.execute(db)
+      await sql<{
+        provider: string;
+        api_key: string | null;
+        system_prompt: string | null;
+        base_url: string | null;
+        created_at: string | null;
+        updated_at: string | null;
+      }>`
+        SELECT provider, api_key, system_prompt, base_url, created_at, updated_at FROM user_api_keys WHERE user_id = ${userId}`.execute(db)
     ).rows;
 
     const result: Record<string, any> = {};
     const systemPrompts: Record<string, string> = {};
+    const endpoints: Record<string, string> = {};
     for (const key of keys) {
       const decrypted = this.decryptApiKey(key.api_key);
       const masked = decrypted ? '****' + decrypted.slice(-4) : null;
       result[key.provider] = { has_custom_key: !!decrypted, masked_key: masked, updated_at: key.updated_at };
       if (key.system_prompt) systemPrompts[key.provider] = key.system_prompt;
+      // The user's own entry point; PHP applies it at chat time only with the user's own key
+      // (ChatController::applyUserApiKeys).
+      if (key.base_url) endpoints[key.provider] = key.base_url;
     }
 
     const modelRows = (
@@ -197,7 +197,7 @@ export class SettingsController {
       /* fail open — leave package_models/locked empty */
     }
 
-    return { success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts };
+    return { success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints };
   }
 
   /** POST /api/v1/settings/keys */
@@ -206,9 +206,25 @@ export class SettingsController {
     const keys: Record<string, any> = ctx.body.keys ?? {};
     const models: Record<string, any> = ctx.body.models ?? {};
     const systemPrompts: Record<string, any> = ctx.body.system_prompts ?? {};
+    // Per-provider entry points (base URL of a gateway that fronts several providers). Same
+    // contract as system_prompts: '' clears, missing leaves untouched.
+    const endpoints: Record<string, any> = ctx.body.endpoints ?? {};
 
-    if (!Object.keys(keys).length && !Object.keys(models).length && !Object.keys(systemPrompts).length) {
-      return { status_code: 400, success: false, error: 'No keys, models, or system_prompts provided' };
+    if (
+      !Object.keys(keys).length &&
+      !Object.keys(models).length &&
+      !Object.keys(systemPrompts).length &&
+      !Object.keys(endpoints).length
+    ) {
+      return { status_code: 400, success: false, error: 'No keys, models, system_prompts or endpoints provided' };
+    }
+
+    // Validate endpoints before writing anything, so a bad URL saves nothing.
+    for (const [provider, url] of Object.entries(endpoints)) {
+      const value = typeof url === 'string' ? url.trim() : '';
+      if (value !== '' && !/^https?:\/\/[^\s/]+/i.test(value)) {
+        return { status_code: 400, success: false, error: `Invalid endpoint for ${provider}: must start with http:// or https://` };
+      }
     }
 
     const valid = SettingsController.VALID_PROVIDERS;
@@ -248,12 +264,28 @@ export class SettingsController {
       promptCount++;
     }
 
+    // Save per-provider entry points, stored without a trailing slash since providers append
+    // their own path.
+    let endpointCount = 0;
+    for (const [provider, url] of Object.entries(endpoints)) {
+      if (!valid.includes(provider)) continue;
+      if (typeof url !== 'string') continue;
+      const value = url.trim().replace(/\/+$/, '');
+      const stored = value === '' ? null : value;
+      await sql`
+        INSERT INTO user_api_keys (user_id, provider, api_key, base_url, created_at, updated_at)
+        VALUES (${userId}, ${provider}, '', ${stored}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE base_url = VALUES(base_url), updated_at = NOW()`.execute(db);
+      endpointCount++;
+    }
+
     return {
       success: true,
-      message: `Saved ${savedCount} API key(s), ${modelCount} model(s), ${promptCount} system prompt(s)`,
+      message: `Saved ${savedCount} API key(s), ${modelCount} model(s), ${promptCount} system prompt(s), ${endpointCount} endpoint(s)`,
       saved_count: savedCount,
       model_count: modelCount,
       prompt_count: promptCount,
+      endpoint_count: endpointCount,
     };
   }
 

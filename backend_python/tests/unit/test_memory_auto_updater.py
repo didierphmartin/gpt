@@ -10,7 +10,7 @@ class Db:
 
 
 class FakeExtractor:
-    def __init__(self, api_key): pass
+    def __init__(self, api_key, base_url='', chat_endpoint=''): pass
     def extract(self, model, mem, user, u, a): return {'memory_additions': ['new fact'], 'user_additions': [], 'reason': 'r'}
     def filterDuplicates(self, model, current, adds): return adds
     def compact(self, *a): return None
@@ -36,7 +36,7 @@ def test_run_guards():
 class TrackingExtractor(FakeExtractor):
     instances: list = []
 
-    def __init__(self, api_key):
+    def __init__(self, api_key, base_url='', chat_endpoint=''):
         super().__init__(api_key)
         self.closed = False
         TrackingExtractor.instances.append(self)

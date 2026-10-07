@@ -509,6 +509,35 @@ def test_build_agent_llm_request_gemini():
     assert 'task text' in req['payload']['contents'][0]['parts'][0]['text']
 
 
+def test_build_agent_llm_request_honours_gateway_base_url():
+    # One entry point serving several providers: each provider config's
+    # base_url replaces the vendor default ('' = unset).
+    runner, _, _ = _make_runner(config={
+        'openai': {'api_key': 'Ko', 'base_url': 'https://gw.corp/openai/'},
+        'claude': {'api_key': 'Kc', 'base_url': 'https://gw.corp/anthropic'},
+        'gemini': {'api_key': 'Kg', 'base_url': 'https://gw.corp/google'},
+        'kimi': {'api_key': 'Kk', 'base_url': ''},
+    })
+    assert runner._buildAgentLLMRequest(_agent('openai'), 't')['url'] == 'https://gw.corp/openai/v1/chat/completions'
+    assert runner._buildAgentLLMRequest(_agent('claude'), 't')['url'] == 'https://gw.corp/anthropic/v1/messages'
+    # A gemini base without a version gets /v1beta.
+    assert runner._buildAgentLLMRequest(_agent('gemini', model='g'), 't')['url'] == \
+        'https://gw.corp/google/v1beta/models/g:generateContent?key=Kg'
+    assert runner._buildAgentLLMRequest(_agent('kimi'), 't')['url'] == 'https://api.moonshot.ai/v1/chat/completions'
+
+
+def test_build_agent_llm_request_uses_chat_endpoint_for_gateway_prefix():
+    # gpt_admin's "API URL" stores origin + path split: the prefix is in chat_endpoint.
+    runner, _, _ = _make_runner(config={
+        'claude': {'api_key': 'Kc', 'base_url': 'https://gw.corp', 'chat_endpoint': '/llm/anthropic/v1/messages'},
+        'grok': {'api_key': 'Kg', 'base_url': 'https://gw.corp', 'chat_endpoint': '/llm/xai/v1/chat/completions'},
+        'deepseek': {'api_key': 'Kd', 'chat_endpoint': ''},
+    })
+    assert runner._buildAgentLLMRequest(_agent('claude'), 't')['url'] == 'https://gw.corp/llm/anthropic/v1/messages'
+    assert runner._buildAgentLLMRequest(_agent('grok'), 't')['url'] == 'https://gw.corp/llm/xai/v1/chat/completions'
+    assert runner._buildAgentLLMRequest(_agent('deepseek'), 't')['url'] == 'https://api.deepseek.com/v1/chat/completions'
+
+
 def test_build_agent_llm_request_deepseek_grok_kimi():
     runner, _, _ = _make_runner(config={
         'deepseek': {'api_key': 'Kd'}, 'grok': {'api_key': 'Kg'}, 'kimi': {'api_key': 'Kk'},
@@ -520,7 +549,7 @@ def test_build_agent_llm_request_deepseek_grok_kimi():
     assert g['url'] == 'https://api.x.ai/v1/chat/completions' and g['provider'] == 'grok'
 
     k = runner._buildAgentLLMRequest(_agent('kimi'), 't')
-    assert k['url'] == 'https://api.moonshot.cn/v1/chat/completions' and k['provider'] == 'kimi'
+    assert k['url'] == 'https://api.moonshot.ai/v1/chat/completions' and k['provider'] == 'kimi'
     assert 'temperature' not in k['payload']  # kimi omits temperature entirely
 
 

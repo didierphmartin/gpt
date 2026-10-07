@@ -50,6 +50,26 @@ final class ApiKeyCrypto
     }
 
     /**
+     * The usable key in a user_api_keys.api_key value, or '' when there is
+     * none. SettingsController stores keys encrypted; AdminController stores
+     * per-user keys in the clear. A value not even shaped like an encrypted
+     * blob is such a clear key; one that IS shaped like a blob but will not
+     * open (rotated secret) is unusable.
+     */
+    public static function reveal(string $stored, string $secret): string
+    {
+        $stored = trim($stored);
+        if ($stored === '') {
+            return '';
+        }
+        $plain = self::decrypt($stored, $secret);
+        if ($plain !== null && trim($plain) !== '') {
+            return trim($plain);
+        }
+        return self::looksEncrypted($stored) ? '' : $stored;
+    }
+
+    /**
      * Whether $value has the exact shape encrypt() produces: canonical base64
      * of a 16-byte IV followed by whole AES blocks. Used to tell an encrypted
      * key we cannot open (wrong secret) from a key that was stored in the clear.

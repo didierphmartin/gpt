@@ -104,9 +104,13 @@ class KimiProvider(
         self.supportedModels = providerConfig.get('supported_models') if providerConfig.get('supported_models') is not None else [self.model]
         self.streamingEnabled = providerConfig.get('streaming') if providerConfig.get('streaming') is not None else True
 
-        # PHP constant base_uri — a `base_url` in providerConfig is ignored.
+        # Vendor default unless the admin (system_llm_settings) or the user
+        # (their own key + endpoint) points this provider at a gateway.
+        self.baseUrl = (providerConfig.get('base_url') or self.BASE_URL).rstrip('/')
+        self.chatEndpoint = providerConfig.get('chat_endpoint') or self.CHAT_ENDPOINT
+
         self.httpClient = httpx.Client(
-            base_url=self.BASE_URL,
+            base_url=self.baseUrl,
             timeout=600,
             # Shared SSL context: httpx 0.28 builds (and certifi-loads) a new one
             # per Client, and every enabled provider is constructed per chat request.
@@ -318,7 +322,7 @@ class KimiProvider(
             payload['stream_options'] = {'include_usage': True}
 
         if self.logger:
-            self.logger.logApiRequest('kimi', self.CHAT_ENDPOINT, payload)
+            self.logger.logApiRequest('kimi', self.chatEndpoint, payload)
         error_log(
             "[KimiProvider] Request model=" + self.model
             + " max_tokens=" + str(self.maxTokens)
@@ -333,7 +337,7 @@ class KimiProvider(
 
         try:
             if streaming:
-                with self.httpClient.stream('POST', self.CHAT_ENDPOINT, headers=headers, content=jsonPayload) as response:
+                with self.httpClient.stream('POST', self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload) as response:
                     try:
                         response.raise_for_status()
                     except httpx.HTTPStatusError as statusError:
@@ -345,7 +349,7 @@ class KimiProvider(
 
                     return self._handleStreamingResponse(response)
             else:
-                response = self.httpClient.post(self.CHAT_ENDPOINT, headers=headers, content=jsonPayload)
+                response = self.httpClient.post(self.baseUrl + self.chatEndpoint, headers=headers, content=jsonPayload)
                 response.raise_for_status()
 
                 body = _json_decode(response.text)

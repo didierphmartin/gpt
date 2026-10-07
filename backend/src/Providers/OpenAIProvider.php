@@ -35,6 +35,7 @@ class OpenAIProvider implements AIProviderInterface, HttpRequestBuilderInterface
     private int $maxTokens;
     private float $temperature;
     private string $baseUrl;
+    private string $chatEndpoint;
     private int $maxRecursionDepth;
 
     /**
@@ -69,7 +70,8 @@ class OpenAIProvider implements AIProviderInterface, HttpRequestBuilderInterface
         $this->model = $openaiConfig['model'] ?? 'gpt-4-turbo-preview';
         $this->maxTokens = $openaiConfig['max_tokens'] ?? 4096;
         $this->temperature = $openaiConfig['temperature'] ?? 0.7;
-        $this->baseUrl = rtrim($openaiConfig['base_url'] ?? 'https://api.openai.com', '/');
+        $this->baseUrl = rtrim(($openaiConfig['base_url'] ?? '') ?: 'https://api.openai.com', '/');
+        $this->chatEndpoint = ($openaiConfig['chat_endpoint'] ?? '') ?: '/v1/chat/completions';
         $this->maxRecursionDepth = $config->get('max_recursion_depth', 10);
 
         $this->httpClient = new Client([
@@ -351,10 +353,10 @@ class OpenAIProvider implements AIProviderInterface, HttpRequestBuilderInterface
         error_log("[OpenAIProvider] Model: {$this->model}, MaxTokens: {$this->maxTokens}, Tools count: " . count($tools));
         error_log("[OpenAIProvider] Full payload: " . json_encode($payload, JSON_PRETTY_PRINT));
 
-        $this->logger?->logApiRequest('openai', '/v1/chat/completions', $payload);
+        $this->logger?->logApiRequest('openai', $this->chatEndpoint, $payload);
 
         try {
-            $response = $this->httpClient->post('/v1/chat/completions', [
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'Authorization' => 'Bearer ' . $apiKey,

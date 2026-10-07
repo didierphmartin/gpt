@@ -20,9 +20,11 @@ from app.support.phpcompat import php_empty
 class MemoryAutoUpdater:
     MIN_USER_MSG_CHARS = 20
 
-    def __init__(self, db, apiKey: str):
+    def __init__(self, db, apiKey: str, baseUrl: str = '', chatEndpoint: str = ''):
         self.db = db
         self.apiKey = apiKey
+        self.baseUrl = baseUrl
+        self.chatEndpoint = chatEndpoint
         self.memoryRepo = UserMemoryRepository(db)
         self.eventsRepo = UserMemoryEventsRepository(db)
         self.settingsRepo = UserMemorySettingsRepository(db)
@@ -43,7 +45,7 @@ class MemoryAutoUpdater:
         currentMemory = current[UserMemoryRepository.SCOPE_MEMORY]
         currentUser = current[UserMemoryRepository.SCOPE_USER]
 
-        extractor = MemoryExtractor(self.apiKey)
+        extractor = MemoryExtractor(self.apiKey, self.baseUrl, self.chatEndpoint)
         try:
             result = extractor.extract(
                 settings['model'],

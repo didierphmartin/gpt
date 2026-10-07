@@ -468,6 +468,8 @@
     "jevModelDesc": "Choisit une branche pour un répartiteur ; n'écrit jamais de texte",
     "systemPrompts": "Prompts système (avancé)",
     "systemPromptsDescription": "Remplacez le prompt système envoyé à chaque fournisseur. Laissez vide pour utiliser le prompt administrateur/par défaut.",
+    "endpoint": "Point d'accès",
+    "endpointsDescription": "Point d'accès : accédez à un fournisseur via votre propre point d'entrée (par exemple une passerelle desservant plusieurs fournisseurs). Laissez vide pour utiliser le lien du fournisseur affiché. S'applique uniquement avec votre propre clé API pour ce fournisseur.",
     "systemPromptPlaceholder": "Prompt système par défaut",
     "loadingUsage": "Chargement des données d'utilisation...",
     "saveKeys": "Enregistrer les Clés API",

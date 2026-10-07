@@ -43,6 +43,25 @@ final class JevRouterTest extends TestCase
         ]], 'usage' => ['input_tokens' => 342, 'output_tokens' => 39]]));
     }
 
+    public function testItPostsToAConfiguredGatewayUrl(): void
+    {
+        $seen = [];
+        $stack = HandlerStack::create(new MockHandler([self::answer('Billing', 0.99)]));
+        $stack->push(\GuzzleHttp\Middleware::history($seen));
+        (new JevRouter('test-key', new Client(['handler' => $stack]), JevRouter::DEFAULT_CONFIDENCE_FLOOR, 'https://gw.corp/jev'))
+            ->route('I was charged twice.', self::TARGETS, 'Which team?');
+        $this->assertSame('https://gw.corp/jev', (string) $seen[0]['request']->getUri());
+    }
+
+    public function testItPostsToTheVendorUrlByDefault(): void
+    {
+        $seen = [];
+        $stack = HandlerStack::create(new MockHandler([self::answer('Billing', 0.99)]));
+        $stack->push(\GuzzleHttp\Middleware::history($seen));
+        (new JevRouter('test-key', new Client(['handler' => $stack])))->route('I was charged twice.', self::TARGETS, 'Which team?');
+        $this->assertSame(JevRouter::URL, (string) $seen[0]['request']->getUri());
+    }
+
     public function testAConfidentChoiceRoutes(): void
     {
         $out = $this->router([self::answer('Billing', 0.99)])->route('I was charged twice.', self::TARGETS, 'Which team?');

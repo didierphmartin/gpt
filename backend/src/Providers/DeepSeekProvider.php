@@ -51,6 +51,10 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
 
     private Configuration $config;
     private Client $httpClient;
+    // Vendor default unless the admin (system_llm_settings) or the user
+    // (their own key + endpoint) points this provider at a gateway.
+    private string $baseUrl;
+    private string $chatEndpoint;
     private ?FunctionExecutorInterface $functionExecutor = null;
     private ?UsageTrackerInterface $usageTracker = null;
     private ?StreamingClientInterface $sseClient = null;
@@ -89,8 +93,11 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
         $this->supportedModels = $providerConfig['supported_models'] ?? [$this->model];
         $this->streamingEnabled = $providerConfig['streaming'] ?? true;
 
+        $this->baseUrl = rtrim(($providerConfig['base_url'] ?? '') ?: self::BASE_URL, '/');
+        $this->chatEndpoint = ($providerConfig['chat_endpoint'] ?? '') ?: self::CHAT_ENDPOINT;
+
         $this->httpClient = new Client([
-            'base_uri' => self::BASE_URL,
+            'base_uri' => $this->baseUrl,
             'timeout' => 600,
         ]);
 
@@ -355,10 +362,10 @@ class DeepSeekProvider implements AIProviderInterface, HttpRequestBuilderInterfa
             $payload['stream_options'] = ['include_usage' => true];
         }
 
-        $this->logger?->logApiRequest('deepseek', self::CHAT_ENDPOINT, $payload);
+        $this->logger?->logApiRequest('deepseek', $this->chatEndpoint, $payload);
 
         try {
-            $response = $this->httpClient->post(self::CHAT_ENDPOINT, [
+            $response = $this->httpClient->post($this->baseUrl . $this->chatEndpoint, [
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'Authorization' => 'Bearer ' . $this->apiKey,
