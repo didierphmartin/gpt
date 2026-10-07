@@ -264,6 +264,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/admin/llm-settings/{key}', ['SystemSettingsController', 'deleteLLMProvider']);
         $r->post('/api/v1/admin/llm-settings/toggle', ['SystemSettingsController', 'toggleProvider']);
         $r->post('/api/v1/admin/llm-settings/seed', ['SystemSettingsController', 'seedFromConfig']);
+        $r->get('/api/v1/admin/decision-protocols', ['SystemSettingsController', 'decisionProtocols']);
 
         // ============================================
         // TOOLS ROUTES (List all available tools for LLM)

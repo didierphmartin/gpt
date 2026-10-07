@@ -6,6 +6,8 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Services\DecisionProtocols;
+use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
@@ -386,13 +388,6 @@ class SystemSettingsController
 
         $displayName = $body['display_name'] ?? ucfirst($providerKey);
         $model = $body['model'] ?? null;
-        if (!$model) {
-            return [
-                'success' => false,
-                'error' => 'Model is required',
-                'status_code' => 400
-            ];
-        }
 
         // Validate api_format
         $apiFormat = $body['api_format'] ?? 'openai';
@@ -404,27 +399,57 @@ class SystemSettingsController
             ];
         }
 
-        // A router row and a router key go together: 'router' on a chat key
-        // would silently drop that provider from chat, and a router key saved
-        // as a chat format would offer it as a chat provider it cannot be.
-        $isRouterKey = in_array($providerKey, ProviderKinds::ROUTER_KEYS, true);
-        if ($isRouterKey !== ($apiFormat === ProviderKinds::ROUTER_FORMAT)) {
+        // A decision provider (router row) names a registered protocol; a
+        // row's kind is fixed at creation, so 'router' on a chat key, or a
+        // chat format on a decision key, is refused.
+        $isRouter = $apiFormat === ProviderKinds::ROUTER_FORMAT;
+        $existingFormat = $this->existingApiFormat($providerKey);
+        if ($existingFormat !== null && ($existingFormat === ProviderKinds::ROUTER_FORMAT) !== $isRouter) {
             return [
                 'success' => false,
-                'error' => $isRouterKey
-                    ? "Provider '$providerKey' is a router: api_format must be '" . ProviderKinds::ROUTER_FORMAT . "'"
-                    : "api_format '" . ProviderKinds::ROUTER_FORMAT . "' is reserved for: " . implode(', ', ProviderKinds::ROUTER_KEYS),
+                'error' => $isRouter
+                    ? "Provider '$providerKey' is an LLM; it cannot become a decision provider"
+                    : "Provider '$providerKey' is a decision provider; it cannot become an LLM",
                 'status_code' => 400
             ];
         }
-        if ($isRouterKey) {
-            // No chat endpoint, no streaming, no tools: whatever the form sent.
-            // base_url is kept: the full Jev URL when routing goes through a
-            // gateway, empty = the vendor URL (JevRouter::URL).
+        if ($isRouter) {
+            $protocol = DecisionProtocols::get(isset($body['protocol']) ? (string) $body['protocol'] : null);
+            if ($protocol === null) {
+                return [
+                    'success' => false,
+                    'error' => 'Decision provider needs a protocol: one of ' . implode(', ', array_keys(DecisionProtocols::all())),
+                    'status_code' => 400
+                ];
+            }
+            $stem = DecisionProviders::envStem($providerKey);
+            foreach (DecisionProviders::keys($this->db) as $other) {
+                if ($other !== $providerKey && DecisionProviders::envStem($other) === $stem) {
+                    return [
+                        'success' => false,
+                        'error' => "'$other' and '$providerKey' would share the env name {$stem}_API_KEY",
+                        'status_code' => 400
+                    ];
+                }
+            }
+            // No chat endpoint, no streaming, no tools. base_url is the full
+            // vendor URL (a gateway), empty = the protocol default.
+            $body['protocol'] = (string) $body['protocol'];
             $body['base_url'] = trim((string) ($body['base_url'] ?? '')) ?: null;
             $body['chat_endpoint'] = null;
             $body['streaming'] = 0;
             $body['supports_tools'] = 0;
+            $model = $model ?: $protocol['model'];
+        } else {
+            $body['protocol'] = null;
+        }
+
+        if (!$model) {
+            return [
+                'success' => false,
+                'error' => 'Model is required',
+                'status_code' => 400
+            ];
         }
 
         try {
@@ -468,6 +493,7 @@ class SystemSettingsController
                             supports_tools = :supports_tools,
                             supported_models = :supported_models,
                             api_format = :api_format,
+                            protocol = :protocol,
                             system_prompt = :system_prompt,
                             enabled = :enabled,
                             sort_order = :sort_order,
@@ -478,12 +504,12 @@ class SystemSettingsController
                 $sql = "INSERT INTO system_llm_settings
                         (provider_key, display_name, api_key, model, base_url, max_tokens, temperature,
                          price_input_per_1m, price_output_per_1m,
-                         chat_endpoint, streaming, supports_tools, supported_models, api_format,
+                         chat_endpoint, streaming, supports_tools, supported_models, api_format, protocol,
                          system_prompt, enabled, sort_order, created_at, updated_at)
                         VALUES
                         (:provider_key, :display_name, :api_key, :model, :base_url, :max_tokens, :temperature,
                          :price_input_per_1m, :price_output_per_1m,
-                         :chat_endpoint, :streaming, :supports_tools, :supported_models, :api_format,
+                         :chat_endpoint, :streaming, :supports_tools, :supported_models, :api_format, :protocol,
                          :system_prompt, :enabled, :sort_order, NOW(), NOW())";
             }
 
@@ -503,6 +529,7 @@ class SystemSettingsController
                 ':supports_tools' => (int)($body['supports_tools'] ?? 1),
                 ':supported_models' => $supportedModels,
                 ':api_format' => $body['api_format'] ?? 'openai',
+                ':protocol' => $body['protocol'],
                 ':system_prompt' => $body['system_prompt'] ?? null,
                 ':enabled' => (int)($body['enabled'] ?? 1),
                 ':sort_order' => (int)($body['sort_order'] ?? 0)
@@ -521,6 +548,24 @@ class SystemSettingsController
                 'status_code' => 500
             ];
         }
+    }
+
+    /** api_format of an existing row, null when the key is new. */
+    private function existingApiFormat(string $providerKey): ?string
+    {
+        $stmt = $this->db->prepare("SELECT api_format FROM system_llm_settings WHERE provider_key = :k");
+        $stmt->execute([':k' => $providerKey]);
+        $v = $stmt->fetchColumn();
+        return $v === false ? null : (string) $v;
+    }
+
+    /** GET /admin/decision-protocols: the protocols a decision provider row may name. */
+    public function decisionProtocols(array $request): array
+    {
+        if ($error = $this->requireAdmin($request)) {
+            return $error;
+        }
+        return ['success' => true, 'protocols' => DecisionProtocols::catalog(), 'status_code' => 200];
     }
 
     /**

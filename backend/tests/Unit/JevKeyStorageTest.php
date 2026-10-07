@@ -54,6 +54,7 @@ final class JevKeyStorageTest extends TestCase
             supports_tools INTEGER DEFAULT 1,
             supported_models TEXT,
             api_format TEXT DEFAULT \'openai\',
+            protocol TEXT,
             system_prompt TEXT,
             enabled INTEGER DEFAULT 1,
             sort_order INTEGER DEFAULT 0,
@@ -90,8 +91,8 @@ final class JevKeyStorageTest extends TestCase
     private function seedGlobalJev(string $key = 'global-jev-key', int $enabled = 1): void
     {
         $stmt = $this->db->prepare("INSERT INTO system_llm_settings
-            (provider_key, display_name, api_key, model, base_url, streaming, supports_tools, api_format, enabled, sort_order)
-            VALUES ('jev', 'Jev (dispatcher routing)', :k, 'jev-latest', NULL, 0, 0, 'router', :e, 100)");
+            (provider_key, display_name, api_key, model, base_url, streaming, supports_tools, api_format, protocol, enabled, sort_order)
+            VALUES ('jev', 'Jev (dispatcher routing)', :k, 'jev-latest', NULL, 0, 0, 'router', 'typesafe', :e, 100)");
         $stmt->execute([':k' => $key, ':e' => $enabled]);
     }
 
@@ -199,6 +200,7 @@ final class JevKeyStorageTest extends TestCase
 
     public function testAdminSaveAndGetApiKeysAcceptJev(): void
     {
+        $this->seedGlobalJev('');
         $this->allowJev();
         $admin = new AdminController($this->db, $this->config());
 
@@ -393,12 +395,13 @@ final class JevKeyStorageTest extends TestCase
             'provider_key' => 'jev', 'display_name' => 'Jev (dispatcher routing)',
             'model' => 'jev-latest', 'api_format' => 'router', 'api_key' => 'global-jev-key',
             'base_url' => 'https://gw.corp/jev', 'chat_endpoint' => '/should-not-be-kept',
-            'streaming' => 1, 'supports_tools' => 1,
+            'streaming' => 1, 'supports_tools' => 1, 'protocol' => 'typesafe',
         ]]);
         $this->assertTrue($out['success'], $out['error'] ?? '');
 
         $row = $this->db->query("SELECT * FROM system_llm_settings WHERE provider_key = 'jev'")->fetch(PDO::FETCH_ASSOC);
         $this->assertSame('router', $row['api_format']);
+        $this->assertSame('typesafe', $row['protocol']);
         // The full Jev URL is kept (a gateway); a chat endpoint is not.
         $this->assertSame('https://gw.corp/jev', $row['base_url']);
         $this->assertNull($row['chat_endpoint'], 'a router row has no chat endpoint');
@@ -406,18 +409,89 @@ final class JevKeyStorageTest extends TestCase
         $this->assertSame(0, (int) $row['supports_tools']);
     }
 
-    public function testRouterFormatIsOnlyForTheJevRow(): void
+    public function testARouterRowNeedsARegisteredProtocol(): void
     {
         $ctrl = new SystemSettingsController($this->db, $this->config());
-        $asRouter = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
-            'provider_key' => 'kimi', 'model' => 'moonshot-v1-auto', 'api_format' => 'router',
+        $none = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'acme', 'model' => 'm', 'api_format' => 'router',
         ]]);
-        $this->assertSame(400, $asRouter['status_code']);
+        $this->assertSame(400, $none['status_code']);
+        $bad = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'acme', 'model' => 'm', 'api_format' => 'router', 'protocol' => 'nope',
+        ]]);
+        $this->assertSame(400, $bad['status_code']);
+    }
 
+    public function testAnyKeyCanBeADecisionProvider(): void
+    {
+        $ctrl = new SystemSettingsController($this->db, $this->config());
+        $out = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'jev-eu', 'display_name' => 'Jev EU', 'api_format' => 'router',
+            'protocol' => 'typesafe', 'api_key' => 'k', 'model' => '',
+        ]]);
+        $this->assertTrue($out['success'], $out['error'] ?? '');
+        $row = $this->db->query("SELECT * FROM system_llm_settings WHERE provider_key = 'jev-eu'")->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('typesafe', $row['protocol']);
+        $this->assertSame('jev-latest', $row['model'], 'blank model = the protocol default');
+    }
+
+    public function testAKindCannotFlip(): void
+    {
+        $this->seedGlobalJev();
+        $ctrl = new SystemSettingsController($this->db, $this->config());
         $jevAsChat = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
             'provider_key' => 'jev', 'model' => 'jev-latest', 'api_format' => 'openai',
         ]]);
         $this->assertSame(400, $jevAsChat['status_code']);
+        $kimiAsRouter = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'kimi', 'model' => 'm', 'api_format' => 'router', 'protocol' => 'typesafe',
+        ]]);
+        $this->assertSame(400, $kimiAsRouter['status_code']);
+        $row = $this->db->query("SELECT api_format FROM system_llm_settings WHERE provider_key = 'kimi'")->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('openai', $row['api_format']);
+    }
+
+    public function testTwoKeysWithTheSameEnvStemAreRefused(): void
+    {
+        $ctrl = new SystemSettingsController($this->db, $this->config());
+        $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'jev-eu', 'model' => 'm', 'api_format' => 'router', 'protocol' => 'typesafe',
+        ]]);
+        $clash = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+            'provider_key' => 'jev_eu', 'model' => 'm', 'api_format' => 'router', 'protocol' => 'typesafe',
+        ]]);
+        $this->assertSame(400, $clash['status_code']);
+        $this->assertStringContainsString('JEV_EU_API_KEY', $clash['error']);
+    }
+
+    public function testDecisionProtocolsAreListed(): void
+    {
+        $out = (new SystemSettingsController($this->db, $this->config()))->decisionProtocols(['user_id' => 1]);
+        $this->assertTrue($out['success']);
+        $this->assertSame('typesafe', $out['protocols'][0]['id']);
+    }
+
+    public function testAdminPerUserKeysAcceptAnyDecisionRow(): void
+    {
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, api_format, protocol)
+            VALUES ('acme', 'Acme', '', 'm', 'router', 'typesafe'),
+                   ('glm', 'GLM', '', 'glm-4', 'openai', NULL)");
+        $this->allowJev();
+        $admin = new AdminController($this->db, $this->config());
+
+        $before = $admin->getApiKeys(['user_id' => 1], 2);
+        $this->assertArrayHasKey('acme', $before['keys'], 'the empty decision slot is listed');
+        $this->assertNull($before['keys']['acme']['masked_key']);
+        $this->assertArrayHasKey('glm', $before['keys'], 'a chat row outside the old literal list is listed too');
+
+        $saved = $admin->saveApiKeys(['user_id' => 1, 'body' => ['user_id' => 2, 'keys' => [
+            'acme' => 'admin-set-acme-key-9876', 'glm' => 'admin-set-glm-key-5432',
+        ]]]);
+        $this->assertTrue($saved['success']);
+
+        $after = $admin->getApiKeys(['user_id' => 1], 2);
+        $this->assertSame('****9876', $after['keys']['acme']['masked_key']);
+        $this->assertSame('****5432', $after['keys']['glm']['masked_key']);
     }
 }
 

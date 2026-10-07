@@ -9,7 +9,7 @@ use Quantis\AIPortfolioAssistant\Services\RoleStore;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
-use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
+use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use PDO;
 use Exception;
 
@@ -951,7 +951,7 @@ class AdminController
 
         // Include all valid providers with empty state if not set. Router keys
         // (Jev) are listed too: stored per user like LLM keys, never a chat provider.
-        $validProviders = array_merge(['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'], ProviderKinds::ROUTER_KEYS);
+        $validProviders = $this->configuredProviderKeys();
         foreach ($validProviders as $provider) {
             if (!isset($keys[$provider])) {
                 $keys[$provider] = $emptyState;
@@ -1047,7 +1047,8 @@ class AdminController
 
         // Router keys (Jev) are accepted like LLM keys; see the settings
         // filter below for what a router row may carry.
-        $validProviders = array_merge(['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'], ProviderKinds::ROUTER_KEYS);
+        $validProviders = $this->configuredProviderKeys();
+        $decisionKeys = DecisionProviders::keys($this->db);
         $savedCount = 0;
 
         // Columns that can be updated individually (without requiring an api_key).
@@ -1093,7 +1094,7 @@ class AdminController
                 $params[':api_key'] = $apiKey;
             }
 
-            $isRouter = in_array($provider, ProviderKinds::ROUTER_KEYS, true);
+            $isRouter = in_array($provider, $decisionKeys, true);
             foreach ($settingFields as $inputKey => [$col, $cast]) {
                 if (!array_key_exists($inputKey, $entry)) {
                     continue;
@@ -1238,6 +1239,17 @@ class AdminController
     /**
      * Ensure user_api_keys table exists
      */
+    /** Every provider key an admin configured (chat and decision rows): the per-user key slots. */
+    private function configuredProviderKeys(): array
+    {
+        try {
+            return array_map('strval', $this->db->query("SELECT provider_key FROM system_llm_settings")->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        } catch (\Throwable $e) {
+            error_log('[AdminController] provider keys lookup failed: ' . $e->getMessage());
+            return [];
+        }
+    }
+
     private function ensureApiKeysTableExists(): void
     {
         $sql = "CREATE TABLE IF NOT EXISTS `user_api_keys` (
