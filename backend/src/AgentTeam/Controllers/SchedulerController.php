@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AgentTeam\Controllers;
 
 use AgentTeam\Services\ScheduledWorkflowService;
+use AgentTeam\Services\ScheduleTick;
 use AgentTeam\Services\WorkflowRepository;
 use AgentTeam\Services\AgentRepository;
 use AgentTeam\Services\AgentRunner;
@@ -154,85 +155,10 @@ class SchedulerController
             $this->config
         );
 
-        // Get due schedules
-        $dueSchedules = $this->scheduleService->getDueSchedules();
-
-        $results = [
-            'timestamp' => date('Y-m-d H:i:s'),
-            'due_count' => count($dueSchedules),
-            'executed' => [],
-            'failed' => []
-        ];
-
-        foreach ($dueSchedules as $schedule) {
-            $scheduleId = (int) $schedule['id'];
-            $workflowId = (int) $schedule['workflow_id'];
-            $userId = (int) $schedule['user_id'];
-            $inputPrompt = $schedule['input_prompt'];
-
-            try {
-                // Mark as running
-                $this->scheduleService->markRunning($scheduleId);
-
-                // Load workflow
-                $workflow = $workflowRepository->findById($workflowId);
-
-                if (!$workflow) {
-                    throw new \Exception("Workflow #{$workflowId} not found");
-                }
-
-                if (!$workflow->isEnabled()) {
-                    throw new \Exception("Workflow #{$workflowId} is disabled");
-                }
-
-                // Prepare input variables
-                $inputVariables = [];
-                if ($inputPrompt) {
-                    $inputVariables['user_prompt'] = $inputPrompt;
-                    $inputVariables['prompt'] = $inputPrompt;
-                }
-
-                // Check if graph-based workflow
-                $hasGraphNodes = $graphRepository->getNodes($workflowId);
-                $isGraphWorkflow = !empty($hasGraphNodes);
-
-                // Execute workflow
-                if ($isGraphWorkflow) {
-                    $result = $graphWorkflowRunner->run($workflow, $userId, $inputVariables);
-                } else {
-                    $result = $workflowRunner->run($workflow, $userId, $inputVariables);
-                }
-
-                if ($result['success']) {
-                    $this->scheduleService->markCompleted($scheduleId);
-                    $results['executed'][] = [
-                        'schedule_id' => $scheduleId,
-                        'workflow_id' => $workflowId,
-                        'workflow_name' => $schedule['workflow_name'],
-                        'execution_id' => $result['execution_id'] ?? null
-                    ];
-                } else {
-                    throw new \Exception($result['error'] ?? 'Workflow execution failed');
-                }
-
-            } catch (\Exception $e) {
-                $errorMessage = $e->getMessage();
-                $this->scheduleService->markFailed($scheduleId, $errorMessage);
-
-                $results['failed'][] = [
-                    'schedule_id' => $scheduleId,
-                    'workflow_id' => $workflowId,
-                    'workflow_name' => $schedule['workflow_name'] ?? 'Unknown',
-                    'error' => $errorMessage
-                ];
-
-                error_log("Scheduled workflow failed: Schedule #{$scheduleId}, Workflow #{$workflowId}: {$errorMessage}");
-            }
-        }
-
-        $results['executed_count'] = count($results['executed']);
-        $results['failed_count'] = count($results['failed']);
-
-        return $results;
+        $tick = new ScheduleTick(
+            $this->scheduleService,
+            ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner)
+        );
+        return $tick->run();
     }
 }

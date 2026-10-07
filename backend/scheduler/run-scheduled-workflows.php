@@ -8,7 +8,7 @@
  *   1. CLI: php /path/to/run-scheduled-workflows.php
  *   2. HTTP: curl https://yoursite.com/scheduler/run-scheduled-workflows.php?token=YOUR_SECRET
  *
- * Cron entry example (runs every minute):
+ * Cron entry example (runs every minute; every minute is required for cron schedules):
  *   * * * * * /usr/bin/php /path/to/backend/scheduler/run-scheduled-workflows.php >> /var/log/workflow-scheduler.log 2>&1
  *
  * Or via HTTP:
@@ -132,100 +132,12 @@ $workflowRunner = new WorkflowRunner(
     $config
 );
 
-// Get due schedules
-$dueSchedules = $scheduleService->getDueSchedules();
-
-$results = [
-    'timestamp' => date('Y-m-d H:i:s'),
-    'due_count' => count($dueSchedules),
-    'executed' => [],
-    'failed' => []
-];
-
-if ($isCli) {
-    echo "[" . date('Y-m-d H:i:s') . "] Found " . count($dueSchedules) . " due schedule(s)\n";
-}
-
-foreach ($dueSchedules as $schedule) {
-    $scheduleId = (int) $schedule['id'];
-    $workflowId = (int) $schedule['workflow_id'];
-    $userId = (int) $schedule['user_id'];
-    $inputPrompt = $schedule['input_prompt'];
-
-    if ($isCli) {
-        echo "[" . date('Y-m-d H:i:s') . "] Executing schedule #{$scheduleId} (workflow #{$workflowId})\n";
-    }
-
-    try {
-        // Mark as running
-        $scheduleService->markRunning($scheduleId);
-
-        // Load workflow
-        $workflow = $workflowRepository->findById($workflowId);
-
-        if (!$workflow) {
-            throw new Exception("Workflow #{$workflowId} not found");
-        }
-
-        if (!$workflow->isEnabled()) {
-            throw new Exception("Workflow #{$workflowId} is disabled");
-        }
-
-        // Prepare input variables
-        $inputVariables = [];
-        if ($inputPrompt) {
-            $inputVariables['user_prompt'] = $inputPrompt;
-            $inputVariables['prompt'] = $inputPrompt;
-        }
-
-        // Check if graph-based workflow
-        $hasGraphNodes = $graphRepository->getNodes($workflowId);
-        $isGraphWorkflow = !empty($hasGraphNodes);
-
-        // Execute workflow
-        if ($isGraphWorkflow) {
-            $result = $graphWorkflowRunner->run($workflow, $userId, $inputVariables);
-        } else {
-            $result = $workflowRunner->run($workflow, $userId, $inputVariables);
-        }
-
-        if ($result['success']) {
-            $scheduleService->markCompleted($scheduleId);
-            $results['executed'][] = [
-                'schedule_id' => $scheduleId,
-                'workflow_id' => $workflowId,
-                'workflow_name' => $schedule['workflow_name'],
-                'execution_id' => $result['execution_id'] ?? null
-            ];
-
-            if ($isCli) {
-                echo "[" . date('Y-m-d H:i:s') . "] ✓ Schedule #{$scheduleId} completed successfully\n";
-            }
-        } else {
-            throw new Exception($result['error'] ?? 'Workflow execution failed');
-        }
-
-    } catch (Exception $e) {
-        $errorMessage = $e->getMessage();
-        $scheduleService->markFailed($scheduleId, $errorMessage);
-
-        $results['failed'][] = [
-            'schedule_id' => $scheduleId,
-            'workflow_id' => $workflowId,
-            'workflow_name' => $schedule['workflow_name'] ?? 'Unknown',
-            'error' => $errorMessage
-        ];
-
-        if ($isCli) {
-            echo "[" . date('Y-m-d H:i:s') . "] ✗ Schedule #{$scheduleId} failed: {$errorMessage}\n";
-        }
-
-        error_log("Scheduled workflow failed: Schedule #{$scheduleId}, Workflow #{$workflowId}: {$errorMessage}");
-    }
-}
-
-$results['executed_count'] = count($results['executed']);
-$results['failed_count'] = count($results['failed']);
+$tick = new AgentTeam\Services\ScheduleTick(
+    $scheduleService,
+    AgentTeam\Services\ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner),
+    $isCli ? static fn(string $line) => print('[' . date('Y-m-d H:i:s') . "] {$line}\n") : null
+);
+$results = $tick->run();
 
 if ($isCli) {
     echo "[" . date('Y-m-d H:i:s') . "] Completed: " . $results['executed_count'] . " succeeded, " . $results['failed_count'] . " failed\n";

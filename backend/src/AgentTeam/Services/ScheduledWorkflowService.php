@@ -44,6 +44,14 @@ class ScheduledWorkflowService
         return ($modify ? $t->modify($modify) : $t)->format('Y-m-d H:i:s');
     }
 
+    /** One clock read as [now, stale-threshold] strings, so a statement sees a single instant. */
+    private function nowAndStale(): array
+    {
+        $t = $this->now();
+        return [$t->format('Y-m-d H:i:s'),
+            $t->modify('-' . self::STALE_RUNNING_MINUTES . ' minutes')->format('Y-m-d H:i:s')];
+    }
+
     private function nextCronRun(string $cron): string
     {
         return (new CronExpression($cron))->nextAfter($this->now())->format('Y-m-d H:i:s');
@@ -221,11 +229,12 @@ class ScheduledWorkflowService
             LEFT JOIN agent_workflows w ON sw.workflow_id = w.id
             LEFT JOIN users u ON sw.user_id = u.id
             WHERE (sw.status = 'pending' AND sw.next_run <= :now)
-               OR (sw.status = 'running' AND sw.running_since < :stale)
+               OR (sw.status = 'running' AND (sw.running_since IS NULL OR sw.running_since < :stale))
             ORDER BY sw.next_run ASC
             LIMIT 50
         ");
-        $stmt->execute(['now' => $this->stamp(), 'stale' => $this->stamp('-' . self::STALE_RUNNING_MINUTES . ' minutes')]);
+        [$now, $stale] = $this->nowAndStale();
+        $stmt->execute(['now' => $now, 'stale' => $stale]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -239,24 +248,12 @@ class ScheduledWorkflowService
             UPDATE scheduled_workflows
             SET status = 'running', running_since = :now
             WHERE id = :id
-              AND (status = 'pending' OR (status = 'running' AND running_since < :stale))
+              AND ((status = 'pending' AND next_run <= :due)
+                   OR (status = 'running' AND (running_since IS NULL OR running_since < :stale)))
         ");
-        $stmt->execute(['id' => $id, 'now' => $this->stamp(),
-            'stale' => $this->stamp('-' . self::STALE_RUNNING_MINUTES . ' minutes')]);
+        [$now, $stale] = $this->nowAndStale();
+        $stmt->execute(['id' => $id, 'now' => $now, 'due' => $now, 'stale' => $stale]);
         return $stmt->rowCount() > 0;
-    }
-
-    /**
-     * Mark a schedule as running
-     */
-    public function markRunning(int $id): void
-    {
-        $stmt = $this->db->prepare("
-            UPDATE scheduled_workflows
-            SET status = 'running'
-            WHERE id = :id
-        ");
-        $stmt->execute(['id' => $id]);
     }
 
     /**

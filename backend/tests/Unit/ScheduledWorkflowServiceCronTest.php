@@ -35,6 +35,14 @@ final class ScheduledWorkflowServiceCronTest extends TestCase
             'repeat_type' => 'cron', 'cron' => $cron]);
     }
 
+    /** A cron schedule whose next_run has already passed, so claim() may take it. */
+    private function dueCronSchedule(): array
+    {
+        $s = $this->cronSchedule();
+        $this->pdo->exec("UPDATE scheduled_workflows SET next_run = '2026-10-07 10:42:00' WHERE id = " . (int) $s['id']);
+        return $s;
+    }
+
     public function testCreateCronComputesNextRunFromNow(): void
     {
         $s = $this->cronSchedule();
@@ -71,15 +79,15 @@ final class ScheduledWorkflowServiceCronTest extends TestCase
 
     public function testClaimIsExclusive(): void
     {
-        $s = $this->cronSchedule();
+        $s = $this->dueCronSchedule();
         self::assertTrue($this->svc()->claim((int) $s['id']));
         self::assertFalse($this->svc()->claim((int) $s['id']), 'a second tick must not claim a running schedule');
     }
 
     public function testStaleRunningIsReclaimed(): void
     {
-        $s = $this->cronSchedule();
-        $this->svc()->claim((int) $s['id']);
+        $s = $this->dueCronSchedule();
+        self::assertTrue($this->svc()->claim((int) $s['id']));
         $this->clock = $this->clock->modify('+61 minutes');
         $due = $this->svc()->getDueSchedules();
         self::assertSame([(int) $s['id']], array_map(fn($r) => (int) $r['id'], $due));
@@ -88,8 +96,8 @@ final class ScheduledWorkflowServiceCronTest extends TestCase
 
     public function testRunningWithinWindowIsNotDue(): void
     {
-        $s = $this->cronSchedule();
-        $this->svc()->claim((int) $s['id']);
+        $s = $this->dueCronSchedule();
+        self::assertTrue($this->svc()->claim((int) $s['id']));
         $this->clock = $this->clock->modify('+10 minutes');
         self::assertSame([], $this->svc()->getDueSchedules());
     }
@@ -115,5 +123,37 @@ final class ScheduledWorkflowServiceCronTest extends TestCase
         $svc = new ScheduledWorkflowService($this->pdo);   // no injected clock
         $s = $svc->create(['user_id' => 3, 'workflow_id' => 44, 'repeat_type' => 'cron', 'cron' => '*/2 * * * *']);
         self::assertSame('2026-10-07 10:44:00', $s['next_run']);
+    }
+
+    public function testRunningWithNullRunningSinceCountsAsStale(): void
+    {
+        $s = $this->cronSchedule();
+        $this->pdo->exec("UPDATE scheduled_workflows SET status = 'running', running_since = NULL WHERE id = " . (int) $s['id']);
+        $due = $this->svc()->getDueSchedules();
+        self::assertSame([(int) $s['id']], array_map(fn($r) => (int) $r['id'], $due));
+        self::assertTrue($this->svc()->claim((int) $s['id']));
+    }
+
+    public function testClockIsReadOncePerMethod(): void
+    {
+        $reads = 0;
+        $svc = new ScheduledWorkflowService($this->pdo, function () use (&$reads) {
+            $reads++;
+            return $this->clock;
+        });
+        $s = $this->cronSchedule();
+        $reads = 0;
+        $svc->getDueSchedules();
+        self::assertSame(1, $reads, 'getDueSchedules reads the clock once');
+        $reads = 0;
+        $svc->claim((int) $s['id']);
+        self::assertSame(1, $reads, 'claim reads the clock once');
+    }
+
+    public function testClaimRefusesAPendingScheduleEditedIntoTheFuture(): void
+    {
+        $s = $this->cronSchedule();
+        $this->pdo->exec("UPDATE scheduled_workflows SET next_run = '2026-10-07 11:00:00' WHERE id = " . (int) $s['id']);
+        self::assertFalse($this->svc()->claim((int) $s['id']));
     }
 }
