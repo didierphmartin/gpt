@@ -8,10 +8,10 @@ use PDO;
 use Exception;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
 use Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException;
+use Quantis\AIPortfolioAssistant\Services\DecisionKeyResolver;
 use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
 use Quantis\AIPortfolioAssistant\Services\PricingResolver;
-use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
 /**
  * Settings Controller
@@ -193,7 +193,8 @@ class SettingsController
                 'quota_tokens_used' => self::quotaTokensUsed($balances, DecisionProviders::keys($this->db)),
                 'plan' => $userRow['plan'] ?? 'free',
                 'role' => $userRow['role'] ?? 'prospect',
-                'free_trial_quota' => 50000
+                'free_trial_quota' => 50000,
+                'decision_providers' => $this->decisionProviderList((int) $userId)
             ],
             'status_code' => 200
         ];
@@ -343,8 +344,33 @@ class SettingsController
             'endpoints' => $endpoints,
             // Admin-set rates for the decision-model rows; null = unpriced.
             'rates' => self::routerRates(new PricingResolver($this->db), DecisionProviders::keys($this->db)),
+            'decision_providers' => $this->decisionProviderList((int) $userId),
             'status_code' => 200
         ];
+    }
+
+    /** Enabled decision rows with a registered protocol that the user's plan allows, admin order. Never a key. */
+    private function decisionProviderList(int $userId): array
+    {
+        $pricing = new PricingResolver($this->db);
+        $decisionProviders = [];
+        foreach (DecisionProviders::rows($this->db) as $row) {
+            $key = (string) $row['provider_key'];
+            $protocol = DecisionProviders::protocolOf($row);
+            if ($protocol === null || !DecisionKeyResolver::allowed($this->db, $userId, $key)) {
+                continue;
+            }
+            $decisionProviders[] = [
+                'key' => $key,
+                'label' => (string) ($row['display_name'] ?: $key),
+                'protocol' => (string) $row['protocol'],
+                'model' => (string) ($row['model'] ?: $protocol['model']),
+                'default_url' => trim((string) ($row['base_url'] ?? '')) ?: $protocol['url'],
+                'rate' => self::rateOf($pricing, $key),
+                'console_url' => $protocol['console_url'],
+            ];
+        }
+        return $decisionProviders;
     }
 
     /**
@@ -365,11 +391,6 @@ class SettingsController
         $endpoints = $request['body']['endpoints'] ?? [];
 
         $validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi'];
-        // Router keys (Jev) are stored like LLM keys, encrypted the same way,
-        // but a router has no model choice and no system prompt: accepted in
-        // `keys` only.
-        $validKeyProviders = array_merge($validProviders, ProviderKinds::ROUTER_KEYS);
-
         if (empty($keys) && empty($models) && empty($systemPrompts) && empty($endpoints)) {
             return [
                 'success' => false,
@@ -389,6 +410,11 @@ class SettingsController
                 ];
             }
         }
+
+        // Decision-provider keys are stored like LLM keys, encrypted the same
+        // way, but have no model choice and no system prompt.
+        $decisionKeys = DecisionProviders::keys($this->db);
+        $validKeyProviders = array_merge($validProviders, $decisionKeys);
 
         $this->ensureApiKeysTableExists();
         $this->ensureUserModelsTableExists();
@@ -493,7 +519,7 @@ class SettingsController
         // without a trailing slash since providers append their own path.
         $endpointCount = 0;
         foreach ($endpoints as $provider => $url) {
-            // Router keys too: Jev can sit behind a gateway (full Jev URL).
+            // Decision providers too: they can sit behind a gateway (full URL).
             if (!in_array($provider, $validKeyProviders) || !is_string($url)) {
                 continue;
             }

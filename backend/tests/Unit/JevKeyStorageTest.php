@@ -163,6 +163,7 @@ final class JevKeyStorageTest extends TestCase
 
     public function testSettingsSaveKeysStoresTheJevKeyEncrypted(): void
     {
+        $this->seedGlobalJev();
         $ctrl = new SettingsController($this->db, $this->config());
         $out = $ctrl->saveKeys(['user_id' => 2, 'body' => [
             'keys' => ['jev' => 'user-jev-key'],
@@ -180,6 +181,43 @@ final class JevKeyStorageTest extends TestCase
         $this->assertSame('user-jev-key', ApiKeyCrypto::decrypt($row['api_key'], self::SECRET));
         $this->assertNull($row['system_prompt']);
         $this->assertSame(0, (int) $this->db->query("SELECT COUNT(*) FROM user_model_selections WHERE provider = 'jev'")->fetchColumn());
+    }
+
+    public function testSettingsKeysListTheAllowedDecisionProviders(): void
+    {
+        $this->seedGlobalJev();
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, base_url, api_format, protocol, sort_order)
+            VALUES ('acme', 'Acme', '', 'acme-1', 'https://gw.corp/acme', 'router', 'typesafe', 50),
+                   ('hidden', 'Hidden', '', 'm', NULL, 'router', 'typesafe', 60)");
+        $this->db->prepare('INSERT INTO packages (role, capabilities) VALUES (?, ?)')
+            ->execute(['user', json_encode(['providers' => ['jev' => ['enabled' => true], 'acme' => ['enabled' => true]]])]);
+
+        $ctrl = new SettingsController($this->db, $this->config());
+        $out = $ctrl->getKeys(['user_id' => 2]);
+        $this->assertSame(['acme', 'jev'], array_column($out['decision_providers'], 'key'));
+        $this->assertSame('https://gw.corp/acme', $out['decision_providers'][0]['default_url']);
+        $this->assertSame(\AgentTeam\Services\JevRouter::URL, $out['decision_providers'][1]['default_url']);
+
+        $this->db->exec('ALTER TABLE users ADD COLUMN plan TEXT');
+        $this->db->exec('CREATE TABLE llm_usage_balance (user_id INT, provider TEXT, month_requests INT, month_tokens INT, month_cost_usd REAL,
+            total_requests INT, total_tokens INT, total_cost_usd REAL, monthly_budget_usd REAL, monthly_request_limit INT, current_month TEXT)');
+        $this->db->exec('CREATE TABLE llm_usage_transactions (user_id INT, provider TEXT, response_time_ms INT, prompt_tokens INT,
+            completion_tokens INT, total_tokens INT, cost_usd REAL, created_at TEXT)');
+        $usage = $ctrl->getUsage(['user_id' => 2]);
+        $this->assertSame(['acme', 'jev'], array_column($usage['usage']['decision_providers'], 'key'));
+    }
+
+    public function testSettingsSaveKeysAcceptsAnyDecisionRow(): void
+    {
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, api_format, protocol)
+            VALUES ('acme', 'Acme', '', 'm', 'router', 'typesafe')");
+        $out = (new SettingsController($this->db, $this->config()))->saveKeys(['user_id' => 2, 'body' => [
+            'keys' => ['acme' => 'acme-mine'], 'endpoints' => ['acme' => 'https://mine.example/acme'],
+        ]]);
+        $this->assertTrue($out['success'], $out['error'] ?? '');
+        $row = $this->db->query("SELECT * FROM user_api_keys WHERE user_id = 2 AND provider = 'acme'")->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('acme-mine', ApiKeyCrypto::decrypt($row['api_key'], self::SECRET));
+        $this->assertSame('https://mine.example/acme', $row['base_url']);
     }
 
     /** The shared helper must be the exact algorithm the controllers already used. */
