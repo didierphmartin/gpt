@@ -78,35 +78,38 @@
     }
 
     // The Poll Outlook template's poll_new_mail argument dict, and its default filters.
-    const OUTLOOK_ARGS_RE = /(call_tool\("outlook",\s*"poll_new_mail",\s*)\{[\s\S]*?\n\s*\}\)/;
+    const OUTLOOK_ARGS_RE = /(call_tool\("outlook",\s*"poll_new_mail",\s*)\{([\s\S]*?)\n\s*\}\)/;
     const OUTLOOK_DEFAULTS = { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false };
+    const OUTLOOK_LINE_RE = /^\s*"(\w+)":\s*("(?:[^"\\]|\\.)*"|True|False),?\s*$/;
 
     /**
-     * The Poll Outlook form's filters written into the code's poll_new_mail argument dict.
-     * null when the code no longer has that dict (hand-edited): the form then leaves the code alone.
-     */
-    function outlookArgs(code, args) {
-        if (!OUTLOOK_ARGS_RE.test(code)) return null;
-        const py = (v) => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(String(v)));
-        const body = Object.keys(OUTLOOK_DEFAULTS).map((k) => `        "${k}": ${py(args[k] ?? OUTLOOK_DEFAULTS[k])},`).join('\n');
-        return code.replace(OUTLOOK_ARGS_RE, (_, head) => `${head}{\n${body}\n    })`);
-    }
-
-    /**
-     * The filters currently in the code's poll_new_mail dict (the form's starting values); a value
-     * the form did not write (hand-edited) takes its default. null when the dict is gone.
+     * The filters in the code's poll_new_mail dict, when the dict is exactly what the form writes:
+     * the four keys, each once, each a literal of its type. null otherwise -- no dict, or a dict
+     * edited by hand (an extra key, a variable, ...): the form then leaves the code alone (spec §5).
      */
     function readOutlookArgs(code) {
         const m = String(code || '').match(OUTLOOK_ARGS_RE);
         if (!m) return null;
-        const out = { ...OUTLOOK_DEFAULTS };
-        for (const k of Object.keys(out)) {
-            const v = m[0].match(new RegExp(`"${k}":\\s*("(?:[^"\\\\]|\\\\.)*"|True|False)`));
-            if (!v) continue;
-            if (v[1] === 'True' || v[1] === 'False') { if (typeof out[k] === 'boolean') out[k] = v[1] === 'True'; continue; }
-            try { if (typeof out[k] === 'string') out[k] = JSON.parse(v[1]); } catch (_) { /* not ours: keep the default */ }
+        const out = {};
+        for (const line of m[2].split('\n').filter((l) => l.trim())) {
+            const v = line.match(OUTLOOK_LINE_RE);
+            if (!v || !(v[1] in OUTLOOK_DEFAULTS) || v[1] in out) return null;
+            const isBool = v[2] === 'True' || v[2] === 'False';
+            if (isBool !== (typeof OUTLOOK_DEFAULTS[v[1]] === 'boolean')) return null;
+            try { out[v[1]] = isBool ? v[2] === 'True' : JSON.parse(v[2]); } catch (_) { return null; }
         }
-        return out;
+        return Object.keys(out).length === Object.keys(OUTLOOK_DEFAULTS).length ? out : null;
+    }
+
+    /**
+     * The Poll Outlook form's filters written into the code's poll_new_mail argument dict.
+     * null when the form does not own that dict (readOutlookArgs): the code is left alone.
+     */
+    function outlookArgs(code, args) {
+        if (readOutlookArgs(code) === null) return null;
+        const py = (v) => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(String(v)));
+        const body = Object.keys(OUTLOOK_DEFAULTS).map((k) => `        "${k}": ${py(args[k] ?? OUTLOOK_DEFAULTS[k])},`).join('\n');
+        return code.replace(OUTLOOK_ARGS_RE, (_, head) => `${head}{\n${body}\n    })`);
     }
 
     function validateConfig(cfg) {

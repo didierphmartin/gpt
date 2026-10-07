@@ -784,7 +784,8 @@
       "subject": "El asunto contiene (opcional)",
       "hasAttachments": "Solo con adjuntos",
       "startShortcut": "Conectar con Outlook",
-      "needServer": "Primero añada el servidor MCP de Outlook en Servidores MCP y guarde el flujo."
+      "needServer": "Primero añada el servidor MCP de Outlook en Servidores MCP y guarde el flujo.",
+      "handEdited": "Estos filtros se editaron en el código: cámbielos allí."
     },
     "schedule": {
       "title": "Programar Ejecución",

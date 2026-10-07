@@ -784,7 +784,8 @@
       "subject": "L’objet contient (facultatif)",
       "hasAttachments": "Seulement avec pièces jointes",
       "startShortcut": "Se connecter à Outlook",
-      "needServer": "Ajoutez d’abord le serveur MCP Outlook dans Serveurs MCP, puis enregistrez le flux."
+      "needServer": "Ajoutez d’abord le serveur MCP Outlook dans Serveurs MCP, puis enregistrez le flux.",
+      "handEdited": "Ces filtres ont été modifiés dans le code : changez-les là."
     },
     "schedule": {
       "title": "Planifier l'Exécution",

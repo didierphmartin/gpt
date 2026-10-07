@@ -784,7 +784,8 @@
       "subject": "Subject contains (optional)",
       "hasAttachments": "Only with attachments",
       "startShortcut": "Connect to Outlook",
-      "needServer": "Add the Outlook MCP server under MCP Servers first, and save the workflow."
+      "needServer": "Add the Outlook MCP server under MCP Servers first, and save the workflow.",
+      "handEdited": "These filters were edited in the code: change them there."
     },
     "schedule": {
       "title": "Schedule Execution",

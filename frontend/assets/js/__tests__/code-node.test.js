@@ -192,4 +192,16 @@ assert.deepStrictEqual(CN.readOutlookArgs(rewritten), { folder: 'Invoices', from
 assert.deepStrictEqual(CN.readOutlookArgs(po.code), { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false });
 assert.deepStrictEqual(CN.readOutlookArgs(CN.outlookArgs(po.code, { from: 'a "q" \\ b' })).from, 'a "q" \\ b');
 assert.strictEqual(CN.readOutlookArgs('def run(input, call_tool):\n    return 1\n'), null);
+// hand-edited filters (spec §5: the Python stays freely editable): the form leaves them alone
+const extraKey = po.code.replace('"has_attachments": False,', '"has_attachments": False,\n        "top": 5,');
+assert.strictEqual(CN.outlookArgs(extraKey, { folder: 'X' }), null, 'an extra key: code unchanged');
+assert.strictEqual(CN.readOutlookArgs(extraKey), null);
+const nonLiteral = po.code.replace('"from": "",', '"from": sender,');
+assert.strictEqual(CN.outlookArgs(nonLiteral, { folder: 'X' }), null, 'a non-literal value: code unchanged');
+assert.strictEqual(CN.readOutlookArgs(nonLiteral), null);
+const missingKey = po.code.replace('        "subject_contains": "",\n', '');
+assert.strictEqual(CN.outlookArgs(missingKey, { folder: 'X' }), null, 'a missing key: code unchanged');
+const wrongType = po.code.replace('"has_attachments": False', '"has_attachments": "no"');
+assert.strictEqual(CN.outlookArgs(wrongType, { folder: 'X' }), null, 'a value of the wrong type: code unchanged');
+assert.ok(CN.outlookArgs(po.code, { folder: 'X' }).includes('"folder": "X"'), 'the form-shaped dict still rewrites');
 console.log('code-node.test.js: OK');

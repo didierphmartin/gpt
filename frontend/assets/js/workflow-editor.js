@@ -6841,7 +6841,9 @@ class WorkflowEditor {
         // Connect to Outlook: a 2-minute cron, a Poll Outlook node after Start, and its window (spec 2026-10-07 §5).
         document.getElementById('schedule-outlook-shortcut').addEventListener('click', async () => {
             const msg = document.getElementById('schedule-outlook-msg');
-            const server = (await this._loadMcpServersMeta(true)).find((m) => window.CodeNode.slug(m.name) === 'outlook');
+            // The user's own, enabled Outlook server: the connection key is saved on that row.
+            const server = (await this._loadMcpServersMeta(true)).find((m) =>
+                window.CodeNode.slug(m.name) === 'outlook' && !m.is_global && m.effective_on !== false);
             if (!this.currentWorkflowId || !server) {
                 msg.textContent = this.t('workflow.outlook.needServer');
                 msg.style.display = 'block';
@@ -9125,6 +9127,7 @@ class WorkflowEditor {
                 <label>${t('subject')}<input class="outlook-subject" type="text"></label>
                 <label style="display:flex; align-items:center; gap:6px;"><input class="outlook-attach" type="checkbox"> ${t('hasAttachments')}</label>
             </div>
+            <div class="outlook-handedited" style="display:none; margin-top:6px; font-size:12px; color:#6b7280;">${t('handEdited')}</div>
         </div>`;
     }
 
@@ -9173,9 +9176,10 @@ class WorkflowEditor {
             folder.innerHTML = all.map((p) => `<option>${this.escapeHtml(p)}</option>`).join('');
             folder.value = folderValue;
         };
+        let connecting = false;   // one sign-in at a time: a refresh mid sign-in must not re-enable Connect
         const showWho = async () => {
             const server = getServer();
-            btn.disabled = !server;
+            btn.disabled = connecting || !server;
             if (!server) { status.textContent = t('checkServer'); return; }
             const who = await this._outlookCall(server, 'whoami');
             btn.textContent = t(who.error === 'reconnect_needed' ? 'reconnect' : 'connect');
@@ -9232,9 +9236,13 @@ class WorkflowEditor {
         };
         btn.addEventListener('click', async () => {
             const server = getServer();
-            if (!server) return;
+            if (connecting || !server) return;
+            connecting = true;
             btn.disabled = true;
-            try { await connect(server); } finally { btn.disabled = false; }
+            try { await connect(server); } finally {
+                connecting = false;
+                btn.disabled = !getServer();
+            }
         });
         const syncCode = () => {
             folderValue = folder.value || 'Inbox';
@@ -9247,9 +9255,12 @@ class WorkflowEditor {
             if (next !== null) setCode(next);
         };
         el.querySelectorAll('select, input').forEach((i) => i.addEventListener('change', syncCode));
-        // The form starts from the filters in the code.
+        // The form starts from the filters in the code; filters edited by hand in the code are left to the code.
+        const filters = [folder, q('.outlook-from'), q('.outlook-subject'), q('.outlook-attach')];
         const refresh = () => {
             const a = window.CodeNode.readOutlookArgs(getCode());
+            filters.forEach((i) => { i.disabled = !a; });
+            q('.outlook-handedited').style.display = a ? 'none' : 'block';
             if (a) {
                 folderValue = a.folder || 'Inbox';
                 q('.outlook-from').value = a.from;
