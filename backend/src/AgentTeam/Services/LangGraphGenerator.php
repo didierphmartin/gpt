@@ -3024,7 +3024,13 @@ PY;
         $L[] = '                                   also the human-gate rendezvous a playbook node\'s tools wait on';
         $L[] = '  set_event_sink, emit_event,';
         $L[] = '  resolve_gate                    EVENTS\' methods under their old names, for api.py and the run-server probes';
-        $L[] = '  JevRouter, Dispatcher           a DISPATCHER node\'s routing: Jev or one forced route_to call, never both';
+        // dispatcherBlock() is emitted for every workflow (DispatcherNode names Dispatcher);
+        // only the adapter classes depend on the protocols the dispatchers use.
+        $adapters = array_map(fn(string $p) => LangGraphRuntime::ADAPTER_CLASSES[$p] . ',',
+            self::decisionProtocolsUsed($facts['agentData'] ?? []));
+        $L[] = '  ' . implode(' ', array_merge(['DecisionResult,'], $adapters));
+        $L[] = '  DECISION_ADAPTERS, RouteDecision,';
+        $L[] = '  Dispatcher                      a DISPATCHER node\'s routing: a decision model or one forced route_to call, never both';
         $L[] = '  inject_datetime()               prepends a dated header, resolves [date]/[weekday]/[year]/[time] in a system prompt';
         if ($facts['playbookData'] !== []) {
             $L[] = '  PLAYBOOK_SYSTEM_PROMPT,';
@@ -3752,7 +3758,7 @@ PY;
         }
         foreach ($optional as $env => $names) {
             $lines[] = "# Optional: {$env} for dispatchers with no routing mode saved (" . implode(', ', array_unique($names)) . '):';
-            $lines[] = '#   the first decision model whose key is set routes, else the model.';
+            $lines[] = '#   the first decision model whose key is set routes (else the model); once one is chosen, a request it cannot decide stops the run there (no model fallback).';
         }
         if ($required !== [] || $optional !== []) {
             $lines[] = '#   Each key has a matching <NAME>_BASE_URL (a gateway). TypeSafe rows also read the legacy TYPESAFE_API_KEY / TYPESAFE_BASE_URL.';

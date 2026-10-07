@@ -227,7 +227,7 @@ class LangGraphJevDispatchTest extends TestCase
         // Unset: the first decision model whose key is set, else the model -- never both.
         $unset = $doc([]);
         $this->assertStringContainsString('# Optional: JEV_API_KEY for dispatchers with no routing mode saved (techBuddy):', $unset);
-        $this->assertStringContainsString('#   the first decision model whose key is set routes, else the model.', $unset);
+        $this->assertStringContainsString('#   the first decision model whose key is set routes (else the model); once one is chosen, a request it cannot decide stops the run there (no model fallback).', $unset);
         $this->assertStringContainsString('TypeSafe rows also read the legacy TYPESAFE_API_KEY / TYPESAFE_BASE_URL.', $unset);
         $this->assertStringNotContainsString('# Required: JEV_API_KEY', $unset);
         // A named provider: required.
@@ -239,6 +239,16 @@ class LangGraphJevDispatchTest extends TestCase
         $this->assertStringNotContainsString('JEV_API_KEY', $llm);
         $this->assertStringNotContainsString('TYPESAFE_API_KEY', $llm);
         $this->assertStringContainsString('"decision": [],', $llm);
+    }
+
+    public function testCommonPyProvidesListsTheDecisionRuntime(): void
+    {
+        $common = array_column($this->generator()->generate(44, '3', ['modular' => true])['files'], 'code', 'path')['common.py'] ?? '';
+        $this->assertStringContainsString("  DecisionResult, JevRouter,\n  DECISION_ADAPTERS, RouteDecision,\n  Dispatcher ", $common);
+        $this->assertStringNotContainsString('JevRouter, Dispatcher ', $common);
+        foreach (['class DecisionResult', 'class JevRouter', 'DECISION_ADAPTERS = {', 'class RouteDecision', 'class Dispatcher'] as $def) {
+            $this->assertStringContainsString($def, $common, 'PROVIDES lists only what is emitted');
+        }
     }
 
     public function testSavedAgentRecordNamesTheJevQuestion(): void
