@@ -1252,7 +1252,10 @@ class McpClient:
             raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
         if not isinstance(extra, dict):
             raise RuntimeError(f"{var} in .env must be a JSON object")
-        return {**self.HEADERS, **{str(k): str(v) for k, v in extra.items()}}
+        for k, v in extra.items():
+            if not isinstance(v, str) or "\r" in v or "\n" in v or "\r" in str(k) or "\n" in str(k):
+                raise RuntimeError(f"{var} in .env: every header value must be a single-line string (check header {str(k)!r})")
+        return {**self.HEADERS, **{str(k): v for k, v in extra.items()}}
 
     @staticmethod
     def normalize_url(url: str) -> str:

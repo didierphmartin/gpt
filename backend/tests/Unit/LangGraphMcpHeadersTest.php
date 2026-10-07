@@ -15,6 +15,16 @@ final class LangGraphMcpHeadersTest extends TestCase
 {
     private const SECRET = 'sekret-conn-key-7731';
 
+    private function python(): string
+    {
+        $py = is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3';
+        exec($py . ' -c ' . escapeshellarg('import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)') . ' 2>&1', $o, $rc);
+        if ($rc !== 0) {
+            self::markTestSkipped('Python 3.10+ not available');
+        }
+        return $py;
+    }
+
     private function runPy(string $tail, array $env = []): array
     {
         $py = "import json, os, sys, time\nclass httpx:\n    class Client:\n        pass\n"
@@ -26,7 +36,7 @@ final class LangGraphMcpHeadersTest extends TestCase
         foreach ($env as $k => $v) {
             $envStr .= $k . '=' . escapeshellarg($v) . ' ';
         }
-        exec($envStr . '/usr/local/bin/python3 ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        exec($envStr . $this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
         unlink($file);
         return [$rc, $out];
     }
@@ -61,6 +71,17 @@ final class LangGraphMcpHeadersTest extends TestCase
         self::assertStringContainsString('MCP_HEADERS_OUTLOOK', implode("\n", $out));
     }
 
+    public function testNonStringOrMultilineHeaderValueNamesTheVariableNotTheValue(): void
+    {
+        foreach (['{"X-A": 5}', '{"X-A": "a\\nb"}'] as $bad) {
+            [$rc, $out] = $this->runPy("MCP._headers('http://o/mcp')", ['MCP_HEADERS_OUTLOOK' => $bad]);
+            self::assertNotSame(0, $rc);
+            $text = implode("\n", $out);
+            self::assertStringContainsString('MCP_HEADERS_OUTLOOK', $text);
+            self::assertStringNotContainsString('a\\nb', $text);
+        }
+    }
+
     public function testEveryRequestUsesServerHeaders(): void
     {
         $src = LangGraphRuntime::mcpClientBlock();
@@ -69,7 +90,8 @@ final class LangGraphMcpHeadersTest extends TestCase
         self::assertSame(2, substr_count($src, 'headers=self._headers(server_url)'));
     }
 
-    private function generate(array $options): array
+    /** @param list<array{string,string}> $extraServers  seeded for the user; $useExtra says whether the agent calls them */
+    private function generate(array $options, array $extraServers = [], bool $useExtra = false): array
     {
         $pdo = new \PDO('sqlite::memory:');
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
@@ -77,14 +99,27 @@ final class LangGraphMcpHeadersTest extends TestCase
         $pdo->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
         $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
         $pdo->exec("INSERT INTO mcp_servers VALUES (5, '3', 'Outlook', 'http://localhost/outlook/mcp', 1, '{\"X-Outlook-Account\": \"" . self::SECRET . "\"}')");
+        foreach ($extraServers as $i => [$name, $url]) {
+            $pdo->exec("INSERT INTO mcp_servers VALUES (" . (10 + $i) . ", '3', '$name', '$url', 1, NULL)");
+            $pdo->exec("INSERT INTO mcp_server_tools VALUES (" . (10 + $i) . ", " . (10 + $i) . ", 'tool_$i', 'T', '{}')");
+        }
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (1, 5, 'list_messages', 'List', '{}')");
         $pdo->exec("INSERT INTO system_llm_settings VALUES ('claude', 'claude-sonnet-4-6', 1)");
+        $tools = ['mcp_list_messages'];
+        if ($useExtra) {
+            foreach (array_keys($extraServers) as $i) {
+                $tools[] = 'mcp_tool_' . $i;
+            }
+        }
         $graph = [
             'nodes' => [
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
-                ['id' => '2', 'node_type' => 'output', 'config' => ['type' => 'output']],
+                ['id' => '2', 'node_type' => '', 'config' => ['type' => 'agent-template', 'agent_name' => 'Mailer', 'agent_type' => 'standard',
+                    'instructions' => 'Read mail.', 'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-6',
+                    'tools' => $tools, 'settings' => ['temperature' => 0.7, 'max_tokens' => 4096]]],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ],
-            'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1']],
+            'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']],
         ];
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Mail', 'user_id' => '3']));
@@ -114,5 +149,26 @@ final class LangGraphMcpHeadersTest extends TestCase
         self::assertStringContainsString('MCP_SERVER_SLUGS = ', $all);
         self::assertStringContainsString('MCP_HEADERS_OUTLOOK=', $all);
         self::assertStringNotContainsString(self::SECRET, $all);
+    }
+
+    public function testOnlyServersTheWorkflowUsesAreListedAndDocumented(): void
+    {
+        $code = $this->generate([], [['Calendar', 'http://localhost/cal/mcp']])['code'];
+        self::assertStringContainsString('"http://localhost/outlook/mcp": "outlook"', $code);
+        self::assertStringNotContainsString('calendar', strtolower($code));
+        self::assertStringNotContainsString('MCP_HEADERS_CALENDAR', $code);
+    }
+
+    public function testTwoUsedServersWithTheSameSlugAreRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('MCP_HEADERS_OUTLOOK');
+        $this->generate([], [['outlook', 'http://localhost/other/mcp']], true);
+    }
+
+    public function testSameSlugOnAnUnusedServerIsFine(): void
+    {
+        $code = $this->generate([], [['outlook', 'http://localhost/other/mcp']])['code'];
+        self::assertStringNotContainsString('http://localhost/other/mcp', $code);
     }
 }

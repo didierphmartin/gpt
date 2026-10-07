@@ -423,7 +423,7 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '';
         // The protocol steps and the SSE note are McpClient's class docstring.
-        $lines[] = self::serverSlugsLine($facts);
+        $lines[] = self::serverSlugsLine($facts['serverSlugs'] ?? []);
         $lines[] = '';
         $lines[] = LangGraphRuntime::mcpClientBlock();
         if ($codeData !== []) {
@@ -1129,10 +1129,6 @@ class LangGraphGenerator
                 $codeServerUrls[$surl] = true;
             }
         }
-        $serverSlugs = [];
-        foreach ($serverRegistry as $surl => $meta) {
-            $serverSlugs[(string) $surl] = CodeNodeEmit::slug((string) ($meta['name'] ?? ''));
-        }
         $codeSlugs = [];
         foreach ($codeData as $cd) {
             foreach ($cd['mcp_servers'] as $slg) {
@@ -1168,6 +1164,19 @@ class LangGraphGenerator
             if (isset($serverRegistry[$surl])) {
                 $usedServers[$surl] = $serverRegistry[$surl];
             }
+        }
+        // Header env names (MCP_HEADERS_<SLUG>) are per server name: two servers this workflow
+        // uses must not share a slug, or one's connection key would go to the other.
+        $serverSlugs = [];
+        $slugOwner = [];
+        foreach ($usedServers as $surl => $meta) {
+            $slg = CodeNodeEmit::slug((string) ($meta['name'] ?? ''));
+            if (isset($slugOwner[$slg]) && $slugOwner[$slg]['url'] !== (string) $surl) {
+                throw new \RuntimeException('MCP servers "' . $slugOwner[$slg]['name'] . '" and "' . (string) ($meta['name'] ?? '')
+                    . '" both map to MCP_HEADERS_' . strtoupper($slg) . '; rename one so each server has its own header variable.');
+            }
+            $slugOwner[$slg] = ['url' => (string) $surl, 'name' => (string) ($meta['name'] ?? '')];
+            $serverSlugs[(string) $surl] = $slg;
         }
         // Flag tools that agents need but aren't available as MCP.
         // run_skill_script is a LOCAL (non-MCP) tool registered directly into
@@ -1981,7 +1990,7 @@ PY;
         $L[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($catalog, true);
         $L[] = '';
         $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP'; $L[] = $sep;
-        $L[] = self::serverSlugsLine($facts);
+        $L[] = self::serverSlugsLine(array_intersect_key($facts['serverSlugs'] ?? [], $servers));
         $L[] = '';
         $L[] = LangGraphRuntime::mcpClientBlock();
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
@@ -3261,7 +3270,7 @@ TXT;
         $L[] = $sep;
         $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP';
         $L[] = $sep;
-        $L[] = self::serverSlugsLine($facts);
+        $L[] = self::serverSlugsLine($facts['serverSlugs'] ?? []);
         $L[] = '';
         $L[] = LangGraphRuntime::mcpClientBlock();
         if ($facts['codeData'] !== []) {
@@ -3672,17 +3681,10 @@ PY;
         return var_export((float) ($ad['jev_min_confidence'] ?? JevRouter::DEFAULT_CONFIDENCE_FLOOR), true);
     }
 
-    /**
-     * TO RUN note for TYPESAFE_API_KEY, by the dispatchers' routing modes
-     * (nothing else reads it): required when a dispatcher is Jev-only, optional
-     * for an unset one (no mode saved: Jev when the key is set, else the model),
-     * not mentioned when every dispatcher routes with the model. LangGraph-only: the other compile targets still route
-     * every dispatcher with the model.
-     */
-    /** MCP_SERVER_SLUGS: every MCP server URL in this workflow -> its slug (McpClient._headers reads MCP_HEADERS_<SLUG>). */
-    private static function serverSlugsLine(array $facts): string
+    /** MCP_SERVER_SLUGS: every MCP server URL this workflow (or this A2A node) uses -> its slug (McpClient._headers reads MCP_HEADERS_<SLUG>). */
+    private static function serverSlugsLine(array $slugs): string
     {
-        return 'MCP_SERVER_SLUGS = ' . PythonEmitHelpers::jsonToPython($facts['serverSlugs'] ?? [], true);
+        return 'MCP_SERVER_SLUGS = ' . PythonEmitHelpers::jsonToPython($slugs, true);
     }
 
     /** The .env lines a run needs for servers that take headers (values are the user's, never emitted). */
@@ -3699,6 +3701,13 @@ PY;
         return $lines;
     }
 
+    /**
+     * TO RUN note for TYPESAFE_API_KEY, by the dispatchers' routing modes
+     * (nothing else reads it): required when a dispatcher is Jev-only, optional
+     * for an unset one (no mode saved: Jev when the key is set, else the model),
+     * not mentioned when every dispatcher routes with the model. LangGraph-only: the other compile targets still route
+     * every dispatcher with the model.
+     */
     private static function jevDocLines(array $agentData): array
     {
         $jevOnly = [];
