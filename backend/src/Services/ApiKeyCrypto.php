@@ -9,7 +9,7 @@ namespace Quantis\AIPortfolioAssistant\Services;
  *
  * base64(iv16 . AES-256-CBC(plaintext)) with key = sha256(secret), where the
  * secret is `auth.jwt_secret`. Extracted verbatim from SettingsController and
- * ChatController so a third reader (JevKeyResolver) cannot drift from them.
+ * ChatController so a third reader (DecisionKeyResolver) cannot drift from them.
  */
 final class ApiKeyCrypto
 {

@@ -17,7 +17,7 @@ use GuzzleHttp\Exception\GuzzleException;
  * LLM keys are (a ROUTER row in system_llm_settings, api_format 'router', and
  * per-user rows in user_api_keys), but every chat path skips router rows --
  * they all assume a provider can answer a prompt, and Jev cannot. The key a
- * run uses comes from JevKeyResolver and is passed in; this class never reads
+ * run uses comes from DecisionKeyResolver and is passed in; this class never reads
  * the environment.
  *
  * What it CAN do is the one thing a dispatcher node actually needs: pick one
@@ -80,11 +80,11 @@ final class JevRouter implements DecisionRouter
         private ?string $apiKey = null,
         private ?Client $http = null,
         private float $confidenceFloor = self::DEFAULT_CONFIDENCE_FLOOR,
-        // A gateway in front of TypeSafe (JevKeyResolver::url); '' = URL.
+        // A gateway in front of TypeSafe (DecisionKeyResolver url); '' = URL.
         private string $url = '',
         private string $model = ''
     ) {
-        // null = not configured. The key comes from JevKeyResolver (user row,
+        // null = not configured. The key comes from DecisionKeyResolver (user row,
         // else the global router row); .env TYPESAFE_API_KEY is deliberately
         // NOT read, or it would bypass that precedence.
         $this->apiKey ??= '';

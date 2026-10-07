@@ -49,7 +49,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
     }
 
     /**
-     * A PDO that answers ensureDbConnection, JevKeyResolver's package and key
+     * A PDO that answers ensureDbConnection, DecisionKeyResolver's package and key
      * lookups, and PricingResolver's jev price row.
      *
      * @param bool $jevEnabled the role's package switches Jev on (false = not in the plan)

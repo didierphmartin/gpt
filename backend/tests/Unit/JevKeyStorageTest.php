@@ -7,12 +7,13 @@ namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 use PDO;
 use PDOStatement;
 use PHPUnit\Framework\TestCase;
+use AgentTeam\Services\JevRouter;
 use Quantis\AIPortfolioAssistant\Controllers\AdminController;
 use Quantis\AIPortfolioAssistant\Controllers\ProviderController;
 use Quantis\AIPortfolioAssistant\Controllers\SettingsController;
 use Quantis\AIPortfolioAssistant\Controllers\SystemSettingsController;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
-use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
+use Quantis\AIPortfolioAssistant\Services\DecisionKeyResolver;
 use Quantis\AIPortfolioAssistant\Services\LLMProviderResolver;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
 
@@ -256,7 +257,7 @@ final class JevKeyStorageTest extends TestCase
         // on this path); the resolver still reads it.
         $this->assertSame(
             ['key' => 'admin-set-jev-key-9876', 'source' => 'user'],
-            JevKeyResolver::resolve($this->db, $this->config(), 2)
+            $this->keySource(2)
         );
     }
 
@@ -268,8 +269,8 @@ final class JevKeyStorageTest extends TestCase
     {
         $this->allowJev();
         $this->seedGlobalJev();
-        $resolved = JevKeyResolver::resolve($this->db, $this->config(), 2);
-        $this->assertSame('', JevKeyResolver::url($this->db, $resolved, 2));
+        $resolved = DecisionKeyResolver::resolve($this->db, $this->config(), 2, 'jev');
+        $this->assertSame(JevRouter::URL, $resolved['url']);
     }
 
     public function testTheGlobalUrlGoesWithTheGlobalKey(): void
@@ -277,8 +278,8 @@ final class JevKeyStorageTest extends TestCase
         $this->allowJev();
         $this->seedGlobalJev();
         $this->db->exec("UPDATE system_llm_settings SET base_url = 'https://gw.corp/jev' WHERE provider_key = 'jev'");
-        $resolved = JevKeyResolver::resolve($this->db, $this->config(), 2);
-        $this->assertSame('https://gw.corp/jev', JevKeyResolver::url($this->db, $resolved, 2));
+        $resolved = DecisionKeyResolver::resolve($this->db, $this->config(), 2, 'jev');
+        $this->assertSame('https://gw.corp/jev', $resolved['url']);
     }
 
     public function testTheUsersUrlGoesWithTheUsersOwnKeyOnly(): void
@@ -288,39 +289,46 @@ final class JevKeyStorageTest extends TestCase
         $this->db->exec("UPDATE system_llm_settings SET base_url = 'https://gw.corp/jev' WHERE provider_key = 'jev'");
         $this->seedUserJev(2, ApiKeyCrypto::encrypt('user-jev-key', self::SECRET));
         $this->db->exec("UPDATE user_api_keys SET base_url = 'https://mine.example/jev' WHERE user_id = 2");
-        $own = JevKeyResolver::resolve($this->db, $this->config(), 2);
-        $this->assertSame('https://mine.example/jev', JevKeyResolver::url($this->db, $own, 2));
+        $own = DecisionKeyResolver::resolve($this->db, $this->config(), 2, 'jev');
+        $this->assertSame('https://mine.example/jev', $own['url']);
 
         // A URL with no key of the user's own: the global key keeps the global URL.
         $this->db->exec("UPDATE user_api_keys SET api_key = '' WHERE user_id = 2");
-        $global = JevKeyResolver::resolve($this->db, $this->config(), 2);
+        $global = DecisionKeyResolver::resolve($this->db, $this->config(), 2, 'jev');
         $this->assertSame('global', $global['source']);
-        $this->assertSame('https://gw.corp/jev', JevKeyResolver::url($this->db, $global, 2));
+        $this->assertSame('https://gw.corp/jev', $global['url']);
     }
 
+
+    /** @return array{key: string, source: string} */
+    private function keySource(?int $userId): array
+    {
+        $r = DecisionKeyResolver::resolve($this->db, $this->config(), $userId, 'jev');
+        return ['key' => $r['key'], 'source' => $r['source']];
+    }
 
     public function testUserKeyWinsOverGlobal(): void
     {
         $this->allowJev();
         $this->seedGlobalJev();
         $this->seedUserJev(2, ApiKeyCrypto::encrypt('user-jev-key', self::SECRET));
-        $this->assertSame(['key' => 'user-jev-key', 'source' => 'user'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        $this->assertSame(['key' => 'user-jev-key', 'source' => 'user'], $this->keySource(2));
     }
 
     public function testGlobalKeyWhenTheUserHasNone(): void
     {
         $this->allowJev();
         $this->seedGlobalJev();
-        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), 2));
-        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), null));
+        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], $this->keySource(2));
+        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], $this->keySource(null));
     }
 
     public function testNoneWhenNothingIsSet(): void
     {
         $this->allowJev();
-        $this->assertSame(['key' => '', 'source' => 'none'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        $this->assertSame(['key' => '', 'source' => 'unknown'], $this->keySource(2), 'no decision row at all');
         $this->seedGlobalJev('');
-        $this->assertSame(['key' => '', 'source' => 'none'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        $this->assertSame(['key' => '', 'source' => 'none'], $this->keySource(2));
     }
 
     public function testDisabledRowsAreIgnored(): void
@@ -328,14 +336,18 @@ final class JevKeyStorageTest extends TestCase
         $this->allowJev();
         $this->seedGlobalJev('global-jev-key', 0);
         $this->seedUserJev(2, ApiKeyCrypto::encrypt('user-jev-key', self::SECRET), 0);
-        $this->assertSame(['key' => '', 'source' => 'none'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        // A disabled row is no decision provider at all.
+        $this->assertSame(['key' => '', 'source' => 'unknown'], $this->keySource(2));
+        $this->db->exec("UPDATE system_llm_settings SET enabled = 1, api_key = ''");
+        $this->assertSame(['key' => '', 'source' => 'none'], $this->keySource(2), 'a disabled user key is ignored');
     }
 
     public function testAnotherUsersKeyIsNotUsed(): void
     {
         $this->allowJev();
+        $this->seedGlobalJev('');
         $this->seedUserJev(1, ApiKeyCrypto::encrypt('admin-own-key', self::SECRET));
-        $this->assertSame(['key' => '', 'source' => 'none'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        $this->assertSame(['key' => '', 'source' => 'none'], $this->keySource(2));
     }
 
     /** Encrypted under an old jwt_secret: unusable, so the global key must take over. */
@@ -344,7 +356,7 @@ final class JevKeyStorageTest extends TestCase
         $this->allowJev();
         $this->seedGlobalJev();
         $this->seedUserJev(2, ApiKeyCrypto::encrypt('user-jev-key', 'rotated-away-secret'));
-        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), 2));
+        $this->assertSame(['key' => 'global-jev-key', 'source' => 'global'], $this->keySource(2));
     }
 
     public function testJevOffInThePackageIsNotAllowedEvenWithTheUsersOwnKey(): void
@@ -353,7 +365,7 @@ final class JevKeyStorageTest extends TestCase
         $this->package('user', ['enabled' => false, 'default_api_key' => 'pkg-key']);
         $this->seedUserJev(7, ApiKeyCrypto::encrypt('own-key', self::SECRET));
         $this->seedGlobalJev('global-key');
-        $this->assertSame(['key' => '', 'source' => 'not_allowed'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->assertSame(['key' => '', 'source' => 'not_allowed'], $this->keySource(7));
     }
 
     public function testAPackageWithoutAJevEntryIsNotAllowed(): void
@@ -361,14 +373,14 @@ final class JevKeyStorageTest extends TestCase
         $this->userWithRole(7, 'user');
         $this->package('user', null);
         $this->seedGlobalJev('global-key');
-        $this->assertSame('not_allowed', JevKeyResolver::resolve($this->db, $this->config(), 7)['source']);
+        $this->assertSame('not_allowed', DecisionKeyResolver::resolve($this->db, $this->config(), 7, 'jev')['source']);
     }
 
     public function testAMissingPackageRowIsNotAllowed(): void
     {
         $this->userWithRole(7, 'user');
         $this->seedGlobalJev('global-key');
-        $this->assertSame('not_allowed', JevKeyResolver::resolve($this->db, $this->config(), 7)['source']);
+        $this->assertSame('not_allowed', DecisionKeyResolver::resolve($this->db, $this->config(), 7, 'jev')['source']);
     }
 
     public function testProvidersNotAnArrayMeansNoAllowlist(): void
@@ -376,7 +388,7 @@ final class JevKeyStorageTest extends TestCase
         $this->userWithRole(7, 'user');
         $this->package('user', null, false);
         $this->seedGlobalJev('global-key');
-        $this->assertSame(['key' => 'global-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->assertSame(['key' => 'global-key', 'source' => 'global'], $this->keySource(7));
     }
 
     public function testUserKeyWinsOverPackageAndGlobal(): void
@@ -385,7 +397,7 @@ final class JevKeyStorageTest extends TestCase
         $this->package('user', ['enabled' => true, 'default_api_key' => 'pkg-key']);
         $this->seedUserJev(7, ApiKeyCrypto::encrypt('own-key', self::SECRET));
         $this->seedGlobalJev('global-key');
-        $this->assertSame(['key' => 'own-key', 'source' => 'user'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->assertSame(['key' => 'own-key', 'source' => 'user'], $this->keySource(7));
     }
 
     public function testPackageKeyWinsOverGlobal(): void
@@ -393,7 +405,7 @@ final class JevKeyStorageTest extends TestCase
         $this->userWithRole(7, 'user');
         $this->package('user', ['enabled' => true, 'default_api_key' => '  pkg-key  ']);
         $this->seedGlobalJev('global-key');
-        $this->assertSame(['key' => 'pkg-key', 'source' => 'package'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->assertSame(['key' => 'pkg-key', 'source' => 'package'], $this->keySource(7));
     }
 
     public function testEnabledPackageWithoutKeyFallsBackToGlobal(): void
@@ -401,27 +413,31 @@ final class JevKeyStorageTest extends TestCase
         $this->userWithRole(7, 'user');
         $this->package('user', ['enabled' => true]);
         $this->seedGlobalJev('global-key');
-        $this->assertSame(['key' => 'global-key', 'source' => 'global'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->assertSame(['key' => 'global-key', 'source' => 'global'], $this->keySource(7));
     }
 
     public function testTruthyEnabledCountsAsOnLikeTheLlmProviders(): void
     {
         $this->userWithRole(7, 'user');
         $this->package('user', ['enabled' => 1, 'default_api_key' => 'pkg-key']);
-        $this->assertSame(['key' => 'pkg-key', 'source' => 'package'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->seedGlobalJev('');
+        $this->assertSame(['key' => 'pkg-key', 'source' => 'package'], $this->keySource(7));
     }
 
     public function testEnabledPackageAndNoKeyAnywhereIsNone(): void
     {
         $this->userWithRole(7, 'user');
         $this->package('user', ['enabled' => true]);
-        $this->assertSame(['key' => '', 'source' => 'none'], JevKeyResolver::resolve($this->db, $this->config(), 7));
+        $this->seedGlobalJev('');
+        $this->assertSame(['key' => '', 'source' => 'none'], $this->keySource(7));
     }
 
     public function testUnavailableReasons(): void
     {
-        $this->assertSame('Jev is not enabled for your plan', JevKeyResolver::unavailableReason('not_allowed'));
-        $this->assertSame('no Jev key', JevKeyResolver::unavailableReason('none'));
+        $row = ['display_name' => 'Jev'];
+        $this->assertSame('Jev is not enabled for your plan',
+            DecisionKeyResolver::unavailableReason(['source' => 'not_allowed', 'row' => $row], 'jev'));
+        $this->assertSame('no Jev key', DecisionKeyResolver::unavailableReason(['source' => 'none', 'row' => $row], 'jev'));
     }
 
     // ------------------------------------------------ admin router-row save

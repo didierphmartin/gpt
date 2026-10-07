@@ -112,7 +112,7 @@ final class JevRouterTest extends TestCase
     }
 
     /**
-     * The key lives in the LLM settings now (JevKeyResolver), not in .env. A
+     * The key lives in the LLM settings now (DecisionKeyResolver), not in .env. A
      * null key means "not configured", even when a stale TYPESAFE_API_KEY is
      * still exported: reading it would silently bypass the per-user/global
      * precedence and the admin's decision to leave Jev unset.
