@@ -257,6 +257,16 @@ class ScheduledWorkflowService
     }
 
     /**
+     * Keep a claimed schedule's run fresh: a tick draining it for longer than STALE_RUNNING_MINUTES
+     * must not have it reclaimed by another tick. Only a running schedule is touched.
+     */
+    public function touchRunning(int $id): void
+    {
+        $stmt = $this->db->prepare("UPDATE scheduled_workflows SET running_since = :now WHERE id = :id AND status = 'running'");
+        $stmt->execute(['id' => $id, 'now' => $this->now()->format('Y-m-d H:i:s')]);
+    }
+
+    /**
      * Mark a schedule as completed and calculate next run if recurring
      */
     public function markCompleted(int $id, ?string $executionId = null): void

@@ -63,6 +63,22 @@ final class ScheduleTickTest extends TestCase
         self::assertSame(ScheduleTick::MAX_RUNS_PER_TICK, $calls);
     }
 
+    public function testEachDrainRunRefreshesRunningSince(): void
+    {
+        // A drain longer than the stale window must not be reclaimed by another tick mid-way.
+        $clock = new \DateTimeImmutable('2026-10-07 10:42:30');
+        $svc = new ScheduledWorkflowService($this->pdo, function () use (&$clock) { return $clock; });
+        $seen = [];
+        $calls = 0;
+        $runner = function (array $s) use ($svc, &$clock, &$seen, &$calls) {
+            $seen[] = $svc->findById(1)['running_since'];
+            $clock = $clock->modify('+40 minutes');
+            return ++$calls < 3 ? ['success' => true, 'quiet' => false, 'drain' => true] : ['success' => true, 'quiet' => true];
+        };
+        (new ScheduleTick($svc, $runner))->run();
+        self::assertSame(['2026-10-07 10:42:30', '2026-10-07 11:22:30', '2026-10-07 12:02:30'], $seen);
+    }
+
     public function testPlainCronWorkflowDoesNotDrain(): void
     {
         // No code node ran: the runner reports drain=false although the run did work.

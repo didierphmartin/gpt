@@ -38,6 +38,7 @@ final class ScheduleTick
             try {
                 $runs = 0;
                 do {
+                    $this->schedules->touchRunning($id);   // a long drain stays claimed
                     $result = ($this->runSchedule)($schedule);
                     $runs++;
                     if (empty($result['success'])) {

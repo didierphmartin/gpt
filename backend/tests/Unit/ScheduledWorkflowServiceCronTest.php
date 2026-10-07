@@ -94,6 +94,27 @@ final class ScheduledWorkflowServiceCronTest extends TestCase
         self::assertTrue($this->svc()->claim((int) $s['id']));
     }
 
+    public function testTouchRunningKeepsALongRunFromBeingReclaimed(): void
+    {
+        $s = $this->dueCronSchedule();
+        self::assertTrue($this->svc()->claim((int) $s['id']));
+        $this->clock = $this->clock->modify('+50 minutes');
+        $this->svc()->touchRunning((int) $s['id']);
+        self::assertSame('2026-10-07 11:32:30', $this->svc()->findById((int) $s['id'])['running_since']);
+        $this->clock = $this->clock->modify('+50 minutes');   // 100 minutes after the claim, 50 after the touch
+        self::assertSame([], $this->svc()->getDueSchedules());
+        self::assertFalse($this->svc()->claim((int) $s['id']));
+    }
+
+    public function testTouchRunningLeavesAScheduleThatIsNotRunning(): void
+    {
+        $s = $this->dueCronSchedule();
+        $this->svc()->touchRunning((int) $s['id']);
+        $row = $this->svc()->findById((int) $s['id']);
+        self::assertSame('pending', $row['status']);
+        self::assertNull($row['running_since']);
+    }
+
     public function testRunningWithinWindowIsNotDue(): void
     {
         $s = $this->dueCronSchedule();
