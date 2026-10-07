@@ -36,8 +36,9 @@ final class DispatchControllerTest extends TestCase
         $this->db->exec("INSERT INTO users (id, role) VALUES (7, 'user'), (8, 'user')");
         $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, capabilities TEXT, updated_at TEXT)');
         $this->db->exec("INSERT INTO packages (role, capabilities) VALUES ('user', '{\"providers\":{\"jev\":{\"enabled\":true}}}')");
-        $this->db->exec('CREATE TABLE system_llm_settings (provider_key TEXT, api_key TEXT, enabled INTEGER DEFAULT 1)');
-        $this->db->exec('CREATE TABLE user_api_keys (user_id INTEGER, provider TEXT, api_key TEXT, enabled INTEGER DEFAULT 1)');
+        $this->db->exec('CREATE TABLE system_llm_settings (provider_key TEXT UNIQUE, display_name TEXT, api_key TEXT, model TEXT, base_url TEXT, api_format TEXT, protocol TEXT, enabled INTEGER DEFAULT 1, sort_order INTEGER DEFAULT 0)');
+        $this->db->exec('CREATE TABLE user_api_keys (user_id INTEGER, provider TEXT, api_key TEXT, base_url TEXT, enabled INTEGER DEFAULT 1)');
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, api_format, protocol) VALUES ('jev', 'Jev', '', 'jev-latest', 'router', 'typesafe')");
     }
 
     /** $logger: where answered calls are recorded; a silent stub unless a test watches it. */
@@ -64,7 +65,7 @@ final class DispatchControllerTest extends TestCase
 
     private function globalKey(string $key = 'g-key'): void
     {
-        $this->db->prepare("INSERT INTO system_llm_settings (provider_key, api_key) VALUES ('jev', ?)")->execute([$key]);
+        $this->db->prepare("UPDATE system_llm_settings SET api_key = ? WHERE provider_key = 'jev'")->execute([$key]);
     }
 
     private function userKey(int $uid, string $key = 'u-key'): void
@@ -82,7 +83,7 @@ final class DispatchControllerTest extends TestCase
 
     private function post(DispatchController $c, array $body, int $uid = 7): array
     {
-        return $c->route(['user_id' => $uid, 'body' => $body]);
+        return $c->jevRoute(['user_id' => $uid, 'body' => $body]);
     }
 
     private function body(array $extra = []): array
@@ -93,7 +94,7 @@ final class DispatchControllerTest extends TestCase
     public function testStatusPerSource(): void
     {
         $c = $this->controller();
-        $this->assertSame(['success' => true, 'allowed' => true, 'available' => false, 'source' => 'none', 'status_code' => 200], $c->jevStatus(['user_id' => 7]));
+        $this->assertSame(['success' => true, 'provider' => 'jev', 'allowed' => true, 'available' => false, 'source' => 'none', 'status_code' => 200], $c->jevStatus(['user_id' => 7]));
 
         $this->globalKey();
         $this->assertSame('global', $c->jevStatus(['user_id' => 7])['source']);
@@ -217,7 +218,7 @@ final class DispatchControllerTest extends TestCase
         $this->globalKey();
         $logger = $this->createMock(UsageLogger::class);
         $logger->expects($this->once())->method('logTransaction')
-            ->with($this->callback(fn (array $t) => $t['request_metadata'] === ['jev_outcome' => 'unclear']))
+            ->with($this->callback(fn (array $t) => $t['request_metadata'] === ['decision_outcome' => 'unclear']))
             ->willReturn(1);
         $this->post($this->controller([self::answer('unclear', 1.0)], $logger), $this->body());
     }
