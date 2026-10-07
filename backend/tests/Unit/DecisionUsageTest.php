@@ -2,10 +2,10 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
-use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\DecisionUsage;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 
-final class JevUsageTest extends TestCase
+final class DecisionUsageTest extends TestCase
 {
     private function answered(string $outcome = 'routed'): array
     {
@@ -15,7 +15,7 @@ final class JevUsageTest extends TestCase
 
     public function testTransactionPayload(): void
     {
-        $t = JevUsage::transaction(7, $this->answered());
+        $t = DecisionUsage::transaction(7, 'jev', 'jev-latest', $this->answered());
         $this->assertSame(7, $t['user_id']);
         $this->assertSame('jev', $t['provider']);
         $this->assertSame('jev-latest', $t['model']);
@@ -24,18 +24,18 @@ final class JevUsageTest extends TestCase
         $this->assertSame(212, $t['response_time_ms']);
         $this->assertSame('success', $t['status']);
         $this->assertNull($t['error_message']);
-        $this->assertSame(['jev_outcome' => 'routed'], $t['request_metadata']);
+        $this->assertSame(['decision_outcome' => 'routed'], $t['request_metadata']);
     }
 
     public function testUnclearAndLowConfidenceAreSuccessfulCalls(): void
     {
-        $this->assertSame('success', JevUsage::transaction(7, $this->answered('unclear'))['status']);
-        $this->assertSame('success', JevUsage::transaction(7, $this->answered('low_confidence'))['status']);
+        $this->assertSame('success', DecisionUsage::transaction(7, 'jev', 'jev-latest', $this->answered('unclear'))['status']);
+        $this->assertSame('success', DecisionUsage::transaction(7, 'jev', 'jev-latest', $this->answered('low_confidence'))['status']);
     }
 
     public function testAnAnsweredErrorIsRecordedAsError(): void
     {
-        $t = JevUsage::transaction(7, $this->answered('error'));
+        $t = DecisionUsage::transaction(7, 'jev', 'jev-latest', $this->answered('error'));
         $this->assertSame('error', $t['status']);
         $this->assertSame('no choice in the response', $t['error_message']);
     }
@@ -44,15 +44,15 @@ final class JevUsageTest extends TestCase
     {
         $logger = $this->createMock(UsageLogger::class);
         $logger->expects($this->never())->method('logTransaction');
-        JevUsage::record($logger, 7, ['outcome' => 'unavailable', 'ms' => null, 'usage' => [], 'reason' => 'no Jev key']);
-        JevUsage::record($logger, 7, ['outcome' => 'error', 'ms' => null, 'usage' => [], 'reason' => 'a menu needs at least two targets']);
+        DecisionUsage::record($logger, 7, 'jev', 'jev-latest', ['outcome' => 'unavailable', 'ms' => null, 'usage' => [], 'reason' => 'no Jev key']);
+        DecisionUsage::record($logger, 7, 'jev', 'jev-latest', ['outcome' => 'error', 'ms' => null, 'usage' => [], 'reason' => 'a menu needs at least two targets']);
     }
 
     public function testNoUserNoRecord(): void
     {
         $logger = $this->createMock(UsageLogger::class);
         $logger->expects($this->never())->method('logTransaction');
-        JevUsage::record($logger, null, $this->answered());
+        DecisionUsage::record($logger, null, 'jev', 'jev-latest', $this->answered());
     }
 
     public function testAnsweredCallIsRecordedOnce(): void
@@ -61,14 +61,23 @@ final class JevUsageTest extends TestCase
         $logger->expects($this->once())->method('logTransaction')
             ->with($this->callback(fn(array $t) => $t['provider'] === 'jev' && $t['prompt_tokens'] === 342))
             ->willReturn(1);
-        JevUsage::record($logger, 7, $this->answered());
+        DecisionUsage::record($logger, 7, 'jev', 'jev-latest', $this->answered());
     }
 
     public function testALoggerFailureNeverThrows(): void
     {
         $logger = $this->createMock(UsageLogger::class);
         $logger->method('logTransaction')->willThrowException(new RuntimeException('db down'));
-        JevUsage::record($logger, 7, $this->answered());
+        DecisionUsage::record($logger, 7, 'jev', 'jev-latest', $this->answered());
         $this->assertTrue(true);
+    }
+
+    public function testTheRowKeyAndModelAreRecorded(): void
+    {
+        $tx = DecisionUsage::transaction(7, 'acme', 'acme-1', ['outcome' => 'routed', 'ms' => 12,
+            'usage' => ['input_tokens' => 5, 'output_tokens' => 1]]);
+        $this->assertSame('acme', $tx['provider']);
+        $this->assertSame('acme-1', $tx['model']);
+        $this->assertSame(['decision_outcome' => 'routed'], $tx['request_metadata']);
     }
 }

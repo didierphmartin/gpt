@@ -8,6 +8,7 @@ use PDO;
 use Exception;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
 use Quantis\AIPortfolioAssistant\Exceptions\PricingUnavailableException;
+use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
 use Quantis\AIPortfolioAssistant\Services\PricingResolver;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
@@ -172,9 +173,9 @@ class SettingsController
             'usage' => [
                 'current_month' => $currentMonth,
                 'by_provider' => $byProvider,
-                // Rates for usage rows the model catalog does not price (Jev),
+                // Rates for usage rows the model catalog does not price (decision providers),
                 // read from the admin-editable system_llm_settings row.
-                'rates' => self::routerRates(new PricingResolver($this->db)),
+                'rates' => self::routerRates(new PricingResolver($this->db), DecisionProviders::keys($this->db)),
                 'totals' => [
                     'cost_usd' => $totalCost,
                     'tokens' => $totalTokens,
@@ -188,8 +189,8 @@ class SettingsController
                     'requests' => (int)($lifetime['lifetime_requests'] ?? 0)
                 ],
                 // What the free-trial quota counts: the same sum ChatController::checkFreeTrialQuota
-                // enforces (llm_usage_balance, Jev excluded). lifetime.total_tokens still counts all.
-                'quota_tokens_used' => self::quotaTokensUsed($balances),
+                // enforces (llm_usage_balance, decision providers excluded). lifetime.total_tokens still counts all.
+                'quota_tokens_used' => self::quotaTokensUsed($balances, DecisionProviders::keys($this->db)),
                 'plan' => $userRow['plan'] ?? 'free',
                 'role' => $userRow['role'] ?? 'prospect',
                 'free_trial_quota' => 50000
@@ -200,15 +201,16 @@ class SettingsController
 
     /**
      * Tokens that count toward the quota: every provider's balance total except
-     * Jev, whose routing tokens are recorded but never capped.
+     * decision provider, whose routing tokens are recorded but never capped.
      *
      * @param array<int, array<string, mixed>> $balances llm_usage_balance rows
+     * @param list<string> $decisionKeys
      */
-    public static function quotaTokensUsed(array $balances): int
+    public static function quotaTokensUsed(array $balances, array $decisionKeys): int
     {
         $sum = 0;
         foreach ($balances as $row) {
-            if (($row['provider'] ?? '') !== ProviderKinds::JEV_KEY) {
+            if (!in_array((string) ($row['provider'] ?? ''), $decisionKeys, true)) {
                 $sum += (int) ($row['total_tokens'] ?? 0);
             }
         }
@@ -232,14 +234,19 @@ class SettingsController
     }
 
     /**
-     * Rates for rows the model catalog does not price (Jev), keyed by
-     * provider; shared by /settings/usage and /settings/keys.
+     * Rates for rows the model catalog does not price (decision providers),
+     * keyed by provider; shared by /settings/usage and /settings/keys.
      *
+     * @param list<string> $decisionKeys
      * @return array<string, array{input: float, output: float}|null>
      */
-    public static function routerRates(PricingResolver $pricing): array
+    public static function routerRates(PricingResolver $pricing, array $decisionKeys): array
     {
-        return [ProviderKinds::JEV_KEY => self::rateOf($pricing, ProviderKinds::JEV_KEY)];
+        $rates = [];
+        foreach ($decisionKeys as $key) {
+            $rates[$key] = self::rateOf($pricing, $key);
+        }
+        return $rates;
     }
 
     /**
@@ -334,8 +341,8 @@ class SettingsController
             'locked' => $locked,
             'system_prompts' => $systemPrompts,
             'endpoints' => $endpoints,
-            // Admin-set rates for the decision-model rows (Jev); null = unpriced.
-            'rates' => self::routerRates(new PricingResolver($this->db)),
+            // Admin-set rates for the decision-model rows; null = unpriced.
+            'rates' => self::routerRates(new PricingResolver($this->db), DecisionProviders::keys($this->db)),
             'status_code' => 200
         ];
     }

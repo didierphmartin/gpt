@@ -2962,10 +2962,12 @@ class ChatController
                 return null; // Table doesn't exist yet, no usage
             }
 
-            // Jev tokens are recorded (usage, costs) but never count toward the quota:
+            // Decision-model tokens are recorded (usage, costs) but never count toward the quota:
             // routing costs a tiny fraction of a model call and is not what the cap limits.
-            $stmt = $this->db->prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ? AND provider <> ?");
-            $stmt->execute([$numericUserId, \Quantis\AIPortfolioAssistant\Services\ProviderKinds::JEV_KEY]);
+            $decisionKeys = \Quantis\AIPortfolioAssistant\Services\DecisionProviders::keys($this->db);
+            $notIn = $decisionKeys === [] ? '' : ' AND provider NOT IN (' . implode(', ', array_fill(0, count($decisionKeys), '?')) . ')';
+            $stmt = $this->db->prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ?" . $notIn);
+            $stmt->execute(array_merge([$numericUserId], $decisionKeys));
             $row = $stmt->fetch();
             $totalTokens = (int)($row['total'] ?? 0);
 

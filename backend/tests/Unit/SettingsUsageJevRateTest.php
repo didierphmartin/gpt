@@ -44,10 +44,10 @@ final class SettingsUsageJevRateTest extends TestCase
     public function testRouterRatesForKeysResponse(): void
     {
         $this->assertSame(
-            ['jev' => ['input' => 0.042, 'output' => 0.0]],
-            SettingsController::routerRates(new PricingResolver($this->pdo('0.042', '0')))
+            ['jev' => ['input' => 0.042, 'output' => 0.0], 'acme' => null],
+            SettingsController::routerRates(new PricingResolver($this->pdo('0.042', '0')), ['jev', 'acme'])
         );
-        $this->assertSame(['jev' => null], SettingsController::routerRates(new PricingResolver($this->pdo(null, null))));
+        $this->assertSame(['jev' => null], SettingsController::routerRates(new PricingResolver($this->pdo(null, null)), ['jev']));
     }
 
     public function testGetKeysReturnsRouterRates(): void
@@ -64,10 +64,12 @@ final class SettingsUsageJevRateTest extends TestCase
         $balances = [
             ['provider' => 'claude', 'total_tokens' => '1200'],
             ['provider' => 'jev', 'total_tokens' => '90000'],
+            ['provider' => 'acme', 'total_tokens' => 70000],
             ['provider' => 'kimi', 'total_tokens' => 300],
         ];
-        $this->assertSame(1500, SettingsController::quotaTokensUsed($balances));
-        $this->assertSame(0, SettingsController::quotaTokensUsed([['provider' => 'jev', 'total_tokens' => 5]]));
-        $this->assertSame(0, SettingsController::quotaTokensUsed([]));
+        $keys = ['jev', 'acme'];
+        $this->assertSame(1500, SettingsController::quotaTokensUsed($balances, $keys));
+        $this->assertSame(0, SettingsController::quotaTokensUsed([['provider' => 'jev', 'total_tokens' => 5]], $keys));
+        $this->assertSame(0, SettingsController::quotaTokensUsed([], $keys));
     }
 }

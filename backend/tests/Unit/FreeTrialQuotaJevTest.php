@@ -39,6 +39,8 @@ final class FreeTrialQuotaJevTest extends TestCase
         $this->db->exec("INSERT INTO users (id, plan, role) VALUES (7, 'free', 'user')");
         $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, capabilities TEXT, updated_at TEXT)');
         $this->db->exec("INSERT INTO packages (role, capabilities) VALUES ('user', '{\"quota_tokens\": 1000}')");
+        $this->db->exec('CREATE TABLE system_llm_settings (provider_key TEXT, api_format TEXT, enabled INTEGER, sort_order INTEGER DEFAULT 0)');
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, api_format, enabled) VALUES ('jev', 'router', 1), ('acme', 'router', 1), ('claude', 'anthropic', 1)");
         $this->db->exec('CREATE TABLE llm_usage_balance (user_id INTEGER, provider TEXT, total_tokens INTEGER)');
     }
 
@@ -63,6 +65,7 @@ final class FreeTrialQuotaJevTest extends TestCase
     {
         $this->usage('claude', 900);
         $this->usage('jev', 5000);
+        $this->usage('acme', 5000);
         $this->assertNull($this->checkQuota(7));
     }
 
