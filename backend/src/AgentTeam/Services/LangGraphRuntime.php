@@ -655,8 +655,16 @@ class ErrorExitTaken(Exception):
     def __init__(self, failed: list[tuple[str, str]]):
         """failed: (display name, the error exit's output -- why the run failed, '' when none) per code node."""
         self.nodes = [n for n, _ in failed]   # display names of the code nodes that took it
-        super().__init__(", ".join(f"code node {n!r} took its error exit" + (f": {out}" if out else "")
+        super().__init__(", ".join(f"code node {n!r} took its error exit" + (f": {self.reason(out)}" if out.strip() else "")
                                    for n, out in failed))
+
+    REASON_MAX = 200   # characters of an error exit's output in the error line
+
+    @classmethod
+    def reason(cls, out: str) -> str:
+        """The output as one line of at most REASON_MAX characters: it may be a whole tool error page or email body."""
+        line = " ".join(out.split())
+        return line if len(line) <= cls.REASON_MAX else line[:cls.REASON_MAX] + "…"
 
 
 class WorkflowGraph:

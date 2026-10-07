@@ -262,9 +262,17 @@ try:
     g.check_error_exits()
 except ErrorExitTaken as e:
     print("raised", e, e.nodes)
+g.outputs = {"2": {"source": "Poll Outlook", "text": "line one\n\n  line two\t" + "x" * 400}}   # e.g. a whole email body
+try:
+    g.check_error_exits()
+except ErrorExitTaken as e:
+    print("long", e)
 PY);
         self::assertSame(['clean ok', 'other exits ok', "raised code node 'Poll Outlook' took its error exit",
-            "raised code node 'Poll Outlook' took its error exit: not_connected ['Poll Outlook']"], $out);
+            "raised code node 'Poll Outlook' took its error exit: not_connected ['Poll Outlook']"], array_slice($out, 0, 4));
+        // a long multi-line reason (an email body, a tool error page) prints as ONE line, cut at 200 characters
+        $reason = 'line one line two ' . str_repeat('x', 182);
+        self::assertSame(["long code node 'Poll Outlook' took its error exit: {$reason}…"], array_slice($out, 4));
     }
 
     // ---------- the generator: DEFAULT_CRON, the loop and the docs in every entry file ----------
