@@ -50,6 +50,7 @@ class SystemSettingsController
         $alters = [
             "ALTER TABLE `system_llm_settings` ADD COLUMN `price_input_per_1m` DECIMAL(10,4) DEFAULT NULL AFTER `temperature`",
             "ALTER TABLE `system_llm_settings` ADD COLUMN `price_output_per_1m` DECIMAL(10,4) DEFAULT NULL AFTER `price_input_per_1m`",
+            "ALTER TABLE `system_llm_settings` ADD COLUMN `protocol` VARCHAR(64) NULL DEFAULT NULL AFTER `api_format`",
         ];
         foreach ($alters as $alter) {
             try { $this->db->exec($alter); } catch (\PDOException $e) { /* already exists */ }

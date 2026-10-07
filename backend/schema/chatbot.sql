@@ -693,6 +693,7 @@ CREATE TABLE `system_llm_settings` (
   `supports_tools` tinyint(1) DEFAULT '1',
   `supported_models` json DEFAULT NULL,
   `api_format` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT 'openai',
+  `protocol` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `system_prompt` text COLLATE utf8mb4_unicode_ci,
   `enabled` tinyint(1) DEFAULT '1',
   `sort_order` int DEFAULT '0',
