@@ -40,7 +40,7 @@ export function routerRowError(input: {
       : `Provider '${providerKey}' is a decision provider; it cannot become an LLM`;
   }
   if (!isRouter) return null;
-  if (!protocol || !(protocol in DECISION_PROTOCOLS)) {
+  if (!protocol || !Object.hasOwn(DECISION_PROTOCOLS, protocol)) {
     return 'Decision provider needs a protocol: one of ' + Object.keys(DECISION_PROTOCOLS).join(', ');
   }
   const stem = envStem(providerKey);
@@ -61,7 +61,7 @@ function decisionRows(rows: Row[]): Row[] {
     .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0) || String(a.provider_key).localeCompare(String(b.provider_key)));
 }
 
-const protocolOf = (row: Row) => (row.protocol && DECISION_PROTOCOLS[row.protocol]) || null;
+const protocolOf = (row: Row) => (row.protocol && Object.hasOwn(DECISION_PROTOCOLS, row.protocol) && DECISION_PROTOCOLS[row.protocol]) || null;
 
 /** `decision_providers` of GET /settings/keys: usable rows the plan allows. Never a key. No rate on TS. */
 export function decisionProviderList(rows: Row[], allowed: (key: string) => boolean) {
@@ -103,6 +103,7 @@ export function dispatchProviderList(rows: Row[], allowed: (key: string) => bool
       key_env: `${stem}_API_KEY`,
       url_env: `${stem}_BASE_URL`,
       legacy_env: protocol?.legacy_env ?? null,
+      supported: false,
     };
   });
   return { default: null, providers };

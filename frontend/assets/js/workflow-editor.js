@@ -18741,8 +18741,11 @@ Based on the analysis...
             const o = document.createElement('option');
             o.value = p.key;
             o.dataset.provider = '1';
-            o.textContent = p.allowed === false ? `${p.label} — ${tf('decisionNotInPlan', { provider: p.label })}` : p.label;
-            o.disabled = p.allowed === false && p.key !== current;
+            // supported === false: this backend cannot route with decision models at all.
+            const unsupported = p.supported === false;
+            o.textContent = unsupported ? `${p.label} — ${p.reason}`
+                : (p.allowed === false ? `${p.label} — ${tf('decisionNotInPlan', { provider: p.label })}` : p.label);
+            o.disabled = (unsupported || p.allowed === false) && p.key !== current;
             sel.insertBefore(o, llm);
         }
         if (current && current !== 'llm' && !listed.has(current)) {
@@ -18782,6 +18785,7 @@ Based on the analysis...
         sw?.classList.add('hidden');
         if (!this._formDecisionList) { st.textContent = tf('decisionKeyUnknown'); st.className = 'text-sm text-gray-600'; return; }
         if (!p) { st.textContent = tf('routingUnavailable', { provider: label }); st.className = 'text-sm text-amber-700'; return; }
+        if (p.supported === false) { st.textContent = p.reason; st.className = 'text-sm text-amber-700'; return; }
         if (p.allowed === false) { st.textContent = tf('decisionNotInPlan', { provider: label }); st.className = 'text-sm text-amber-700'; return; }
         if (p.has_key) {
             st.textContent = tf(p.source === 'user' ? 'decisionKeySetUser' : (p.source === 'package' ? 'decisionKeySetPackage' : 'decisionKeySetGlobal'), { provider: label });

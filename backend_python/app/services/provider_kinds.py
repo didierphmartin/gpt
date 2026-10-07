@@ -88,5 +88,6 @@ def dispatch_provider_list(rows: list[dict], allowed) -> dict:
             'key_env': f'{stem}_API_KEY',
             'url_env': f'{stem}_BASE_URL',
             'legacy_env': protocol['legacy_env'] if protocol else None,
+            'supported': False,
         })
     return {'default': None, 'providers': providers}

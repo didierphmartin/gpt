@@ -51,5 +51,6 @@ test('/dispatch/providers says routing is not supported here', () => {
   assert.equal(out.default, null);
   assert.deepEqual(out.providers.map((p) => p.key), ['broken', 'acme', 'jev']);
   assert.ok(out.providers.every((p) => p.routable === false && p.reason === 'not supported on this backend'));
+  assert.ok(out.providers.every((p) => p.supported === false), 'the form greys these out');
   assert.equal(out.providers[1].key_env, 'ACME_API_KEY');
 });

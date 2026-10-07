@@ -57,6 +57,8 @@ class DispatchController
                 'key_env' => $stem . '_API_KEY',
                 'url_env' => $stem . '_BASE_URL',
                 'legacy_env' => $protocol['legacy_env'] ?? null,
+                // This backend routes with decision models (the TS/Python twins say false).
+                'supported' => true,
             ];
         }
         return ['success' => true, 'default' => DecisionKeyResolver::defaultProvider($this->db, $userId),

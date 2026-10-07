@@ -65,6 +65,7 @@ final class DispatchProvidersTest extends TestCase
         $this->assertSame('acme', $out['default']);
         $acme = $out['providers'][0];
         $this->assertTrue($acme['routable']);
+        $this->assertTrue($acme['supported'], 'PHP routes with decision models');
         $this->assertSame('ACME_API_KEY', $acme['key_env']);
         $this->assertSame('ACME_BASE_URL', $acme['url_env']);
         $this->assertSame(['key' => 'TYPESAFE_API_KEY', 'url' => 'TYPESAFE_BASE_URL'], $acme['legacy_env']);

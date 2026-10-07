@@ -45,3 +45,4 @@ def test_dispatch_provider_list_is_not_routable_here():
     assert out['default'] is None
     assert [p['key'] for p in out['providers']] == ['broken', 'acme', 'jev']
     assert all(p['routable'] is False and p['reason'] == 'not supported on this backend' for p in out['providers'])
+    assert all(p['supported'] is False for p in out['providers'])

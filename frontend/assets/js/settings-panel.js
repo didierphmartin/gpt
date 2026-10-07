@@ -3220,7 +3220,7 @@ class SettingsPanel {
             cardsHtml += `
                 <div class="usage-card ${decision ? 'decision' : provider}">
                     <div class="usage-card-header">${this.getProviderDisplayName(provider)}</div>
-                    <div class="usage-card-model">${pricing.model}</div>
+                    <div class="usage-card-model">${this.escapeHtml(pricing.model)}</div>
                     <div class="usage-card-stat">
                         <span>Requests</span>
                         <span>${this.formatNumber(data.month_requests || 0)}</span>
