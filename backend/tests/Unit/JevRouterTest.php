@@ -200,4 +200,30 @@ final class JevRouterTest extends TestCase
         $this->assertNull($this->router([new ConnectException('timeout', new Request('POST', 'x'))])
             ->route('x', self::TARGETS, 'q')['ms']);
     }
+
+    public function testTheModelComesFromTheRow(): void
+    {
+        $history = [];
+        $stack = HandlerStack::create(new MockHandler([self::answer('Billing', 0.99)]));
+        $stack->push(\GuzzleHttp\Middleware::history($history));
+        (new JevRouter('k', new Client(['handler' => $stack]), 0.6, '', 'jev-2'))
+            ->route('x', self::TARGETS, 'q');
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('jev-2', $body['model']);
+    }
+
+    public function testAnEmptyModelIsTheVendorDefault(): void
+    {
+        $history = [];
+        $stack = HandlerStack::create(new MockHandler([self::answer('Billing', 0.99)]));
+        $stack->push(\GuzzleHttp\Middleware::history($history));
+        (new JevRouter('k', new Client(['handler' => $stack])))->route('x', self::TARGETS, 'q');
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame(JevRouter::MODEL, $body['model']);
+    }
+
+    public function testItIsADecisionRouter(): void
+    {
+        $this->assertInstanceOf(\AgentTeam\Services\DecisionRouter::class, new JevRouter('k'));
+    }
 }

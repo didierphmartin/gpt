@@ -52,14 +52,16 @@ use GuzzleHttp\Exception\GuzzleException;
  * >= 0.95 and the two genuinely straddling ones at 0.46 and 0.51, so the floor
  * separates them cleanly. It is a starting point tuned from ~20 requests on two
  * workflows, not a constant: expose it, do not hardcode a belief.
+ *
+ * The `typesafe` protocol adapter (DecisionProtocols).
  */
-final class JevRouter
+final class JevRouter implements DecisionRouter
 {
     /** POST target. Captured from typesafe-sdk 0.7.2 rather than inferred. */
     public const URL = 'https://api.typesafe.ai/v1/systemone';
 
     /** Pinned by name, not by version: the API resolves it (answered jev-1.13.0 when written). */
-    private const MODEL = 'jev-latest';
+    public const MODEL = 'jev-latest';
 
     /** The synthetic option that lets "I cannot tell" be sayable. Never a real branch name. */
     public const UNCLEAR = 'unclear';
@@ -79,13 +81,15 @@ final class JevRouter
         private ?Client $http = null,
         private float $confidenceFloor = self::DEFAULT_CONFIDENCE_FLOOR,
         // A gateway in front of TypeSafe (JevKeyResolver::url); '' = URL.
-        private string $url = ''
+        private string $url = '',
+        private string $model = ''
     ) {
         // null = not configured. The key comes from JevKeyResolver (user row,
         // else the global router row); .env TYPESAFE_API_KEY is deliberately
         // NOT read, or it would bypass that precedence.
         $this->apiKey ??= '';
         $this->url = trim($this->url) !== '' ? trim($this->url) : self::URL;
+        $this->model = trim($this->model) !== '' ? trim($this->model) : self::MODEL;
         // 10s: a measured p50 of ~160ms and max of 385ms means a request still
         // running after ten seconds is broken, not slow. Failing fast matters
         // because the caller's fallback is a working LLM route, not an error.
@@ -145,7 +149,7 @@ final class JevRouter
 
         $body = [
             'state' => ['request' => $request],
-            'model' => self::MODEL,
+            'model' => $this->model,
             'questions' => [
                 'route' => ['type' => 'choice', 'instructions' => $question, 'criteria' => $criteria],
             ],
