@@ -2,6 +2,9 @@
 -- A router row (api_format 'router') names the protocol its adapter speaks
 -- (DecisionProtocols.php). NULL = not usable until an admin sets it.
 -- Additive: code that predates this column ignores it.
+-- The app may already have added the column (SystemSettingsController
+-- ensurePriceColumnsExist runs this ALTER and the UPDATE below lazily). If the
+-- ALTER fails with "Duplicate column", run the UPDATE statement alone.
 ALTER TABLE system_llm_settings ADD COLUMN protocol VARCHAR(64) NULL DEFAULT NULL AFTER api_format;
 
 UPDATE system_llm_settings SET protocol = 'typesafe'

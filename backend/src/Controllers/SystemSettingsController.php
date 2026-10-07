@@ -6,6 +6,7 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use AgentTeam\Services\PythonEmitHelpers;
 use Quantis\AIPortfolioAssistant\Services\DecisionProtocols;
 use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use Quantis\AIPortfolioAssistant\Services\ProviderKinds;
@@ -57,6 +58,13 @@ class SystemSettingsController
         foreach ($alters as $alter) {
             try { $this->db->exec($alter); } catch (\PDOException $e) { /* already exists */ }
         }
+        // The backfill of migration 2026-10-07_decision_protocol.sql: adding the
+        // protocol column here would otherwise leave the jev router row at NULL
+        // (and the migration then stops on "Duplicate column" before its UPDATE).
+        try {
+            $this->db->exec("UPDATE system_llm_settings SET protocol = 'typesafe'"
+                . " WHERE provider_key = 'jev' AND api_format = 'router' AND protocol IS NULL");
+        } catch (\PDOException $e) { /* column missing: the ALTER above failed */ }
         $this->priceColumnsEnsured = true;
     }
 
@@ -423,6 +431,19 @@ class SystemSettingsController
                 ];
             }
             $stem = DecisionProviders::envStem($providerKey);
+            // The runner .env already uses the LLM key names and each protocol's
+            // legacy key name; a decision key must not land on one of them.
+            $reserved = array_merge(
+                array_values(PythonEmitHelpers::PROVIDER_KEY_ENV),
+                array_map(fn (array $p) => $p['legacy_env']['key'], array_values(DecisionProtocols::all()))
+            );
+            if (in_array("{$stem}_API_KEY", $reserved, true)) {
+                return [
+                    'success' => false,
+                    'error' => "'$providerKey' would use the env name {$stem}_API_KEY, which is reserved",
+                    'status_code' => 400
+                ];
+            }
             foreach (DecisionProviders::keys($this->db) as $other) {
                 if ($other !== $providerKey && DecisionProviders::envStem($other) === $stem) {
                     return [

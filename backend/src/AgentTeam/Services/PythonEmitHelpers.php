@@ -639,15 +639,18 @@ PY;
     // Generated-script documentation (shared by every compile target)
     // ------------------------------------------------------------------
 
+    /** Env var that carries the API key of each LLM provider (as the runner's .env names them). */
+    public const PROVIDER_KEY_ENV = [
+        'claude' => 'ANTHROPIC_API_KEY', 'anthropic' => 'ANTHROPIC_API_KEY',
+        'openai' => 'OPENAI_API_KEY', 'gemini' => 'GOOGLE_API_KEY', 'google' => 'GOOGLE_API_KEY',
+        'grok' => 'XAI_API_KEY', 'xai' => 'XAI_API_KEY', 'kimi' => 'KIMI_API_KEY', 'moonshot' => 'KIMI_API_KEY',
+        'deepseek' => 'DEEPSEEK_API_KEY', 'glm' => 'GLM_API_KEY',
+    ];
+
     /** Env var that carries the API key of a provider (as the runner's .env names them). */
     public static function providerKeyEnv(string $provider): ?string
     {
-        return [
-            'claude' => 'ANTHROPIC_API_KEY', 'anthropic' => 'ANTHROPIC_API_KEY',
-            'openai' => 'OPENAI_API_KEY', 'gemini' => 'GOOGLE_API_KEY', 'google' => 'GOOGLE_API_KEY',
-            'grok' => 'XAI_API_KEY', 'xai' => 'XAI_API_KEY', 'kimi' => 'KIMI_API_KEY', 'moonshot' => 'KIMI_API_KEY',
-            'deepseek' => 'DEEPSEEK_API_KEY', 'glm' => 'GLM_API_KEY',
-        ][strtolower($provider)] ?? null;
+        return self::PROVIDER_KEY_ENV[strtolower($provider)] ?? null;
     }
 
     /** One-line summary of a node descriptor (see WorkflowGraphAnalyzer::docNodes). */

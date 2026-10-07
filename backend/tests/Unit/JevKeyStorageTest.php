@@ -518,6 +518,34 @@ final class JevKeyStorageTest extends TestCase
         $this->assertStringContainsString('JEV_EU_API_KEY', $clash['error']);
     }
 
+    public function testADecisionKeyOnAReservedEnvNameIsRefused(): void
+    {
+        $ctrl = new SystemSettingsController($this->db, $this->config());
+        foreach (['xai' => 'XAI_API_KEY', 'typesafe' => 'TYPESAFE_API_KEY'] as $key => $env) {
+            $out = $ctrl->saveLLMProvider(['user_id' => 1, 'body' => [
+                'provider_key' => $key, 'model' => 'm', 'api_format' => 'router', 'protocol' => 'typesafe',
+            ]]);
+            $this->assertSame(400, $out['status_code'], $key);
+            $this->assertSame("'$key' would use the env name $env, which is reserved", $out['error']);
+        }
+        $this->assertSame(0, (int) $this->db->query("SELECT COUNT(*) FROM system_llm_settings WHERE api_format = 'router'")->fetchColumn());
+    }
+
+    /** The lazy ALTER must carry the migration's jev backfill with it. */
+    public function testTheLazyColumnEnsureBackfillsTheJevProtocol(): void
+    {
+        $this->db->exec("INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, api_format, protocol)
+            VALUES ('jev', 'Jev', '', 'jev-latest', 'router', NULL),
+                   ('acme', 'Acme', '', 'm', 'router', NULL)");
+        $out = (new SystemSettingsController($this->db, $this->config()))->getLLMProviders(['user_id' => 1]);
+        $this->assertTrue($out['success'], $out['error'] ?? '');
+
+        $protocols = $this->db->query("SELECT provider_key, protocol FROM system_llm_settings WHERE api_format = 'router'")
+            ->fetchAll(PDO::FETCH_KEY_PAIR);
+        $this->assertSame('typesafe', $protocols['jev']);
+        $this->assertNull($protocols['acme'], 'only the jev row is backfilled');
+    }
+
     public function testDecisionProtocolsAreListed(): void
     {
         $out = (new SystemSettingsController($this->db, $this->config()))->decisionProtocols(['user_id' => 1]);
