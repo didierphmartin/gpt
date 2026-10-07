@@ -136,7 +136,7 @@ def test_apply_package_defaults_and_quota():
     out = ChatController(db, cfg)._applyPackageDefaults(cfg, '3')
     assert out['claude'] == {'api_key': 'K', 'model': 'M'} and out['providers']['kimi'] == {'api_key': 'x'}
     q = ChatController(Db([{'plan': 'free', 'role': 'user'}, {'role': 'user'}, {'capabilities': '{"quota_tokens":1000}', 'updated_at': None},
-                           [{'Tables_in_x': 'llm_usage_balance'}], {'total': 1500}]), cfg)._checkFreeTrialQuota('3')
+                           [{'Tables_in_x': 'llm_usage_balance'}], [], {'total': 1500}]), cfg)._checkFreeTrialQuota('3')
     assert q == {'success': False, 'error': 'Token quota reached. You have used 1,500 of 1,000 tokens. Please upgrade your plan to continue.', 'code': 'QUOTA_EXCEEDED',
                  'usage': {'total_tokens': 1500, 'quota': 1000}, 'status_code': 403}
     assert ChatController(Db([{'plan': 'premium', 'role': 'user'}]), cfg)._checkFreeTrialQuota('3') is None
@@ -189,6 +189,22 @@ def test_apply_user_api_keys_zero_string_user_id_is_empty_like_php():
     db = Db([])
     out = ChatController(db, cfg)._applyUserApiKeys(cfg, '0')
     assert out == cfg and db.calls == []
+
+
+def test_quota_excludes_every_decision_provider_like_php():
+    # ChatController::checkFreeTrialQuota: decision-model tokens never count toward the cap;
+    # every router row (enabled or not) is excluded, one placeholder per key.
+    head = [{'plan': 'free', 'role': 'user'}, {'role': 'user'}, {'capabilities': '{"quota_tokens":1000}', 'updated_at': None},
+            [{'Tables_in_x': 'llm_usage_balance'}]]
+    db = Db(head + [[{'provider_key': 'acme', 'enabled': 0}, {'provider_key': 'jev', 'enabled': 1}], {'total': 400}])
+    assert ChatController(db, {})._checkFreeTrialQuota('3') is None
+    sql, params = db.calls[-1]
+    assert sql == 'SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ? AND provider NOT IN (?, ?)'
+    assert params == [3, 'acme', 'jev']
+    # No decision rows: no NOT IN clause at all.
+    db = Db(head + [[], {'total': 400}])
+    ChatController(db, {})._checkFreeTrialQuota('3')
+    assert db.calls[-1] == ('SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ?', [3])
 
 
 def test_quota_check_treats_empty_string_plan_as_not_free():

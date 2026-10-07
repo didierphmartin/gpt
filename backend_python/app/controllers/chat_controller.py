@@ -23,6 +23,7 @@ from app.agent_team.services.session_search_service import SessionSearchService
 from app.agent_team.services.user_memory_repository import UserMemoryRepository
 from app.exceptions import ProviderException
 from app.services.api_key_crypto import ApiKeyCrypto
+from app.services.decision_access import router_rows
 from app.services.combined_tools_executor import CombinedToolsExecutor
 from app.services.filtered_tools_executor import FilteredToolsExecutor
 from app.services.mcp_tools_loader import MCPToolsLoader
@@ -927,9 +928,13 @@ class ChatController:
             if len(tables) == 0:
                 return None  # Table doesn't exist yet, no usage
 
+            # Decision-model tokens are recorded (usage, costs) but never count toward the quota:
+            # routing costs a tiny fraction of a model call and is not what the cap limits.
+            decision_keys = [str(r['provider_key']) for r in router_rows(self.db)]
+            not_in = (' AND provider NOT IN (' + ', '.join(['?'] * len(decision_keys)) + ')') if decision_keys else ''
             row = self.db.fetch_one(
-                "SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ?",
-                [numeric_user_id],
+                "SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ?" + not_in,
+                [numeric_user_id, *decision_keys],
             )
             total_tokens = php_intval(row.get('total')) if row else 0
 
