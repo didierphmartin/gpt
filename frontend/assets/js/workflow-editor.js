@@ -6734,13 +6734,27 @@ class WorkflowEditor {
                                             <option value="daily" ${schedule.repeat_type === 'daily' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.daily')}</option>
                                             <option value="weekly" ${schedule.repeat_type === 'weekly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.weekly')}</option>
                                             <option value="monthly" ${schedule.repeat_type === 'monthly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.monthly')}</option>
+                                            <option value="cron" ${schedule.repeat_type === 'cron' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.cron')}</option>
                                         </select>
                                     </div>
-                                    <div id="repeat-interval-container" style="width: 120px; display: ${schedule.repeat_type && schedule.repeat_type !== 'none' ? 'block' : 'none'};">
+                                    <div id="repeat-interval-container" style="width: 120px; display: ${schedule.repeat_type && schedule.repeat_type !== 'none' && schedule.repeat_type !== 'cron' ? 'block' : 'none'};">
                                         <label style="display: block; font-size: 13px; color: #6b7280; margin-bottom: 4px;">${this.t('workflow.schedule.every')}</label>
                                         <input type="number" id="schedule-repeat-interval" value="${schedule.repeat_interval || 1}" min="1" max="99"
                                             style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; text-align: center;">
                                     </div>
+                                </div>
+
+                                <div id="cron-container" style="margin-top: 12px; display: ${schedule.repeat_type === 'cron' ? 'block' : 'none'};">
+                                    <label style="display:block; font-size:13px; color:#6b7280; margin-bottom:4px;">${this.t('workflow.schedule.cron.label')}</label>
+                                    <input type="text" id="schedule-cron" value="${this.escapeHtml(schedule.cron || '*/2 * * * *')}" spellcheck="false"
+                                        style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; font-family:monospace;">
+                                    <div style="font-size:12px; color:#6b7280; margin-top:4px;">${this.t('workflow.schedule.cron.hint')}</div>
+                                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                                        ${window.CronText.PRESETS.map((p) => `<button type="button" class="cron-preset" data-expr="${p.expr}"
+                                            style="padding:4px 8px; border:1px solid #d1d5db; border-radius:4px; background:#fff; font-size:12px; cursor:pointer;">
+                                            ${this.t('workflow.schedule.cron.' + p.key)}</button>`).join('')}
+                                    </div>
+                                    <div id="schedule-cron-preview" style="margin-top:6px; font-size:13px;"></div>
                                 </div>
 
                                 ${hasSchedule ? `
@@ -6799,9 +6813,26 @@ class WorkflowEditor {
         });
 
         // Show/hide repeat interval based on repeat type
-        repeatTypeSelect.addEventListener('change', () => {
-            repeatIntervalContainer.style.display = repeatTypeSelect.value !== 'none' ? 'block' : 'none';
-        });
+        const cronContainer = document.getElementById('cron-container');
+        const cronInput = document.getElementById('schedule-cron');
+        const cronPreview = document.getElementById('schedule-cron-preview');
+        const t = (k, p) => this.t(k, p);
+        const refreshCron = () => {
+            const isCron = repeatTypeSelect.value === 'cron';
+            cronContainer.style.display = isCron ? 'block' : 'none';
+            repeatIntervalContainer.style.display = !isCron && repeatTypeSelect.value !== 'none' ? 'block' : 'none';
+            const err = isCron ? window.CronText.validate(cronInput.value) : null;
+            cronPreview.textContent = err ? this.t(err) : (isCron ? window.CronText.describe(cronInput.value, t) : '');
+            cronPreview.style.color = err ? '#dc2626' : '#059669';
+            if (saveScheduleBtn) saveScheduleBtn.disabled = !!err;
+        };
+        repeatTypeSelect.addEventListener('change', refreshCron);
+        cronInput.addEventListener('input', refreshCron);
+        cronContainer.querySelectorAll('.cron-preset').forEach((b) => b.addEventListener('click', () => {
+            cronInput.value = b.dataset.expr;
+            refreshCron();
+        }));
+        refreshCron();
 
         // Show save schedule button if enabled
         if (saveScheduleBtn && scheduleEnabledChk.checked) {
@@ -6822,9 +6853,12 @@ class WorkflowEditor {
                 const scheduleData = {
                     workflow_id: this.currentWorkflowId,
                     input_prompt: textarea.value.trim(),
-                    scheduled_time: document.getElementById('schedule-datetime').value,
+                    // The server requires scheduled_time even for cron (it ignores it for next_run).
+                    scheduled_time: document.getElementById('schedule-datetime').value
+                        || (repeatTypeSelect.value === 'cron' ? new Date().toISOString() : ''),
                     repeat_type: repeatTypeSelect.value,
-                    repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1
+                    repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1,
+                    cron: repeatTypeSelect.value === 'cron' ? cronInput.value.trim() : null
                 };
 
                 const success = await this.saveSchedule(scheduleData);
