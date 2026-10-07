@@ -8,9 +8,26 @@ use PHPUnit\Framework\TestCase;
 /** Runs the real python3 runner (no MCP server needed for these cases). */
 final class CodeNodeExecutorTest extends TestCase
 {
+    /** A Python 3.10+ interpreter: CODE_NODE_PYTHON, else /usr/local/bin/python3, else python3 from PATH. */
+    private static function python(): string
+    {
+        $env = getenv('CODE_NODE_PYTHON');
+        return $env ?: (is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3');
+    }
+
     private function exec(array $config = []): CodeNodeExecutor
     {
-        return new CodeNodeExecutor($this->pdo(), $config);
+        return new CodeNodeExecutor($this->pdo(), $config + ['code_nodes' => ['python' => self::python()]]);
+    }
+
+    /** Skips when the interpreter is too old; otherwise requires the run to have succeeded. */
+    private function assertRan(array $out): void
+    {
+        $err = (string) ($out['result']['error'] ?? '');
+        if (!$out['result']['ok'] && str_contains($err, 'needs Python 3.10+')) {
+            self::markTestSkipped($err);
+        }
+        self::assertTrue($out['result']['ok'], $err);
     }
 
     private function pdo(): \PDO
@@ -31,6 +48,7 @@ final class CodeNodeExecutorTest extends TestCase
     {
         $code = "def run(input, call_tool):\n    return {'route': 'b', 'output': input.upper()}\n";
         $out = $this->exec()->run(self::node($code), [], [2], '3', [['name' => 'start', 'text' => 'hi', 'start' => true]], 'hi');
+        $this->assertRan($out);
         self::assertSame('b', $out['result']['route']);
         self::assertSame('HI', $out['result']['output_text']);
     }
@@ -69,5 +87,19 @@ final class CodeNodeExecutorTest extends TestCase
             ->run(self::node("def run(i, c):\n    return {'route': 'a', 'output': 1}\n"), [], [2], '3', [], '');
         self::assertFalse($out['result']['ok']);
         self::assertStringContainsString('code node runner failed', $out['result']['error']);
+    }
+
+    public function testRunawayCodeIsStoppedWithATimeoutError(): void
+    {
+        $node = self::node("def run(i, c):\n    while True:\n        pass\n");
+        $node['config']['timeout_s'] = 1;
+        $t = microtime(true);
+        $out = $this->exec()->run($node, [], [2], '3', [], '');
+        if (!$out['result']['ok'] && str_contains((string) $out['result']['error'], 'needs Python 3.10+')) {
+            self::markTestSkipped($out['result']['error']);
+        }
+        self::assertFalse($out['result']['ok']);
+        self::assertMatchesRegularExpression('/time/i', $out['result']['error']);
+        self::assertLessThan(10, microtime(true) - $t);
     }
 }

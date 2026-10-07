@@ -27,7 +27,7 @@ final class CodeNodeStep
             }
             $start = ($nodes[$u]['node_type'] ?? '') === 'start';
             $cfg = $nodes[$u]['config'] ?? [];
-            $out[] = ['name' => $start ? 'start' : (string) ($cfg['agent_name'] ?? $cfg['name'] ?? "node_{$u}"),
+            $out[] = ['name' => $start ? 'start' : (string) (($cfg['agent_name'] ?? '') ?: ($cfg['name'] ?? '') ?: "node_{$u}"),
                 'text' => is_string($text) ? $text : json_encode($text), 'start' => $start];
         }
         return $out;

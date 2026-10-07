@@ -68,7 +68,8 @@ final class CodeNodeExecutor
         if (!is_resource($proc)) {
             throw new \RuntimeException("could not start {$python} for the code node");
         }
-        fwrite($pipes[0], json_encode($request, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        // A child that died early closes the pipe: the warning is not an error here, the empty stdout below reports it.
+        @fwrite($pipes[0], json_encode($request, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         fclose($pipes[0]);
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
@@ -82,6 +83,9 @@ final class CodeNodeExecutor
             }
             if (microtime(true) > $deadline) {
                 proc_terminate($proc, 9);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                proc_close($proc);
                 return ['ok' => false, 'error' => "code node timed out after {$killAfterS}s (process killed)", 'stdout' => '', 'tool_calls' => []];
             }
             usleep(20000);
