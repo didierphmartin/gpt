@@ -6855,7 +6855,7 @@ class WorkflowEditor {
                     input_prompt: textarea.value.trim(),
                     // The server requires scheduled_time even for cron (it ignores it for next_run).
                     scheduled_time: document.getElementById('schedule-datetime').value
-                        || (repeatTypeSelect.value === 'cron' ? new Date().toISOString() : ''),
+                        || (repeatTypeSelect.value === 'cron' ? this._localNowStamp() : ''),
                     repeat_type: repeatTypeSelect.value,
                     repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1,
                     cron: repeatTypeSelect.value === 'cron' ? cronInput.value.trim() : null
@@ -20267,6 +20267,13 @@ Based on the analysis...
     /**
      * Save or update a schedule
      */
+    /** Local 'YYYY-MM-DDTHH:mm', the shape the datetime-local field sends. */
+    _localNowStamp() {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
     async saveSchedule(scheduleData) {
         try {
             const isUpdate = this.currentSchedule?.id;
