@@ -571,8 +571,12 @@ class GraphWorkflowRunner
                     'output' => null, 'node_outputs' => $this->nodeOutputs, 'nodes_executed' => count($executedNodes)];
             }
 
-            // Complete execution
-            $this->completeExecution($this->executionId, $this->nodeOutputs, $responseTime);
+            // Complete execution. A run in which a code node took its error exit keeps its row with the
+            // error recorded, but is neither saved to output storage nor archived as a chat (it would be
+            // one more chat per tick while a mailbox is down).
+            $errorExits = CodeNodeStep::errorExits($this->nodeOutputs, $nodes);
+            $this->completeExecution($this->executionId, $this->nodeOutputs, $responseTime,
+                $errorExits ? implode('; ', $errorExits) : null);
 
             // Emit workflow_complete event
             $this->emitWorkflowEvent('workflow_complete', $workflow, [
@@ -589,43 +593,45 @@ class GraphWorkflowRunner
 
             // Save output to storage if enabled
             $storageSaveResult = null;
-            try {
-                $storageSaveResult = $this->outputStorage->saveOutput(
-                    $workflow->getId(),
-                    $userId,
-                    [
-                        'execution_id' => $this->executionId,
-                        'workflow_id' => $workflow->getId(),
-                        'workflow_name' => $workflow->getName(),
-                        'timestamp' => date('c'),
-                        'response_time_ms' => round($responseTime, 2),
-                        'nodes_executed' => count($executedNodes),
-                        'output' => $finalOutput,
-                        'node_outputs' => $this->nodeOutputs,
-                        'input_variables' => $inputVariables,
-                    ]
-                );
+            if ($errorExits === []) {
+                try {
+                    $storageSaveResult = $this->outputStorage->saveOutput(
+                        $workflow->getId(),
+                        $userId,
+                        [
+                            'execution_id' => $this->executionId,
+                            'workflow_id' => $workflow->getId(),
+                            'workflow_name' => $workflow->getName(),
+                            'timestamp' => date('c'),
+                            'response_time_ms' => round($responseTime, 2),
+                            'nodes_executed' => count($executedNodes),
+                            'output' => $finalOutput,
+                            'node_outputs' => $this->nodeOutputs,
+                            'input_variables' => $inputVariables,
+                        ]
+                    );
 
-                if ($storageSaveResult['success']) {
-                    error_log("[GraphWorkflowRunner] Output saved to storage: " . ($storageSaveResult['path'] ?? 'unknown'));
+                    if ($storageSaveResult['success']) {
+                        error_log("[GraphWorkflowRunner] Output saved to storage: " . ($storageSaveResult['path'] ?? 'unknown'));
+                    }
+                } catch (\Exception $e) {
+                    error_log("[GraphWorkflowRunner] Failed to save output to storage: " . $e->getMessage());
                 }
-            } catch (\Exception $e) {
-                error_log("[GraphWorkflowRunner] Failed to save output to storage: " . $e->getMessage());
-            }
 
-            // Archive the run into conversation_contexts so it shows up in
-            // the chat sidebar and is searchable via session_search. This is
-            // best-effort — a failure here never fails the workflow.
-            try {
-                $this->archiveRunToConversationContexts(
-                    $userId,
-                    (int) $workflow->getId(),
-                    (string) $workflow->getName(),
-                    (string) $userPrompt,
-                    (string) ($finalOutput ?? '')
-                );
-            } catch (\Throwable $e) {
-                error_log('[GraphWorkflowRunner] Archive to conversation_contexts failed: ' . $e->getMessage());
+                // Archive the run into conversation_contexts so it shows up in
+                // the chat sidebar and is searchable via session_search. This is
+                // best-effort — a failure here never fails the workflow.
+                try {
+                    $this->archiveRunToConversationContexts(
+                        $userId,
+                        (int) $workflow->getId(),
+                        (string) $workflow->getName(),
+                        (string) $userPrompt,
+                        (string) ($finalOutput ?? '')
+                    );
+                } catch (\Throwable $e) {
+                    error_log('[GraphWorkflowRunner] Archive to conversation_contexts failed: ' . $e->getMessage());
+                }
             }
 
             return [
@@ -1877,16 +1883,17 @@ class GraphWorkflowRunner
     /**
      * Complete workflow execution
      */
-    private function completeExecution(int $executionId, array $outputs, float $responseTime): void
+    private function completeExecution(int $executionId, array $outputs, float $responseTime, ?string $error = null): void
     {
         $this->ensureDbConnection();
         $stmt = $this->db->prepare(
             "UPDATE agent_workflow_executions
-             SET status = 'completed', output = ?, response_time_ms = ?, completed_at = NOW()
+             SET status = 'completed', output = ?, error_message = ?, response_time_ms = ?, completed_at = NOW()
              WHERE id = ?"
         );
         $stmt->execute([
             json_encode($outputs),
+            $error,
             (int)$responseTime,
             $executionId,
         ]);

@@ -60,6 +60,20 @@ final class CodeNodeStep
             'chosen' => $chosen, 'skip' => array_values(array_diff($children, $chosen))];
     }
 
+    /** One line per code node that took its error exit: "code node '<name>' took its error exit: <reason>". */
+    public static function errorExits(array $nodeOutputs, array $nodes): array
+    {
+        $lines = [];
+        foreach ($nodeOutputs as $id => $o) {
+            if (($o['type'] ?? '') === 'code' && ($o['exit'] ?? null) === 'error') {
+                $name = trim((string) ($nodes[$id]['config']['name'] ?? '')) ?: 'Code';
+                $reason = self::reason((string) ($o['output'] ?? ''));
+                $lines[] = "code node '{$name}' took its error exit" . ($reason !== '' ? ": {$reason}" : '');
+            }
+        }
+        return $lines;
+    }
+
     /**
      * quiet: a code node ran, did not error, and no work node ran. drain: a code node ran, a work node
      * downstream of the exit it took ran, and nothing errored (a work node beside the poll, fed by Start,

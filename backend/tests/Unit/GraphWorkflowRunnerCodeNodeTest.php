@@ -69,7 +69,7 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         $agentRunner->shouldNotReceive('run');
         $runner = new GraphWorkflowRunner($this->pdo, Mockery::mock(AgentRepository::class), $agentRunner, $graph,
             array_replace_recursive(['workflow_runs_dir' => $this->runsDir, 'code_nodes' => ['python' => self::python()]], $config));
-        $prev = ini_set('error_log', '/dev/null');
+        $prev = ini_set('error_log', $this->runsDir . '/php.log');
         try {
             return $runner->run(new Workflow(['id' => 44, 'name' => 'Poll test']), 3, ['prompt' => 'go']);
         } finally {
@@ -141,6 +141,32 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertStringContainsString('mailbox down', (string) $rows[0]['output']);
         $log = (string) file_get_contents($this->runLogs()[0]);
         self::assertStringContainsString('took its error exit', $log);
+    }
+
+    private function phpLog(): string
+    {
+        return (string) @file_get_contents($this->runsDir . '/php.log');
+    }
+
+    public function testAnErrorExitRunIsRecordedButNeitherSavedNorArchived(): void
+    {
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'error', 'output': 'mailbox down'}\n", ['work', 'idle', 'error']);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertNull($out['storage'], 'no output storage for an error exit');
+        self::assertStringNotContainsString('Archive to conversation_contexts', $this->phpLog(), 'no archive attempt');
+        $rows = $this->rows();
+        self::assertCount(1, $rows);
+        self::assertSame("code node 'Poll' took its error exit: mailbox down", $rows[0]['error_message']);
+    }
+
+    public function testANormalRunIsSavedAndArchived(): void
+    {
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'work', 'output': 'job 1'}\n", ['work', 'idle', 'error']);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertIsArray($out['storage'], 'output storage was attempted');
+        // No contexts_database in the test config: the attempt fails (best effort) and says so.
+        self::assertStringContainsString('Archive to conversation_contexts failed', $this->phpLog());
+        self::assertNull($this->rows()[0]['error_message']);
     }
 
     public function testTheErrorExitReasonIsLoggedAsOneBoundedLine(): void
