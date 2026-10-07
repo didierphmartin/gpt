@@ -362,6 +362,19 @@ PY);
         self::assertStringContainsString('graph.check_error_exits()', $code);
     }
 
+    public function testTheDocsSayWhatWorkMeansForADrain(): void
+    {
+        $line = 'needs an Output node to drain';
+        $code = $this->generate($this->pdo('*/2 * * * *'), $this->codeGraph())['code'];
+        self::assertStringContainsString('work = a non-empty final output', $code);
+        self::assertStringContainsString($line, $code);
+        $files = array_column($this->generate($this->pdo('*/2 * * * *'), $this->codeGraph(), ['modular' => true])['files'], 'code', 'path');
+        self::assertStringContainsString($line, $files['workflow.py']);
+        // no code node, no drain: not documented
+        $a2a = array_column($this->generate($this->pdo('*/2 * * * *'), LangGraphA2AGeneratorTest::graph(), ['a2a' => true])['files'], 'code', 'path');
+        self::assertStringNotContainsString($line, $a2a['orchestrator.py']);
+    }
+
     public function testAPausedNewestScheduleFallsBackToTheOlderActiveOne(): void
     {
         $code = $this->generate($this->pdo('*/2 * * * *', 'paused'), $this->codeGraph())['code'];

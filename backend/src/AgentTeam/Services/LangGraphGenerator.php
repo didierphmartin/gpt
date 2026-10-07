@@ -1281,7 +1281,11 @@ class LangGraphGenerator
         return ["python {$file} --cron            # loop on the Start node schedule"
             . (($facts['defaultCron'] ?? null) !== null ? " ({$facts['defaultCron']})" : ' (none saved: pass an expression)'),
             "python {$file} --cron \"*/5 8-18 * * 1-5\"   # or any 5-field cron, Ctrl-C (or SIGTERM) to stop",
-            "python {$file} \"your prompt here\" --cron   # a prompt goes BEFORE --cron (after it, it is read as the expression)"];
+            "python {$file} \"your prompt here\" --cron   # a prompt goes BEFORE --cron (after it, it is read as the expression)",
+            ...(!empty($facts['codeData'])
+                ? ['# --cron with code nodes: a run that did work runs again at once (up to 20 per tick); work = a non-empty'
+                    . ' final output, so a code -> agent chain needs an Output node to drain']
+                : [])];
     }
 
     /** Kebab-case ASCII slug for file names (max 40 chars). */
