@@ -1117,9 +1117,16 @@ class LangGraphGenerator
 
         // Code nodes: validated settings, exit -> children from the edges' ports, and the MCP
         // servers their declared tools live on (spec §5).
+        // Every registered server name resolves, including a second one sharing a URL (refused below if both are used).
         $slugToUrl = [];
-        foreach ($serverRegistry as $surl => $meta) {
-            $slugToUrl[CodeNodeEmit::slug((string) ($meta['name'] ?? ''))] = (string) $surl;
+        $slugName = [];
+        foreach ($mcpTools as $t) {
+            $surl = (string) ($t['server_url'] ?? '');
+            if ($surl !== '') {
+                $slg = CodeNodeEmit::slug((string) ($t['server_name'] ?? ''));
+                $slugToUrl[$slg] = $surl;
+                $slugName[$slg] = (string) ($t['server_name'] ?? '');
+            }
         }
         $codeData = [];
         $codeServerUrls = [];
@@ -1166,6 +1173,44 @@ class LangGraphGenerator
         foreach (array_keys($codeServerUrls) as $surl) {
             if (isset($serverRegistry[$surl])) {
                 $usedServers[$surl] = $serverRegistry[$surl];
+            }
+        }
+        // The registry is keyed by URL: two used servers on one URL (two mailboxes on one Outlook MCP,
+        // told apart only by their headers) would collapse into one connection. Refuse; a single used
+        // server on a shared URL keeps its own name (and so its own header variable).
+        $usedNamesByUrl = [];
+        foreach ($usedServers as $surl => $meta) {
+            $usedNamesByUrl[$surl] = [];
+        }
+        foreach ($codeData as $cd) {
+            foreach ($cd['mcp_servers'] as $slg) {
+                $usedNamesByUrl[$slugToUrl[$slg]][$slg] = $slugName[$slg] ?? $slg;
+            }
+        }
+        foreach ($playbookData as $pd) {
+            foreach ($pd['actions'] as $a) {
+                if (($a['kind'] ?? '') === 'mcp') {
+                    $slg = self::serverSlug(explode('.', (string) $a['target'], 2)[0]);
+                    $usedNamesByUrl[$a['server_url']][$slg] = $slugName[$slg] ?? $slg;
+                }
+            }
+        }
+        foreach ($usedCatalog as $entry) {
+            $surl = (string) ($entry['server_url'] ?? '');
+            if (isset($usedServers[$surl])) {
+                $name = (string) ($usedServers[$surl]['name'] ?? '');
+                $usedNamesByUrl[$surl][CodeNodeEmit::slug($name)] = $name;
+            }
+        }
+        foreach ($usedNamesByUrl as $surl => $names) {
+            if (count($names) > 1) {
+                $names = array_values($names);
+                throw new \RuntimeException('MCP servers "' . $names[0] . '" and "' . $names[1] . '" share the URL ' . $surl
+                    . '; a compiled script supports one connection per MCP URL. For a second mailbox (or account), run a second'
+                    . ' server instance on its own URL and register that.');
+            }
+            if (count($names) === 1 && isset($usedServers[$surl])) {
+                $usedServers[$surl]['name'] = array_values($names)[0];
             }
         }
         // Header env names (MCP_HEADERS_<SLUG>) are per server name: two servers this workflow
@@ -3803,6 +3848,9 @@ PY;
             }
             $lines[] = '# MCP_HEADERS_' . strtoupper($slug) . '={"Header": "value"}   # in .env, only if this MCP server needs headers'
                 . ($slug === 'outlook' ? ' (Outlook: {"X-Outlook-Account": "<connection key from the editor>"})' : '');
+        }
+        if ($lines) {
+            $lines[] = '# (one connection per MCP URL: for a second mailbox, run a second MCP server instance on its own URL)';
         }
         return $lines;
     }

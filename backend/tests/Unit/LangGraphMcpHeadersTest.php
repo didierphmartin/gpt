@@ -171,4 +171,60 @@ final class LangGraphMcpHeadersTest extends TestCase
         $code = $this->generate([], [['outlook', 'http://localhost/other/mcp']])['code'];
         self::assertStringNotContainsString('http://localhost/other/mcp', $code);
     }
+
+    /** Two mailboxes on one Outlook MCP URL (different X-Outlook-Account): a code node checks $servers. */
+    private function generateCode(array $servers): array
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER, headers TEXT)');
+        $pdo->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
+        $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
+        $pdo->exec("INSERT INTO mcp_servers VALUES (5, '3', 'Outlook', 'http://localhost/outlook/mcp', 1, NULL)");
+        $pdo->exec("INSERT INTO mcp_servers VALUES (6, '3', 'Outlook Work', 'http://localhost/outlook/mcp', 1, NULL)");
+        $pdo->exec("INSERT INTO mcp_server_tools VALUES (1, 5, 'list_messages', 'List', '{}')");
+        $pdo->exec("INSERT INTO mcp_server_tools VALUES (2, 6, 'list_messages', 'List', '{}')");
+        $graph = [
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
+                ['id' => '2', 'node_type' => 'code', 'config' => ['type' => 'code', 'name' => 'Poll',
+                    'code' => "def run(input, call_tool):\n    return {'route': 'next', 'output': 'x'}\n",
+                    'exits' => ['next'], 'mcp_servers' => $servers, 'timeout_s' => 30]],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']],
+        ];
+        $wfRepo = $this->createMock(WorkflowRepository::class);
+        $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Mail', 'user_id' => '3']));
+        $graphRepo = $this->createMock(WorkflowGraphRepository::class);
+        $graphRepo->method('getGraph')->willReturn($graph);
+        $agentRepo = $this->createMock(AgentRepository::class);
+        $agentRepo->method('findById')->willReturn(null);
+        return (new LangGraphGenerator($pdo, $wfRepo, $graphRepo, $agentRepo))->generate(44, '3', []);
+    }
+
+    public function testTwoUsedServersOnOneUrlAreRefused(): void
+    {
+        try {
+            $this->generateCode(['Outlook', 'Outlook Work']);
+            self::fail('two used servers on one URL compiled');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('"Outlook"', $e->getMessage());
+            self::assertStringContainsString('"Outlook Work"', $e->getMessage());
+            self::assertStringContainsString('one connection per MCP URL', $e->getMessage());
+        }
+    }
+
+    public function testTheOneUsedServerOnASharedUrlKeepsItsOwnHeaderVariable(): void
+    {
+        $code = $this->generateCode(['Outlook Work'])['code'];
+        self::assertStringContainsString('"http://localhost/outlook/mcp": "outlook_work"', $code);
+        self::assertStringContainsString('MCP_HEADERS_OUTLOOK_WORK=', $code);
+        self::assertStringNotContainsString('MCP_HEADERS_OUTLOOK=', $code);
+    }
+
+    public function testTheDocsSayOneConnectionPerUrl(): void
+    {
+        self::assertStringContainsString('one connection per MCP URL', $this->generate([])['code']);
+    }
 }
