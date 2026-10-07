@@ -44,13 +44,9 @@ class SettingsPanel {
 
         // Provider list
         this.providers = ['claude', 'openai', 'kimi', 'gemini', 'grok', 'deepseek', 'gamma4', 'glm'];
-        // Providers that have an API-key slot. Jev is a routing service, not
-        // a chat provider: it is deliberately NOT in this.providers (model
-        // selects, prompts, usage, catalog) and only joins the key loops.
-        this.keyProviders = [...this.providers, 'jev'];
-        // Providers shown in the Usage tab. Jev has usage and cost but is
-        // not a chat provider, so it joins here and not this.providers.
-        this.usageProviders = [...this.providers, 'jev'];
+        // Decision providers (not chat providers: no model select, prompt or catalog)
+        // as listed by the server; they join the key and usage loops via allKeyProviders().
+        this.decisionProviders = [];
 
         // Pricing per 1M tokens (USD). Populated from the shared catalog fetch
         // below; each provider's entry mirrors the first model in its catalog
@@ -149,11 +145,15 @@ class SettingsPanel {
         }
     }
 
+    /** Chat providers plus the decision providers the server listed: every key slot on this tab. */
+    allKeyProviders() {
+        return [...this.providers, ...this.decisionProviders.map((d) => d.key)];
+    }
+
     onLanguageChanged() {
         if (this.isActive && this.usageData) {
             this.renderUsageStats(this.usageData);
         }
-        if (this.keyRates) this.renderJevModelInfo();
     }
 
     /**
@@ -2234,7 +2234,7 @@ class SettingsPanel {
             if (plan === 'free' && role !== 'admin') {
                 if (quotaSection) quotaSection.classList.remove('hidden');
 
-                // The quota counts every provider but Jev (same sum the server enforces).
+                // The quota counts every provider but decision models (same sum the server enforces).
                 const quotaUsed = typeof usage.quota_tokens_used === 'number' ? usage.quota_tokens_used : totalTokens;
                 const percent = Math.min(100, Math.round((quotaUsed / quota) * 100));
 
@@ -3184,7 +3184,9 @@ class SettingsPanel {
         // Build cards HTML
         let cardsHtml = '';
 
-        for (const provider of this.usageProviders) {
+        // Decision providers come with the usage payload: cards and chart labels use them.
+        this.decisionProviders = usage.decision_providers || this.decisionProviders;
+        for (const provider of this.allKeyProviders()) {
             const data = providerUsage[provider] || {
                 month_requests: 0,
                 month_tokens: 0,
@@ -3195,12 +3197,13 @@ class SettingsPanel {
             totalCost += costUsd;
 
             // Get pricing info for this provider and convert to selected currency
-            // The model catalog has no Jev: its card names the recorded model
+            // The model catalog has no decision models: their card names the model
             // and takes the admin-set rate the server reports (null = unpriced).
             let pricing = this.pricing[provider] || { input: 0, output: 0, model: '' };
-            if (provider === 'jev') {
-                const r = (usage.rates || {}).jev;
-                pricing = { input: r ? r.input : null, output: r ? r.output : null, model: 'jev-latest' };
+            const decision = (usage.decision_providers || []).find((d) => d.key === provider);
+            if (decision) {
+                pricing = { input: decision.rate ? decision.rate.input : null,
+                            output: decision.rate ? decision.rate.output : null, model: decision.model };
             }
             const pricingText = (pricing.input === null || pricing.output === null)
                 ? '—'
@@ -3215,7 +3218,7 @@ class SettingsPanel {
             const totalTokens = inputTokens + outputTokens;
 
             cardsHtml += `
-                <div class="usage-card ${provider}">
+                <div class="usage-card ${decision ? 'decision' : provider}">
                     <div class="usage-card-header">${this.getProviderDisplayName(provider)}</div>
                     <div class="usage-card-model">${pricing.model}</div>
                     <div class="usage-card-stat">
@@ -3289,7 +3292,7 @@ class SettingsPanel {
         const costData = [];
         const tokenData = [];
 
-        for (const provider of this.usageProviders) {
+        for (const provider of this.allKeyProviders()) {
             const data = providerUsage[provider];
             // Include providers with any activity (requests, tokens, or cost)
             if (data && (data.month_requests > 0 || data.month_cost_usd > 0 || data.month_tokens > 0)) {
@@ -3498,8 +3501,9 @@ class SettingsPanel {
                 this.providerLocked = data.locked || {};
                 this.packageModels = data.package_models || {};
                 this.keyRates = data.rates || {};
+                this.decisionProviders = data.decision_providers || [];
+                this.renderDecisionRows();
                 this.renderApiKeyStatuses();
-                this.renderJevModelInfo();
                 this.renderModelSelections();
                 this.renderSystemPrompts();
                 this.renderEndpoints();
@@ -3526,8 +3530,8 @@ class SettingsPanel {
      * points. Empty = the vendor link shown as placeholder.
      */
     renderEndpoints() {
-        // keyProviders: Jev can sit behind a gateway too.
-        for (const provider of this.keyProviders) {
+        // Decision providers can sit behind a gateway too.
+        for (const provider of this.allKeyProviders()) {
             const input = document.getElementById(`endpoint-${provider}`);
             if (!input) continue;
             input.value = (this.userEndpoints && this.userEndpoints[provider]) || '';
@@ -3648,7 +3652,7 @@ class SettingsPanel {
      * Update API key status indicators
      */
     renderApiKeyStatuses() {
-        for (const provider of this.keyProviders) {
+        for (const provider of this.allKeyProviders()) {
             const statusEl = document.getElementById(`key-status-${provider}`);
             const inputEl = document.getElementById(`api-key-${provider}`);
 
@@ -3667,43 +3671,48 @@ class SettingsPanel {
                 }
             }
         }
-        this.renderJevOrgKeyStatus();
     }
 
-    /**
-     * The Jev row's description and admin-set rate (from /settings/keys
-     * `rates.jev`; null = unpriced, shown as a dash). Jev is not in
-     * this.providers, so updateModelInfo and the model-selection loops never
-     * touch it and its model is never saved.
-     */
-    renderJevModelInfo() {
-        const infoEl = document.getElementById('model-info-jev');
-        if (!infoEl) return;
-        const r = (this.keyRates || {}).jev;
-        const cost = r
-            ? `$${this.formatRate(r.input)}/M in \u00b7 $${this.formatRate(r.output)}/M out`
-            : '\u2014';
-        infoEl.innerHTML = `<span class="model-desc">${this.escapeHtml(this.t('settings.jevModelDesc'))}</span><br><span class="model-cost">${cost}</span>`;
+    /** One key row per decision provider (key, endpoint, rate, status); same ids as the chat rows. */
+    renderDecisionRows() {
+        const box = document.getElementById('decision-keys-container');
+        if (!box) return;
+        const esc = (s) => this.escapeHtml(String(s ?? ''));
+        box.innerHTML = this.decisionProviders.map((d) => {
+            const cost = d.rate
+                ? `$${this.formatRate(d.rate.input)}/M in \u00b7 $${this.formatRate(d.rate.output)}/M out`
+                : '\u2014';
+            const link = d.console_url
+                ? `<a class="console-link" href="${esc(d.console_url)}" target="_blank" rel="noopener noreferrer" title="${esc(d.label)}" aria-label="${esc(d.label)}"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg></a>`
+                : '';
+            return `<div class="api-key-row">
+                <label>${esc(d.label)}</label>
+                <select class="model-select" id="model-select-${esc(d.key)}" disabled><option>${esc(d.model)}</option></select>
+                <span class="model-info" id="model-info-${esc(d.key)}"><span class="model-desc">${esc(this.t('settings.decisionModelDesc'))}</span><br><span class="model-cost">${cost}</span></span>
+                <input type="password" id="api-key-${esc(d.key)}" placeholder="apikey..." autocomplete="off">
+                ${link}
+                <span class="key-status default" id="key-status-${esc(d.key)}">Default</span>
+                <div class="endpoint-line">
+                    <label for="endpoint-${esc(d.key)}">${esc(this.t('settings.endpoint'))}</label>
+                    <input type="url" id="endpoint-${esc(d.key)}" placeholder="${esc(d.default_url)}" autocomplete="off" spellcheck="false">
+                </div>
+            </div>`;
+        }).join('');
+        this.renderDecisionPlanStatuses();
     }
 
-    /**
-     * Jev's status tag. renderApiKeyStatuses already shows "Custom" for the
-     * user's own key and "Default" otherwise (package / organisation key, or
-     * none, like an LLM row). A plan without Jev overrides both, since no key
-     * can be used then. The status endpoint returns availability only, never
-     * the key.
-     */
-    async renderJevOrgKeyStatus() {
-        const statusEl = document.getElementById('key-status-jev');
-        if (!statusEl) return;
+    /** "Not included in your plan" on rows the plan forbids (GET /dispatch/providers; never a key). */
+    async renderDecisionPlanStatuses() {
         try {
-            const res = await fetch(`${this.apiBaseUrl}/dispatch/jev/status`, {
+            const res = await fetch(`${this.apiBaseUrl}/dispatch/providers`, {
                 headers: { 'Authorization': `Bearer ${this.getAuthToken()}` }
             });
             const data = await res.json();
-            if (!data.success || data.allowed !== false) return;
-            statusEl.textContent = 'Not included in your plan';
-            statusEl.className = 'key-status missing';
+            for (const p of (data && data.providers) || []) {
+                if (p.allowed !== false) continue;
+                const el = document.getElementById(`key-status-${p.key}`);
+                if (el) { el.textContent = this.t('settings.notInPlan'); el.className = 'key-status missing'; }
+            }
         } catch (e) { /* status is cosmetic */ }
     }
 
@@ -3716,7 +3725,7 @@ class SettingsPanel {
             const keys = {};
 
             // Collect non-empty keys
-            for (const provider of this.keyProviders) {
+            for (const provider of this.allKeyProviders()) {
                 const inputEl = document.getElementById(`api-key-${provider}`);
                 if (inputEl && inputEl.value.trim()) {
                     keys[provider] = inputEl.value.trim();
@@ -3751,7 +3760,7 @@ class SettingsPanel {
             // Collect per-provider entry points; '' clears an override, like
             // system prompts. Only providers with an input on the page.
             const endpoints = {};
-            for (const provider of this.keyProviders) {
+            for (const provider of this.allKeyProviders()) {
                 const input = document.getElementById(`endpoint-${provider}`);
                 if (input) {
                     endpoints[provider] = input.value.trim();
@@ -3791,7 +3800,7 @@ class SettingsPanel {
                 this.showNotification('API keys saved successfully', 'success');
 
                 // Clear input fields
-                for (const provider of this.keyProviders) {
+                for (const provider of this.allKeyProviders()) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
@@ -3842,7 +3851,7 @@ class SettingsPanel {
                 this.renderApiKeyStatuses();
 
                 // Clear input fields
-                for (const provider of this.keyProviders) {
+                for (const provider of this.allKeyProviders()) {
                     const inputEl = document.getElementById(`api-key-${provider}`);
                     if (inputEl) inputEl.value = '';
                 }
@@ -3887,10 +3896,11 @@ class SettingsPanel {
             'grok': 'Grok (xAI)',
             'deepseek': 'DeepSeek',
             'gamma4': 'Gamma4',
-            'glm': 'GLM 5.2 (z.ai)',
-            'jev': 'Jev (dispatcher routing)'
+            'glm': 'GLM 5.2 (z.ai)'
         };
-        return names[provider] || provider;
+        return names[provider]
+            || this.decisionProviders.find((d) => d.key === provider)?.label
+            || provider;
     }
 
     /** A per-1M rate: 3 decimals below 0.10 (so 0.042 stays visible), else 2. */
