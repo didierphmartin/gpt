@@ -652,9 +652,11 @@ PY;
 class ErrorExitTaken(Exception):
     """A run in which a code node took its `error` exit (WorkflowGraph.check_error_exits)."""
 
-    def __init__(self, nodes: list[str]):
-        self.nodes = nodes   # display names of the code nodes that took it
-        super().__init__(", ".join(f"code node {n!r}" for n in nodes) + " took its error exit")
+    def __init__(self, failed: list[tuple[str, str]]):
+        """failed: (display name, the error exit's output -- why the run failed, '' when none) per code node."""
+        self.nodes = [n for n, _ in failed]   # display names of the code nodes that took it
+        super().__init__(", ".join(f"code node {n!r} took its error exit" + (f": {out}" if out else "")
+                                   for n, out in failed))
 
 
 class WorkflowGraph:
@@ -673,6 +675,7 @@ class WorkflowGraph:
         self.agents, self.run_node, self.start_documents = agents, run_node, start_documents
         self.started: float | None = None   # time.monotonic() when the run began (RUN SUMMARY)
         self.routes: dict[str, str] = {}     # the last run's exit per code node / child per dispatcher
+        self.outputs: dict[str, dict] = {}   # the last run's node_outputs (an error exit's output says why)
 
     def parents(self, nid: str) -> list[str]:
         """Get direct predecessor node IDs (nodes with edges INTO this node)."""
@@ -815,12 +818,14 @@ class WorkflowGraph:
         self.started = time.monotonic()
         result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
         self.routes = result.get("routes", {})
+        self.outputs = result.get("node_outputs", {})
         return result.get("final_output", "")
 
     def check_error_exits(self) -> None:
         """Raise ErrorExitTaken when a code node of the last run took its `error` exit: that
         run failed, even when the error branch produced output (--cron reports it, never drains)."""
-        failed = [self.agents[nid]["display"] for nid, route in self.routes.items()
+        failed = [(self.agents[nid]["display"], self.outputs.get(nid, {}).get("text", ""))
+                  for nid, route in self.routes.items()
                   if route == "error" and self.agents.get(nid, {}).get("kind") == "code"]
         if failed:
             raise ErrorExitTaken(failed)

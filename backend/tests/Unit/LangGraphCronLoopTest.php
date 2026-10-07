@@ -257,8 +257,14 @@ try:
     g.check_error_exits()
 except ErrorExitTaken as e:
     print("raised", e)
+g.outputs = {"2": {"source": "Poll Outlook", "text": "not_connected"}}   # the error exit's output: why the run failed
+try:
+    g.check_error_exits()
+except ErrorExitTaken as e:
+    print("raised", e, e.nodes)
 PY);
-        self::assertSame(['clean ok', 'other exits ok', "raised code node 'Poll Outlook' took its error exit"], $out);
+        self::assertSame(['clean ok', 'other exits ok', "raised code node 'Poll Outlook' took its error exit",
+            "raised code node 'Poll Outlook' took its error exit: not_connected ['Poll Outlook']"], $out);
     }
 
     // ---------- the generator: DEFAULT_CRON, the loop and the docs in every entry file ----------
