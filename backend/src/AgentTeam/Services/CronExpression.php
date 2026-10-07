@@ -12,7 +12,7 @@ namespace AgentTeam\Services;
 final class CronExpression
 {
     private const RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
-    /** About 5 years of days plus hours: enough for a leap day, bounded for never-firing input. */
+    /** Day steps bound the search at about 164 years (fewer once hour steps are spent): enough for a leap day, bounded for never-firing input. */
     private const MAX_STEPS = 60000;
 
     /** @var array<int, array<int, true>> */

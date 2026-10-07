@@ -873,7 +873,7 @@ class CronExpression:
     """A 5-field cron expression, with the rules of the server's CronExpression.php."""
 
     RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
-    MAX_STEPS = 60000   # about 5 years of days plus hours: enough for a leap day, bounded for one that never fires
+    MAX_STEPS = 60000   # day steps bound the search at about 164 years: enough for a leap day, bounded for one that never fires
     _ITEM = re.compile(r"(\*|[0-9]+(?:-[0-9]+)?)(?:/([0-9]+))?")
 
     def __init__(self, expr: str):
