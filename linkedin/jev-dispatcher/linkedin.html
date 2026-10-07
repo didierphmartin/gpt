@@ -10,7 +10,7 @@
 
 <p>In multi-agent workflows, one step quietly costs time and money every time it runs: <b>deciding which agent should handle the request</b>. We tried a new kind of AI model for that step. It never writes a sentence. It only picks from the options you give it. Here is what we found, including the part that surprised us.</p>
 
-<p><img src="key-numbers.png" alt="Key results: 12 of 12 clear requests routed correctly; about 0.16 s per decision vs about 5 s for the LLM; about $14 per million decisions; zero chance of an answer outside the list."></p>
+<p><img src="key-numbers.png" alt="Key results: 12 of 12 clear requests routed correctly; about 0.16 s per decision vs about 5 s for the LLM; $0.042 per million input tokens, about $0.000014 per decision; zero chance of an answer outside the list."></p>
 
 <h2>The workflow under test</h2>
 
@@ -116,7 +116,7 @@
 </tbody>
 </table>
 
-<p><img src="what-it-means-cards.png" alt="Cost: about $0.0000144 per decision, roughly $14 per million. Speed: median 159 ms vs about 5 s. Consistent decisions: answers always from your list; unclear option plus 60% threshold separated clear and ambiguous cases. Fits into a workflow: nothing new to write, sits in front of the existing LLM step. Availability: early access, one vendor; failures fall back to the LLM."></p>
+<p><img src="what-it-means-cards.png" alt="Cost: $0.042 per million input tokens, about $0.0000144 per decision, so about $14 per million decisions. Speed: median 159 ms vs about 5 s. Consistent decisions: answers always from your list; unclear option plus 60% threshold separated clear and ambiguous cases. Fits into a workflow: nothing new to write, sits in front of the existing LLM step. Availability: early access, one vendor; failures fall back to the LLM."></p>
 
 <h2>What we don't know yet</h2>
 
