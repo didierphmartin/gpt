@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Routing Agents in 0.2 Seconds</title>
+</head>
+<body>
+
+<h1>Letting an AI that can't write text route our agents: 0.2 seconds and a fraction of a cent per decision</h1>
+
+<p>In multi-agent workflows, one step quietly costs time and money every time it runs: <b>deciding which agent should handle the request</b>. We tried a new kind of AI model for that step. It never writes a sentence. It only picks from the options you give it. Here is what we found, including the part that surprised us.</p>
+
+<p><img src="key-numbers.png" alt="Key results: 12 of 12 clear requests routed correctly; about 0.16 s per decision vs about 5 s for the LLM; about $14 per million decisions; zero chance of an answer outside the list."></p>
+
+<h2>The workflow under test</h2>
+
+<p>The workflow below was built with the <b>AI Assistant from SynergyAI</b>. It is a typical internal help desk. A request comes in, a "dispatcher" agent called techBuddy reads it, and sends it to <b>exactly one</b> of three teams: IT claims, Human resources or Devices management. The "1 OF 3" badge on the canvas shows that rule: three branches are drawn and only one runs. HR requests continue into an HR playbook connected to Google Calendar, Slack, Workday, HiBob and UKG.</p>
+
+<p><img src="workflow-synergyai.png" alt="The help desk workflow designed with SynergyAI's AI Assistant: Start, the techBuddy dispatcher, three branches (IT claims, Human resources with Playbook HR, Devices management) and an Output node."></p>
+
+<p>The workflow, designed with SynergyAI's AI Assistant. Every agent here runs on Claude. The experiment replaced only one thing: techBuddy's routing decision.</p>
+
+<p>Think of the dispatcher as a receptionist. Normally a large language model (LLM) does this job. It reads the request, thinks it over in text, and names a team. That works, but it takes about 5 seconds of an 11-second run. Sometimes it also names a team that doesn't exist, so the software needs safety nets to catch those answers.</p>
+
+<h2>What is Jev?</h2>
+
+<p><b>Jev</b> is a "System One" model from <b>TypeSafe AI</b>, released in limited early access on 15 September 2026. It answers closed questions: which of these options, what level on this scale, or is this true. It returns a probability for each option, and nothing else. It cannot write text, so it cannot invent an answer that is not on your list.</p>
+
+<p>That makes it a natural fit for a dispatcher. The question "which of these three teams owns this request?" is a multiple-choice question.</p>
+
+<h2>Test 1: three clearly different teams</h2>
+
+<p>We sent seven requests to the real help desk dispatcher.</p>
+
+<table>
+<thead><tr><th>Request</th><th>Jev chose</th><th>Confidence</th></tr></thead>
+<tbody>
+<tr><td>Two days of vacation next week</td><td>Human resources ✔</td><td>100%</td></tr>
+<tr><td>Account locked out</td><td>IT claims ✔</td><td>100%</td></tr>
+<tr><td>Cracked laptop screen</td><td>Devices management ✔</td><td>100%</td></tr>
+<tr><td>VPN drops every ten minutes</td><td>IT claims ✔</td><td>100%</td></tr>
+<tr><td>Vacation days left this year</td><td>Human resources ✔</td><td>100%</td></tr>
+<tr><td>Need a second monitor</td><td>Devices management ✔</td><td>100%</td></tr>
+<tr><td>Something is wrong, I need help</td><td><b>IT claims ✘</b></td><td><b>100%</b></td></tr>
+</tbody>
+</table>
+
+<p>Six out of six were right, at a median of 159 milliseconds. The last request has no clue in it at all, yet Jev sent it to IT with full confidence. A simple "hello" went to IT at 97%.</p>
+
+<p><b>This is not a bug. It is what the model promises to do.</b> Offered three teams and nothing else, it must pick one of the three. A rule like "only trust answers above X% confidence" would never have caught it.</p>
+
+<h2>The fix: make "I can't tell" one of the options</h2>
+
+<p>If the model can only answer with options you supply, then uncertainty has to be one of those options. We added a fourth choice, <b>"unclear"</b>, to every question.</p>
+
+<table>
+<thead><tr><th>Request</th><th>Three teams only</th><th>With "unclear" added</th></tr></thead>
+<tbody>
+<tr><td>Something is wrong, I need help</td><td>IT 99% ✘</td><td><b>unclear 100% ✔</b></td></tr>
+<tr><td>hello</td><td>IT 97% ✘</td><td><b>unclear 100% ✔</b></td></tr>
+<tr><td>I need access</td><td>IT 100% ✘</td><td><b>unclear 69% / IT 31%</b></td></tr>
+<tr><td>Laptop can't reach the VPN</td><td>IT 97% ✔</td><td>IT 98% ✔</td></tr>
+<tr><td>Leaving, returning my laptop</td><td>Devices mgmt 99% ✔</td><td>Devices mgmt 98% ✔</td></tr>
+<tr><td>Two days of vacation</td><td>HR 100% ✔</td><td>HR 100% ✔</td></tr>
+</tbody>
+</table>
+
+<p>Real requests still route with confidence. Empty ones now say so. "I need access" is genuinely ambiguous, and it came back split: 69% unclear, 31% IT. The probabilities only became informative once uncertainty had somewhere to go.</p>
+
+<h2>Test 2: two teams that overlap</h2>
+
+<p>A second workflow chooses between <b>Billing</b> and <b>Sales</b>, which overlap in real life.</p>
+
+<table>
+<thead><tr><th>Request</th><th>Jev chose</th><th>Confidence</th><th>Split</th></tr></thead>
+<tbody>
+<tr><td>Charged twice this month</td><td>Billing</td><td>100%</td><td>Billing 100%</td></tr>
+<tr><td>Refund on my subscription</td><td>Billing</td><td>100%</td><td>Billing 100%</td></tr>
+<tr><td>Invoice shows the wrong plan</td><td>Billing</td><td>97%</td><td>Billing 98%</td></tr>
+<tr><td>How much is the Pro plan</td><td>Sales</td><td>99%</td><td>Sales 100%</td></tr>
+<tr><td>A demo before we commit</td><td>Sales</td><td>100%</td><td>Sales 100%</td></tr>
+<tr><td>Discount for non-profits</td><td>Sales</td><td>97%</td><td>Sales 98%</td></tr>
+<tr><td><b>Upgrade to the annual plan</b></td><td><b>Sales</b></td><td><b>49%</b></td><td><b>Sales 66% / Billing 33%</b></td></tr>
+<tr><td><b>Monthly vs annual, and when charged</b></td><td><b>Billing</b></td><td><b>58%</b></td><td><b>Billing 72% / Sales 16%</b></td></tr>
+<tr><td>A question about my account</td><td>unclear</td><td>99%</td><td>unclear 100%</td></tr>
+<tr><td>hello</td><td>unclear</td><td>100%</td><td>unclear 100%</td></tr>
+</tbody>
+</table>
+
+<p>Every clear request scored 95% or more. Questions like "Upgrade to the annual plan" scored below 60%, split between Sales and Billing. That is the right reading: Sales sells the upgrade, Billing takes the money. Without the "unclear" option, "hello" would have gone to Sales.</p>
+
+<p>So the two kinds of problem are caught by two different signals:</p>
+
+<p><b>"unclear"</b> means the request names no team. Hand it to a human.</p>
+<p><b>Confidence below 60%</b> means two teams could own it. Let the LLM weigh it.</p>
+
+<h2>The design we shipped: fast when sure, careful when not</h2>
+
+<p><img src="hybrid-routing-diagram.png" alt="Hybrid routing: the dispatcher asks Jev one multiple-choice question with the teams plus 'unclear'. Unclear goes to a human; confidence of 60% or more routes directly in about 0.2 seconds; below 60%, an error or no key falls back to the LLM dispatcher. Exactly one agent runs."></p>
+
+<p>Jev decides only when it is sure. The LLM keeps the cases that need judgment. "Unclear" requests go to a person. A guess never decides a route.</p>
+
+<p>Every outcome other than a confident answer falls back to the existing LLM path: no API key, a timeout, an error, an unexpected answer. <b>The fast path can make routing cheaper. It cannot make it fail.</b></p>
+
+<h2>What this means if you run AI workflows</h2>
+
+<table>
+<thead><tr><th>Measure</th><th>Jev</th><th>LLM routing step</th></tr></thead>
+<tbody>
+<tr><td>Time per decision (median)</td><td>159 ms</td><td>about 5,000 ms</td></tr>
+<tr><td>Time range</td><td>134 to 385 ms (30 calls)</td><td>not measured</td></tr>
+<tr><td>Tokens per decision</td><td>342 in, 39 out</td><td>a full agent turn</td></tr>
+<tr><td>Billing</td><td>input only, $0.042 per million</td><td>input and output</td></tr>
+<tr><td>Cost per decision</td><td>about $0.0000144</td><td>not recorded</td></tr>
+<tr><td>Can answer outside the list</td><td>no</td><td>yes, needs safety nets</td></tr>
+</tbody>
+</table>
+
+<p><img src="what-it-means-cards.png" alt="Cost: about $0.0000144 per decision, roughly $14 per million. Speed: median 159 ms vs about 5 s. Consistent decisions: answers always from your list; unclear option plus 60% threshold separated clear and ambiguous cases. Fits into a workflow: nothing new to write, sits in front of the existing LLM step. Availability: early access, one vendor; failures fall back to the LLM."></p>
+
+<h2>What we don't know yet</h2>
+
+<p><b>Small sample.</b> 30 calls on two workflows with well-named teams. The 60% threshold hasn't been tested on six similar teams or on messy, real-world wording.</p>
+
+<p><b>No hand-over notes.</b> When the LLM routes, it also writes a short note for the chosen agent. Jev can't. Nothing breaks, but we haven't measured whether answers get worse. That is the next experiment.</p>
+
+<p><b>Black box.</b> For routes where a wrong branch is expensive, the evidence isn't strong enough yet.</p>
+
+<p><b>Vendor claims are the vendor's.</b> TypeSafe advertises 40 to 200 times faster than frontier LLMs. We measured about 30 times faster on this step. Independent benchmarks are still scarce.</p>
+
+<h2>The takeaway</h2>
+
+<p>For a narrow, closed decision like routing a request, a model that can only choose is fast, very cheap and predictable. The key lesson isn't really about speed: <b>give the model a way to say "I don't know"</b>, and keep a more careful path for the cases in between. Next we will test whether the same idea works for yes/no checks, like approval gates, in agent workflows.</p>
+
+<p>Are you using small, specialised models for decisions inside your agent workflows? I'd like to hear what has worked for you and what hasn't.</p>
+
+<p>#AIAgents #MultiAgentSystems #WorkflowAutomation #LLM #AIcosts #SynergyAI #Jev</p>
+
+<p>Sources: experiment report "Jev for dispatcher routing: experiments, design, results" (27 September 2026, model jev-1.13.0). Background on Jev: https://www.datacamp.com/blog/system-one-models-jev and https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude</p>
+
+</body>
+</html>
