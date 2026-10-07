@@ -45,12 +45,68 @@
                 '',
             ].join('\n'),
         },
+        poll_outlook: {
+            label: 'Poll Outlook (new email)',
+            exits: ['new_mail', 'no_mail', 'error'],
+            servers: ['outlook'],
+            code: [
+                'def run(input, call_tool):',
+                '    # The next unseen email in the folder that matches the filters, or None.',
+                '    # Attachments arrive as a list (id, name, content_type, size) and are NEVER opened here:',
+                '    # a triage step decides first; only agents downstream of it may open them.',
+                '    result = call_tool("outlook", "poll_new_mail", {',
+                '        "folder": "Inbox",',
+                '        "from": "",',
+                '        "subject_contains": "",',
+                '        "has_attachments": False,',
+                '    })',
+                '    if result.get("error"):',
+                '        return {"route": "error", "output": result["error"]}',
+                '    mail = result.get("mail")',
+                '    if mail is None:',
+                '        return {"route": "no_mail", "output": None}',
+                '    return {"route": "new_mail", "output": mail}',
+                '',
+            ].join('\n'),
+        },
     };
     const DEFAULT_TEMPLATE = 'blank';
 
     /** The server slug call_tool uses: twin of CodeNodeEmit::slug. */
     function slug(serverName) {
         return String(serverName).replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    }
+
+    // The Poll Outlook template's poll_new_mail argument dict, and its default filters.
+    const OUTLOOK_ARGS_RE = /(call_tool\("outlook",\s*"poll_new_mail",\s*)\{[\s\S]*?\n\s*\}\)/;
+    const OUTLOOK_DEFAULTS = { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false };
+
+    /**
+     * The Poll Outlook form's filters written into the code's poll_new_mail argument dict.
+     * null when the code no longer has that dict (hand-edited): the form then leaves the code alone.
+     */
+    function outlookArgs(code, args) {
+        if (!OUTLOOK_ARGS_RE.test(code)) return null;
+        const py = (v) => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(String(v)));
+        const body = Object.keys(OUTLOOK_DEFAULTS).map((k) => `        "${k}": ${py(args[k] ?? OUTLOOK_DEFAULTS[k])},`).join('\n');
+        return code.replace(OUTLOOK_ARGS_RE, (_, head) => `${head}{\n${body}\n    })`);
+    }
+
+    /**
+     * The filters currently in the code's poll_new_mail dict (the form's starting values); a value
+     * the form did not write (hand-edited) takes its default. null when the dict is gone.
+     */
+    function readOutlookArgs(code) {
+        const m = String(code || '').match(OUTLOOK_ARGS_RE);
+        if (!m) return null;
+        const out = { ...OUTLOOK_DEFAULTS };
+        for (const k of Object.keys(out)) {
+            const v = m[0].match(new RegExp(`"${k}":\\s*("(?:[^"\\\\]|\\\\.)*"|True|False)`));
+            if (!v) continue;
+            if (v[1] === 'True' || v[1] === 'False') { if (typeof out[k] === 'boolean') out[k] = v[1] === 'True'; continue; }
+            try { if (typeof out[k] === 'string') out[k] = JSON.parse(v[1]); } catch (_) { /* not ours: keep the default */ }
+        }
+        return out;
     }
 
     function validateConfig(cfg) {
@@ -243,6 +299,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, outlookArgs, readOutlookArgs, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });

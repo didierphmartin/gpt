@@ -769,6 +769,23 @@
       "save": "Guardar",
       "run": "Ejecutar Workflow"
     },
+    "outlook": {
+      "connect": "Conectar con Outlook",
+      "reconnect": "Volver a conectar con Outlook",
+      "connected": "● Conectado: {{account}}",
+      "notConnected": "Sin conexión",
+      "reconnectNeeded": "Debe volver a conectar el buzón.",
+      "checkServer": "Marque el servidor de Outlook en la pestaña Servidores MCP.",
+      "deviceCode": "Vaya a {{url}} e introduzca {{code}}",
+      "useRedirect": "Su organización bloquea el inicio de sesión con código. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Inicie sesión aquí</a>.",
+      "failed": "La conexión falló ({{status}}). Inténtelo de nuevo.",
+      "folder": "Carpeta",
+      "from": "De (opcional)",
+      "subject": "El asunto contiene (opcional)",
+      "hasAttachments": "Solo con adjuntos",
+      "startShortcut": "Conectar con Outlook",
+      "needServer": "Primero añada el servidor MCP de Outlook en Servidores MCP y guarde el flujo."
+    },
     "schedule": {
       "title": "Programar Ejecución",
       "enableSchedule": "Activar ejecución programada",

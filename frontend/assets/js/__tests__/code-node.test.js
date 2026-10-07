@@ -172,4 +172,24 @@ assert.strictEqual(CN.exitsLabel(['job', 'no_job']), '1:job  2:no_job');
 assert.deepStrictEqual(CN.parseExits(''), ['next']);
 assert.deepStrictEqual(CN.parseExits('  ,  '), ['next']);
 assert.deepStrictEqual(CN.parseExits('job, no_job ,error'), ['job', 'no_job', 'error']);
+// Poll Outlook template (spec 2026-10-07 §5): three exits, the outlook server, attachments never fetched.
+const po = CN.TEMPLATES.poll_outlook;
+assert.deepStrictEqual(po.exits, ['new_mail', 'no_mail', 'error']);
+assert.deepStrictEqual(po.servers, ['outlook']);
+assert.ok(po.code.includes('poll_new_mail'));
+assert.ok(!po.code.includes('get_attachment'), 'the template must never open attachments');
+assert.strictEqual(CN.validateConfig({ code: po.code, exits: po.exits, mcp_servers: ['Outlook'], timeout_s: 30 }).length, 0);
+
+const rewritten = CN.outlookArgs(po.code, { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+assert.ok(rewritten.includes('"folder": "Invoices"'));
+assert.ok(rewritten.includes('"from": "billing@acme.com"'));
+assert.ok(rewritten.includes('"has_attachments": True'));
+assert.ok(rewritten.includes('poll_new_mail'));
+assert.strictEqual(CN.outlookArgs(rewritten, { folder: 'Inbox' }), po.code, 'rewriting back to the defaults restores the template');
+assert.strictEqual(CN.outlookArgs('def run(input, call_tool):\n    return 1\n', { folder: 'X' }), null, 'hand-edited code without the dict is left alone');
+// the form reads the filters back from the code (reopening the node), null when the dict is gone
+assert.deepStrictEqual(CN.readOutlookArgs(rewritten), { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+assert.deepStrictEqual(CN.readOutlookArgs(po.code), { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false });
+assert.deepStrictEqual(CN.readOutlookArgs(CN.outlookArgs(po.code, { from: 'a "q" \\ b' })).from, 'a "q" \\ b');
+assert.strictEqual(CN.readOutlookArgs('def run(input, call_tool):\n    return 1\n'), null);
 console.log('code-node.test.js: OK');

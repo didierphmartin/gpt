@@ -6715,6 +6715,10 @@ class WorkflowEditor {
                                 </label>
                                 ${hasSchedule ? `<span style="margin-left: auto; font-size: 12px; color: #059669; background: #d1fae5; padding: 2px 8px; border-radius: 4px;">● ${this.t('workflow.schedule.scheduled')}</span>` : ''}
                             </div>
+                            <div style="margin-bottom: 12px;">
+                                <button type="button" id="schedule-outlook-shortcut" style="padding: 6px 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; font-size: 13px;">📧 ${this.t('workflow.outlook.startShortcut')}</button>
+                                <div id="schedule-outlook-msg" style="display: none; margin-top: 6px; font-size: 13px; color: #dc2626;"></div>
+                            </div>
 
                             <div id="schedule-fields" style="display: ${scheduleEnabled ? 'block' : 'none'};">
                                 <!-- Date/Time -->
@@ -6833,6 +6837,24 @@ class WorkflowEditor {
             refreshCron();
         }));
         refreshCron();
+
+        // Connect to Outlook: a 2-minute cron, a Poll Outlook node after Start, and its window (spec 2026-10-07 §5).
+        document.getElementById('schedule-outlook-shortcut').addEventListener('click', async () => {
+            const msg = document.getElementById('schedule-outlook-msg');
+            const server = (await this._loadMcpServersMeta(true)).find((m) => window.CodeNode.slug(m.name) === 'outlook');
+            if (!this.currentWorkflowId || !server) {
+                msg.textContent = this.t('workflow.outlook.needServer');
+                msg.style.display = 'block';
+                return;
+            }
+            msg.style.display = 'none';
+            scheduleEnabledChk.checked = true;
+            scheduleEnabledChk.dispatchEvent(new Event('change'));
+            repeatTypeSelect.value = 'cron';
+            cronInput.value = '*/2 * * * *';
+            refreshCron();
+            this.showCodeNodeModal(this._outlookPollNodeAfterStart(server.name));
+        });
 
         // Show save schedule button if enabled
         if (saveScheduleBtn && scheduleEnabledChk.checked) {
@@ -8930,6 +8952,7 @@ class WorkflowEditor {
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
+                        <div data-f="outlook" class="storage-config-folder full" style="display:none;">${this._outlookConnectHtml()}</div>
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
@@ -8999,18 +9022,22 @@ class WorkflowEditor {
             }).join('')}</div>` : '<p class="text-sm text-gray-400 italic">No MCP servers yet. Add one in Settings → MCP Servers.</p>';
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
+                refreshOutlook();
             }));
         };
+        // Connect to Outlook: shown for the Poll Outlook template or a checked server whose slug is outlook.
+        const outlook = this._wireOutlookConnect(f('outlook'),
+            () => servers.find((m) => checked.has(m.name) && CN.slug(m.name) === 'outlook') || null,
+            () => f('code').value, (code) => { f('code').value = code; });
+        const refreshOutlook = () => {
+            const on = f('template').value === 'poll_outlook' || [...checked].some((n) => CN.slug(n) === 'outlook');
+            f('outlook').style.display = on ? '' : 'none';
+            if (on) outlook.refresh();
+        };
         (async () => {
-            if (!this._mcpServersMeta) {
-                try {
-                    const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
-                    const j = await r.json();
-                    this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
-                } catch (_) { this._mcpServersMeta = []; }
-            }
-            servers = this._mcpServersMeta;
+            servers = await this._loadMcpServersMeta();
             renderServers();
+            refreshOutlook();
         })();
 
         const read = () => ({
@@ -9041,6 +9068,7 @@ class WorkflowEditor {
             renderServers();
             const missing = t.servers.filter((sl) => !servers.some((m) => CN.slug(m.name) === sl));
             show(missing.length ? `This template calls ${missing.join(', ')}: add an MCP server with that name in Settings → MCP Servers.` : '');
+            refreshOutlook();
         });
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
@@ -9069,6 +9097,189 @@ class WorkflowEditor {
             this._applyCodeNodeConfig(nodeId, cfg);
             overlay.remove();
         });
+    }
+
+    /** The user's MCP servers (GET /me/mcp-servers), loaded once; `fresh` reloads them. */
+    async _loadMcpServersMeta(fresh = false) {
+        if (!this._mcpServersMeta || fresh) {
+            try {
+                const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
+                const j = await r.json();
+                this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
+            } catch (_) { this._mcpServersMeta = []; }
+        }
+        return this._mcpServersMeta;
+    }
+
+    _outlookConnectHtml() {
+        const t = (k) => this.t(`workflow.outlook.${k}`);
+        return `<div class="outlook-connect" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <button type="button" class="storage-config-btn outlook-connect-btn">${t('connect')}</button>
+                <div class="outlook-status" style="font-size:13px;"></div>
+            </div>
+            <div class="outlook-device" style="display:none; margin-top:8px; font-size:14px;"></div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                <label>${t('folder')}<select class="outlook-folder"></select></label>
+                <label>${t('from')}<input class="outlook-from" type="text"></label>
+                <label>${t('subject')}<input class="outlook-subject" type="text"></label>
+                <label style="display:flex; align-items:center; gap:6px;"><input class="outlook-attach" type="checkbox"> ${t('hasAttachments')}</label>
+            </div>
+        </div>`;
+    }
+
+    /**
+     * One Outlook MCP tool call through the proxy, as the tool's own JSON payload. A failed call
+     * (no answer, a JSON-RPC error, an isError result) comes back as {error, message}.
+     */
+    async _outlookCall(server, tool, args = {}) {
+        const rpc = await this._mcpProxyToolCall(server, tool, args);
+        if (!rpc) return { error: 'network_error', message: 'no answer from the Outlook server' };
+        if (rpc.error) return { error: 'network_error', message: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'error') };
+        const text = rpc.result?.content?.[0]?.text;
+        if (rpc.result?.isError) return { error: 'tool_error', message: String(text || 'tool error') };
+        try { return JSON.parse(text); } catch (_) { return { error: 'bad_result', message: String(text ?? '') }; }
+    }
+
+    /**
+     * The connection key into the server row's X-Outlook-Account header, through the MCP server
+     * update (which needs the row's name, url and description too). Never shown, never logged.
+     */
+    async _saveOutlookKey(server, key) {
+        const rows = await window.mcpClient.loadServers(true);
+        const row = (rows || []).find((r) => String(r.id) === String(server.id));
+        if (!row) return { success: false, error: 'the Outlook server is not one of your own MCP servers' };
+        return window.mcpClient.updateServer(row.id, row.name, row.url, row.description || '',
+            { ...(row.headers || {}), 'X-Outlook-Account': key });
+    }
+
+    /**
+     * The code node's Connect to Outlook box (spec 2026-10-07 §5): device sign-in, the mailbox the
+     * server reads, and the poll's filters, written into the code's poll_new_mail dict
+     * (CodeNode.outlookArgs; hand-edited code without that dict is left alone).
+     * getServer: the checked Outlook server ({id, name, url}) or null. Returns { refresh }.
+     */
+    _wireOutlookConnect(el, getServer, getCode, setCode) {
+        const q = (c) => el.querySelector(c);
+        const status = q('.outlook-status'), device = q('.outlook-device'), btn = q('.outlook-connect-btn'), folder = q('.outlook-folder');
+        const t = (k, p) => this.t(`workflow.outlook.${k}`, p);
+        const failed = (r) => t('failed', { status: r.message || r.error || r.status || 'error' });
+        const sayDevice = (text) => { device.style.display = 'block'; device.textContent = text; };
+        // A server-supplied URL in an href: http(s) only, quotes escaped.
+        const href = (u) => (/^https?:\/\//i.test(String(u || '')) ? this.escapeHtml(String(u)).replace(/"/g, '&quot;') : '#');
+        let folderValue = 'Inbox';
+        const setFolders = (paths) => {
+            const all = paths.includes(folderValue) ? paths : [folderValue, ...paths];
+            folder.innerHTML = all.map((p) => `<option>${this.escapeHtml(p)}</option>`).join('');
+            folder.value = folderValue;
+        };
+        const showWho = async () => {
+            const server = getServer();
+            btn.disabled = !server;
+            if (!server) { status.textContent = t('checkServer'); return; }
+            const who = await this._outlookCall(server, 'whoami');
+            btn.textContent = t(who.error === 'reconnect_needed' ? 'reconnect' : 'connect');
+            if (who.account) {
+                status.textContent = t('connected', { account: who.account });
+                const folders = await this._outlookCall(server, 'list_folders');
+                if (Array.isArray(folders)) setFolders(folders.map((x) => x.path));
+                return;
+            }
+            switch (who.error) {
+                case 'not_connected': status.textContent = t('notConnected'); break;
+                case 'reconnect_needed': status.textContent = t('reconnectNeeded'); break;
+                default: status.textContent = failed(who);
+            }
+        };
+        const connect = async (server) => {
+            const start = await this._outlookCall(server, 'connect_start', { method: 'device' });
+            if (start.error) { sayDevice(failed(start)); return; }
+            device.style.display = 'block';
+            device.innerHTML = t('deviceCode', {
+                url: `<a href="${href(start.verification_uri)}" target="_blank" rel="noopener">${this.escapeHtml(start.verification_uri)}</a>`,
+                code: `<strong style="font-family:monospace">${this.escapeHtml(start.user_code)}</strong>` });
+            const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+            while (Date.now() < deadline && el.isConnected) {
+                await new Promise((r) => setTimeout(r, 3000));
+                const st = await this._outlookCall(server, 'connect_status', { connect_id: start.connect_id });
+                switch (st.status) {
+                    case 'pending':
+                        continue;
+                    case 'connected': {
+                        if (!st.connection_key) { sayDevice(failed({ status: 'connected without a key' })); return; }
+                        const saved = await this._saveOutlookKey(server, st.connection_key);
+                        if (!saved?.success) { sayDevice(failed({ message: saved?.error })); return; }
+                        device.style.display = 'none';
+                        await showWho();
+                        return;
+                    }
+                    case 'policy_blocked':
+                        // With a redirect the same sign-in completes in the browser: keep polling.
+                        if (st.redirect_url) {
+                            const html = t('useRedirect', { url: href(st.redirect_url) });
+                            if (device.innerHTML !== html) device.innerHTML = html;
+                            continue;
+                        }
+                        sayDevice(st.message || failed(st));
+                        return;
+                    default:
+                        if (st.error === 'network_error') continue;   // a missed poll: the sign-in may still complete
+                        sayDevice(failed(st));
+                        return;
+                }
+            }
+            if (el.isConnected) sayDevice(failed({ status: 'expired' }));
+        };
+        btn.addEventListener('click', async () => {
+            const server = getServer();
+            if (!server) return;
+            btn.disabled = true;
+            try { await connect(server); } finally { btn.disabled = false; }
+        });
+        const syncCode = () => {
+            folderValue = folder.value || 'Inbox';
+            const next = window.CodeNode.outlookArgs(getCode(), {
+                folder: folderValue,
+                from: q('.outlook-from').value.trim(),
+                subject_contains: q('.outlook-subject').value.trim(),
+                has_attachments: q('.outlook-attach').checked,
+            });
+            if (next !== null) setCode(next);
+        };
+        el.querySelectorAll('select, input').forEach((i) => i.addEventListener('change', syncCode));
+        // The form starts from the filters in the code.
+        const refresh = () => {
+            const a = window.CodeNode.readOutlookArgs(getCode());
+            if (a) {
+                folderValue = a.folder || 'Inbox';
+                q('.outlook-from').value = a.from;
+                q('.outlook-subject').value = a.subject_contains;
+                q('.outlook-attach').checked = a.has_attachments;
+            }
+            setFolders([...folder.options].map((o) => o.value).filter((v) => v !== folderValue));
+            return showWho();
+        };
+        return { refresh };
+    }
+
+    /**
+     * The Start form's Connect to Outlook shortcut (spec 2026-10-07 §5): the code node wired right
+     * after Start, or a new Poll Outlook node wired there, checked on `serverName`.
+     */
+    _outlookPollNodeAfterStart(serverName) {
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        const startId = Object.keys(nodes).find((id) => this._wfNodeKind(id, nodes) === 'start');
+        const start = startId ? nodes[startId] : null;
+        const existing = (start?.outputs?.output_1?.connections || []).map((c) => String(c.node))
+            .find((id) => this._wfNodeKind(id, nodes) === 'code');
+        if (existing) return existing;
+        const t = window.CodeNode.TEMPLATES.poll_outlook;
+        const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100,
+            { name: 'Poll Outlook', code: t.code, exits: [...t.exits], mcp_servers: [serverName] });
+        if (startId) this.editor.addConnection(startId, id, 'output_1', 'input_1');
+        this._refreshCodeNode(id);
+        this._workflowDirty = true;
+        return id;
     }
 
     /**

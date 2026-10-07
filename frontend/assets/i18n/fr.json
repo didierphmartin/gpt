@@ -769,6 +769,23 @@
       "save": "Enregistrer",
       "run": "Exécuter le Workflow"
     },
+    "outlook": {
+      "connect": "Se connecter à Outlook",
+      "reconnect": "Se reconnecter à Outlook",
+      "connected": "● Connecté : {{account}}",
+      "notConnected": "Non connecté",
+      "reconnectNeeded": "La boîte aux lettres doit être reconnectée.",
+      "checkServer": "Cochez le serveur Outlook dans l’onglet Serveurs MCP.",
+      "deviceCode": "Allez sur {{url}} et saisissez {{code}}",
+      "useRedirect": "Votre organisation bloque la connexion par code. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Connectez-vous ici</a>.",
+      "failed": "La connexion a échoué ({{status}}). Réessayez.",
+      "folder": "Dossier",
+      "from": "De (facultatif)",
+      "subject": "L’objet contient (facultatif)",
+      "hasAttachments": "Seulement avec pièces jointes",
+      "startShortcut": "Se connecter à Outlook",
+      "needServer": "Ajoutez d’abord le serveur MCP Outlook dans Serveurs MCP, puis enregistrez le flux."
+    },
     "schedule": {
       "title": "Planifier l'Exécution",
       "enableSchedule": "Activer l'exécution planifiée",

@@ -769,6 +769,23 @@
       "save": "Save",
       "run": "Run Workflow"
     },
+    "outlook": {
+      "connect": "Connect to Outlook",
+      "reconnect": "Reconnect to Outlook",
+      "connected": "● Connected: {{account}}",
+      "notConnected": "Not connected",
+      "reconnectNeeded": "The mailbox must be connected again.",
+      "checkServer": "Check the Outlook server in the MCP Servers tab.",
+      "deviceCode": "Go to {{url}} and enter {{code}}",
+      "useRedirect": "Your organisation blocks code sign-in. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in here instead</a>.",
+      "failed": "Connection failed ({{status}}). Try again.",
+      "folder": "Folder",
+      "from": "From (optional)",
+      "subject": "Subject contains (optional)",
+      "hasAttachments": "Only with attachments",
+      "startShortcut": "Connect to Outlook",
+      "needServer": "Add the Outlook MCP server under MCP Servers first, and save the workflow."
+    },
     "schedule": {
       "title": "Schedule Execution",
       "enableSchedule": "Enable scheduled execution",
