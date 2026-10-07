@@ -624,10 +624,12 @@ CREATE TABLE `scheduled_workflows` (
   `input_prompt` text,
   `scheduled_time` datetime NOT NULL,
   `status` enum('pending','running','completed','failed','paused') DEFAULT 'pending',
-  `repeat_type` enum('none','hourly','daily','weekly','monthly') DEFAULT 'none',
+  `repeat_type` enum('none','hourly','daily','weekly','monthly','cron') DEFAULT 'none',
   `repeat_interval` int DEFAULT '1',
+  `cron` varchar(100) DEFAULT NULL,
   `last_run` datetime DEFAULT NULL,
   `next_run` datetime DEFAULT NULL,
+  `running_since` datetime DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `error_message` text
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
