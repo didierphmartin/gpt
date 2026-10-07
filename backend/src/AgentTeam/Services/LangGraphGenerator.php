@@ -336,7 +336,7 @@ class LangGraphGenerator
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [], self::jevDocLines($agentData)),
+                    : [], self::jevDocLines($agentData), self::mcpHeaderDocLines($facts)),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -423,6 +423,8 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '';
         // The protocol steps and the SSE note are McpClient's class docstring.
+        $lines[] = self::serverSlugsLine($facts);
+        $lines[] = '';
         $lines[] = LangGraphRuntime::mcpClientBlock();
         if ($codeData !== []) {
             $lines[] = LangGraphRuntime::codeHarnessBlock();
@@ -1127,6 +1129,10 @@ class LangGraphGenerator
                 $codeServerUrls[$surl] = true;
             }
         }
+        $serverSlugs = [];
+        foreach ($serverRegistry as $surl => $meta) {
+            $serverSlugs[(string) $surl] = CodeNodeEmit::slug((string) ($meta['name'] ?? ''));
+        }
         $codeSlugs = [];
         foreach ($codeData as $cd) {
             foreach ($cd['mcp_servers'] as $slg) {
@@ -1188,7 +1194,7 @@ class LangGraphGenerator
         $orchestration = $workflow->getOrchestration();
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
-            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
+            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
             'orchestration');
     }
 
@@ -1403,7 +1409,7 @@ class LangGraphGenerator
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                       'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
-                          self::jevDocLines($facts['agentData'] ?? [])),
+                          self::jevDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts)),
                       // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
                       'env_path' => '../../.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
@@ -1975,6 +1981,8 @@ PY;
         $L[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($catalog, true);
         $L[] = '';
         $L[] = $sep; $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP'; $L[] = $sep;
+        $L[] = self::serverSlugsLine($facts);
+        $L[] = '';
         $L[] = LangGraphRuntime::mcpClientBlock();
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
         $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
@@ -2051,7 +2059,7 @@ PY;
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                       'extra' => array_merge(['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
-                          self::jevDocLines($facts['agentData'] ?? [])),
+                          self::jevDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts)),
                       // This file lives 3 levels under the workflow root (agents/<file>.py).
                       'env_path' => '../../../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
@@ -3159,7 +3167,7 @@ PY;
             // DATA FLOW paragraph of their own (run_node()/dispatcher/playbook
             // prose does not describe a swarm, which has none of those).
             'data_flow' => $dataFlow ?? self::modularDataFlowDoc(),
-            'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::jevDocLines($facts['agentData'] ?? []))] + $run,
+            'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::jevDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts))] + $run,
             'storage' => $storage
                 ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()]
                 : ['enabled' => false, 'folder' => null],
@@ -3253,6 +3261,8 @@ TXT;
         $L[] = $sep;
         $L[] = '# MCP CLIENT -- JSON-RPC 2.0 over HTTP';
         $L[] = $sep;
+        $L[] = self::serverSlugsLine($facts);
+        $L[] = '';
         $L[] = LangGraphRuntime::mcpClientBlock();
         if ($facts['codeData'] !== []) {
             $L[] = LangGraphRuntime::codeHarnessBlock();
@@ -3669,6 +3679,26 @@ PY;
      * not mentioned when every dispatcher routes with the model. LangGraph-only: the other compile targets still route
      * every dispatcher with the model.
      */
+    /** MCP_SERVER_SLUGS: every MCP server URL in this workflow -> its slug (McpClient._headers reads MCP_HEADERS_<SLUG>). */
+    private static function serverSlugsLine(array $facts): string
+    {
+        return 'MCP_SERVER_SLUGS = ' . PythonEmitHelpers::jsonToPython($facts['serverSlugs'] ?? [], true);
+    }
+
+    /** The .env lines a run needs for servers that take headers (values are the user's, never emitted). */
+    private static function mcpHeaderDocLines(array $facts): array
+    {
+        $lines = [];
+        foreach (array_unique(array_values($facts['serverSlugs'] ?? [])) as $slug) {
+            if ($slug === '') {
+                continue;
+            }
+            $lines[] = '# MCP_HEADERS_' . strtoupper($slug) . '={"Header": "value"}   # in .env, only if this MCP server needs headers'
+                . ($slug === 'outlook' ? ' (Outlook: {"X-Outlook-Account": "<connection key from the editor>"})' : '');
+        }
+        return $lines;
+    }
+
     private static function jevDocLines(array $agentData): array
     {
         $jevOnly = [];

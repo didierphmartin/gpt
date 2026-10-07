@@ -1235,6 +1235,25 @@ class McpClient:
         # Its cookie jar is shared by every server on the same host (MCP uses headers, not cookies).
         self._http = httpx.Client()
 
+    def _headers(self, server_url: str) -> dict:
+        """HEADERS plus the server's own headers from MCP_HEADERS_<SLUG> in .env (a JSON object).
+
+        Header values (keys, connection ids) never live in this script: the editor's MCP server
+        entry holds them, and .env carries them to the compiled run.
+        """
+        slug = MCP_SERVER_SLUGS.get(server_url, "")
+        var = f"MCP_HEADERS_{slug.upper()}"
+        raw = os.environ.get(var, "") if slug else ""
+        if not raw:
+            return self.HEADERS
+        try:
+            extra = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
+        if not isinstance(extra, dict):
+            raise RuntimeError(f"{var} in .env must be a JSON object")
+        return {**self.HEADERS, **{str(k): str(v) for k, v in extra.items()}}
+
     @staticmethod
     def normalize_url(url: str) -> str:
         """Ensure the URL points to the MCP endpoint.
@@ -1299,9 +1318,10 @@ class McpClient:
             if cand not in candidates:
                 candidates.append(cand)
         last_err = None
+        h = self._headers(url)   # outside the try: a bad MCP_HEADERS_<SLUG> must stop the run, not look like a failed handshake
         for mcp_url in candidates:
             try:
-                r = self._http.post(mcp_url, json=init_req, headers=self.HEADERS, timeout=30)
+                r = self._http.post(mcp_url, json=init_req, headers=h, timeout=30)
                 r.raise_for_status()
                 data = self._parse(r.text)
                 if data is None or "error" in (data or {}):
@@ -1312,7 +1332,7 @@ class McpClient:
                     "jsonrpc": "2.0",
                     "method": "notifications/initialized",
                     "params": {}
-                }, headers=self.HEADERS, timeout=30)
+                }, headers=h, timeout=30)
                 self._endpoints[url] = mcp_url
                 return mcp_url
             except Exception as e:
@@ -1336,7 +1356,7 @@ class McpClient:
                        "arguments": arguments or {}}
         }
         try:
-            r = self._http.post(mcp_url, json=request, headers=self.HEADERS, timeout=180)
+            r = self._http.post(mcp_url, json=request, headers=self._headers(server_url), timeout=180)
             r.raise_for_status()
             data = self._parse(r.text)
         except Exception as e:
@@ -1361,7 +1381,7 @@ class McpClient:
             "params": {"name": tool_name, "arguments": arguments or {}}
         }
         try:
-            r = self._http.post(mcp_url, json=request, headers=self.HEADERS, timeout=180)
+            r = self._http.post(mcp_url, json=request, headers=self._headers(server_url), timeout=180)
             r.raise_for_status()
             data = self._parse(r.text)
         except Exception as e:
