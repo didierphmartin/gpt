@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 
 use AgentTeam\Services\AgentRunner;
+use AgentTeam\Services\DecisionRouter;
 use AgentTeam\Services\GraphWorkflowRunner;
 use AgentTeam\Services\JevRouter;
 use GuzzleHttp\Client;
@@ -15,16 +16,16 @@ use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Services\ApiKeyCrypto;
-use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\DecisionUsage;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 
 /**
  * The interpreter's dispatcher honours settings.routing_mode:
- *   'jev' = Jev only (the model is never called; no decision = "did not route"),
- *   'llm' = model only (Jev is never consulted),
- *   anything else (absent, unknown) = the default: Jev when the user's plan
- *   allows Jev, else the model. There is no hybrid: an unset dispatcher on a
- *   plan with Jev is Jev only, and a Jev decline never falls back to the model.
+ *   a provider key (e.g. 'jev') = that decision provider only (the model is
+ *     never called; no decision, or an unknown provider = "did not route"),
+ *   'llm' = model only (no decision provider is consulted),
+ *   unset = the first decision provider the user's plan allows, else the model.
+ *   There is no hybrid: a decline never falls back to the model or another provider.
  * The key is the stored one (user row wins over the global row), never .env.
  */
 final class GraphWorkflowRunnerRoutingModeTest extends TestCase
@@ -60,20 +61,31 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $pdo->shouldReceive('query')->andReturn(Mockery::mock(\PDOStatement::class));
         $pdo->shouldReceive('prepare')->andReturnUsing(function (string $sql) use ($userKey, $globalKey, $jevEnabled, $jevPrices) {
             $row = false;
+            $rows = [];
             if (str_contains($sql, 'FROM users')) {
                 $row = ['role' => 'user'];
             } elseif (str_contains($sql, 'FROM packages')) {
-                $row = ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => $jevEnabled]]]), 'updated_at' => null];
+                $row = ['capabilities' => json_encode(['providers' => [
+                    'jev' => ['enabled' => $jevEnabled], 'acme' => ['enabled' => $jevEnabled],
+                ]]), 'updated_at' => null];
+            } elseif (str_contains($sql, 'api_format = :f')) {
+                $rows = [
+                    ['provider_key' => 'acme', 'display_name' => 'Acme', 'api_key' => 'acme-global', 'model' => 'acme-1',
+                     'base_url' => null, 'protocol' => 'typesafe', 'enabled' => 1, 'sort_order' => 200],
+                    ['provider_key' => 'jev', 'display_name' => 'Jev', 'api_key' => $globalKey, 'model' => 'jev-latest',
+                     'base_url' => null, 'protocol' => 'typesafe', 'enabled' => 1, 'sort_order' => 100],
+                ];
+                usort($rows, fn($a, $b) => $a['sort_order'] <=> $b['sort_order']);
+            } elseif (str_contains($sql, 'user_api_keys')) {
+                $row = $userKey !== '' ? ['api_key' => ApiKeyCrypto::encrypt($userKey, self::SECRET), 'base_url' => null] : false;
             } elseif (str_contains($sql, 'price_input_per_1m')) {
                 $row = ['price_input_per_1m' => $jevPrices[0], 'price_output_per_1m' => $jevPrices[1]];
             }
-            $value = str_contains($sql, 'user_api_keys')
-                ? ($userKey !== '' ? ApiKeyCrypto::encrypt($userKey, self::SECRET) : false)
-                : ($globalKey !== '' ? $globalKey : false);
             $stmt = Mockery::mock(\PDOStatement::class);
             $stmt->shouldReceive('execute')->andReturn(true);
             $stmt->shouldReceive('fetch')->andReturn($row);
-            $stmt->shouldReceive('fetchColumn')->andReturn($value);
+            $stmt->shouldReceive('fetchAll')->andReturn($rows);
+            $stmt->shouldReceive('fetchColumn')->andReturn(false);
             return $stmt;
         });
         return $pdo;
@@ -167,7 +179,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame('jev', $out['provider']);
         $this->assertArrayNotHasKey('route', $out);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (Jev: unclear: the request names no branch).',
+            'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
             $out['output']
         );
         $this->assertSame(['input_tokens' => 342, 'output_tokens' => 39], $out['usage']);
@@ -180,7 +192,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
 
         $this->assertFalse($out['success']);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (Jev: low_confidence: confidence 0.46 below floor 0.60).',
+            'Error: dispatcher "Router" did not route the request (jev: low_confidence: confidence 0.46 below floor 0.60).',
             $out['output']
         );
     }
@@ -193,7 +205,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertFalse($out['success']);
         $this->assertSame('jev', $out['provider']);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (Jev: unavailable: no Jev key).',
+            'Error: dispatcher "Router" did not route the request (jev: unavailable: no Jev key).',
             $out['output']
         );
         $this->assertSame(['input_tokens' => 0, 'output_tokens' => 0], $out['usage']);
@@ -254,7 +266,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertArrayNotHasKey('route', $out);
         $this->assertTrue($out['halt_branches']);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (Jev: unclear: the request names no branch).',
+            'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
             $out['output']
         );
     }
@@ -268,29 +280,43 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $this->assertSame('jev', $out['provider']);
         $this->assertTrue($out['halt_branches']);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (Jev: unavailable: no Jev key).',
+            'Error: dispatcher "Router" did not route the request (jev: unavailable: no Jev key).',
             $out['output']
         );
     }
 
-    public function testAnUnknownModeIsTheDefault(): void
+    public function testANodeNamingADeletedProviderHalts(): void
     {
-        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), []);
         $out = $this->dispatch($runner, ['routing_mode' => 'banana']);
 
-        $this->assertSame('jev', $out['provider'], 'an unknown mode resolves like an unset one: Jev when allowed');
         $this->assertFalse($out['success']);
         $this->assertTrue($out['halt_branches']);
+        $this->assertSame('banana', $out['provider']);
+        $this->assertSame(0, $runner->made, 'nothing to build for an unknown provider');
+        $this->assertSame(
+            'Error: dispatcher "Router" did not route the request (banana: unavailable: \'banana\' is not an available decision provider).',
+            $out['output']
+        );
     }
 
-    public function testAnUnknownModeNotAllowedGoesToTheModel(): void
+    public function testEachNodeUsesItsOwnProvider(): void
     {
-        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(true), [], false);
-        $out = $this->dispatch($runner, ['routing_mode' => 'banana']);
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Sales', 0.99)]);
+        $out = $this->dispatch($runner, ['routing_mode' => 'acme']);
 
-        $this->assertSame('openai', $out['provider']);
-        $this->assertSame('Sales', $out['route']['name']);
-        $this->assertSame(0, $runner->made, 'not allowed: the Jev router is never built');
+        $this->assertTrue($out['success']);
+        $this->assertSame('acme', $out['provider']);
+        $this->assertSame('acme', $runner->madeFor);
+        $this->assertSame('acme-global', $runner->madeWithKey);
+        $this->assertSame('acme', $runner->recorded[0]['provider']);
+    }
+
+    public function testMinConfidenceWinsOverTheLegacySetting(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Sales', 0.99)]);
+        $this->dispatch($runner, ['routing_mode' => 'jev', 'min_confidence' => 0.8, 'jev_min_confidence' => 0.3]);
+        $this->assertSame(0.8, $runner->madeWithFloor);
     }
 
     // ── Minimum confidence ─────────────────────────────────────────────────
@@ -350,10 +376,12 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
             $stmt->shouldReceive('fetch')->andReturn(str_contains($sql, 'FROM packages')
                 ? ['capabilities' => json_encode(['providers' => ['jev' => ['enabled' => true]]]), 'updated_at' => null]
                 : false);
-            $stmt->shouldReceive('fetchAll')->andReturn([]);
-            $stmt->shouldReceive('fetchColumn')->andReturn(
-                str_contains($sql, 'system_llm_settings') && $globalKey !== '' ? $globalKey : false
-            );
+            // The decision rows (DecisionProviders::rows): the jev row holds the global key.
+            $stmt->shouldReceive('fetchAll')->andReturn(str_contains($sql, 'api_format = :f')
+                ? [['provider_key' => 'jev', 'display_name' => 'Jev', 'api_key' => $globalKey, 'model' => 'jev-latest',
+                    'base_url' => null, 'protocol' => 'typesafe', 'enabled' => 1, 'sort_order' => 100]]
+                : []);
+            $stmt->shouldReceive('fetchColumn')->andReturn(false);
             $stmt->shouldReceive('rowCount')->andReturn(0);
             return $stmt;
         });
@@ -425,7 +453,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         } finally {
             $this->cleanRunsDir();
         }
-        $message = "Error: dispatcher \"Router\" did not route the request (Jev: {$why}).";
+        $message = "Error: dispatcher \"Router\" did not route the request (jev: {$why}).";
 
         $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
         $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
@@ -443,7 +471,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         } finally {
             $this->cleanRunsDir();
         }
-        $message = 'Error: dispatcher "Router" did not route the request (Jev: unclear: the request names no branch).';
+        $message = 'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).';
 
         $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
         $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
@@ -513,7 +541,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $out = $this->dispatch($runner, ['routing_mode' => 'jev']);
 
         $this->assertFalse($out['success']);
-        $this->assertStringContainsString('(Jev: unavailable: Jev is not enabled for your plan).', $out['output']);
+        $this->assertStringContainsString('(jev: unavailable: Jev is not enabled for your plan).', $out['output']);
         $this->assertTrue($out['halt_branches']);
         $this->assertSame([], $runner->recorded, 'a call that was never sent records nothing');
     }
@@ -554,33 +582,35 @@ class RoutingModeTestRunner extends GraphWorkflowRunner
     public int $made = 0;
     public ?string $madeWithKey = null;
     public ?float $madeWithFloor = null;
+    public string $madeFor = '';
     /** @var array<int, array<string, mixed>> the Jev results production would write as usage, with their user */
     public array $recorded = [];
 
-    /** Production's filter (JevUsage::record), with the database write replaced by a list. */
-    protected function recordJevUsage(int $userId, array $jevOut): void
+    /** Production's filter (DecisionUsage::record), with the database write replaced by a list. */
+    protected function recordDecisionUsage(int $userId, string $providerKey, string $model, array $out): void
     {
         $recorded = &$this->recorded;
-        $logger = new class ($recorded, $jevOut) extends UsageLogger {
-            public function __construct(private array &$into, private array $jevOut)
+        $logger = new class ($recorded, $out) extends UsageLogger {
+            public function __construct(private array &$into, private array $out)
             {
             }
 
             public function logTransaction(array $data): ?int
             {
-                $this->into[] = ['user_id' => $data['user_id']] + $this->jevOut;
+                $this->into[] = ['user_id' => $data['user_id'], 'provider' => $data['provider']] + $this->out;
                 return 1;
             }
         };
-        JevUsage::record($logger, $userId, $jevOut);
+        DecisionUsage::record($logger, $userId, $providerKey, $model, $out);
     }
 
-    protected function makeJevRouter(string $key, float $floor, string $url = ''): JevRouter
+    protected function makeDecisionRouter(array $resolved, float $floor): ?DecisionRouter
     {
         $this->made++;
-        $this->madeWithKey = $key;
+        $this->madeWithKey = $resolved['key'];
         $this->madeWithFloor = $floor;
-        // Mirrors production: an empty key means "not configured" (null).
-        return new JevRouter($key !== '' ? $key : null, new Client(['handler' => HandlerStack::create(new MockHandler($this->jevQueue))]), $floor);
+        $this->madeFor = (string) ($resolved['row']['provider_key'] ?? '');
+        return new JevRouter($resolved['key'] !== '' ? $resolved['key'] : null,
+            new Client(['handler' => HandlerStack::create(new MockHandler($this->jevQueue))]), $floor);
     }
 }

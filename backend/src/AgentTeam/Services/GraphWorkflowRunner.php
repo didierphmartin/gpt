@@ -6,8 +6,9 @@ namespace AgentTeam\Services;
 
 use AgentTeam\Models\Workflow;
 use PDO;
-use Quantis\AIPortfolioAssistant\Services\JevKeyResolver;
-use Quantis\AIPortfolioAssistant\Services\JevUsage;
+use Quantis\AIPortfolioAssistant\Services\DecisionKeyResolver;
+use Quantis\AIPortfolioAssistant\Services\DecisionRouters;
+use Quantis\AIPortfolioAssistant\Services\DecisionUsage;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use Quantis\AIPortfolioAssistant\Providers\ProviderRequestFactory;
 
@@ -477,7 +478,7 @@ class GraphWorkflowRunner
                     continue;
                 }
 
-                // A Jev-only dispatcher that did not route: the run stops on
+                // A decision-model dispatcher that did not route: the run stops on
                 // that branch point, and its failure is the run's result.
                 if ($this->haltUnrouted($currentNodeId, $output, $edges, $executedNodes)) {
                     $finalOutput = $output['output'] ?? null;
@@ -674,10 +675,10 @@ class GraphWorkflowRunner
     }
 
     /**
-     * Jev-only dispatcher that did not route ('halt_branches'): mark every
+     * Decision-model dispatcher that did not route ('halt_branches'): mark every
      * branch -- and everything reachable solely through them -- as done
-     * without running it, so no child agent or model is called. Only Jev mode
-     * sets the flag; an LLM dispatcher that does not route keeps its
+     * without running it, so no child agent or model is called. Only a
+     * decision-provider mode sets the flag; an LLM dispatcher that does not route keeps its
      * historical behaviour. Returns false (and touches nothing) otherwise.
      */
     private function haltUnrouted(int $nodeId, array $output, array $edges, array &$executedNodes): bool
@@ -687,7 +688,7 @@ class GraphWorkflowRunner
         foreach (DispatchRouting::skipSet($branches, $edges) as $skipId) {
             if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
         }
-        error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} did not route (Jev only); skipped " . json_encode($branches));
+        error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} did not route (decision model only); skipped " . json_encode($branches));
         return true;
     }
 
@@ -1007,86 +1008,83 @@ class GraphWorkflowRunner
         }
 
         // Dispatcher routing mode (settings.routing_mode) -- always exactly one:
-        //   'llm'  -> the model only; Jev is never consulted.
-        //   'jev'  -> Jev only; the model is never called. When Jev cannot
-        //             decide (unclear, below the minimum confidence, not in the
-        //             plan, no key, error, timeout) the run stops with "did not
-        //             route" and none of the branches run.
-        //   other  -> (absent on dispatchers saved before the setting existed,
-        //             or unknown) resolved here: Jev when the user's plan allows
-        //             Jev, else the model. There is no third, hybrid state.
+        //   'llm'  -> the model only; no decision provider is consulted.
+        //   a key  -> that decision provider only (a saved 'jev' is the jev
+        //             row's key); the model is never called. When it cannot
+        //             decide (unclear, below the minimum confidence, unknown
+        //             provider, not in the plan, no key, error, timeout) the
+        //             run stops with "did not route" and none of the branches run.
+        //   unset  -> (absent on dispatchers saved before the setting existed)
+        //             resolved here: the first decision provider the user's plan
+        //             allows, else the model. There is no hybrid state and no
+        //             fallback to another provider or to the model.
         //
-        // Why Jev by default. A dispatcher answers a CLOSED question, which is
-        // the one thing a System One model does natively -- and does with a
-        // guarantee the LLM cannot give: the answer is constrained to the
-        // options supplied, so a branch that does not exist is unrepresentable
-        // rather than merely unlikely. Measured on this workflow: ~250ms
-        // against ~5s for the forced route_to turn.
+        // Why a decision model by default. A dispatcher answers a CLOSED
+        // question, which is the one thing a System One model does natively --
+        // and does with a guarantee the LLM cannot give: the answer is
+        // constrained to the options supplied, so a branch that does not exist
+        // is unrepresentable rather than merely unlikely. Measured on this
+        // workflow: ~250ms against ~5s for the forced route_to turn.
         //
         // It decides ONLY when it is sure: 'unclear' (no branch named) and
-        // 'low_confidence' (two branches defensible) are not routes, and in Jev
-        // mode they stop the run rather than route on a guess. A dispatcher
-        // that needs the model's judgement -- or the notes only a model can
-        // write for the chosen child -- is set to LLM.
+        // 'low_confidence' (two branches defensible) are not routes, and with a
+        // decision model they stop the run rather than route on a guess. A
+        // dispatcher that needs the model's judgement -- or the notes only a
+        // model can write for the chosen child -- is set to LLM.
         if ($dispatchTargets !== []) {
             $routingSettings = $agent->getSettings();
-            $savedMode = $routingSettings['routing_mode'] ?? null;
-            // One resolve serves both the default and the Jev call below.
-            $resolvedJev = null;
-            if ($savedMode === 'jev' || $savedMode === 'llm') {
-                $routingMode = $savedMode;
-            } else {
-                $resolvedJev = JevKeyResolver::resolve($this->db, $this->config, $userId);
-                $routingMode = $resolvedJev['source'] === 'not_allowed' ? 'llm' : 'jev';
-            }
-            if ($routingMode === 'jev') {
+            $saved = trim((string) ($routingSettings['routing_mode'] ?? ''));
+            // 'llm' = the model; any other value names a decision provider
+            // (a saved 'jev' is the jev row's key); unset = the first decision
+            // provider the plan allows, else the model.
+            $routingMode = $saved !== '' ? $saved
+                : (DecisionKeyResolver::defaultProvider($this->db, $userId) ?? 'llm');
+            if ($routingMode !== 'llm') {
                 // Same clamp as DispatchController (browser path): [0,1], else the default.
-                $floor = is_numeric($routingSettings['jev_min_confidence'] ?? null)
-                    ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
+                $floorSetting = $routingSettings['min_confidence'] ?? $routingSettings['jev_min_confidence'] ?? null;
+                $floor = is_numeric($floorSetting)
+                    ? max(0.0, min(1.0, (float) $floorSetting))
                     : JevRouter::DEFAULT_CONFIDENCE_FLOOR;
                 // The key the plan allows (user row, package key, global row);
                 // none = "did not route", with the reason saying why.
-                $resolvedJev ??= JevKeyResolver::resolve($this->db, $this->config, $userId);
-                $jev = $this->makeJevRouter($resolvedJev['key'], $floor,
-                    JevKeyResolver::url($this->db, $resolvedJev, $userId));
-                $jevOut = $jev->route($task, $dispatchTargets,
-                    DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName));
-                if ($resolvedJev['key'] === '') {
-                    // Not in the plan vs. no key: the reason says which.
-                    $jevOut['reason'] = JevKeyResolver::unavailableReason($resolvedJev['source']);
-                }
-                // The only place a Jev call is written as usage (answered calls only).
-                $this->recordJevUsage($userId, $jevOut);
-                $conf = $jevOut['confidence'] !== null ? sprintf('%.2f', $jevOut['confidence']) : '?';
-                $jevUsage = ['input_tokens' => (int) ($jevOut['usage']['input_tokens'] ?? 0),
-                             'output_tokens' => (int) ($jevOut['usage']['output_tokens'] ?? 0)];
-                if ($jevOut['outcome'] === 'routed') {
-                    $target = $jevOut['target'];
-                    // Same shape the LLM path returns below, minus notes: Jev
-                    // produces no prose, so the child gets the task alone --
-                    // which the notes block already treats as optional.
+                $resolved = DecisionKeyResolver::resolve($this->db, $this->config, $userId, $routingMode);
+                $router = $resolved['key'] !== '' ? $this->makeDecisionRouter($resolved, $floor) : null;
+                $out = $router !== null
+                    ? $router->route($task, $dispatchTargets,
+                        DispatchRouting::defaultInstructions($agent->getName(), (string) $agent->getDescription(), $this->workflowName))
+                    : DecisionRouters::unavailable($resolved, $routingMode);
+                // The only place a decision call is written as usage (answered calls only).
+                $this->recordDecisionUsage($userId, $routingMode, (string) ($resolved['row']['model'] ?? ''), $out);
+                $conf = $out['confidence'] !== null ? sprintf('%.2f', $out['confidence']) : '?';
+                $usage = ['input_tokens' => (int) ($out['usage']['input_tokens'] ?? 0),
+                          'output_tokens' => (int) ($out['usage']['output_tokens'] ?? 0)];
+                if ($out['outcome'] === 'routed') {
+                    $target = $out['target'];
+                    // Same shape the LLM path returns below, minus notes: a
+                    // decision model writes no prose, so the child gets the
+                    // task alone -- which the notes block already treats as optional.
                     $this->nodeLog($node, 'info', 'routing',
-                        "Jev routed to {$target['name']} (confidence {$conf}, {$jevOut['ms']}ms, no LLM turn)");
+                        "{$routingMode} routed to {$target['name']} (confidence {$conf}, {$out['ms']}ms, no LLM turn)");
                     return [
                         'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
                         'output' => $task,
                         'route' => ['id' => $target['id'], 'name' => $target['name'], 'notes' => ''],
                         'success' => true,
-                        'usage' => $jevUsage,
-                        'provider' => 'jev',
+                        'usage' => $usage,
+                        'provider' => $routingMode,
                     ];
                 }
-                // Jev only: no model fallback, so the run stops here and says
-                // why (the reason names a missing key or the plan, too).
-                $why = "{$jevOut['outcome']}: {$jevOut['reason']}";
+                // No model fallback, no other provider: the run stops here and
+                // says why (the reason names a missing key or the plan, too).
+                $why = "{$out['outcome']}: {$out['reason']}";
                 $this->nodeLog($node, 'error', 'routing',
-                    "Jev did not route ({$why}, confidence {$conf}) — Jev-only dispatcher, no model fallback");
+                    "{$routingMode} did not route ({$why}, confidence {$conf}) — decision-model dispatcher, no model fallback");
                 return [
                     'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
-                    'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request (Jev: {$why}).",
+                    'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request ({$routingMode}: {$why}).",
                     'success' => false,
-                    'usage' => $jevUsage,
-                    'provider' => 'jev',
+                    'usage' => $usage,
+                    'provider' => $routingMode,
                     // The run loop reads this: no branch may run (see haltUnrouted).
                     'halt_branches' => true,
                 ];
@@ -1176,21 +1174,20 @@ class GraphWorkflowRunner
     }
 
     /**
-     * The Jev router for one dispatcher decision. A seam so tests can replace
-     * the HTTP transport; production always talks to the real service.
+     * The decision router for one dispatcher decision. A seam so tests can
+     * replace the HTTP transport; production always talks to the real service.
      */
-    protected function makeJevRouter(string $key, float $floor, string $url = ''): JevRouter
+    protected function makeDecisionRouter(array $resolved, float $floor): ?DecisionRouter
     {
-        return new JevRouter($key !== '' ? $key : null, null, $floor, $url);
+        return DecisionRouters::make($resolved, $floor);
     }
 
-    /** Test seam: where an answered Jev call is written as usage. */
-    protected function recordJevUsage(int $userId, array $jevOut): void
+    /** Test seam: where an answered decision call is written as usage. */
+    protected function recordDecisionUsage(int $userId, string $providerKey, string $model, array $out): void
     {
-        JevUsage::record(
+        DecisionUsage::record(
             new UsageLogger($this->db, true, $this->config['contexts_database'] ?? $this->config['database'] ?? null),
-            $userId,
-            $jevOut
+            $userId, $providerKey, $model, $out
         );
     }
 
