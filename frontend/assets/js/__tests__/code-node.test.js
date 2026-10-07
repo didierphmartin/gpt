@@ -204,4 +204,12 @@ assert.strictEqual(CN.outlookArgs(missingKey, { folder: 'X' }), null, 'a missing
 const wrongType = po.code.replace('"has_attachments": False', '"has_attachments": "no"');
 assert.strictEqual(CN.outlookArgs(wrongType, { folder: 'X' }), null, 'a value of the wrong type: code unchanged');
 assert.ok(CN.outlookArgs(po.code, { folder: 'X' }).includes('"folder": "X"'), 'the form-shaped dict still rewrites');
+// Connect to Outlook inserts Start -> Poll Outlook: Start's other children move behind the poll's
+// work exit (agents run only when there is mail); code children stay on Start.
+const startNodes = {
+    1: { outputs: { output_1: { connections: [{ node: '9', output: 'input_1' }, { node: '2', output: 'input_1' }, { node: '4', output: 'input_2' }] } } },
+};
+assert.deepStrictEqual(CN.startChildrenToMove('1', startNodes, kindOf), [{ node: '9', input: 'input_1' }, { node: '4', input: 'input_2' }]);
+assert.deepStrictEqual(CN.startChildrenToMove('1', { 1: { outputs: {} } }, kindOf), []);
+assert.deepStrictEqual(CN.startChildrenToMove(null, startNodes, kindOf), []);
 console.log('code-node.test.js: OK');

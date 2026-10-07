@@ -148,6 +148,17 @@
         return (out?.connections || []).map((c) => String(c.node));
     }
 
+    /**
+     * Start's children (other than code nodes) the Connect to Outlook shortcut moves behind the poll's
+     * work exit, so they run only when the poll found something: [{node, input}] with their input port.
+     */
+    function startChildrenToMove(startId, nodes, kindOf) {
+        if (startId == null) return [];
+        return (nodes[startId]?.outputs?.output_1?.connections || [])
+            .filter((c) => kindOf(String(c.node)) !== 'code')
+            .map((c) => ({ node: String(c.node), input: c.output }));
+    }
+
     /** The parents that ran, as the harness wants them; a parent with no output (skipped) is left out. */
     function parentsFor(nodeId, nodes, outputs, kindOf) {
         const res = [];
@@ -302,6 +313,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, outlookArgs, readOutlookArgs, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, outlookArgs, readOutlookArgs, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, startChildrenToMove,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });

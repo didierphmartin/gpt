@@ -9275,7 +9275,8 @@ class WorkflowEditor {
 
     /**
      * The Start form's Connect to Outlook shortcut (spec 2026-10-07 §5): the code node wired right
-     * after Start, or a new Poll Outlook node wired there, checked on `serverName`.
+     * after Start, or a new Poll Outlook node wired there, checked on `serverName`; a new one takes
+     * over Start's other children on its new_mail exit, so a poll with no mail runs no agent.
      */
     _outlookPollNodeAfterStart(serverName) {
         const nodes = this.editor.drawflow.drawflow.Home.data;
@@ -9287,6 +9288,13 @@ class WorkflowEditor {
         const t = window.CodeNode.TEMPLATES.poll_outlook;
         const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100,
             { name: 'Poll Outlook', code: t.code, exits: [...t.exits], mcp_servers: [serverName] });
+        // Start's other children move behind new_mail: they run only when there is mail.
+        const moved = window.CodeNode.startChildrenToMove(startId, nodes, (nid) => this._wfNodeKind(nid, nodes));
+        const workPort = window.CodeNode.portForExit(t.exits, 'new_mail');
+        for (const c of moved) {
+            this.editor.removeSingleConnection(startId, c.node, 'output_1', c.input);
+            this.editor.addConnection(id, c.node, workPort, c.input);
+        }
         if (startId) this.editor.addConnection(startId, id, 'output_1', 'input_1');
         this._refreshCodeNode(id);
         this._workflowDirty = true;
