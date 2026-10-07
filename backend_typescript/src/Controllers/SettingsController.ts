@@ -1,4 +1,6 @@
 import { sql } from 'kysely';
+import { ROUTER_FORMAT, decisionProviderList } from '../Services/ProviderKinds';
+import { packageAllowed } from '../Services/DecisionAccess';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { PackageResolver } from '../Services/PackageResolver';
@@ -197,7 +199,11 @@ export class SettingsController {
       /* fail open — leave package_models/locked empty */
     }
 
-    return { success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints };
+    // Decision-model providers (router rows) the plan allows; routing itself is PHP-only.
+    const routerRows = (await sql`SELECT * FROM system_llm_settings WHERE api_format = ${ROUTER_FORMAT}`.execute(db)).rows as Record<string, any>[];
+    const decision_providers = decisionProviderList(routerRows, await packageAllowed(userId));
+
+    return { success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints, decision_providers };
   }
 
   /** POST /api/v1/settings/keys */

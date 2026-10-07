@@ -7,6 +7,7 @@ import { AuthController } from './Controllers/AuthController';
 import { PromptLibraryController } from './Controllers/PromptLibraryController';
 import { ChatController } from './Controllers/ChatController';
 import { ProviderController } from './Controllers/ProviderController';
+import { DispatchController } from './Controllers/DispatchController';
 import { ToolsController } from './Controllers/ToolsController';
 import { ContextController } from './Controllers/ContextController';
 import { MCPServerController } from './Controllers/MCPServerController';
@@ -50,6 +51,7 @@ const auth = new AuthController();
 const prompts = new PromptLibraryController();
 const chat = new ChatController();
 const providers = new ProviderController();
+const dispatch = new DispatchController();
 const tools = new ToolsController();
 const contexts = new ContextController();
 const mcpServers = new MCPServerController();
@@ -104,6 +106,7 @@ router.post('/api/v1/fetch-url', handle((ctx) => urlFetch.fetch(ctx)));
 
 // Providers (protected) — the provider picker's data source
 router.get('/api/v1/providers', handle((ctx) => providers.list(ctx)));
+router.get('/api/v1/dispatch/providers', handle((ctx) => dispatch.providers(ctx)));
 router.get('/api/v1/tools', handle((ctx) => tools.list(ctx)));
 // Direct tool execution (workflow realtime runner) + intent classification (voice realtime).
 router.post('/api/v1/tools/execute', handle((ctx) => tools.execute(ctx)));
@@ -236,6 +239,7 @@ router.delete('/api/v1/settings/provider', handle((ctx) => settings.deleteProvid
 // (e.g. "claude"), NOT digits — so it uses a plain param. The literal /toggle and /seed routes
 // are registered BEFORE /:key so they aren't shadowed. PHP maps both POST and PUT to
 // saveLLMProvider (POST = create at the collection path, PUT = update at /:key).
+router.get('/api/v1/admin/decision-protocols', handle((ctx) => systemSettings.decisionProtocols(ctx)));
 router.get('/api/v1/admin/llm-settings', handle((ctx) => systemSettings.getLLMProviders(ctx)));
 router.post('/api/v1/admin/llm-settings', handle((ctx) => systemSettings.saveLLMProvider(ctx)));
 router.post('/api/v1/admin/llm-settings/toggle', handle((ctx) => systemSettings.toggleProvider(ctx)));

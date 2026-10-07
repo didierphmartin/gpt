@@ -4,7 +4,8 @@ import { config } from '../config/env';
 import { db } from '../db/pools';
 import { DB } from '../db/types';
 import { Ctx, ControllerResult } from '../Support/Http';
-import { ROUTER_FORMAT, routerPairingError, ROUTER_KEYS } from '../Services/ProviderKinds';
+import { ROUTER_FORMAT, routerRowError } from '../Services/ProviderKinds';
+import { DECISION_PROTOCOLS, decisionProtocolCatalog } from '../Services/DecisionProtocols';
 
 /**
  * Mirrors src/Controllers/SystemSettingsController.php — the admin dashboard's LLM
@@ -380,10 +381,7 @@ export class SystemSettingsController {
     }
 
     const displayName = body.display_name ?? ucfirst(providerKey);
-    const model = body.model ?? null;
-    if (!model) {
-      return { success: false, error: 'Model is required', status_code: 400 };
-    }
+    let model = body.model ?? null;
 
     // Validate api_format
     const apiFormat = body.api_format ?? 'openai';
@@ -395,19 +393,45 @@ export class SystemSettingsController {
       };
     }
 
-    // A router row and a router key go together (see ProviderKinds).
-    const pairingError = routerPairingError(providerKey, apiFormat);
-    if (pairingError) {
-      return { success: false, error: pairingError, status_code: 400 };
+    // A decision provider (router row) names a registered protocol and a row's kind is fixed at
+    // creation (see ProviderKinds). The `protocol` column must exist: TS does no DDL, so it is
+    // there once the decision-providers migration has run.
+    const isRouter = apiFormat === ROUTER_FORMAT;
+    try {
+      const existingFormat =
+        (await sql<{ api_format: string | null }>`SELECT api_format FROM system_llm_settings WHERE provider_key = ${providerKey}`.execute(db))
+          .rows[0]?.api_format ?? null;
+      const otherDecisionKeys = (
+        await sql<{ provider_key: string }>`SELECT provider_key FROM system_llm_settings WHERE api_format = ${ROUTER_FORMAT}`.execute(db)
+      ).rows.map((r) => String(r.provider_key));
+      const rowError = routerRowError({
+        providerKey,
+        apiFormat,
+        protocol: body.protocol != null ? String(body.protocol) : null,
+        existingFormat,
+        otherDecisionKeys,
+      });
+      if (rowError) {
+        return { success: false, error: rowError, status_code: 400 };
+      }
+    } catch (e: any) {
+      return { success: false, error: 'Failed to save provider: ' + (e?.message ?? ''), status_code: 500 };
     }
-    if (ROUTER_KEYS.includes(providerKey)) {
+    if (isRouter) {
       // No chat endpoint, no streaming, no tools: whatever the form sent.
-      // base_url is kept: the full Jev URL when routing goes through a
-      // gateway, empty = the vendor URL (PHP JevRouter::URL).
+      // base_url is the full vendor URL (a gateway); empty = the protocol default.
+      body.protocol = String(body.protocol);
       body.base_url = typeof body.base_url === 'string' && body.base_url.trim() !== '' ? body.base_url.trim() : null;
       body.chat_endpoint = null;
       body.streaming = 0;
       body.supports_tools = 0;
+      model = model || DECISION_PROTOCOLS[body.protocol].model;
+    } else {
+      body.protocol = null;
+    }
+
+    if (!model) {
+      return { success: false, error: 'Model is required', status_code: 400 };
     }
 
     try {
@@ -447,6 +471,7 @@ export class SystemSettingsController {
       const systemPrompt = body.system_prompt ?? null;
       const enabled = phpIntVal(body.enabled ?? 1);
       const sortOrder = phpIntVal(body.sort_order ?? 0);
+      const protocol: string | null = body.protocol;
 
       if (existing) {
         await sql`
@@ -464,6 +489,7 @@ export class SystemSettingsController {
               supports_tools = ${supportsTools},
               supported_models = ${supportedModels},
               api_format = ${apiFormatVal},
+              protocol = ${protocol},
               system_prompt = ${systemPrompt},
               enabled = ${enabled},
               sort_order = ${sortOrder},
@@ -474,12 +500,12 @@ export class SystemSettingsController {
           INSERT INTO system_llm_settings
               (provider_key, display_name, api_key, model, base_url, max_tokens, temperature,
                price_input_per_1m, price_output_per_1m,
-               chat_endpoint, streaming, supports_tools, supported_models, api_format,
+               chat_endpoint, streaming, supports_tools, supported_models, api_format, protocol,
                system_prompt, enabled, sort_order, created_at, updated_at)
           VALUES
               (${providerKey}, ${displayName}, ${apiKey}, ${model}, ${baseUrl}, ${maxTokens}, ${temperature},
                ${priceInput}, ${priceOutput},
-               ${chatEndpoint}, ${streaming}, ${supportsTools}, ${supportedModels}, ${apiFormatVal},
+               ${chatEndpoint}, ${streaming}, ${supportsTools}, ${supportedModels}, ${apiFormatVal}, ${protocol},
                ${systemPrompt}, ${enabled}, ${sortOrder}, NOW(), NOW())`.execute(db);
       }
 
@@ -492,6 +518,13 @@ export class SystemSettingsController {
     } catch (e: any) {
       return { success: false, error: 'Failed to save provider: ' + (e?.message ?? ''), status_code: 500 };
     }
+  }
+
+  /** GET /api/v1/admin/decision-protocols: the protocols a decision provider row may name. */
+  async decisionProtocols(ctx: Ctx): Promise<ControllerResult> {
+    const err = await this.requireAdmin(ctx);
+    if (err) return err;
+    return { success: true, protocols: decisionProtocolCatalog(), status_code: 200 };
   }
 
   /** DELETE /api/v1/admin/llm-settings/:key. Mirrors deleteLLMProvider(). */
