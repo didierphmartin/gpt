@@ -298,10 +298,10 @@ def test_save_inserts_new_provider():
     assert sql == (
         'INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, base_url, max_tokens,'
         ' temperature, price_input_per_1m, price_output_per_1m, chat_endpoint, streaming, supports_tools,'
-        ' supported_models, api_format, system_prompt, enabled, sort_order, created_at, updated_at)'
+        ' supported_models, api_format, protocol, system_prompt, enabled, sort_order, created_at, updated_at)'
         ' VALUES (:provider_key, :display_name, :api_key, :model, :base_url, :max_tokens, :temperature,'
         ' :price_input_per_1m, :price_output_per_1m, :chat_endpoint, :streaming, :supports_tools,'
-        ' :supported_models, :api_format, :system_prompt, :enabled, :sort_order, NOW(), NOW())'
+        ' :supported_models, :api_format, :protocol, :system_prompt, :enabled, :sort_order, NOW(), NOW())'
     )       # SystemSettingsController.php:439-448 (saveLLMProvider's INSERT branch)
     assert params[':provider_key'] == 'newp'
     assert params[':display_name'] == 'Newp'          # ucfirst fallback
@@ -321,7 +321,7 @@ def test_save_inserts_new_provider():
 
 def test_save_updates_existing_and_keeps_key_when_masked_or_blank():
     for sent_key in ('', 'sk-1***90ab', None):
-        db = _admin_db(one=[{'id': 1, 'api_key': 'sk-existingkey1'}])
+        db = _admin_db(one=[{'api_format': 'openai'}, {'id': 1, 'api_key': 'sk-existingkey1'}])
         body = {'provider_key': 'kimi', 'model': 'm', 'api_key': sent_key}
         r = c(db).saveLLMProvider(ctx(body=body))
         assert r == {'success': True, 'message': 'Provider updated', 'provider_key': 'kimi', 'status_code': 200}
@@ -333,14 +333,14 @@ def test_save_updates_existing_and_keeps_key_when_masked_or_blank():
             ' price_output_per_1m = :price_output_per_1m, chat_endpoint = :chat_endpoint,'
             ' streaming = :streaming, supports_tools = :supports_tools,'
             ' supported_models = :supported_models, api_format = :api_format,'
-            ' system_prompt = :system_prompt, enabled = :enabled, sort_order = :sort_order,'
+            ' protocol = :protocol, system_prompt = :system_prompt, enabled = :enabled, sort_order = :sort_order,'
             ' updated_at = NOW() WHERE provider_key = :provider_key'
         )       # SystemSettingsController.php:418-436 (saveLLMProvider's UPDATE branch)
         assert params[':api_key'] == 'sk-existingkey1'
 
 
 def test_save_uses_new_api_key_when_provided_and_not_masked():
-    db = _admin_db(one=[{'id': 1, 'api_key': 'sk-existingkey1'}])
+    db = _admin_db(one=[{'api_format': 'openai'}, {'id': 1, 'api_key': 'sk-existingkey1'}])
     body = {'provider_key': 'kimi', 'model': 'm', 'api_key': 'sk-brandnewvalue'}
     c(db).saveLLMProvider(ctx(body=body))
     _, params = db.calls[-1]
@@ -566,22 +566,52 @@ def test_config_fallback_configured_prices_still_win():
 
 # ─── router rows (Jev) ───────────────────────────────────────────────────
 
-def test_save_router_key_requires_router_format():
+def test_a_router_row_needs_a_registered_protocol():
+    db = _admin_db(one=[None])   # existing-format lookup -> new key
+    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'acme', 'model': 'm', 'api_format': 'router'}))
+    assert r == {'success': False, 'error': 'Decision provider needs a protocol: one of typesafe', 'status_code': 400}
     db = _admin_db(one=[None])
-    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'jev', 'model': 'jev-latest', 'api_format': 'openai'}))
-    assert r == {'success': False, 'error': "Provider 'jev' is a router: api_format must be 'router'", 'status_code': 400}
-    r = c(_admin_db(one=[None])).saveLLMProvider(ctx(body={'provider_key': 'jev', 'model': 'jev-latest'}))   # default 'openai'
-    assert r['status_code'] == 400
+    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'acme', 'model': 'm', 'api_format': 'router', 'protocol': 'bogus'}))
+    assert r['status_code'] == 400 and 'needs a protocol' in r['error']
 
 
-def test_save_router_format_is_reserved_for_router_keys():
-    r = c(_admin_db(one=[None])).saveLLMProvider(ctx(body={'provider_key': 'kimi', 'model': 'm', 'api_format': 'router'}))
-    assert r == {'success': False, 'error': "api_format 'router' is reserved for: jev", 'status_code': 400}
+def test_a_kind_cannot_flip():
+    r = c(_admin_db(one=[{'api_format': 'router'}])).saveLLMProvider(
+        ctx(body={'provider_key': 'jev', 'model': 'm', 'api_format': 'openai'}))
+    assert r == {'success': False, 'error': "Provider 'jev' is a decision provider; it cannot become an LLM", 'status_code': 400}
+    r = c(_admin_db(one=[{'api_format': 'openai'}])).saveLLMProvider(
+        ctx(body={'provider_key': 'kimi', 'model': 'm', 'api_format': 'router', 'protocol': 'typesafe'}))
+    assert r == {'success': False, 'error': "Provider 'kimi' is an LLM; it cannot become a decision provider", 'status_code': 400}
+
+
+def test_env_stem_clash_is_refused():
+    db = _admin_db(one=[None], all_=[[{'provider_key': 'jev-eu'}]])
+    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'jev_eu', 'model': 'm', 'api_format': 'router', 'protocol': 'typesafe'}))
+    assert r == {'success': False, 'error': "'jev-eu' and 'jev_eu' would share the env name JEV_EU_API_KEY", 'status_code': 400}
+
+
+def test_blank_router_model_defaults_to_the_protocol_and_protocol_is_written():
+    db = _admin_db(one=[None, None], all_=[[]])
+    r = c(db).saveLLMProvider(ctx(body={'provider_key': 'acme', 'api_format': 'router', 'protocol': 'typesafe'}))
+    assert r['status_code'] == 201
+    params = db.calls[-1][1]
+    assert params[':model'] == 'jev-latest' and params[':protocol'] == 'typesafe'
+
+
+def test_a_chat_row_writes_a_null_protocol():
+    db = _admin_db(one=[None, None])
+    c(db).saveLLMProvider(ctx(body={'provider_key': 'kimi', 'model': 'm', 'protocol': 'typesafe'}))
+    assert db.calls[-1][1][':protocol'] is None
+
+
+def test_decision_protocols_endpoint_is_admin_only_and_lists_the_catalog():
+    r = c(_admin_db()).decisionProtocols(ctx())
+    assert r['success'] is True and r['protocols'][0]['id'] == 'typesafe'
 
 
 def test_save_router_row_accepted_and_stripped_of_chat_settings():
-    db = _admin_db(one=[None])
-    body = {'provider_key': 'jev', 'model': 'jev-latest', 'api_format': 'router', 'api_key': 'sk-jevkey12345',
+    db = _admin_db(one=[None, None], all_=[[]])
+    body = {'provider_key': 'jev', 'model': 'jev-latest', 'api_format': 'router', 'protocol': 'typesafe', 'api_key': 'sk-jevkey12345',
             'base_url': 'https://x', 'chat_endpoint': '/v1', 'streaming': 1, 'supports_tools': 1}
     r = c(db).saveLLMProvider(ctx(body=body))
     assert r['success'] is True and r['status_code'] == 201

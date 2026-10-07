@@ -18,7 +18,9 @@ from pathlib import Path
 
 from app.config import PHP_BACKEND
 from app.services.api_key_crypto import ApiKeyCrypto
+from app.services.decision_access import package_allowed, router_rows
 from app.services.package_resolver import PackageResolver
+from app.services.provider_kinds import decision_provider_list
 from app.support.crypto import aes256cbc_encrypt
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
@@ -267,6 +269,7 @@ class SettingsController:
             'locked': php_array(locked),
             'system_prompts': php_array(systemPrompts),
             'endpoints': php_array(endpoints),
+            'decision_providers': decision_provider_list(router_rows(self.db), package_allowed(self.db, userId)),
             'status_code': 200,
         }
 

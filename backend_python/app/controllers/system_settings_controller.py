@@ -28,7 +28,8 @@ from __future__ import annotations
 import json
 
 from app.controllers.model_catalog_controller import CATALOG_PATH
-from app.services.provider_kinds import ROUTER_FORMAT, ROUTER_KEYS, router_pairing_error
+from app.services.decision_protocols import DECISION_PROTOCOLS, decision_protocol_catalog
+from app.services.provider_kinds import ROUTER_FORMAT, router_row_error
 from app.support.db_presence import DbPresence
 from app.support.phpcompat import (
     php_bool,
@@ -45,7 +46,7 @@ from app.support.phpjson import php_json_decode, php_json_encode
 
 class SystemSettingsController:
     # Allowed API formats for validation (SystemSettingsController.php:24)
-    # 'router' marks a non-chat row (Jev): it only stores a key; see provider_kinds.
+    # 'router' marks a non-chat row (a decision provider): it only stores a key; see provider_kinds.
     ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ROUTER_FORMAT]
 
     # Top-level provider keys that have dedicated config sections (php:27)
@@ -361,8 +362,6 @@ class SystemSettingsController:
 
         display_name = php_coalesce(body.get('display_name'), ucfirst(str(provider_key)))
         model = body.get('model')
-        if not model:
-            return {'success': False, 'error': 'Model is required', 'status_code': 400}
 
         api_format = php_coalesce(body.get('api_format'), 'openai')
         if api_format not in self.ALLOWED_API_FORMATS:
@@ -372,17 +371,34 @@ class SystemSettingsController:
                 'status_code': 400,
             }
 
-        # A router row and a router key go together (see provider_kinds).
-        pairing_error = router_pairing_error(provider_key, api_format)
-        if pairing_error:
-            return {'success': False, 'error': pairing_error, 'status_code': 400}
-        if provider_key in ROUTER_KEYS:
-            # No chat endpoint, no streaming, no tools: whatever the form sent.
-            # base_url is kept: the full Jev URL when routing goes through a
-            # gateway, empty = the vendor URL (PHP JevRouter::URL).
+        # A decision provider (router row) names a registered protocol; a row's
+        # kind is fixed at creation, so 'router' on a chat key, or a chat
+        # format on a decision key, is refused.
+        is_router = api_format == ROUTER_FORMAT
+        protocol_id = body.get('protocol')
+        protocol_id = str(protocol_id) if protocol_id is not None else None
+        try:
+            existing_format = self._existing_api_format(provider_key)
+            other_keys = self._decision_keys() if is_router and protocol_id in DECISION_PROTOCOLS else []
+        except Exception as e:  # noqa: BLE001
+            return {'success': False, 'error': f'Failed to save provider: {e}', 'status_code': 500}
+        kind_error = router_row_error(provider_key, api_format, protocol_id, existing_format, other_keys)
+        if kind_error:
+            return {'success': False, 'error': kind_error, 'status_code': 400}
+        if is_router:
+            # No chat endpoint, no streaming, no tools. base_url is the full
+            # vendor URL (a gateway), empty = the protocol default.
             base_url = body.get('base_url')
             base_url = php_trim(base_url) if isinstance(base_url, str) and php_trim(base_url) != '' else None
-            body = {**body, 'base_url': base_url, 'chat_endpoint': None, 'streaming': 0, 'supports_tools': 0}
+            body = {**body, 'protocol': protocol_id, 'base_url': base_url, 'chat_endpoint': None,
+                    'streaming': 0, 'supports_tools': 0}
+            if not model:
+                model = DECISION_PROTOCOLS[protocol_id]['model']
+        else:
+            body = {**body, 'protocol': None}
+
+        if not model:
+            return {'success': False, 'error': 'Model is required', 'status_code': 400}
 
         try:
             self._ensure_price_columns()
@@ -415,16 +431,16 @@ class SystemSettingsController:
                        ' price_output_per_1m = :price_output_per_1m, chat_endpoint = :chat_endpoint,'
                        ' streaming = :streaming, supports_tools = :supports_tools,'
                        ' supported_models = :supported_models, api_format = :api_format,'
-                       ' system_prompt = :system_prompt, enabled = :enabled, sort_order = :sort_order,'
+                       ' protocol = :protocol, system_prompt = :system_prompt, enabled = :enabled, sort_order = :sort_order,'
                        ' updated_at = NOW() WHERE provider_key = :provider_key')
             else:
                 sql = ('INSERT INTO system_llm_settings (provider_key, display_name, api_key, model, base_url,'
                        ' max_tokens, temperature, price_input_per_1m, price_output_per_1m, chat_endpoint,'
-                       ' streaming, supports_tools, supported_models, api_format, system_prompt, enabled,'
+                       ' streaming, supports_tools, supported_models, api_format, protocol, system_prompt, enabled,'
                        ' sort_order, created_at, updated_at) VALUES (:provider_key, :display_name, :api_key,'
                        ' :model, :base_url, :max_tokens, :temperature, :price_input_per_1m,'
                        ' :price_output_per_1m, :chat_endpoint, :streaming, :supports_tools, :supported_models,'
-                       ' :api_format, :system_prompt, :enabled, :sort_order, NOW(), NOW())')
+                       ' :api_format, :protocol, :system_prompt, :enabled, :sort_order, NOW(), NOW())')
 
             self.db.execute(sql, {
                 ':provider_key': provider_key,
@@ -441,6 +457,7 @@ class SystemSettingsController:
                 ':supports_tools': php_intval(php_coalesce(body.get('supports_tools'), 1)),
                 ':supported_models': supported_models,
                 ':api_format': php_coalesce(body.get('api_format'), 'openai'),
+                ':protocol': body['protocol'],
                 ':system_prompt': body.get('system_prompt'),
                 ':enabled': php_intval(php_coalesce(body.get('enabled'), 1)),
                 ':sort_order': php_intval(php_coalesce(body.get('sort_order'), 0)),
@@ -454,6 +471,27 @@ class SystemSettingsController:
             }
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': f'Failed to save provider: {e}', 'status_code': 500}
+
+    def _existing_api_format(self, provider_key):
+        """api_format of an existing row, None when the key is new."""
+        row = self.db.fetch_one('SELECT api_format FROM system_llm_settings WHERE provider_key = :k',
+                                {':k': provider_key})
+        return str(row['api_format']) if row else None
+
+    def _decision_keys(self) -> list:
+        """Every decision key, enabled or not."""
+        rows = self.db.fetch_all('SELECT provider_key FROM system_llm_settings WHERE api_format = :f',
+                                 {':f': ROUTER_FORMAT})
+        return [str(r['provider_key']) for r in rows]
+
+    # ─── decisionProtocols ──────────────────────────────────────────────
+
+    def decisionProtocols(self, request) -> dict:
+        """GET /admin/decision-protocols: the protocols a decision provider row may name."""
+        err = self._require_admin(request)
+        if err:
+            return err
+        return {'success': True, 'protocols': decision_protocol_catalog(), 'status_code': 200}
 
     # ─── deleteLLMProvider (php:490-534) ────────────────────────────────
 

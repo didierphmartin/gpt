@@ -16,6 +16,7 @@ from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.context_controller import ContextController
+from app.controllers.dispatch_controller import DispatchController
 from app.controllers.drive_controller import DriveController
 from app.controllers.evi_webhook_controller import EVIWebhookController
 from app.controllers.file_storage_controller import FileStorageController
@@ -65,6 +66,7 @@ CONTROLLERS = {
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
     'ContextController': ContextController,
+    'DispatchController': DispatchController,
     'DriveController': DriveController,
     'EVIWebhookController': EVIWebhookController,
     'FileStorageController': FileStorageController,
@@ -176,6 +178,8 @@ ROUTES = [
     ('POST', '/api/v1/settings/provider/active', ('SettingsController', 'setActiveProvider')),
     ('DELETE', '/api/v1/settings/provider', ('SettingsController', 'deleteProvider')),
     ('GET', '/api/v1/settings/phone', ('SettingsController', 'getPhoneStatus')),
+    # Decision-model routing (list only; routing is not supported on this backend)
+    ('GET', '/api/v1/dispatch/providers', ('DispatchController', 'providers')),
     # Storage settings
     ('GET', '/api/v1/settings/storage', ('SettingsController', 'getStorageSettings')),
     ('POST', '/api/v1/settings/storage', ('SettingsController', 'saveStorageSettings')),
@@ -192,6 +196,7 @@ ROUTES = [
     ('DELETE', '/api/v1/admin/llm-settings/{key}', ('SystemSettingsController', 'deleteLLMProvider')),
     ('POST', '/api/v1/admin/llm-settings/toggle', ('SystemSettingsController', 'toggleProvider')),
     ('POST', '/api/v1/admin/llm-settings/seed', ('SystemSettingsController', 'seedFromConfig')),
+    ('GET', '/api/v1/admin/decision-protocols', ('SystemSettingsController', 'decisionProtocols')),
     # HEAL (self-healing enforcement gate: mode/budget/ceiling — routes.php:137-139)
     ('POST', '/api/v1/heal/authorize', ('HealController', 'authorize')),
     ('POST', '/api/v1/heal/record', ('HealController', 'record')),
