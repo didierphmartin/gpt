@@ -94,6 +94,15 @@ final class CodeNodeStepTest extends TestCase
         self::assertSame(['quiet' => false, 'drain' => false], self::summarize($erroredThenWork));
     }
 
+    public function testErrorExitReasonIsOneBoundedLine(): void
+    {
+        // Parity with the compiled ErrorExitTaken.reason: whitespace collapsed, cut at 200 characters (…).
+        self::assertSame('mailbox down: retry later', CodeNodeStep::reason("  mailbox down:\n\t retry   later \n"));
+        $long = CodeNodeStep::reason(str_repeat('é', 250));
+        self::assertSame(str_repeat('é', 200) . '…', $long);
+        self::assertSame(str_repeat('a', 200), CodeNodeStep::reason(str_repeat('a', 200)));
+    }
+
     public function testEmptyAgentNameFallsThroughToName(): void
     {
         $nodes = [3 => ['config' => ['agent_name' => '', 'name' => 'Triage']], 2 => self::NODES[2]];

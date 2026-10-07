@@ -12,6 +12,16 @@ final class CodeNodeStep
     /** Node types whose execution means the run did real work (not a quiet poll). */
     private const WORK_TYPES = ['agent', 'playbook', 'output'];
 
+    /** Characters of an error exit's output kept in its log line (the compiled ErrorExitTaken.REASON_MAX). */
+    public const REASON_MAX = 200;
+
+    /** An error exit's output as one line of at most REASON_MAX characters (ErrorExitTaken.reason): it may be a whole tool error page or email body. */
+    public static function reason(string $out): string
+    {
+        $line = trim((string) preg_replace('/\s+/u', ' ', $out));
+        return mb_strlen($line) <= self::REASON_MAX ? $line : mb_substr($line, 0, self::REASON_MAX) . '…';
+    }
+
     /** run()'s parents: executed parents with a non-empty output; Start flagged (CodeNode.parentsFor). */
     public static function parents(int $nodeId, array $edges, array $nodes, array $nodeOutputs): array
     {

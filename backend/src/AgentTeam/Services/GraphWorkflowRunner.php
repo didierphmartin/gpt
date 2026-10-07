@@ -1617,7 +1617,7 @@ class GraphWorkflowRunner
             throw new \RuntimeException("code node '{$run['data']['display']}' failed: " . ($res['error'] ?? 'unknown'));
         }
         if ($route['exit'] === 'error') {
-            $this->nodeLog($node, 'error', 'done', "code node '{$run['data']['display']}' took its error exit: {$route['output']}");
+            $this->nodeLog($node, 'error', 'done', "code node '{$run['data']['display']}' took its error exit: " . CodeNodeStep::reason($route['output']));
         }
         return ['type' => 'code', 'output' => $route['output'], 'exit' => $route['exit'], 'success' => true,
             'code_route' => $route];

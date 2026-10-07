@@ -143,6 +143,15 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertStringContainsString('took its error exit', $log);
     }
 
+    public function testTheErrorExitReasonIsLoggedAsOneBoundedLine(): void
+    {
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'error', 'output': 'tool page\\n\\n  says ' + 'x' * 300}\n",
+            ['work', 'idle', 'error']);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        $log = (string) file_get_contents($this->runLogs()[0]);
+        self::assertMatchesRegularExpression('/took its error exit: tool page says x{185}…"/u', $log);
+    }
+
     public function testAFailedCodeNodeFailsTheRunAndKeepsTheRow(): void
     {
         $out = $this->run_("def run(input, call_tool):\n    raise ValueError('mailbox down')\n", ['work', 'idle']);
