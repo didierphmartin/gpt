@@ -24,12 +24,26 @@ final class LangGraphCronLoopTest extends TestCase
         return $py;
     }
 
+    /** A fake clock: sleep(s) moves now() forward by s (plus `jump` seconds once, e.g. a laptop asleep). */
+    private const CLOCK = <<<'PY'
+class Clock:
+    def __init__(self, *args, jump=0):
+        self.t, self.slept, self.jump = datetime(*args), [], jump
+    def now(self):
+        return self.t
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += timedelta(seconds=s + self.jump)
+        self.jump = 0
+
+PY;
+
     /** Run cronBlock() plus $tail with the imports an entry file gives it; returns [exit code, output lines]. */
     private function runPy(string $tail): array
     {
         $file = tempnam(sys_get_temp_dir(), 'cr') . '.py';
-        file_put_contents($file, "from __future__ import annotations\nimport argparse, re, time\nfrom datetime import datetime, timedelta\n"
-            . LangGraphRuntime::cronBlock() . "\n" . $tail);
+        file_put_contents($file, "from __future__ import annotations\nimport argparse, asyncio, re, signal, time\nfrom datetime import datetime, timedelta\n"
+            . LangGraphRuntime::cronBlock() . "\n" . self::CLOCK . $tail);
         exec($this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
         unlink($file);
         return [$rc, $out];
@@ -89,24 +103,23 @@ def run_once():
     if o == "boom":
         raise RuntimeError("reconnect_needed")
     return o
-slept = []
-run_cron("*/2 * * * *", run_once, drains=True, sleep=slept.append,
-         now=lambda: datetime(2026, 10, 7, 10, 42, 30), ticks=3)
-print("sleeps", len(slept))
+c = Clock(2026, 10, 7, 10, 42, 30)
+run_cron("*/2 * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=3)
+print("sleeps", len(c.slept))
 PY);
         $text = implode("\n", $out);
         self::assertStringContainsString('2 run(s) did work', $text);   // tick 1: mail 1, mail 2, then quiet
         self::assertStringContainsString('reconnect_needed', $text);    // tick 2: error logged, loop continues
         self::assertStringContainsString('nothing to do', $text);       // tick 3: quiet
-        self::assertStringContainsString('sleeps 3', $text);
+        self::assertStringContainsString('sleeps 6', $text);           // 90 s, then 120 s twice, in naps of <= 60 s
     }
 
     public function testNoDrainWithoutCodeNodes(): void
     {
         $out = $this->py(<<<'PY'
 n = []
-run_cron("* * * * *", lambda: n.append(1) or "report", drains=False, sleep=lambda s: None,
-         now=lambda: datetime(2026, 10, 7, 10, 0), ticks=1)
+c = Clock(2026, 10, 7, 10, 0)
+run_cron("* * * * *", lambda: n.append(1) or "report", drains=False, sleep=c.sleep, now=c.now, ticks=1)
 print("runs", len(n))
 PY);
         self::assertContains('runs 1', $out);
@@ -116,8 +129,8 @@ PY);
     {
         $out = $this->py(<<<'PY'
 n = []
-run_cron("* * * * *", lambda: n.append(1) or "mail", drains=True, sleep=lambda s: None,
-         now=lambda: datetime(2026, 10, 7, 10, 0), ticks=1)
+c = Clock(2026, 10, 7, 10, 0)
+run_cron("* * * * *", lambda: n.append(1) or "mail", drains=True, sleep=c.sleep, now=c.now, ticks=1)
 print("runs", len(n))
 PY);
         self::assertContains('runs 20', $out);
@@ -133,8 +146,8 @@ def run_once():
     if len(calls) == 2:
         raise RuntimeError("code node 'Poll Outlook' took its error exit")
     return "mail"
-run_cron("* * * * *", run_once, drains=True, sleep=lambda s: None,
-         now=lambda: datetime(2026, 10, 7, 10, 0), ticks=1)
+c = Clock(2026, 10, 7, 10, 0)
+run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=1)
 print("runs", len(calls))
 PY);
         $text = implode("\n", $out);
@@ -143,18 +156,71 @@ PY);
         self::assertStringNotContainsString('nothing to do', $text);
     }
 
-    public function testTicksFireOnTheScheduleAndNeverTwiceInAMinute(): void
+    public function testTicksFireOnTheScheduleInNapsOfAMinuteAtMost(): void
     {
         $out = $this->py(<<<'PY'
-slept = []
-run_cron("*/2 * * * *", lambda: "", drains=True, sleep=slept.append,
-         now=lambda: datetime(2026, 10, 7, 10, 42, 30), ticks=3)
-print(slept)
+c = Clock(2026, 10, 7, 10, 42, 30)
+run_cron("*/2 * * * *", lambda: "", drains=True, sleep=c.sleep, now=c.now, ticks=3)
+print(c.slept)
 PY);
-        // first fire 10:44 (90 s away); the next ones 10:46, 10:48 even though the fake clock stands still
-        self::assertSame('[90.0, 210.0, 330.0]', end($out));
+        // first fire 10:44 (90 s away), then 10:46 and 10:48; the clock is re-read after every nap
+        self::assertSame('[60.0, 30.0, 60.0, 60.0, 60.0, 60.0]', end($out));
         self::assertStringContainsString('[tick 10:44] nothing to do', implode("\n", $out));
         self::assertStringContainsString('[tick 10:48] nothing to do', implode("\n", $out));
+    }
+
+    public function testAClockJumpDuringANapFiresWithoutSleepingTheOldGap(): void
+    {
+        $out = $this->py(<<<'PY'
+c = Clock(2026, 10, 7, 10, 0, 30, jump=3600)   # the first nap lasts an hour (laptop asleep, DST change)
+run_cron("*/30 * * * *", lambda: "", drains=False, sleep=c.sleep, now=c.now, ticks=2)
+print(c.slept)
+PY);
+        // due 10:30: one nap, then the clock reads 11:01:30 -> fire at once; the next fire is 11:30
+        self::assertSame('[60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 30.0]', end($out));
+        self::assertStringContainsString('[tick 10:30] nothing to do', implode("\n", $out));
+        self::assertStringContainsString('[tick 11:30] nothing to do', implode("\n", $out));
+    }
+
+    public function testSigtermStopsTheLoopLikeCtrlC(): void
+    {
+        $out = $this->py(<<<'PY'
+import os, threading
+before = signal.getsignal(signal.SIGTERM)
+threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+try:
+    run_cron("0 0 1 1 *", lambda: "", drains=False)
+finally:
+    print("finally ran")
+print("handler restored", signal.getsignal(signal.SIGTERM) is before)
+PY);
+        self::assertSame(['[cron] stopped.', 'finally ran', 'handler restored True'], array_slice($out, -3));
+    }
+
+    public function testACancelledRunIsAnErrorAndItsLeftoverTasksAreCancelled(): void
+    {
+        $out = $this->py(<<<'PY'
+loop = asyncio.new_event_loop()
+started = []
+async def bad_run():
+    started.append(loop.create_task(asyncio.sleep(1000)))   # a task the failed run leaves behind
+    await asyncio.sleep(0)
+    raise asyncio.CancelledError()
+outputs = iter(["cancel", ""])
+def run_once():
+    if next(outputs) == "cancel":
+        return loop.run_until_complete(bad_run())
+    print("pending before run 2:", len([t for t in asyncio.all_tasks(loop) if not t.done()]))
+    return ""
+c = Clock(2026, 10, 7, 10, 0)
+run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=2, loop=loop)
+print("leftover cancelled", started[0].cancelled())
+PY);
+        $text = implode("\n", $out);
+        self::assertStringContainsString('[tick 10:01] error after 0 run(s) that did work: CancelledError', $text);
+        self::assertContains('pending before run 2: 0', $out);
+        self::assertStringContainsString('[tick 10:02] nothing to do', $text);
+        self::assertContains('leftover cancelled True', $out);
     }
 
     public function testCliExpressionFallsBackToTheBakedScheduleAndRefusesBadInput(): void
@@ -263,7 +329,12 @@ PY);
         self::assertSame(1, substr_count($code, 'def run_cron('), $label);
         self::assertStringContainsString('ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR"', $code, $label);
         self::assertStringContainsString('CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)', $code, $label);
-        self::assertStringContainsString("run_cron(expr, run_once, drains={$drains})", $code, $label);
+        self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=loop)", $code, $label);
+        self::assertMatchesRegularExpression('~^import argparse, asyncio, [a-z, ]*\bsignal\b~m', $code, $label);
+        self::assertStringContainsString('allow_abbrev=False)', $code, $label);   // --cron is never guessed from a prefix
+        self::assertStringContainsString("python {$file} \"your prompt here\" --cron   # a prompt goes BEFORE --cron", $code, $label);
+        // every run starts with a clean RUN SUMMARY (the swarm has no per-node times)
+        self::assertMatchesRegularExpression('~def run_once\(\) -> str:\n(?:        [^\n]*\n)*?        (?:NODE_DURATIONS\.clear\(\)|session = uuid)~', $code, $label);
         self::assertStringContainsString("python {$file} --cron ", $code, $label);
         self::assertStringContainsString("python {$file} --cron \"*/5 8-18 * * 1-5\"", $code, $label);
         $this->assertCompiles($code, $label);
@@ -324,5 +395,6 @@ PY);
         $res = $this->generate($this->pdo('*/2 * * * *'), $graph, ['modular' => true], 'swarm');
         $files = array_column($res['files'], 'code', 'path');
         $this->assertCronEntry($files['workflow.py'], 'swarm', '"*/2 * * * *"', 'False', 'workflow.py');
+        self::assertStringContainsString('_GRAPH.checkpointer.delete_thread(session)', $files['workflow.py']);
     }
 }

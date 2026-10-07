@@ -838,7 +838,7 @@ PY;
      * MAX_RUNS_PER_TICK runs; a run without output is quiet; an error -- an exception, or a code
      * node's error exit (WorkflowGraph.check_error_exits) -- is always printed, never quiet,
      * never drained, and the loop goes on. The entry file supplies re, time, argparse and
-     * datetime/timedelta.
+     * datetime/timedelta, asyncio and signal.
      */
     public static function cronBlock(): string
     {
@@ -941,10 +941,13 @@ class CronExpression:
 class CronLoop:
     """The --cron loop: sleep until the next fire, run one tick, print one line, repeat."""
 
-    def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now):
+    MAX_NAP = 60.0   # seconds: sleep in naps and re-check the clock (DST changes, a laptop asleep)
+
+    def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
+                 loop: asyncio.AbstractEventLoop | None = None):
         self.expr, self.cron = expr, CronExpression(expr)
         self.run_once, self.drains, self.max_runs = run_once, drains, max_runs
-        self.sleep, self.now = sleep, now
+        self.sleep, self.now, self.loop = sleep, now, loop
 
     def tick(self) -> str:
         """One tick's runs, as the line it prints: drain while runs do work (only when `drains`),
@@ -957,24 +960,53 @@ class CronLoop:
                 worked += 1
                 if not self.drains:
                     break
-        except Exception as e:  # noqa: BLE001 -- one bad run must not stop the loop
+        except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001 -- one bad run must not stop the loop
+            self._cancel_leftovers()
             return f"error after {worked} run(s) that did work: {type(e).__name__}: {e}"
         return f"{worked} run(s) did work" if worked else "nothing to do"
 
+    def _cancel_leftovers(self) -> None:
+        """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
+        wakes up inside the next run."""
+        if self.loop is None or self.loop.is_closed():
+            return
+        leftovers = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+        for t in leftovers:
+            t.cancel()
+        if leftovers:
+            self.loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
+
+    def _wait_until(self, due: datetime) -> None:
+        """Sleep until `due` in naps of at most MAX_NAP seconds, re-reading the clock after each."""
+        while (left := (due - self.now()).total_seconds()) > 0:
+            self.sleep(min(left, self.MAX_NAP))
+
+    @staticmethod
+    def _on_sigterm(signum, frame):
+        """SIGTERM stops the loop like Ctrl-C does (the caller's finally blocks run)."""
+        raise KeyboardInterrupt
+
     def run(self, ticks: int | None = None) -> None:
-        """Tick on every fire until Ctrl-C (or `ticks` ticks, for tests)."""
+        """Tick on every fire until Ctrl-C or SIGTERM (or `ticks` ticks, for tests)."""
         due = self.cron.next_after(self.now())
         print(f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
+        try:
+            previous = signal.signal(signal.SIGTERM, self._on_sigterm)
+        except ValueError:   # not the main thread: signals stay as they are
+            previous = None
         done = 0
         try:
             while ticks is None or done < ticks:
-                self.sleep(max(0.0, (due - self.now()).total_seconds()))
+                self._wait_until(due)
                 done += 1
                 print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
                 # The fire after this one -- or after now, when the runs overran the next fires.
                 due = self.cron.next_after(max(due, self.now()))
         except KeyboardInterrupt:
             print("\n[cron] stopped.", flush=True)
+        finally:
+            if previous is not None:
+                signal.signal(signal.SIGTERM, previous)
 
 
 def cron_next(expr: str, after: datetime) -> datetime:
@@ -983,14 +1015,15 @@ def cron_next(expr: str, after: datetime) -> datetime:
 
 
 def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20, sleep=time.sleep,
-             now=datetime.now, ticks: int | None = None) -> None:
-    """Run the workflow on every fire of `expr` until Ctrl-C (or `ticks` ticks, for tests).
+             now=datetime.now, ticks: int | None = None, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    """Run the workflow on every fire of `expr` until Ctrl-C or SIGTERM (or `ticks` ticks, for tests).
 
     run_once() runs the workflow once and returns its output ('' = nothing to do). drains is
     True when the workflow has code nodes: a run that did work then runs again at once, up to
-    max_runs runs per tick (the server's MAX_RUNS_PER_TICK).
+    max_runs runs per tick (the server's MAX_RUNS_PER_TICK). `loop` is the event loop the runs
+    use: the tasks a failed run leaves on it are cancelled before the next run.
     """
-    CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now).run(ticks)
+    CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop).run(ticks)
 
 
 PY;

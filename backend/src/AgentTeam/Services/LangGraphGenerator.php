@@ -348,7 +348,7 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
+        $lines[] = 'import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
         $lines[] = 'from abc import ABC, abstractmethod';
         $lines[] = 'from dataclasses import asdict, dataclass, field';
         $lines[] = 'from datetime import datetime, timedelta';
@@ -1235,7 +1235,8 @@ class LangGraphGenerator
     {
         return ["python {$file} --cron            # loop on the Start node schedule"
             . (($facts['defaultCron'] ?? null) !== null ? " ({$facts['defaultCron']})" : ' (none saved: pass an expression)'),
-            "python {$file} --cron \"*/5 8-18 * * 1-5\"   # or any 5-field cron, Ctrl-C to stop"];
+            "python {$file} --cron \"*/5 8-18 * * 1-5\"   # or any 5-field cron, Ctrl-C (or SIGTERM) to stop",
+            "python {$file} \"your prompt here\" --cron   # a prompt goes BEFORE --cron (after it, it is read as the expression)"];
     }
 
     /** Kebab-case ASCII slug for file names (max 40 chars). */
@@ -1471,7 +1472,7 @@ class LangGraphGenerator
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time, uuid';
         $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from pathlib import Path';
         $L[] = 'from typing import Annotated, Awaitable, Callable, TypedDict';
@@ -1910,7 +1911,7 @@ async def run(user_prompt: str, session: str | None = None) -> str:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=f"A2A orchestrator for workflow {WORKFLOW_NAME!r}")
+    ap = argparse.ArgumentParser(description=f"A2A orchestrator for workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     ap.add_argument("--keep-serving", action="store_true", help="leave the agent servers running after the run")
     ap.add_argument("--no-spawn", action="store_true", help="do not start agents; expect their URLs to be reachable")
@@ -1924,6 +1925,7 @@ if __name__ == "__main__":
     def run_once() -> str:
         """One run over the agent servers: its output printed and saved ('' when it ended without one)."""
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
         output = loop.run_until_complete(graph.run(prompt))
         if output:
@@ -1942,7 +1944,7 @@ if __name__ == "__main__":
                 if not run_once():
                     print("[info] The run ended without output (a branch ended).", flush=True)
             case expr:
-                run_cron(expr, run_once, drains=False)   # A2A packaging has no code nodes
+                run_cron(expr, run_once, drains=False, loop=loop)   # A2A packaging has no code nodes
     finally:
         if not a.keep_serving:
             sup.stop()
@@ -2746,7 +2748,7 @@ PY;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, re, time, uuid';
+        $L[] = 'import argparse, asyncio, re, signal, time, uuid';
         $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from typing import Callable';
         $L[] = '';
@@ -2861,7 +2863,7 @@ PY;
         $L[] = '';
         $L[] = LangGraphRuntime::cronBlock();
         $L[] = 'if __name__ == "__main__":';
-        $L[] = '    ap = argparse.ArgumentParser(description=f"LangGraph swarm {WORKFLOW_NAME!r}")';
+        $L[] = '    ap = argparse.ArgumentParser(description=f"LangGraph swarm {WORKFLOW_NAME!r}", allow_abbrev=False)';
         $L[] = '    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")';
         $L[] = '    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",';
         $L[] = '                    help="run on a cron schedule until Ctrl-C (default: the Start node\'s schedule)")';
@@ -2873,7 +2875,12 @@ PY;
         $L[] = '        """One run of the swarm (a fresh conversation): its output printed and saved (\'\' when none)."""';
         $L[] = '        print(f"[info] Prompt: {prompt[:100]}{\'...\' if len(prompt) > 100 else \'\'}", flush=True)';
         $L[] = '        t0 = time.monotonic()';
-        $L[] = '        output = loop.run_until_complete(run(prompt))';
+        $L[] = '        session = uuid.uuid4().hex';
+        $L[] = '        try:';
+        $L[] = '            output = loop.run_until_complete(run(prompt, session))';
+        $L[] = '        finally:';
+        $L[] = '            if _GRAPH is not None:   # a run\'s conversation is not kept, so memory stays flat';
+        $L[] = '                _GRAPH.checkpointer.delete_thread(session)';
         $L[] = '        if output:';
         $L[] = '            print("\\n" + "=" * 60 + "\\nFINAL OUTPUT\\n" + "=" * 60 + "\\n" + output, flush=True)';
         $L[] = '            saved = _save_output(output)';
@@ -2889,7 +2896,7 @@ PY;
         $L[] = '            if not run_once():';
         $L[] = '                print("[info] The run ended without output.", flush=True)';
         $L[] = '        case expr:';
-        $L[] = '            run_cron(expr, run_once, drains=False)   # a swarm has no code nodes';
+        $L[] = '            run_cron(expr, run_once, drains=False, loop=loop)   # a swarm has no code nodes';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -3569,7 +3576,7 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, re, sys, time';
+        $L[] = 'import argparse, asyncio, re, signal, sys, time';
         $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from typing import Callable';
         $L[] = '';
@@ -3702,7 +3709,8 @@ async def run(user_prompt: str, session: str | None = None) -> str:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r} (agents in separate files)")
+    ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r} (agents in separate files)",
+                                 allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
                     help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
@@ -3714,6 +3722,7 @@ if __name__ == "__main__":
         """One run: its output printed and saved ('' when it ended without one). A code node
         that took its error exit raises ErrorExitTaken once the output is saved."""
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
         output = loop.run_until_complete(graph.run(prompt))
         if output:
@@ -3732,7 +3741,7 @@ if __name__ == "__main__":
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
         case expr:
-            run_cron(expr, run_once, drains=any(ad["kind"] == "code" for ad in AGENTS.values()))
+            run_cron(expr, run_once, drains=any(ad["kind"] == "code" for ad in AGENTS.values()), loop=loop)
 PY;
     }
 
@@ -4018,7 +4027,7 @@ PY . $missingWarning . <<<'PY'
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r}")
+    ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
                     help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
@@ -4030,6 +4039,7 @@ if __name__ == "__main__":
         """One run: its output printed and saved ('' when it ended without one). A code node
         that took its error exit raises ErrorExitTaken once the output is saved."""
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
         output = loop.run_until_complete(run(prompt, graph))
         if output:
@@ -4048,7 +4058,7 @@ if __name__ == "__main__":
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
         case expr:
-            run_cron(expr, run_once, drains=bool(CODE_NODES))
+            run_cron(expr, run_once, drains=bool(CODE_NODES), loop=loop)
 
 PY;
     }
