@@ -23,12 +23,13 @@ class LangGraphA2AGeneratorTest extends TestCase
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER)');
         $pdo->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
-        $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
+        $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, display_name TEXT, model TEXT, base_url TEXT, api_format TEXT, protocol TEXT, enabled INTEGER, sort_order INTEGER)');
         $pdo->exec("INSERT INTO mcp_servers VALUES (85, '3', 'Workday', 'http://localhost/mockstack/index.php/workday', 1)");
         $pdo->exec("INSERT INTO mcp_servers VALUES (9, NULL, 'News', 'http://localhost/news/', 1)");
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (1, 85, 'get_pto_balance', 'Get balances', '{\"type\":\"object\",\"properties\":{\"email\":{\"type\":\"string\"}}}')");
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', '{}')");
-        $pdo->exec("INSERT INTO system_llm_settings VALUES ('claude', 'claude-sonnet-4-5', 1)");
+        $pdo->exec("INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)");
+        $pdo->exec("INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)");
         return $pdo;
     }
 

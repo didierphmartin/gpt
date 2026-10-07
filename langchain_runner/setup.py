@@ -89,7 +89,9 @@ XAI_API_KEY=           # for Grok (api.x.ai)
 DEEPSEEK_API_KEY=      # for DeepSeek (api.deepseek.com)
 KIMI_API_KEY=          # for Kimi / Moonshot (api.moonshot.ai)
 GLM_API_KEY=           # for GLM (api.z.ai)
-TYPESAFE_API_KEY=      # for Jev dispatcher routing (api.typesafe.ai)
+# Decision models (dispatcher routing): one pair per provider row, e.g.
+# JEV_API_KEY=           # the 'jev' row; written by the editor on Generate
+# JEV_BASE_URL=          # optional gateway, default = the row's URL
 
 # === Optional entry points (gateways) ===
 # When one entry point serves several providers, set its URL here; the
@@ -102,7 +104,6 @@ TYPESAFE_API_KEY=      # for Jev dispatcher routing (api.typesafe.ai)
 # DEEPSEEK_BASE_URL=     # default https://api.deepseek.com
 # KIMI_BASE_URL=         # default https://api.moonshot.ai/v1
 # GLM_BASE_URL=          # default https://api.z.ai/api/paas/v4
-# TYPESAFE_BASE_URL=     # full Jev URL, default https://api.typesafe.ai/v1/systemone
 
 # === Optional global override ===
 # Setting MODEL_NAME forces every agent in every script to use this

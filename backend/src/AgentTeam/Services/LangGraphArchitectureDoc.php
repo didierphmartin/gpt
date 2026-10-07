@@ -57,8 +57,17 @@ final class LangGraphArchitectureDoc
         if ($withPlaybook) {
             $classes[] = 'PlaybookNode';
         }
-        array_push($classes, 'NodeKind', 'Dispatcher', 'JevRouter', 'JevResult', 'RouteDecision', 'RoutingMode',
-            'ToolCatalog', 'McpClient', 'SkillRuntime', 'RunEvents');
+        array_push($classes, 'NodeKind', 'Dispatcher');
+        // One adapter class per decision protocol the dispatchers use (none when every
+        // dispatcher routes with the model): the same set LangGraphRuntime emits.
+        $adapters = [];
+        foreach ($facts['agentData'] ?? [] as $ad) {
+            foreach ($ad['decision'] ?? [] as $c) {
+                $adapters[LangGraphRuntime::ADAPTER_CLASSES[$c['protocol']]] = true;
+            }
+        }
+        array_push($classes, ...array_keys($adapters));
+        array_push($classes, 'DecisionResult', 'RouteDecision', 'ToolCatalog', 'McpClient', 'SkillRuntime', 'RunEvents');
         if ($withPlaybook) {
             array_push($classes, 'PlaybookRun', 'PlaybookToolset');
         }
@@ -202,11 +211,6 @@ final class LangGraphArchitectureDoc
             $L[] = '        PLAYBOOK';
         }
         $L[] = '    }';
-        $L[] = '    class RoutingMode {';
-        $L[] = '        <<enumeration>>';
-        $L[] = '        JEV';
-        $L[] = '        LLM';
-        $L[] = '    }';
         $L[] = '    class WorkflowGraph {';
         $L[] = '        +compile()';
         $L[] = '        +run(prompt)';
@@ -222,9 +226,9 @@ final class LangGraphArchitectureDoc
             ['Node', '..>', 'NodeKind', 'make_node'],
             ['DispatcherNode', '-->', 'Dispatcher', ''],
             ['Dispatcher', '-->', 'JevRouter', ''],
-            ['Dispatcher', '..>', 'RoutingMode', ''],
             ['Dispatcher', '..>', 'RouteDecision', 'returns'],
-            ['JevRouter', '..>', 'JevResult', 'returns'],
+            ['Dispatcher', '..>', 'DecisionResult', 'reads'],
+            ['JevRouter', '..>', 'DecisionResult', 'returns'],
             ['AgentNode', '-->', 'ToolCatalog', ''],
             ['AgentNode', '-->', 'SkillRuntime', ''],
             ['ToolCatalog', '-->', 'McpClient', ''],
@@ -322,17 +326,16 @@ final class LangGraphArchitectureDoc
                 . 'a `PlaybookRun` recording it) and returns the Markdown transcript of what the playbook did.',
             'NodeKind' => 'Enum of the node kinds `make_node` matches on (`agent`, `dispatcher`'
                 . (in_array('PlaybookNode', $classes, true) ? ', `playbook`' : '') . ').',
-            'Dispatcher' => 'Picks exactly one child for a dispatcher node, through Jev or through one forced `route_to` '
-                . 'model call, never both. `mode()` reads the node\'s routing mode; an unset mode means Jev when '
-                . '`TYPESAFE_API_KEY` is set, else the model. Returns a `RouteDecision`; no choice means the run stops '
-                . 'at the dispatcher.' . $unused,
-            'JevRouter' => 'Client for TypeSafe Jev: asks a closed routing question over the dispatcher\'s menu (plus an '
-                . '`unclear` option) and returns a `JevResult`. It never raises.',
-            'JevResult' => 'Frozen record of one Jev call: its outcome (`routed`, `unclear`, `low_confidence`, '
+            'Dispatcher' => 'Picks exactly one child for a dispatcher node, through a decision model or through one forced '
+                . '`route_to` model call, never both. `mode()` reads the node\'s routing mode: `llm`, a decision provider, '
+                . 'or unset (the first compiled decision model whose key is set, else the model). Returns a '
+                . '`RouteDecision`; no choice means the run stops at the dispatcher.' . $unused,
+            'JevRouter' => 'Client for TypeSafe Jev (the `typesafe` decision protocol): asks a closed routing question over '
+                . 'the dispatcher\'s menu (plus an `unclear` option) and returns a `DecisionResult`. It never raises.',
+            'DecisionResult' => 'Frozen record of one decision-model call: its outcome (`routed`, `unclear`, `low_confidence`, '
                 . '`unavailable`, `error`), the chosen target, the confidence and the evidence.',
             'RouteDecision' => 'Frozen record of a dispatcher\'s answer: the text its child receives, the chosen child\'s id '
                 . '(`route`, empty when none), notes and status.',
-            'RoutingMode' => 'Enum of the two routing modes, `jev` and `llm`.',
             'ToolCatalog' => 'The workflow\'s tools, built once on first use: turns the baked catalog (tool name, MCP server '
                 . 'URL, description, JSON Schema) into LangChain tools that call `McpClient`, plus the local '
                 . '`run_skill_script`. Each node takes its own tools by name.',
@@ -408,12 +411,13 @@ final class LangGraphArchitectureDoc
             $modes = [];
             foreach ($dispatchers as $ad) {
                 $m = $ad['routing_mode'] ?? '';
-                $modes[] = "\"{$ad['display']}\": " . ($m === 'jev' ? 'Jev' : ($m === 'llm' ? 'the model' : 'Jev when `TYPESAFE_API_KEY` is set, else the model'));
+                $modes[] = "\"{$ad['display']}\": " . ($m === 'llm' ? 'the model'
+                    : ($m === '' ? 'the first decision model whose key is set, else the model' : "decision model `{$m}`"));
             }
-            $steps[] = 'A dispatcher node (`DispatcherNode`) asks its `Dispatcher`, which routes with Jev (`JevRouter`) or '
+            $steps[] = 'A dispatcher node (`DispatcherNode`) asks its `Dispatcher`, which routes with a decision model (`JevRouter`) or '
                 . 'with one forced `route_to` model call, never both (' . implode('; ', $modes) . '). The chosen '
                 . 'child\'s id comes back as `route` and drives the conditional edge, so only that child runs. When '
-                . 'nothing is chosen (Jev unclear or below its confidence floor, no key, an error), the run stops there '
+                . 'nothing is chosen (the decision model unclear or below its confidence floor, no key, an error), the run stops there '
                 . 'and the dispatcher\'s message is the result.';
         }
         if (!empty($facts['playbookData'])) {
@@ -466,7 +470,7 @@ final class LangGraphArchitectureDoc
         $L[] = '- **Change a node\'s settings** (prompt, model, tools, skills, routing): edit the node in the editor and generate again.';
         $L[] = '- **Keys** come from `.env` in the runner folder (`python/.env`), which the editor refreshes on every '
             . 'generation: ' . ($keyList ? implode(', ', $keyList) : 'no provider key is needed by this workflow')
-            . ($hasDispatcher ? '; `TYPESAFE_API_KEY` for Jev routing' : '') . '.';
+            . ($hasDispatcher ? '; one `<PROVIDER>_API_KEY` per decision model' : '') . '.';
         return implode("\n", $L);
     }
 

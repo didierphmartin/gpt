@@ -11,16 +11,18 @@ use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
 
 /**
- * LangGraph compiler: a dispatcher routes with TypeSafe's Jev or with the
- * model, never both, the same way GraphWorkflowRunner does. An unset mode is
- * resolved at run time (Jev when TYPESAFE_API_KEY is set, else the model).
+ * LangGraph compiler: a dispatcher routes with a decision model (a provider
+ * row, e.g. TypeSafe's Jev) or with the model, never both, the same way
+ * GraphWorkflowRunner does. Each dispatcher carries its candidate providers
+ * and their env names; an unset mode is resolved at run time (the first
+ * candidate whose key is set, else the model).
  * Checked in every LangGraph mode that runs a dispatcher (single
  * script, modular package, A2A agent server), and the emitted runtime itself is
  * exercised by tests/fixtures/jev_dispatch_harness.py with a fake HTTP layer.
  */
 class LangGraphJevDispatchTest extends TestCase
 {
-    private const BLOCK_START = '# TypeSafe Jev (twin of JevRouter.php)';
+    private const BLOCK_START = '# Decision-model routing (twin of DecisionProtocols.php';
     private const BLOCK_END = '        return RouteDecision(text=text, route=chosen["id"], notes=notes, status="ok")';
     private const NODE_START = 'class Node(ABC):';
     private const NODE_END = '            raise ValueError(f"unknown node kind: {cfg[\'kind\']!r}")';
@@ -49,13 +51,18 @@ class LangGraphJevDispatchTest extends TestCase
 
     private function generator(?array $graph = null, $agentRecord = null): LangGraphGenerator
     {
+        return $this->generatorWithPdo(LangGraphA2AGeneratorTest::pdo(), $graph ?? self::graph(), $agentRecord);
+    }
+
+    private function generatorWithPdo(\PDO $pdo, array $graph, $agentRecord = null): LangGraphGenerator
+    {
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Dispatcher demo', 'user_id' => '3']));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
-        $graphRepo->method('getGraph')->willReturn($graph ?? self::graph());
+        $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn($agentRecord);
-        return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        return new LangGraphGenerator($pdo, $wfRepo, $graphRepo, $agentRepo);
     }
 
     /** mode => [runtime file (carries dispatcherBlock), node file (carries the dispatcher's data)] */
@@ -81,13 +88,13 @@ class LangGraphJevDispatchTest extends TestCase
             . 'Handle the request you receive directly and completely, in the role your name implies.', $question);
         foreach ($this->modes() as $mode => [$runtime, $node]) {
             $this->assertNotSame('', $runtime, "{$mode}: runtime file missing");
-            foreach (['    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> JevResult:',
+            foreach (['    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> DecisionResult:',
                       '    URL = "https://api.typesafe.ai/v1/systemone"', '    MODEL = "jev-latest"', '    CONFIDENCE_FLOOR = 0.6', '    TIMEOUT_S = 10',
-                      '        if mode in (RoutingMode.JEV, RoutingMode.LLM):', '        return RoutingMode.JEV if self.router.available() else RoutingMode.LLM',
-                      'case RoutingMode.JEV:',
-                      'asyncio.to_thread(self.router.route, task, self.targets, self.cfg.get("jev_question", ""), self.floor), self.router.TIMEOUT_S + 1)',
-                      'jev = await asyncio.wait_for(', 'ctx.load_verify_locations(certifi.where())',
-                      'Jev routed to', 'Jev-only dispatcher, no model fallback'] as $needle) {
+                      '    LEGACY_KEY_ENV = "TYPESAFE_API_KEY"', 'DECISION_ADAPTERS = {"typesafe": JevRouter}',
+                      '        match self.cfg.get("routing_mode", ""):', '        match self.mode():',
+                      'self.cfg.get("decision_question", "")',
+                      'ctx.load_verify_locations(certifi.where())',
+                      '{key} routed to {chosen[\'name\']!r}', 'decision-model dispatcher, no model fallback'] as $needle) {
                 $this->assertStringContainsString($needle, $runtime, "{$mode}: {$needle}");
             }
             // No hybrid: a Jev decline never falls through to the model.
@@ -95,18 +102,21 @@ class LangGraphJevDispatchTest extends TestCase
             $this->assertStringNotContainsString('Jev declined', $runtime, "{$mode}: no hybrid");
             // The Jev path returns BEFORE the forced route_to turn.
             $this->assertLessThan(strpos($runtime, 'llm = make_llm().bind_tools([self._route_tool()], tool_choice="any")'),
-                strpos($runtime, 'case RoutingMode.JEV:'), "{$mode}: Jev mode is decided first");
+                strpos($runtime, 'return await self._via_decision(key, task)'), "{$mode}: the mode is decided first");
             // techBuddy has no routing_mode saved: '' (resolved at run time), at the default floor.
             $this->assertStringContainsString('"routing_mode": "",', $node, "{$mode}: routing_mode");
-            $this->assertStringContainsString('"jev_min_confidence": 0.6,', $node, "{$mode}: floor");
+            $this->assertStringContainsString('"min_confidence": 0.6,', $node, "{$mode}: floor");
+            // Unset: every usable decision provider, in admin order, with its env names.
+            $this->assertStringContainsString('"decision": [{"provider": "jev", "protocol": "typesafe", "url": "https://api.typesafe.ai/v1/systemone", '
+                . '"model": "jev-latest", "key_env": "JEV_API_KEY", "url_env": "JEV_BASE_URL"}],', $node, "{$mode}: decision");
             // Target descriptions mirror the interpreter: DispatchRouting::targets()
             // carries none, so Jev judges every option by its name there -- and here.
             $this->assertStringContainsString(
                 '"dispatch": [{"id": "3", "name": "IT claims", "description": ""}, {"id": "4", "name": "Human resources", "description": ""}]',
                 $node, "{$mode}: menu");
-            $this->assertStringContainsString('"jev_question": ' . json_encode($question, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',',
+            $this->assertStringContainsString('"decision_question": ' . json_encode($question, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',',
                 $node, "{$mode}: question");
-            $this->assertStringContainsString('TYPESAFE_API_KEY (TypeSafe Jev)', $node, "{$mode}: TO RUN note");
+            $this->assertStringContainsString('# Optional: JEV_API_KEY for dispatchers', $node, "{$mode}: TO RUN note");
         }
     }
 
@@ -122,9 +132,9 @@ class LangGraphJevDispatchTest extends TestCase
         ];
         $got = [];
         foreach ($files as $mode => $code) {
-            $this->assertMatchesRegularExpression('/"routing_mode": "(jev|llm|)",/', $code, "{$mode}: routing_mode");
-            preg_match('/"routing_mode": ("[a-z]*"),/', $code, $m1);
-            preg_match('/"jev_min_confidence": ([0-9.]+),/', $code, $m2);
+            $this->assertMatchesRegularExpression('/"routing_mode": "[a-z-]*",/', $code, "{$mode}: routing_mode");
+            preg_match('/"routing_mode": ("[a-z-]*"),/', $code, $m1);
+            preg_match('/"min_confidence": ([0-9.]+),/', $code, $m2);
             $got[$mode] = [$m1[1] ?? null, $m2[1] ?? null];
         }
         return $got;
@@ -143,9 +153,14 @@ class LangGraphJevDispatchTest extends TestCase
         $cases = [
             [['routing_mode' => 'jev', 'jev_min_confidence' => 0.85], '"jev"', '0.85'],
             [['routing_mode' => 'llm'], '"llm"', '0.6'],
-            // Anything else is unset (''), resolved at run time like the interpreter.
-            [['routing_mode' => 'bogus'], '""', '0.6'],
+            // Any other value names a decision provider (kept verbatim, like the
+            // interpreter); blank is unset (''), resolved at run time.
+            [['routing_mode' => 'bogus'], '"bogus"', '0.6'],
+            [['routing_mode' => ' jev '], '"jev"', '0.6'],
             [['routing_mode' => ''], '""', '0.6'],
+            // min_confidence wins over the legacy jev_min_confidence.
+            [['routing_mode' => 'jev', 'min_confidence' => 0.8, 'jev_min_confidence' => 0.3], '"jev"', '0.8'],
+            [['routing_mode' => 'jev', 'min_confidence' => 0.75], '"jev"', '0.75'],
             // jev_min_confidence: numeric -> clamped to [0, 1]; otherwise 0.6.
             [['routing_mode' => 'jev', 'jev_min_confidence' => 1.7], '"jev"', '1.0'],
             [['routing_mode' => 'jev', 'jev_min_confidence' => -2], '"jev"', '0.0'],
@@ -209,21 +224,21 @@ class LangGraphJevDispatchTest extends TestCase
     public function testToRunNoteFollowsTheRoutingMode(): void
     {
         $doc = fn(array $settings) => $this->generator(self::withSettings($settings))->generate(44, '3')['code'];
-        // Unset: Jev when the key is set, else the model -- never both.
+        // Unset: the first decision model whose key is set, else the model -- never both.
         $unset = $doc([]);
-        $this->assertStringContainsString('# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (techBuddy):', $unset);
-        $this->assertStringContainsString('#   Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev', $unset);
-        $this->assertStringContainsString('#   cannot decide stops the run there (no model fallback).', $unset);
-        $this->assertStringNotContainsString('Required: TYPESAFE_API_KEY', $unset);
-        $this->assertStringNotContainsString('lets a dispatcher route without an LLM turn', $unset);
-        // Jev only: required.
+        $this->assertStringContainsString('# Optional: JEV_API_KEY for dispatchers with no routing mode saved (techBuddy):', $unset);
+        $this->assertStringContainsString('#   the first decision model whose key is set routes, else the model.', $unset);
+        $this->assertStringContainsString('TypeSafe rows also read the legacy TYPESAFE_API_KEY / TYPESAFE_BASE_URL.', $unset);
+        $this->assertStringNotContainsString('# Required: JEV_API_KEY', $unset);
+        // A named provider: required.
         $jev = $doc(['routing_mode' => 'jev']);
-        $this->assertStringContainsString('# Required: TYPESAFE_API_KEY (TypeSafe Jev) for Jev-only dispatchers (techBuddy)', $jev);
-        $this->assertStringNotContainsString('# Optional: TYPESAFE_API_KEY', $jev);
-        // LLM only: unused, so not asked for.
+        $this->assertStringContainsString('# Required: JEV_API_KEY for dispatchers (techBuddy);', $jev);
+        $this->assertStringNotContainsString('# Optional: JEV_API_KEY', $jev);
+        // LLM only: no decision model, so no key is asked for.
         $llm = $doc(['routing_mode' => 'llm']);
-        $this->assertStringNotContainsString('# Required: TYPESAFE_API_KEY', $llm);
-        $this->assertStringNotContainsString('# Optional: TYPESAFE_API_KEY', $llm);
+        $this->assertStringNotContainsString('JEV_API_KEY', $llm);
+        $this->assertStringNotContainsString('TYPESAFE_API_KEY', $llm);
+        $this->assertStringContainsString('"decision": [],', $llm);
     }
 
     public function testSavedAgentRecordNamesTheJevQuestion(): void
@@ -242,7 +257,7 @@ class LangGraphJevDispatchTest extends TestCase
                   // A record with no name/description falls back to the node config.
                   [$blank, DispatchRouting::defaultInstructions('techBuddy', 'the front desk', 'Dispatcher demo')]] as [$agent, $want]) {
             $code = $this->generator($graph, $agent)->generate(44, '3')['code'];
-            $this->assertStringContainsString('"jev_question": ' . json_encode($want, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',', $code);
+            $this->assertStringContainsString('"decision_question": ' . json_encode($want, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',', $code);
         }
     }
 
@@ -291,14 +306,47 @@ class LangGraphJevDispatchTest extends TestCase
             file_put_contents($base . '.py', $block);
             file_put_contents($base . '_nodes.py', $classes);
             $out = [];
-            exec('env -u TYPESAFE_API_KEY python3 ' . escapeshellarg(dirname(__DIR__) . '/fixtures/jev_dispatch_harness.py')
+            exec('env -u TYPESAFE_API_KEY -u TYPESAFE_BASE_URL -u JEV_API_KEY -u JEV_BASE_URL python3 ' . escapeshellarg(dirname(__DIR__) . '/fixtures/jev_dispatch_harness.py')
                 . ' ' . escapeshellarg($base . '.py') . ' ' . escapeshellarg($base . '_nodes.py') . ' 2>&1', $out, $rc);
             @unlink($base . '.py');
             @unlink($base . '_nodes.py');
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame('OK 21 cases', end($out), $mode);
+            $this->assertSame('OK 25 cases', end($out), $mode);
         }
+    }
+
+    public function testEachDispatcherCarriesItsProviderAndEnvNames(): void
+    {
+        $pdo = LangGraphA2AGeneratorTest::pdo();
+        $pdo->exec("INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order)
+            VALUES ('jev-eu', 'Jev EU', 'jev-latest', 'https://gw.corp/jev', 'router', 'typesafe', 1, 50)");
+        $graph = self::graph();
+        $graph['nodes'][1]['config']['settings']['routing_mode'] = 'jev-eu';
+        $code = $this->generatorWithPdo($pdo, $graph)->generate(44)['code'];
+        $this->assertStringContainsString('"routing_mode": "jev-eu"', $code);
+        $this->assertStringContainsString('"key_env": "JEV_EU_API_KEY"', $code);
+        $this->assertStringContainsString('"url": "https://gw.corp/jev"', $code);
+        $this->assertSame(1, substr_count($code, 'class JevRouter'), 'one adapter per protocol used');
+        $this->assertStringContainsString('JEV_EU_API_KEY', $code, 'the TO RUN note names the per-row env var');
+    }
+
+    public function testAnUnsetDispatcherListsEveryProviderInAdminOrder(): void
+    {
+        $pdo = LangGraphA2AGeneratorTest::pdo();
+        $pdo->exec("INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order)
+            VALUES ('acme', 'Acme', 'jev-latest', NULL, 'router', 'typesafe', 1, 50)");
+        $code = $this->generatorWithPdo($pdo, self::graph())->generate(44)['code'];
+        $this->assertLessThan(strpos($code, '"provider": "jev"'), strpos($code, '"provider": "acme"'));
+    }
+
+    public function testANodeNamingAMissingProviderCompilesWithNoCandidate(): void
+    {
+        $graph = self::graph();
+        $graph['nodes'][1]['config']['settings']['routing_mode'] = 'gone';
+        $code = $this->generator($graph)->generate(44)['code'];
+        $this->assertStringContainsString('"routing_mode": "gone"', $code);
+        $this->assertStringContainsString('"decision": []', $code);
     }
 
     private function assertCompiles(string $code, string $label): void

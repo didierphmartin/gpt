@@ -175,16 +175,16 @@ class AgentNode(Node):
 
 
 class DispatcherNode(Node):
-    """A dispatcher node: routes the request to exactly one child of its menu (Jev or one forced route_to call)."""
+    """A dispatcher node: routes the request to exactly one child of its menu (a decision model or one forced route_to call)."""
 
     @cached_property
     def dispatcher(self) -> Dispatcher:
-        """This node's Dispatcher, built once per process so its JevRouter -- and that router's
-        cached SSL context -- is reused by every run of the node instead of rebuilt per request."""
+        """This node's Dispatcher, built once per process so its decision adapters -- and their
+        cached SSL contexts -- are reused by every run of the node instead of rebuilt per request."""
         return Dispatcher(self.cfg)
 
     async def run(self, request: str, trace) -> dict:
-        """Dispatcher: Jev or one forced route_to call (Dispatcher); the chosen child id travels back as "route"."""
+        """Dispatcher: a decision model or one forced route_to call (Dispatcher); the chosen child id travels back as "route"."""
         c = self.cfg
         await trace(f"{self.display!r} -- {len(self.tools)} tools (provider={c.get('provider', '?')}, model={c.get('model', '?')})")
         await trace(f"inputs: system={len(c.get('system_prompt') or '')} chars, context={len(request)} chars")
@@ -291,7 +291,7 @@ def make_node(cfg: dict) -> Node:
         case NodeKind.AGENT:
             return AgentNode(cfg)
         case NodeKind.DISPATCHER:
-            # Dispatcher: Jev or one forced route_to call picks the child; no ReAct loop.
+            # Dispatcher: a decision model or one forced route_to call picks the child; no ReAct loop.
             return DispatcherNode(cfg)
 
 PY;
@@ -316,23 +316,36 @@ PY;
     }
 
     /**
-     * Dispatcher node runtime: JevResult and JevRouter (TypeSafe Jev), RoutingMode,
-     * RouteDecision and Dispatcher. A dispatcher routes with Jev (routing_mode 'jev', or
-     * unset with a key) or with one forced route_to call over the menu (the model), never
-     * both. JevRouter.route() is the standard-library twin of JevRouter::route() (same body,
-     * same 'unclear' option, same floor, same outcomes); Dispatcher.mode() mirrors
-     * GraphWorkflowRunner's mode choice. DispatcherNode.run() is its one caller.
+     * Dispatcher node runtime: DecisionResult, one adapter class per decision protocol the
+     * workflow's dispatchers use (JevRouter for "typesafe"), DECISION_ADAPTERS, RouteDecision
+     * and Dispatcher. A dispatcher routes with a decision model (a provider key, or unset
+     * with a candidate whose key is set) or with one forced route_to call over the menu
+     * (the model), never both. JevRouter.route() is the standard-library twin of
+     * JevRouter::route() (same body, same 'unclear' option, same floor, same outcomes);
+     * Dispatcher.mode() mirrors GraphWorkflowRunner's mode choice. DispatcherNode.run() is
+     * its one caller.
+     *
+     * @param list<string> $protocols decision protocols any dispatcher may use (one adapter each)
      */
-    public static function dispatcherBlock(): string
+    public static function dispatcherBlock(array $protocols): string
     {
-        return <<<'PY'
-# TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
-# question with one of the options supplied -- never a value outside them.
+        return self::decisionHead()
+            . implode('', array_map(fn(string $p) => self::adapterBlock($p), $protocols))
+            . self::adaptersTable($protocols)
+            . self::dispatcherClasses();
+    }
 
+    /** Python adapter class per decision protocol: the runtime twin of DecisionProtocols' 'adapter'. */
+    public const ADAPTER_CLASSES = ['typesafe' => 'JevRouter'];
 
+    /** The routing banner and DecisionResult, the record every adapter returns. */
+    private static function decisionHead(): string
+    {
+        return "# Decision-model routing (twin of DecisionProtocols.php / DecisionRouters.php).\n\n\n"
+            . <<<'PY'
 @dataclass(frozen=True)
-class JevResult:
-    """What JevRouter.route() found for one request: an outcome and the evidence behind it.
+class DecisionResult:
+    """What a decision adapter's route() found for one request: an outcome and the evidence behind it.
 
     outcome is 'routed'|'unclear'|'low_confidence'|'unavailable'|'error'; only 'routed'
     decides, and then target is the chosen menu entry. A record rather than a dict, so a
@@ -347,23 +360,52 @@ class JevResult:
     usage: dict = field(default_factory=dict)
 
 
+
+PY;
+    }
+
+    /**
+     * One decision protocol's Python adapter. The registry and the runtime grow together:
+     * a protocol with no adapter here fails at compile time, not mid-run.
+     */
+    private static function adapterBlock(string $protocol): string
+    {
+        return match ($protocol) {
+            'typesafe' => <<<'PY'
+# TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
+# question with one of the options supplied -- never a value outside them.
+
+
 class JevRouter:
-    """Asks TypeSafe Jev a closed routing question: the Python twin of JevRouter.php.
+    """Asks TypeSafe Jev (the "typesafe" decision protocol) a closed routing question:
+    the Python twin of JevRouter.php, one instance per provider row compiled in.
 
     Same request body, same 'unclear' option, same floor and outcomes. route() never raises.
     """
-    URL = "https://api.typesafe.ai/v1/systemone"   # TYPESAFE_BASE_URL in .env overrides it (a gateway)
+    URL = "https://api.typesafe.ai/v1/systemone"   # protocol default; the row's URL, then its <NAME>_BASE_URL, override it
     MODEL = "jev-latest"
     UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
     UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
                     "several of the options. Pick this rather than guessing.")
-    CONFIDENCE_FLOOR = 0.6   # default minimum confidence (a dispatcher's jev_min_confidence overrides it)
+    CONFIDENCE_FLOOR = 0.6   # default minimum confidence (a dispatcher's min_confidence overrides it)
     TIMEOUT_S = 10
+    LEGACY_KEY_ENV = "TYPESAFE_API_KEY"   # .env files written before per-row names
+    LEGACY_URL_ENV = "TYPESAFE_BASE_URL"
 
-    @staticmethod
-    def available() -> bool:
-        """Configured = a key is present. An unset dispatcher routes with Jev only then, else with the model."""
-        return bool(os.environ.get("TYPESAFE_API_KEY") or "")
+    def __init__(self, key_env: str = "JEV_API_KEY", url_env: str = "JEV_BASE_URL", url: str = URL, model: str = MODEL):
+        """key_env/url_env are this provider row's variables (compiled in); url/model its defaults."""
+        self.key_env, self.url_env, self.url, self.model = key_env, url_env, url or self.URL, model or self.MODEL
+
+    def _creds(self) -> tuple[str, str]:
+        """(key, url): the row's own variables, else the legacy TYPESAFE_* pair; url defaults to the compiled one."""
+        key = os.environ.get(self.key_env) or ""
+        if key:
+            return key, os.environ.get(self.url_env) or self.url
+        return os.environ.get(self.LEGACY_KEY_ENV) or "", os.environ.get(self.LEGACY_URL_ENV) or self.url
+
+    def available(self) -> bool:
+        """Configured = a key is present (the row's own variable or the legacy one)."""
+        return bool(self._creds()[0])
 
     @cached_property
     def ssl_context(self):
@@ -381,33 +423,33 @@ class JevRouter:
             pass
         return ctx
 
-    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> JevResult:
-        """Choose one target for `request`, or say why not. Returns a JevResult with
+    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> DecisionResult:
+        """Choose one target for `request`, or say why not. Returns a DecisionResult with
         outcome ('routed'|'unclear'|'low_confidence'|'unavailable'|'error'), target,
         confidence, probabilities, ms, usage, reason. Only 'routed' decides; every
         other outcome means the dispatcher does not route (no model fallback).
         `floor` is the dispatcher's minimum
-        confidence (settings.jev_min_confidence). Never raises."""
+        confidence (settings.min_confidence). Never raises."""
         try:
             return self._route(request, targets, question, floor)
         except Exception as e:   # anything at all -> an 'error' outcome, never a raise
-            return JevResult("error", reason=f"{type(e).__name__}: {e}")
+            return DecisionResult("error", reason=f"{type(e).__name__}: {e}")
 
-    def _route(self, request, targets, question, floor) -> JevResult:
+    def _route(self, request, targets, question, floor) -> DecisionResult:
         """route() without its safety net: check the menu, ask Jev, read its answer."""
         import urllib.request
-        key = os.environ.get("TYPESAFE_API_KEY") or ""
+        key, url = self._creds()
         if not key:
-            return JevResult("unavailable", reason="no TYPESAFE_API_KEY")
+            return DecisionResult("unavailable", reason=f"no {self.key_env}")
         named = {}
         for t in targets:
             name = str(t.get("name") or "").strip()
             if name == "" or name.lower() == self.UNCLEAR:
                 # A branch literally named "unclear" would collide with the escape hatch.
-                return JevResult("error", reason=f"unusable target name: '{name}'")
+                return DecisionResult("error", reason=f"unusable target name: '{name}'")
             named[name] = t
         if len(named) < 2:
-            return JevResult("error", reason="a menu needs at least two targets")
+            return DecisionResult("error", reason="a menu needs at least two targets")
         criteria = {}
         for name, t in named.items():
             desc = str(t.get("description") or "").strip()
@@ -415,11 +457,11 @@ class JevRouter:
         criteria[self.UNCLEAR] = self.UNCLEAR_DESC
         body = {
             "state": {"request": request},
-            "model": self.MODEL,
+            "model": self.model,
             "questions": {"route": {"type": "choice", "instructions": question, "criteria": criteria}},
         }
         req = urllib.request.Request(
-            os.environ.get("TYPESAFE_BASE_URL") or self.URL, data=json.dumps(body).encode("utf-8"), method="POST",
+            url, data=json.dumps(body).encode("utf-8"), method="POST",
             headers={"Authorization": "Bearer " + key, "Accept": "application/json",
                      "Content-Type": "application/json"})
         t0 = time.monotonic()
@@ -427,7 +469,7 @@ class JevRouter:
             with urllib.request.urlopen(req, timeout=self.TIMEOUT_S, context=self.ssl_context) as resp:   # HTTP 4xx/5xx raise here
                 raw = resp.read()
         except Exception as e:
-            return JevResult("error", reason=str(e))
+            return DecisionResult("error", reason=str(e))
         ms = int(round((time.monotonic() - t0) * 1000))
         try:
             decoded = json.loads(raw.decode("utf-8"))
@@ -436,33 +478,41 @@ class JevRouter:
         answers = decoded.get("answers") if isinstance(decoded, dict) else None
         answer = answers.get("route") if isinstance(answers, dict) else None
         if not isinstance(answer, dict) or answer.get("choice") is None:
-            return JevResult("error", ms=ms, reason="no choice in the response")
+            return DecisionResult("error", ms=ms, reason="no choice in the response")
         choice = str(answer["choice"])
         conf = float(answer["confidence"]) if answer.get("confidence") is not None else None
         probs = answer.get("probabilities") if isinstance(answer.get("probabilities"), (dict, list)) else {}
         usage = decoded.get("usage") if isinstance(decoded.get("usage"), dict) else {}
         common = {"confidence": conf, "probabilities": probs, "ms": ms, "usage": usage}
         if choice == self.UNCLEAR:
-            return JevResult("unclear", reason="the request names no branch", **common)
+            return DecisionResult("unclear", reason="the request names no branch", **common)
         if choice not in named:
             # Unreachable by contract; treated as an error rather than trusted.
-            return JevResult("error", reason=f"answer '{choice}' is not on the menu", **common)
+            return DecisionResult("error", reason=f"answer '{choice}' is not on the menu", **common)
         if conf is not None and conf < floor:
-            return JevResult("low_confidence", target=named[choice],
-                             reason=f"confidence {conf:.2f} below floor {floor:.2f}", **common)
-        return JevResult("routed", target=named[choice], **common)
+            return DecisionResult("low_confidence", target=named[choice],
+                                  reason=f"confidence {conf:.2f} below floor {floor:.2f}", **common)
+        return DecisionResult("routed", target=named[choice], **common)
 
 
-class RoutingMode(str, Enum):
-    """How a dispatcher picks its child: Jev only, or the model only -- never both.
 
-    A str mixin, not enum.StrEnum (Python 3.11+; the floor is 3.10), so a saved
-    routing_mode string compares equal to its member.
-    """
-    JEV = "jev"
-    LLM = "llm"
+PY,
+            default => throw new \InvalidArgumentException("no LangGraph adapter for decision protocol '{$protocol}'"),
+        };
+    }
 
+    /** DECISION_ADAPTERS: protocol -> adapter class, for the protocols compiled in. */
+    private static function adaptersTable(array $protocols): string
+    {
+        $entries = array_map(fn(string $p) => '"' . $p . '": ' . self::ADAPTER_CLASSES[$p], $protocols);
+        return "# Decision protocol -> adapter class (only the protocols this workflow's dispatchers use).\n"
+            . 'DECISION_ADAPTERS = {' . implode(', ', $entries) . "}\n\n\n";
+    }
 
+    /** RouteDecision and Dispatcher: the mode choice and both routing paths. */
+    private static function dispatcherClasses(): string
+    {
+        return <<<'PY'
 @dataclass(frozen=True)
 class RouteDecision:
     """A dispatcher's answer: the text its child receives, the chosen child's id and the notes.
@@ -477,81 +527,104 @@ class RouteDecision:
 
 
 class Dispatcher:
-    """Picks exactly one child for a dispatcher node: through Jev or through one forced route_to call, never both.
+    """Picks exactly one child for a dispatcher node: through a decision model or through one forced route_to call, never both.
 
     Dispatcher agent (twin of DispatchRouting in the PHP runner): the model
     MUST call route_to with one of the menu names; that child alone runs. The
     child receives the dispatcher's original input plus the notes.
     With no choice the run stops at the dispatcher. It holds the menu, the
-    confidence floor and the Jev router -- nothing of the graph.
+    confidence floor and the compiled decision candidates -- nothing of the graph.
     """
 
-    def __init__(self, cfg: dict, router: JevRouter | None = None):
-        """cfg is the dispatcher's node entry (id, display, dispatch, jev_question, routing_mode,
-        jev_min_confidence); router is the Jev client, a real JevRouter unless a test passes one."""
+    def __init__(self, cfg: dict, router=None):
+        """cfg is the dispatcher's node entry (id, display, dispatch, decision_question, routing_mode,
+        min_confidence, decision); router replaces every candidate's adapter (tests only)."""
         self.cfg = cfg
         self.display = cfg["display"]
         self.targets = cfg["dispatch"]
         self.names = [t["name"] for t in self.targets]
-        self.router = router or JevRouter()
-        floor = cfg.get("jev_min_confidence")
-        self.floor = JevRouter.CONFIDENCE_FLOOR if floor is None else floor
+        self.candidates = cfg.get("decision", [])
+        self._router = router
+        self._adapters = {}   # provider -> adapter, built once so its cached SSL context is reused
+        floor = cfg.get("min_confidence")
+        # 0.6 = JevRouter::DEFAULT_CONFIDENCE_FLOOR, the interpreter's default.
+        self.floor = 0.6 if floor is None else floor
 
-    def mode(self) -> RoutingMode:
-        """The routing mode for this run.
+    def router_for(self, provider: str):
+        """The adapter for one candidate, None when the provider was not compiled in or its protocol has no adapter."""
+        c = next((c for c in self.candidates if c["provider"] == provider), None)
+        if c is None:
+            return None
+        if self._router is not None:
+            return self._router
+        if provider not in self._adapters:
+            cls = DECISION_ADAPTERS.get(c["protocol"])
+            self._adapters[provider] = (cls(key_env=c["key_env"], url_env=c["url_env"], url=c["url"], model=c["model"])
+                                        if cls else None)
+        return self._adapters[provider]
 
-        Routing mode (settings.routing_mode, twin of GraphWorkflowRunner) --
-        always exactly one, never both:
-          "llm" -> the model only; Jev is never asked.
-          "jev" -> Jev only; the model is never called. Any outcome but 'routed'
-                   (unclear, low_confidence, no key, error, timeout) = did not
-                   route: routes END, so none of the dispatcher's branches runs.
-          ""    -> unset (saved before the setting existed): resolved here to
-                   "jev" when TYPESAFE_API_KEY is set -- the editor's runner sync
-                   writes it only when the user's plan allows Jev, the stand-in
-                   for the interpreter's plan check -- else "llm".
+    def mode(self) -> str:
+        """"llm", or the decision provider this run routes with (twin of GraphWorkflowRunner):
+          "llm" -> the model only.
+          a key -> that decision model only; any outcome but 'routed' (unclear,
+                   low_confidence, no key, error, timeout) stops the run here.
+          ""    -> unset: the first compiled candidate whose key is set (the editor's runner
+                   sync writes only keys the plan allows), else "llm".
         """
-        mode = self.cfg.get("routing_mode", "")
-        if mode in (RoutingMode.JEV, RoutingMode.LLM):
-            return RoutingMode(mode)
-        return RoutingMode.JEV if self.router.available() else RoutingMode.LLM
+        match self.cfg.get("routing_mode", ""):
+            case "llm":
+                return "llm"
+            case "":
+                for c in self.candidates:
+                    r = self.router_for(c["provider"])
+                    if r is not None and r.available():
+                        return c["provider"]
+                return "llm"
+            case key:
+                return key
 
     async def route(self, task: str, msgs: list, make_llm) -> RouteDecision:
-        """Route `task` (the dispatcher's input) to one child of the menu.
+        """Route `task` (the dispatcher's input) to one child of the menu (see mode()).
 
         msgs is the dispatcher's model turn; make_llm() returns its chat model and is
-        read only on the LLM path, so a Jev-only dispatcher needs no model key or package.
+        read only on the LLM path, so a decision-model dispatcher needs no model key or package.
         route is "" and status "unrouted" when no child is chosen.
         """
         match self.mode():
-            case RoutingMode.JEV:
-                return await self._via_jev(task)
-            case _:
+            case "llm":
                 return await self._via_llm(task, msgs, make_llm)
+            case key:
+                return await self._via_decision(key, task)
 
-    async def _via_jev(self, task: str) -> RouteDecision:
-        """Jev only: 'routed' decides; any other outcome stops the run here (no model fallback)."""
+    async def _via_decision(self, key: str, task: str) -> RouteDecision:
+        """Decision model `key` only: 'routed' decides; any other outcome stops the run here (no model fallback)."""
         nid = self.cfg["id"]
-        try:
-            # urlopen's timeout bounds each socket op, not DNS or the total; this does.
-            jev = await asyncio.wait_for(
-                asyncio.to_thread(self.router.route, task, self.targets, self.cfg.get("jev_question", ""), self.floor), self.router.TIMEOUT_S + 1)
-        except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
-            jev = JevResult("error", reason=f"{type(e).__name__}: no answer within {self.router.TIMEOUT_S + 1}s"
-                            if isinstance(e, asyncio.TimeoutError) else str(e))
-        conf = f"{jev.confidence:.2f}" if jev.confidence is not None else "?"
-        if jev.outcome == "routed":
-            chosen = jev.target
-            # Same shape the model path returns, minus notes: Jev writes no prose.
-            print(f"[node] [{nid}] {self.display!r} Jev routed to {chosen['name']!r} "
-                  f"(confidence {conf}, {jev.ms}ms, no LLM turn)", flush=True)
+        router = self.router_for(key)
+        if router is None:
+            # Not compiled in (no usable row at generation) or no adapter: nothing is called.
+            res = DecisionResult("unavailable", reason=f"'{key}' is not an available decision provider")
+        else:
+            try:
+                # urlopen's timeout bounds each socket op, not DNS or the total; this does.
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(router.route, task, self.targets, self.cfg.get("decision_question", ""), self.floor),
+                    router.TIMEOUT_S + 1)
+            except Exception as e:   # asyncio.TimeoutError included -> an 'error' outcome (did not route)
+                res = DecisionResult("error", reason=f"{type(e).__name__}: no answer within {router.TIMEOUT_S + 1}s"
+                                     if isinstance(e, asyncio.TimeoutError) else str(e))
+        conf = f"{res.confidence:.2f}" if res.confidence is not None else "?"
+        if res.outcome == "routed":
+            chosen = res.target
+            # Same shape the model path returns, minus notes: a decision model writes no prose.
+            print(f"[node] [{nid}] {self.display!r} {key} routed to {chosen['name']!r} "
+                  f"(confidence {conf}, {res.ms}ms, no LLM turn)", flush=True)
             return RouteDecision(text=task, route=chosen["id"], notes="", status="ok")
-        # Jev only: no model fallback, so the run stops here and says why
+        # Decision model only: no model fallback, so the run stops here and says why
         # (the reason names a missing key, too). Same message as the interpreter.
         msg = (f'Error: dispatcher "{self.display}" did not route the request '
-               f'(Jev: {jev.outcome}: {jev.reason}).')
-        print(f"[node] [{nid}] ⚠ {self.display!r} Jev did not route ({jev.outcome}: {jev.reason}, "
-              f"confidence {conf}) — Jev-only dispatcher, no model fallback", flush=True)
+               f'({key}: {res.outcome}: {res.reason}).')
+        print(f"[node] [{nid}] ⚠ {self.display!r} {key} did not route ({res.outcome}: {res.reason}, "
+              f"confidence {conf}) — decision-model dispatcher, no model fallback", flush=True)
         return RouteDecision(text=msg, route="", notes="", status="unrouted")
 
     def _route_tool(self) -> StructuredTool:

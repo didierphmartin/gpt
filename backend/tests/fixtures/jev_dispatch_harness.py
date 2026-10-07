@@ -2,8 +2,8 @@
 
 Usage: python3 jev_dispatch_harness.py <extracted_block.py> [<node_classes.py>]
 
-The block is the slice of a generated LangGraph file from the TypeSafe Jev comment
-through the end of Dispatcher._via_llm(). It is exec'd into a namespace with stubs
+The block is the slice of a generated LangGraph file from the decision-model routing
+comment through the end of Dispatcher._via_llm(). It is exec'd into a namespace with stubs
 for the LangChain/pydantic names the model path touches, so this needs only the
 standard library. urllib.request.urlopen is monkeypatched: no network.
 The optional second file is the Node classes (class Node through make_node()),
@@ -33,6 +33,29 @@ END = "__end__"
 TARGETS = [{"id": "3", "name": "IT claims", "description": ""},
            {"id": "4", "name": "Human resources", "description": "Leave, payroll and benefits."}]
 QUESTION = 'You are "techBuddy", the front desk, an agent in the workflow "Dispatcher demo".'
+JEV_URL = "https://api.typesafe.ai/v1/systemone"
+ENV_NAMES = ("JEV_API_KEY", "JEV_BASE_URL", "TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "ACME_API_KEY", "ACME_BASE_URL")
+
+
+def candidate(provider="jev", url=JEV_URL):
+    """One compiled decision candidate, as the generator emits it in a dispatcher's "decision" list."""
+    stem = provider.upper().replace("-", "_")
+    return {"provider": provider, "protocol": "typesafe", "url": url, "model": "jev-latest",
+            "key_env": f"{stem}_API_KEY", "url_env": f"{stem}_BASE_URL"}
+
+
+def set_env(**env):
+    """Exactly these decision env vars (None or missing = unset)."""
+    for name in ENV_NAMES:
+        os.environ.pop(name, None)
+    for name, value in env.items():
+        if value is not None:
+            os.environ[name] = value
+
+
+def router(ns):
+    """The jev row's adapter, as Dispatcher.router_for() builds it."""
+    return ns["JevRouter"](key_env="JEV_API_KEY", url_env="JEV_BASE_URL")
 
 
 class FakeResp:
@@ -100,18 +123,18 @@ def answer(choice, conf):
             "usage": {"input_tokens": 12, "output_tokens": 1}}
 
 
-def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=None):
+def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=None, decision=None, env=None):
     """The cfg carries what the generator emits for a dispatcher: routing_mode is
-    'jev' | 'llm' | '' (unset: Jev when TYPESAFE_API_KEY is set, else the
-    model) and jev_min_confidence the floor. Returns the RouteDecision as a dict."""
+    'llm' | a provider key | '' (unset: the first candidate whose key is set, else
+    the model), min_confidence the floor and decision the compiled candidates (the
+    jev row unless given). key sets JEV_API_KEY; env, when given, replaces the decision
+    env vars instead. Returns the RouteDecision as a dict."""
     urllib.request.urlopen = http
-    if key is None:
-        os.environ.pop("TYPESAFE_API_KEY", None)
-    else:
-        os.environ["TYPESAFE_API_KEY"] = key
+    set_env(**(env if env is not None else {"JEV_API_KEY": key}))
     llm = FakeLLM()
-    cfg = {"id": "2", "display": "techBuddy", "dispatch": TARGETS, "jev_question": QUESTION,
-           "routing_mode": routing_mode, "jev_min_confidence": floor}
+    cfg = {"id": "2", "display": "techBuddy", "dispatch": TARGETS, "decision_question": QUESTION,
+           "routing_mode": routing_mode, "min_confidence": floor,
+           "decision": [candidate()] if decision is None else decision}
     made = []   # how many times the dispatcher asked for its chat model
 
     def make_llm():
@@ -140,9 +163,9 @@ def routed():
     http = FakeHTTP(answer("IT claims", 0.97))
     out, llm_calls, log = run_dispatcher(ns, http)
     assert llm_calls == 0, "routed must not spend an LLM turn"
-    assert run_dispatcher.llm_made == 0, "Jev mode must not even build the chat model"
+    assert run_dispatcher.llm_made == 0, "a decision model must not even build the chat model"
     assert out == {"text": "My laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
-    assert "[node] [2] 'techBuddy' Jev routed to 'IT claims' (confidence 0.97, " in log and "ms, no LLM turn)" in log, log
+    assert "[node] [2] 'techBuddy' jev routed to 'IT claims' (confidence 0.97, " in log and "ms, no LLM turn)" in log, log
     # The wire request: same contract as JevRouter.php.
     req, timeout = http.requests[0]
     assert req.full_url == "https://api.typesafe.ai/v1/systemone" and req.get_method() == "POST"
@@ -155,46 +178,46 @@ def routed():
     assert q["criteria"] == {"IT claims": "IT claims",   # blank description -> the name
                              "Human resources": "Leave, payroll and benefits.",
                              "unclear": ns["JevRouter"].UNCLEAR_DESC}, q["criteria"]
-    r = ns["JevRouter"]().route("x", TARGETS, QUESTION)
-    assert isinstance(r, ns["JevResult"]), r
+    r = router(ns).route("x", TARGETS, QUESTION)
+    assert isinstance(r, ns["DecisionResult"]), r
     assert r.outcome == "routed" and r.target["id"] == "3" and r.usage["input_tokens"] == 12, r
 
 
 def no_key():
-    """Unset without TYPESAFE_API_KEY resolves to the model: Jev is never asked."""
+    """Unset without any decision key resolves to the model: Jev is never asked."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     out, llm_calls, log = run_dispatcher(ns, http, key=None)
     assert http.requests == [], "no key must not call HTTP"
     assert llm_calls == 1 and out == {"text": "My laptop will not boot\n\n## Dispatcher notes\nfrom the model",
                                       "route": "4", "notes": "from the model", "status": "ok"}, out
-    assert "Jev" not in log, log
-    assert ns["JevRouter"]().route("x", TARGETS, QUESTION).outcome == "unavailable"
-    os.environ["TYPESAFE_API_KEY"] = ""
+    assert "jev" not in log, log
+    r = router(ns).route("x", TARGETS, QUESTION)
+    assert r.outcome == "unavailable" and r.reason == "no JEV_API_KEY", r
     out, llm_calls, log = run_dispatcher(ns, http, key="")
-    assert http.requests == [] and llm_calls == 1 and "Jev" not in log
+    assert http.requests == [] and llm_calls == 1 and "jev" not in log
 
 
 def refusals():
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
-    os.environ["TYPESAFE_API_KEY"] = "k"
-    r = ns["JevRouter"]().route("x", [{"id": "1", "name": "Unclear"}, TARGETS[0]], QUESTION)
+    set_env(JEV_API_KEY="k")
+    r = router(ns).route("x", [{"id": "1", "name": "Unclear"}, TARGETS[0]], QUESTION)
     assert r.outcome == "error" and "unusable target name" in r.reason, r
-    r = ns["JevRouter"]().route("x", [TARGETS[0]], QUESTION)
+    r = router(ns).route("x", [TARGETS[0]], QUESTION)
     assert r.outcome == "error" and "at least two" in r.reason, r
     assert http.requests == [], "refusals happen before any HTTP"
     long = [{"id": "1", "name": "A", "description": "d" * 900}, {"id": "2", "name": "B"}]
-    ns["JevRouter"]().route("x", long, QUESTION)
+    router(ns).route("x", long, QUESTION)
     crit = json.loads(http.requests[0][0].data)["questions"]["route"]["criteria"]
     assert crit["A"] == "d" * 400 and crit["B"] == "B", crit
 
 
 def hung():
     """A Jev call that never returns (DNS, a stalled read) is cut off by
-    asyncio.wait_for(router.TIMEOUT_S + 1): an unset dispatcher with a key is Jev
-    only, so the run stops with "did not route" -- the model is never asked."""
+    asyncio.wait_for(router.TIMEOUT_S + 1): an unset dispatcher with a key routes with
+    that decision model only, so the run stops with "did not route" -- the model is never asked."""
     ns = namespace()
 
     class Slow(ns["JevRouter"]):
@@ -202,14 +225,14 @@ def hung():
 
         def route(self, *a):
             time.sleep(2)
-            return ns["JevResult"]("routed")
+            return ns["DecisionResult"]("routed")
 
     t0 = time.monotonic()
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.99)), router=Slow())
     waited = time.monotonic() - t0
     assert llm_calls == 0 and run_dispatcher.llm_made == 0, "a Jev timeout never falls back to the model"
     assert out["route"] == "" and out["status"] == "unrouted" and branch_that_runs(out) is None, out
-    assert "Jev did not route (error: TimeoutError" in log and "no answer within 1s" in log, log
+    assert "jev did not route (error: TimeoutError" in log and "no answer within 1s" in log, log
     assert waited >= 1.0, waited
 
 
@@ -224,8 +247,8 @@ def run_dispatcher_node(ns, llm, routing_mode, request):
     exec(compile(KIND, "node_classes", "exec"), ns)
     node = ns["make_node"]({"id": "2", "kind": "dispatcher", "display": "techBuddy", "provider": "claude", "model": "m",
                             "temperature": 0.7, "max_tokens": 10, "system_prompt": "", "tool_names": [],
-                            "dispatch": TARGETS, "jev_question": QUESTION, "routing_mode": routing_mode,
-                            "jev_min_confidence": 0.6})
+                            "dispatch": TARGETS, "decision_question": QUESTION, "routing_mode": routing_mode,
+                            "min_confidence": 0.6, "decision": [candidate()]})
     if llm is not None:
         node.llm = llm
     node.__dict__["tools"] = []
@@ -235,14 +258,71 @@ def run_dispatcher_node(ns, llm, routing_mode, request):
     return out, buf.getvalue()
 
 
+def legacy_key():
+    """Only the legacy TYPESAFE_API_KEY set (an .env written before per-row names): the
+    jev row still routes, and posts to TYPESAFE_BASE_URL when that is set."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.97))
+    out, llm_calls, _ = run_dispatcher(ns, http, routing_mode="jev", env={"TYPESAFE_API_KEY": "legacy"})
+    assert llm_calls == 0 and out["route"] == "3" and out["status"] == "ok", out
+    req = http.requests[0][0]
+    assert req.get_header("Authorization") == "Bearer legacy" and req.full_url == JEV_URL, req.full_url
+    http = FakeHTTP(answer("IT claims", 0.97))
+    out, _, _ = run_dispatcher(ns, http, env={"TYPESAFE_API_KEY": "legacy", "TYPESAFE_BASE_URL": "https://gw.local/jev"})
+    assert out["route"] == "3", "unset mode: the legacy key makes the jev row usable"
+    assert http.requests[0][0].full_url == "https://gw.local/jev", http.requests[0][0].full_url
+
+
+def row_key_wins():
+    """The row's own JEV_API_KEY (and JEV_BASE_URL) win over the legacy TYPESAFE_* pair."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.97))
+    out, _, _ = run_dispatcher(ns, http, routing_mode="jev",
+                               env={"JEV_API_KEY": "row", "JEV_BASE_URL": "https://row.gw/jev",
+                                    "TYPESAFE_API_KEY": "legacy", "TYPESAFE_BASE_URL": "https://legacy.gw/jev"})
+    assert out["route"] == "3", out
+    req = http.requests[0][0]
+    assert req.get_header("Authorization") == "Bearer row" and req.full_url == "https://row.gw/jev", req.full_url
+
+
+def unset_picks_first_keyed_candidate():
+    """Unset mode with two candidates, only the second's key set: the second routes."""
+    ns = namespace()
+    set_env(ACME_API_KEY="acme-key")
+    d = ns["Dispatcher"]({"id": "2", "display": "techBuddy", "dispatch": TARGETS, "routing_mode": "",
+                          "decision": [candidate(), candidate("acme", "https://acme.example/route")]})
+    assert d.mode() == "acme", d.mode()
+    http = FakeHTTP(answer("IT claims", 0.97))
+    out, llm_calls, log = run_dispatcher(ns, http, env={"ACME_API_KEY": "acme-key"},
+                                         decision=[candidate(), candidate("acme", "https://acme.example/route")])
+    assert llm_calls == 0 and out["route"] == "3", out
+    req = http.requests[0][0]
+    assert req.get_header("Authorization") == "Bearer acme-key" and req.full_url == "https://acme.example/route"
+    assert "acme routed to 'IT claims'" in log, log
+
+
+def missing_provider():
+    """A node naming a provider that was not compiled in (row gone or disabled at
+    generation): it does not route, and the model is never called."""
+    ns = namespace()
+    http = FakeHTTP(answer("IT claims", 0.99))
+    out, llm_calls, log = run_dispatcher(ns, http, routing_mode="gone", decision=[])
+    assert llm_calls == 0 and run_dispatcher.llm_made == 0 and http.requests == [], (llm_calls, http.requests)
+    msg = ('Error: dispatcher "techBuddy" did not route the request '
+           "(gone: unavailable: 'gone' is not an available decision provider).")
+    assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
+    assert ns["RouteDecision"](**out).status == "unrouted"
+    assert branch_that_runs(out) is None
+
+
 def kind_routed():
     """DispatcherNode carries the route id back as "route"."""
     ns = namespace()
     urllib.request.urlopen = FakeHTTP(answer("IT claims", 0.97))
-    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    set_env(JEV_API_KEY="test-key")
     out, log = run_dispatcher_node(ns, None, "", "Framed request: my laptop will not boot")   # no model: Jev never builds one
     assert out == {"text": "Framed request: my laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
-    assert "Jev routed to 'IT claims'" in log
+    assert "jev routed to 'IT claims'" in log
 
 
 def branch_that_runs(out):
@@ -261,7 +341,7 @@ def llm_mode():
     out, llm_calls, log = run_dispatcher(ns, http, routing_mode="llm")
     assert http.requests == [], "LLM mode must never call Jev"
     assert llm_calls == 1 and out["route"] == "4" and out["notes"] == "from the model", out
-    assert "Jev" not in log, log
+    assert "jev" not in log, log
 
 
 def jev_routed():
@@ -271,11 +351,11 @@ def jev_routed():
     assert llm_calls == 0 and run_dispatcher.llm_made == 0, "Jev mode never builds or calls the model"
     assert out == {"text": "My laptop will not boot", "route": "3", "notes": "", "status": "ok"}, out
     assert branch_that_runs(out) == "3"
-    assert "Jev routed to 'IT claims'" in log, log
+    assert "jev routed to 'IT claims'" in log, log
 
 
 def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6, http_calls=1, routing_mode="jev"):
-    """routing_mode 'jev' (or unset with a key, which resolves to Jev): any
+    """routing_mode 'jev' (or unset with its key, which resolves to jev): any
     non-routed outcome stops at the dispatcher with the interpreter's "did not
     route" message; no model call, no branch."""
     ns = namespace()
@@ -284,40 +364,39 @@ def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6
     assert llm_calls == 0, f"Jev mode never calls the model ({expect_reason})"
     assert run_dispatcher.llm_made == 0, f"Jev mode never builds the model ({expect_reason})"
     assert len(http.requests) == http_calls, http.requests
-    msg = f'Error: dispatcher "techBuddy" did not route the request (Jev: {expect_reason}).'
+    msg = f'Error: dispatcher "techBuddy" did not route the request (jev: {expect_reason}).'
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert branch_that_runs(out) is None, "no branch may run"
     assert "asking the model" not in log and "no model fallback" in log, log
 
 
 def custom_floor():
-    """jev_min_confidence is honoured: 0.8 is below a 0.9 floor (the default
+    """min_confidence is honoured: 0.8 is below a 0.9 floor (the default
     0.6 would route it). An unset dispatcher with a key is Jev only, so it
     stops there -- the model is never asked."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.8))
     urllib.request.urlopen = http
-    os.environ["TYPESAFE_API_KEY"] = "k"
-    r = ns["JevRouter"]().route("x", TARGETS, QUESTION, 0.9)
+    set_env(JEV_API_KEY="k")
+    r = router(ns).route("x", TARGETS, QUESTION, 0.9)
     assert r.outcome == "low_confidence" and r.reason == "confidence 0.80 below floor 0.90", r
-    assert ns["JevRouter"]().route("x", TARGETS, QUESTION).outcome == "routed", "default floor stays 0.6"
+    assert router(ns).route("x", TARGETS, QUESTION).outcome == "routed", "default floor stays 0.6"
     out, llm_calls, log = run_dispatcher(ns, FakeHTTP(answer("IT claims", 0.8)), floor=0.9)
     assert llm_calls == 0 and out["route"] == "" and out["status"] == "unrouted", out
-    assert "Jev did not route (low_confidence: confidence 0.80 below floor 0.90" in log, log
+    assert "jev did not route (low_confidence: confidence 0.80 below floor 0.90" in log, log
 
 
 def mode_resolution():
-    """Dispatcher.mode(): a saved mode wins; unset (or anything else) is Jev with a key, else the model."""
+    """Dispatcher.mode(): a saved mode wins (any key, compiled in or not); unset is the
+    first candidate whose key is set, else the model."""
     ns = namespace()
     for saved, key, want in [("jev", None, "jev"), ("llm", "k", "llm"), ("", "k", "jev"), ("", None, "llm"),
-                             ("bogus", "k", "jev"), ("", "", "llm")]:
-        if key is None:
-            os.environ.pop("TYPESAFE_API_KEY", None)
-        else:
-            os.environ["TYPESAFE_API_KEY"] = key
-        got = ns["Dispatcher"]({"id": "2", "display": "techBuddy", "dispatch": TARGETS, "routing_mode": saved}).mode()
+                             ("bogus", "k", "bogus"), ("", "", "llm")]:
+        set_env(JEV_API_KEY=key)
+        got = ns["Dispatcher"]({"id": "2", "display": "techBuddy", "dispatch": TARGETS, "routing_mode": saved,
+                                "decision": [candidate()]}).mode()
         assert got == want, (saved, key, got)
-        assert isinstance(got, ns["RoutingMode"]), got
+        assert type(got) is str, got
 
 
 def kind_jev_unrouted():
@@ -325,19 +404,19 @@ def kind_jev_unrouted():
     graph's conditional edge goes to END) with the message."""
     ns = namespace()
     urllib.request.urlopen = FakeHTTP(answer("unclear", 1.0))
-    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    set_env(JEV_API_KEY="test-key")
     out, _ = run_dispatcher_node(ns, None, "jev", "Framed request")   # no model: Jev never builds one
-    msg = 'Error: dispatcher "techBuddy" did not route the request (Jev: unclear: the request names no branch).'
+    msg = 'Error: dispatcher "techBuddy" did not route the request (jev: unclear: the request names no branch).'
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert out["route"] not in {t["id"] for t in TARGETS}, "no branch may run"
 
 
 def kind_unset_no_key():
-    """An unset dispatcher without TYPESAFE_API_KEY -> the model."""
+    """An unset dispatcher without any decision key -> the model."""
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
-    os.environ.pop("TYPESAFE_API_KEY", None)
+    set_env()
     llm = FakeLLM()
     out, _ = run_dispatcher_node(ns, llm, "", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
@@ -348,7 +427,7 @@ def kind_llm_mode():
     ns = namespace()
     http = FakeHTTP(answer("IT claims", 0.99))
     urllib.request.urlopen = http
-    os.environ["TYPESAFE_API_KEY"] = "test-key"
+    set_env(JEV_API_KEY="test-key")
     llm = FakeLLM()
     out, _ = run_dispatcher_node(ns, llm, "llm", "Framed request")
     assert http.requests == [] and llm.calls == 1 and out["route"] == "4", out
@@ -368,11 +447,15 @@ case(hung)
 case(llm_mode)
 case(jev_routed)
 case(lambda: jev_not_routed("unclear: the request names no branch", body=answer("unclear", 1.0)))
-case(lambda: jev_not_routed("unavailable: no TYPESAFE_API_KEY", body=answer("IT claims", 0.99), key=None, http_calls=0))
+case(lambda: jev_not_routed("unavailable: no JEV_API_KEY", body=answer("IT claims", 0.99), key=None, http_calls=0))
 case(lambda: jev_not_routed("low_confidence: confidence 0.80 below floor 0.90", body=answer("IT claims", 0.8), floor=0.9))
 case(lambda: jev_not_routed("error: <urlopen error timed out>", exc=urllib.error.URLError("timed out")))
 case(custom_floor)
 case(mode_resolution)
+case(legacy_key)
+case(row_key_wins)
+case(unset_picks_first_keyed_candidate)
+case(missing_provider)
 if KIND is not None:
     case(kind_routed)
     case(kind_jev_unrouted)

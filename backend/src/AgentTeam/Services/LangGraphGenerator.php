@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
 use RuntimeException;
 
 /**
@@ -336,7 +337,7 @@ class LangGraphGenerator
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [], self::jevDocLines($agentData)),
+                    : [], self::decisionDocLines($agentData)),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -442,7 +443,7 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $lines[] = LangGraphRuntime::runEventsBlock();
-        $lines[] = LangGraphRuntime::dispatcherBlock();
+        $lines[] = LangGraphRuntime::dispatcherBlock(self::decisionProtocolsUsed($agentData));
         if ($playbookData !== []) {
             $lines[] = LangGraphRuntime::playbookBlock();
         }
@@ -906,12 +907,12 @@ class LangGraphGenerator
             // record carries explicit fields.
             $agentProvider = '';
             $agentModel = '';
-            // Who the dispatcher is, for its Jev question. GraphWorkflowRunner asks
+            // Who the dispatcher is, for its decision question. GraphWorkflowRunner asks
             // the resolved Agent (getName()/getDescription()); when this node
             // references a saved agent, use that record, else the node config.
-            $jevName = self::displayName($node);
-            $jevDesc = (string) ($cfg['description'] ?? '');
-            // Routing settings (routing_mode, jev_min_confidence): the interpreter
+            $dispatcherName = self::displayName($node);
+            $dispatcherDesc = (string) ($cfg['description'] ?? '');
+            // Routing settings (routing_mode, min_confidence): the interpreter
             // reads $agent->getSettings(), i.e. the saved record when the node
             // references one, else the node's own settings.
             $routingSettings = is_array($cfg['settings'] ?? null) ? $cfg['settings'] : [];
@@ -921,10 +922,10 @@ class LangGraphGenerator
                     if ($agent !== null) {
                         $agentArr = $agent->toArray();
                         if (trim((string) ($agentArr['name'] ?? '')) !== '') {
-                            $jevName = (string) $agentArr['name'];
+                            $dispatcherName = (string) $agentArr['name'];
                         }
                         if (trim((string) ($agentArr['description'] ?? '')) !== '') {
-                            $jevDesc = (string) $agentArr['description'];
+                            $dispatcherDesc = (string) $agentArr['description'];
                         }
                         $recSettings = $agentArr['settings'] ?? [];
                         if (is_string($recSettings)) {
@@ -1071,23 +1072,22 @@ class LangGraphGenerator
                                 ? $cfgSettings['thinking'] : null),
                 'skills' => $skills,
                 'dispatch' => $dispatch,
-                // The Jev question for this dispatcher, computed exactly as the
-                // interpreter does (GraphWorkflowRunner: defaultInstructions over
-                // the agent's name, description and the workflow name) -- NOT the
-                // node's system prompt, which also carries the routing block.
-                'jev_question' => $dispatch !== []
-                    ? DispatchRouting::defaultInstructions($jevName, $jevDesc, $wfName)
+                // The question a decision model answers for this dispatcher, computed exactly as
+                // the interpreter does (DispatchRouting::defaultInstructions over the agent's
+                // name, description and the workflow name) -- not the node's system prompt.
+                'decision_question' => $dispatch !== []
+                    ? DispatchRouting::defaultInstructions($dispatcherName, $dispatcherDesc, $wfName)
                     : '',
-                // Routing mode, as GraphWorkflowRunner reads it: 'jev' (Jev only),
-                // 'llm' (model only), anything else '' = unset, resolved by the
-                // runtime (Dispatcher.mode()): Jev when TYPESAFE_API_KEY is set,
-                // else the model. Never both.
-                'routing_mode' => in_array($routingSettings['routing_mode'] ?? null, ['jev', 'llm'], true)
-                    ? $routingSettings['routing_mode'] : '',
-                // Same clamp as the interpreter: numeric -> [0, 1], else the default floor.
-                'jev_min_confidence' => is_numeric($routingSettings['jev_min_confidence'] ?? null)
-                    ? max(0.0, min(1.0, (float) $routingSettings['jev_min_confidence']))
+                // Routing mode as GraphWorkflowRunner reads it: 'llm', a decision provider
+                // key, or '' (unset: the first candidate whose key is set, else the model).
+                'routing_mode' => trim((string) ($routingSettings['routing_mode'] ?? '')),
+                // Same clamp as the interpreter: min_confidence, else jev_min_confidence, else the default.
+                'min_confidence' => is_numeric($f = $routingSettings['min_confidence'] ?? $routingSettings['jev_min_confidence'] ?? null)
+                    ? max(0.0, min(1.0, (float) $f))
                     : JevRouter::DEFAULT_CONFIDENCE_FLOOR,
+                'decision' => $dispatch !== []
+                    ? $this->decisionCandidates(trim((string) ($routingSettings['routing_mode'] ?? '')))
+                    : [],
             ];
         }
 
@@ -1403,7 +1403,7 @@ class LangGraphGenerator
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                       'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
-                          self::jevDocLines($facts['agentData'] ?? [])),
+                          self::decisionDocLines($facts['agentData'] ?? [])),
                       // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
                       'env_path' => '../../.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
@@ -1979,7 +1979,7 @@ PY;
         $L[] = $sep; $L[] = '# TOOL BUILDER + SKILL RUNTIME'; $L[] = $sep;
         $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
         $L[] = LangGraphRuntime::runEventsBlock();
-        $L[] = LangGraphRuntime::dispatcherBlock();
+        $L[] = LangGraphRuntime::dispatcherBlock(self::decisionProtocolsUsed($facts['agentData'] ?? []));
         $L[] = self::datetimeInjectorBlock();
         if ($isPlaybook) {
             $L[] = LangGraphRuntime::playbookBlock();
@@ -2051,7 +2051,7 @@ PY;
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                       'extra' => array_merge(['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
-                          self::jevDocLines($facts['agentData'] ?? [])),
+                          self::decisionDocLines($facts['agentData'] ?? [])),
                       // This file lives 3 levels under the workflow root (agents/<file>.py).
                       'env_path' => '../../../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
@@ -3159,7 +3159,7 @@ PY;
             // DATA FLOW paragraph of their own (run_node()/dispatcher/playbook
             // prose does not describe a swarm, which has none of those).
             'data_flow' => $dataFlow ?? self::modularDataFlowDoc(),
-            'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::jevDocLines($facts['agentData'] ?? []))] + $run,
+            'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::decisionDocLines($facts['agentData'] ?? []))] + $run,
             'storage' => $storage
                 ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()]
                 : ['enabled' => false, 'folder' => null],
@@ -3266,7 +3266,7 @@ TXT;
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
         $L[] = $sep;
-        $L[] = LangGraphRuntime::dispatcherBlock();
+        $L[] = LangGraphRuntime::dispatcherBlock(self::decisionProtocolsUsed($facts['agentData'] ?? []));
         $L[] = self::datetimeInjectorBlock();
         if ($withPlaybooks) {
             $L[] = LangGraphRuntime::playbookBlock();
@@ -3432,9 +3432,10 @@ TXT;
             // Dispatcher menu: the node calls route_to over these names and only
             // the chosen child runs (conditional edge in WorkflowGraph).
             $L[] = $indent . '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
-            $L[] = $indent . '    "jev_question": ' . PythonEmitHelpers::pyStr((string) ($def['jev_question'] ?? '')) . ',';
+            $L[] = $indent . '    "decision_question": ' . PythonEmitHelpers::pyStr((string) ($def['decision_question'] ?? '')) . ',';
             $L[] = $indent . '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
-            $L[] = $indent . '    "jev_min_confidence": ' . self::pyFloor($def) . ',';
+            $L[] = $indent . '    "min_confidence": ' . self::pyFloor($def) . ',';
+            $L[] = $indent . '    "decision": ' . self::decisionLiteral($def['decision'] ?? []) . ',';
         }
         // An entry inside a dict literal (the single file's AGENTS / PLAYBOOKS) ends with a comma.
         $L[] = $indent . '}' . ($indent !== '' ? ',' : '');
@@ -3656,43 +3657,105 @@ PY;
         )) . ']';
     }
 
-    /** A dispatcher's Jev floor as a Python float literal (0.6, 1.0, 0.85). */
+    /**
+     * A dispatcher's decision candidates as a one-line Python list literal, spaced like
+     * dispatchMenuLiteral(): [{"provider": "jev", "protocol": "typesafe", ...}, ...].
+     */
+    private static function decisionLiteral(array $candidates): string
+    {
+        return '[' . implode(', ', array_map(
+            fn(array $c) => '{' . implode(', ', array_map(
+                fn(string $k) => '"' . $k . '": ' . PythonEmitHelpers::pyStr((string) $c[$k]),
+                array_keys($c)
+            )) . '}',
+            $candidates
+        )) . ']';
+    }
+
+    /** A dispatcher's decision-model floor as a Python float literal (0.6, 1.0, 0.85). */
     private static function pyFloor(array $ad): string
     {
-        return var_export((float) ($ad['jev_min_confidence'] ?? JevRouter::DEFAULT_CONFIDENCE_FLOOR), true);
+        return var_export((float) ($ad['min_confidence'] ?? JevRouter::DEFAULT_CONFIDENCE_FLOOR), true);
     }
 
     /**
-     * TO RUN note for TYPESAFE_API_KEY, by the dispatchers' routing modes
-     * (nothing else reads it): required when a dispatcher is Jev-only, optional
-     * for an unset one (no mode saved: Jev when the key is set, else the model),
-     * not mentioned when every dispatcher routes with the model. LangGraph-only: the other compile targets still route
-     * every dispatcher with the model.
+     * The decision providers a dispatcher may route with, written into the script
+     * (it never reads the database): the named row, every usable row in admin order
+     * for an unset mode, none for 'llm' or a key with no usable row.
+     *
+     * @return list<array{provider: string, protocol: string, url: string, model: string, key_env: string, url_env: string}>
      */
-    private static function jevDocLines(array $agentData): array
+    private function decisionCandidates(string $mode): array
     {
-        $jevOnly = [];
-        $unset = [];
+        if ($mode === 'llm') {
+            return [];
+        }
+        $out = [];
+        foreach (DecisionProviders::rows($this->db) as $row) {
+            $key = (string) $row['provider_key'];
+            $protocol = DecisionProviders::protocolOf($row);
+            if ($protocol === null || ($mode !== '' && $key !== $mode)) {
+                continue;
+            }
+            $stem = DecisionProviders::envStem($key);
+            $out[] = [
+                'provider' => $key,
+                'protocol' => (string) $row['protocol'],
+                'url' => trim((string) ($row['base_url'] ?? '')) ?: $protocol['url'],
+                'model' => trim((string) ($row['model'] ?? '')) ?: $protocol['model'],
+                'key_env' => $stem . '_API_KEY',
+                'url_env' => $stem . '_BASE_URL',
+            ];
+        }
+        return $out;
+    }
+
+    /** @return list<string> protocols any dispatcher of this workflow may use (one adapter each). */
+    private static function decisionProtocolsUsed(array $agentData): array
+    {
+        $ids = [];
+        foreach ($agentData as $ad) {
+            foreach ($ad['decision'] ?? [] as $c) {
+                $ids[$c['protocol']] = true;
+            }
+        }
+        return array_keys($ids);
+    }
+
+    /**
+     * TO RUN note for the decision-model env vars, per provider the dispatchers may use:
+     * required for a dispatcher naming that provider, optional for an unset one.
+     * LangGraph-only: the other compile targets route every dispatcher with the model.
+     */
+    private static function decisionDocLines(array $agentData): array
+    {
+        $required = [];
+        $optional = [];
         foreach ($agentData as $ad) {
             if (empty($ad['dispatch'])) {
                 continue;
             }
+            $name = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));
             $mode = $ad['routing_mode'] ?? '';
-            if ($mode === 'jev') {
-                $jevOnly[] = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));   // one comment line
-            } elseif ($mode !== 'llm') {
-                $unset[] = str_replace(["\r", "\n"], ' ', (string) ($ad['display'] ?? ''));
+            foreach ($ad['decision'] ?? [] as $c) {
+                if ($mode === '') {
+                    $optional[$c['key_env']][] = $name;
+                } else {
+                    $required[$c['key_env']][] = $name;
+                }
             }
         }
         $lines = [];
-        if ($jevOnly !== []) {
-            $lines[] = '# Required: TYPESAFE_API_KEY (TypeSafe Jev) for Jev-only dispatchers (' . implode(', ', $jevOnly) . ');';
-            $lines[] = '#   without it (or when Jev cannot decide) they do not route and the run stops there.';
+        foreach ($required as $env => $names) {
+            $lines[] = "# Required: {$env} for dispatchers (" . implode(', ', array_unique($names)) . ');';
+            $lines[] = '#   without it (or when the decision model cannot decide) they do not route and the run stops there.';
         }
-        if ($unset !== []) {
-            $lines[] = '# Optional: TYPESAFE_API_KEY (TypeSafe Jev) for dispatchers with no routing mode saved (' . implode(', ', $unset) . '):';
-            $lines[] = '#   Jev when TYPESAFE_API_KEY is set, else the model. With the key set, a request Jev';
-            $lines[] = '#   cannot decide stops the run there (no model fallback).';
+        foreach ($optional as $env => $names) {
+            $lines[] = "# Optional: {$env} for dispatchers with no routing mode saved (" . implode(', ', array_unique($names)) . '):';
+            $lines[] = '#   the first decision model whose key is set routes, else the model.';
+        }
+        if ($required !== [] || $optional !== []) {
+            $lines[] = '#   Each key has a matching <NAME>_BASE_URL (a gateway). TypeSafe rows also read the legacy TYPESAFE_API_KEY / TYPESAFE_BASE_URL.';
         }
         return $lines;
     }

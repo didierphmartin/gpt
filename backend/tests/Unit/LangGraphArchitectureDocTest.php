@@ -84,16 +84,18 @@ class LangGraphArchitectureDocTest extends TestCase
 
     public function testClassDiagramListsOnlyTheClassesPresent(): void
     {
-        $base = ['Node', 'AgentNode', 'DispatcherNode', 'NodeKind', 'Dispatcher', 'JevRouter', 'JevResult',
-            'RouteDecision', 'RoutingMode', 'WorkflowGraph', 'ToolCatalog', 'McpClient', 'SkillRuntime',
+        $base = ['Node', 'AgentNode', 'DispatcherNode', 'NodeKind', 'Dispatcher', 'DecisionResult',
+            'RouteDecision', 'WorkflowGraph', 'ToolCatalog', 'McpClient', 'SkillRuntime',
             'RunEvents', 'DocumentConverter'];
+        // A decision adapter is emitted, and drawn, only for a protocol a dispatcher may use.
+        $adapter = ['JevRouter'];
         $playbook = ['PlaybookNode', 'PlaybookRun', 'PlaybookToolset'];
         $a2aOnly = ['AgentSupervisor', 'NodeExecutor'];
 
         $cases = [
-            ['dispatcher_demo', 'modular', array_merge($base, $playbook), $a2aOnly],
-            ['dispatcher_demo', 'a2a', array_merge($base, $playbook, $a2aOnly), []],
-            ['linear', 'single', $base, array_merge($playbook, $a2aOnly)],
+            ['dispatcher_demo', 'modular', array_merge($base, $adapter, $playbook), $a2aOnly],
+            ['dispatcher_demo', 'a2a', array_merge($base, $adapter, $playbook, $a2aOnly), []],
+            ['linear', 'single', $base, array_merge($adapter, $playbook, $a2aOnly)],
         ];
         foreach ($cases as [$graph, $mode, $present, $absent]) {
             $r = $this->generate($graph, $mode);
@@ -214,7 +216,7 @@ class LangGraphArchitectureDocTest extends TestCase
             $this->assertStringContainsString('RUN SUMMARY', $doc);
             $this->assertStringContainsString('ANTHROPIC_API_KEY', $doc);
             $this->assertStringContainsString('DEEPSEEK_API_KEY', $doc);
-            $this->assertStringContainsString('TYPESAFE_API_KEY', $doc);
+            $this->assertStringContainsString('`<PROVIDER>_API_KEY` per decision model', $doc);
         }
     }
 }
