@@ -78,7 +78,14 @@ final class ScheduleTickTest extends TestCase
 
     public function testFailureStopsDrainAndIsRecorded(): void
     {
-        $r = $this->tick([['success' => true, 'drain' => true], ['success' => false, 'error' => 'reconnect_needed']], $calls);
+        $log = tempnam(sys_get_temp_dir(), 'tick');
+        $prev = ini_set('error_log', $log);
+        try {
+            $r = $this->tick([['success' => true, 'drain' => true], ['success' => false, 'error' => 'reconnect_needed']], $calls);
+        } finally {
+            ini_set('error_log', (string) $prev);
+            @unlink($log);
+        }
         self::assertSame(2, $calls);
         self::assertSame('reconnect_needed', $r['failed'][0]['error']);
         $row = $this->svc->findById(1);
@@ -86,10 +93,18 @@ final class ScheduleTickTest extends TestCase
         self::assertSame('reconnect_needed', $row['error_message']);
     }
 
-    public function testAClaimedScheduleIsSkipped(): void
+    public function testAScheduleClaimedByAnOverlappingTickIsSkipped(): void
     {
-        $this->svc->claim(1);   // another tick holds it
-        $this->tick([['success' => true]], $calls);
-        self::assertSame(0, $calls);
+        $this->pdo->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, cron, next_run, status)
+            VALUES (3, 45, 'cron', '*/2 * * * *', '2026-10-07 10:42:00', 'pending')");
+        $calls = 0;
+        $runner = function (array $s) use (&$calls) {
+            $calls++;
+            $this->svc->claim(2);   // an overlapping tick takes row 2 while we run row 1
+            return ['success' => true, 'quiet' => true];
+        };
+        (new ScheduleTick($this->svc, $runner))->run();
+        self::assertSame(1, $calls);
+        self::assertSame('running', $this->svc->findById(2)['status']);
     }
 }
