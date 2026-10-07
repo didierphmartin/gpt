@@ -472,6 +472,18 @@ class GraphWorkflowRunner
                     continue; // Don't queue nodes after output
                 }
 
+                // Code node: continue on the exit it took; the other exits' branches are skipped.
+                if (isset($output['code_route'])) {
+                    foreach (DispatchRouting::skipSet($output['code_route']['skip'], $edges) as $skipId) {
+                        if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
+                    }
+                    foreach ($output['code_route']['chosen'] as $nextId) {
+                        if (!in_array($nextId, $queue, true) && !in_array($nextId, $executedNodes, true)) $queue[] = $nextId;
+                    }
+                    unset($this->nodeOutputs[$currentNodeId]['code_route']);
+                    continue;
+                }
+
                 // Dispatcher routing: one chosen branch, siblings skipped.
                 if ($this->applyRoute($currentNodeId, $output, $edges, $queue, $executedNodes)) {
                     continue;
@@ -544,6 +556,21 @@ class GraphWorkflowRunner
 
             $responseTime = (microtime(true) - $startTime) * 1000;
 
+            // A poll that found nothing (a code node ran, no work node did) leaves no trace:
+            // no execution row, no run log. An error exit or a failed code node is never quiet.
+            $summary = CodeNodeStep::summarize($this->nodeOutputs);
+            if ($summary['quiet']) {
+                $this->ensureDbConnection();
+                $this->db->prepare('DELETE FROM agent_workflow_executions WHERE id = ?')->execute([$this->executionId]);
+                @unlink($this->runLog->pathFor($this->runId));
+                // An attached browser still needs the end of the run; it is not persisted.
+                $this->streamContext?->emit(['type' => 'workflow_complete', 'workflow_id' => $workflow->getId(),
+                    'workflow_name' => $workflow->getName(), 'timestamp' => microtime(true), 'success' => true,
+                    'quiet' => true, 'execution_id' => null, 'output' => null]);
+                return ['success' => true, 'quiet' => true, 'drain' => false, 'execution_id' => null,
+                    'output' => null, 'node_outputs' => $this->nodeOutputs, 'nodes_executed' => count($executedNodes)];
+            }
+
             // Complete execution
             $this->completeExecution($this->executionId, $this->nodeOutputs, $responseTime);
 
@@ -603,6 +630,8 @@ class GraphWorkflowRunner
 
             return [
                 'success' => true,
+                'quiet' => false,
+                'drain' => $summary['drain'],
                 'execution_id' => $this->executionId,
                 'workflow' => [
                     'id' => $workflow->getId(),
@@ -721,11 +750,12 @@ class GraphWorkflowRunner
     }
 
     /** Why this runner cannot execute a node of $nodeType, or null when it can. */
-    public static function unsupportedNodeMessage(string $nodeType): ?string
+    public static function unsupportedNodeMessage(string $nodeType, array $config = []): ?string
     {
         return match ($nodeType) {
             'playbook' => "Playbook nodes run only from the workflow editor's browser run path (server-side durable runs arrive in slice 1c).",
-            'code' => "Code nodes run only from the workflow editor's browser run path or in compiled workflows.",
+            'code' => CodeNodeExecutor::enabled($config) ? null
+                : 'Code nodes are switched off on this server (CODE_NODES_SERVER_SIDE=0); run from the editor or a compiled workflow.',
             default => null,
         };
     }
@@ -748,7 +778,8 @@ class GraphWorkflowRunner
         return match ($nodeType) {
             'agent' => $this->executeAgentNode($node, $userId, $userPrompt, $edges, $executedNodes),
             'agent-template' => throw new \RuntimeException("Unconfigured agent template node found. Please configure all agent nodes before running the workflow."),
-            'playbook', 'code' => throw new \RuntimeException(self::unsupportedNodeMessage($nodeType)),
+            'playbook' => throw new \RuntimeException(self::unsupportedNodeMessage('playbook')),
+            'code' => $this->executeCodeNode($node, $userId, $userPrompt, $edges),
             'output' => $this->executeOutputNode($node, $edges, $executedNodes),
             default => ['type' => $nodeType, 'output' => null],
         };
@@ -1561,6 +1592,35 @@ class GraphWorkflowRunner
         }
 
         return null;
+    }
+
+    /**
+     * A code node, server-side: the shared harness via CodeNodeExecutor (spec 2026-10-07 §4).
+     * Its nodeOutputs entry always carries 'exit' and 'success' (CodeNodeStep::summarize reads them);
+     * a failed run is recorded there before the run fails, and an error exit is logged as an error.
+     */
+    private function executeCodeNode(array $node, int $userId, string $userPrompt, array $edges): array
+    {
+        if ($msg = self::unsupportedNodeMessage('code', $this->config)) {
+            throw new \RuntimeException($msg);
+        }
+        $parents = CodeNodeStep::parents((int) $node['id'], $edges, $this->graphNodes, $this->nodeOutputs);
+        $run = (new CodeNodeExecutor($this->db, $this->config))
+            ->run($node, $edges, array_keys($this->graphNodes), (string) $userId, $parents, $userPrompt);
+        $res = $run['result'];
+        foreach ($res['tool_calls'] ?? [] as $c) {
+            $this->nodeLog($node, 'info', 'tool', "{$c['server']}.{$c['tool']} ok=" . ($c['ok'] ? 'true' : 'false') . " ({$c['ms']} ms)");
+        }
+        $route = CodeNodeStep::routeAfter($run['data'], $res, $this->getNextNodeIds((int) $node['id'], $edges));
+        if (!$route['success']) {
+            $this->nodeOutputs[(int) $node['id']] = ['type' => 'code', 'output' => $route['output'], 'exit' => null, 'success' => false];
+            throw new \RuntimeException("code node '{$run['data']['display']}' failed: " . ($res['error'] ?? 'unknown'));
+        }
+        if ($route['exit'] === 'error') {
+            $this->nodeLog($node, 'error', 'done', "code node '{$run['data']['display']}' took its error exit: {$route['output']}");
+        }
+        return ['type' => 'code', 'output' => $route['output'], 'exit' => $route['exit'], 'success' => true,
+            'code_route' => $route];
     }
 
     /**
