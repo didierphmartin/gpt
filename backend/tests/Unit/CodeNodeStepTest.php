@@ -64,4 +64,12 @@ final class CodeNodeStepTest extends TestCase
         $erroredThenWork = $errored + [3 => ['type' => 'agent']];
         self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($erroredThenWork));
     }
+
+    public function testEmptyAgentNameFallsThroughToName(): void
+    {
+        $nodes = [3 => ['config' => ['agent_name' => '', 'name' => 'Triage']], 2 => self::NODES[2]];
+        $edges = [['from_node_id' => 3, 'to_node_id' => 2, 'from_port' => 'output_1']];
+        $p = CodeNodeStep::parents(2, $edges, $nodes, [3 => ['output' => 'x']]);
+        self::assertSame('Triage', $p[0]['name']);
+    }
 }

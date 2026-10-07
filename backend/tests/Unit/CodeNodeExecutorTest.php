@@ -102,4 +102,26 @@ final class CodeNodeExecutorTest extends TestCase
         self::assertMatchesRegularExpression('/time/i', $out['result']['error']);
         self::assertLessThan(10, microtime(true) - $t);
     }
+
+    public function testChildThatNeverStopsIsKilledByTheExecutor(): void
+    {
+        $dir = sys_get_temp_dir() . '/codenode_stub_' . bin2hex(random_bytes(4));
+        mkdir($dir);
+        $stub = $dir . '/python';
+        file_put_contents($stub, "#!/bin/sh\nexec sleep 30\n");
+        chmod($stub, 0755);
+        try {
+            $node = self::node("def run(i, c):\n    return {'route': 'a', 'output': 1}\n");
+            $node['config']['timeout_s'] = 1;
+            $t = microtime(true);
+            $out = (new CodeNodeExecutor($this->pdo(), ['code_nodes' => ['python' => $stub]]))
+                ->run($node, [], [2], '3', [], '');
+            self::assertFalse($out['result']['ok']);
+            self::assertStringContainsString('(process killed)', $out['result']['error']);
+            self::assertLessThan(1 + 5 + 2, microtime(true) - $t);
+        } finally {
+            @unlink($stub);
+            @rmdir($dir);
+        }
+    }
 }
