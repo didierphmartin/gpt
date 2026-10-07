@@ -336,7 +336,7 @@ class LangGraphGenerator
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [], self::jevDocLines($agentData), self::mcpHeaderDocLines($facts)),
+                    : [], self::jevDocLines($agentData), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, "{$safeName}_langgraph.py")),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -348,9 +348,10 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
+        $lines[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
         $lines[] = 'from abc import ABC, abstractmethod';
         $lines[] = 'from dataclasses import asdict, dataclass, field';
+        $lines[] = 'from datetime import datetime, timedelta';
         $lines[] = 'from enum import Enum';
         $lines[] = 'from functools import cached_property';
         $lines[] = 'from pathlib import Path';
@@ -521,6 +522,7 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = LangGraphRuntime::workflowGraphBlock();
         $lines[] = LangGraphRuntime::outputBlock();
+        $lines[] = LangGraphRuntime::cronBlock();
 
         // ---------- start node config ----------
         $lines[] = '';
@@ -537,6 +539,7 @@ class LangGraphGenerator
         $lines[] = '';
         // Verbatim, as the package bakes it: no 80-column wrap, so the prompt is the same text in every mode.
         $lines[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($startPrompt);
+        $lines[] = self::defaultCronLine($facts);
         $lines[] = '';
         // Output-node storage setting baked in so the compiled script persists the final
         // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
@@ -1201,10 +1204,38 @@ class LangGraphGenerator
         // read it here rather than taking it as a generate() option, so every
         // caller agrees without having to remember to pass it.
         $orchestration = $workflow->getOrchestration();
+        $defaultCron = $this->defaultCron($workflowId);
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
             'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
-            'orchestration');
+            'orchestration', 'defaultCron');
+    }
+
+    /** The workflow's active cron schedule (newest scheduled_workflows row), baked as DEFAULT_CRON for --cron. */
+    private function defaultCron(int $workflowId): ?string
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT cron FROM scheduled_workflows WHERE workflow_id = ? AND repeat_type = 'cron' AND status <> 'paused' ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$workflowId]);
+            $c = $stmt->fetchColumn();
+            return is_string($c) && $c !== '' ? $c : null;
+        } catch (\PDOException) {
+            return null;   // no schedules table, or an older one without the cron column: no default
+        }
+    }
+
+    /** DEFAULT_CRON's line: the baked schedule, or None. */
+    private static function defaultCronLine(array $facts): string
+    {
+        return 'DEFAULT_CRON = ' . ($facts['defaultCron'] === null ? 'None' : PythonEmitHelpers::pyStr($facts['defaultCron']));
+    }
+
+    /** TO RUN lines for --cron, naming the entry file $file. */
+    private static function cronDocLines(array $facts, string $file): array
+    {
+        return ["python {$file} --cron            # loop on the Start node schedule"
+            . (($facts['defaultCron'] ?? null) !== null ? " ({$facts['defaultCron']})" : ' (none saved: pass an expression)'),
+            "python {$file} --cron \"*/5 8-18 * * 1-5\"   # or any 5-field cron, Ctrl-C to stop"];
     }
 
     /** Kebab-case ASCII slug for file names (max 40 chars). */
@@ -1418,7 +1449,7 @@ class LangGraphGenerator
             'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                       'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
-                          self::jevDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts)),
+                          self::jevDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, 'orchestrator.py')),
                       // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
                       'env_path' => '../../.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
@@ -1441,6 +1472,7 @@ class LangGraphGenerator
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $L[] = 'import argparse, asyncio, json, os, re, subprocess, sys, threading, time, uuid';
+        $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from pathlib import Path';
         $L[] = 'from typing import Annotated, Awaitable, Callable, TypedDict';
         $L[] = '';
@@ -1463,6 +1495,7 @@ class LangGraphGenerator
         $L[] = 'OUTPUT_STORAGE_ENABLED = ' . ($facts['workflow']->isOutputStorageEnabled() ? 'True' : 'False');
         $L[] = 'OUTPUT_FOLDER = ' . (($facts['workflow']->getOutputFolder() ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $facts['workflow']->getOutputFolder()) : 'None');
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
+        $L[] = self::defaultCronLine($facts);
         $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($facts['startDocuments'] ?: []);
         $L[] = 'A2A_BASE_PORT = int(os.environ.get("A2A_BASE_PORT", "8701"))   # agent i listens on A2A_BASE_PORT + i';
         $L[] = '';
@@ -1499,6 +1532,7 @@ class LangGraphGenerator
         $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
+        $L[] = LangGraphRuntime::cronBlock();
         $L[] = self::a2aOrchestratorBlock();
         return implode("\n", $L) . "\n";
     }
@@ -1880,21 +1914,38 @@ if __name__ == "__main__":
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     ap.add_argument("--keep-serving", action="store_true", help="leave the agent servers running after the run")
     ap.add_argument("--no-spawn", action="store_true", help="do not start agents; expect their URLs to be reachable")
+    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
-    print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron stops here, before any agent starts
+    loop = asyncio.new_event_loop()   # one loop for every run
+
+    def run_once() -> str:
+        """One run over the agent servers: its output printed and saved ('' when it ended without one)."""
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        graph = build_graph()
+        output = loop.run_until_complete(graph.run(prompt))
+        if output:
+            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
+            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (A2A round trip)")
+        return output
+
+    # The agents start once and serve every run of the loop.
     sup = AgentSupervisor(spawn=not a.no_spawn)
-    graph = build_graph()
     try:
         sup.start()
-        output = asyncio.run(graph.run(prompt))
+        match cron:
+            case None:
+                if not run_once():
+                    print("[info] The run ended without output (a branch ended).", flush=True)
+            case expr:
+                run_cron(expr, run_once, drains=False)   # A2A packaging has no code nodes
     finally:
         if not a.keep_serving:
             sup.stop()
-    print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (A2A round trip)")
 PY;
     }
 
@@ -2695,7 +2746,9 @@ PY;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, time, uuid';
+        $L[] = 'import argparse, asyncio, re, time, uuid';
+        $L[] = 'from datetime import datetime, timedelta';
+        $L[] = 'from typing import Callable';
         $L[] = '';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage';
         $L[] = 'from langgraph.checkpoint.memory import MemorySaver';
@@ -2714,6 +2767,7 @@ PY;
         $ofolder = $facts['workflow']->getOutputFolder();
         $L[] = 'OUTPUT_FOLDER = ' . (($ofolder ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
+        $L[] = self::defaultCronLine($facts);
         $entryName = (string) ($rw['agents'][$rw['entry']]['name'] ?? '');
         $L[] = 'DEFAULT_ACTIVE_AGENT = ' . PythonEmitHelpers::pyStr($entryName) . '   # the member wired to Start';
         $L[] = '# Every valid create_swarm() active_agent value -- each member\'s NODE["display"],';
@@ -2805,21 +2859,37 @@ PY;
         $L[] = '    return path';
         $L[] = '';
         $L[] = '';
+        $L[] = LangGraphRuntime::cronBlock();
         $L[] = 'if __name__ == "__main__":';
         $L[] = '    ap = argparse.ArgumentParser(description=f"LangGraph swarm {WORKFLOW_NAME!r}")';
         $L[] = '    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")';
+        $L[] = '    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",';
+        $L[] = '                    help="run on a cron schedule until Ctrl-C (default: the Start node\'s schedule)")';
         $L[] = '    a = ap.parse_args()';
         $L[] = '    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"';
-        $L[] = '    print(f"[info] Prompt: {prompt[:100]}{\'...\' if len(prompt) > 100 else \'\'}", flush=True)';
-        $L[] = '    _t0 = time.monotonic()';
-        $L[] = '    output = asyncio.run(run(prompt))';
-        $L[] = '    print("\\n" + "=" * 60 + "\\nFINAL OUTPUT\\n" + "=" * 60 + "\\n" + output, flush=True)';
-        $L[] = '    saved = _save_output(output)';
-        $L[] = '    print("\\n" + "=" * 74 + "\\nRUN SUMMARY\\n" + "-" * 74, flush=True)';
-        $L[] = '    print(f"  Total wall-clock: {time.monotonic() - _t0:.1f}s", flush=True)';
-        $L[] = '    print(f"  Final output: {len(output)} chars", flush=True)';
-        $L[] = '    print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)';
-        $L[] = '    print("=" * 74, flush=True)';
+        $L[] = '    loop = asyncio.new_event_loop()   # one loop for every run: the compiled graph stays usable';
+        $L[] = '';
+        $L[] = '    def run_once() -> str:';
+        $L[] = '        """One run of the swarm (a fresh conversation): its output printed and saved (\'\' when none)."""';
+        $L[] = '        print(f"[info] Prompt: {prompt[:100]}{\'...\' if len(prompt) > 100 else \'\'}", flush=True)';
+        $L[] = '        t0 = time.monotonic()';
+        $L[] = '        output = loop.run_until_complete(run(prompt))';
+        $L[] = '        if output:';
+        $L[] = '            print("\\n" + "=" * 60 + "\\nFINAL OUTPUT\\n" + "=" * 60 + "\\n" + output, flush=True)';
+        $L[] = '            saved = _save_output(output)';
+        $L[] = '            print("\\n" + "=" * 74 + "\\nRUN SUMMARY\\n" + "-" * 74, flush=True)';
+        $L[] = '            print(f"  Total wall-clock: {time.monotonic() - t0:.1f}s", flush=True)';
+        $L[] = '            print(f"  Final output: {len(output)} chars", flush=True)';
+        $L[] = '            print(f"  Document saved to: {saved}" if saved else "  Document not saved (output storage is OFF in the workflow settings) -- the output is printed above.", flush=True)';
+        $L[] = '            print("=" * 74, flush=True)';
+        $L[] = '        return output';
+        $L[] = '';
+        $L[] = '    match CronExpression.from_cli(ap, a.cron, DEFAULT_CRON):';
+        $L[] = '        case None:';
+        $L[] = '            if not run_once():';
+        $L[] = '                print("[info] The run ended without output.", flush=True)';
+        $L[] = '        case expr:';
+        $L[] = '            run_cron(expr, run_once, drains=False)   # a swarm has no code nodes';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -2893,6 +2963,9 @@ PY;
             $L[] = '  # No LLM provider is used by a member of this swarm.';
         }
         $L[] = '  python workflow.py "your prompt here"';
+        foreach (self::cronDocLines($facts, 'workflow.py') as $cl) {
+            $L[] = '  ' . $cl;
+        }
         if (!empty($facts['missing'])) {
             $L[] = '  # WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing']);
         }
@@ -3479,9 +3552,9 @@ TXT;
                         '# optional, only for the attachment formats you use:',
                         '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
              'usage' => 'python workflow.py "your prompt here"',
-             'extra' => !empty($facts['missing'])
+             'extra' => array_merge(!empty($facts['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]
-                 : [],
+                 : [], self::cronDocLines($facts, 'workflow.py')),
              'env_path' => '../../.env'], null, true);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
@@ -3496,11 +3569,13 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, time';
+        $L[] = 'import argparse, asyncio, re, sys, time';
+        $L[] = 'from datetime import datetime, timedelta';
+        $L[] = 'from typing import Callable';
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import EVENTS, WorkflowGraph, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3511,6 +3586,7 @@ TXT;
         $ofolder = $facts['workflow']->getOutputFolder();
         $L[] = 'OUTPUT_FOLDER = ' . (($ofolder ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
+        $L[] = self::defaultCronLine($facts);
         $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($facts['startDocuments'] ?: []);
         $L[] = '';
         $L[] = $sep;
@@ -3555,6 +3631,7 @@ TXT;
         }
         $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $L[] = '';
+        $L[] = LangGraphRuntime::cronBlock();
         $L[] = self::modularRunnerBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
@@ -3627,15 +3704,35 @@ async def run(user_prompt: str, session: str | None = None) -> str:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r} (agents in separate files)")
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
+    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
-    print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
-    graph = build_graph()
-    output = asyncio.run(graph.run(prompt))
-    print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
+    loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
+
+    def run_once() -> str:
+        """One run: its output printed and saved ('' when it ended without one). A code node
+        that took its error exit raises ErrorExitTaken once the output is saved."""
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        graph = build_graph()
+        output = loop.run_until_complete(graph.run(prompt))
+        if output:
+            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
+            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
+        graph.check_error_exits()
+        return output
+
+    match CronExpression.from_cli(ap, a.cron, DEFAULT_CRON):
+        case None:
+            try:
+                if not run_once():
+                    print("[info] The run ended without output (a branch ended).", flush=True)
+            except ErrorExitTaken as e:
+                sys.exit(f"[error] {e}")
+        case expr:
+            run_cron(expr, run_once, drains=any(ad["kind"] == "code" for ad in AGENTS.values()))
 PY;
     }
 
@@ -3921,17 +4018,37 @@ PY . $missingWarning . <<<'PY'
 
 
 if __name__ == "__main__":
-    prompt = " ".join(sys.argv[1:]) or DEFAULT_PROMPT or "Hello"
-    print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-    graph = build_graph()
-    output = asyncio.run(run(prompt, graph))
-    print("\n" + "=" * 60)
-    print("FINAL OUTPUT")
-    print("=" * 60)
-    print(output)
-    saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                        workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
+    ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r}")
+    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
+    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    a = ap.parse_args()
+    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
+    loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
+
+    def run_once() -> str:
+        """One run: its output printed and saved ('' when it ended without one). A code node
+        that took its error exit raises ErrorExitTaken once the output is saved."""
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+        graph = build_graph()
+        output = loop.run_until_complete(run(prompt, graph))
+        if output:
+            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output)
+            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
+        graph.check_error_exits()
+        return output
+
+    match CronExpression.from_cli(ap, a.cron, DEFAULT_CRON):
+        case None:
+            try:
+                if not run_once():
+                    print("[info] The run ended without output (a branch ended).")
+            except ErrorExitTaken as e:
+                sys.exit(f"[error] {e}")
+        case expr:
+            run_cron(expr, run_once, drains=bool(CODE_NODES))
 
 PY;
     }

@@ -649,6 +649,14 @@ PY;
 # ==============================================================
 
 
+class ErrorExitTaken(Exception):
+    """A run in which a code node took its `error` exit (WorkflowGraph.check_error_exits)."""
+
+    def __init__(self, nodes: list[str]):
+        self.nodes = nodes   # display names of the code nodes that took it
+        super().__init__(", ".join(f"code node {n!r}" for n in nodes) + " took its error exit")
+
+
 class WorkflowGraph:
     """The workflow as a LangGraph StateGraph built from its frozen EDGES / ORDER / NODE_TYPES.
 
@@ -664,6 +672,7 @@ class WorkflowGraph:
         self.edges, self.order, self.node_types = edges, order, node_types
         self.agents, self.run_node, self.start_documents = agents, run_node, start_documents
         self.started: float | None = None   # time.monotonic() when the run began (RUN SUMMARY)
+        self.routes: dict[str, str] = {}     # the last run's exit per code node / child per dispatcher
 
     def parents(self, nid: str) -> list[str]:
         """Get direct predecessor node IDs (nodes with edges INTO this node)."""
@@ -805,7 +814,183 @@ class WorkflowGraph:
         print("[info] Running...", flush=True)
         self.started = time.monotonic()
         result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
+        self.routes = result.get("routes", {})
         return result.get("final_output", "")
+
+    def check_error_exits(self) -> None:
+        """Raise ErrorExitTaken when a code node of the last run took its `error` exit: that
+        run failed, even when the error branch produced output (--cron reports it, never drains)."""
+        failed = [self.agents[nid]["display"] for nid, route in self.routes.items()
+                  if route == "error" and self.agents.get(nid, {}).get("kind") == "code"]
+        if failed:
+            raise ErrorExitTaken(failed)
+
+
+PY;
+    }
+
+    /**
+     * --cron: the autonomous loop of a compiled workflow (spec 2026-10-07 §7.2), emitted once per
+     * entry file. CronExpression is the twin of CronExpression.php (same fields, same "restricted
+     * day field" rule -- a day field is restricted unless it is exactly "*", so "*\/2" is -- same
+     * never-firing bound). run_cron follows ScheduleTick + CodeNodeStep::summarize: a run with
+     * output did work and, when the workflow has code nodes, drains (runs again at once) up to
+     * MAX_RUNS_PER_TICK runs; a run without output is quiet; an error -- an exception, or a code
+     * node's error exit (WorkflowGraph.check_error_exits) -- is always printed, never quiet,
+     * never drained, and the loop goes on. The entry file supplies re, time, argparse and
+     * datetime/timedelta.
+     */
+    public static function cronBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# CRON LOOP (--cron)
+# CronExpression has the server scheduler's rules (CronExpression.php): 5
+# fields (minute hour day-of-month month day-of-week), local time, *, n, a-b
+# and /step, comma-separated, day-of-week 0 and 7 = Sunday; when neither day
+# field is exactly "*", a day matches either one. run_cron() follows the
+# server's tick: a run with output did work -- in a workflow with code nodes
+# it runs again at once (the next email may be waiting), at most 20 runs per
+# tick; a run without output is quiet (one line); an error is always printed,
+# ends the tick, and the loop goes on.
+# ==============================================================
+
+
+class CronExpression:
+    """A 5-field cron expression, with the rules of the server's CronExpression.php."""
+
+    RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+    MAX_STEPS = 60000   # about 5 years of days plus hours: enough for a leap day, bounded for one that never fires
+    _ITEM = re.compile(r"(\*|[0-9]+(?:-[0-9]+)?)(?:/([0-9]+))?")
+
+    def __init__(self, expr: str):
+        parts = re.split(r"[ \t\n\v\f\r]+", expr.strip(" \t\n\r\0\v"))
+        if len(parts) != 5:
+            raise ValueError("cron needs 5 fields: minute hour day-of-month month day-of-week")
+        self.minutes, self.hours, self.days, self.months, self.weekdays = (
+            self._field(p, lo, hi) for p, (lo, hi) in zip(parts, self.RANGES))
+        if 7 in self.weekdays:
+            self.weekdays = (self.weekdays - {7}) | {0}
+        self.dom_star, self.dow_star = parts[2] == "*", parts[4] == "*"
+
+    @classmethod
+    def _field(cls, f: str, lo: int, hi: int) -> set[int]:
+        """The values one field allows: items "*", "n" or "a-b", each with an optional "/step"."""
+        out = set()
+        for item in f.split(","):
+            m = cls._ITEM.fullmatch(item)
+            if not m:
+                raise ValueError(f"bad cron field '{f}'")
+            base, step = m.group(1), int(m.group(2) or 1)
+            match base.split("-"):
+                case ["*"]:
+                    a, b = lo, hi
+                case [x, y]:
+                    a, b = int(x), int(y)
+                case [x]:
+                    a = b = int(x)
+                    if m.group(2) is not None:
+                        b = hi   # "5/10" = from 5, every 10
+            if a < lo or b > hi or a > b or step < 1:
+                raise ValueError(f"cron field '{f}' is out of range {lo}-{hi}")
+            out.update(range(a, b + 1, step))
+        return out
+
+    def _day_matches(self, t: datetime) -> bool:
+        if t.month not in self.months:
+            return False
+        dom, dow = t.day in self.days, t.isoweekday() % 7 in self.weekdays
+        return (dom and dow) if (self.dom_star or self.dow_star) else (dom or dow)
+
+    def next_after(self, after: datetime) -> datetime:
+        """The first minute strictly after `after` that matches."""
+        t = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        for _ in range(self.MAX_STEPS):
+            if not self._day_matches(t):
+                t = t.replace(hour=0, minute=0) + timedelta(days=1)
+                continue
+            if t.hour not in self.hours:
+                t = t.replace(minute=0) + timedelta(hours=1)
+                continue
+            for minute in range(t.minute, 60):
+                if minute in self.minutes:
+                    return t.replace(minute=minute)
+            t = t.replace(minute=0) + timedelta(hours=1)
+        raise ValueError("cron expression never fires")
+
+    @classmethod
+    def from_cli(cls, ap: argparse.ArgumentParser, value: str | None, default: str | None) -> str | None:
+        """--cron's expression: None without the flag, the baked DEFAULT_CRON for a bare --cron,
+        else the one given. A missing or invalid expression is a usage error (exit 2)."""
+        match value:
+            case None:
+                return None
+            case "":
+                if not default:
+                    ap.error("--cron needs an expression: this workflow has no cron schedule")
+                expr = default
+            case _:
+                expr = value
+        try:
+            cls(expr).next_after(datetime.now())
+        except ValueError as e:
+            ap.error(f"--cron {expr!r}: {e}")
+        return expr
+
+
+class CronLoop:
+    """The --cron loop: sleep until the next fire, run one tick, print one line, repeat."""
+
+    def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now):
+        self.expr, self.cron = expr, CronExpression(expr)
+        self.run_once, self.drains, self.max_runs = run_once, drains, max_runs
+        self.sleep, self.now = sleep, now
+
+    def tick(self) -> str:
+        """One tick's runs, as the line it prints: drain while runs do work (only when `drains`),
+        stop at a quiet run or after max_runs runs; an error ends the tick and is reported."""
+        worked = 0
+        try:
+            for _ in range(self.max_runs):
+                if not self.run_once():
+                    break
+                worked += 1
+                if not self.drains:
+                    break
+        except Exception as e:  # noqa: BLE001 -- one bad run must not stop the loop
+            return f"error after {worked} run(s) that did work: {type(e).__name__}: {e}"
+        return f"{worked} run(s) did work" if worked else "nothing to do"
+
+    def run(self, ticks: int | None = None) -> None:
+        """Tick on every fire until Ctrl-C (or `ticks` ticks, for tests)."""
+        due = self.cron.next_after(self.now())
+        print(f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
+        done = 0
+        try:
+            while ticks is None or done < ticks:
+                self.sleep(max(0.0, (due - self.now()).total_seconds()))
+                done += 1
+                print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
+                # The fire after this one -- or after now, when the runs overran the next fires.
+                due = self.cron.next_after(max(due, self.now()))
+        except KeyboardInterrupt:
+            print("\n[cron] stopped.", flush=True)
+
+
+def cron_next(expr: str, after: datetime) -> datetime:
+    """The first minute strictly after `after` that matches the 5-field cron `expr`."""
+    return CronExpression(expr).next_after(after)
+
+
+def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20, sleep=time.sleep,
+             now=datetime.now, ticks: int | None = None) -> None:
+    """Run the workflow on every fire of `expr` until Ctrl-C (or `ticks` ticks, for tests).
+
+    run_once() runs the workflow once and returns its output ('' = nothing to do). drains is
+    True when the workflow has code nodes: a run that did work then runs again at once, up to
+    max_runs runs per tick (the server's MAX_RUNS_PER_TICK).
+    """
+    CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now).run(ticks)
 
 
 PY;
