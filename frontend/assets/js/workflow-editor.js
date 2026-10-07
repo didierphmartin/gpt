@@ -18793,6 +18793,21 @@ Based on the analysis...
         sw?.classList.remove('hidden');
     }
 
+    /** GET /dispatch/providers → {default, providers} or null when it cannot be read. `fresh` skips the per-run cache. */
+    async _decisionList(fresh = false) {
+        if (!fresh && this._wfDecisionList !== undefined) return this._wfDecisionList;
+        let list = null;
+        try {
+            const resp = await fetch(`${this.apiBase}/dispatch/providers`, { headers: this.getAuthHeaders(), credentials: 'include' });
+            if (resp.ok) {
+                const j = await resp.json();
+                if (j && j.success !== false) list = { default: j.default ?? null, providers: j.providers || [] };
+            }
+        } catch (_) { /* unknown */ }
+        if (!fresh) this._wfDecisionList = list;
+        return list;
+    }
+
     _wireRoutingMode() {
         document.getElementById('agent-routing-mode')?.addEventListener('change', () => this._applyRoutingVisibility());
         document.getElementById('agent-min-confidence')?.addEventListener('input', (e) => {
