@@ -47,12 +47,21 @@ final class CodeNodeStepTest extends TestCase
 
     public function testQuietAndDrain(): void
     {
-        $codeOnly = [1 => ['type' => 'start'], 2 => ['type' => 'code']];
+        $codeOnly = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'exit' => 'idle', 'success' => true]];
         self::assertSame(['quiet' => true, 'drain' => false], CodeNodeStep::summarize($codeOnly));
         $work = $codeOnly + [3 => ['type' => 'agent'], 4 => ['type' => 'output']];
         self::assertSame(['quiet' => false, 'drain' => true], CodeNodeStep::summarize($work));
         $plain = [1 => ['type' => 'start'], 3 => ['type' => 'agent'], 4 => ['type' => 'output']];
         self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($plain));
+    }
+
+    public function testACodeNodeThatTookNoExitDidNotRun(): void
+    {
+        // A disabled code node: the generic sentinel, no exit taken. Neither quiet nor drain.
+        $disabled = [1 => ['type' => 'start'], 2 => ['type' => 'code', 'output' => 'disabled node', 'success' => true]];
+        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($disabled));
+        $disabledThenWork = $disabled + [3 => ['type' => 'agent'], 4 => ['type' => 'output']];
+        self::assertSame(['quiet' => false, 'drain' => false], CodeNodeStep::summarize($disabledThenWork));
     }
 
     public function testErrorExitIsNeverQuietAndDoesNotDrain(): void

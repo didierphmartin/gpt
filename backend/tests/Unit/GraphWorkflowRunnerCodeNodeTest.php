@@ -50,12 +50,12 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         return $env ?: (is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3');
     }
 
-    private function run_(string $code, array $exits, array $config = []): array
+    private function run_(string $code, array $exits, array $config = [], array $nodeConfig = []): array
     {
         $nodes = [
             ['id' => 1, 'node_type' => 'start', 'config' => []],
             ['id' => 2, 'node_type' => 'code', 'config' => ['name' => 'Poll', 'code' => $code, 'exits' => $exits,
-                'mcp_servers' => [], 'timeout_s' => 10]],
+                'mcp_servers' => [], 'timeout_s' => 10] + $nodeConfig],
             ['id' => 3, 'node_type' => 'output', 'config' => []],
         ];
         $edges = [
@@ -133,13 +133,28 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
     {
         $out = $this->run_("def run(input, call_tool):\n    raise ValueError('mailbox down')\n", ['work', 'idle']);
         self::assertFalse($out['success']);
-        self::assertEmpty($out['quiet'] ?? false);
+        self::assertArrayNotHasKey('quiet', $out, 'a failed run is never reported quiet');
+        self::assertArrayNotHasKey('drain', $out, 'a failed run never drains');
         self::assertStringContainsString('mailbox down', $out['error']);
         self::assertFalse($out['partial_outputs'][2]['success']);
         $rows = $this->rows();
         self::assertCount(1, $rows);
         self::assertSame('failed', $rows[0]['status']);
         self::assertStringContainsString('mailbox down', (string) $rows[0]['error_message']);
+    }
+
+    public function testADisabledCodeNodeNeitherDrainsNorGoesQuiet(): void
+    {
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'idle', 'output': 'x'}\n", ['work', 'idle'],
+            [], ['disabled' => true]);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertFalse($out['quiet']);
+        self::assertFalse($out['drain'], 'a disabled code node must not make the scheduler re-run the workflow');
+        self::assertArrayHasKey(3, $out['node_outputs'], 'the downstream Output ran');
+        $rows = $this->rows();
+        self::assertCount(1, $rows);
+        self::assertSame('completed', $rows[0]['status']);
+        self::assertCount(1, $this->runLogs());
     }
 
     public function testSwitchedOffCodeNodesFailTheRun(): void

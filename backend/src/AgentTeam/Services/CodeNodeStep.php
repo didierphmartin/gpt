@@ -52,21 +52,27 @@ final class CodeNodeStep
 
     /**
      * quiet: a code node ran, did not error, and no work node ran. drain: a code node ran, the run did
-     * real work, and nothing errored. An error exit or a failed code node is never quiet and never drains:
-     * errors are always recorded.
+     * real work, and nothing errored. A code node "ran" only when it took an exit: a disabled one (no
+     * exit) neither quiets nor drains the run. An error exit or a failed code node is never quiet and
+     * never drains: errors are always recorded.
      */
     public static function summarize(array $nodeOutputs): array
     {
         $types = [];
+        $codeRan = false;
         $errored = false;
         foreach ($nodeOutputs as $o) {
             $type = $o['type'] ?? '';
             $types[] = $type;
-            if ($type === 'code' && (($o['exit'] ?? null) === 'error' || ($o['success'] ?? true) === false)) {
+            if ($type !== 'code') {
+                continue;
+            }
+            if (($o['exit'] ?? null) === 'error' || ($o['success'] ?? true) === false) {
                 $errored = true;
+            } elseif (is_string($o['exit'] ?? null)) {
+                $codeRan = true;
             }
         }
-        $codeRan = in_array('code', $types, true);
         $worked = (bool) array_intersect($types, self::WORK_TYPES);
         return ['quiet' => $codeRan && !$errored && !$worked, 'drain' => $codeRan && !$errored && $worked];
     }
