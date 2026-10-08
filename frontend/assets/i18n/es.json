@@ -849,7 +849,8 @@
     "zoom": {
       "in": "Acercar",
       "out": "Alejar",
-      "reset": "Restablecer zoom"
+      "reset": "Restablecer zoom",
+      "selectHint": "Mayús+arrastrar: seleccionar · ⌘/Ctrl+clic: añadir"
     },
     "messages": {
       "saveFirst": "Por favor guarda el workflow primero",

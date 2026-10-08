@@ -849,7 +849,8 @@
     "zoom": {
       "in": "Zoom avant",
       "out": "Zoom arrière",
-      "reset": "Réinitialiser le zoom"
+      "reset": "Réinitialiser le zoom",
+      "selectHint": "Maj+glisser : sélectionner · ⌘/Ctrl+clic : ajouter"
     },
     "messages": {
       "saveFirst": "Veuillez d'abord enregistrer le workflow",

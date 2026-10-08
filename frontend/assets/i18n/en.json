@@ -849,7 +849,8 @@
     "zoom": {
       "in": "Zoom In",
       "out": "Zoom Out",
-      "reset": "Reset Zoom"
+      "reset": "Reset Zoom",
+      "selectHint": "Shift+drag: select · ⌘/Ctrl+click: add"
     },
     "messages": {
       "saveFirst": "Please save the workflow first",

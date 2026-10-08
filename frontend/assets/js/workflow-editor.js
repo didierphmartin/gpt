@@ -1130,6 +1130,7 @@ class WorkflowEditor {
             <span class="zoom-level" id="zoom-level">100%</span>
             <button class="zoom-btn" id="zoom-out-btn" title="${this.t('workflow.zoom.out')}">−</button>
             <button class="zoom-btn zoom-reset" id="zoom-reset-btn" title="${this.t('workflow.zoom.reset')}">⟲</button>
+            <span class="zoom-select-hint" style="margin-left:6px;font-size:11px;color:#9ca3af;white-space:nowrap;">${this.escapeHtml(this.t('workflow.zoom.selectHint'))}</span>
         `;
 
         // Add to container (the canvas parent)
@@ -2846,7 +2847,8 @@ class WorkflowEditor {
             const node = e.target.closest('.drawflow-node');
             const isConnection = e.target.closest('.connection') || e.target.tagName === 'path';
 
-            if (!node && !isConnection && !e.ctrlKey && !e.metaKey) {
+            // Not the click that ends a selection rectangle (it lands on the empty canvas too).
+            if (!node && !isConnection && !e.ctrlKey && !e.metaKey && !e.shiftKey && !this._bandJustEnded) {
                 this.clearNodeSelection();
             }
         });
@@ -2929,6 +2931,51 @@ class WorkflowEditor {
             initialPositions = {};
             lastMousePos = null;
         });
+
+        // Shift+drag on empty canvas draws a selection rectangle: every node it
+        // touches is selected (Cmd/Ctrl held too adds to the selection), and the
+        // drag above then moves them together. A plain drag still pans: the
+        // rectangle only starts with Shift, and stops Drawflow's pan for that drag.
+        let band = null;
+        this.container.addEventListener('mousedown', (e) => {
+            if (!e.shiftKey || e.button !== 0) return;
+            if (e.target.closest('.drawflow-node, .connection, .workflow-zoom-controls, .workflow-info-box, button, input, textarea, select')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            if (!e.ctrlKey && !e.metaKey) this.clearNodeSelection();
+            const el = document.createElement('div');
+            el.className = 'wf-select-band';
+            el.style.cssText = 'position:fixed;z-index:50;pointer-events:none;border:1px dashed #3b82f6;background:rgba(59,130,246,0.08);';
+            document.body.appendChild(el);
+            band = { el, x0: e.clientX, y0: e.clientY };
+            const draw = (x, y) => {
+                const l = Math.min(band.x0, x), t = Math.min(band.y0, y);
+                Object.assign(el.style, { left: l + 'px', top: t + 'px', width: Math.abs(x - band.x0) + 'px', height: Math.abs(y - band.y0) + 'px' });
+            };
+            draw(e.clientX, e.clientY);
+            const onMove = (ev) => draw(ev.clientX, ev.clientY);
+            const onUp = (ev) => {
+                document.removeEventListener('mousemove', onMove, true);
+                document.removeEventListener('mouseup', onUp, true);
+                const r = { left: Math.min(band.x0, ev.clientX), right: Math.max(band.x0, ev.clientX),
+                            top: Math.min(band.y0, ev.clientY), bottom: Math.max(band.y0, ev.clientY) };
+                el.remove();
+                band = null;
+                this._bandJustEnded = true;
+                setTimeout(() => { this._bandJustEnded = false; }, 0);
+                if (r.right - r.left < 4 && r.bottom - r.top < 4) return;   // a click, not a rectangle
+                this.container.querySelectorAll('.drawflow-node').forEach((node) => {
+                    const b = node.getBoundingClientRect();
+                    if (b.right < r.left || b.left > r.right || b.bottom < r.top || b.top > r.bottom) return;
+                    const id = node.id.replace('node-', '');
+                    this.selectedNodes.add(id);
+                    node.classList.add('multi-selected');
+                });
+            };
+            document.addEventListener('mousemove', onMove, true);
+            document.addEventListener('mouseup', onUp, true);
+        }, true);   // capture: ahead of Drawflow's pan
     }
 
     /**
@@ -11958,7 +12005,9 @@ class WorkflowEditor {
         );
         try {
             // Leaving the current workflow: flush its pending in-memory edits to the DB first.
-            await this._persistIfDirty();
+            // Not for the quiet reload a Save makes of what it just wrote: that reload runs
+            // INSIDE the save, and _persistIfDirty waits for the save in flight -- itself.
+            if (!quiet) await this._persistIfDirty();
             console.log('[WorkflowEditor] Loading workflow ID:', workflowId);
             // Add cache-busting parameter to prevent stale data
             const response = await fetch(`${this.apiBase}/workflows/${workflowId}?_=${Date.now()}`, {
