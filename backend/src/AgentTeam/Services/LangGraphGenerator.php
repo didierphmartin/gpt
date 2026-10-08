@@ -722,7 +722,8 @@ class LangGraphGenerator
             $safeName = 'workflow_' . $workflowId;
         }
 
-        $graph = $this->graphRepo->getGraph($workflowId);
+        // Only what Start reaches is the workflow: unconnected canvas nodes stay out.
+        $graph = WorkflowGraphAnalyzer::reachableGraph($this->graphRepo->getGraph($workflowId));
         // Route pure graph analysis through WorkflowGraphAnalyzer.
         // Returns: byId, order (Kahn topo), edges (normalised), startNodeId.
         $gdata   = WorkflowGraphAnalyzer::analyzeGraph($graph);

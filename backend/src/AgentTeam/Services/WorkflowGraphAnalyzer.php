@@ -33,6 +33,42 @@ class WorkflowGraphAnalyzer
     // --------------------------------------------------------------------------
 
     /**
+     * The part of a {nodes, edges} graph a run reaches: the start node(s) and
+     * everything downstream of them. A node left unconnected on the canvas
+     * (kept for later, or to compare a run with and without it) is not part of
+     * the workflow, so it is dropped with its edges -- every compile target
+     * reads the graph through here or analyze(). A graph with no start node is
+     * returned unchanged. Other keys of $graph are kept.
+     */
+    public static function reachableGraph(array $graph): array
+    {
+        $nodes = $graph['nodes'] ?? [];
+        $edges = $graph['edges'] ?? [];
+        $children = [];
+        $seen = [];
+        foreach ($edges as $e) {
+            $from = (string) ($e['from'] ?? $e['from_node_id'] ?? $e['source'] ?? '');
+            $to   = (string) ($e['to']   ?? $e['to_node_id']   ?? $e['target'] ?? '');
+            if ($from !== '' && $to !== '') $children[$from][] = $to;
+        }
+        $queue = [];
+        foreach ($nodes as $n) {
+            if (self::typeOf($n) === 'start') $queue[] = (string) ($n['id'] ?? '');
+        }
+        if ($queue === []) return $graph;
+        while ($queue) {
+            $id = array_shift($queue);
+            if ($id === '' || isset($seen[$id])) continue;
+            $seen[$id] = true;
+            foreach ($children[$id] ?? [] as $c) $queue[] = $c;
+        }
+        $graph['nodes'] = array_values(array_filter($nodes, fn($n) => isset($seen[(string) ($n['id'] ?? '')])));
+        $graph['edges'] = array_values(array_filter($edges, fn($e) =>
+            isset($seen[(string) ($e['from'] ?? $e['from_node_id'] ?? $e['source'] ?? '')])));
+        return $graph;
+    }
+
+    /**
      * Pure, DB-free analysis of a {nodes, edges} graph.
      *
      * Accepts all edge-field aliases used across the DSL:
@@ -379,7 +415,8 @@ class WorkflowGraphAnalyzer
         if (!$wf) {
             throw new \RuntimeException('Workflow not found');
         }
-        $graph = $this->graphRepo->getGraph($workflowId);
+        // Only what Start reaches is the workflow: unconnected canvas nodes stay out.
+        $graph = self::reachableGraph($this->graphRepo->getGraph($workflowId));
         $base  = self::analyzeGraph($graph);
 
         // Build the agents map — only agent/agent-template nodes.

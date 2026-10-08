@@ -95,4 +95,30 @@ class WorkflowGraphAnalyzerTest extends TestCase
     {
         $this->assertSame([], \AgentTeam\Services\WorkflowGraphAnalyzer::skillsFromConfig(['type' => 'agent']));
     }
+
+    /** A node left unconnected on the canvas is not part of the workflow. */
+    public function testReachableGraphDropsNodesStartDoesNotReach(): void
+    {
+        $graph = ['nodes' => [
+            ['id' => 1, 'node_type' => 'start'], ['id' => 2, 'node_type' => 'agent'],
+            ['id' => 3, 'node_type' => 'output'], ['id' => 9, 'node_type' => 'agent'],   // 9: kept on the canvas
+        ], 'edges' => [
+            ['from_node_id' => 1, 'to_node_id' => 2], ['from_node_id' => 2, 'to_node_id' => 3],
+            ['from_node_id' => 9, 'to_node_id' => 3],   // a stray arrow into the flow
+        ], 'workflow_id' => 64];
+
+        $out = WorkflowGraphAnalyzer::reachableGraph($graph);
+
+        $this->assertSame([1, 2, 3], array_column($out['nodes'], 'id'));
+        $this->assertCount(2, $out['edges'], 'the stray arrow goes with its node');
+        $this->assertSame(64, $out['workflow_id']);
+        // The trimmed graph analyses without the "disconnected node" error.
+        $this->assertSame(['1', '2', '3'], WorkflowGraphAnalyzer::analyzeGraph($out)['order']);
+    }
+
+    public function testReachableGraphWithoutAStartIsUnchanged(): void
+    {
+        $graph = ['nodes' => [['id' => 1, 'node_type' => 'agent']], 'edges' => []];
+        $this->assertSame($graph, WorkflowGraphAnalyzer::reachableGraph($graph));
+    }
 }

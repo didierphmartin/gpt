@@ -14012,6 +14012,7 @@ class WorkflowEditor {
         // `min(82vh, 860px)` for good, so the window could only ever get
         // smaller, never grow back with the viewport.
         let userSized = false;
+        let fitting = false;   // a viewport fit in progress: its resize is not saved
 
         const saved = readRect();
         if (saved && saved.width >= MIN_W && saved.height >= MIN_H) {
@@ -14093,7 +14094,7 @@ class WorkflowEditor {
             // Only a resize the user performed. The observer also fires for
             // layout settling and viewport changes, and persisting those is how
             // a transient small measurement became permanent.
-            ro = new ResizeObserver(() => { if (!drag && userSized) persist(); });
+            ro = new ResizeObserver(() => { if (!drag && !fitting && userSized) persist(); });
             ro.observe(modal);
         }
 
@@ -14109,8 +14110,14 @@ class WorkflowEditor {
             // killed the responsive height for good. CSS already handles the
             // untouched case: the rule is min(82vh, 860px) with vh maxima.
             if (!userSized) return;
-            const r = modal.getBoundingClientRect();
+            // Fit from the REMEMBERED rect, not the current one: a viewport that
+            // narrowed and widened again gives the user's size back. And the fit
+            // is not the user's choice -- the ResizeObserver must not save it
+            // (it did, and a narrow moment shrank the window for good).
+            const r = readRect() || modal.getBoundingClientRect();
+            fitting = true;
             apply(clamp({ left: r.left, top: r.top, width: r.width, height: r.height }));
+            requestAnimationFrame(() => requestAnimationFrame(() => { fitting = false; }));
         };
         window.addEventListener('resize', onViewportResize);
 
@@ -15677,11 +15684,25 @@ class WorkflowEditor {
         const done = new Set();
         const remaining = new Set();
 
+        // Only what Start reaches is the workflow. A node left unconnected on the
+        // canvas (kept for later, or to compare a run with and without it) has no
+        // upstream, so it would otherwise count as ready at once and run.
+        const reached = new Set();
+        const walk = ids.filter(id => this._wfNodeKind(id, nodes) === 'start');
+        while (walk.length) {
+            const id = String(walk.pop());
+            if (reached.has(id)) continue;
+            reached.add(id);
+            walk.push(...this._wfDownstreamIds(id, nodes));
+        }
+
         // Seed Start node(s) with the prompt; reset agent node UI.
         for (const id of ids) {
             const kind = this._wfNodeKind(id, nodes);
             if (kind === 'start') { this._wfOutputs[id] = userPrompt; done.add(id); }
-            else {
+            else if (!reached.has(String(id))) {
+                if (kind === 'agent' || kind === 'playbook' || kind === 'code') this.highlightNode(id, 'idle', id, 'agent');
+            } else {
                 remaining.add(id);
                 if (kind === 'agent' || kind === 'playbook' || kind === 'code') { this.nodeExecutionData[id] = {}; this.highlightNode(id, 'idle', id, 'agent'); }
             }
@@ -15689,7 +15710,8 @@ class WorkflowEditor {
 
         let guard = 0;
         while (remaining.size && guard++ < 100) {
-            const ready = [...remaining].filter(id => this._wfUpstreamIds(id, nodes).every(u => done.has(u)));
+            // Parents outside the workflow never run: only reached ones are waited for.
+            const ready = [...remaining].filter(id => this._wfUpstreamIds(id, nodes).filter(u => reached.has(String(u))).every(u => done.has(u)));
             if (!ready.length) break; // cycle or orphan — stop
             await Promise.allSettled(ready.map(async (id) => {
                 const node = { id, data: nodes[id].data || {} };

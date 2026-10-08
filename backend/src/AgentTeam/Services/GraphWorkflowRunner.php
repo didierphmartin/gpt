@@ -313,8 +313,10 @@ class GraphWorkflowRunner
                 'documents' => $startNode['config']['documents'] ?? []
             ];
 
-            // Get all nodes and edges for traversal
-            $graph = $this->graphRepository->getGraph($workflow->getId());
+            // Get all nodes and edges for traversal -- only what Start reaches: an
+            // unconnected canvas node is not part of the workflow, and as a parent of
+            // a reached node it would hold that node's merge wait forever.
+            $graph = WorkflowGraphAnalyzer::reachableGraph($this->graphRepository->getGraph($workflow->getId()));
             $nodes = $this->indexNodesById($graph['nodes']);
             $this->graphNodes = $nodes;
             $this->workflowName = (string)$workflow->getName();
