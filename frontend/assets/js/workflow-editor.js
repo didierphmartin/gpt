@@ -11695,6 +11695,9 @@ class WorkflowEditor {
      * dirty or when no workflow is loaded yet.
      */
     async _persistIfDirty() {
+        // A save already running carries these edits: wait for it rather than queue a
+        // second save, whose reload would land after whatever the caller opens next.
+        if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
         if (!this._workflowDirty) return;
         if (!this.currentWorkflowId) { this._workflowDirty = false; return; }
         try {
@@ -11973,8 +11976,9 @@ class WorkflowEditor {
             console.log('[WorkflowEditor] Graph data:', workflowData.graph);
             console.log('[WorkflowEditor] Has graph nodes:', workflowData.graph?.nodes?.length || 0);
 
-            // Clear current canvas FIRST (this resets currentWorkflowId)
-            this.clearWorkflow(true);
+            // Clear current canvas FIRST (this resets currentWorkflowId). The quiet reload
+            // that follows a Save is the SAME workflow: an open conversation survives it.
+            this.clearWorkflow(true, { keepSession: quiet && String(workflowId) === String(this.currentWorkflowId) });
 
             // Clear the node ID mapping for SSE highlighting
             this.dbNodeToDrawflowMap = {};
@@ -15288,6 +15292,14 @@ class WorkflowEditor {
      * continue) has no counterpart here and _openSwarmSession keeps it.
      */
     async _openBatchSession() {
+        // The pending-edit save can take seconds; a second click meanwhile must not
+        // open (and later lose) a second conversation.
+        if (this._openingBatchSession) return this._openingBatchSession;
+        this._openingBatchSession = this._openBatchSessionNow();
+        try { return await this._openingBatchSession; } finally { this._openingBatchSession = null; }
+    }
+
+    async _openBatchSessionNow() {
         await this._persistIfDirty();
         // Leaving a compiled conversation: its stream must stop driving this
         // browser before the interpreter's conversation opens (see
@@ -16206,7 +16218,7 @@ class WorkflowEditor {
      * Clear the workflow canvas
      * @param {boolean} skipConfirm - If true, don't ask for confirmation
      */
-    clearWorkflow(skipConfirm = false) {
+    clearWorkflow(skipConfirm = false, { keepSession = false } = {}) {
         // Check if there are any nodes
         const data = this.editor.export();
         const nodes = data.drawflow?.Home?.data || {};
@@ -16223,7 +16235,9 @@ class WorkflowEditor {
         // answer, and _saveWorkflowOutput names the file from the workflow it
         // belonged to. Cleared first, every session's answer lands as
         // wf-workflow_<timestamp>.md with no idea which workflow produced it.
-        this._swarmSessionEnd();
+        // keepSession: the reload after a Save of this same workflow, which must not
+        // close the conversation the user is in.
+        if (!keepSession) this._swarmSessionEnd();
         this.currentWorkflowId = null;
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
