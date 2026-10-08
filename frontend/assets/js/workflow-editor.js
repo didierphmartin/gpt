@@ -9056,7 +9056,8 @@ class WorkflowEditor {
             if (on) outlook.refresh();
         };
         (async () => {
-            servers = await this._loadMcpServersMeta();
+            // Fresh on every open: a server added in Settings since the page loaded must show here.
+            servers = await this._loadMcpServersMeta(true);
             renderServers();
             refreshOutlook();
         })();
