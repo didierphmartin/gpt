@@ -53,7 +53,22 @@
         return { set, drop: [...drop] };
     }
 
-    const api = { routingChoice, effectiveKey, minConfidence, envPlan };
+    /** Outcomes that mean "no branch fits", as opposed to a failure (no key, network). */
+    const NOT_CLASSIFIED = ['unclear', 'low_confidence'];
+
+    /**
+     * The branch a not-classified request goes to: settings.unclear_branch (a branch
+     * NAME), only for unclear/low_confidence and only while it is on the menu; else null.
+     * Twin of DispatchRouting::unclearBranch.
+     */
+    function unclearBranch(settings, targets, outcome) {
+        if (!NOT_CLASSIFIED.includes(outcome)) return null;
+        const name = String((settings || {}).unclear_branch ?? '').trim();
+        if (!name) return null;
+        return (targets || []).find((t) => t.name === name) || null;
+    }
+
+    const api = { routingChoice, effectiveKey, minConfidence, envPlan, unclearBranch, NOT_CLASSIFIED };
     root.DecisionRouting = api;
     root.__DECISION_ROUTING_TEST__ = api;
 })(typeof window !== 'undefined' && window ? window : globalThis);

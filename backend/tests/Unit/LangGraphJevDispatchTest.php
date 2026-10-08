@@ -322,7 +322,7 @@ class LangGraphJevDispatchTest extends TestCase
             @unlink($base . '_nodes.py');
             @unlink($base);
             $this->assertSame(0, $rc, "{$mode}: " . implode("\n", $out));
-            $this->assertSame('OK 25 cases', end($out), $mode);
+            $this->assertSame('OK 29 cases', end($out), $mode);
         }
     }
 

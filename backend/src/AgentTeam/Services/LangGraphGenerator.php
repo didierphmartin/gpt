@@ -1086,6 +1086,8 @@ class LangGraphGenerator
                 // Routing mode as GraphWorkflowRunner reads it: 'llm', a decision provider
                 // key, or '' (unset: the first candidate whose key is set, else the model).
                 'routing_mode' => trim((string) ($routingSettings['routing_mode'] ?? '')),
+                // The branch (by name) a not-classified request goes to (DispatchRouting::unclearBranch); '' = stop.
+                'unclear_branch' => trim((string) ($routingSettings['unclear_branch'] ?? '')),
                 // Same clamp as the interpreter: min_confidence, else jev_min_confidence, else the default.
                 'min_confidence' => is_numeric($f = $routingSettings['min_confidence'] ?? $routingSettings['jev_min_confidence'] ?? null)
                     ? max(0.0, min(1.0, (float) $f))
@@ -3588,6 +3590,7 @@ TXT;
             $L[] = $indent . '    "dispatch": ' . self::dispatchMenuLiteral($def['dispatch'] ?? []) . ',';
             $L[] = $indent . '    "decision_question": ' . PythonEmitHelpers::pyStr((string) ($def['decision_question'] ?? '')) . ',';
             $L[] = $indent . '    "routing_mode": ' . PythonEmitHelpers::pyStr((string) ($def['routing_mode'] ?? '')) . ',';
+            $L[] = $indent . '    "unclear_branch": ' . PythonEmitHelpers::pyStr((string) ($def['unclear_branch'] ?? '')) . ',';
             $L[] = $indent . '    "min_confidence": ' . self::pyFloor($def) . ',';
             $L[] = $indent . '    "decision": ' . self::decisionLiteral($def['decision'] ?? []) . ',';
         }

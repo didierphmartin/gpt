@@ -123,7 +123,7 @@ def answer(choice, conf):
             "usage": {"input_tokens": 12, "output_tokens": 1}}
 
 
-def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=None, decision=None, env=None):
+def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=None, decision=None, env=None, unclear_branch=""):
     """The cfg carries what the generator emits for a dispatcher: routing_mode is
     'llm' | a provider key | '' (unset: the first candidate whose key is set, else
     the model), min_confidence the floor and decision the compiled candidates (the
@@ -133,7 +133,7 @@ def run_dispatcher(ns, http, key="test-key", routing_mode="", floor=0.6, router=
     set_env(**(env if env is not None else {"JEV_API_KEY": key}))
     llm = FakeLLM()
     cfg = {"id": "2", "display": "techBuddy", "dispatch": TARGETS, "decision_question": QUESTION,
-           "routing_mode": routing_mode, "min_confidence": floor,
+           "routing_mode": routing_mode, "min_confidence": floor, "unclear_branch": unclear_branch,
            "decision": [candidate()] if decision is None else decision}
     made = []   # how many times the dispatcher asked for its chat model
 
@@ -364,7 +364,9 @@ def jev_not_routed(expect_reason, body=None, exc=None, key="test-key", floor=0.6
     assert llm_calls == 0, f"Jev mode never calls the model ({expect_reason})"
     assert run_dispatcher.llm_made == 0, f"Jev mode never builds the model ({expect_reason})"
     assert len(http.requests) == http_calls, http.requests
-    msg = f'Error: dispatcher "techBuddy" did not route the request (jev: {expect_reason}).'
+    # A request no branch fits ends as "Not classified"; a failure (no key, network) is an error.
+    prefix = "Not classified" if expect_reason.startswith(("unclear", "low_confidence")) else "Error"
+    msg = f'{prefix}: dispatcher "techBuddy" did not route the request (jev: {expect_reason}).'
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert branch_that_runs(out) is None, "no branch may run"
     assert "asking the model" not in log and "no model fallback" in log, log
@@ -406,7 +408,7 @@ def kind_jev_unrouted():
     urllib.request.urlopen = FakeHTTP(answer("unclear", 1.0))
     set_env(JEV_API_KEY="test-key")
     out, _ = run_dispatcher_node(ns, None, "jev", "Framed request")   # no model: Jev never builds one
-    msg = 'Error: dispatcher "techBuddy" did not route the request (jev: unclear: the request names no branch).'
+    msg = 'Not classified: dispatcher "techBuddy" did not route the request (jev: unclear: the request names no branch).'
     assert out == {"text": msg, "route": "", "notes": "", "status": "unrouted"}, out
     assert out["route"] not in {t["id"] for t in TARGETS}, "no branch may run"
 
@@ -447,6 +449,23 @@ case(hung)
 case(llm_mode)
 case(jev_routed)
 case(lambda: jev_not_routed("unclear: the request names no branch", body=answer("unclear", 1.0)))
+
+
+def jev_unclear_branch(body, unclear_branch, expect_route, key="test-key"):
+    """unclear / low_confidence go to the unclear branch (by name) while it is on the menu;
+    a failure never does."""
+    ns = namespace()
+    out, llm_calls, log = run_dispatcher(ns, FakeHTTP(body), key=key, routing_mode="jev", unclear_branch=unclear_branch)
+    assert llm_calls == 0, "the unclear branch is a route, not a model fallback"
+    assert out["route"] == expect_route, out
+    if expect_route:
+        assert out["status"] == "ok" and "sent to the unclear branch" in log, (out, log)
+
+
+case(lambda: jev_unclear_branch(answer("unclear", 0.7), "IT claims", "3"))
+case(lambda: jev_unclear_branch(answer("IT claims", 0.4), "IT claims", "3"))
+case(lambda: jev_unclear_branch(answer("unclear", 1.0), "Deleted branch", ""))
+case(lambda: jev_unclear_branch(answer("IT claims", 0.99), "IT claims", "", key=None))
 case(lambda: jev_not_routed("unavailable: no JEV_API_KEY", body=answer("IT claims", 0.99), key=None, http_calls=0))
 case(lambda: jev_not_routed("low_confidence: confidence 0.80 below floor 0.90", body=answer("IT claims", 0.8), floor=0.9))
 case(lambda: jev_not_routed("error: <urlopen error timed out>", exc=urllib.error.URLError("timed out")))

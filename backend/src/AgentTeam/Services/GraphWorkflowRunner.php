@@ -1111,15 +1111,32 @@ class GraphWorkflowRunner
                         'provider' => $routingMode,
                     ];
                 }
-                // No model fallback, no other provider: the run stops here and
-                // says why (the reason names a missing key or the plan, too).
                 $why = "{$out['outcome']}: {$out['reason']}";
-                $this->nodeLog($node, 'error', 'routing',
+                // Not classified (unclear / low confidence) goes to the branch the
+                // form names for it, when there is one: a normal route, not a fallback model.
+                $unclear = DispatchRouting::unclearBranch($routingSettings, $dispatchTargets, (string) $out['outcome']);
+                if ($unclear !== null) {
+                    $this->nodeLog($node, 'info', 'routing',
+                        "{$routingMode} did not classify ({$why}, confidence {$conf}) — sent to the unclear branch {$unclear['name']}");
+                    return [
+                        'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
+                        'output' => $task,
+                        'route' => ['id' => $unclear['id'], 'name' => $unclear['name'], 'notes' => ''],
+                        'success' => true,
+                        'usage' => $usage,
+                        'provider' => $routingMode,
+                    ];
+                }
+                // No model fallback, no other provider: the run stops here and
+                // says why (the reason names a missing key or the plan, too). A
+                // request no branch fits is a normal ending; anything else is an error.
+                $notClassified = in_array($out['outcome'], DispatchRouting::NOT_CLASSIFIED, true);
+                $this->nodeLog($node, $notClassified ? 'info' : 'error', 'routing',
                     "{$routingMode} did not route ({$why}, confidence {$conf}) — decision-model dispatcher, no model fallback");
                 return [
                     'type' => 'agent', 'agent_id' => $agentId, 'agent_name' => $agent->getName(), 'input' => $task,
-                    'output' => "Error: dispatcher \"{$agent->getName()}\" did not route the request ({$routingMode}: {$why}).",
-                    'success' => false,
+                    'output' => ($notClassified ? 'Not classified' : 'Error') . ": dispatcher \"{$agent->getName()}\" did not route the request ({$routingMode}: {$why}).",
+                    'success' => $notClassified,
                     'usage' => $usage,
                     'provider' => $routingMode,
                     // The run loop reads this: no branch may run (see haltUnrouted).

@@ -21,6 +21,26 @@ final class DispatchRouting
 {
     public const TOOL_NAME = 'route_to';
 
+    /** Decision outcomes that mean "no branch fits", as opposed to a failure (no key, network). */
+    public const NOT_CLASSIFIED = ['unclear', 'low_confidence'];
+
+    /**
+     * The branch a decision-model dispatcher sends what it could not classify to:
+     * settings.unclear_branch (a branch NAME -- node ids change on every save),
+     * only for an unclear/low_confidence outcome and only while that branch is
+     * still on the menu. null = no such branch: the run stops there.
+     */
+    public static function unclearBranch(array $settings, array $targets, string $outcome): ?array
+    {
+        if (!in_array($outcome, self::NOT_CLASSIFIED, true)) return null;
+        $name = trim((string) ($settings['unclear_branch'] ?? ''));
+        if ($name === '') return null;
+        foreach ($targets as $t) {
+            if ($t['name'] === $name) return $t;
+        }
+        return null;
+    }
+
     /** Downstream agent nodes of $nodeId as [['id' => int, 'name' => string], …] in edge order. */
     public static function targets(int $nodeId, array $edges, array $nodes): array
     {

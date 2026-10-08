@@ -6472,6 +6472,7 @@ class WorkflowEditor {
         this.scheduleEnabled = !!(payload.triggers?.schedule?.enabled);
 
         this.importGraphFromBackend({ nodes, edges });
+        this._refreshDecisionBadges().catch(() => {});
         this.restorePromptFromStartNode(nodes);
         this._applyOrchestrationToCanvas();
 
@@ -11849,11 +11850,13 @@ class WorkflowEditor {
             console.log('[WorkflowEditor] Workflows list refreshed, count:', this.workflows.length);
 
             // Reload the workflow to get proper node IDs from database
-            // This ensures nodes have db_node_id set for document operations
-            await this.loadWorkflow(savedWorkflowId);
+            // This ensures nodes have db_node_id set for document operations.
+            // Quiet: no "Loading workflow…" spinner for a reload the user did not ask for.
+            await this.loadWorkflow(savedWorkflowId, { quiet: true });
 
+            // Named: a save flushed while opening ANOTHER workflow must not read as that one's.
             this.showToast(
-                this.tWithFallback('workflow.messages.saved', 'Workflow saved successfully!'),
+                this.tWithFallback('workflow.messages.savedNamed', `Workflow "${this.currentWorkflowName}" saved`, { name: this.currentWorkflowName }),
                 'success'
             );
 
@@ -11942,11 +11945,12 @@ class WorkflowEditor {
     /**
      * Load a workflow from backend
      */
-    async loadWorkflow(workflowId) {
+    async loadWorkflow(workflowId, { quiet = false } = {}) {
         // Recalling a workflow takes seconds (dirty-flush + fetch + graph
         // render) — show the shared spinner overlay for the whole span so the
         // click has immediate feedback. Closed in finally, success or error.
-        const overlay = this._showGeneratingOverlay(
+        // quiet: the reload right after a Save, which the user did not ask for.
+        const overlay = quiet ? { close() {} } : this._showGeneratingOverlay(
             this.t('workflow.loadingWorkflow') || 'Loading workflow…'
         );
         try {
@@ -12047,6 +12051,7 @@ class WorkflowEditor {
                 // Playbook nodes read their text from the collection: load it once per workflow load.
                 if (workflowData.graph.nodes.some(n => (n.type || n.node_type || n.config?.type) === 'playbook')) await this._loadPlaybookCache();
                 this.importGraphFromBackend(workflowData.graph);
+                this._refreshDecisionBadges().catch(() => {});
 
                 // Restore prompt from start node if saved
                 this.restorePromptFromStartNode(workflowData.graph.nodes);
@@ -13084,28 +13089,37 @@ class WorkflowEditor {
                         || dispatchTargets.find(t => t.name === jr.target.name))
                     : null;
                 const nd = this.nodeExecutionData[dfId];
-                if (hit) {
+                // Not classified (unclear / low confidence) goes to the form's unclear branch, if any.
+                const unclear = hit ? null
+                    : window.DecisionRouting.unclearBranch(data.settings, dispatchTargets, jr.outcome);
+                if (unclear) {
+                    this._wfNodeLog(dfId, 'routing', `${who} did not classify (${jr.outcome}: ${jr.reason || 'no reason given'}, confidence ${conf}) — sent to the unclear branch ${unclear.name}`);
+                }
+                if (hit || unclear) {
+                    const chosen = hit || unclear;
                     // A decision model writes no notes: the child gets the dispatcher's input alone.
-                    const route = { id: hit.id, name: hit.name, notes: '' };
+                    const route = { id: chosen.id, name: chosen.name, notes: '' };
                     nd.output = inputText;
                     nd.success = true;
                     nd.executionTime = Date.now() - _startedAt;
                     nd.inputTokens = 0; nd.outputTokens = 0;
                     try { this.stopNodeTimer(dfId); } catch (_) {}
-                    this._wfNodeLog(dfId, 'routing', `${who} routed to ${hit.name} (confidence ${conf}, ${jr.ms ?? '?'}ms, no LLM turn)`);
+                    if (hit) this._wfNodeLog(dfId, 'routing', `${who} routed to ${hit.name} (confidence ${conf}, ${jr.ms ?? '?'}ms, no LLM turn)`);
                     this.highlightNode(dfId, 'completed', dfId, 'agent');
                     this.updateModalInputOutput(dfId);
                     return { success: true, output: nd.output, route, history: conversationHistory };
                 }
                 const why = `${jr.outcome}: ${jr.reason || 'no reason given'}`;
-                nd.output = `Error: dispatcher "${agentLabel}" did not route the request (${who}: ${why}).`;
-                nd.success = false;
+                // A request no branch fits is a normal ending; anything else (no key, network) is an error.
+                const notClassified = window.DecisionRouting.NOT_CLASSIFIED.includes(jr.outcome);
+                nd.output = `${notClassified ? 'Not classified' : 'Error'}: dispatcher "${agentLabel}" did not route the request (${who}: ${why}).`;
+                nd.success = notClassified;
                 nd.executionTime = Date.now() - _startedAt;
                 try { this.stopNodeTimer(dfId); } catch (_) {}
-                this._wfNodeLog(dfId, 'error', `${who} did not route (${why}, confidence ${conf}) — decision-model dispatcher, no model fallback`, 'error');
-                this.highlightNode(dfId, 'error', dfId, 'agent');
+                this._wfNodeLog(dfId, notClassified ? 'routing' : 'error', `${who} did not route (${why}, confidence ${conf}) — decision-model dispatcher, no model fallback`, notClassified ? undefined : 'error');
+                this.highlightNode(dfId, notClassified ? 'completed' : 'error', dfId, 'agent');
                 this.updateModalInputOutput(dfId);
-                return { success: false, output: nd.output, halt: true, history: conversationHistory };
+                return { success: notClassified, output: nd.output, halt: true, history: conversationHistory };
             }
         }
 
@@ -16360,6 +16374,7 @@ class WorkflowEditor {
             if (bodyElement) {
                 const providerDisplay = agent.provider || agent.llm_provider || '';
                 bodyElement.innerHTML = this._agentNodeBodyHtml({ provider: providerDisplay, agentId: agent.id });
+                this._refreshDecisionBadges(nodeId).catch(() => {});
             }
 
             // Change from template yellow to configured style
@@ -17671,6 +17686,22 @@ class WorkflowEditor {
                                         <input type="range" id="agent-min-confidence" class="w-full" min="0" max="1" step="0.05"
                                                value="${window.DecisionRouting.minConfidence(agent.settings)}">
                                         <p class="text-xs text-gray-500 mt-1">${tf('minConfidenceHint')}</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">${tf('unclearBranch')}</label>
+                                        <select id="agent-unclear-branch" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                            ${(() => {
+                                                // This dispatcher's branches on the canvas, by name (what the runners match on).
+                                                const nid = this.editingNodeId || this.pendingTemplateNodeId;
+                                                const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
+                                                const names = nid && nodes[nid] ? this._wfDispatchTargets(String(nid), nodes).map((t) => t.name) : [];
+                                                const saved = String(agent.settings?.unclear_branch || '');
+                                                const opt = (v, label) => `<option value="${this.escapeHtml(v)}" ${v === saved ? 'selected' : ''}>${this.escapeHtml(label)}</option>`;
+                                                return [opt('', tf('unclearStop')), ...names.map((n) => opt(n, n)),
+                                                    ...(saved && !names.includes(saved) ? [opt(saved, `${saved} ${tf('unclearGone')}`)] : [])].join('');
+                                            })()}
+                                        </select>
+                                        <p class="text-xs text-gray-500 mt-1">${tf('unclearBranchHint')}</p>
                                     </div>
                                     <div>
                                         <span id="agent-decision-key-label" class="block text-sm font-medium text-gray-700 mb-1"></span>
@@ -19088,6 +19119,37 @@ Based on the analysis...
     }
 
     /** GET /dispatch/providers → {default, providers} or null when it cannot be read. `fresh` skips the per-run cache. */
+    /**
+     * A dispatcher that routes with a decision model shows that provider on its
+     * card instead of its LLM: the LLM is never called for routing then. Same
+     * resolution as the run (DecisionRouting.effectiveKey); `nodeId` limits it
+     * to one node, otherwise every node on the canvas is repainted.
+     */
+    async _refreshDecisionBadges(nodeId = null) {
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
+        const ids = nodeId != null ? [String(nodeId)] : Object.keys(nodes);
+        if (!ids.some((id) => nodes[id]?.data?.agent_type === 'dispatcher')) return;
+        const list = await this._decisionList();
+        for (const id of ids) {
+            const data = nodes[id]?.data;
+            const body = document.querySelector(`#node-${id} .node-body`);
+            if (!data || !body || data.agent_type !== 'dispatcher') continue;
+            const key = window.DecisionRouting?.effectiveKey(data.settings?.routing_mode, list);
+            const provider = key ? (list?.providers || []).find((p) => p.key === key) : null;
+            const label = key ? (provider?.label || key) : (data.agent_provider || '');
+            let badge = body.querySelector('.node-provider');
+            if (!label) { badge?.remove(); continue; }
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'node-provider';
+                const edit = body.querySelector('.node-edit-btn');
+                if (edit) edit.before(badge); else body.appendChild(badge);
+            }
+            badge.textContent = label;
+            badge.title = key ? `Routes with the decision model ${label}` : '';
+        }
+    }
+
     async _decisionList(fresh = false) {
         if (!fresh && this._wfDecisionList !== undefined) return this._wfDecisionList;
         let list = null;
@@ -19877,7 +19939,9 @@ Based on the analysis...
                     ? { min_confidence: (() => {
                         const v = parseFloat(document.getElementById('agent-min-confidence')?.value);
                         return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.6;
-                    })() }
+                    })(),
+                        // The branch (by name) a not-classified request goes to; '' = stop.
+                        unclear_branch: document.getElementById('agent-unclear-branch')?.value || '' }
                     : {})
             },
             is_template: saveAsTemplate,
@@ -20295,6 +20359,7 @@ Based on the analysis...
         // Update body with proper agent node structure (timer, provider, edit button)
         if (bodyElement) {
             bodyElement.innerHTML = this._agentNodeBodyHtml({ provider: agentData.provider, agentId: newNodeData.agent_id || '' });
+            this._refreshDecisionBadges(nodeId).catch(() => {});
         }
 
         // Update the workflow-node div

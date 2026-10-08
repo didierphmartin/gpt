@@ -175,11 +175,11 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
         $out = $this->dispatch($runner, ['routing_mode' => 'jev']);
 
-        $this->assertFalse($out['success']);
+        $this->assertTrue($out['success'], 'no branch fits: a normal ending, not an error');
         $this->assertSame('jev', $out['provider']);
         $this->assertArrayNotHasKey('route', $out);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
+            'Not classified: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
             $out['output']
         );
         $this->assertSame(['input_tokens' => 342, 'output_tokens' => 39], $out['usage']);
@@ -190,11 +190,48 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Sales', 0.46)]);
         $out = $this->dispatch($runner, ['routing_mode' => 'jev']);
 
-        $this->assertFalse($out['success']);
+        $this->assertTrue($out['success'], 'no branch fits: a normal ending, not an error');
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (jev: low_confidence: confidence 0.46 below floor 0.60).',
+            'Not classified: dispatcher "Router" did not route the request (jev: low_confidence: confidence 0.46 below floor 0.60).',
             $out['output']
         );
+    }
+
+    public function testJevModeUnclearGoesToTheUnclearBranch(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 0.7)]);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev', 'unclear_branch' => 'Sales']);
+
+        $this->assertTrue($out['success']);
+        $this->assertSame('Sales', $out['route']['name']);
+        $this->assertArrayNotHasKey('halt_branches', $out);
+    }
+
+    public function testJevModeLowConfidenceGoesToTheUnclearBranch(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer('Billing', 0.46)]);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev', 'unclear_branch' => 'Sales']);
+
+        $this->assertSame('Sales', $out['route']['name']);
+    }
+
+    public function testAnUnclearBranchNoLongerOnTheMenuStops(): void
+    {
+        $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev', 'unclear_branch' => 'Deleted branch']);
+
+        $this->assertArrayNotHasKey('route', $out);
+        $this->assertTrue($out['halt_branches']);
+    }
+
+    public function testAMissingKeyIgnoresTheUnclearBranch(): void
+    {
+        $runner = $this->makeRunner('', '', $this->agentRunner(false), []);
+        $out = $this->dispatch($runner, ['routing_mode' => 'jev', 'unclear_branch' => 'Sales']);
+
+        $this->assertFalse($out['success']);
+        $this->assertArrayNotHasKey('route', $out);
+        $this->assertStringStartsWith('Error: ', $out['output']);
     }
 
     public function testJevModeWithoutAKeyStopsWithDidNotRouteAndZeroUsage(): void
@@ -261,12 +298,12 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         $runner = $this->makeRunner('', 'global-jev-key', $this->agentRunner(false), [self::jevAnswer(JevRouter::UNCLEAR, 1.0)]);
         $out = $this->dispatch($runner, []);
 
-        $this->assertFalse($out['success']);
+        $this->assertTrue($out['success'], 'no branch fits: a normal ending, not an error');
         $this->assertSame('jev', $out['provider']);
         $this->assertArrayNotHasKey('route', $out);
         $this->assertTrue($out['halt_branches']);
         $this->assertSame(
-            'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
+            'Not classified: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).',
             $out['output']
         );
     }
@@ -453,12 +490,14 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         } finally {
             $this->cleanRunsDir();
         }
-        $message = "Error: dispatcher \"Router\" did not route the request (jev: {$why}).";
+        // A request no branch fits ends normally; a missing key is an error.
+        $notClassified = str_starts_with($why, 'unclear');
+        $message = ($notClassified ? 'Not classified' : 'Error') . ": dispatcher \"Router\" did not route the request (jev: {$why}).";
 
         $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
         $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
         $this->assertArrayNotHasKey(4, $out['node_outputs'], 'nothing downstream of the branches runs');
-        $this->assertFalse($out['node_outputs'][1]['success']);
+        $this->assertSame($notClassified, $out['node_outputs'][1]['success']);
         $this->assertSame($message, $out['node_outputs'][1]['output']);
         $this->assertSame($message, $out['output'], 'the run ends with the did-not-route result');
     }
@@ -471,7 +510,7 @@ final class GraphWorkflowRunnerRoutingModeTest extends TestCase
         } finally {
             $this->cleanRunsDir();
         }
-        $message = 'Error: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).';
+        $message = 'Not classified: dispatcher "Router" did not route the request (jev: unclear: the request names no branch).';
 
         $this->assertArrayNotHasKey(2, $out['node_outputs'], 'Billing must not run');
         $this->assertArrayNotHasKey(3, $out['node_outputs'], 'Sales must not run');
