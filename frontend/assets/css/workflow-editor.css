@@ -1294,7 +1294,8 @@ svg.connection.wf-edge-chosen .main-path {
 
 /* Bottom buttons tucked into the output node (LangGraph + View JSON). */
 .workflow-node.output-node .node-langgraph,
-.workflow-node.output-node .node-view-json {
+.workflow-node.output-node .node-view-json,
+.workflow-node.start-node .node-start-schedule {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1331,7 +1332,8 @@ svg.connection.wf-edge-chosen .main-path {
 }
 
 .workflow-node.output-node .node-langgraph::after,
-.workflow-node.output-node .node-view-json::after {
+.workflow-node.output-node .node-view-json::after,
+.workflow-node.start-node .node-start-schedule::after {
     content: '›';
     position: absolute;
     right: 10px;
@@ -1346,7 +1348,8 @@ svg.connection.wf-edge-chosen .main-path {
 }
 
 .workflow-node.output-node .node-langgraph:hover,
-.workflow-node.output-node .node-view-json:hover {
+.workflow-node.output-node .node-view-json:hover,
+.workflow-node.start-node .node-start-schedule:hover {
     background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
     color: #ffffff;
     box-shadow: inset 4px 0 0 #1e40af, 0 2px 6px rgba(59, 130, 246, 0.35);
@@ -1354,12 +1357,14 @@ svg.connection.wf-edge-chosen .main-path {
 }
 
 .workflow-node.output-node .node-langgraph:hover .gen-label,
-.workflow-node.output-node .node-view-json:hover .gen-label {
+.workflow-node.output-node .node-view-json:hover .gen-label,
+.workflow-node.start-node .node-start-schedule:hover .gen-label {
     font-weight: 700;
 }
 
 .workflow-node.output-node .node-langgraph:hover::after,
-.workflow-node.output-node .node-view-json:hover::after {
+.workflow-node.output-node .node-view-json:hover::after,
+.workflow-node.start-node .node-start-schedule:hover::after {
     opacity: 1;
     transform: translateY(-50%) translateX(0);
 }

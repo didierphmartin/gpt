@@ -715,6 +715,7 @@ class WorkflowEditor {
                      data-workflow-id="${wf.id}" data-workflow-name="${this.escapeHtml(wf.name || '')}"
                      ${isActive ? 'style="background:#dbeafe; border-left:3px solid #3b82f6;"' : ''}>
                     <span class="opacity-60">${icon}</span>
+                    <span class="flex-shrink-0 text-[10px] text-gray-400 tabular-nums">#${wf.id}</span>
                     <span class="flex-1 truncate" title="${this.escapeHtml(wf.name)} (${badgeLabel}, ID: ${wf.id})">${this.escapeHtml(wf.name || 'Untitled')}</span>
                     <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded" style="${badgeStyle}">${badgeLabel}</span>
                     <button type="button"
@@ -2780,6 +2781,10 @@ class WorkflowEditor {
                     e.target.closest('.doc-remove')) {
                     return;
                 }
+                if (e.target.closest('.node-start-schedule')) {
+                    this.showPromptForm();
+                    return;
+                }
                 if (this._isSwarm()) {
                     // Start is the door into a swarm, not a prompt to fill in
                     // once: clicking it opens the conversation (spec §3b).
@@ -2960,6 +2965,7 @@ class WorkflowEditor {
             // The has-a-prompt styling means nothing here, so skip it; the
             // play button stays visible and relabeled to say what it opens.
             if (this._isSwarm()) {
+                node.querySelector('.node-start-schedule')?.remove();
                 node.classList.remove('has-prompt');
                 if (small) {
                     small.textContent = this.t('workflow.swarmSession.startHint');
@@ -2973,6 +2979,16 @@ class WorkflowEditor {
             }
 
             node.classList.toggle('has-prompt', !!hasPrompt);
+            // The node's way to the prompt/schedule form (the body click opens
+            // the conversation): an option row like the Output node's, created
+            // here so Start nodes built by any template get it.
+            if (!node.querySelector('.node-start-schedule')) {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'node-start-schedule';
+                row.innerHTML = `<span class="gen-label">⏱ ${this.escapeHtml(this.t('workflow.batchSession.configureLabel'))}</span>`;
+                node.querySelector('.node-body')?.after(row);
+            }
             if (small) {
                 small.textContent = this.t('workflow.batchSession.startHint');
                 small.style.color = hasPrompt ? '#2563eb' : '';
@@ -3892,6 +3908,7 @@ class WorkflowEditor {
         // _runLangGraphScript. ADK now runs as a compiled package (server +
         // conversation overlay), same as LangGraph's multi-file modes.
         this._showCompiledScrim(this.t('workflow.toolbar.compileAdk'), 'preparing');
+        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             this._hideCompiledScrim();
@@ -4246,6 +4263,7 @@ class WorkflowEditor {
         // _runLangGraphScript. MAF now runs as a compiled package (server +
         // conversation overlay), same as LangGraph's multi-file modes.
         this._showCompiledScrim(this.t('workflow.toolbar.compileMaf'), 'preparing');
+        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             this._hideCompiledScrim();
@@ -4604,6 +4622,7 @@ class WorkflowEditor {
         // _runLangGraphScript. NOOA now runs as a compiled package (server +
         // conversation overlay), same as LangGraph's multi-file modes.
         this._showCompiledScrim(this.t('workflow.toolbar.compileNooa'), 'preparing');
+        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             this._hideCompiledScrim();
@@ -5334,7 +5353,12 @@ class WorkflowEditor {
             const rel = `python/scripts/${data.root}/${f.path}`;
             const dirPath = rel.slice(0, rel.lastIndexOf('/'));
             const dir = await window.localFs.resolvePath(dirPath, { create: true });
-            if (!dir) throw new Error(`Could not create ${dirPath}`);
+            if (!dir) {
+                if (!(await window.localFs.getRootHandle())) {
+                    throw new Error('the local synergyAI folder is not accessible — allow folder access when Chrome asks, or re-pick it in Settings → Storage');
+                }
+                throw new Error(`Could not create ${dirPath}`);
+            }
             const fh = await dir.getFileHandle(f.path.slice(f.path.lastIndexOf('/') + 1), { create: true });
             const w = await fh.createWritable();
             await w.write(f.code);
@@ -5665,6 +5689,7 @@ class WorkflowEditor {
         // and none of it used to be on screen: showing the wait when the run
         // server starts was showing it near the END of the wait.
         this._showCompiledScrim(this.t('workflow.toolbar.compileLangGraph'), 'preparing');
+        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
         await this._persistIfDirty();  // flush deferred node edits to the DB before running
         if (!this.currentWorkflowId) {
             this._hideCompiledScrim();
