@@ -14875,6 +14875,8 @@ class WorkflowEditor {
             );
         }
         this._updateExitTags();
+        // A branch added, removed or renamed changes a dispatcher's catch-all marks.
+        this._refreshDecisionBadges().catch(() => {});
     }
 
     /**
@@ -17761,6 +17763,25 @@ class WorkflowEditor {
                                     </div>
                                 </div>
 
+                                <!-- Catch-all branch (decision-model dispatcher): picked from the connected
+                                     branches, any name. _applyRoutingVisibility() shows it. -->
+                                <div id="agent-catchall-block" class="hidden">
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">${tf('unclearBranch')}</label>
+                                        <select id="agent-unclear-branch" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                            ${(() => {
+                                                // This dispatcher's branches on the canvas, by name (what the runners match on).
+                                                const nid = this.editingNodeId || this.pendingTemplateNodeId;
+                                                const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
+                                                const names = nid && nodes[nid] ? this._wfDispatchTargets(String(nid), nodes).map((t) => t.name) : [];
+                                                const saved = String(agent.settings?.unclear_branch || '');
+                                                const opt = (v, label) => `<option value="${this.escapeHtml(v)}" ${v === saved ? 'selected' : ''}>${this.escapeHtml(label)}</option>`;
+                                                return [opt('', tf('unclearStop')), ...names.map((n) => opt(n, n)),
+                                                    ...(saved && !names.includes(saved) ? [opt(saved, `${saved} ${tf('unclearGone')}`)] : [])].join('');
+                                            })()}
+                                        </select>
+                                        <p class="text-xs text-gray-500 mt-1">${tf('unclearBranchHint')}</p>
+                                    </div>
+
                                 <!-- Description -->
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">${tf('description')}</label>
@@ -17778,22 +17799,6 @@ class WorkflowEditor {
                                         <input type="range" id="agent-min-confidence" class="w-full" min="0" max="1" step="0.05"
                                                value="${window.DecisionRouting.minConfidence(agent.settings)}">
                                         <p class="text-xs text-gray-500 mt-1">${tf('minConfidenceHint')}</p>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-1">${tf('unclearBranch')}</label>
-                                        <select id="agent-unclear-branch" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                                            ${(() => {
-                                                // This dispatcher's branches on the canvas, by name (what the runners match on).
-                                                const nid = this.editingNodeId || this.pendingTemplateNodeId;
-                                                const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
-                                                const names = nid && nodes[nid] ? this._wfDispatchTargets(String(nid), nodes).map((t) => t.name) : [];
-                                                const saved = String(agent.settings?.unclear_branch || '');
-                                                const opt = (v, label) => `<option value="${this.escapeHtml(v)}" ${v === saved ? 'selected' : ''}>${this.escapeHtml(label)}</option>`;
-                                                return [opt('', tf('unclearStop')), ...names.map((n) => opt(n, n)),
-                                                    ...(saved && !names.includes(saved) ? [opt(saved, `${saved} ${tf('unclearGone')}`)] : [])].join('');
-                                            })()}
-                                        </select>
-                                        <p class="text-xs text-gray-500 mt-1">${tf('unclearBranchHint')}</p>
                                     </div>
                                     <div>
                                         <span id="agent-decision-key-label" class="block text-sm font-medium text-gray-700 mb-1"></span>
@@ -19184,6 +19189,7 @@ Based on the analysis...
         document.getElementById('agent-provider-model-block')?.classList.toggle('hidden', decision);
         document.getElementById('agent-sampling-block')?.classList.toggle('hidden', decision);
         document.getElementById('agent-decision-block')?.classList.toggle('hidden', !decision);
+        document.getElementById('agent-catchall-block')?.classList.toggle('hidden', !decision);
         document.getElementById('agent-decision-description-hint')?.classList.toggle('hidden', !decision);
         document.getElementById('tab-system-prompt')?.classList.toggle('hidden', decision);
         const isPb = document.getElementById('agent-type-select')?.value === 'playbook';
@@ -19220,7 +19226,10 @@ Based on the analysis...
     async _refreshDecisionBadges(nodeId = null) {
         const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
         const ids = nodeId != null ? [String(nodeId)] : Object.keys(nodes);
-        if (!ids.some((id) => nodes[id]?.data?.agent_type === 'dispatcher')) return;
+        if (!Object.values(nodes).some((n) => n?.data?.agent_type === 'dispatcher')) {
+            this.container?.querySelectorAll('.wf-catchall-tag, .wf-catchall-warn').forEach((el) => el.remove());
+            return;
+        }
         const list = await this._decisionList();
         for (const id of ids) {
             const data = nodes[id]?.data;
@@ -19239,6 +19248,46 @@ Based on the analysis...
             }
             badge.textContent = label;
             badge.title = key ? `Routes with the decision model ${label}` : '';
+        }
+        this._paintCatchAll(nodes, list);
+    }
+
+    /**
+     * The catch-all, visible on the canvas: a "catch-all" tag on the branch a
+     * decision-model dispatcher sends what it cannot classify to, and a warning
+     * on such a dispatcher that has none (unclassified messages stop there).
+     * Whole-canvas pass: a branch can be renamed, rewired or deleted at any time.
+     * Both marks hang off .drawflow-node (.workflow-node clips its overflow).
+     */
+    _paintCatchAll(nodes, list) {
+        if (!this.container) return;
+        this.container.querySelectorAll('.wf-catchall-tag, .wf-catchall-warn').forEach((el) => el.remove());
+        const tag = (id, cls, text, title, css) => {
+            const host = this.container.querySelector(`#node-${id}`);
+            if (!host) return;
+            const el = document.createElement('span');
+            el.className = cls;
+            el.textContent = text;
+            el.title = title;
+            el.style.cssText = 'position:absolute;z-index:3;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;white-space:nowrap;pointer-events:none;' + css;
+            host.appendChild(el);
+        };
+        for (const [id, n] of Object.entries(nodes)) {
+            const data = n?.data;
+            if (data?.agent_type !== 'dispatcher') continue;
+            if (!window.DecisionRouting?.effectiveKey(data.settings?.routing_mode, list)) continue;
+            const targets = this._wfDispatchTargets(id, nodes);
+            if (!targets.length) continue;
+            const chosen = window.DecisionRouting.unclearBranch(data.settings, targets, 'unclear');
+            if (chosen) {
+                tag(chosen.id, 'wf-catchall-tag', this.t('workflow.agentForm.catchAllTag'),
+                    this.t('workflow.agentForm.catchAllTagTitle', { dispatcher: data.agent_name || '' }),
+                    'top:-11px;left:10px;background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd;');
+            } else {
+                tag(id, 'wf-catchall-warn', this.t('workflow.agentForm.catchAllMissing'),
+                    this.t('workflow.agentForm.catchAllMissingTitle'),
+                    'bottom:-11px;left:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;');
+            }
         }
     }
 
