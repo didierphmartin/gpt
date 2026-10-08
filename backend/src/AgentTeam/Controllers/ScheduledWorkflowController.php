@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AgentTeam\Controllers;
 
+use AgentTeam\Services\CronExpression;
 use AgentTeam\Services\ScheduledWorkflowService;
 use AgentTeam\Services\WorkflowRepository;
 use PDO;
@@ -107,13 +108,15 @@ class ScheduledWorkflowController
         }
 
         // Validate repeat_type if provided
-        $validRepeatTypes = ['none', 'hourly', 'daily', 'weekly', 'monthly'];
-        if (!empty($body['repeat_type']) && !in_array($body['repeat_type'], $validRepeatTypes)) {
+        if (!empty($body['repeat_type']) && !in_array($body['repeat_type'], ScheduledWorkflowService::REPEAT_TYPES, true)) {
             return [
                 'success' => false,
-                'error' => 'Invalid repeat type. Must be one of: ' . implode(', ', $validRepeatTypes),
+                'error' => 'Invalid repeat type. Must be one of: ' . implode(', ', ScheduledWorkflowService::REPEAT_TYPES),
                 'status_code' => 400
             ];
+        }
+        if (($body['repeat_type'] ?? '') === 'cron' && !CronExpression::isValid(trim((string) ($body['cron'] ?? '')))) {
+            return ['success' => false, 'error' => 'Invalid cron expression', 'status_code' => 400];
         }
 
         try {
@@ -123,7 +126,8 @@ class ScheduledWorkflowController
                 'input_prompt' => $body['input_prompt'] ?? null,
                 'scheduled_time' => $body['scheduled_time'],
                 'repeat_type' => $body['repeat_type'] ?? 'none',
-                'repeat_interval' => (int) ($body['repeat_interval'] ?? 1)
+                'repeat_interval' => (int) ($body['repeat_interval'] ?? 1),
+                'cron' => $body['cron'] ?? null,
             ]);
 
             return [
@@ -203,13 +207,22 @@ class ScheduledWorkflowController
 
         // Validate repeat_type if provided
         if (!empty($body['repeat_type'])) {
-            $validRepeatTypes = ['none', 'hourly', 'daily', 'weekly', 'monthly'];
-            if (!in_array($body['repeat_type'], $validRepeatTypes)) {
+            if (!in_array($body['repeat_type'], ScheduledWorkflowService::REPEAT_TYPES, true)) {
                 return [
                     'success' => false,
                     'error' => 'Invalid repeat type',
                     'status_code' => 400
                 ];
+            }
+        }
+
+        // Effective cron after this update: a cron schedule must carry a valid, ever-firing expression.
+        if (($body['repeat_type'] ?? null) === 'cron' || array_key_exists('cron', $body)) {
+            $existing = $this->scheduleService->findById($id);
+            $effType = $body['repeat_type'] ?? ($existing['repeat_type'] ?? 'none');
+            $effCron = trim((string) ($body['cron'] ?? $existing['cron'] ?? ''));
+            if ($effType === 'cron' && !CronExpression::isValid($effCron)) {
+                return ['success' => false, 'error' => 'Invalid cron expression', 'status_code' => 400];
             }
         }
 

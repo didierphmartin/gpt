@@ -196,5 +196,41 @@ class ErrorsAndLimits(unittest.TestCase):
         self.assertNotIn("A", results[1]["stdout"])
 
 
+class PollOutlookTemplate(unittest.TestCase):
+    """The shipped template, read from code-node.js, under a fake call_tool."""
+
+    @classmethod
+    def setUpClass(cls):
+        import re
+        js = (Path(__file__).resolve().parents[2] / "js" / "code-node.js").read_text()
+        block = js[js.index("poll_outlook:"):]
+        lines = re.findall(r"^\s*'(.*)',$", block[:block.index("].join")], re.M)
+        cls.source = "\n".join(l.replace("\\'", "'") for l in lines) + "\n"
+
+    def run_with(self, poll_result):
+        calls = []
+
+        def transport(server, tool, args):
+            calls.append(tool)
+            return ok_result(poll_result)
+        res = run(self.source, input="", exits=("new_mail", "no_mail", "error"), servers=("outlook",), transport=transport)
+        return res, calls
+
+    def test_new_mail_passes_metadata_only_and_never_opens_attachments(self):
+        mail = {"id": "m1", "subject": "Invoice", "attachments": [{"id": "a1", "name": "x.pdf", "content_type": "application/pdf", "size": 9}]}
+        res, calls = self.run_with({"mail": mail})
+        self.assertEqual(res["route"], "new_mail")
+        self.assertEqual(json.loads(res["output_text"]), mail)
+        self.assertEqual(calls, ["poll_new_mail"])
+
+    def test_no_mail_and_error(self):
+        self.assertEqual(self.run_with({"mail": None})[0]["route"], "no_mail")
+        for code in ("not_connected", "reconnect_needed", "network_error", "throttled"):
+            with self.subTest(code=code):
+                res, calls = self.run_with({"error": code, "message": "m"})
+                self.assertEqual(res["route"], "error")
+                self.assertEqual(calls, ["poll_new_mail"])
+
+
 if __name__ == "__main__":
     unittest.main()

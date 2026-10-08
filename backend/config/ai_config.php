@@ -170,6 +170,12 @@ return [
         'timeout_minutes' => 30, // Maximum execution time per workflow
     ],
 
+    'code_nodes' => [
+        // Run workflow code nodes on this server (scheduled/server runs). 0 switches it off.
+        'server_side' => ($_ENV['CODE_NODES_SERVER_SIDE'] ?? '1') !== '0',
+        'python' => $_ENV['CODE_NODE_PYTHON'] ?? 'python3',   // needs Python 3.10+
+    ],
+
     // Storage Configuration (for file attachments, workflow outputs, etc.)
     // User settings in database override these defaults
     'storage' => [

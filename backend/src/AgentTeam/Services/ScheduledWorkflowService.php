@@ -15,11 +15,46 @@ use DateInterval;
  */
 class ScheduledWorkflowService
 {
-    private PDO $db;
+    public const REPEAT_TYPES = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron'];
+    /** A run 'running' for longer than this is treated as crashed and may be claimed again. */
+    public const STALE_RUNNING_MINUTES = 60;
 
-    public function __construct(PDO $db)
+    private PDO $db;
+    private \Closure $now;
+
+    /**
+     * @param \Closure|null $now returns the current server time as a DateTimeImmutable. The default
+     *                           reads the DB connection's NOW(), so "server time" matches the NOW()
+     *                           used elsewhere in this service (PHP CLI may be in another timezone).
+     */
+    public function __construct(PDO $db, ?\Closure $now = null)
     {
         $this->db = $db;
+        $this->now = $now ?? fn() => new \DateTimeImmutable((string) $this->db->query('SELECT NOW()')->fetchColumn());
+    }
+
+    private function now(): \DateTimeImmutable
+    {
+        return ($this->now)();
+    }
+
+    private function stamp(?string $modify = null): string
+    {
+        $t = $this->now();
+        return ($modify ? $t->modify($modify) : $t)->format('Y-m-d H:i:s');
+    }
+
+    /** One clock read as [now, stale-threshold] strings, so a statement sees a single instant. */
+    private function nowAndStale(): array
+    {
+        $t = $this->now();
+        return [$t->format('Y-m-d H:i:s'),
+            $t->modify('-' . self::STALE_RUNNING_MINUTES . ' minutes')->format('Y-m-d H:i:s')];
+    }
+
+    private function nextCronRun(string $cron): string
+    {
+        return (new CronExpression($cron))->nextAfter($this->now())->format('Y-m-d H:i:s');
     }
 
     /**
@@ -27,28 +62,33 @@ class ScheduledWorkflowService
      */
     public function create(array $data): array
     {
+        $repeatType = $data['repeat_type'] ?? 'none';
+        $cron = $repeatType === 'cron' ? trim((string) ($data['cron'] ?? '')) : null;
+        if ($repeatType === 'cron' && !CronExpression::isValid($cron)) {
+            throw new \InvalidArgumentException('Invalid cron expression');
+        }
+        $scheduledTime = $data['scheduled_time'] ?? $this->stamp();
+        // A cron schedule first fires on its next cron minute; others at the scheduled time.
+        $nextRun = $cron !== null ? $this->nextCronRun($cron) : $scheduledTime;
+
         $stmt = $this->db->prepare("
             INSERT INTO scheduled_workflows
-            (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, next_run, created_at)
+            (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, cron, next_run, created_at)
             VALUES
-            (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :next_run, NOW())
+            (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :cron, :next_run, NOW())
         ");
-
-        $scheduledTime = $data['scheduled_time'];
-        $nextRun = $scheduledTime; // First run is the scheduled time
-
         $stmt->execute([
             'user_id' => $data['user_id'],
             'workflow_id' => $data['workflow_id'],
             'input_prompt' => $data['input_prompt'] ?? null,
             'scheduled_time' => $scheduledTime,
-            'repeat_type' => $data['repeat_type'] ?? 'none',
+            'repeat_type' => $repeatType,
             'repeat_interval' => $data['repeat_interval'] ?? 1,
-            'next_run' => $nextRun
+            'cron' => $cron,
+            'next_run' => $nextRun,
         ]);
 
-        $id = (int) $this->db->lastInsertId();
-        return $this->findById($id);
+        return $this->findById((int) $this->db->lastInsertId());
     }
 
     /**
@@ -85,6 +125,22 @@ class ScheduledWorkflowService
         if (isset($data['repeat_interval'])) {
             $fields[] = 'repeat_interval = :repeat_interval';
             $params['repeat_interval'] = $data['repeat_interval'];
+        }
+
+        $repeatType = $data['repeat_type'] ?? $schedule['repeat_type'];
+        if (array_key_exists('cron', $data) || $repeatType === 'cron') {
+            $cron = $repeatType === 'cron' ? trim((string) ($data['cron'] ?? $schedule['cron'] ?? '')) : null;
+            if ($repeatType === 'cron' && !CronExpression::isValid($cron)) {
+                throw new \InvalidArgumentException('Invalid cron expression');
+            }
+            $fields[] = 'cron = :cron';
+            $params['cron'] = $cron;
+            if ($cron !== null) {
+                // The cron decides the next run; replace any scheduled_time-derived next_run.
+                $fields = array_values(array_filter($fields, fn($f) => $f !== 'next_run = :next_run'));
+                $fields[] = 'next_run = :next_run';
+                $params['next_run'] = $this->nextCronRun($cron);
+            }
         }
 
         if (isset($data['status'])) {
@@ -164,9 +220,7 @@ class ScheduledWorkflowService
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    /**
-     * Get all due schedules (ready to execute)
-     */
+    /** Due schedules: pending and due, or 'running' for longer than STALE_RUNNING_MINUTES (a crashed run). */
     public function getDueSchedules(): array
     {
         $stmt = $this->db->prepare("
@@ -174,26 +228,42 @@ class ScheduledWorkflowService
             FROM scheduled_workflows sw
             LEFT JOIN agent_workflows w ON sw.workflow_id = w.id
             LEFT JOIN users u ON sw.user_id = u.id
-            WHERE sw.status = 'pending'
-              AND sw.next_run <= NOW()
+            WHERE (sw.status = 'pending' AND sw.next_run <= :now)
+               OR (sw.status = 'running' AND (sw.running_since IS NULL OR sw.running_since < :stale))
             ORDER BY sw.next_run ASC
             LIMIT 50
         ");
-        $stmt->execute();
+        [$now, $stale] = $this->nowAndStale();
+        $stmt->execute(['now' => $now, 'stale' => $stale]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
-     * Mark a schedule as running
+     * Take a due schedule for this tick. Atomic: of two overlapping ticks, only one gets true.
+     * A 'running' row older than STALE_RUNNING_MINUTES can be taken again.
      */
-    public function markRunning(int $id): void
+    public function claim(int $id): bool
     {
         $stmt = $this->db->prepare("
             UPDATE scheduled_workflows
-            SET status = 'running'
+            SET status = 'running', running_since = :now
             WHERE id = :id
+              AND ((status = 'pending' AND next_run <= :due)
+                   OR (status = 'running' AND (running_since IS NULL OR running_since < :stale)))
         ");
-        $stmt->execute(['id' => $id]);
+        [$now, $stale] = $this->nowAndStale();
+        $stmt->execute(['id' => $id, 'now' => $now, 'due' => $now, 'stale' => $stale]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Keep a claimed schedule's run fresh: a tick draining it for longer than STALE_RUNNING_MINUTES
+     * must not have it reclaimed by another tick. Only a running schedule is touched.
+     */
+    public function touchRunning(int $id): void
+    {
+        $stmt = $this->db->prepare("UPDATE scheduled_workflows SET running_since = :now WHERE id = :id AND status = 'running'");
+        $stmt->execute(['id' => $id, 'now' => $this->now()->format('Y-m-d H:i:s')]);
     }
 
     /**
@@ -213,16 +283,16 @@ class ScheduledWorkflowService
             // One-time schedule - mark as completed
             $stmt = $this->db->prepare("
                 UPDATE scheduled_workflows
-                SET status = 'completed', last_run = NOW()
+                SET status = 'completed', last_run = NOW(), running_since = NULL
                 WHERE id = :id
             ");
             $stmt->execute(['id' => $id]);
         } else {
             // Recurring - calculate next run and reset to pending
-            $nextRun = $this->calculateNextRun($schedule['next_run'], $repeatType, $repeatInterval);
+            $nextRun = $this->calculateNextRun($schedule['next_run'], $repeatType, $repeatInterval, $schedule['cron'] ?? null);
             $stmt = $this->db->prepare("
                 UPDATE scheduled_workflows
-                SET status = 'pending', last_run = NOW(), next_run = :next_run
+                SET status = 'pending', last_run = NOW(), running_since = NULL, next_run = :next_run
                 WHERE id = :id
             ");
             $stmt->execute(['id' => $id, 'next_run' => $nextRun]);
@@ -245,17 +315,17 @@ class ScheduledWorkflowService
             // One-time - mark as failed permanently
             $stmt = $this->db->prepare("
                 UPDATE scheduled_workflows
-                SET status = 'failed', error_message = :error, last_run = NOW()
+                SET status = 'failed', error_message = :error, last_run = NOW(), running_since = NULL
                 WHERE id = :id
             ");
             $stmt->execute(['id' => $id, 'error' => $errorMessage]);
         } else {
             // Recurring - reset to pending for next attempt, but log the error
             $repeatInterval = (int) $schedule['repeat_interval'];
-            $nextRun = $this->calculateNextRun($schedule['next_run'], $repeatType, $repeatInterval);
+            $nextRun = $this->calculateNextRun($schedule['next_run'], $repeatType, $repeatInterval, $schedule['cron'] ?? null);
             $stmt = $this->db->prepare("
                 UPDATE scheduled_workflows
-                SET status = 'pending', error_message = :error, last_run = NOW(), next_run = :next_run
+                SET status = 'pending', error_message = :error, last_run = NOW(), running_since = NULL, next_run = :next_run
                 WHERE id = :id
             ");
             $stmt->execute(['id' => $id, 'error' => $errorMessage, 'next_run' => $nextRun]);
@@ -265,8 +335,12 @@ class ScheduledWorkflowService
     /**
      * Calculate the next run time based on repeat settings
      */
-    private function calculateNextRun(string $currentRun, string $repeatType, int $interval): string
+    private function calculateNextRun(string $currentRun, string $repeatType, int $interval, ?string $cron = null): string
     {
+        if ($repeatType === 'cron') {
+            // From now, not from the last next_run: a late tick must not replay missed minutes.
+            return $this->nextCronRun((string) $cron);
+        }
         $date = new DateTime($currentRun);
 
         switch ($repeatType) {

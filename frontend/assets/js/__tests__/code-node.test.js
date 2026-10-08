@@ -172,4 +172,44 @@ assert.strictEqual(CN.exitsLabel(['job', 'no_job']), '1:job  2:no_job');
 assert.deepStrictEqual(CN.parseExits(''), ['next']);
 assert.deepStrictEqual(CN.parseExits('  ,  '), ['next']);
 assert.deepStrictEqual(CN.parseExits('job, no_job ,error'), ['job', 'no_job', 'error']);
+// Poll Outlook template (spec 2026-10-07 §5): three exits, the outlook server, attachments never fetched.
+const po = CN.TEMPLATES.poll_outlook;
+assert.deepStrictEqual(po.exits, ['new_mail', 'no_mail', 'error']);
+assert.deepStrictEqual(po.servers, ['outlook']);
+assert.ok(po.code.includes('poll_new_mail'));
+assert.ok(!po.code.includes('get_attachment'), 'the template must never open attachments');
+assert.strictEqual(CN.validateConfig({ code: po.code, exits: po.exits, mcp_servers: ['Outlook'], timeout_s: 30 }).length, 0);
+
+const rewritten = CN.outlookArgs(po.code, { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+assert.ok(rewritten.includes('"folder": "Invoices"'));
+assert.ok(rewritten.includes('"from": "billing@acme.com"'));
+assert.ok(rewritten.includes('"has_attachments": True'));
+assert.ok(rewritten.includes('poll_new_mail'));
+assert.strictEqual(CN.outlookArgs(rewritten, { folder: 'Inbox' }), po.code, 'rewriting back to the defaults restores the template');
+assert.strictEqual(CN.outlookArgs('def run(input, call_tool):\n    return 1\n', { folder: 'X' }), null, 'hand-edited code without the dict is left alone');
+// the form reads the filters back from the code (reopening the node), null when the dict is gone
+assert.deepStrictEqual(CN.readOutlookArgs(rewritten), { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+assert.deepStrictEqual(CN.readOutlookArgs(po.code), { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false });
+assert.deepStrictEqual(CN.readOutlookArgs(CN.outlookArgs(po.code, { from: 'a "q" \\ b' })).from, 'a "q" \\ b');
+assert.strictEqual(CN.readOutlookArgs('def run(input, call_tool):\n    return 1\n'), null);
+// hand-edited filters (spec §5: the Python stays freely editable): the form leaves them alone
+const extraKey = po.code.replace('"has_attachments": False,', '"has_attachments": False,\n        "top": 5,');
+assert.strictEqual(CN.outlookArgs(extraKey, { folder: 'X' }), null, 'an extra key: code unchanged');
+assert.strictEqual(CN.readOutlookArgs(extraKey), null);
+const nonLiteral = po.code.replace('"from": "",', '"from": sender,');
+assert.strictEqual(CN.outlookArgs(nonLiteral, { folder: 'X' }), null, 'a non-literal value: code unchanged');
+assert.strictEqual(CN.readOutlookArgs(nonLiteral), null);
+const missingKey = po.code.replace('        "subject_contains": "",\n', '');
+assert.strictEqual(CN.outlookArgs(missingKey, { folder: 'X' }), null, 'a missing key: code unchanged');
+const wrongType = po.code.replace('"has_attachments": False', '"has_attachments": "no"');
+assert.strictEqual(CN.outlookArgs(wrongType, { folder: 'X' }), null, 'a value of the wrong type: code unchanged');
+assert.ok(CN.outlookArgs(po.code, { folder: 'X' }).includes('"folder": "X"'), 'the form-shaped dict still rewrites');
+// Connect to Outlook inserts Start -> Poll Outlook: Start's other children move behind the poll's
+// work exit (agents run only when there is mail); code children stay on Start.
+const startNodes = {
+    1: { outputs: { output_1: { connections: [{ node: '9', output: 'input_1' }, { node: '2', output: 'input_1' }, { node: '4', output: 'input_2' }] } } },
+};
+assert.deepStrictEqual(CN.startChildrenToMove('1', startNodes, kindOf), [{ node: '9', input: 'input_1' }, { node: '4', input: 'input_2' }]);
+assert.deepStrictEqual(CN.startChildrenToMove('1', { 1: { outputs: {} } }, kindOf), []);
+assert.deepStrictEqual(CN.startChildrenToMove(null, startNodes, kindOf), []);
 console.log('code-node.test.js: OK');

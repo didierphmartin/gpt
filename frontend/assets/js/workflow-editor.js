@@ -6734,6 +6734,10 @@ class WorkflowEditor {
                                 </label>
                                 ${hasSchedule ? `<span style="margin-left: auto; font-size: 12px; color: #059669; background: #d1fae5; padding: 2px 8px; border-radius: 4px;">● ${this.t('workflow.schedule.scheduled')}</span>` : ''}
                             </div>
+                            <div style="margin-bottom: 12px;">
+                                <button type="button" id="schedule-outlook-shortcut" style="padding: 6px 12px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; cursor: pointer; font-size: 13px;">📧 ${this.t('workflow.outlook.startShortcut')}</button>
+                                <div id="schedule-outlook-msg" style="display: none; margin-top: 6px; font-size: 13px; color: #dc2626;"></div>
+                            </div>
 
                             <div id="schedule-fields" style="display: ${scheduleEnabled ? 'block' : 'none'};">
                                 <!-- Date/Time -->
@@ -6753,13 +6757,27 @@ class WorkflowEditor {
                                             <option value="daily" ${schedule.repeat_type === 'daily' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.daily')}</option>
                                             <option value="weekly" ${schedule.repeat_type === 'weekly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.weekly')}</option>
                                             <option value="monthly" ${schedule.repeat_type === 'monthly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.monthly')}</option>
+                                            <option value="cron" ${schedule.repeat_type === 'cron' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.cron')}</option>
                                         </select>
                                     </div>
-                                    <div id="repeat-interval-container" style="width: 120px; display: ${schedule.repeat_type && schedule.repeat_type !== 'none' ? 'block' : 'none'};">
+                                    <div id="repeat-interval-container" style="width: 120px; display: ${schedule.repeat_type && schedule.repeat_type !== 'none' && schedule.repeat_type !== 'cron' ? 'block' : 'none'};">
                                         <label style="display: block; font-size: 13px; color: #6b7280; margin-bottom: 4px;">${this.t('workflow.schedule.every')}</label>
                                         <input type="number" id="schedule-repeat-interval" value="${schedule.repeat_interval || 1}" min="1" max="99"
                                             style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; text-align: center;">
                                     </div>
+                                </div>
+
+                                <div id="cron-container" style="margin-top: 12px; display: ${schedule.repeat_type === 'cron' ? 'block' : 'none'};">
+                                    <label style="display:block; font-size:13px; color:#6b7280; margin-bottom:4px;">${this.t('workflow.schedule.cron.label')}</label>
+                                    <input type="text" id="schedule-cron" value="${this.escapeHtml(schedule.cron || '*/2 * * * *')}" spellcheck="false"
+                                        style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; font-family:monospace;">
+                                    <div style="font-size:12px; color:#6b7280; margin-top:4px;">${this.t('workflow.schedule.cron.hint')}</div>
+                                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                                        ${window.CronText.PRESETS.map((p) => `<button type="button" class="cron-preset" data-expr="${p.expr}"
+                                            style="padding:4px 8px; border:1px solid #d1d5db; border-radius:4px; background:#fff; font-size:12px; cursor:pointer;">
+                                            ${this.t('workflow.schedule.cron.' + p.key)}</button>`).join('')}
+                                    </div>
+                                    <div id="schedule-cron-preview" style="margin-top:6px; font-size:13px;"></div>
                                 </div>
 
                                 ${hasSchedule ? `
@@ -6818,8 +6836,45 @@ class WorkflowEditor {
         });
 
         // Show/hide repeat interval based on repeat type
-        repeatTypeSelect.addEventListener('change', () => {
-            repeatIntervalContainer.style.display = repeatTypeSelect.value !== 'none' ? 'block' : 'none';
+        const cronContainer = document.getElementById('cron-container');
+        const cronInput = document.getElementById('schedule-cron');
+        const cronPreview = document.getElementById('schedule-cron-preview');
+        const t = (k, p) => this.t(k, p);
+        const refreshCron = () => {
+            const isCron = repeatTypeSelect.value === 'cron';
+            cronContainer.style.display = isCron ? 'block' : 'none';
+            repeatIntervalContainer.style.display = !isCron && repeatTypeSelect.value !== 'none' ? 'block' : 'none';
+            const err = isCron ? window.CronText.validate(cronInput.value) : null;
+            cronPreview.textContent = err ? this.t(err) : (isCron ? window.CronText.describe(cronInput.value, t) : '');
+            cronPreview.style.color = err ? '#dc2626' : '#059669';
+            if (saveScheduleBtn) saveScheduleBtn.disabled = !!err;
+        };
+        repeatTypeSelect.addEventListener('change', refreshCron);
+        cronInput.addEventListener('input', refreshCron);
+        cronContainer.querySelectorAll('.cron-preset').forEach((b) => b.addEventListener('click', () => {
+            cronInput.value = b.dataset.expr;
+            refreshCron();
+        }));
+        refreshCron();
+
+        // Connect to Outlook: a 2-minute cron, a Poll Outlook node after Start, and its window (spec 2026-10-07 §5).
+        document.getElementById('schedule-outlook-shortcut').addEventListener('click', async () => {
+            const msg = document.getElementById('schedule-outlook-msg');
+            // The user's own, enabled Outlook server: the connection key is saved on that row.
+            const server = (await this._loadMcpServersMeta(true)).find((m) =>
+                window.CodeNode.slug(m.name) === 'outlook' && !m.is_global && m.effective_on !== false);
+            if (!this.currentWorkflowId || !server) {
+                msg.textContent = this.t('workflow.outlook.needServer');
+                msg.style.display = 'block';
+                return;
+            }
+            msg.style.display = 'none';
+            scheduleEnabledChk.checked = true;
+            scheduleEnabledChk.dispatchEvent(new Event('change'));
+            repeatTypeSelect.value = 'cron';
+            cronInput.value = '*/2 * * * *';
+            refreshCron();
+            this.showCodeNodeModal(this._outlookPollNodeAfterStart(server.name));
         });
 
         // Show save schedule button if enabled
@@ -6841,9 +6896,12 @@ class WorkflowEditor {
                 const scheduleData = {
                     workflow_id: this.currentWorkflowId,
                     input_prompt: textarea.value.trim(),
-                    scheduled_time: document.getElementById('schedule-datetime').value,
+                    // The server requires scheduled_time even for cron (it ignores it for next_run).
+                    scheduled_time: document.getElementById('schedule-datetime').value
+                        || (repeatTypeSelect.value === 'cron' ? this._localNowStamp() : ''),
                     repeat_type: repeatTypeSelect.value,
-                    repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1
+                    repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1,
+                    cron: repeatTypeSelect.value === 'cron' ? cronInput.value.trim() : null
                 };
 
                 const success = await this.saveSchedule(scheduleData);
@@ -8915,6 +8973,7 @@ class WorkflowEditor {
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
+                        <div data-f="outlook" class="storage-config-folder full" style="display:none;">${this._outlookConnectHtml()}</div>
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
@@ -8984,18 +9043,22 @@ class WorkflowEditor {
             }).join('')}</div>` : '<p class="text-sm text-gray-400 italic">No MCP servers yet. Add one in Settings → MCP Servers.</p>';
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
+                refreshOutlook();
             }));
         };
+        // Connect to Outlook: shown for the Poll Outlook template or a checked server whose slug is outlook.
+        const outlook = this._wireOutlookConnect(f('outlook'),
+            () => servers.find((m) => checked.has(m.name) && CN.slug(m.name) === 'outlook') || null,
+            () => f('code').value, (code) => { f('code').value = code; });
+        const refreshOutlook = () => {
+            const on = f('template').value === 'poll_outlook' || [...checked].some((n) => CN.slug(n) === 'outlook');
+            f('outlook').style.display = on ? '' : 'none';
+            if (on) outlook.refresh();
+        };
         (async () => {
-            if (!this._mcpServersMeta) {
-                try {
-                    const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
-                    const j = await r.json();
-                    this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
-                } catch (_) { this._mcpServersMeta = []; }
-            }
-            servers = this._mcpServersMeta;
+            servers = await this._loadMcpServersMeta();
             renderServers();
+            refreshOutlook();
         })();
 
         const read = () => ({
@@ -9026,6 +9089,7 @@ class WorkflowEditor {
             renderServers();
             const missing = t.servers.filter((sl) => !servers.some((m) => CN.slug(m.name) === sl));
             show(missing.length ? `This template calls ${missing.join(', ')}: add an MCP server with that name in Settings → MCP Servers.` : '');
+            refreshOutlook();
         });
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
@@ -9054,6 +9118,206 @@ class WorkflowEditor {
             this._applyCodeNodeConfig(nodeId, cfg);
             overlay.remove();
         });
+    }
+
+    /** The user's MCP servers (GET /me/mcp-servers), loaded once; `fresh` reloads them. */
+    async _loadMcpServersMeta(fresh = false) {
+        if (!this._mcpServersMeta || fresh) {
+            try {
+                const r = await fetch(`${this.apiBase}/me/mcp-servers`, { headers: this.getAuthHeaders(), credentials: 'include' });
+                const j = await r.json();
+                this._mcpServersMeta = Array.isArray(j?.servers) ? j.servers : (Array.isArray(j?.data) ? j.data : []);
+            } catch (_) { this._mcpServersMeta = []; }
+        }
+        return this._mcpServersMeta;
+    }
+
+    _outlookConnectHtml() {
+        const t = (k) => this.t(`workflow.outlook.${k}`);
+        return `<div class="outlook-connect" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <button type="button" class="storage-config-btn outlook-connect-btn">${t('connect')}</button>
+                <div class="outlook-status" style="font-size:13px;"></div>
+            </div>
+            <div class="outlook-device" style="display:none; margin-top:8px; font-size:14px;"></div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                <label>${t('folder')}<select class="outlook-folder"></select></label>
+                <label>${t('from')}<input class="outlook-from" type="text"></label>
+                <label>${t('subject')}<input class="outlook-subject" type="text"></label>
+                <label style="display:flex; align-items:center; gap:6px;"><input class="outlook-attach" type="checkbox"> ${t('hasAttachments')}</label>
+            </div>
+            <div class="outlook-handedited" style="display:none; margin-top:6px; font-size:12px; color:#6b7280;">${t('handEdited')}</div>
+        </div>`;
+    }
+
+    /**
+     * One Outlook MCP tool call through the proxy, as the tool's own JSON payload. A failed call
+     * (no answer, a JSON-RPC error, an isError result) comes back as {error, message}.
+     */
+    async _outlookCall(server, tool, args = {}) {
+        const rpc = await this._mcpProxyToolCall(server, tool, args);
+        if (!rpc) return { error: 'network_error', message: 'no answer from the Outlook server' };
+        if (rpc.error) return { error: 'network_error', message: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'error') };
+        const text = rpc.result?.content?.[0]?.text;
+        if (rpc.result?.isError) return { error: 'tool_error', message: String(text || 'tool error') };
+        try { return JSON.parse(text); } catch (_) { return { error: 'bad_result', message: String(text ?? '') }; }
+    }
+
+    /**
+     * The connection key into the server row's X-Outlook-Account header, through the MCP server
+     * update (which needs the row's name, url and description too). Never shown, never logged.
+     */
+    async _saveOutlookKey(server, key) {
+        const rows = await window.mcpClient.loadServers(true);
+        const row = (rows || []).find((r) => String(r.id) === String(server.id));
+        if (!row) return { success: false, error: 'the Outlook server is not one of your own MCP servers' };
+        return window.mcpClient.updateServer(row.id, row.name, row.url, row.description || '',
+            { ...(row.headers || {}), 'X-Outlook-Account': key });
+    }
+
+    /**
+     * The code node's Connect to Outlook box (spec 2026-10-07 §5): device sign-in, the mailbox the
+     * server reads, and the poll's filters, written into the code's poll_new_mail dict
+     * (CodeNode.outlookArgs; hand-edited code without that dict is left alone).
+     * getServer: the checked Outlook server ({id, name, url}) or null. Returns { refresh }.
+     */
+    _wireOutlookConnect(el, getServer, getCode, setCode) {
+        const q = (c) => el.querySelector(c);
+        const status = q('.outlook-status'), device = q('.outlook-device'), btn = q('.outlook-connect-btn'), folder = q('.outlook-folder');
+        const t = (k, p) => this.t(`workflow.outlook.${k}`, p);
+        const failed = (r) => t('failed', { status: r.message || r.error || r.status || 'error' });
+        const sayDevice = (text) => { device.style.display = 'block'; device.textContent = text; };
+        // A server-supplied URL in an href: http(s) only, quotes escaped.
+        const href = (u) => (/^https?:\/\//i.test(String(u || '')) ? this.escapeHtml(String(u)).replace(/"/g, '&quot;') : '#');
+        let folderValue = 'Inbox';
+        const setFolders = (paths) => {
+            const all = paths.includes(folderValue) ? paths : [folderValue, ...paths];
+            folder.innerHTML = all.map((p) => `<option>${this.escapeHtml(p)}</option>`).join('');
+            folder.value = folderValue;
+        };
+        let connecting = false;   // one sign-in at a time: a refresh mid sign-in must not re-enable Connect
+        const showWho = async () => {
+            const server = getServer();
+            btn.disabled = connecting || !server;
+            if (!server) { status.textContent = t('checkServer'); return; }
+            const who = await this._outlookCall(server, 'whoami');
+            btn.textContent = t(who.error === 'reconnect_needed' ? 'reconnect' : 'connect');
+            if (who.account) {
+                status.textContent = t('connected', { account: who.account });
+                const folders = await this._outlookCall(server, 'list_folders');
+                if (Array.isArray(folders)) setFolders(folders.map((x) => x.path));
+                return;
+            }
+            switch (who.error) {
+                case 'not_connected': status.textContent = t('notConnected'); break;
+                case 'reconnect_needed': status.textContent = t('reconnectNeeded'); break;
+                default: status.textContent = failed(who);
+            }
+        };
+        const connect = async (server) => {
+            const start = await this._outlookCall(server, 'connect_start', { method: 'device' });
+            if (start.error) { sayDevice(failed(start)); return; }
+            device.style.display = 'block';
+            device.innerHTML = t('deviceCode', {
+                url: `<a href="${href(start.verification_uri)}" target="_blank" rel="noopener">${this.escapeHtml(start.verification_uri)}</a>`,
+                code: `<strong style="font-family:monospace">${this.escapeHtml(start.user_code)}</strong>` });
+            const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+            while (Date.now() < deadline && el.isConnected) {
+                await new Promise((r) => setTimeout(r, 3000));
+                const st = await this._outlookCall(server, 'connect_status', { connect_id: start.connect_id });
+                switch (st.status) {
+                    case 'pending':
+                        continue;
+                    case 'connected': {
+                        if (!st.connection_key) { sayDevice(failed({ status: 'connected without a key' })); return; }
+                        const saved = await this._saveOutlookKey(server, st.connection_key);
+                        if (!saved?.success) { sayDevice(failed({ message: saved?.error })); return; }
+                        device.style.display = 'none';
+                        await showWho();
+                        return;
+                    }
+                    case 'policy_blocked':
+                        // With a redirect the same sign-in completes in the browser: keep polling.
+                        if (st.redirect_url) {
+                            const html = t('useRedirect', { url: href(st.redirect_url) });
+                            if (device.innerHTML !== html) device.innerHTML = html;
+                            continue;
+                        }
+                        sayDevice(st.message || failed(st));
+                        return;
+                    default:
+                        if (st.error === 'network_error') continue;   // a missed poll: the sign-in may still complete
+                        sayDevice(failed(st));
+                        return;
+                }
+            }
+            if (el.isConnected) sayDevice(failed({ status: 'expired' }));
+        };
+        btn.addEventListener('click', async () => {
+            const server = getServer();
+            if (connecting || !server) return;
+            connecting = true;
+            btn.disabled = true;
+            try { await connect(server); } finally {
+                connecting = false;
+                btn.disabled = !getServer();
+            }
+        });
+        const syncCode = () => {
+            folderValue = folder.value || 'Inbox';
+            const next = window.CodeNode.outlookArgs(getCode(), {
+                folder: folderValue,
+                from: q('.outlook-from').value.trim(),
+                subject_contains: q('.outlook-subject').value.trim(),
+                has_attachments: q('.outlook-attach').checked,
+            });
+            if (next !== null) setCode(next);
+        };
+        el.querySelectorAll('select, input').forEach((i) => i.addEventListener('change', syncCode));
+        // The form starts from the filters in the code; filters edited by hand in the code are left to the code.
+        const filters = [folder, q('.outlook-from'), q('.outlook-subject'), q('.outlook-attach')];
+        const refresh = () => {
+            const a = window.CodeNode.readOutlookArgs(getCode());
+            filters.forEach((i) => { i.disabled = !a; });
+            q('.outlook-handedited').style.display = a ? 'none' : 'block';
+            if (a) {
+                folderValue = a.folder || 'Inbox';
+                q('.outlook-from').value = a.from;
+                q('.outlook-subject').value = a.subject_contains;
+                q('.outlook-attach').checked = a.has_attachments;
+            }
+            setFolders([...folder.options].map((o) => o.value).filter((v) => v !== folderValue));
+            return showWho();
+        };
+        return { refresh };
+    }
+
+    /**
+     * The Start form's Connect to Outlook shortcut (spec 2026-10-07 §5): the code node wired right
+     * after Start, or a new Poll Outlook node wired there, checked on `serverName`; a new one takes
+     * over Start's other children on its new_mail exit, so a poll with no mail runs no agent.
+     */
+    _outlookPollNodeAfterStart(serverName) {
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        const startId = Object.keys(nodes).find((id) => this._wfNodeKind(id, nodes) === 'start');
+        const start = startId ? nodes[startId] : null;
+        const existing = (start?.outputs?.output_1?.connections || []).map((c) => String(c.node))
+            .find((id) => this._wfNodeKind(id, nodes) === 'code');
+        if (existing) return existing;
+        const t = window.CodeNode.TEMPLATES.poll_outlook;
+        const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100,
+            { name: 'Poll Outlook', code: t.code, exits: [...t.exits], mcp_servers: [serverName] });
+        // Start's other children move behind new_mail: they run only when there is mail.
+        const moved = window.CodeNode.startChildrenToMove(startId, nodes, (nid) => this._wfNodeKind(nid, nodes));
+        const workPort = window.CodeNode.portForExit(t.exits, 'new_mail');
+        for (const c of moved) {
+            this.editor.removeSingleConnection(startId, c.node, 'output_1', c.input);
+            this.editor.addConnection(id, c.node, workPort, c.input);
+        }
+        if (startId) this.editor.addConnection(startId, id, 'output_1', 'input_1');
+        this._refreshCodeNode(id);
+        this._workflowDirty = true;
+        return id;
     }
 
     /**
@@ -20212,6 +20476,13 @@ Based on the analysis...
     /**
      * Save or update a schedule
      */
+    /** Local 'YYYY-MM-DDTHH:mm', the shape the datetime-local field sends. */
+    _localNowStamp() {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
     async saveSchedule(scheduleData) {
         try {
             const isUpdate = this.currentSchedule?.id;

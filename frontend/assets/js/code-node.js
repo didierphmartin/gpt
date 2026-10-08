@@ -45,12 +45,71 @@
                 '',
             ].join('\n'),
         },
+        poll_outlook: {
+            label: 'Poll Outlook (new email)',
+            exits: ['new_mail', 'no_mail', 'error'],
+            servers: ['outlook'],
+            code: [
+                'def run(input, call_tool):',
+                '    # The next unseen email in the folder that matches the filters, or None.',
+                '    # Attachments arrive as a list (id, name, content_type, size) and are NEVER opened here:',
+                '    # a triage step decides first; only agents downstream of it may open them.',
+                '    result = call_tool("outlook", "poll_new_mail", {',
+                '        "folder": "Inbox",',
+                '        "from": "",',
+                '        "subject_contains": "",',
+                '        "has_attachments": False,',
+                '    })',
+                '    if result.get("error"):',
+                '        return {"route": "error", "output": result["error"]}',
+                '    mail = result.get("mail")',
+                '    if mail is None:',
+                '        return {"route": "no_mail", "output": None}',
+                '    return {"route": "new_mail", "output": mail}',
+                '',
+            ].join('\n'),
+        },
     };
     const DEFAULT_TEMPLATE = 'blank';
 
     /** The server slug call_tool uses: twin of CodeNodeEmit::slug. */
     function slug(serverName) {
         return String(serverName).replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    }
+
+    // The Poll Outlook template's poll_new_mail argument dict, and its default filters.
+    const OUTLOOK_ARGS_RE = /(call_tool\("outlook",\s*"poll_new_mail",\s*)\{([\s\S]*?)\n\s*\}\)/;
+    const OUTLOOK_DEFAULTS = { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false };
+    const OUTLOOK_LINE_RE = /^\s*"(\w+)":\s*("(?:[^"\\]|\\.)*"|True|False),?\s*$/;
+
+    /**
+     * The filters in the code's poll_new_mail dict, when the dict is exactly what the form writes:
+     * the four keys, each once, each a literal of its type. null otherwise -- no dict, or a dict
+     * edited by hand (an extra key, a variable, ...): the form then leaves the code alone (spec §5).
+     */
+    function readOutlookArgs(code) {
+        const m = String(code || '').match(OUTLOOK_ARGS_RE);
+        if (!m) return null;
+        const out = {};
+        for (const line of m[2].split('\n').filter((l) => l.trim())) {
+            const v = line.match(OUTLOOK_LINE_RE);
+            if (!v || !(v[1] in OUTLOOK_DEFAULTS) || v[1] in out) return null;
+            const isBool = v[2] === 'True' || v[2] === 'False';
+            if (isBool !== (typeof OUTLOOK_DEFAULTS[v[1]] === 'boolean')) return null;
+            try { out[v[1]] = isBool ? v[2] === 'True' : JSON.parse(v[2]); } catch (_) { return null; }
+        }
+        return Object.keys(out).length === Object.keys(OUTLOOK_DEFAULTS).length ? out : null;
+    }
+
+    /**
+     * The Poll Outlook form's filters written into the code's poll_new_mail argument dict.
+     * null when the form does not own that dict (readOutlookArgs): the code is left alone.
+     */
+    function outlookArgs(code, args) {
+        if (readOutlookArgs(code) === null) return null;
+        const py = (v) => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(String(v)));
+        const body = Object.keys(OUTLOOK_DEFAULTS).map((k) => `        "${k}": ${py(args[k] ?? OUTLOOK_DEFAULTS[k])},`).join('\n');
+        return code.replace(OUTLOOK_ARGS_RE, (_, head) => `${head}{\n${body}\n    })`);
     }
 
     function validateConfig(cfg) {
@@ -87,6 +146,17 @@
         const port = portForExit(exits, exit);
         const out = (nodes[nodeId]?.outputs || {})[port];
         return (out?.connections || []).map((c) => String(c.node));
+    }
+
+    /**
+     * Start's children (other than code nodes) the Connect to Outlook shortcut moves behind the poll's
+     * work exit, so they run only when the poll found something: [{node, input}] with their input port.
+     */
+    function startChildrenToMove(startId, nodes, kindOf) {
+        if (startId == null) return [];
+        return (nodes[startId]?.outputs?.output_1?.connections || [])
+            .filter((c) => kindOf(String(c.node)) !== 'code')
+            .map((c) => ({ node: String(c.node), input: c.output }));
     }
 
     /** The parents that ran, as the harness wants them; a parent with no output (skipped) is left out. */
@@ -243,6 +313,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, outlookArgs, readOutlookArgs, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, startChildrenToMove,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });
