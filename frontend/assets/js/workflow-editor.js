@@ -15191,6 +15191,10 @@ class WorkflowEditor {
         this._pbClearFeed();
         this._pbBubble('you', userPrompt);
         this._pbPending();
+        // A save still running (started when the conversation opened, or any other)
+        // rebuilds the canvas when it lands: walk the graph only after it.
+        if (this._batchSessionSave) { await this._batchSessionSave; this._batchSessionSave = null; }
+        if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
         const st = document.getElementById('pb-ov-status');
         if (st) { st.textContent = this.t('workflow.batchSession.running'); st.style.color = '#9ca3af'; }
         let res;
@@ -15300,7 +15304,10 @@ class WorkflowEditor {
     }
 
     async _openBatchSessionNow() {
-        await this._persistIfDirty();
+        // The conversation opens at once; pending node edits are saved behind it. The
+        // save's reload keeps this session (clearWorkflow keepSession), and _batchTurn
+        // waits for the save before it walks the canvas the reload rebuilds.
+        this._batchSessionSave = this._persistIfDirty().catch(() => {});
         // Leaving a compiled conversation: its stream must stop driving this
         // browser before the interpreter's conversation opens (see
         // _detachCompiledStream -- a gate arriving afterwards froze the new
