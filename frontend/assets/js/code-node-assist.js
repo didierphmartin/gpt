@@ -13,6 +13,37 @@
 
     const isDocumented = (tool) => typeof tool?.description === 'string' && tool.description.trim() !== '';
 
+    /** A JSON schema's type in a few characters: "string", "object|null", "array of object", "\"a\"|\"b\"". */
+    function schemaType(sc) {
+        if (!sc || typeof sc !== 'object') return '';
+        if (Array.isArray(sc.enum)) return sc.enum.map((v) => JSON.stringify(v)).join('|');
+        const alt = sc.anyOf || sc.oneOf;
+        if (Array.isArray(alt)) return alt.map(schemaType).filter(Boolean).join('|');
+        const t = Array.isArray(sc.type) ? sc.type.join('|') : (sc.type || (sc.properties ? 'object' : ''));
+        return /\barray\b/.test(t) && sc.items ? t.replace(/\barray\b/, `array of ${schemaType(sc.items) || 'any'}`) : t;
+    }
+
+    /**
+     * A schema's fields as indented lines, for the Tools tab: [{ depth, name, type, required, description }].
+     * Nested objects (and arrays of objects) list their own fields one level deeper, down to maxDepth.
+     */
+    function schemaLines(schema, depth = 0, maxDepth = 3) {
+        const fieldsOf = (sc) => {
+            if (!sc || typeof sc !== 'object') return null;
+            if (sc.properties && typeof sc.properties === 'object') return sc;
+            if (sc.items?.properties) return sc.items;
+            for (const a of sc.anyOf || sc.oneOf || []) if (a?.properties || a?.items?.properties) return fieldsOf(a);
+            return null;
+        };
+        const obj = fieldsOf(schema);
+        if (!obj || depth >= maxDepth) return [];
+        const required = new Set(Array.isArray(obj.required) ? obj.required : []);
+        return Object.entries(obj.properties).flatMap(([name, sc]) => [
+            { depth, name, type: schemaType(sc), required: required.has(name), description: typeof sc?.description === 'string' ? sc.description : '' },
+            ...schemaLines(sc, depth + 1, maxDepth),
+        ]);
+    }
+
     /** Server listings -> the documented tools per server, and "slug.tool" for each undocumented one. */
     function splitDocumented(listed) {
         const usable = [], skipped = [], noSchema = [];
@@ -342,5 +373,5 @@
         return { refresh };
     }
 
-    return { mergeExits, lineDiff, changingCalls, unlistedCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer, mountAssistBox };
+    return { schemaType, schemaLines, mergeExits, lineDiff, changingCalls, unlistedCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer, mountAssistBox };
 });

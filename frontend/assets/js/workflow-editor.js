@@ -9011,7 +9011,7 @@ class WorkflowEditor {
             <div class="storage-config-modal" style="width:min(900px,95vw);height:min(720px,92vh);display:flex;flex-direction:column;">
                 <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -9032,6 +9032,7 @@ class WorkflowEditor {
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
                     ${pane('logs', '<div data-f="logs"></div>')}
@@ -9053,7 +9054,10 @@ class WorkflowEditor {
             });
             overlay.querySelectorAll('[data-pane]').forEach((p) => { p.style.display = p.dataset.pane === k ? '' : 'none'; });
         };
-        overlay.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+        overlay.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+            showTab(b.dataset.tab);
+            if (b.dataset.tab === 'tools') renderTools();
+        }));
         showTab('settings');
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
@@ -9071,7 +9075,44 @@ class WorkflowEditor {
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
         let servers = [];
-        const testTools = new Map();   // one successful tools listing per server per modal open (Test confirmation)
+        const testTools = new Map();   // one successful tools listing per server per modal open
+        // The checked servers' tools/list (Test confirmation, Tools tab, assistant). A failed listing is never
+        // cached (the next call lists again) and never reads as "no tools".
+        const listChecked = () => Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
+            if (!testTools.has(m.name)) testTools.set(m.name, this._mcpProxyListToolEntries(m).catch((e) => ({ error: String(e?.message || e) })));
+            const r = (await testTools.get(m.name)) || { error: 'tools/list failed' };
+            if (r.error || !Array.isArray(r.tools)) testTools.delete(m.name);
+            return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error || (Array.isArray(r.tools) ? undefined : 'tools/list failed') };
+        }));
+        // Tools: each checked server's tools with their input and result schemas, read-only (nothing is called).
+        let toolsSeq = 0;
+        const renderTools = async () => {
+            const seq = ++toolsSeq;
+            const esc = (v) => this.escapeHtml(String(v ?? ''));
+            if (!checked.size) { f('tools').innerHTML = '<p class="text-sm text-gray-400 italic">No server checked. Check one in MCP Servers.</p>'; return; }
+            f('tools').innerHTML = '<p class="text-sm text-gray-400 italic">Listing tools…</p>';
+            const listed = await listChecked();
+            if (seq !== toolsSeq) return;   // a newer tick re-rendered meanwhile
+            const fields = (schema) => {
+                const lines = window.CodeNodeAssist.schemaLines(schema);
+                return lines.map((l) => `<div style="padding-left:${12 + l.depth * 14}px;"><code>${esc(l.name)}</code>${l.required ? '<span class="text-red-600">*</span>' : ''}
+                    <span class="text-gray-500">${esc(l.type)}</span>${l.description ? ` <span class="text-gray-500">— ${esc(l.description)}</span>` : ''}</div>`).join('');
+            };
+            const muted = (text) => `<div class="text-gray-400 italic" style="padding-left:12px;">${esc(text)}</div>`;
+            f('tools').innerHTML = `<p class="text-xs text-gray-500" style="margin:0 0 8px;">What each checked server's <code>tools/list</code> says.
+                <span class="text-red-600">*</span> = required. Nothing here calls a tool.</p>` + listed.map((s) => `
+                <div style="margin-bottom:14px;">
+                    <div class="text-sm font-semibold text-gray-800" style="border-bottom:1px solid #e5e7eb;margin-bottom:4px;">${esc(s.name)} <code class="text-xs text-gray-400 font-normal">${esc(s.slug)}</code></div>
+                    ${s.error ? `<div class="text-xs text-red-700">Couldn't list tools — ${esc(s.error)}</div>` : !s.tools.length ? muted('No tools.') : s.tools.map((t) => `
+                    <div class="text-xs" style="margin:6px 0 8px;">
+                        <div><code class="font-semibold">${esc(t.name)}</code>${window.CodeNodeAssist.isDocumented(t) ? '' : ' <span class="px-1 rounded bg-red-100 text-red-700">undocumented</span>'}</div>
+                        ${window.CodeNodeAssist.isDocumented(t) ? `<div class="text-gray-700" style="white-space:pre-wrap;">${esc(t.description)}</div>` : ''}
+                        <div class="text-gray-600" style="margin-top:2px;">Input</div>${fields(t.inputSchema) || muted('No arguments.')}
+                        <div class="text-gray-600" style="margin-top:2px;">Result</div>${t.outputSchema ? (fields(t.outputSchema) || muted(window.CodeNodeAssist.schemaType(t.outputSchema) || 'Schema without fields.')) : muted('No result schema.')}
+                    </div>`).join('')}
+                </div>`).join('');
+        };
+        const toolsShown = () => f('tools').closest('[data-pane]')?.style.display !== 'none';
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
@@ -9096,6 +9137,7 @@ class WorkflowEditor {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshOutlook();
                 assist?.refresh();
+                if (toolsShown()) renderTools();
             }));
         };
         // Connect to Outlook: shown for the Poll Outlook template or a checked server whose slug is outlook.
@@ -9134,10 +9176,7 @@ class WorkflowEditor {
         assist = window.CodeNodeAssist.mountAssistBox(f('assist'), {
             t: (k, p) => this.t(k, p),
             tickedCount: () => checked.size,
-            listServers: () => Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
-                const r = await this._mcpProxyListToolEntries(m);
-                return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error };
-            })),
+            listServers: listChecked,
             // One entry per provider, labelled with the model the user settings say runs: on the package key the
             // admin's default_model, with the user's own key their saved choice. /chat applies that model itself.
             models: async () => {
@@ -9203,13 +9242,7 @@ class WorkflowEditor {
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
                 if (errs.length) { show(errs.join('\n'), true); return; }
-                // A failed listing is never cached (the next Test lists again) and never reads as "no tools".
-                const listed = await Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
-                    if (!testTools.has(m.name)) testTools.set(m.name, this._mcpProxyListToolEntries(m).catch((e) => ({ error: String(e?.message || e) })));
-                    const r = (await testTools.get(m.name)) || { error: 'tools/list failed' };
-                    if (r.error || !Array.isArray(r.tools)) testTools.delete(m.name);
-                    return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error || (Array.isArray(r.tools) ? undefined : 'tools/list failed') };
-                }));
+                const listed = await listChecked();
                 // Checked names that are not among the user's servers could not be listed either.
                 const known = new Set(servers.map((m) => m.name));
                 for (const n of checked) if (!known.has(n)) listed.push({ name: n, slug: CN.slug(n), tools: [], error: 'not listed' });

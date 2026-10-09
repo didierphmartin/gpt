@@ -21,6 +21,21 @@ assert.deepStrictEqual(noSchema, ['outlook.poll_new_mail']);   // documented, no
 assert.deepStrictEqual(CA.splitDocumented([{ name: 'X', slug: 'x', tools: [
     { name: 'a', description: 'd', outputSchema: { type: 'object' } }, { name: 'b', description: 'd' }] }]).noSchema, ['x.b']);
 
+// Tools tab: a schema as indented field lines
+assert.strictEqual(CA.schemaType({ type: ['object', 'null'] }), 'object|null');
+assert.strictEqual(CA.schemaType({ type: 'array', items: { type: 'string' } }), 'array of string');
+assert.strictEqual(CA.schemaType({ enum: ['device'] }), '"device"');
+assert.strictEqual(CA.schemaType({ anyOf: [{ type: 'object' }, { type: 'null' }] }), 'object|null');
+assert.deepStrictEqual(CA.schemaLines({ type: 'object', required: ['mail'], properties: { mail: { type: ['object', 'null'], description: 'The email',
+    properties: { subject: { type: 'string' }, attachments: { type: 'array', items: { type: 'object', properties: { size: { type: 'integer' } } } } } } } }), [
+    { depth: 0, name: 'mail', type: 'object|null', required: true, description: 'The email' },
+    { depth: 1, name: 'subject', type: 'string', required: false, description: '' },
+    { depth: 1, name: 'attachments', type: 'array of object', required: false, description: '' },
+    { depth: 2, name: 'size', type: 'integer', required: false, description: '' },
+]);
+assert.deepStrictEqual(CA.schemaLines(undefined), []);
+assert.deepStrictEqual(CA.schemaLines({ type: 'object' }), []);
+
 // refuse before asking -- review focus 1
 assert.strictEqual(CA.askBlocker(0, []), null);                       // no server ticked: plain Python is fine
 assert.strictEqual(CA.askBlocker(2, usable), null);
