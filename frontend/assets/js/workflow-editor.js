@@ -9027,6 +9027,7 @@ class WorkflowEditor {
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
                             <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
                         <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3"></textarea></div>
+                        <div data-f="assist" class="storage-config-folder full"></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
@@ -9070,6 +9071,7 @@ class WorkflowEditor {
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
         let servers = [];
+        let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
             const known = new Set(servers.map((m) => m.name));
@@ -9092,6 +9094,7 @@ class WorkflowEditor {
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshOutlook();
+                assist?.refresh();
             }));
         };
         // Connect to Outlook: shown for the Poll Outlook template or a checked server whose slug is outlook.
@@ -9109,6 +9112,54 @@ class WorkflowEditor {
             renderServers();
             refreshOutlook();
         })();
+
+        // The assistant under the Code tab: writes the code and exits from the checked servers' tool docs.
+        const savedExits = Array.isArray(d.exits) && d.exits.length ? d.exits : ['next'];
+        // Drawflow ports follow the SAVED exits until Save: wiring is read through them, by exit name.
+        const wiredExits = () => {
+            const all = this.editor.export().drawflow.Home.data;
+            return new Set(savedExits.filter((e) => CN.targetsForExit(String(nodeId), all, e, savedExits).length));
+        };
+        const wiring = () => {
+            const all = this.editor.export().drawflow.Home.data;
+            const out = {};
+            for (const e of savedExits) {
+                out[e] = CN.targetsForExit(String(nodeId), all, e, savedExits)
+                    .map((id) => all[id]?.data?.name || all[id]?.data?.agent_name || all[id]?.data?.type || id);
+            }
+            return out;
+        };
+        assist = window.CodeNodeAssist.mountAssistBox(f('assist'), {
+            t: (k, p) => this.t(k, p),
+            tickedCount: () => checked.size,
+            listServers: () => Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
+                const r = await this._mcpProxyListToolEntries(m);
+                return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error };
+            })),
+            models: async () => {
+                await this.loadProviders();
+                if (!this._modelCatalog) {
+                    try { this._modelCatalog = (await (await fetch(window.apiUrl('/models/catalog'))).json())?.providers || {}; }
+                    catch (_) { this._modelCatalog = {}; }
+                }
+                return (this.providers || []).flatMap((p) => [
+                    { provider: p.name, model: '', label: this.t('workflow.codeAssist.providerDefault', { provider: p.name }) },
+                    ...((this._modelCatalog[p.name] || []).map((mm) => ({ provider: p.name, model: mm.id, label: `${p.name} · ${mm.label || mm.id}` }))),
+                ]);
+            },
+            ask: (o) => this._codeAssistAsk(o),
+            checkPython: (code) => this._codeNodeCheck(code),
+            getCode: () => f('code').value,
+            getExits: () => CN.parseExits(f('exits').value),
+            wiredExits,
+            wiring,
+            getSample: () => f('sample').value,
+            apply: ({ code, exits }) => {
+                f('code').value = code;
+                f('exits').value = CN.exitsText(exits);
+                refreshOutlook();
+            },
+        });
 
         const read = () => ({
             name: f('name').value.trim() || 'Code',
@@ -10024,12 +10075,6 @@ class WorkflowEditor {
             const tools = rpc?.result?.tools;
             return Array.isArray(tools) ? { tools: tools.filter((x) => x && x.name) } : { error: 'no tool list in the answer' };
         } catch (e) { return { error: String(e?.message || e) }; }
-    }
-
-    /** Tool names of a server ([] on failure). */
-    async _mcpProxyListTools(server) {
-        const r = await this._mcpProxyListToolEntries(server);
-        return (r.tools || []).map((x) => x?.name).filter(Boolean);
     }
 
     /**
@@ -13709,6 +13754,33 @@ class WorkflowEditor {
         const r = await this._codeWorkerJob('checkCode', { code: source, harness: await this._codeHarness() },
             10000, 'code check timed out');
         return r.error || null;
+    }
+
+    /** One non-streaming /chat turn for the code node assistant: no history, no tools, no memory. Returns the text. */
+    async _codeAssistAsk({ provider, model, system, message, signal }) {
+        const resp = await fetch(`${this.apiBase}/chat`, {
+            method: 'POST',
+            headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+            credentials: 'include',
+            signal,
+            body: JSON.stringify({ message, conversation_history: [], streaming: false, provider, model: model || null,
+                system_prompt: system, tools: [], memory: false }),
+        });
+        if (!resp.ok) {
+            // The backend's own error message, as _runNodeAsChatUnit reads it.
+            let detail = '';
+            try {
+                const errText = await resp.text();
+                try {
+                    const j = JSON.parse(errText);
+                    detail = (j && (j.error?.message || j.message || (typeof j.error === 'string' ? j.error : '') || j.detail)) || errText;
+                } catch { detail = errText; }
+            } catch { /* body unreadable */ }
+            detail = String(detail || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+            throw new Error(detail ? `${detail} (HTTP ${resp.status})` : `Request failed (HTTP ${resp.status})`);
+        }
+        const r = await resp.json();
+        return r.assistant_text || r.text || '';
     }
 
     /**

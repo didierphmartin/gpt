@@ -770,6 +770,28 @@
       "save": "Save",
       "run": "Run Workflow"
     },
+    "codeAssist": {
+      "title": "Assistant",
+      "placeholder": "Describe what this node should do",
+      "model": "Model",
+      "providerDefault": "{{provider}} (default model)",
+      "ask": "Ask",
+      "thinking": "Thinking…",
+      "stop": "Stop",
+      "emptyRequest": "Describe what the node should do first.",
+      "undocumented": "Not usable (undocumented): {{list}}",
+      "listFailed": "{{server}}: couldn't list tools — {{message}}",
+      "noTools": "The checked servers don't document their tools, so code can't be generated reliably. Write the code by hand, or ask the server's maintainer to document the tools.",
+      "cannot": "The assistant can't write this code: {{reason}}",
+      "unusable": "The assistant's answer was not usable: {{reason}}",
+      "failed": "The assistant failed: {{message}}",
+      "exits": "Exits",
+      "exitNew": "new",
+      "exitKept": "kept, wired to {{nodes}}, not used by the code",
+      "accept": "Accept",
+      "discard": "Discard",
+      "confirmTest": "This test will really call {{calls}}. Continue?"
+    },
     "outlook": {
       "connect": "Connect to Outlook",
       "reconnect": "Reconnect to Outlook",

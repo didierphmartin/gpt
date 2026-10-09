@@ -178,5 +178,112 @@
         return out;
     }
 
-    return { mergeExits, lineDiff, changingCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer };
+    /** The assistant box under the Code tab. All editor services come in through deps (see the plan). */
+    function mountAssistBox(el, deps) {
+        const t = deps.t;
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        el.innerHTML = `
+            <label>${esc(t('workflow.codeAssist.title'))}</label>
+            <textarea data-a="request" rows="3" style="width:100%;" placeholder="${esc(t('workflow.codeAssist.placeholder'))}"></textarea>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+                <label style="margin:0;">${esc(t('workflow.codeAssist.model'))}</label>
+                <select data-a="model" style="flex:1;"></select>
+                <button type="button" class="storage-config-btn" data-a="ask">${esc(t('workflow.codeAssist.ask'))}</button>
+            </div>
+            <div data-a="status" class="text-xs text-gray-500" style="margin-top:6px;"></div>
+            <div data-a="proposal" style="margin-top:8px;"></div>`;
+        const q = (k) => el.querySelector(`[data-a="${k}"]`);
+        const STORE = 'codeAssist.model';
+        let options = [], listed = null, controller = null;
+
+        const status = (html) => { q('status').innerHTML = html; };
+        const remembered = () => { try { return localStorage.getItem(STORE) || ''; } catch (_) { return ''; } };
+
+        (async () => {
+            options = await deps.models();
+            q('model').innerHTML = options.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('');
+            const i = options.findIndex((o) => `${o.provider}|${o.model}` === remembered());
+            if (i >= 0) q('model').value = String(i);
+            q('model').addEventListener('change', () => {
+                const o = options[Number(q('model').value)];
+                try { localStorage.setItem(STORE, `${o.provider}|${o.model}`); } catch (_) {}
+            });
+        })();
+
+        /** The ticked servers' listings, the "not usable" line and any listing failures. */
+        async function refresh() {
+            listed = await deps.listServers();
+            const { skipped } = splitDocumented(listed);
+            const lines = listed.filter((s) => s.error).map((s) => esc(t('workflow.codeAssist.listFailed', { server: s.name, message: s.error })));
+            if (skipped.length) lines.push(esc(t('workflow.codeAssist.undocumented', { list: skipped.join(', ') })));
+            status(lines.join('<br>'));
+            return listed;
+        }
+
+        function showProposal(ans) {
+            const { exits, added, kept, errors } = mergeExits(ans.exits, deps.getExits(), deps.wiredExits());
+            const wiring = deps.wiring();
+            const chip = (e) => {
+                const note = added.includes(e) ? ` (${esc(t('workflow.codeAssist.exitNew'))})`
+                    : kept.includes(e) ? ` — ${esc(t('workflow.codeAssist.exitKept', { nodes: (wiring[e] || []).join(', ') }))}` : '';
+                return `<div><code>${esc(e)}</code>${note}</div>`;
+            };
+            const diff = lineDiff(deps.getCode(), ans.code).map((d) => {
+                const bg = d.op === '+' ? 'background:rgba(34,197,94,0.15);' : d.op === '-' ? 'background:rgba(239,68,68,0.15);' : '';
+                return `<div style="${bg}white-space:pre;">${esc(d.op + ' ' + d.line)}</div>`;
+            }).join('');
+            q('proposal').innerHTML = `
+                <p style="margin:0 0 6px;">${esc(ans.explanation)}</p>
+                <label>${esc(t('workflow.codeAssist.exits'))}</label>${exits.map(chip).join('')}
+                ${errors.length ? `<div style="color:#b91c1c;">${esc(errors.join(' '))}</div>` : ''}
+                <div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;max-height:260px;overflow:auto;border:1px solid #e5e7eb;margin-top:6px;">${diff}</div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+                    <button type="button" class="storage-config-btn cancel" data-a="discard">${esc(t('workflow.codeAssist.discard'))}</button>
+                    <button type="button" class="storage-config-btn save" data-a="accept" ${errors.length ? 'disabled' : ''}>${esc(t('workflow.codeAssist.accept'))}</button>
+                </div>`;
+            q('discard').addEventListener('click', () => { q('proposal').innerHTML = ''; });
+            q('accept').addEventListener('click', () => { deps.apply({ code: ans.code, exits }); q('proposal').innerHTML = ''; });
+        }
+
+        async function ask() {
+            if (controller) { controller.abort(); return; }          // the button reads "Stop" while asking
+            const request = q('request').value.trim();
+            if (!request) { status(esc(t('workflow.codeAssist.emptyRequest'))); return; }
+            q('proposal').innerHTML = '';
+            const { usable } = splitDocumented(await refresh());
+            if (askBlocker(deps.tickedCount(), usable)) { status(esc(t('workflow.codeAssist.noTools'))); return; }
+            const opt = options[Number(q('model').value)] || options[0] || { provider: '', model: '' };
+            const message = buildUserMessage({ usable, exits: deps.getExits(), wiring: deps.wiring(),
+                sample: deps.getSample(), code: deps.getCode(), request });
+            controller = new AbortController();
+            q('ask').textContent = t('workflow.codeAssist.stop');
+            const before = q('status').innerHTML;
+            status(before + (before ? '<br>' : '') + esc(t('workflow.codeAssist.thinking')));
+            try {
+                let msg = message, ans = null, errs = [];
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    ans = parseAnswer(await deps.ask({ provider: opt.provider, model: opt.model, system: SYSTEM_PROMPT, message: msg, signal: controller.signal }));
+                    if (ans.kind === 'cannot') break;
+                    errs = ans.kind === 'invalid' ? [ans.error] : checkAnswer(ans, usable);
+                    if (!errs.length) { const py = await deps.checkPython(ans.code); if (py) errs = [py]; }
+                    if (!errs.length) break;
+                    msg = `${message}\n\n## Your previous answer was rejected\n${errs.join('\n')}\nAnswer again, fixing this.`;
+                }
+                status(before);
+                if (ans.kind === 'cannot') status(esc(t('workflow.codeAssist.cannot', { reason: ans.reason })));
+                else if (errs.length) status(esc(t('workflow.codeAssist.unusable', { reason: errs.join(' ') })));
+                else showProposal(ans);
+            } catch (e) {
+                status(e?.name === 'AbortError' ? before : esc(t('workflow.codeAssist.failed', { message: e?.message || e })));
+            } finally {
+                controller = null;
+                q('ask').textContent = t('workflow.codeAssist.ask');
+            }
+        }
+
+        q('ask').addEventListener('click', ask);
+        return { refresh };
+    }
+
+    return { mergeExits, lineDiff, changingCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer, mountAssistBox };
 });
