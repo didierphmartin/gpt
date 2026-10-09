@@ -790,7 +790,9 @@
       "exitKept": "kept, wired to {{nodes}}, not used by the code",
       "accept": "Accept",
       "discard": "Discard",
-      "confirmTest": "This test will really call {{calls}}. Continue?"
+      "confirmTest": "This test will really call {{calls}}. Continue?",
+      "confirmUnlisted": "This test will call tools on {{servers}}, whose tools couldn't be listed. Continue?",
+      "codeChanged": "The code changed since this proposal; review the updated comparison, then Accept again."
     },
     "outlook": {
       "connect": "Connect to Outlook",

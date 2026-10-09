@@ -790,7 +790,9 @@
       "exitKept": "se conserva, conectada a {{nodes}}, el código no la usa",
       "accept": "Aceptar",
       "discard": "Descartar",
-      "confirmTest": "Esta prueba llamará realmente a {{calls}}. ¿Continuar?"
+      "confirmTest": "Esta prueba llamará realmente a {{calls}}. ¿Continuar?",
+      "confirmUnlisted": "Esta prueba llamará a herramientas de {{servers}}, cuyas herramientas no se pudieron listar. ¿Continuar?",
+      "codeChanged": "El código cambió desde esta propuesta; revisa la comparación actualizada y vuelve a pulsar Aceptar."
     },
     "outlook": {
       "connect": "Conectar con Outlook",

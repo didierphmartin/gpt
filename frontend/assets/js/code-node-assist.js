@@ -55,7 +55,9 @@
         '   result fields their description or outputSchema names. Never guess a field, an argument or a result shape.',
         '2. Every tool call has up to three outcomes:',
         '   - something: the call returned a result -> a data exit, with the result (or its documented part) as output;',
-        '   - error: call_tool raised -> the "error" exit. Include "error" in the exits; letting the exception propagate is enough;',
+        '   - error: call_tool raised -> the "error" exit. Include "error" in the exits; letting the exception propagate is enough.',
+        '     call_tool raises only when the server marks the result as an error; if the tool\'s documentation describes errors',
+        '     returned inside a normal result, detect them as documented and route to error;',
         '   - nothing: the call succeeded but found nothing -> a quiet exit (e.g. "no_items") with a short text as output.',
         '     A "nothing" exit is required when the tool\'s documentation describes an empty / no-result outcome, or when the',
         '     request is about fetching or polling items. If the documentation does not say how "nothing" looks for such a',
@@ -64,8 +66,16 @@
         '3. Answer {"cannot": ...} when the request needs result contents (fields) the documentation does not give, or is a',
         '   fetch or poll whose empty case is undocumented. Do not write code that guesses. There is no fallback, not even',
         '   when asked to pass the whole result on.',
-        '4. Keep the current code\'s names and style unless the request changes them; keep existing exit names that fit.',
+        '4. The current code is NOT documentation: it may use tools, arguments, result fields or error checks the tool list',
+        '   does not document. Keep only its variable/function names, exit names and layout. Every tool name, argument and',
+        '   result field in your code must come from the tool list (rule 1), even if the current code already uses it. If the',
+        '   request needs something the current code takes from a result but the documentation does not name, answer cannot',
+        '   and name it.',
         '5. Each exit leads to the nodes named for it; let that decide what each exit\'s output should be.',
+        '6. Never remove or weaken the current code\'s handling of a tool result (checks for errors, empty results or status',
+        '   values) unless the request asks for it: a server may report errors inside an ordinary result, and call_tool raises',
+        '   only when the server flags the error. If that handling relies on fields the documentation does not describe, you',
+        '   can neither keep it (rule 1) nor drop it: answer cannot, naming the tool and the undocumented field.',
     ].join('\n');
 
     function buildUserMessage({ usable, exits, wiring, sample, code, request }) {
@@ -88,7 +98,7 @@
             return `${e} -> ${to.length ? to.join(', ') : '(not connected)'}`;
         }).join('\n'));
         if (sample && String(sample).trim()) parts.push('## Sample input\n' + sample);
-        parts.push('## Current code\n```python\n' + (code || '') + '\n```');
+        parts.push('## Current code (for names and style only; it is not documentation, see rules 4 and 6)\n```python\n' + (code || '') + '\n```');
         parts.push('## Request\n' + request);
         return parts.join('\n\n');
     }
@@ -178,6 +188,21 @@
         return out;
     }
 
+    /**
+     * Servers the code calls by literal name (call_tool("<slug>", ...)) whose tools could not be listed:
+     * their display names, once each. A Test must not run those calls unconfirmed just because the listing failed.
+     */
+    function unlistedCalls(code, listed) {
+        const failed = new Map();
+        for (const s of listed || []) if (s.error) failed.set(s.slug, s.name);
+        const out = [];
+        for (const m of String(code || '').matchAll(CALL_RE)) {
+            const name = failed.get(m[2]);
+            if (name !== undefined && !out.includes(name)) out.push(name);
+        }
+        return out;
+    }
+
     /** The assistant box under the Code tab. All editor services come in through deps (see the plan). */
     function mountAssistBox(el, deps) {
         const t = deps.t;
@@ -200,7 +225,8 @@
         const status = (html) => { q('status').innerHTML = html; };
         const thinking = () => esc(t('workflow.codeAssist.thinking'));
         /** The listing lines, plus "Thinking…" while an Ask runs (a server tick mid-Ask keeps it). */
-        const showBase = () => status(controller ? base + (base ? '<br>' : '') + thinking() : base);
+        const withBase = (html) => base + (base && html ? '<br>' : '') + html;
+        const showBase = () => status(controller ? withBase(thinking()) : base);
         const remembered = () => { try { return localStorage.getItem(STORE) || ''; } catch (_) { return ''; } };
 
         const modelsReady = (async () => {
@@ -225,7 +251,9 @@
             return listed;
         }
 
+        /** The proposal against the code as it is now; Accept applies it only if the code is still that. */
         function showProposal(ans) {
+            const shownCode = deps.getCode();
             const { exits, added, kept, errors } = mergeExits(ans.exits, deps.getExits(), deps.wiredExits());
             const wiring = deps.wiring();
             const chip = (e) => {
@@ -233,7 +261,7 @@
                     : kept.includes(e) ? ` — ${esc(t('workflow.codeAssist.exitKept', { nodes: (wiring[e] || []).join(', ') }))}` : '';
                 return `<div><code>${esc(e)}</code>${note}</div>`;
             };
-            const diff = lineDiff(deps.getCode(), ans.code).map((d) => {
+            const diff = lineDiff(shownCode, ans.code).map((d) => {
                 const bg = d.op === '+' ? 'background:rgba(34,197,94,0.15);' : d.op === '-' ? 'background:rgba(239,68,68,0.15);' : '';
                 return `<div style="${bg}white-space:pre;">${esc(d.op + ' ' + d.line)}</div>`;
             }).join('');
@@ -247,7 +275,16 @@
                     <button type="button" class="storage-config-btn save" data-a="accept" ${errors.length ? 'disabled' : ''}>${esc(t('workflow.codeAssist.accept'))}</button>
                 </div>`;
             q('discard').addEventListener('click', () => { q('proposal').innerHTML = ''; });
-            q('accept').addEventListener('click', () => { deps.apply({ code: ans.code, exits }); q('proposal').innerHTML = ''; });
+            q('accept').addEventListener('click', () => {
+                if (deps.getCode() !== shownCode) {      // edited since: show the comparison again, Accept again
+                    showProposal(ans);
+                    status(withBase(esc(t('workflow.codeAssist.codeChanged'))));
+                    return;
+                }
+                deps.apply({ code: ans.code, exits });
+                q('proposal').innerHTML = '';
+                status(base);
+            });
         }
 
         async function ask() {
@@ -266,7 +303,7 @@
                 if (!opt) { status(esc(t('workflow.codeAssist.failed', { message: modelsError || 'no model available' }))); return; }
                 const { usable } = splitDocumented(await refresh());
                 if (ctl.signal.aborted) return;
-                if (askBlocker(deps.tickedCount(), usable)) { status(esc(t('workflow.codeAssist.noTools'))); return; }
+                if (askBlocker(deps.tickedCount(), usable)) { status(withBase(esc(t('workflow.codeAssist.noTools')))); return; }
                 const message = buildUserMessage({ usable, exits: deps.getExits(), wiring: deps.wiring(),
                     sample: deps.getSample(), code: deps.getCode(), request });
                 let msg = message, ans = null, errs = [];
@@ -284,8 +321,8 @@
                     msg = `${message}\n\n## Your previous answer was rejected\n${errs.join('\n')}\nAnswer again, fixing this.`;
                 }
                 status(base);
-                if (ans.kind === 'cannot') status(esc(t('workflow.codeAssist.cannot', { reason: ans.reason })));
-                else if (errs.length) status(esc(t('workflow.codeAssist.unusable', { reason: errs.join(' ') })));
+                if (ans.kind === 'cannot') status(withBase(esc(t('workflow.codeAssist.cannot', { reason: ans.reason }))));
+                else if (errs.length) status(withBase(esc(t('workflow.codeAssist.unusable', { reason: errs.join(' ') }))));
                 else showProposal(ans);
             } catch (e) {
                 if (!ctl.signal.aborted) status(esc(t('workflow.codeAssist.failed', { message: e?.message || e })));
@@ -300,5 +337,5 @@
         return { refresh };
     }
 
-    return { mergeExits, lineDiff, changingCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer, mountAssistBox };
+    return { mergeExits, lineDiff, changingCalls, unlistedCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer, mountAssistBox };
 });

@@ -94,4 +94,54 @@ assert.deepStrictEqual(CA.changingCalls(code, sn),
     [{ server: 'ServiceNow', tool: 'create_ticket' }, { server: 'ServiceNow', tool: 'purge' }]);
 assert.deepStrictEqual(CA.changingCalls('call_tool("servicenow", "plain")', sn), []);
 
-console.log('code-node-assist core: ok');
+// final fix wave -- the current code is not documentation; result handling is never dropped silently
+assert.ok(CA.SYSTEM_PROMPT.includes('4. The current code is NOT documentation'));
+assert.ok(CA.SYSTEM_PROMPT.includes('even if the current code already uses it'));
+assert.ok(CA.SYSTEM_PROMPT.includes('6. Never remove or weaken the current code\'s handling of a tool result'));
+assert.ok(CA.SYSTEM_PROMPT.includes('you\n   can neither keep it (rule 1) nor drop it: answer cannot'));
+assert.ok(CA.SYSTEM_PROMPT.includes('call_tool raises only when the server marks the result as an error'));
+assert.ok(CA.SYSTEM_PROMPT.includes('detect them as documented and route to error'));
+assert.ok(!/outlook|servicenow|jira/i.test(CA.SYSTEM_PROMPT));                 // general for every server
+assert.ok(msg.includes('## Current code (for names and style only; it is not documentation, see rules 4 and 6)'));
+
+// Test confirmation: servers the code calls whose listing failed
+const mixed = [{ name: 'Outlook', slug: 'outlook', tools: [], error: 'HTTP 502' },
+    { name: 'Jira', slug: 'jira', tools: [{ name: 'get' }] }, { name: 'Idle', slug: 'idle', tools: [], error: 'down' }];
+assert.deepStrictEqual(CA.unlistedCalls('call_tool("outlook", "a")\ncall_tool(\'outlook\', "b")\ncall_tool("jira", "get")', mixed), ['Outlook']);
+assert.deepStrictEqual(CA.unlistedCalls('call_tool("jira", "get")', mixed), []);
+assert.deepStrictEqual(CA.unlistedCalls('x = 1', mixed), []);
+
+// the box: cannot keeps the listing lines; Accept refuses code edited since the proposal
+(async () => {
+    const stubs = {};
+    const stub = (k) => stubs[k] || (stubs[k] = { value: k === 'model' ? '0' : '', innerHTML: '', textContent: '', handlers: [],
+        addEventListener(ev, h) { if (ev === 'click') this.handlers.push(h); }, click() { return this.handlers[this.handlers.length - 1](); } });
+    const el = { innerHTML: '', querySelector: (sel) => stub(/data-a="([^"]+)"/.exec(sel)[1]) };
+    let code = 'def run(input, call_tool):\n    return input\n', applied = null, reply = '{"cannot": "no field"}';
+    const deps = {
+        t: (k, p) => k + (p ? JSON.stringify(p) : ''), tickedCount: () => 1,
+        listServers: async () => [...listed],
+        models: async () => [{ provider: 'p', model: 'm', label: 'p m' }],
+        ask: async () => reply, checkPython: async () => null,
+        getCode: () => code, getExits: () => ['next'], wiredExits: () => new Set(), wiring: () => ({}), getSample: () => '',
+        apply: (a) => { applied = a; },
+    };
+    const box = CA.mountAssistBox(el, deps);
+    stub('request').value = 'get the next email';
+    await stub('ask').click();
+    assert.ok(stubs.status.innerHTML.includes('workflow.codeAssist.listFailed'));
+    assert.ok(stubs.status.innerHTML.includes('workflow.codeAssist.undocumented'));
+    assert.ok(stubs.status.innerHTML.includes('workflow.codeAssist.cannot'));
+    reply = JSON.stringify({ code: 'def run(input, call_tool):\n    return 1\n', exits: ['next'], explanation: 'e' });
+    await stub('ask').click();
+    assert.ok(stubs.proposal.innerHTML.includes('return 1'));
+    code = 'def run(input, call_tool):\n    return 2\n';                        // edited after the proposal
+    stub('accept').click();
+    assert.strictEqual(applied, null);
+    assert.ok(stubs.status.innerHTML.includes('workflow.codeAssist.codeChanged'));
+    assert.ok(stubs.proposal.innerHTML.includes('return 2'));                  // diff now against the edited code
+    stub('accept').click();
+    assert.deepStrictEqual(applied, { code: 'def run(input, call_tool):\n    return 1\n', exits: ['next'] });
+    assert.strictEqual(typeof box.refresh, 'function');
+    console.log('code-node-assist core: ok');
+})().catch((e) => { console.error(e); process.exit(1); });

@@ -9071,7 +9071,7 @@ class WorkflowEditor {
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
         let servers = [];
-        const testTools = new Map();   // one tools listing per server per modal open (Test confirmation)
+        const testTools = new Map();   // one successful tools listing per server per modal open (Test confirmation)
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
@@ -9112,6 +9112,7 @@ class WorkflowEditor {
             servers = await this._loadMcpServersMeta(true);
             renderServers();
             refreshOutlook();
+            assist?.refresh();
         })();
 
         // The assistant under the Code tab: writes the code and exits from the checked servers' tool docs.
@@ -9191,6 +9192,7 @@ class WorkflowEditor {
             const missing = t.servers.filter((sl) => !servers.some((m) => CN.slug(m.name) === sl));
             show(missing.length ? `This template calls ${missing.join(', ')}: add an MCP server with that name in Settings → MCP Servers.` : '');
             refreshOutlook();
+            assist?.refresh();
         });
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
@@ -9200,13 +9202,22 @@ class WorkflowEditor {
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
                 if (errs.length) { show(errs.join('\n'), true); return; }
+                // A failed listing is never cached (the next Test lists again) and never reads as "no tools".
                 const listed = await Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
-                    if (!testTools.has(m.name)) testTools.set(m.name, Promise.resolve(this._mcpProxyListToolEntries(m)).catch(() => ({})));
-                    return { name: m.name, slug: CN.slug(m.name), tools: ((await testTools.get(m.name)) || {}).tools || [] };
+                    if (!testTools.has(m.name)) testTools.set(m.name, this._mcpProxyListToolEntries(m).catch((e) => ({ error: String(e?.message || e) })));
+                    const r = (await testTools.get(m.name)) || { error: 'tools/list failed' };
+                    if (r.error || !Array.isArray(r.tools)) testTools.delete(m.name);
+                    return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error || (Array.isArray(r.tools) ? undefined : 'tools/list failed') };
                 }));
+                // Checked names that are not among the user's servers could not be listed either.
+                const known = new Set(servers.map((m) => m.name));
+                for (const n of checked) if (!known.has(n)) listed.push({ name: n, slug: CN.slug(n), tools: [], error: 'not listed' });
                 const changing = window.CodeNodeAssist.changingCalls(cfg.code, listed);
                 if (changing.length && !confirm(this.t('workflow.codeAssist.confirmTest',
                     { calls: changing.map((c) => `${c.tool} (${c.server})`).join(', ') }))) return;
+                const unlisted = window.CodeNodeAssist.unlistedCalls(cfg.code, listed);
+                if (unlisted.length && !confirm(this.t('workflow.codeAssist.confirmUnlisted',
+                    { servers: unlisted.join(', ') }))) return;
                 show('Running…');
                 const sample = f('sample').value;
                 const prompt = this.lastUserPrompt || '';
@@ -10079,7 +10090,7 @@ class WorkflowEditor {
                 }),
             });
             const rpc = data?.response || data;
-            if (rpc?.error) return { error: rpc.error.message || 'tools/list failed' };
+            if (rpc?.error) return { error: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'tools/list failed') };
             const tools = rpc?.result?.tools;
             return Array.isArray(tools) ? { tools: tools.filter((x) => x && x.name) } : { error: 'no tool list in the answer' };
         } catch (e) { return { error: String(e?.message || e) }; }
