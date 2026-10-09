@@ -218,7 +218,7 @@
             <div data-a="status" class="text-xs text-gray-500" style="margin-top:6px;"></div>
             <div data-a="proposal" style="margin-top:8px;"></div>`;
         const q = (k) => el.querySelector(`[data-a="${k}"]`);
-        const STORE = 'codeAssist.model';
+        const STORE = 'codeAssist.provider';
         let options = [], modelsError = null, controller = null;
         let base = '';   // the status without the "Thinking…" line: listing failures and the "not usable" line
 
@@ -232,11 +232,11 @@
         const modelsReady = (async () => {
             try { options = (await deps.models()) || []; } catch (e) { options = []; modelsError = e?.message || String(e); return; }
             q('model').innerHTML = options.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('');
-            const i = options.findIndex((o) => `${o.provider}|${o.model}` === remembered());
+            const i = options.findIndex((o) => o.provider === remembered());
             if (i >= 0) q('model').value = String(i);
             q('model').addEventListener('change', () => {
                 const o = options[Number(q('model').value)];
-                try { localStorage.setItem(STORE, `${o.provider}|${o.model}`); } catch (_) {}
+                try { localStorage.setItem(STORE, o.provider); } catch (_) {}
             });
         })();
 
@@ -308,7 +308,7 @@
                     sample: deps.getSample(), code: deps.getCode(), request });
                 let msg = message, ans = null, errs = [];
                 for (let attempt = 0; attempt < 2; attempt++) {
-                    ans = parseAnswer(await deps.ask({ provider: opt.provider, model: opt.model, system: SYSTEM_PROMPT, message: msg, signal: ctl.signal }));
+                    ans = parseAnswer(await deps.ask({ provider: opt.provider, system: SYSTEM_PROMPT, message: msg, signal: ctl.signal }));
                     if (ctl.signal.aborted) return;
                     if (ans.kind === 'cannot') break;
                     errs = ans.kind === 'invalid' ? [ans.error] : checkAnswer(ans, usable);

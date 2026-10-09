@@ -9138,16 +9138,17 @@ class WorkflowEditor {
                 const r = await this._mcpProxyListToolEntries(m);
                 return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error };
             })),
+            // One entry per provider, labelled with the model the user settings say runs: on the package key the
+            // admin's default_model, with the user's own key their saved choice. /chat applies that model itself.
             models: async () => {
                 await this.loadProviders();
-                if (!this._modelCatalog) {
-                    try { this._modelCatalog = (await (await fetch(window.apiUrl('/models/catalog'))).json())?.providers || {}; }
-                    catch (_) { this._modelCatalog = {}; }
-                }
-                return (this.providers || []).flatMap((p) => [
-                    { provider: p.name, model: '', label: this.t('workflow.codeAssist.providerDefault', { provider: p.name }) },
-                    ...((this._modelCatalog[p.name] || []).map((mm) => ({ provider: p.name, model: mm.id, label: `${p.name} · ${mm.label || mm.id}` }))),
-                ]);
+                let s = {};
+                try { s = await (await fetch(`${this.apiBase}/settings/keys`, { headers: this.getAuthHeaders(), credentials: 'include' })).json(); }
+                catch (_) { s = {}; }
+                return (this.providers || []).map((p) => {
+                    const model = (!s.locked?.[p.name] && s.models?.[p.name]) || s.package_models?.[p.name] || '';
+                    return { provider: p.name, model, label: model ? `${p.name} · ${model}` : this.t('workflow.codeAssist.providerDefault', { provider: p.name }) };
+                });
             },
             ask: (o) => this._codeAssistAsk(o),
             checkPython: (code) => this._codeNodeCheck(code),
@@ -13776,13 +13777,13 @@ class WorkflowEditor {
     }
 
     /** One non-streaming /chat turn for the code node assistant: no history, no tools, no memory. Returns the text. */
-    async _codeAssistAsk({ provider, model, system, message, signal }) {
+    async _codeAssistAsk({ provider, system, message, signal }) {
         const resp = await fetch(`${this.apiBase}/chat`, {
             method: 'POST',
             headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
             credentials: 'include',
             signal,
-            body: JSON.stringify({ message, conversation_history: [], streaming: false, provider, model: model || null,
+            body: JSON.stringify({ message, conversation_history: [], streaming: false, provider,
                 system_prompt: system, tools: [], memory: false }),
         });
         if (!resp.ok) {
