@@ -66,4 +66,32 @@ assert.strictEqual(CA.parseAnswer('{"cannot": "why", "code": "x", "exits": ["a"]
 assert.ok(CA.checkAnswer({ ...good, exits: ['x'] }, usable).some((e) => e.includes('"error" exit')));
 assert.deepStrictEqual(CA.checkAnswer({ code: 'def run(input, call_tool):\n    return input\n', exits: ['next'] }, []), []);
 
+// exit merge -- review focus 4
+let m = CA.mergeExits(['new_mail', 'no_mail', 'error'], ['next'], new Set(['next']));
+assert.deepStrictEqual(m, { exits: ['new_mail', 'no_mail', 'error', 'next'], added: ['new_mail', 'no_mail', 'error'], kept: ['next'], errors: [] });
+m = CA.mergeExits(['a', 'b'], ['next', 'b'], new Set());                 // unwired unused exit dropped
+assert.deepStrictEqual([m.exits, m.added, m.kept], [['a', 'b'], ['a'], []]);
+m = CA.mergeExits(['a', 'b', 'c', 'd', 'e', 'f', 'g'], ['x', 'y'], new Set(['x', 'y']));
+assert.strictEqual(m.exits.length, 9);
+assert.ok(m.errors.some((e) => e.includes('1 to 8')));
+
+// line diff
+assert.deepStrictEqual(CA.lineDiff('a\nb\nc', 'a\nx\nc'),
+    [{ op: ' ', line: 'a' }, { op: '-', line: 'b' }, { op: '+', line: 'x' }, { op: ' ', line: 'c' }]);
+assert.deepStrictEqual(CA.lineDiff('', 'a'), [{ op: '-', line: '' }, { op: '+', line: 'a' }]);
+assert.deepStrictEqual(CA.lineDiff('a', 'a'), [{ op: ' ', line: 'a' }]);
+
+// changing calls -- review focus 5
+const sn = [{ name: 'ServiceNow', slug: 'servicenow', tools: [
+    { name: 'create_ticket', annotations: { readOnlyHint: false } },
+    { name: 'purge', annotations: { destructiveHint: true } },
+    { name: 'list', annotations: { readOnlyHint: true } },
+    { name: 'plain' },
+] }];
+const code = 'call_tool("servicenow", "create_ticket", {})\ncall_tool("servicenow", "create_ticket", {})\n'
+    + 'call_tool("servicenow", "list")\ncall_tool("servicenow", "plain")\ncall_tool("servicenow", "purge")';
+assert.deepStrictEqual(CA.changingCalls(code, sn),
+    [{ server: 'ServiceNow', tool: 'create_ticket' }, { server: 'ServiceNow', tool: 'purge' }]);
+assert.deepStrictEqual(CA.changingCalls('call_tool("servicenow", "plain")', sn), []);
+
 console.log('code-node-assist core: ok');

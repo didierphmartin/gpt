@@ -135,5 +135,48 @@
         return errs;
     }
 
-    return { CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer };
+    /** The node's exits after Accept: the proposal's, plus every current exit that is wired and not proposed. */
+    function mergeExits(proposed, current, wired) {
+        const cur = current || [];
+        const kept = cur.filter((e) => wired.has(e) && !proposed.includes(e));
+        const exits = [...proposed, ...kept];
+        const added = proposed.filter((e) => !cur.includes(e));
+        const errors = CN.validateConfig({ code: 'def run(', exits, mcp_servers: [], timeout_s: 1 });
+        return { exits, added, kept, errors };
+    }
+
+    /** Line diff (longest common subsequence): ' ' same, '-' only in the old text, '+' only in the new. */
+    function lineDiff(oldText, newText) {
+        const x = String(oldText ?? '').split('\n'), y = String(newText ?? '').split('\n');
+        const n = x.length, k = y.length;
+        const L = Array.from({ length: n + 1 }, () => new Array(k + 1).fill(0));
+        for (let i = n - 1; i >= 0; i--) for (let j = k - 1; j >= 0; j--) {
+            L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+        }
+        const out = [];
+        let i = 0, j = 0;
+        while (i < n && j < k) {
+            if (x[i] === y[j]) { out.push({ op: ' ', line: x[i] }); i++; j++; }
+            else if (L[i + 1][j] >= L[i][j + 1]) out.push({ op: '-', line: x[i++] });
+            else out.push({ op: '+', line: y[j++] });
+        }
+        while (i < n) out.push({ op: '-', line: x[i++] });
+        while (j < k) out.push({ op: '+', line: y[j++] });
+        return out;
+    }
+
+    /** Literal tool calls in the code whose server marks the tool as changing things (MCP annotations). */
+    function changingCalls(code, listed) {
+        const byKey = new Map();
+        for (const s of listed || []) for (const t of s.tools || []) byKey.set(`${s.slug}.${t.name}`, { server: s.name, tool: t.name, a: t.annotations || {} });
+        const seen = new Set(), out = [];
+        for (const m of String(code || '').matchAll(CALL_RE)) {
+            const key = `${m[2]}.${m[4]}`, hit = byKey.get(key);
+            if (!hit || seen.has(key)) continue;
+            if (hit.a.readOnlyHint === false || hit.a.destructiveHint === true) { seen.add(key); out.push({ server: hit.server, tool: hit.tool }); }
+        }
+        return out;
+    }
+
+    return { mergeExits, lineDiff, changingCalls, CALL_RE, isDocumented, splitDocumented, askBlocker, SYSTEM_PROMPT, buildUserMessage, parseAnswer, checkAnswer };
 });
