@@ -9312,7 +9312,12 @@ class WorkflowEditor {
         if (!rpc) return { error: 'network_error', message: 'no answer from the Outlook server' };
         if (rpc.error) return { error: 'network_error', message: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'error') };
         const text = rpc.result?.content?.[0]?.text;
-        if (rpc.result?.isError) return { error: 'tool_error', message: String(text || 'tool error') };
+        if (rpc.result?.isError) {
+            // The server's error text is {"error": code, "message": ...}: keep its code (not_connected, reconnect_needed...).
+            try { const e = JSON.parse(text); if (e && typeof e.error === 'string') return e; } catch (_) { /* plain text */ }
+            return { error: 'tool_error', message: String(text || 'tool error') };
+        }
+        if (rpc.result?.structuredContent && typeof rpc.result.structuredContent === 'object') return rpc.result.structuredContent;
         try { return JSON.parse(text); } catch (_) { return { error: 'bad_result', message: String(text ?? '') }; }
     }
 
@@ -9358,7 +9363,8 @@ class WorkflowEditor {
             if (who.account) {
                 status.textContent = t('connected', { account: who.account });
                 const folders = await this._outlookCall(server, 'list_folders');
-                if (Array.isArray(folders)) setFolders(folders.map((x) => x.path));
+                const list = Array.isArray(folders) ? folders : folders?.folders;   // {folders} since the server's outputSchema
+                if (Array.isArray(list)) setFolders(list.map((x) => x.path));
                 return;
             }
             switch (who.error) {
