@@ -52,4 +52,21 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         $with = LangGraphRuntime::nodeClassesBlock(true, true);
         self::assertMatchesRegularExpression('~class CodeNode\(Node\):.*?def __init__\(self, cfg: dict\):\n        super\(\).__init__\(cfg\)\n.*?CODE_HARNESS\.check_code\(cfg\["source"\]\)~s', $with);
     }
+
+    public function testToolErrorResultTakesErrorExitInCompiledScript(): void
+    {
+        $block = LangGraphRuntime::codeHarnessBlock();
+        $py = "import json, sys, types\nMCP_SLUGS = {'s': 'http://x/mcp'}\nclass _M:\n"
+            . "    def call_tool_raw(self, u, t, a):\n"
+            . "        return {'isError': True, 'content': [{'type': 'text', 'text': 'quota_exceeded'}]}\nMCP = _M()\n"
+            . $block
+            . "\nr = CODE_HARNESS.execute('def run(i, call_tool):\\n    return {\"route\": \"ok\", \"output\": call_tool(\"s\", \"t\")}',"
+            . " None, ['ok', 'error'], ['s'], _code_transport, 5)\n"
+            . "print(r['route'])\nprint('quota_exceeded' in r['output_text'])\n";
+        $file = tempnam(sys_get_temp_dir(), 'cn') . '.py';
+        file_put_contents($file, $py);
+        exec('python3 ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame(['error', 'True'], $out);
+    }
 }
