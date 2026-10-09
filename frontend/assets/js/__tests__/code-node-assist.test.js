@@ -53,4 +53,17 @@ assert.ok(CA.checkAnswer({ ...good, code: 'x = 1' }, usable).some((e) => e.inclu
 assert.ok(CA.checkAnswer({ ...good, code: good.code.replace('poll_new_mail', 'tmp_debug') }, usable).some((e) => e.includes('tmp_debug')));
 assert.ok(CA.checkAnswer({ ...good, code: good.code.replace('"outlook"', "'jira'") }, usable).some((e) => e.includes('jira')));
 
+// fix round 1
+assert.ok(!msg.includes('Style examples') && !msg.includes('poll_jobs'));
+const withOut = CA.buildUserMessage({ usable: [{ name: 'S', slug: 's', tools: [{ name: 't', description: 'd', inputSchema: {}, outputSchema: { type: 'object', properties: { zz_field: {} } } }] }],
+    exits: ['next'], wiring: {}, sample: '', code: '', request: 'r' });
+assert.ok(withOut.includes('zz_field'));
+assert.strictEqual(CA.parseAnswer('```JSON\n{"cannot": "c"}\n```').kind, 'cannot');
+assert.strictEqual(CA.parseAnswer('```jsonc\n{"cannot": "c"}\n```').kind, 'cannot');
+assert.strictEqual(CA.parseAnswer('```\n{"cannot": "c"}\n```').kind, 'cannot');
+assert.strictEqual(CA.parseAnswer('```python\nx=1\n```\nthen\n```json\n{"cannot": "c"}\n```').kind, 'cannot');
+assert.strictEqual(CA.parseAnswer('{"cannot": "why", "code": "x", "exits": ["a"]}').kind, 'cannot');
+assert.ok(CA.checkAnswer({ ...good, exits: ['x'] }, usable).some((e) => e.includes('"error" exit')));
+assert.deepStrictEqual(CA.checkAnswer({ code: 'def run(input, call_tool):\n    return input\n', exits: ['next'] }, []), []);
+
 console.log('code-node-assist core: ok');
