@@ -15,13 +15,17 @@
 
     /** Server listings -> the documented tools per server, and "slug.tool" for each undocumented one. */
     function splitDocumented(listed) {
-        const usable = [], skipped = [];
+        const usable = [], skipped = [], noSchema = [];
         for (const s of listed || []) {
             if (s.error) continue;
-            for (const t of s.tools || []) if (!isDocumented(t)) skipped.push(`${s.slug}.${t?.name}`);
+            for (const t of s.tools || []) {
+                if (!isDocumented(t)) skipped.push(`${s.slug}.${t?.name}`);
+                // Usable, but its result is described in prose only (MCP outputSchema is optional).
+                else if (!t.outputSchema || typeof t.outputSchema !== 'object') noSchema.push(`${s.slug}.${t.name}`);
+            }
             usable.push({ name: s.name, slug: s.slug, tools: (s.tools || []).filter(isDocumented) });
         }
-        return { usable, skipped };
+        return { usable, skipped, noSchema };
     }
 
     /** Why an Ask must not reach the LLM, or null. Servers ticked but no documented tool: refuse. */
@@ -243,9 +247,10 @@
         /** The ticked servers' listings, the "not usable" line and any listing failures. */
         async function refresh() {
             const listed = await deps.listServers();
-            const { skipped } = splitDocumented(listed);
+            const { skipped, noSchema } = splitDocumented(listed);
             const lines = listed.filter((s) => s.error).map((s) => esc(t('workflow.codeAssist.listFailed', { server: s.name, message: s.error })));
             if (skipped.length) lines.push(esc(t('workflow.codeAssist.undocumented', { list: skipped.join(', ') })));
+            if (noSchema.length) lines.push(esc(t('workflow.codeAssist.noSchema', { list: noSchema.join(', ') })));
             base = lines.join('<br>');
             showBase();
             return listed;

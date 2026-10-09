@@ -780,6 +780,7 @@
       "stop": "Arrêter",
       "emptyRequest": "Décrivez d'abord ce que le nœud doit faire.",
       "undocumented": "Inutilisables (non documentés) : {{list}}",
+      "noSchema": "Sans schéma de résultat : {{list}}",
       "listFailed": "{{server}} : impossible de lister les outils — {{message}}",
       "noTools": "Les serveurs cochés ne documentent pas leurs outils : le code ne peut pas être généré de façon fiable. Écrivez le code à la main, ou demandez au responsable du serveur de documenter les outils.",
       "cannot": "L'assistant ne peut pas écrire ce code : {{reason}}",

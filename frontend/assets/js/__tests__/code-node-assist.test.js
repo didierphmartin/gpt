@@ -14,9 +14,12 @@ const listed = [
 assert.strictEqual(CA.isDocumented({ description: 'x' }), true);
 assert.strictEqual(CA.isDocumented({ description: ' ' }), false);
 assert.strictEqual(CA.isDocumented({}), false);
-const { usable, skipped } = CA.splitDocumented(listed);
+const { usable, skipped, noSchema } = CA.splitDocumented(listed);
 assert.deepStrictEqual(usable.map((s) => [s.slug, s.tools.map((t) => t.name)]), [['outlook', ['poll_new_mail']]]);
 assert.deepStrictEqual(skipped, ['outlook.tmp_debug', 'outlook.nodesc']);
+assert.deepStrictEqual(noSchema, ['outlook.poll_new_mail']);   // documented, no outputSchema
+assert.deepStrictEqual(CA.splitDocumented([{ name: 'X', slug: 'x', tools: [
+    { name: 'a', description: 'd', outputSchema: { type: 'object' } }, { name: 'b', description: 'd' }] }]).noSchema, ['x.b']);
 
 // refuse before asking -- review focus 1
 assert.strictEqual(CA.askBlocker(0, []), null);                       // no server ticked: plain Python is fine

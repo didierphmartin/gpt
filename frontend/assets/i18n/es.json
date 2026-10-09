@@ -780,6 +780,7 @@
       "stop": "Detener",
       "emptyRequest": "Primero describe lo que debe hacer el nodo.",
       "undocumented": "No utilizables (sin documentar): {{list}}",
+      "noSchema": "Sin esquema de resultado: {{list}}",
       "listFailed": "{{server}}: no se pudieron listar las herramientas — {{message}}",
       "noTools": "Los servidores marcados no documentan sus herramientas, así que no se puede generar código de forma fiable. Escribe el código a mano o pide al responsable del servidor que documente las herramientas.",
       "cannot": "El asistente no puede escribir este código: {{reason}}",
