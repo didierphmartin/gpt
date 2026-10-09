@@ -514,12 +514,33 @@ async function runCodeNode(payload) {
   return JSON.parse(pyodide.globals.get('_code_res_json'));
 }
 
+// Code nodes: the harness's own static check (syntax, imports, run defined) without running anything.
+const CHECK_DRIVER = `
+import json, types
+_req = json.loads(_code_req_json)
+_h = types.ModuleType("code_node_harness")
+exec(_req["harness"], _h.__dict__)
+try:
+    _h.check_code(_req["code"])
+    _code_check_msg = ""
+except _h.CodeNodeError as e:
+    _code_check_msg = str(e)
+`;
+
+async function checkCodeNode(payload) {
+  await ensureLoaded();
+  pyodide.globals.set('_code_req_json', JSON.stringify(payload));
+  await pyodide.runPythonAsync(CHECK_DRIVER);
+  return { error: pyodide.globals.get('_code_check_msg') || null };
+}
+
 self.onmessage = async (e) => {
   const { id, verb, payload } = e.data || {};
   try {
     let result;
     if (verb === 'runSkillScript') result = await runSkillScript(payload);
     else if (verb === 'runCode') result = await runCodeNode(payload);
+    else if (verb === 'checkCode') result = await checkCodeNode(payload);
     else throw new Error(`unknown verb: ${verb}`);
     self.postMessage({ id, ok: true, result });
   } catch (err) {

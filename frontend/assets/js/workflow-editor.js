@@ -10007,6 +10007,31 @@ class WorkflowEditor {
         }
     }
 
+    /** tools/list through the proxy, full entries; {error} when the server could not be listed. */
+    async _mcpProxyListToolEntries(server) {
+        try {
+            if (!server?.url || typeof window.mcpClient?.request !== 'function') return { error: 'no URL for this server' };
+            const data = await window.mcpClient.request('/mcp/proxy', {
+                method: 'POST',
+                body: JSON.stringify({
+                    action: 'proxy', server_url: server.url, server_id: server.id,
+                    user_id: typeof window.mcpClient.getUserId === 'function' ? window.mcpClient.getUserId() : undefined,
+                    jsonrpc: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+                }),
+            });
+            const rpc = data?.response || data;
+            if (rpc?.error) return { error: rpc.error.message || 'tools/list failed' };
+            const tools = rpc?.result?.tools;
+            return Array.isArray(tools) ? { tools: tools.filter((x) => x && x.name) } : { error: 'no tool list in the answer' };
+        } catch (e) { return { error: String(e?.message || e) }; }
+    }
+
+    /** Tool names of a server ([] on failure). */
+    async _mcpProxyListTools(server) {
+        const r = await this._mcpProxyListToolEntries(server);
+        return (r.tools || []).map((x) => x?.name).filter(Boolean);
+    }
+
     /**
      * Defensively parse an MCP list_providers result into a string[] of provider
      * names. Handles: { providers:[...] }, result.content[0].text JSON, plain
@@ -13662,31 +13687,49 @@ class WorkflowEditor {
         }
     }
 
-    async _codeNodeExecuteOnce(req) {
+    async _codeHarness() {
         if (!this._codeHarnessSrc) {
             const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit-2');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
-        const payload = { ...req, harness: this._codeHarnessSrc,
+        return this._codeHarnessSrc;
+    }
+
+    async _codeNodeExecuteOnce(req) {
+        const payload = { ...req, harness: await this._codeHarness(),
             api_base: window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
             token: window.authManager?.token || window.authManager?.getToken?.() || null };
-        // The worker runs Python synchronously, so jobs go through it one at a time; each job's
-        // timer starts when the job starts, not while it waits in the queue.
+        return this._codeWorkerJob('runCode', payload, (req.timeout_s + 5) * 1000,
+            `timed out after ${req.timeout_s}s`);
+    }
+
+    /** The harness's static check of `source`: its message, or null when the code is acceptable. */
+    async _codeNodeCheck(source) {
+        const r = await this._codeWorkerJob('checkCode', { code: source, harness: await this._codeHarness() },
+            10000, 'code check timed out');
+        return r.error || null;
+    }
+
+    /**
+     * One job through the single code worker. The worker runs Python synchronously, so jobs go
+     * through it one at a time; each job's timer starts when the job starts, not while it waits
+     * in the queue. A cold worker first loads Pyodide (tens of seconds), so it gets +90 s.
+     */
+    _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-no-exit-2');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261009-assist');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
-            // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
-            const limitMs = (req.timeout_s + 5) * 1000 + (cold ? 90000 : 0);
+            const limit = limitMs + (cold ? 90000 : 0);
             return new Promise((resolve, reject) => {
                 const timer = setTimeout(() => {
                     w.removeEventListener('message', onMsg);
                     w.terminate();
                     if (this._codeWorker === w) { this._codeWorker = null; this._codeWorkerWarm = false; }
-                    reject(new Error(`timed out after ${req.timeout_s}s`));
-                }, limitMs);
+                    reject(new Error(timeoutMsg));
+                }, limit);
                 const onMsg = (e) => {
                     const m = e.data || {};
                     if (m.type === 'progress' || m.id !== id) return;
@@ -13696,12 +13739,12 @@ class WorkflowEditor {
                     m.ok ? resolve(m.result) : reject(new Error(m.error));
                 };
                 w.addEventListener('message', onMsg);
-                w.postMessage({ id, verb: 'runCode', payload });
+                w.postMessage({ id, verb, payload });
             });
         };
         const job = (this._codeQueue || Promise.resolve()).then(runOne, runOne);
         this._codeQueue = job.catch(() => {});
-        return await job;
+        return job;
     }
 
     /**
