@@ -9071,6 +9071,7 @@ class WorkflowEditor {
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
         let servers = [];
+        const testTools = new Map();   // one tools listing per server per modal open (Test confirmation)
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
@@ -9199,6 +9200,13 @@ class WorkflowEditor {
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
                 if (errs.length) { show(errs.join('\n'), true); return; }
+                const listed = await Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
+                    if (!testTools.has(m.name)) testTools.set(m.name, Promise.resolve(this._mcpProxyListToolEntries(m)).catch(() => ({})));
+                    return { name: m.name, slug: CN.slug(m.name), tools: ((await testTools.get(m.name)) || {}).tools || [] };
+                }));
+                const changing = window.CodeNodeAssist.changingCalls(cfg.code, listed);
+                if (changing.length && !confirm(this.t('workflow.codeAssist.confirmTest',
+                    { calls: changing.map((c) => `${c.tool} (${c.server})`).join(', ') }))) return;
                 show('Running…');
                 const sample = f('sample').value;
                 const prompt = this.lastUserPrompt || '';
