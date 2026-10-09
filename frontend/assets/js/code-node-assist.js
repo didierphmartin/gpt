@@ -194,13 +194,17 @@
             <div data-a="proposal" style="margin-top:8px;"></div>`;
         const q = (k) => el.querySelector(`[data-a="${k}"]`);
         const STORE = 'codeAssist.model';
-        let options = [], listed = null, controller = null;
+        let options = [], modelsError = null, controller = null;
+        let base = '';   // the status without the "Thinking…" line: listing failures and the "not usable" line
 
         const status = (html) => { q('status').innerHTML = html; };
+        const thinking = () => esc(t('workflow.codeAssist.thinking'));
+        /** The listing lines, plus "Thinking…" while an Ask runs (a server tick mid-Ask keeps it). */
+        const showBase = () => status(controller ? base + (base ? '<br>' : '') + thinking() : base);
         const remembered = () => { try { return localStorage.getItem(STORE) || ''; } catch (_) { return ''; } };
 
-        (async () => {
-            options = await deps.models();
+        const modelsReady = (async () => {
+            try { options = (await deps.models()) || []; } catch (e) { options = []; modelsError = e?.message || String(e); return; }
             q('model').innerHTML = options.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('');
             const i = options.findIndex((o) => `${o.provider}|${o.model}` === remembered());
             if (i >= 0) q('model').value = String(i);
@@ -212,11 +216,12 @@
 
         /** The ticked servers' listings, the "not usable" line and any listing failures. */
         async function refresh() {
-            listed = await deps.listServers();
+            const listed = await deps.listServers();
             const { skipped } = splitDocumented(listed);
             const lines = listed.filter((s) => s.error).map((s) => esc(t('workflow.codeAssist.listFailed', { server: s.name, message: s.error })));
             if (skipped.length) lines.push(esc(t('workflow.codeAssist.undocumented', { list: skipped.join(', ') })));
-            status(lines.join('<br>'));
+            base = lines.join('<br>');
+            showBase();
             return listed;
         }
 
@@ -249,35 +254,45 @@
             if (controller) { controller.abort(); return; }          // the button reads "Stop" while asking
             const request = q('request').value.trim();
             if (!request) { status(esc(t('workflow.codeAssist.emptyRequest'))); return; }
-            q('proposal').innerHTML = '';
-            const { usable } = splitDocumented(await refresh());
-            if (askBlocker(deps.tickedCount(), usable)) { status(esc(t('workflow.codeAssist.noTools'))); return; }
-            const opt = options[Number(q('model').value)] || options[0] || { provider: '', model: '' };
-            const message = buildUserMessage({ usable, exits: deps.getExits(), wiring: deps.wiring(),
-                sample: deps.getSample(), code: deps.getCode(), request });
-            controller = new AbortController();
+            // Busy from the first moment: a second click while listing or asking aborts this Ask.
+            const ctl = controller = new AbortController();
             q('ask').textContent = t('workflow.codeAssist.stop');
-            const before = q('status').innerHTML;
-            status(before + (before ? '<br>' : '') + esc(t('workflow.codeAssist.thinking')));
+            q('proposal').innerHTML = '';
+            showBase();
             try {
+                await modelsReady;
+                if (ctl.signal.aborted) return;
+                const opt = options[Number(q('model').value)] || options[0];
+                if (!opt) { status(esc(t('workflow.codeAssist.failed', { message: modelsError || 'no model available' }))); return; }
+                const { usable } = splitDocumented(await refresh());
+                if (ctl.signal.aborted) return;
+                if (askBlocker(deps.tickedCount(), usable)) { status(esc(t('workflow.codeAssist.noTools'))); return; }
+                const message = buildUserMessage({ usable, exits: deps.getExits(), wiring: deps.wiring(),
+                    sample: deps.getSample(), code: deps.getCode(), request });
                 let msg = message, ans = null, errs = [];
                 for (let attempt = 0; attempt < 2; attempt++) {
-                    ans = parseAnswer(await deps.ask({ provider: opt.provider, model: opt.model, system: SYSTEM_PROMPT, message: msg, signal: controller.signal }));
+                    ans = parseAnswer(await deps.ask({ provider: opt.provider, model: opt.model, system: SYSTEM_PROMPT, message: msg, signal: ctl.signal }));
+                    if (ctl.signal.aborted) return;
                     if (ans.kind === 'cannot') break;
                     errs = ans.kind === 'invalid' ? [ans.error] : checkAnswer(ans, usable);
-                    if (!errs.length) { const py = await deps.checkPython(ans.code); if (py) errs = [py]; }
+                    if (!errs.length) {
+                        const py = await deps.checkPython(ans.code);
+                        if (ctl.signal.aborted) return;
+                        if (py) errs = [py];
+                    }
                     if (!errs.length) break;
                     msg = `${message}\n\n## Your previous answer was rejected\n${errs.join('\n')}\nAnswer again, fixing this.`;
                 }
-                status(before);
+                status(base);
                 if (ans.kind === 'cannot') status(esc(t('workflow.codeAssist.cannot', { reason: ans.reason })));
                 else if (errs.length) status(esc(t('workflow.codeAssist.unusable', { reason: errs.join(' ') })));
                 else showProposal(ans);
             } catch (e) {
-                status(e?.name === 'AbortError' ? before : esc(t('workflow.codeAssist.failed', { message: e?.message || e })));
+                if (!ctl.signal.aborted) status(esc(t('workflow.codeAssist.failed', { message: e?.message || e })));
             } finally {
                 controller = null;
                 q('ask').textContent = t('workflow.codeAssist.ask');
+                if (ctl.signal.aborted) status(base);
             }
         }
 
