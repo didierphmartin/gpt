@@ -804,6 +804,8 @@
       "checkServer": "Check the Outlook server in the MCP Servers tab.",
       "deviceCode": "Go to {{url}} and enter {{code}}",
       "useRedirect": "Your organisation blocks code sign-in. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in here instead</a>.",
+      "orBrowser": "Or <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">sign in in the browser</a>.",
+      "useRedirectAfter": "Code sign-in did not finish ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in in the browser instead</a>.",
       "failed": "Connection failed ({{status}}). Try again.",
       "folder": "Folder",
       "from": "From (optional)",

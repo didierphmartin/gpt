@@ -9380,7 +9380,15 @@ class WorkflowEditor {
             device.innerHTML = t('deviceCode', {
                 url: `<a href="${href(start.verification_uri)}" target="_blank" rel="noopener">${this.escapeHtml(start.verification_uri)}</a>`,
                 code: `<strong style="font-family:monospace">${this.escapeHtml(start.user_code)}</strong>` });
-            const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+            // The server's browser sign-in for the same connect, offered up front: a tenant can refuse the
+            // code on Microsoft's page while connect_status keeps answering pending.
+            if (start.redirect_url) device.innerHTML += ` ${t('orBrowser', { url: href(start.redirect_url) })}`;
+            let deadline = Date.now() + (Number(start.expires_in) || 900) * 1000, offered = false;
+            // A browser sign-in on screen: keep polling while it stays open (the server gives it 15 minutes).
+            const offerBrowser = (html) => {
+                if (!offered) { offered = true; deadline = Math.max(deadline, Date.now() + 900 * 1000); }
+                if (device.innerHTML !== html) device.innerHTML = html;
+            };
             while (Date.now() < deadline && el.isConnected) {
                 await new Promise((r) => setTimeout(r, 3000));
                 const st = await this._outlookCall(server, 'connect_status', { connect_id: start.connect_id });
@@ -9397,15 +9405,17 @@ class WorkflowEditor {
                     }
                     case 'policy_blocked':
                         // With a redirect the same sign-in completes in the browser: keep polling.
-                        if (st.redirect_url) {
-                            const html = t('useRedirect', { url: href(st.redirect_url) });
-                            if (device.innerHTML !== html) device.innerHTML = html;
-                            continue;
-                        }
+                        if (st.redirect_url) { offerBrowser(t('useRedirect', { url: href(st.redirect_url) })); continue; }
                         sayDevice(st.message || failed(st));
                         return;
                     default:
                         if (st.error === 'network_error') continue;   // a missed poll: the sign-in may still complete
+                        // Expired, denied or failed: the server may still offer the browser sign-in for this connect.
+                        if (st.redirect_url) {
+                            offerBrowser(t('useRedirectAfter', { status: this.escapeHtml(st.message || st.status || 'error'),
+                                url: href(st.redirect_url) }));
+                            continue;
+                        }
                         sayDevice(failed(st));
                         return;
                 }
