@@ -363,6 +363,9 @@ class LangGraphGenerator
         $lines[] = '# Without this a DIRECT terminal run has no credentials and every provider';
         $lines[] = '# call fails; runner-mediated runs only worked because main.py loads the';
         $lines[] = '# same file and subprocesses inherit the environment.';
+        $lines[] = '# A .env next to this script comes first (load_dotenv never overrides a variable already set),';
+        $lines[] = '# so a copy run outside the runner folder carries its own keys.';
+        $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))';
         $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
         $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $lines[] = 'DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps';
@@ -395,7 +398,8 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '# MCP SERVER REGISTRY';
         $lines[] = "# Baked at generation time from the workflow editor's config.";
-        $lines[] = "# Maps server URL -> metadata. If a server moves, update the URL here.";
+        $lines[] = "# Maps server URL -> metadata. If a server moves, set MCP_URL_<SLUG> in .env";
+        $lines[] = "# (e.g. MCP_URL_OUTLOOK=http://host:8770/mcp); the URL here stays the key.";
         $lines[] = $sep;
         $lines[] = '';
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($usedServers, true);
@@ -1318,9 +1322,10 @@ class LangGraphGenerator
         $lines[] = '    The (provider, model) pair was resolved by the generator: the';
         $lines[] = "    agent's explicit model overrides the provider's default from";
         $lines[] = '    system_llm_settings, and that result is what reaches this';
-        $lines[] = '    function. No hardcoded model fallbacks here — every value comes';
-        $lines[] = '    from the database, so changing a model in the editor propagates';
-        $lines[] = '    via the next Generate Python.';
+        $lines[] = '    function. No hardcoded model fallbacks here: every value was read';
+        $lines[] = '    from the database when this file was generated (the script never';
+        $lines[] = '    reads it), so a model changed in the editor takes effect at the';
+        $lines[] = '    next Generate Python.';
         $lines[] = '';
         $lines[] = '    Recognised providers (case-insensitive):';
         $lines[] = '      claude     → langchain_anthropic.ChatAnthropic';
@@ -2059,6 +2064,7 @@ PY;
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
+        $L[] = 'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env first (never overridden)';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $L[] = 'DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node\'s outputs/_debug dumps';
@@ -3371,6 +3377,7 @@ TXT;
         $L[] = '# Loaded here rather than in workflow.py so a module imported on its own';
         $L[] = '# (a test, a REPL) still finds the provider keys.';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
+        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $L[] = 'DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps';
@@ -3877,10 +3884,11 @@ PY;
                 continue;
             }
             $lines[] = '# MCP_HEADERS_' . strtoupper($slug) . '={"Header": "value"}   # in .env, only if this MCP server needs headers'
-                . ($slug === 'outlook' ? ' (Outlook: {"X-Outlook-Account": "<connection key from the editor>"})' : '');
+                . ' (a server you connected in the editor: the header and key saved on its MCP server row)';
+            $lines[] = '# MCP_URL_' . strtoupper($slug) . '=http://host:port/mcp   # in .env, only if this MCP server no longer answers at the URL compiled in';
         }
         if ($lines) {
-            $lines[] = '# (one connection per MCP URL: for a second mailbox, run a second MCP server instance on its own URL)';
+            $lines[] = '# (one connection per MCP URL: for a second account, run a second MCP server instance on its own URL)';
         }
         return $lines;
     }

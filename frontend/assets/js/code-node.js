@@ -159,13 +159,21 @@
             .map((c) => ({ node: String(c.node), input: c.output }));
     }
 
-    /** The parents that ran, as the harness wants them; a parent with no output (skipped) is left out. */
-    function parentsFor(nodeId, nodes, outputs, kindOf) {
+    /**
+     * The parents that ran, as the harness wants them; a parent with no output (skipped) is left out.
+     * A dispatcher parent (isDispatcher) stands for its own parents: a branch receives what the
+     * dispatcher received (the email), not the agent-framed context it was handed.
+     */
+    function parentsFor(nodeId, nodes, outputs, kindOf, isDispatcher = () => false, seen = new Set()) {
         const res = [];
         const ins = nodes[nodeId]?.inputs || {};
         for (const k of Object.keys(ins)) {
             for (const c of ins[k].connections || []) {
                 const u = String(c.node);
+                if (isDispatcher(u)) {
+                    if (!seen.has(u)) res.push(...parentsFor(u, nodes, outputs, kindOf, isDispatcher, seen.add(u)));
+                    continue;
+                }
                 const text = outputs[u];
                 if (text == null || text === '') continue;
                 const d = nodes[u]?.data || {};

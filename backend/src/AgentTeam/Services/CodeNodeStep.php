@@ -22,8 +22,12 @@ final class CodeNodeStep
         return mb_strlen($line) <= self::REASON_MAX ? $line : mb_substr($line, 0, self::REASON_MAX) . '…';
     }
 
-    /** run()'s parents: executed parents with a non-empty output; Start flagged (CodeNode.parentsFor). */
-    public static function parents(int $nodeId, array $edges, array $nodes, array $nodeOutputs): array
+    /**
+     * run()'s parents: executed parents with a non-empty output; Start flagged (CodeNode.parentsFor).
+     * A dispatcher parent (its output carries the 'route' it chose) stands for its own parents: a
+     * branch receives what the dispatcher received (the email), not the agent-framed context.
+     */
+    public static function parents(int $nodeId, array $edges, array $nodes, array $nodeOutputs, array $seen = []): array
     {
         $out = [];
         foreach ($edges as $e) {
@@ -31,6 +35,12 @@ final class CodeNodeStep
                 continue;
             }
             $u = (int) $e['from_node_id'];
+            if (isset($nodeOutputs[$u]['route'])) {
+                if (!isset($seen[$u])) {
+                    array_push($out, ...self::parents($u, $edges, $nodes, $nodeOutputs, $seen + [$u => true]));
+                }
+                continue;
+            }
             $text = $nodeOutputs[$u]['output'] ?? null;
             if ($text === null || $text === '') {
                 continue;

@@ -40,6 +40,16 @@ class DispatchRoutingTest extends TestCase
         $this->assertSame([], DispatchRouting::targets(5, $edges, $nodes));
     }
 
+    public function testCodeNodesAreTargetsToo(): void
+    {
+        // The editor run and compiled scripts route to code nodes; the scheduled run must too.
+        $nodes = [2 => ['id' => 2, 'node_type' => 'agent', 'config' => ['agent_name' => 'Triage']],
+            3 => ['id' => 3, 'node_type' => 'code', 'config' => ['name' => 'claims']],
+            4 => ['id' => 4, 'node_type' => 'agent', 'config' => ['agent_name' => 'Help']]];
+        $edges = [['from_node_id' => 2, 'to_node_id' => 3], ['from_node_id' => 2, 'to_node_id' => 4]];
+        $this->assertSame([['id' => 3, 'name' => 'claims'], ['id' => 4, 'name' => 'Help']], DispatchRouting::targets(2, $edges, $nodes));
+    }
+
     public function testToolDefinitionEnumeratesTargetNames(): void
     {
         [$nodes, $edges] = $this->graph();

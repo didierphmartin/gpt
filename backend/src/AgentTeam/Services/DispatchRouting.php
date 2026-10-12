@@ -41,7 +41,7 @@ final class DispatchRouting
         return null;
     }
 
-    /** Downstream agent nodes of $nodeId as [['id' => int, 'name' => string], …] in edge order. */
+    /** Downstream agent and code nodes of $nodeId as [['id' => int, 'name' => string], …] in edge order. */
     public static function targets(int $nodeId, array $edges, array $nodes): array
     {
         $out = [];
@@ -49,7 +49,8 @@ final class DispatchRouting
             if ((int)$edge['from_node_id'] !== $nodeId) continue;
             $toId = (int)$edge['to_node_id'];
             $node = $nodes[$toId] ?? null;
-            if (!$node || ($node['node_type'] ?? '') !== 'agent') continue;
+            // Agents and code nodes are branches (as in the editor run and compiled scripts).
+            if (!$node || !in_array($node['node_type'] ?? '', ['agent', 'code'], true)) continue;
             $cfg = $node['config'] ?? [];
             $name = (string)($cfg['agent_name'] ?? $cfg['name'] ?? "Agent {$toId}");
             $out[] = ['id' => $toId, 'name' => $name];

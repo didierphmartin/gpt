@@ -803,6 +803,18 @@ class WorkflowGraph:
             return {"node_outputs": {nid: {"source": "start", "text": text}}}
         return _run
 
+    def _code_parents(self, nid: str, seen: frozenset = frozenset()) -> list[str]:
+        """A code node's parents, a dispatcher standing for its own parents: a branch receives what
+        the dispatcher received (the email), not the agent-framed context it was handed."""
+        out = []
+        for p in self.parents(nid):
+            if (self.agents.get(p) or {}).get("dispatch"):
+                if p not in seen:
+                    out += self._code_parents(p, seen | {p})
+            else:
+                out.append(p)
+        return out
+
     def _request_for(self, nid: str, state: dict) -> str:
         """What a node receives: a playbook gets its parents' texts joined, an agent the labelled context."""
         outs = state.get("node_outputs", {})
@@ -812,7 +824,7 @@ class WorkflowGraph:
             return json.dumps({"user_prompt": state.get("user_prompt", ""),
                                "parents": [{"name": outs[p]["source"], "text": outs[p]["text"],
                                             "start": self.node_types.get(p) == "start"}
-                                           for p in self.parents(nid) if p in outs]}, ensure_ascii=False)
+                                           for p in self._code_parents(nid) if p in outs]}, ensure_ascii=False)
         if self.agents[nid]["kind"] == "playbook":
             return "\n\n".join(outs[p]["text"] for p in self.parents(nid) if p in outs) or state.get("user_prompt", "")
         return build_context(state.get("user_prompt", ""), self.parents(nid), outs)
@@ -1206,9 +1218,10 @@ def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: i
     The (provider, model) pair was resolved by the generator: the
     agent's explicit model overrides the provider's default from
     system_llm_settings, and that result is what reaches this
-    function. No hardcoded model fallbacks here — every value comes
-    from the database, so changing a model in the editor propagates
-    via the next Generate Python.
+    function. No hardcoded model fallbacks here: every value was read
+    from the database when this file was generated (the script never
+    reads it), so a model changed in the editor takes effect at the
+    next Generate Python.
 
     Recognised providers (case-insensitive):
       claude     → langchain_anthropic.ChatAnthropic
@@ -1571,6 +1584,13 @@ class McpClient:
         return {**self.HEADERS, **{str(k): v for k, v in extra.items()}}
 
     @staticmethod
+    def _live_url(server_url: str) -> str:
+        """Where the server answers: MCP_URL_<SLUG> from .env when set (the server moved), else the URL
+        it was registered with. The registered URL stays the key for headers, tools and endpoints."""
+        slug = MCP_SERVER_SLUGS.get(server_url, "")
+        return (os.environ.get(f"MCP_URL_{slug.upper()}", "").strip() if slug else "") or server_url
+
+    @staticmethod
     def normalize_url(url: str) -> str:
         """Ensure the URL points to the MCP endpoint.
 
@@ -1630,7 +1650,8 @@ class McpClient:
             }
         }
         candidates = [self._endpoints[url]] if url in self._endpoints else []
-        for cand in (self.normalize_url(url), url):
+        live = self._live_url(url)
+        for cand in (self.normalize_url(live), live):
             if cand not in candidates:
                 candidates.append(cand)
         last_err = None

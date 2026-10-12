@@ -110,4 +110,17 @@ final class CodeNodeStepTest extends TestCase
         $p = CodeNodeStep::parents(2, $edges, $nodes, [3 => ['output' => 'x']]);
         self::assertSame('Triage', $p[0]['name']);
     }
+
+    public function testADispatcherParentPassesOnWhatItReceived(): void
+    {
+        // Start(1) -> Poll(4) -> dispatcher(3) -> claims(2): the branch gets the email, not the framed context.
+        $nodes = [1 => ['node_type' => 'start', 'config' => []], 4 => ['node_type' => 'code', 'config' => ['name' => 'Poll']],
+            3 => ['node_type' => 'agent', 'config' => ['agent_name' => 'triage']], 2 => self::NODES[2]];
+        $edges = [['from_node_id' => 1, 'to_node_id' => 4], ['from_node_id' => 4, 'to_node_id' => 3],
+            ['from_node_id' => 3, 'to_node_id' => 2]];
+        $outputs = [1 => ['output' => 'poll'], 4 => ['type' => 'code', 'output' => '{"id":"m1"}'],
+            3 => ['type' => 'agent', 'output' => "### Input from: Poll\n{\"id\":\"m1\"}", 'route' => ['id' => 2, 'name' => 'claims']]];
+        self::assertSame([['name' => 'Poll', 'text' => '{"id":"m1"}', 'start' => false]],
+            CodeNodeStep::parents(2, $edges, $nodes, $outputs));
+    }
 }

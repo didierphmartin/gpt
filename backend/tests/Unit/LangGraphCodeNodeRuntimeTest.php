@@ -45,6 +45,25 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         self::assertStringContainsString('"start": self.node_types.get(p) == "start"', $g);
     }
 
+    public function testACodeBranchOfADispatcherReceivesWhatTheDispatcherReceived(): void
+    {
+        // Start(1) -> Poll(2, code) -> triage(3, dispatcher) -> claims(4, code): claims gets the email.
+        $py = "from __future__ import annotations\nimport json\nfrom typing import Awaitable, Callable\n"
+            . LangGraphRuntime::workflowGraphBlock() . "\n"
+            . "g = WorkflowGraph(edges=[['1','2'],['2','3'],['3','4']], order=['1','2','3','4'],\n"
+            . "    node_types={'1':'start','2':'code','3':'agent','4':'code'},\n"
+            . "    agents={'2': {'kind':'code','display':'Poll'}, '3': {'kind':'dispatcher','display':'triage','dispatch':[{'id':'4','name':'claims'}]},\n"
+            . "            '4': {'kind':'code','display':'claims'}}, run_node=None, start_documents=[])\n"
+            . "outs = {'1': {'source':'start','text':'poll'}, '2': {'source':'Poll','text':'{\\\"id\\\": \\\"m1\\\"}'},\n"
+            . "        '3': {'source':'triage','text':'### Input from: Poll'}}\n"
+            . "print(json.dumps(json.loads(g._request_for('4', {'user_prompt':'poll','node_outputs':outs}))['parents']))\n";
+        $file = tempnam(sys_get_temp_dir(), 'cn') . '.py';
+        file_put_contents($file, $py);
+        exec('python3 ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame('[{"name": "Poll", "text": "{\\"id\\": \\"m1\\"}", "start": false}]', end($out));
+    }
+
     public function testCodeNodesAreCheckedAtStartup(): void
     {
         // spec §5.2: every code node's source passes check_code when its Node is built (single file:

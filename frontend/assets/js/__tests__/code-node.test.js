@@ -63,6 +63,20 @@ const anon = { 7: { data: { type: 'code' }, inputs: { input_1: { connections: [{
                8: { data: { type: 'code' }, inputs: {}, outputs: {} } };
 assert.deepStrictEqual(CN.parentsFor('7', anon, { 8: 'x' }, () => 'code'), [{ name: 'node_8', text: 'x', start: false }]);
 
+// a dispatcher parent passes on what IT received (the email), not its agent-framed context
+const routed = {
+    1: { data: { type: 'start' }, inputs: {} },
+    2: { data: { type: 'code', name: 'Poll' }, inputs: { input_1: { connections: [{ node: '1' }] } } },
+    3: { data: { agent_name: 'triage', agent_type: 'dispatcher' }, inputs: { input_1: { connections: [{ node: '2' }] } } },
+    4: { data: { type: 'code', name: 'claims' }, inputs: { input_1: { connections: [{ node: '3' }] } } },
+};
+const routedKind = (u) => (u === '1' ? 'start' : (routed[u].data.type || 'agent'));
+const isDisp = (u) => routed[u]?.data?.agent_type === 'dispatcher';
+const routedOut = { 1: 'poll', 2: '{"id":"m1"}', 3: 'Original user request: "poll"\n### Input from: Poll\n{"id":"m1"}' };
+assert.deepStrictEqual(CN.parentsFor('4', routed, routedOut, routedKind, isDisp), [{ name: 'Poll', text: '{"id":"m1"}', start: false }]);
+// without the predicate (older callers) the dispatcher's own output is passed, as before
+assert.strictEqual(CN.parentsFor('4', routed, routedOut, routedKind)[0].name, 'triage');
+
 // timeout / worker failure -> the error exit when the node has one (spec 3.4), else a failure
 assert.deepStrictEqual(CN.failureResult(['job', 'error'], 'timed out after 30s'),
     { ok: true, route: 'error', output_text: JSON.stringify({ error: 'CodeNodeError: timed out after 30s' }), stdout: '', tool_calls: [] });

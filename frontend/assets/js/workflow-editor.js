@@ -13639,7 +13639,8 @@ class WorkflowEditor {
     async _runNodeAsCodeUnit(id, nodes, userPrompt) {
         const d = nodes[id].data || {};
         this.highlightNode(id, 'running', id, 'agent');
-        const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes));
+        const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes),
+            (u) => nodes[u]?.data?.agent_type === 'dispatcher');
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
         const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'],
             servers: (d.mcp_servers || []).map(window.CodeNode.slug), timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
