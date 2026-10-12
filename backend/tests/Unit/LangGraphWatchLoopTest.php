@@ -1,0 +1,307 @@
+<?php
+declare(strict_types=1);
+namespace Quantis\AIPortfolioAssistant\Tests\Unit;
+
+use AgentTeam\Models\Workflow;
+use AgentTeam\Services\AgentRepository;
+use AgentTeam\Services\LangGraphGenerator;
+use AgentTeam\Services\LangGraphRuntime;
+use AgentTeam\Services\WorkflowGraphRepository;
+use AgentTeam\Services\WorkflowRepository;
+use PHPUnit\Framework\TestCase;
+
+/** spec 2026-10-12 mail/drive events §7: --watch in compiled LangGraph scripts. */
+final class LangGraphWatchLoopTest extends TestCase
+{
+    private function python(): string
+    {
+        $py = is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3';
+        exec($py . ' -c ' . escapeshellarg('import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)') . ' 2>&1', $o, $rc);
+        if ($rc !== 0) {
+            self::markTestSkipped('Python 3.10+ not available');
+        }
+        return $py;
+    }
+
+    /**
+     * A scripted MCP: each call_tool_raw pops the next answer (a dict, or an Exception to raise);
+     * a clock whose sleep moves now; and run_once counting runs from a list of outputs.
+     */
+    private const HARNESS = <<<'PY'
+MCP_SERVER_SLUGS = {"http://mail.local/mcp": "outlook"}
+
+class FakeMcp:
+    def __init__(self, answers):
+        self.answers, self.calls = list(answers), []
+    def call_tool_raw(self, url, tool, args):
+        self.calls.append((url, tool, args))
+        a = self.answers.pop(0)
+        if isinstance(a, BaseException):
+            raise a
+        return a
+
+def ok(**r):
+    return {"content": [{"type": "text", "text": json.dumps(r)}], "structuredContent": r}
+
+class Clock:
+    def __init__(self):
+        self.t, self.slept = datetime(2026, 10, 12, 9, 0), []
+    def now(self):
+        return self.t
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += timedelta(seconds=s)
+
+def runner(outputs):
+    outputs = list(outputs)
+    def run_once():
+        return outputs.pop(0) if outputs else ""
+    return run_once
+
+TRIGGER = WatchTrigger("outlook", "wait_for_new", {"args": {"folder": "Inbox"}})
+
+PY;
+
+    /** cronBlock() + watchBlock() + HARNESS + $tail; returns [exit code, output lines]. */
+    private function runPy(string $tail): array
+    {
+        $file = tempnam(sys_get_temp_dir(), 'wl') . '.py';
+        file_put_contents($file, "from __future__ import annotations\nimport argparse, asyncio, json, re, signal, sys, time\n"
+            . "from datetime import datetime, timedelta\nfrom typing import Callable\n"
+            . LangGraphRuntime::cronBlock() . "\n" . LangGraphRuntime::watchBlock() . "\n" . self::HARNESS . $tail);
+        exec($this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        unlink($file);
+        return [$rc, $out];
+    }
+
+    private function py(string $tail): array
+    {
+        [$rc, $out] = $this->runPy($tail);
+        self::assertSame(0, $rc, implode("\n", $out));
+        return $out;
+    }
+
+    public function testReadyDrainsTimeoutWaitsAgain(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="timeout", events="on"), ok(status="ready", via="event", events="on"),
+               ok(status="ready", via="fallback", events="on")])
+clock = Clock()
+run_watch(TRIGGER, runner(["mail 1", "mail 2", "", ""]), drains=True, sleep=clock.sleep, now=clock.now, calls=3)
+print("calls", MCP.calls[0], len(MCP.calls), "slept", clock.slept)
+PY);
+        self::assertSame([
+            '[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.',
+            '[watch 09:00] ready (event): 2 run(s) did work',
+            '[watch 09:00] ready (fallback): nothing to do',
+            "calls ('http://mail.local/mcp', 'wait_for_new', {'args': {'folder': 'Inbox'}}) 3 slept []",
+        ], $out);
+    }
+
+    public function testWithoutCodeNodesOneRunPerReady(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="ready", via="event")])
+clock = Clock()
+run_watch(TRIGGER, runner(["a", "b"]), drains=False, sleep=clock.sleep, now=clock.now, calls=1)
+PY);
+        self::assertSame('[watch 09:00] ready (event): 1 run(s) did work', $out[1]);
+    }
+
+    public function testFailuresAreRetriedAfterThirtySecondsAndNeverStopTheLoop(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([{"isError": True, "content": [{"type": "text", "text": '{"error": "reconnect_needed"}'}]},
+               ConnectionError("refused"),
+               {"content": [{"type": "text", "text": "not json"}]},
+               ok(answer=42),
+               {"content": [{"type": "text", "text": '{"status": "ready", "via": "pending"}'}]}])   # text only: parsed
+clock = Clock()
+run_watch(TRIGGER, runner(["x", ""]), drains=True, sleep=clock.sleep, now=clock.now, calls=5)
+print("slept", clock.slept)
+PY);
+        self::assertSame('[watch 09:00] outlook.wait_for_new failed: {"error": "reconnect_needed"}; again in 30 s', $out[1]);
+        self::assertSame('[watch 09:00] outlook.wait_for_new failed: refused; again in 30 s', $out[2]);
+        self::assertStringContainsString("expected {\"status\": \"ready\" | \"timeout\"}, got 'not json'", $out[3]);
+        self::assertStringContainsString('got \'{"answer": 42}\'', $out[4]);
+        self::assertSame('[watch 09:02] ready (pending): 1 run(s) did work', $out[5]);
+        self::assertSame('slept [30.0, 30.0, 30.0, 30.0]', $out[6]);
+    }
+
+    public function testAReasonIsPrintedWhenItChanges(): void
+    {
+        $out = $this->py(<<<'PY'
+off = dict(events="off", reason="EVENTHUB_NOTIFICATION_URL is not set")
+MCP = FakeMcp([ok(status="timeout", **off), ok(status="ready", via="fallback", **off), ok(status="timeout", events="on")])
+clock = Clock()
+run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now, calls=3)
+PY);
+        self::assertSame([
+            '[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.',
+            '[watch 09:00] outlook.wait_for_new: EVENTHUB_NOTIFICATION_URL is not set',
+            '[watch 09:00] ready (fallback): nothing to do',
+            '[watch 09:00] outlook.wait_for_new: on',
+        ], $out);
+    }
+
+    public function testAnErrorRunIsReportedAndTheLoopGoesOn(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="ready", via="event"), ok(status="ready", via="event")])
+clock = Clock()
+def run_once(state={"n": 0}):
+    state["n"] += 1
+    if state["n"] == 1:
+        raise RuntimeError("Jev down")
+    return ""
+run_watch(TRIGGER, run_once, drains=True, sleep=clock.sleep, now=clock.now, calls=2)
+PY);
+        self::assertSame('[watch 09:00] ready (event): error after 0 run(s) that did work: RuntimeError: Jev down', $out[1]);
+        self::assertSame('[watch 09:00] ready (event): nothing to do', $out[2]);
+    }
+
+    public function testCtrlCStops(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([KeyboardInterrupt()])
+clock = Clock()
+run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now)
+print("after")
+PY);
+        self::assertSame(['[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.', '', '[watch] stopped.', 'after'], $out);
+    }
+
+    public function testCliTriggerFallsBackToTheBakedOneAndRefusesBadInput(): void
+    {
+        $out = $this->py(<<<'PY'
+ap = argparse.ArgumentParser(prog="wf")
+baked = {"server": "outlook", "tool": "wait_for_new", "args": {"args": {"folder": "Inbox"}}}
+print(WatchTrigger.from_cli(ap, None, baked))
+t = WatchTrigger.from_cli(ap, "", baked)
+print(t, t.args)
+t = WatchTrigger.from_cli(ap, 'outlook.wait_for_new {"timeout_s": 30}', None)
+print(t, t.args, t.url())
+PY);
+        self::assertSame(['None', "outlook.wait_for_new {'args': {'folder': 'Inbox'}}",
+                          "outlook.wait_for_new {'timeout_s': 30} http://mail.local/mcp"], $out);
+        foreach (['"", None' => 'this workflow has no event trigger', '"drive.wait", None' => "MCP server 'drive' is not used by this workflow (its servers: outlook)",
+                  '"outlook", None' => 'expected server.tool', '"outlook.wait {x", None' => 'the arguments are not JSON',
+                  '"outlook.wait [1]", None' => 'must be a JSON object'] as $args => $msg) {
+            [$rc, $lines] = $this->runPy("WatchTrigger.from_cli(argparse.ArgumentParser(prog='wf'), {$args})\n");
+            self::assertSame(2, $rc, $args);
+            self::assertStringContainsString($msg, implode("\n", $lines), $args);
+        }
+    }
+
+    // ---------- the generator: DEFAULT_WATCH, the loop, the flag and the docs ----------
+
+    /** Workflow 44 polls ServiceNow; $trigger: its event_trigger JSON (null: no row; false: no event_trigger column). */
+    private function pdo(string|null|false $trigger, string $status = 'pending'): \PDO
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER)');
+        $pdo->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
+        $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
+        $pdo->exec("INSERT INTO mcp_servers VALUES (85, '3', 'ServiceNow', 'http://localhost/servicenow/?profile=mock&toolset=jobs', 1)");
+        $pdo->exec("INSERT INTO mcp_servers VALUES (86, '3', 'Outlook', 'http://127.0.0.1:8770/mcp', 1)");
+        $pdo->exec("INSERT INTO mcp_server_tools VALUES (1, 85, 'poll_jobs', 'Poll', '{}')");
+        $pdo->exec("INSERT INTO mcp_server_tools VALUES (2, 86, 'wait_for_new', 'Wait', '{}')");
+        $pdo->exec("INSERT INTO system_llm_settings VALUES ('claude', 'claude-sonnet-4-6', 1)");
+        if ($trigger === false) {
+            $pdo->exec('CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY, workflow_id INTEGER, repeat_type TEXT, cron TEXT, status TEXT)');
+        } else {
+            $pdo->exec('CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY, workflow_id INTEGER, repeat_type TEXT, cron TEXT, status TEXT, event_trigger TEXT)');
+            $pdo->exec("INSERT INTO scheduled_workflows VALUES (1, 44, 'cron', '*/2 * * * *', 'pending', NULL)");
+            if ($trigger !== null) {
+                $pdo->exec("INSERT INTO scheduled_workflows VALUES (2, 44, 'event', NULL, " . $pdo->quote($status) . ', ' . $pdo->quote($trigger) . ')');
+            }
+        }
+        return $pdo;
+    }
+
+    private function codeGraph(): array
+    {
+        return [
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'poll']],
+                ['id' => '2', 'node_type' => 'code', 'config' => ['type' => 'code', 'name' => 'Poll ServiceNow',
+                    'code' => "def run(input, call_tool):\n    return {'route': 'job', 'output': 'x'}\n",
+                    'exits' => ['job', 'error'], 'mcp_servers' => ['ServiceNow'], 'timeout_s' => 30]],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']],
+        ];
+    }
+
+    private function generate(\PDO $pdo, array $options = [], ?array $graph = null): array
+    {
+        $wfRepo = $this->createMock(WorkflowRepository::class);
+        $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Mail poll', 'user_id' => '3']));
+        $graphRepo = $this->createMock(WorkflowGraphRepository::class);
+        $graphRepo->method('getGraph')->willReturn($graph ?? $this->codeGraph());
+        $agentRepo = $this->createMock(AgentRepository::class);
+        $agentRepo->method('findById')->willReturn(null);
+        return (new LangGraphGenerator($pdo, $wfRepo, $graphRepo, $agentRepo))->generate(44, '3', $options);
+    }
+
+    private function assertWatchEntry(string $code, string $label, string $default, string $file): void
+    {
+        self::assertStringContainsString("DEFAULT_WATCH = {$default}\n", $code, $label);
+        self::assertSame(1, substr_count($code, 'def run_watch('), $label);
+        self::assertStringContainsString('when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER"', $code, $label);
+        self::assertStringContainsString('watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)', $code, $label);
+        self::assertStringContainsString('run_watch(trigger, run_once, drains=drains, loop=loop)', $code, $label);
+        self::assertStringContainsString("python {$file} --watch ", $code, $label);
+        $f = tempnam(sys_get_temp_dir(), 'wlc') . '.py';
+        file_put_contents($f, $code);
+        exec($this->python() . ' -m py_compile ' . escapeshellarg($f) . ' 2>&1', $out, $rc);
+        unlink($f);
+        self::assertSame(0, $rc, "{$label}: " . implode("\n", $out));
+    }
+
+    public function testSingleFileBakesTheEventTrigger(): void
+    {
+        $code = $this->generate($this->pdo('{"server": "ServiceNow", "tool": "wait_jobs", "args": {"queue": "it"}}'))['code'];
+        $this->assertWatchEntry($code, 'single', "{\n    \"server\": \"servicenow\",\n    \"tool\": \"wait_jobs\",\n    \"args\": {\n        \"queue\": \"it\"\n    }\n}", 'mail_poll_langgraph.py');
+        self::assertStringContainsString('--watch           # run whenever the event trigger says something new arrived (servicenow.wait_jobs)', $code);
+    }
+
+    public function testModularWorkflowPyRunsTheWatchLoop(): void
+    {
+        $files = array_column($this->generate($this->pdo('{"server": "ServiceNow", "tool": "wait_jobs"}'), ['modular' => true])['files'], 'code', 'path');
+        $wf = $files['workflow.py'];
+        $this->assertWatchEntry($wf, 'modular', "{\n    \"server\": \"servicenow\",\n    \"tool\": \"wait_jobs\",\n    \"args\": {}\n}", 'workflow.py');
+        self::assertStringContainsString('from common import EVENTS, MCP, MCP_SERVER_SLUGS, ', $wf);
+        self::assertMatchesRegularExpression('~^import argparse, asyncio, json, ~m', $wf);
+        self::assertStringContainsString('MCP_SERVER_SLUGS = ', $files['common.py']);
+    }
+
+    public function testNoTriggerBakesNone(): void
+    {
+        foreach (['no row' => $this->pdo(null), 'paused' => $this->pdo('{"server": "ServiceNow", "tool": "w"}', 'paused'),
+                  'no column' => $this->pdo(false), 'no tool' => $this->pdo('{"server": "ServiceNow"}')] as $case => $pdo) {
+            $code = $this->generate($pdo)['code'];
+            self::assertStringContainsString("DEFAULT_WATCH = None\n", $code, $case);
+            self::assertStringContainsString('--watch           # run whenever the event trigger says something new arrived (none saved: pass one)', $code, $case);
+        }
+    }
+
+    public function testATriggerOnAServerNoNodeUsesIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('The event trigger waits on MCP server "Outlook", which no node of this workflow uses');
+        $this->generate($this->pdo('{"server": "Outlook", "tool": "wait_for_new"}'));
+    }
+
+    public function testA2AAndSwarmHaveNoWatch(): void
+    {
+        $files = array_column($this->generate($this->pdo(null), ['a2a' => true], LangGraphA2AGeneratorTest::graph())['files'], 'code', 'path');
+        self::assertArrayHasKey('orchestrator.py', $files);
+        foreach ($files as $path => $code) {   // no code node to drain: no flag, no loop, no DEFAULT_WATCH
+            self::assertStringNotContainsString('add_argument("--watch"', $code, $path);
+            self::assertStringNotContainsString('def run_watch(', $code, $path);
+            self::assertStringNotContainsString('DEFAULT_WATCH', $code, $path);
+        }
+    }
+}

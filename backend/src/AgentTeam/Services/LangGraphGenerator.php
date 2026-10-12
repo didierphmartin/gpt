@@ -337,7 +337,8 @@ class LangGraphGenerator
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [], self::decisionDocLines($agentData), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, "{$safeName}_langgraph.py")),
+                    : [], self::decisionDocLines($agentData), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, "{$safeName}_langgraph.py"),
+                    self::watchDocLines($facts, "{$safeName}_langgraph.py")),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -528,6 +529,7 @@ class LangGraphGenerator
         $lines[] = LangGraphRuntime::workflowGraphBlock();
         $lines[] = LangGraphRuntime::outputBlock();
         $lines[] = LangGraphRuntime::cronBlock();
+        $lines[] = LangGraphRuntime::watchBlock();
 
         // ---------- start node config ----------
         $lines[] = '';
@@ -545,6 +547,7 @@ class LangGraphGenerator
         // Verbatim, as the package bakes it: no 80-column wrap, so the prompt is the same text in every mode.
         $lines[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($startPrompt);
         $lines[] = self::defaultCronLine($facts);
+        $lines[] = self::defaultWatchLine($facts);
         $lines[] = '';
         // Output-node storage setting baked in so the compiled script persists the final
         // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
@@ -1257,10 +1260,11 @@ class LangGraphGenerator
         // caller agrees without having to remember to pass it.
         $orchestration = $workflow->getOrchestration();
         $defaultCron = $this->defaultCron($workflowId);
+        $defaultWatch = $this->defaultWatch($workflowId, $serverSlugs);
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
             'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
-            'orchestration', 'defaultCron');
+            'orchestration', 'defaultCron', 'defaultWatch');
     }
 
     /** The workflow's active cron schedule (newest scheduled_workflows row), baked as DEFAULT_CRON for --cron. */
@@ -1274,6 +1278,51 @@ class LangGraphGenerator
         } catch (\PDOException) {
             return null;   // no schedules table, or an older one without the cron column: no default
         }
+    }
+
+    /**
+     * The workflow's event trigger (newest non-paused scheduled_workflows row with repeat_type 'event'),
+     * baked as DEFAULT_WATCH for --watch: ['server' => slug, 'tool' => ..., 'args' => [...]], or null.
+     * event_trigger holds {"server": <server name>, "tool", "args"}. The trigger's server must be one the
+     * workflow uses (its URL and MCP_HEADERS_<SLUG> come from there): another one is a compile error.
+     */
+    private function defaultWatch(int $workflowId, array $serverSlugs): ?array
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT event_trigger FROM scheduled_workflows WHERE workflow_id = ? AND repeat_type = 'event' AND status <> 'paused' ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$workflowId]);
+            $raw = $stmt->fetchColumn();
+        } catch (\PDOException) {
+            return null;   // no schedules table, or one without the event_trigger column yet: no default
+        }
+        $t = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($t) || trim((string) ($t['server'] ?? '')) === '' || trim((string) ($t['tool'] ?? '')) === '') {
+            return null;
+        }
+        $slug = CodeNodeEmit::slug((string) $t['server']);
+        if (!in_array($slug, $serverSlugs, true)) {
+            throw new \RuntimeException('The event trigger waits on MCP server "' . $t['server'] . '", which no node of this'
+                . ' workflow uses; check it on the node that polls it (e.g. the code node calling poll_new_mail).');
+        }
+        return ['server' => $slug, 'tool' => (string) $t['tool'], 'args' => is_array($t['args'] ?? null) ? $t['args'] : []];
+    }
+
+    /** DEFAULT_WATCH's line: the baked event trigger, or None. */
+    private static function defaultWatchLine(array $facts): string
+    {
+        return 'DEFAULT_WATCH = ' . (($facts['defaultWatch'] ?? null) === null ? 'None'
+            : PythonEmitHelpers::jsonToPython(['server' => $facts['defaultWatch']['server'], 'tool' => $facts['defaultWatch']['tool'],
+                                               'args' => (object) $facts['defaultWatch']['args']]));
+    }
+
+    /** TO RUN lines for --watch (single file and modular package: the modes with code nodes). */
+    private static function watchDocLines(array $facts, string $file): array
+    {
+        $w = $facts['defaultWatch'] ?? null;
+        return ["python {$file} --watch           # run whenever the event trigger says something new arrived"
+            . ($w !== null ? " ({$w['server']}.{$w['tool']})" : ' (none saved: pass one)'),
+            "python {$file} --watch 'outlook.wait_for_new {\"args\": {\"folder\": \"Inbox\"}}'   # or any server.tool + JSON arguments",
+            '# --watch: the tool answers {"status": "ready" | "timeout"}; on ready the workflow runs and drains as a --cron tick does'];
     }
 
     /** DEFAULT_CRON's line: the baked schedule, or None. */
@@ -3628,7 +3677,7 @@ TXT;
              'usage' => 'python workflow.py "your prompt here"',
              'extra' => array_merge(!empty($facts['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]
-                 : [], self::cronDocLines($facts, 'workflow.py')),
+                 : [], self::cronDocLines($facts, 'workflow.py'), self::watchDocLines($facts, 'workflow.py')),
              'env_path' => '../../.env'], null, true);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
@@ -3643,13 +3692,13 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, re, signal, sys, time';
+        $L[] = 'import argparse, asyncio, json, re, signal, sys, time';
         $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from typing import Callable';
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import EVENTS, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3661,6 +3710,7 @@ TXT;
         $L[] = 'OUTPUT_FOLDER = ' . (($ofolder ?? '') !== '' ? PythonEmitHelpers::pyStr((string) $ofolder) : 'None');
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
         $L[] = self::defaultCronLine($facts);
+        $L[] = self::defaultWatchLine($facts);
         $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($facts['startDocuments'] ?: []);
         $L[] = '';
         $L[] = $sep;
@@ -3706,6 +3756,7 @@ TXT;
         $L[] = 'NODE_TYPES = ' . PythonEmitHelpers::jsonToPython($typeMap, true);
         $L[] = '';
         $L[] = LangGraphRuntime::cronBlock();
+        $L[] = LangGraphRuntime::watchBlock();
         $L[] = self::modularRunnerBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
@@ -3779,8 +3830,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r} (agents in separate files)",
                                  allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
-    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
-                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    when = ap.add_mutually_exclusive_group()
+    when.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                      help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER",
+                      help="run whenever an MCP tool says something new arrived, until Ctrl-C "
+                           "(default: the Start node's event trigger; or 'server.tool {json args}')")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
@@ -3800,15 +3855,20 @@ if __name__ == "__main__":
         graph.check_error_exits()
         return output
 
-    match CronExpression.from_cli(ap, a.cron, DEFAULT_CRON):
-        case None:
+    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron or --watch stops here, before any agent starts
+    watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)
+    drains = any(ad["kind"] == "code" for ad in AGENTS.values())
+    match cron, watch:
+        case None, None:
             try:
                 if not run_once():
                     print("[info] The run ended without output (a branch ended).", flush=True)
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
-        case expr:
-            run_cron(expr, run_once, drains=any(ad["kind"] == "code" for ad in AGENTS.values()), loop=loop)
+        case None, trigger:
+            run_watch(trigger, run_once, drains=drains, loop=loop)
+        case expr, _:
+            run_cron(expr, run_once, drains=drains, loop=loop)
 PY;
     }
 
@@ -4162,8 +4222,12 @@ PY . $missingWarning . <<<'PY'
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
-    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
-                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    when = ap.add_mutually_exclusive_group()
+    when.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                      help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER",
+                      help="run whenever an MCP tool says something new arrived, until Ctrl-C "
+                           "(default: the Start node's event trigger; or 'server.tool {json args}')")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
@@ -4183,15 +4247,20 @@ if __name__ == "__main__":
         graph.check_error_exits()
         return output
 
-    match CronExpression.from_cli(ap, a.cron, DEFAULT_CRON):
-        case None:
+    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron or --watch stops here, before any agent starts
+    watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)
+    drains = bool(CODE_NODES)
+    match cron, watch:
+        case None, None:
             try:
                 if not run_once():
-                    print("[info] The run ended without output (a branch ended).")
+                    print("[info] The run ended without output (a branch ended).", flush=True)
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
-        case expr:
-            run_cron(expr, run_once, drains=bool(CODE_NODES), loop=loop)
+        case None, trigger:
+            run_watch(trigger, run_once, drains=drains, loop=loop)
+        case expr, _:
+            run_cron(expr, run_once, drains=drains, loop=loop)
 
 PY;
     }

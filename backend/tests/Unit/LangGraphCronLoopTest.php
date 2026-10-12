@@ -334,16 +334,22 @@ PY);
         self::assertSame(0, $rc, "{$label}: " . implode("\n", $out));
     }
 
-    /** The entry file's cron pieces: baked default, imports, the loop, the CLI flag and its docs. */
-    private function assertCronEntry(string $code, string $label, string $default, string $drains, string $file): void
+    /** The entry file's cron pieces: baked default, imports, the loop, the CLI flag and its docs. $watch: an entry
+     *  with --watch too (single file, modular), where --cron sits in a mutually exclusive group and drains is a name. */
+    private function assertCronEntry(string $code, string $label, string $default, string $drains, string $file, bool $watch = false): void
     {
         self::assertStringContainsString("DEFAULT_CRON = {$default}\n", $code, $label);
         self::assertMatchesRegularExpression('~^from datetime import datetime, timedelta$~m', $code, $label);
         self::assertMatchesRegularExpression('~^import argparse, ~m', $code, $label);
         self::assertSame(1, substr_count($code, 'def run_cron('), $label);
-        self::assertStringContainsString('ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR"', $code, $label);
+        self::assertStringContainsString(($watch ? 'when' : 'ap') . '.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR"', $code, $label);
         self::assertStringContainsString('CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)', $code, $label);
-        self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=loop)", $code, $label);
+        if ($watch) {
+            self::assertStringContainsString("    drains = {$drains}\n", $code, $label);
+            self::assertStringContainsString('run_cron(expr, run_once, drains=drains, loop=loop)', $code, $label);
+        } else {
+            self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=loop)", $code, $label);
+        }
         self::assertMatchesRegularExpression('~^import argparse, asyncio, [a-z, ]*\bsignal\b~m', $code, $label);
         self::assertStringContainsString('allow_abbrev=False)', $code, $label);   // --cron is never guessed from a prefix
         self::assertStringContainsString("python {$file} \"your prompt here\" --cron   # a prompt goes BEFORE --cron", $code, $label);
@@ -357,7 +363,7 @@ PY);
     public function testSingleFileBakesTheNewestActiveCronSchedule(): void
     {
         $code = $this->generate($this->pdo('*/5 8-18 * * 1-5'), $this->codeGraph())['code'];
-        $this->assertCronEntry($code, 'single', '"*/5 8-18 * * 1-5"', 'bool(CODE_NODES)', 'mail_poll_langgraph.py');
+        $this->assertCronEntry($code, 'single', '"*/5 8-18 * * 1-5"', 'bool(CODE_NODES)', 'mail_poll_langgraph.py', true);
         self::assertStringContainsString('python mail_poll_langgraph.py --cron            # loop on the Start node schedule (*/5 8-18 * * 1-5)', $code);
         self::assertStringContainsString('graph.check_error_exits()', $code);
     }
@@ -395,7 +401,7 @@ PY);
         $res = $this->generate($this->pdo('*/2 * * * *'), $this->codeGraph(), ['modular' => true]);
         $files = array_column($res['files'], 'code', 'path');
         $this->assertCronEntry($files['workflow.py'], 'modular', '"*/2 * * * *"',
-            'any(ad["kind"] == "code" for ad in AGENTS.values())', 'workflow.py');
+            'any(ad["kind"] == "code" for ad in AGENTS.values())', 'workflow.py', true);
         self::assertStringContainsString('graph.check_error_exits()', $files['workflow.py']);
         self::assertStringNotContainsString('def run_cron(', $files['common.py']);
     }

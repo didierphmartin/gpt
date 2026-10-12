@@ -1045,6 +1045,56 @@ class CronExpression:
         return expr
 
 
+def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
+          loop: asyncio.AbstractEventLoop | None = None) -> str:
+    """What one cron tick or one --watch wake runs: the workflow, again while runs do work (only
+    when `drains`), at most max_runs runs; an error ends it. Returns the line the loop prints."""
+    worked = 0
+    try:
+        for _ in range(max_runs):
+            if not run_once():
+                break
+            worked += 1
+            if not drains:
+                break
+    except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001 -- one bad run must not stop the loop
+        cancel_leftovers(loop)
+        return f"error after {worked} run(s) that did work: {type(e).__name__}: {e}"
+    return f"{worked} run(s) did work" if worked else "nothing to do"
+
+
+def cancel_leftovers(loop: asyncio.AbstractEventLoop | None) -> None:
+    """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
+    wakes up inside the next run."""
+    if loop is None or loop.is_closed():
+        return
+    leftovers = [t for t in asyncio.all_tasks(loop) if not t.done()]
+    for t in leftovers:
+        t.cancel()
+    if leftovers:
+        loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
+
+
+class SigtermAsCtrlC:
+    """While active, SIGTERM stops a loop the way Ctrl-C does (the caller's finally blocks run)."""
+
+    def __enter__(self):
+        try:
+            self.previous = signal.signal(signal.SIGTERM, self._raise)
+        except ValueError:   # not the main thread: signals stay as they are
+            self.previous = None
+        return self
+
+    @staticmethod
+    def _raise(signum, frame):
+        raise KeyboardInterrupt
+
+    def __exit__(self, *exc):
+        if self.previous is not None:
+            signal.signal(signal.SIGTERM, self.previous)
+        return False
+
+
 class CronLoop:
     """The --cron loop: sleep until the next fire, run one tick, print one line, repeat."""
 
@@ -1053,67 +1103,33 @@ class CronLoop:
     def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
                  loop: asyncio.AbstractEventLoop | None = None):
         self.expr, self.cron = expr, CronExpression(expr)
-        self.run_once, self.drains, self.max_runs = run_once, drains, max_runs
-        self.sleep, self.now, self.loop = sleep, now, loop
+        self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
+        self.sleep, self.now = sleep, now
 
     def tick(self) -> str:
-        """One tick's runs, as the line it prints: drain while runs do work (only when `drains`),
-        stop at a quiet run or after max_runs runs; an error ends the tick and is reported."""
-        worked = 0
-        try:
-            for _ in range(self.max_runs):
-                if not self.run_once():
-                    break
-                worked += 1
-                if not self.drains:
-                    break
-        except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001 -- one bad run must not stop the loop
-            self._cancel_leftovers()
-            return f"error after {worked} run(s) that did work: {type(e).__name__}: {e}"
-        return f"{worked} run(s) did work" if worked else "nothing to do"
-
-    def _cancel_leftovers(self) -> None:
-        """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
-        wakes up inside the next run."""
-        if self.loop is None or self.loop.is_closed():
-            return
-        leftovers = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
-        for t in leftovers:
-            t.cancel()
-        if leftovers:
-            self.loop.run_until_complete(asyncio.gather(*leftovers, return_exceptions=True))
+        """One tick's runs, as the line it prints (drain())."""
+        return drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop)
 
     def _wait_until(self, due: datetime) -> None:
         """Sleep until `due` in naps of at most MAX_NAP seconds, re-reading the clock after each."""
         while (left := (due - self.now()).total_seconds()) > 0:
             self.sleep(min(left, self.MAX_NAP))
 
-    @staticmethod
-    def _on_sigterm(signum, frame):
-        """SIGTERM stops the loop like Ctrl-C does (the caller's finally blocks run)."""
-        raise KeyboardInterrupt
-
     def run(self, ticks: int | None = None) -> None:
         """Tick on every fire until Ctrl-C or SIGTERM (or `ticks` ticks, for tests)."""
         due = self.cron.next_after(self.now())
         print(f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
-        try:
-            previous = signal.signal(signal.SIGTERM, self._on_sigterm)
-        except ValueError:   # not the main thread: signals stay as they are
-            previous = None
         done = 0
-        try:
-            while ticks is None or done < ticks:
-                self._wait_until(due)
-                done += 1
-                print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
-                # The fire after this one -- or after now, when the runs overran the next fires.
-                due = self.cron.next_after(max(due, self.now()))
-        except KeyboardInterrupt:
-            print("\n[cron] stopped.", flush=True)
-        finally:
-            if previous is not None:
-                signal.signal(signal.SIGTERM, previous)
+        with SigtermAsCtrlC():
+            try:
+                while ticks is None or done < ticks:
+                    self._wait_until(due)
+                    done += 1
+                    print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
+                    # The fire after this one -- or after now, when the runs overran the next fires.
+                    due = self.cron.next_after(max(due, self.now()))
+            except KeyboardInterrupt:
+                print("\n[cron] stopped.", flush=True)
 
 
 def cron_next(expr: str, after: datetime) -> datetime:
@@ -1131,6 +1147,155 @@ def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: 
     use: the tasks a failed run leaves on it are cancelled before the next run.
     """
     CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop).run(ticks)
+
+
+PY;
+    }
+
+    /**
+     * --watch: run when an MCP tool says something new arrived, instead of on a timer (spec
+     * 2026-10-12 mail/drive events §7). The trigger tool blocks until then and answers
+     * {"status": "ready"} -- the workflow then runs and drains exactly like a cron tick (drain()) --
+     * or {"status": "timeout"}, and the loop asks again; any other answer or a failed call is
+     * printed and retried after RETRY_S. Generic: nothing here knows which server or tool it is
+     * (outlook.wait_for_new is one). Emitted after cronBlock(), whose drain() and SigtermAsCtrlC it
+     * uses; the entry file supplies json, MCP and MCP_SERVER_SLUGS.
+     */
+    public static function watchBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# WATCH LOOP (--watch)
+# Instead of a timer, an MCP tool decides when to run: the loop calls the
+# trigger tool (e.g. outlook.wait_for_new), which waits until something new
+# probably arrived and answers {"status": "ready"} -- the workflow then runs
+# and drains as a cron tick does -- or {"status": "timeout"}, and the loop
+# asks again. A failed call is printed and retried after 30 s.
+# ==============================================================
+
+
+class WatchError(Exception):
+    """The trigger tool failed, or did not answer {"status": "ready" | "timeout"}."""
+
+
+class WatchTrigger:
+    """The MCP tool --watch waits on: a server slug (as in MCP_HEADERS_<SLUG>), a tool, its arguments."""
+
+    def __init__(self, server: str, tool: str, args: dict):
+        self.server, self.tool, self.args = server, tool, args
+
+    def __str__(self) -> str:
+        return f"{self.server}.{self.tool}"
+
+    @classmethod
+    def parse(cls, text: str) -> "WatchTrigger":
+        """'server.tool', optionally followed by a JSON object of the tool's arguments."""
+        head, _, rest = text.strip().partition(" ")
+        server, dot, tool = head.partition(".")
+        if not (server and dot and tool):
+            raise ValueError("expected server.tool, e.g. outlook.wait_for_new")
+        try:
+            args = json.loads(rest) if rest.strip() else {}
+        except ValueError as e:
+            raise ValueError(f"the arguments are not JSON: {e}") from None
+        if not isinstance(args, dict):
+            raise ValueError("the arguments must be a JSON object")
+        return cls(server, tool, args)
+
+    @classmethod
+    def from_cli(cls, ap: argparse.ArgumentParser, value: str | None, default: dict | None) -> "WatchTrigger | None":
+        """--watch's trigger: None without the flag, the baked DEFAULT_WATCH for a bare --watch, else
+        the one given. A missing or bad trigger, or a server this workflow does not use, is a usage
+        error (exit 2), before any agent starts."""
+        match value:
+            case None:
+                return None
+            case "":
+                if not default:
+                    ap.error("--watch needs a trigger: this workflow has no event trigger, e.g. "
+                             "--watch 'outlook.wait_for_new {\"args\": {\"folder\": \"Inbox\"}}'")
+                trigger = cls(default["server"], default["tool"], dict(default.get("args") or {}))
+            case _:
+                try:
+                    trigger = cls.parse(value)
+                except ValueError as e:
+                    ap.error(f"--watch {value!r}: {e}")
+        if trigger.url() is None:
+            known = ", ".join(sorted(set(MCP_SERVER_SLUGS.values()))) or "none"
+            ap.error(f"--watch: MCP server {trigger.server!r} is not used by this workflow (its servers: {known})")
+        return trigger
+
+    def url(self) -> str | None:
+        """The server's registered URL (MCP_SERVER_SLUGS), or None when the workflow does not use it."""
+        return next((u for u, slug in MCP_SERVER_SLUGS.items() if slug == self.server), None)
+
+    def wait(self) -> dict:
+        """One call of the tool, as its result object."""
+        raw = MCP.call_tool_raw(self.url(), self.tool, self.args)
+        text = "\n".join(c.get("text", "") for c in raw.get("content") or []
+                         if isinstance(c, dict) and c.get("type") == "text").strip()
+        if raw.get("isError"):
+            raise WatchError(text or "tool error")
+        result = raw.get("structuredContent")
+        if result is None:
+            try:
+                result = json.loads(text)
+            except ValueError:
+                result = None
+        if not isinstance(result, dict) or result.get("status") not in ("ready", "timeout"):
+            raise WatchError(f'expected {{"status": "ready" | "timeout"}}, got {text[:200]!r}')
+        return result
+
+
+class WatchLoop:
+    """The --watch loop: wait on the trigger, drain the workflow when it says ready, repeat."""
+
+    RETRY_S = 30.0
+
+    def __init__(self, trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
+                 loop: asyncio.AbstractEventLoop | None = None):
+        self.trigger, self.sleep, self.now = trigger, sleep, now
+        self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
+        self._reason = ""
+
+    def _say(self, text: str) -> None:
+        print(f"[watch {self.now():%H:%M}] {text}", flush=True)
+
+    def step(self) -> None:
+        """One call of the trigger, and the runs it calls for."""
+        try:
+            r = self.trigger.wait()
+        except Exception as e:  # noqa: BLE001 -- the server may be down for a while: retry, never stop
+            self._say(f"{self.trigger} failed: {e}; again in {self.RETRY_S:.0f} s")
+            self.sleep(self.RETRY_S)
+            return
+        reason = str(r.get("reason") or "")
+        if reason != self._reason:   # e.g. events off: the trigger fell back to timed polling
+            self._reason = reason
+            self._say(f"{self.trigger}: {reason}" if reason else f"{self.trigger}: {r.get('events', 'ok')}")
+        if r["status"] == "ready":
+            runs = drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop)
+            self._say(f"ready ({r.get('via') or 'no reason given'}): {runs}")
+
+    def run(self, calls: int | None = None) -> None:
+        """Until Ctrl-C or SIGTERM (or `calls` trigger calls, for tests)."""
+        print(f"[watch] waiting on {self.trigger}. Ctrl-C to stop.", flush=True)
+        done = 0
+        with SigtermAsCtrlC():
+            try:
+                while calls is None or done < calls:
+                    done += 1
+                    self.step()
+            except KeyboardInterrupt:
+                print("\n[watch] stopped.", flush=True)
+
+
+def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20,
+              sleep=time.sleep, now=datetime.now, calls: int | None = None,
+              loop: asyncio.AbstractEventLoop | None = None) -> None:
+    """Run the workflow each time `trigger` answers ready, until Ctrl-C or SIGTERM. drains, max_runs
+    and loop as in run_cron()."""
+    WatchLoop(trigger, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop).run(calls)
 
 
 PY;
