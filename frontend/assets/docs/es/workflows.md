@@ -26,6 +26,14 @@ Las salidas se pueden mostrar de dos maneras:
 
 Cada nodo puede asociarse con un **esquema JSON** para decodificación restringida — garantiza que la salida cumple una forma definida, útil para procesamiento posterior.
 
+## Disparadores por evento
+
+En lugar de una hora, una programación puede esperar un **evento**: pon *Repetir* en **Por evento (herramienta MCP)** y elige un servidor MCP y su herramienta disparadora — p. ej. *Outlook* → *wait_for_new*, que responde en cuanto llega un correo nuevo. *Argumentos de la herramienta* es la entrada JSON de la herramienta, p. ej. `{"args": {"folder": "Inbox"}}` para la carpeta que lee un nodo *Poll Outlook* (`{}` = Inbox).
+
+- El script Python compilado lo ejecuta: `python <archivo> --watch` espera esa herramienta y ejecuta el workflow cada vez que responde *ready*, y de nuevo mientras quede trabajo.
+- En la aplicación, una programación por evento aún no se ejecuta por sí sola.
+- Para Outlook, las notificaciones llegan por Azure Event Hubs (ver el README del servidor Outlook). Sin ellas, la herramienta igual responde cada 15 minutos.
+
 ## Compilar a Python
 
 Cualquier workflow puede **compilarse en una aplicación Python independiente**. El script generado usa LangGraph y puede ejecutarse independientemente de la aplicación web — útil cuando quieres distribuir un workflow como CLI o como script programado.

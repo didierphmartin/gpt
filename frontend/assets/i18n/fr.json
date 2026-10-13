@@ -799,7 +799,17 @@
         "daily": "Quotidiennement",
         "weekly": "Hebdomadairement",
         "monthly": "Mensuellement",
-        "cron": "Personnalisé (cron)"
+        "cron": "Personnalisé (cron)",
+        "event": "Sur événement (outil MCP)"
+      },
+      "event": {
+        "server": "Serveur MCP",
+        "tool": "Outil déclencheur",
+        "args": "Arguments de l'outil (JSON)",
+        "hint": "Le workflow s'exécute chaque fois que cet outil répond qu'un nouvel élément est arrivé (par ex. Outlook → wait_for_new). Il est utilisé par le script Python compilé : python <fichier> --watch. Dans l'application, une planification sur événement ne s'exécute pas encore d'elle-même.",
+        "noTools": "Aucun outil MCP enregistré : ajoutez un serveur MCP, ou actualisez ses outils, dans Serveurs MCP.",
+        "needTool": "Choisissez l'outil à attendre.",
+        "badArgs": "Les arguments doivent être un objet JSON, par ex. {} ou {\"args\": {\"folder\": \"Inbox\"}}."
       },
       "cron": {
         "label": "Expression cron",

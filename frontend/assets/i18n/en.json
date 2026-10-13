@@ -799,7 +799,17 @@
         "daily": "Daily",
         "weekly": "Weekly",
         "monthly": "Monthly",
-        "cron": "Custom (cron)"
+        "cron": "Custom (cron)",
+        "event": "On event (MCP tool)"
+      },
+      "event": {
+        "server": "MCP server",
+        "tool": "Trigger tool",
+        "args": "Tool arguments (JSON)",
+        "hint": "The workflow runs each time this tool answers that something new arrived (e.g. Outlook → wait_for_new). It is used by the compiled Python script: python <file> --watch. In the app, an event schedule does not run on its own yet.",
+        "noTools": "No MCP tools saved yet: add an MCP server, or refresh its tools, under MCP Servers.",
+        "needTool": "Choose the tool to wait on.",
+        "badArgs": "The arguments must be a JSON object, e.g. {} or {\"args\": {\"folder\": \"Inbox\"}}."
       },
       "cron": {
         "label": "Cron expression",

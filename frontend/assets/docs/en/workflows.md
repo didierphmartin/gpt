@@ -26,6 +26,14 @@ Outputs can be displayed two ways:
 
 Each node can be paired with a **JSON Schema** for constrained decoding — guarantees the output matches a defined shape, useful for downstream processing.
 
+## Event triggers
+
+Instead of a time, a schedule can wait for an **event**: set *Repeat* to **On event (MCP tool)** and choose an MCP server and its trigger tool — e.g. *Outlook* → *wait_for_new*, which answers as soon as new mail arrives. *Tool arguments* is the tool's JSON input, e.g. `{"args": {"folder": "Inbox"}}` for the folder a *Poll Outlook* node reads (`{}` = Inbox).
+
+- The compiled Python script runs it: `python <file> --watch` waits on that tool and runs the workflow each time it answers *ready*, then again until nothing is left.
+- In the app, an event schedule does not run on its own yet.
+- For Outlook, the notifications come through Azure Event Hubs (see the Outlook server's README). Without them, the tool still answers every 15 minutes.
+
 ## Compile to Python
 
 Any workflow can be **compiled into a standalone Python application**. The generated script uses LangGraph and can run independently of the web app — useful when you want to ship a workflow as a CLI or scheduled script.

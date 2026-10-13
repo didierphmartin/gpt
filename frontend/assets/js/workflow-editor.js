@@ -6806,6 +6806,7 @@ class WorkflowEditor {
                                             <option value="weekly" ${schedule.repeat_type === 'weekly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.weekly')}</option>
                                             <option value="monthly" ${schedule.repeat_type === 'monthly' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.monthly')}</option>
                                             <option value="cron" ${schedule.repeat_type === 'cron' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.cron')}</option>
+                                            <option value="event" ${schedule.repeat_type === 'event' ? 'selected' : ''}>${this.t('workflow.schedule.repeatOptions.event')}</option>
                                         </select>
                                     </div>
                                     <div id="repeat-interval-container" style="width: 120px; display: ${schedule.repeat_type && schedule.repeat_type !== 'none' && schedule.repeat_type !== 'cron' ? 'block' : 'none'};">
@@ -6826,6 +6827,26 @@ class WorkflowEditor {
                                             ${this.t('workflow.schedule.cron.' + p.key)}</button>`).join('')}
                                     </div>
                                     <div id="schedule-cron-preview" style="margin-top:6px; font-size:13px;"></div>
+                                </div>
+
+                                <!-- On event: an MCP tool that waits until something new arrives (compiled --watch) -->
+                                <div id="event-container" style="margin-top: 12px; display: ${schedule.repeat_type === 'event' ? 'block' : 'none'};">
+                                    <div style="display:flex; gap:12px;">
+                                        <div style="flex:1;">
+                                            <label for="schedule-event-server" style="display:block; font-size:13px; color:#6b7280; margin-bottom:4px;">${this.t('workflow.schedule.event.server')}</label>
+                                            <select id="schedule-event-server" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; background:white;"></select>
+                                        </div>
+                                        <div style="flex:1;">
+                                            <label for="schedule-event-tool" style="display:block; font-size:13px; color:#6b7280; margin-bottom:4px;">${this.t('workflow.schedule.event.tool')}</label>
+                                            <select id="schedule-event-tool" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; background:white;"></select>
+                                        </div>
+                                    </div>
+                                    <div id="schedule-event-tool-desc" style="font-size:12px; color:#6b7280; margin-top:6px;"></div>
+                                    <label for="schedule-event-args" style="display:block; font-size:13px; color:#6b7280; margin:10px 0 4px;">${this.t('workflow.schedule.event.args')}</label>
+                                    <textarea id="schedule-event-args" rows="3" spellcheck="false"
+                                        style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; font-family:monospace; resize:vertical;"></textarea>
+                                    <div id="schedule-event-error" style="font-size:13px; color:#dc2626; margin-top:4px;"></div>
+                                    <div style="font-size:12px; color:#6b7280; margin-top:6px;">${this.escapeHtml(this.t('workflow.schedule.event.hint'))}</div>
                                 </div>
 
                                 ${hasSchedule ? `
@@ -6933,6 +6954,9 @@ class WorkflowEditor {
         // Handle cancel
         cancelBtn.addEventListener('click', () => modal.remove());
 
+        // On event: pick the trigger tool (server, tool, JSON arguments) from the user's saved MCP tools.
+        const eventForm = this._scheduleEventForm(schedule, repeatTypeSelect, saveScheduleBtn);
+
         // Handle save schedule
         if (saveScheduleBtn) {
             saveScheduleBtn.addEventListener('click', async () => {
@@ -6951,6 +6975,10 @@ class WorkflowEditor {
                     repeat_interval: parseInt(document.getElementById('schedule-repeat-interval').value) || 1,
                     cron: repeatTypeSelect.value === 'cron' ? cronInput.value.trim() : null
                 };
+                if (repeatTypeSelect.value === 'event') {
+                    scheduleData.event_trigger = eventForm.trigger();
+                    scheduleData.scheduled_time ||= this._localNowStamp();   // required by the server, unused by an event
+                }
 
                 const success = await this.saveSchedule(scheduleData);
                 if (success) {
@@ -17426,6 +17454,77 @@ class WorkflowEditor {
             console.error('[WorkflowEditor] Error loading providers:', error);
             this.providers = [];
         }
+    }
+
+    /**
+     * The schedule form's "On event" part (spec 2026-10-12 mail/drive events §8): an MCP server, one of its
+     * tools and the tool's JSON arguments, from the user's saved tool catalog (/mcp/servers/all-tools).
+     * A compiled script's --watch calls that tool until it answers ready (outlook.wait_for_new is one).
+     * Nothing here knows a particular server. Returns { trigger() } for the save handler.
+     */
+    _scheduleEventForm(schedule, repeatTypeSelect, saveScheduleBtn) {
+        const box = document.getElementById('event-container');
+        const serverSel = document.getElementById('schedule-event-server');
+        const toolSel = document.getElementById('schedule-event-tool');
+        const desc = document.getElementById('schedule-event-tool-desc');
+        const argsBox = document.getElementById('schedule-event-args');
+        const error = document.getElementById('schedule-event-error');
+        const runAt = document.getElementById('schedule-datetime').parentElement;
+        let saved = {};
+        try { saved = JSON.parse(schedule.event_trigger || '{}') || {}; } catch (_) { saved = {}; }
+        argsBox.value = JSON.stringify(saved.args || {}, null, 2);
+        let tools = null;   // [{server_name, tool_name, tool_description}], loaded on first use
+
+        const fill = (sel, values, want) => {
+            sel.innerHTML = values.map((v) => `<option value="${this.escapeHtml(v)}">${this.escapeHtml(v)}</option>`).join('');
+            if (values.includes(want)) sel.value = want;
+        };
+        const fillTools = (want) => {
+            const mine = tools.filter((x) => x.server_name === serverSel.value);
+            fill(toolSel, mine.map((x) => x.tool_name).sort(), want);
+            showDesc();
+        };
+        const showDesc = () => {
+            const tool = tools.find((x) => x.server_name === serverSel.value && x.tool_name === toolSel.value);
+            desc.textContent = tool?.tool_description || '';
+        };
+        const args = () => {
+            try {
+                const v = JSON.parse(argsBox.value.trim() || '{}');
+                return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+            } catch (_) { return null; }
+        };
+        const check = () => {
+            if (repeatTypeSelect.value !== 'event') return;
+            const msg = !tools ? '' : !tools.length ? this.t('workflow.schedule.event.noTools')
+                : !toolSel.value ? this.t('workflow.schedule.event.needTool')
+                : !args() ? this.t('workflow.schedule.event.badArgs') : '';
+            error.textContent = msg;
+            if (saveScheduleBtn) saveScheduleBtn.disabled = !tools || !!msg;
+        };
+        const load = async () => {
+            if (tools) return;
+            try {
+                const userId = window.mcpClient?.getUserId?.();
+                const data = await window.mcpClient.request(`/mcp/servers/all-tools?user_id=${encodeURIComponent(userId ?? '')}`);
+                tools = Array.isArray(data?.tools) ? data.tools : [];
+            } catch (_) { tools = []; }
+            fill(serverSel, [...new Set(tools.map((x) => x.server_name))].sort(), saved.server);
+            fillTools(saved.tool);
+            check();
+        };
+        const refresh = () => {
+            const on = repeatTypeSelect.value === 'event';
+            box.style.display = on ? 'block' : 'none';
+            runAt.style.display = on ? 'none' : '';   // an event schedule has no time: its tool decides
+            if (on) load().then(check);
+        };
+        serverSel.addEventListener('change', () => { fillTools(); check(); });
+        toolSel.addEventListener('change', () => { showDesc(); check(); });
+        argsBox.addEventListener('input', check);
+        repeatTypeSelect.addEventListener('change', refresh);
+        refresh();
+        return { trigger: () => ({ server: serverSel.value, tool: toolSel.value, args: args() || {} }) };
     }
 
     /**

@@ -26,6 +26,14 @@ Les sorties peuvent s'afficher de deux manières :
 
 Chaque nœud peut être associé à un **schéma JSON** pour un décodage contraint — garantit que la sortie respecte une forme définie, utile pour le traitement en aval.
 
+## Déclencheurs sur événement
+
+Au lieu d'une heure, une planification peut attendre un **événement** : réglez *Répéter* sur **Sur événement (outil MCP)** et choisissez un serveur MCP et son outil déclencheur — par ex. *Outlook* → *wait_for_new*, qui répond dès qu'un nouveau courriel arrive. *Arguments de l'outil* est l'entrée JSON de l'outil, par ex. `{"args": {"folder": "Inbox"}}` pour le dossier que lit un nœud *Poll Outlook* (`{}` = Inbox).
+
+- Le script Python compilé l'exécute : `python <fichier> --watch` attend cet outil et lance le workflow chaque fois qu'il répond *ready*, puis encore tant qu'il reste du travail.
+- Dans l'application, une planification sur événement ne s'exécute pas encore d'elle-même.
+- Pour Outlook, les notifications passent par Azure Event Hubs (voir le README du serveur Outlook). Sans elles, l'outil répond quand même toutes les 15 minutes.
+
 ## Compiler en Python
 
 Tout workflow peut être **compilé en application Python autonome**. Le script généré utilise LangGraph et peut tourner indépendamment de l'application web — pratique quand vous voulez livrer un workflow comme CLI ou comme script planifié.

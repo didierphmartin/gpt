@@ -799,7 +799,17 @@
         "daily": "Diariamente",
         "weekly": "Semanalmente",
         "monthly": "Mensualmente",
-        "cron": "Personalizado (cron)"
+        "cron": "Personalizado (cron)",
+        "event": "Por evento (herramienta MCP)"
+      },
+      "event": {
+        "server": "Servidor MCP",
+        "tool": "Herramienta disparadora",
+        "args": "Argumentos de la herramienta (JSON)",
+        "hint": "El flujo se ejecuta cada vez que esta herramienta responde que llegó algo nuevo (p. ej. Outlook → wait_for_new). Lo usa el script Python compilado: python <archivo> --watch. En la aplicación, una programación por evento aún no se ejecuta por sí sola.",
+        "noTools": "Aún no hay herramientas MCP guardadas: añade un servidor MCP, o actualiza sus herramientas, en Servidores MCP.",
+        "needTool": "Elige la herramienta que se esperará.",
+        "badArgs": "Los argumentos deben ser un objeto JSON, p. ej. {} o {\"args\": {\"folder\": \"Inbox\"}}."
       },
       "cron": {
         "label": "Expresión cron",

@@ -118,6 +118,13 @@ class ScheduledWorkflowController
         if (($body['repeat_type'] ?? '') === 'cron' && !CronExpression::isValid(trim((string) ($body['cron'] ?? '')))) {
             return ['success' => false, 'error' => 'Invalid cron expression', 'status_code' => 400];
         }
+        if (($body['repeat_type'] ?? '') === 'event') {
+            try {
+                ScheduledWorkflowService::eventTrigger($body['event_trigger'] ?? null);
+            } catch (\InvalidArgumentException $e) {
+                return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 400];
+            }
+        }
 
         try {
             $schedule = $this->scheduleService->create([
@@ -128,6 +135,7 @@ class ScheduledWorkflowController
                 'repeat_type' => $body['repeat_type'] ?? 'none',
                 'repeat_interval' => (int) ($body['repeat_interval'] ?? 1),
                 'cron' => $body['cron'] ?? null,
+                'event_trigger' => $body['event_trigger'] ?? null,
             ]);
 
             return [
@@ -243,6 +251,8 @@ class ScheduledWorkflowController
                 'message' => 'Schedule updated successfully',
                 'status_code' => 200
             ];
+        } catch (\InvalidArgumentException $e) {   // e.g. an event schedule without a usable trigger
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 400];
         } catch (\Exception $e) {
             return [
                 'success' => false,

@@ -15,7 +15,7 @@ use DateInterval;
  */
 class ScheduledWorkflowService
 {
-    public const REPEAT_TYPES = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron'];
+    public const REPEAT_TYPES = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron', 'event'];
     /** A run 'running' for longer than this is treated as crashed and may be claimed again. */
     public const STALE_RUNNING_MINUTES = 60;
 
@@ -52,6 +52,33 @@ class ScheduledWorkflowService
             $t->modify('-' . self::STALE_RUNNING_MINUTES . ' minutes')->format('Y-m-d H:i:s')];
     }
 
+    /**
+     * An 'event' schedule's trigger -- {"server": <MCP server name>, "tool": ..., "args": {...}} -- as the
+     * canonical JSON stored in event_trigger (spec 2026-10-12 mail/drive events §8). The trigger tool is
+     * called by a compiled script's --watch (LangGraphGenerator::defaultWatch). An event schedule has no
+     * next_run, so no scheduler tick (of any backend) ever claims it.
+     *
+     * @throws \InvalidArgumentException when the trigger is not that shape
+     */
+    public static function eventTrigger(mixed $raw): string
+    {
+        $t = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($t)) {
+            throw new \InvalidArgumentException('An event schedule needs event_trigger: {"server", "tool", "args"}');
+        }
+        $server = trim((string) ($t['server'] ?? ''));
+        $tool = trim((string) ($t['tool'] ?? ''));
+        $args = $t['args'] ?? [];
+        if ($server === '' || $tool === '') {
+            throw new \InvalidArgumentException('event_trigger needs an MCP server and a tool');
+        }
+        if (!is_array($args) || ($args !== [] && array_is_list($args))) {
+            throw new \InvalidArgumentException('event_trigger.args must be a JSON object');
+        }
+        return json_encode(['server' => $server, 'tool' => $tool, 'args' => (object) $args],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+
     private function nextCronRun(string $cron): string
     {
         return (new CronExpression($cron))->nextAfter($this->now())->format('Y-m-d H:i:s');
@@ -67,15 +94,25 @@ class ScheduledWorkflowService
         if ($repeatType === 'cron' && !CronExpression::isValid($cron)) {
             throw new \InvalidArgumentException('Invalid cron expression');
         }
+        $event = $repeatType === 'event' ? self::eventTrigger($data['event_trigger'] ?? null) : null;
         $scheduledTime = $data['scheduled_time'] ?? $this->stamp();
-        // A cron schedule first fires on its next cron minute; others at the scheduled time.
-        $nextRun = $cron !== null ? $this->nextCronRun($cron) : $scheduledTime;
+        // A cron schedule first fires on its next cron minute; an event schedule never (no next_run:
+        // its trigger tool decides, in a compiled --watch); others at the scheduled time.
+        $nextRun = match (true) {
+            $cron !== null => $this->nextCronRun($cron),
+            $event !== null => null,
+            default => $scheduledTime,
+        };
+        // event_trigger is written only for event schedules: the others keep working on a database
+        // the event migration has not reached yet.
+        $eventCol = $event !== null ? ', event_trigger' : '';
+        $eventVal = $event !== null ? ', :event_trigger' : '';
 
         $stmt = $this->db->prepare("
             INSERT INTO scheduled_workflows
-            (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, cron, next_run, created_at)
+            (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, cron, next_run, created_at{$eventCol})
             VALUES
-            (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :cron, :next_run, NOW())
+            (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :cron, :next_run, NOW(){$eventVal})
         ");
         $stmt->execute([
             'user_id' => $data['user_id'],
@@ -86,6 +123,7 @@ class ScheduledWorkflowService
             'repeat_interval' => $data['repeat_interval'] ?? 1,
             'cron' => $cron,
             'next_run' => $nextRun,
+            ...($event !== null ? ['event_trigger' => $event] : []),
         ]);
 
         return $this->findById((int) $this->db->lastInsertId());
@@ -140,6 +178,21 @@ class ScheduledWorkflowService
                 $fields = array_values(array_filter($fields, fn($f) => $f !== 'next_run = :next_run'));
                 $fields[] = 'next_run = :next_run';
                 $params['next_run'] = $this->nextCronRun($cron);
+            }
+        }
+
+        // Event: the trigger is (re)validated and next_run cleared; leaving 'event' clears the trigger.
+        if ($repeatType === 'event') {
+            $fields = array_values(array_filter($fields, fn($f) => $f !== 'next_run = :next_run'));
+            unset($params['next_run']);
+            $fields[] = 'event_trigger = :event_trigger';
+            $fields[] = 'next_run = NULL';
+            $params['event_trigger'] = self::eventTrigger($data['event_trigger'] ?? $schedule['event_trigger'] ?? null);
+        } elseif (($schedule['repeat_type'] ?? '') === 'event') {
+            $fields[] = 'event_trigger = NULL';
+            if (!in_array('next_run = :next_run', $fields, true)) {   // back to a timed schedule: from its time
+                $fields[] = 'next_run = :next_run';
+                $params['next_run'] = $schedule['scheduled_time'];
             }
         }
 
