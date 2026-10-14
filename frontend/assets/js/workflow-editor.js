@@ -9494,16 +9494,24 @@ class WorkflowEditor {
     }
 
     /**
-     * The node a Start option runs after Start: an existing code child of Start is reused, else a node linked to
-     * the component; a new one takes over Start's other children on the option's work exit.
+     * The node a Start option runs after Start: a code child of Start already linked to this component is reused,
+     * else a new node linked to it. A new one takes over Start's other children on the option's work exit, and
+     * Start's link to another Start option's node is cut (that node and its downstream stay); hand-made code
+     * nodes are never disconnected.
      */
     _optionNodeAfterStart(comp) {
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const startId = Object.keys(nodes).find((id) => this._wfNodeKind(id, nodes) === 'start');
         const start = startId ? nodes[startId] : null;
-        const existing = (start?.outputs?.output_1?.connections || []).map((c) => String(c.node))
-            .find((id) => this._wfNodeKind(id, nodes) === 'code');
-        if (existing) return existing;
+        const kids = (start?.outputs?.output_1?.connections || []).filter((c) => this._wfNodeKind(String(c.node), nodes) === 'code');
+        const linkedTo = (c) => nodes[String(c.node)]?.data?.code_component_id;
+        const existing = kids.find((c) => linkedTo(c) && Number(linkedTo(c)) === Number(comp.id));
+        if (existing) return String(existing.node);
+        for (const c of kids) {
+            if (linkedTo(c) && window.CodeComponents.cache.get(Number(linkedTo(c)))?.start_trigger) {
+                this.editor.removeSingleConnection(startId, String(c.node), 'output_1', c.output);
+            }
+        }
         const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100, window.CodeComponents.linkedNodeConfig(comp));
         const moved = window.CodeNode.startChildrenToMove(startId, nodes, (nid) => this._wfNodeKind(nid, nodes));
         const workPort = window.CodeNode.portForExit(comp.exits, comp.start_trigger.work_exit);
@@ -9557,6 +9565,10 @@ class WorkflowEditor {
                         : this.t('workflow.connect.needServer', { servers: missing.join(', ') }), true);
                     return;
                 }
+                if (scheduleEnabledChk.checked) {
+                    scheduleEnabledChk.checked = false;
+                    scheduleEnabledChk.dispatchEvent(new Event('change'));   // the event save replaces the Delay row
+                }
                 this._optionNodeAfterStart(comp);
                 await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
                 const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
@@ -9566,6 +9578,11 @@ class WorkflowEditor {
             } else if (typeof key === 'number') {
                 // Unticked: the event schedule goes (a 'none' row would still run once); the node stays.
                 if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { cb.checked = true; return; }
+            } else if (key === 'delay' && next.state.delay && state.event !== null) {
+                // Delay on while an event option is active: the event schedule goes first.
+                if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { cb.checked = false; return; }
+                scheduleEnabledChk.checked = true;
+                scheduleEnabledChk.dispatchEvent(new Event('change'));
             } else if (next.state.delay !== scheduleEnabledChk.checked) {
                 scheduleEnabledChk.checked = next.state.delay;
                 scheduleEnabledChk.dispatchEvent(new Event('change'));   // shows/hides the Delay fields, as before
