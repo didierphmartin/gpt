@@ -10611,14 +10611,14 @@ class ChatApp {
         // Hide agent teams content panel when switching to other views.
         //
         // Exception: when the user switches the sidebar to 'agents' or
-        // 'skills' while the workflow canvas is already up, KEEP the canvas
+        // 'skills' (or the Playbooks / Code libraries) while the workflow canvas is already up, KEEP the canvas
         // visible. Agents AND skills are drag-dropped FROM their sidebar lists
         // ONTO the workflow canvas (skills bind to a node), so the canvas must
         // stay onscreen across that switch. The guard below is gated on
         // agentTeamsPanel.isActive, so from plain chat (no workflow up)
         // selecting Skills behaves as before. Any other view (conversations,
         // settings, file-storage) still hides the canvas.
-        const KEEPS_WORKFLOW_CANVAS_VISIBLE = new Set(['agent-teams', 'agents', 'skills']);
+        const KEEPS_WORKFLOW_CANVAS_VISIBLE = new Set(['agent-teams', 'agents', 'skills', 'playbooks', 'code-library']);
         if (!KEEPS_WORKFLOW_CANVAS_VISIBLE.has(view) && window.agentTeamsPanel && window.agentTeamsPanel.isActive) {
             window.agentTeamsPanel.hide();
         }
