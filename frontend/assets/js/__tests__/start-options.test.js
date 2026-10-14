@@ -50,4 +50,14 @@ assert.deepStrictEqual(SO.warning('New email', [{ workflow_name: 'A', node_name:
     ['workflow.startOptions.warnActive', 'workflow.startOptions.warnStops',
      'workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
 
+// i18n: every warning line's params fill the en strings with the {{x}} rule i18n.js uses -- no brace left
+const en = require('../../i18n/en.json');
+const lookup = (key) => key.split('.').reduce((o, k) => (o ? o[k] : undefined), en);
+for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test', node_name: 'Email processing' }])) {
+    const raw = lookup(key);
+    assert.strictEqual(typeof raw, 'string', key);
+    const out = raw.replace(/\{\{(\w+)\}\}/g, (m, k) => (params[k] !== undefined ? String(params[k]) : m));
+    assert.ok(!out.includes('{'), `${key}: ${out}`);
+}
+
 console.log('start-options.test.js: OK');

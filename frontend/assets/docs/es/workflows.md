@@ -40,8 +40,8 @@ En lugar de una hora, una programación puede esperar un **evento**: pon *Repeti
 
 Un flujo comienza con su **Instrucción**, con un **Retraso** (una programación) o con una **opción de evento**.
 
-- **Añadir una opción:** arrastre un componente de la Biblioteca de componentes de código sobre cualquier nodo Inicio. Elija la herramienta de espera (para Outlook, `wait_for_new`), sus argumentos y la salida que lleva el trabajo. El Inicio de cada flujo la mostrará.
-- **Usarla:** abra Inicio y marque la opción. Aparece un nodo enlazado al componente después de Inicio, y el flujo espera el evento en lugar de una programación. Una opción de evento a la vez; activarla desactiva el Retraso.
+- **Añadir una opción:** arrastra un componente de la Biblioteca de componentes de código sobre cualquier nodo Inicio. Elige la herramienta de espera (para Outlook, `wait_for_new`), sus argumentos y la salida que lleva el trabajo. El Inicio de cada flujo la mostrará.
+- **Usarla:** abre Inicio y marca la opción. Aparece un nodo enlazado al componente después de Inicio, y el flujo espera el evento en lugar de una programación. Una opción de evento a la vez; activarla desactiva el Retraso.
 - **Quitarla:** ⋮ → Quitar opción. Una advertencia enumera primero los flujos que la usan. Sus nodos se quedan donde están; dejan de comenzar con el evento.
 
 ## Compilar a Python
