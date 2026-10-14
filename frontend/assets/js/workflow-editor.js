@@ -8799,7 +8799,7 @@ class WorkflowEditor {
                 const row = ccId ? window.CodeComponents?.cache.get(ccId) : null;
                 // Dropped on Start: the component becomes a Start option for every workflow (spec §4), no node.
                 if (row && window.StartOptions?.isStartDrop(e.target)) {
-                    this._showStartOptionDialog(row);
+                    this._showStartOptionDialog(row).catch((err) => this.showNotification(err.message, 'error'));
                     break;
                 }
                 this.addCodeNode(x, y, row ? window.CodeComponents.linkedNodeConfig(row) : null);
@@ -9608,9 +9608,12 @@ class WorkflowEditor {
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
         const servers = comp.mcp_servers || [];
         if (!servers.length) { this.showNotification(t('needsServer'), 'error'); return null; }
-        const meta = await this._loadMcpServersMeta();
-        const toolsFor = async (name) => this._mcpProxyListTools(meta.find((m) => m.name === name));
-        const start = comp.start_trigger || window.StartOptions.defaultTrigger(comp, await toolsFor(servers[0]));
+        let meta, toolsFor, start;
+        try {
+            meta = await this._loadMcpServersMeta();
+            toolsFor = async (name) => this._mcpProxyListTools(meta.find((m) => m.name === name));
+            start = comp.start_trigger || window.StartOptions.defaultTrigger(comp, await toolsFor(servers[0]));
+        } catch (err) { this.showNotification(err.message, 'error'); return null; }
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
@@ -9647,8 +9650,14 @@ class WorkflowEditor {
         }
         f('args').value = JSON.stringify(start.watch.args || {}, null, 2);
         fill(f('exit'), comp.exits || [], start.work_exit);
-        f('server').addEventListener('change', async () =>
-            fill(f('tool'), window.StartOptions.sortWaitTools(await toolsFor(f('server').value)), ''));
+        f('server').addEventListener('change', async () => {
+            const asked = f('server').value;
+            try {
+                const names = await toolsFor(asked);
+                if (f('server').value !== asked) return;   // a newer change superseded this response
+                fill(f('tool'), window.StartOptions.sortWaitTools(names), '');
+            } catch (err) { f('result').textContent = err.message; }
+        });
         return new Promise((resolve) => {
             overlay.addEventListener('click', async (ev) => {
                 const act = ev.target?.dataset?.act;
