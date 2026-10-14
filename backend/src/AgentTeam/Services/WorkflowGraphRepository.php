@@ -91,7 +91,8 @@ class WorkflowGraphRepository
         $codeStore = new \Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore($this->db);
         foreach ($rows as &$row) {
             $cfg = $row['config'];
-            if (($row['node_type'] ?? '') !== 'code' || !is_array($cfg) || empty($cfg['code_component_id'])) {
+            if (!\Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore::isCodeNode($row['node_type'] ?? null, $cfg)
+                || !is_array($cfg) || empty($cfg['code_component_id'])) {
                 continue;
             }
             $c = $codeStore->get($ownerId(), (int) $cfg['code_component_id']);

@@ -102,6 +102,15 @@ final class CodeComponentStore
         $this->db->prepare('DELETE FROM code_components WHERE id = ? AND user_id = ?')->execute([$id, $userId]);
     }
 
+    /**
+     * A workflow_nodes row is a code node. The column decides when it has a value; a DB whose node_type
+     * is still the old ENUM (no 'code') stores '' for one, and then the config's type decides.
+     */
+    public static function isCodeNode(?string $nodeType, mixed $cfg): bool
+    {
+        return ($nodeType ?? '') !== '' ? $nodeType === 'code' : is_array($cfg) && ($cfg['type'] ?? null) === 'code';
+    }
+
     /** The user's workflow code nodes that link to the component. */
     public function usedBy(int $userId, int $id): array
     {
@@ -112,14 +121,14 @@ final class CodeComponentStore
     private function linkedNodes(int $userId, int $id): array
     {
         // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-        $st = $this->db->prepare("SELECT n.id AS node_id, n.config, w.id AS workflow_id, w.name AS workflow_name
+        $st = $this->db->prepare("SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-            WHERE w.user_id = ? AND n.node_type = 'code' ORDER BY w.name, n.id");
+            WHERE w.user_id = ? ORDER BY w.name, n.id");
         $st->execute([(string) $userId]);
         $nodes = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cfg = json_decode((string) $r['config'], true);
-            if (is_array($cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id) {
+            if (self::isCodeNode($r['node_type'], $cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id) {
                 $nodes[] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
                     'node_name' => (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id']];
             }

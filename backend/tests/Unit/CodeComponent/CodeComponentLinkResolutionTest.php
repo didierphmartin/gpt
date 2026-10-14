@@ -82,4 +82,24 @@ final class CodeComponentLinkResolutionTest extends TestCase
         $this->expectExceptionMessage('Code component #99 not found (node Gone).');
         CodeNodeEmit::nodeData(['id' => '5', 'config' => ['name' => 'Gone', 'code_component_id' => 99, 'code_component_missing' => true]], [], []);
     }
+
+    /** A DB whose node_type is still the old ENUM (no 'code') stores '' for a code node: config.type still says code. */
+    public function testACodeNodeWhoseColumnLostItsTypeIsStillResolvedAndCounted(): void
+    {
+        $store = new CodeComponentStore($this->db);
+        $id = $store->save(3, null, CodeComponentStoreTest::POLL)['id'];
+        $this->node('', ['type' => 'code', 'name' => 'Poll', 'code_component_id' => $id]);
+        $cfg = (new WorkflowGraphRepository($this->db))->getNodes(1)[0]['config'];
+        $this->assertSame(CodeComponentStoreTest::POLL['code'], $cfg['code']);
+        $this->assertSame([['workflow_id' => 1, 'workflow_name' => 'Mail triage', 'node_name' => 'Poll']], $store->usedBy(3, $id));
+        $this->assertSame(1, $store->list(3)[0]['used_by']);
+    }
+
+    public function testANonCodeConfigTypeWithAnEmptyColumnIsNotResolved(): void
+    {
+        $id = (new CodeComponentStore($this->db))->save(3, null, CodeComponentStoreTest::POLL)['id'];
+        $this->node('', ['type' => 'agent', 'code_component_id' => $id]);
+        $this->assertSame(['type' => 'agent', 'code_component_id' => $id], (new WorkflowGraphRepository($this->db))->getNodes(1)[0]['config']);
+        $this->assertSame([], (new CodeComponentStore($this->db))->usedBy(3, $id));
+    }
 }
