@@ -666,6 +666,21 @@
     "noteNotExported": "Nota: la memoria se aplica solo en tiempo de ejecución. No se incluye en los exports Python LangGraph generados, que permanecen portables e independientes del usuario."
   },
   "workflow": {
+    "startOptions": {
+      "addTitle": "Añadir como opción de inicio",
+      "editTitle": "Editar opción de inicio",
+      "label": "Nombre de la opción",
+      "server": "Servidor MCP",
+      "tool": "Herramienta de espera",
+      "args": "Argumentos (JSON)",
+      "workExit": "Salida que lleva el trabajo",
+      "everyWorkflow": "El nodo Inicio de cada flujo mostrará esta opción. Podrá quitarla más tarde.",
+      "add": "Añadir opción",
+      "save": "Guardar",
+      "badJson": "Los argumentos no son JSON válido.",
+      "needsServer": "Una opción de inicio necesita un componente con un servidor MCP que tenga una herramienta de espera.",
+      "added": "«{label}» es ahora una opción de inicio."
+    },
     "loadingWorkflow": "Cargando el workflow…",
     "toolbar": {
       "compile": "Compilar workflow",

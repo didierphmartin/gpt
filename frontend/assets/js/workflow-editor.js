@@ -8797,6 +8797,11 @@ class WorkflowEditor {
                 // A Code Library row carries its component id; the palette node does not (an inline node).
                 const ccId = e.dataTransfer.getData('code-component-id');
                 const row = ccId ? window.CodeComponents?.cache.get(ccId) : null;
+                // Dropped on Start: the component becomes a Start option for every workflow (spec §4), no node.
+                if (row && window.StartOptions?.isStartDrop(e.target)) {
+                    this._showStartOptionDialog(row);
+                    break;
+                }
                 this.addCodeNode(x, y, row ? window.CodeComponents.linkedNodeConfig(row) : null);
                 break;
             }
@@ -9592,6 +9597,75 @@ class WorkflowEditor {
         const CC = window.CodeComponents;
         if (id && !CC.cache.get(id)) await CC.cache.load(CC.api()).catch(() => {});
         this.showCodeNodeModal(null, { component: id ? CC.cache.get(id) || {} : {} });
+    }
+
+    /**
+     * Register (or edit) a code component as a Start option (spec §4): label, wait tool, its JSON arguments and the
+     * exit that carries work, prefilled by StartOptions.defaultTrigger. Resolves to the saved component, or null.
+     */
+    async _showStartOptionDialog(comp) {
+        const CC = window.CodeComponents;
+        const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        const servers = comp.mcp_servers || [];
+        if (!servers.length) { this.showNotification(t('needsServer'), 'error'); return null; }
+        const meta = await this._loadMcpServersMeta();
+        const toolsFor = async (name) => this._mcpProxyListTools(meta.find((m) => m.name === name));
+        const start = comp.start_trigger || window.StartOptions.defaultTrigger(comp, await toolsFor(servers[0]));
+        const overlay = document.createElement('div');
+        overlay.className = 'storage-config-overlay';
+        overlay.innerHTML = `
+            <div class="storage-config-modal" style="width:min(560px,95vw);">
+                <div class="storage-config-header"><h3>▶ ${this.escapeHtml(t(comp.start_trigger ? 'editTitle' : 'addTitle'))}</h3>
+                    <button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-body"><div class="storage-config-grid">
+                    <div class="storage-config-folder full"><label>${this.escapeHtml(t('label'))}</label><input data-f="label" type="text" maxlength="60"></div>
+                    <div class="storage-config-folder"><label>${this.escapeHtml(t('server'))}</label><select data-f="server"></select></div>
+                    <div class="storage-config-folder"><label>${this.escapeHtml(t('tool'))}</label><select data-f="tool"></select></div>
+                    <div class="storage-config-folder full"><label>${this.escapeHtml(t('args'))}</label>
+                        <textarea data-f="args" rows="4" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
+                    <div class="storage-config-folder full"><label>${this.escapeHtml(t('workExit'))}</label><select data-f="exit"></select></div>
+                    <p class="text-xs text-gray-500" style="grid-column:1/-1;margin:0;">${this.escapeHtml(t('everyWorkflow'))}</p>
+                </div></div>
+                <pre data-f="result" style="white-space:pre-wrap;font-size:12px;margin:0;padding:0 16px;color:#b91c1c;font-weight:600;"></pre>
+                <div class="storage-config-footer">
+                    <button class="storage-config-btn cancel" data-act="close">${this.escapeHtml(this.t('common.cancel'))}</button>
+                    <button class="storage-config-btn save" data-act="save">${this.escapeHtml(t(comp.start_trigger ? 'save' : 'add'))}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        const f = (k) => overlay.querySelector(`[data-f="${k}"]`);
+        const fill = (sel, values, chosen) => {
+            sel.innerHTML = '';
+            for (const v of values) sel.add(new Option(v, v, false, v === chosen));
+        };
+        // Values through the DOM, never interpolated (names may hold quotes).
+        f('label').value = start.label;
+        fill(f('server'), servers, start.watch.server);
+        fill(f('tool'), window.StartOptions.sortWaitTools(await toolsFor(f('server').value)), start.watch.tool);
+        if (start.watch.tool && ![...f('tool').options].some((o) => o.value === start.watch.tool)) {
+            f('tool').add(new Option(start.watch.tool, start.watch.tool, true, true));   // server down: keep the saved tool
+        }
+        f('args').value = JSON.stringify(start.watch.args || {}, null, 2);
+        fill(f('exit'), comp.exits || [], start.work_exit);
+        f('server').addEventListener('change', async () =>
+            fill(f('tool'), window.StartOptions.sortWaitTools(await toolsFor(f('server').value)), ''));
+        return new Promise((resolve) => {
+            overlay.addEventListener('click', async (ev) => {
+                const act = ev.target?.dataset?.act;
+                if (act === 'close') { overlay.remove(); resolve(null); return; }
+                if (act !== 'save') return;
+                let args;
+                try { args = JSON.parse(f('args').value || '{}'); } catch (_) { f('result').textContent = t('badJson'); return; }
+                try {
+                    const row = (await CC.api().setStartOption(comp.id, { label: f('label').value,
+                        watch: { server: f('server').value, tool: f('tool').value, args }, work_exit: f('exit').value })).data;
+                    CC.cache.put(row);
+                    overlay.remove();
+                    this.showNotification(t('added', { label: row.start_trigger.label }), 'success');
+                    resolve(row);
+                } catch (e) { f('result').textContent = e.message; }
+            });
+        });
     }
 
     /**

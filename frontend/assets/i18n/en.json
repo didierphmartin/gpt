@@ -666,6 +666,21 @@
     "noteNotExported": "Note: memory is applied at runtime only. It is not included in generated LangGraph Python exports, which remain portable and user-agnostic."
   },
   "workflow": {
+    "startOptions": {
+      "addTitle": "Add as a Start option",
+      "editTitle": "Edit Start option",
+      "label": "Option name",
+      "server": "MCP server",
+      "tool": "Wait tool",
+      "args": "Arguments (JSON)",
+      "workExit": "Exit that carries work",
+      "everyWorkflow": "Every workflow's Start will list this option. You can remove it later.",
+      "add": "Add option",
+      "save": "Save",
+      "badJson": "The arguments are not valid JSON.",
+      "needsServer": "A Start option needs a component with an MCP server that has a wait tool.",
+      "added": "\"{label}\" is now a Start option."
+    },
     "loadingWorkflow": "Loading workflow…",
     "toolbar": {
       "compile": "Compile workflow",
