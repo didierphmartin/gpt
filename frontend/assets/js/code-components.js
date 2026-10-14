@@ -44,6 +44,9 @@
         update(id, body) { return this.call('PUT', `/${id}`, body); }
         remove(id) { return this.call('DELETE', `/${id}`); }
         usedBy(id) { return this.call('GET', `/${id}/used-by`); }
+        setStartOption(id, trigger) { return this.call('PUT', `/${id}/start-option`, trigger); }
+        startOptionImpact(id) { return this.call('GET', `/${id}/start-option/impact`); }
+        clearStartOption(id) { return this.call('DELETE', `/${id}/start-option`); }
     }
 
     function linkedNodeConfig(row, nodeName) {
