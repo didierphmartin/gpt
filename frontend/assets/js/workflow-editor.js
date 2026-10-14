@@ -9301,8 +9301,11 @@ class WorkflowEditor {
                     CC.cache.put(row);
                     this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled });
                     this._refreshLinkedCodeNodes(row);
-                    window.codeLibrary?.loadTree?.();
                     overlay.remove();
+                    // The component is already saved: store the node's link now too, or a reload before
+                    // Save Workflow leaves a library component that no workflow uses.
+                    await this._persistIfDirty();
+                    window.codeLibrary?.loadTree?.();
                 } catch (e) { show(e.message, true); }
                 return;
             }
