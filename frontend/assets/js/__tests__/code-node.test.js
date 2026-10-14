@@ -236,12 +236,4 @@ assert.ok(!CN.isConnectable([]));
 assert.ok(!CN.isConnectable(undefined));
 // trigger templates: the exit that carries work is declared, and is one of the template's exits
 for (const t of Object.values(CN.TEMPLATES).filter((x) => x.trigger)) assert.ok(t.exits.includes(t.trigger), t.label);
-// Poll a source inserts Start -> poll node: Start's other children move behind the poll's
-// trigger exit (agents run only when there is work); code children stay on Start.
-const startNodes = {
-    1: { outputs: { output_1: { connections: [{ node: '9', output: 'input_1' }, { node: '2', output: 'input_1' }, { node: '4', output: 'input_2' }] } } },
-};
-assert.deepStrictEqual(CN.startChildrenToMove('1', startNodes, kindOf), [{ node: '9', input: 'input_1' }, { node: '4', input: 'input_2' }]);
-assert.deepStrictEqual(CN.startChildrenToMove('1', { 1: { outputs: {} } }, kindOf), []);
-assert.deepStrictEqual(CN.startChildrenToMove(null, startNodes, kindOf), []);
 console.log('code-node.test.js: OK');

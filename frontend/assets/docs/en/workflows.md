@@ -38,12 +38,13 @@ Instead of a time, a schedule can wait for an **event**: set *Repeat* to **On ev
 
 ### Start options
 
-The Start node lists how the workflow starts: **Enter Prompt** (always on), **Set Schedule**, and every **event option** you added. Tick a box on the node to choose.
+The Start node lists how the workflow starts: **Enter Prompt**, **Set Schedule**, and every **event option** you added. One is ticked at a time; ticking another switches to it.
 
-- **Enter Prompt / Set Schedule:** click the text to open the prompt box or the schedule fields (run at, repeat, cron). Ticking Set Schedule opens the schedule fields; the box stays ticked once the schedule is saved. Unticking it deletes the schedule.
+- **Enter Prompt / Set Schedule:** click the text to switch to it and open the prompt box or the schedule fields (run at, repeat, cron). Set Schedule stays ticked once the schedule is saved. Unticking it goes back to Enter Prompt and deletes the schedule.
 - **Add an option:** drag a component from the Code Library onto any Start node. Choose the wait tool (for Outlook, `wait_for_new`), its arguments and the exit that carries work. Every workflow's Start then lists it.
-- **Use it:** tick the option on Start. A node linked to the component appears after Start, and the workflow waits for the event instead of a schedule. One event option at a time; a schedule and an event exclude each other.
-- **Edit or remove it:** in the Code Library, ⋮ on the component → Edit Start option or Remove Start option. A warning lists the workflows using it first. Their nodes stay; they stop starting on the event.
+- **Use it:** tick the option on Start. Start becomes the component: it shows one connector per exit (for Outlook, `new_mail`, `no_mail`, `error`), and you link each one to what should happen next. The workflow runs when the event arrives; what leaves a connector (the email on `new_mail`) is the next node's input. Start's existing links move to the exit that carries work.
+- **Switch back:** tick Enter Prompt or Set Schedule. Start goes back to one connector: the links on the exit that carries work stay, the others are removed. A warning lists them first; Cancel changes nothing.
+- **Edit or remove it:** the component is edited only in the Code Library, and every Start using it follows. If a save removes exits that workflows link from, a warning lists those workflows and links first. ⋮ on the component → Edit Start option or Remove Start option; removing it turns those Starts back into a plain Start.
 
 ## Compile to Python
 

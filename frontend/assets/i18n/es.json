@@ -263,7 +263,11 @@
     "missingTitle": "El componente de código vinculado ya no existe",
     "loadFailed": "No se pudo cargar la Biblioteca de código; inténtalo de nuevo.",
     "optionEdit": "Editar la opción de inicio",
-    "optionRemove": "Quitar la opción de inicio"
+    "optionRemove": "Quitar la opción de inicio",
+    "linksDroppedTitle": "¿Quitar enlaces en los flujos?",
+    "linksDroppedIntro": "Al guardar se quitan salidas de \"{{name}}\". Estos flujos pierden sus enlaces:",
+    "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} enlace(s))",
+    "linksDroppedConfirm": "Guardar y quitar enlaces"
   },
   "playbookLibrary": {
     "newPlaybook": "Nuevo playbook",
@@ -686,15 +690,20 @@
       "warnTitle": "¿Quitar «{{label}}» de las opciones de inicio?",
       "warnActive": "Está activa en {{count}} flujo(s): {{names}}.",
       "warnStops": "Estos flujos ya no comenzarán con «{{label}}». Su vigilancia de eventos se detiene; solo se ejecutan desde la instrucción o una programación que definas.",
-      "warnNodes": "Su nodo ({{nodes}}) se queda donde está, con sus conexiones, como un nodo de código normal.",
       "warnEverywhere": "La opción desaparece del Inicio de todos los flujos.",
       "warnLibrary": "El componente sigue en tu biblioteca de código; podrás añadirlo de nuevo.",
       "remove": "Quitar opción",
-      "note_delayOff": "Retraso desactivado: este flujo ahora comienza con el evento.",
+      "note_delayOff": "La programación está desactivada: este flujo ahora se inicia con el evento.",
       "note_eventOff": "Opción de evento desactivada: este flujo ahora comienza según su programación.",
-      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó. Sus agentes siguen conectados detrás del nodo de esa opción.",
+      "note_replaced": "Solo una opción a la vez: la otra está desactivada.",
       "enterPrompt": "Escribir el prompt",
-      "setSchedule": "Programar"
+      "setSchedule": "Programar",
+      "warnPorts": "Su Start vuelve a tener una sola salida: los enlaces de \"{{exit}}\" se quedan, los de las otras salidas se eliminan.",
+      "dropTitle": "¿Quitar enlaces del Start?",
+      "dropIntro": "Las salidas del Start cambian. Los enlaces de \"{{exit}}\" se conservan; estos se eliminan:",
+      "dropLine": "\"{{exit}}\": {{count}} enlace(s)",
+      "dropConfirm": "Quitar enlaces",
+      "runsOn": "Se ejecuta con \"{{label}}\" (sin prompt)"
     },
     "loadingWorkflow": "Cargando el workflow…",
     "toolbar": {

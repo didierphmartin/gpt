@@ -172,17 +172,6 @@
     }
 
     /**
-     * Start's children (other than code nodes) the Poll a source shortcut moves behind the poll's
-     * trigger exit, so they run only when the poll found something: [{node, input}] with their input port.
-     */
-    function startChildrenToMove(startId, nodes, kindOf) {
-        if (startId == null) return [];
-        return (nodes[startId]?.outputs?.output_1?.connections || [])
-            .filter((c) => kindOf(String(c.node)) !== 'code')
-            .map((c) => ({ node: String(c.node), input: c.output }));
-    }
-
-    /**
      * The parents that ran, as the harness wants them; a parent with no output (skipped) is left out.
      * A dispatcher parent (isDispatcher) stands for its own parents: a branch receives what the
      * dispatcher received (the email), not the agent-framed context it was handed.
@@ -344,6 +333,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, startChildrenToMove,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });

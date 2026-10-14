@@ -263,7 +263,11 @@
     "missingTitle": "Le composant de code lié n'existe plus",
     "loadFailed": "Impossible de charger la Bibliothèque de code ; réessayez.",
     "optionEdit": "Modifier l'option de démarrage",
-    "optionRemove": "Retirer l'option de démarrage"
+    "optionRemove": "Retirer l'option de démarrage",
+    "linksDroppedTitle": "Supprimer des liens dans les workflows ?",
+    "linksDroppedIntro": "L'enregistrement retire des sorties de « {{name}} ». Ces workflows perdent leurs liens :",
+    "linksDroppedLine": "{{workflow}} — {{node}} : « {{exit}} » ({{count}} lien(s))",
+    "linksDroppedConfirm": "Enregistrer et supprimer les liens"
   },
   "playbookLibrary": {
     "newPlaybook": "Nouveau playbook",
@@ -686,15 +690,20 @@
       "warnTitle": "Retirer « {{label}} » des options de démarrage ?",
       "warnActive": "Elle est active dans {{count}} workflow(s) : {{names}}.",
       "warnStops": "Ces workflows ne démarreront plus sur « {{label}} ». Leur surveillance d'événement s'arrête ; ils ne s'exécutent plus que depuis l'invite ou une planification que vous définissez.",
-      "warnNodes": "Leur nœud ({{nodes}}) reste en place, avec ses connexions, comme un nœud de code ordinaire.",
       "warnEverywhere": "L'option disparaît du nœud Démarrer de tous les workflows.",
       "warnLibrary": "Le composant reste dans votre bibliothèque de code ; vous pourrez l'ajouter à nouveau.",
       "remove": "Retirer l'option",
-      "note_delayOff": "Délai désactivé : ce workflow démarre maintenant sur l'événement.",
+      "note_delayOff": "La planification est désactivée : ce workflow démarre maintenant sur l'événement.",
       "note_eventOff": "Option d'événement désactivée : ce workflow démarre maintenant selon sa planification.",
-      "note_replaced": "Un seul événement à la fois : l'autre option est désactivée. Ses agents restent connectés derrière le nœud de cette option.",
+      "note_replaced": "Une seule option à la fois : l'autre est désactivée.",
       "enterPrompt": "Saisir le prompt",
-      "setSchedule": "Planifier"
+      "setSchedule": "Planifier",
+      "warnPorts": "Leur Start revient à une seule sortie : les liens de « {{exit}} » restent, ceux des autres sorties sont supprimés.",
+      "dropTitle": "Supprimer des liens du Start ?",
+      "dropIntro": "Les sorties du Start changent. Les liens de « {{exit}} » sont conservés ; ceux-ci sont supprimés :",
+      "dropLine": "« {{exit}} » : {{count}} lien(s)",
+      "dropConfirm": "Supprimer les liens",
+      "runsOn": "S'exécute sur « {{label}} » (sans prompt)"
     },
     "loadingWorkflow": "Chargement du workflow…",
     "toolbar": {

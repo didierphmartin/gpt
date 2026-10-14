@@ -38,12 +38,13 @@ Au lieu d'une heure, une planification peut attendre un **événement** : régle
 
 ### Options de démarrage
 
-Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt** (toujours actif), **Planifier**, et chaque **option d'événement** que vous avez ajoutée. Cochez une case sur le nœud pour choisir.
+Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt**, **Planifier**, et chaque **option d'événement** que vous avez ajoutée. Une seule est cochée à la fois ; en cocher une autre bascule dessus.
 
-- **Saisir le prompt / Planifier :** cliquez sur le texte pour ouvrir la zone du prompt ou les champs de planification (exécuter à, répéter, cron). Cocher Planifier ouvre les champs de planification ; la case reste cochée une fois la planification enregistrée. La décocher supprime la planification.
+- **Saisir le prompt / Planifier :** cliquez sur le texte pour basculer dessus et ouvrir la zone du prompt ou les champs de planification (exécuter à, répéter, cron). Planifier reste cochée une fois la planification enregistrée. La décocher revient à Saisir le prompt et supprime la planification.
 - **Ajouter une option :** faites glisser un composant de la Bibliothèque de composants de code sur n'importe quel nœud Démarrer. Choisissez l'outil d'attente (pour Outlook, `wait_for_new`), ses arguments et la sortie qui transporte le travail. Le nœud Démarrer de chaque workflow la proposera ensuite.
-- **L'utiliser :** cochez l'option sur Démarrer. Un nœud lié au composant apparaît après Démarrer, et le workflow attend l'événement au lieu d'une planification. Une seule option d'événement à la fois ; une planification et un événement s'excluent.
-- **La modifier ou la retirer :** dans la Bibliothèque de composants de code, ⋮ sur le composant → Modifier l'option de démarrage ou Retirer l'option de démarrage. Un avertissement liste d'abord les workflows qui l'utilisent. Leurs nœuds restent en place ; ils ne démarrent plus sur l'événement.
+- **L'utiliser :** cochez l'option sur Démarrer. Démarrer devient le composant : il affiche un connecteur par sortie (pour Outlook, `new_mail`, `no_mail`, `error`), et vous reliez chacun à ce qui doit suivre. Le workflow s'exécute à l'arrivée de l'événement ; ce qui sort d'un connecteur (le courriel sur `new_mail`) est l'entrée du nœud suivant. Les liens existants de Démarrer passent sur la sortie qui transporte le travail.
+- **Revenir en arrière :** cochez Saisir le prompt ou Planifier. Démarrer revient à un seul connecteur : les liens de la sortie qui transporte le travail restent, les autres sont supprimés. Un avertissement les liste d'abord ; Annuler ne change rien.
+- **La modifier ou la retirer :** le composant se modifie uniquement dans la Bibliothèque de composants de code, et chaque Démarrer qui l'utilise suit. Si un enregistrement retire des sorties reliées dans des workflows, un avertissement liste d'abord ces workflows et liens. ⋮ sur le composant → Modifier l'option de démarrage ou Retirer l'option de démarrage ; la retirer rend à ces Démarrer leur forme ordinaire.
 
 ## Compiler en Python
 

@@ -263,7 +263,11 @@
     "missingTitle": "The linked code component no longer exists",
     "loadFailed": "Could not load the Code Library; try again.",
     "optionEdit": "Edit Start option",
-    "optionRemove": "Remove Start option"
+    "optionRemove": "Remove Start option",
+    "linksDroppedTitle": "Remove links in workflows?",
+    "linksDroppedIntro": "Saving removes exits from \"{{name}}\". These workflows lose the links on them:",
+    "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} link(s))",
+    "linksDroppedConfirm": "Save and remove links"
   },
   "playbookLibrary": {
     "newPlaybook": "New Playbook",
@@ -686,15 +690,20 @@
       "warnTitle": "Remove \"{{label}}\" from the Start options?",
       "warnActive": "It is active in {{count}} workflow(s): {{names}}.",
       "warnStops": "These workflows will no longer start on \"{{label}}\". Their event watch stops; they run only from the prompt or a schedule you set.",
-      "warnNodes": "Their node ({{nodes}}) stays where it is, with its connections, as an ordinary code node.",
       "warnEverywhere": "The option disappears from every workflow's Start.",
       "warnLibrary": "The component stays in your Code Library; you can add it again later.",
       "remove": "Remove option",
-      "note_delayOff": "Delay is off: this workflow now starts on the event.",
+      "note_delayOff": "The schedule is off: this workflow now starts on the event.",
       "note_eventOff": "The event option is off: this workflow now starts on its schedule.",
-      "note_replaced": "Only one event at a time: the other option is off. Its agents stay connected behind that option's node.",
+      "note_replaced": "Only one option at a time: the other one is off.",
       "enterPrompt": "Enter Prompt",
-      "setSchedule": "Set Schedule"
+      "setSchedule": "Set Schedule",
+      "warnPorts": "Their Start goes back to one port: the links on \"{{exit}}\" stay, the links on its other exits are removed.",
+      "dropTitle": "Remove links from Start?",
+      "dropIntro": "Start's ports change. The links on \"{{exit}}\" are kept; these are removed:",
+      "dropLine": "\"{{exit}}\": {{count}} link(s)",
+      "dropConfirm": "Remove links",
+      "runsOn": "Runs on \"{{label}}\" (no prompt)"
     },
     "loadingWorkflow": "Loading workflow…",
     "toolbar": {

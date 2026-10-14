@@ -36,25 +36,49 @@ assert.deepStrictEqual(SO.defaultTrigger({ ...comp, code: 'def run(input, call_t
 // no wait tool, no server
 assert.deepStrictEqual(SO.defaultTrigger({ ...comp, mcp_servers: [] }, []).watch, { server: '', tool: '', args: {} });
 
-// warning: the active form names workflows and nodes; the idle form keeps the last two lines
-assert.deepStrictEqual(SO.warning('New email', [
-    { workflow_name: 'AA test', node_name: 'Email processing' }, { workflow_name: 'email prototype', node_name: null },
-]).map((l) => l.key), ['workflow.startOptions.warnActive', 'workflow.startOptions.warnStops',
-    'workflow.startOptions.warnNodes', 'workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
-assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test', node_name: 'Email processing' },
-    { workflow_name: 'B', node_name: null }])[0].params.names, 'AA test, B');
-assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test', node_name: 'Email processing' }])[2].params.nodes, 'Email processing');
-assert.deepStrictEqual(SO.warning('New email', []).map((l) => l.key),
+// warning: the active form names the workflows and the exit whose links stay; the idle form keeps the last two lines
+assert.deepStrictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }, { workflow_name: 'email prototype' }], 'new_mail')
+    .map((l) => l.key), ['workflow.startOptions.warnActive', 'workflow.startOptions.warnStops',
+    'workflow.startOptions.warnPorts', 'workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
+assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }, { workflow_name: 'B' }], 'new_mail')[0].params.names, 'AA test, B');
+assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }], 'new_mail')[2].params.exit, 'new_mail');
+assert.deepStrictEqual(SO.warning('New email', [], 'new_mail').map((l) => l.key),
     ['workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
-// no impacted workflow has a linked node: no "Their node ()" line
-assert.deepStrictEqual(SO.warning('New email', [{ workflow_name: 'A', node_name: null }]).map((l) => l.key),
-    ['workflow.startOptions.warnActive', 'workflow.startOptions.warnStops',
-     'workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
+
+// active: one row at a time, from the saved schedule row
+assert.strictEqual(SO.active(null), 'prompt');
+assert.strictEqual(SO.active({}), 'prompt');
+assert.strictEqual(SO.active({ id: 4, repeat_type: 'cron' }), 'schedule');
+assert.strictEqual(SO.active({ id: 4, repeat_type: 'event', trigger_component_id: '1' }), 1);
+
+// startLinks -- spec §10
+const PLAIN = { exits: ['next'], work: 'next' };
+const MAIL = { exits: ['new_mail', 'no_mail', 'error'], work: 'new_mail' };
+const conn = (node, output = 'input_1') => ({ node, output });
+// plain -> option: Start's links land on the work exit's port, nothing is lost
+assert.deepStrictEqual(SO.startLinks({ output_1: { connections: [conn('5'), conn('6', 'input_2')] } }, PLAIN, MAIL), {
+    ports: 3, dropped: [],
+    connections: [{ port: 'output_1', node: '5', input: 'input_1' }, { port: 'output_1', node: '6', input: 'input_2' }],
+});
+// work exit not first: the links go to its port
+assert.deepStrictEqual(SO.startLinks({ output_1: { connections: [conn(5)] } }, PLAIN, { exits: ['none', 'job'], work: 'job' }).connections,
+    [{ port: 'output_2', node: '5', input: 'input_1' }]);
+// option -> plain: the work exit's links stay on the one port, the others are removed
+const wired = { output_1: { connections: [conn('5')] }, output_2: { connections: [conn('6'), conn('7')] }, output_3: { connections: [] } };
+assert.deepStrictEqual(SO.startLinks(wired, MAIL, PLAIN), {
+    ports: 1, connections: [{ port: 'output_1', node: '5', input: 'input_1' }], dropped: [{ exit: 'no_mail', count: 2 }],
+});
+// option -> another option
+assert.deepStrictEqual(SO.startLinks(wired, MAIL, { exits: ['none', 'job', 'error'], work: 'job' }), {
+    ports: 3, connections: [{ port: 'output_2', node: '5', input: 'input_1' }], dropped: [{ exit: 'no_mail', count: 2 }],
+});
+// no links at all
+assert.deepStrictEqual(SO.startLinks({}, MAIL, PLAIN), { ports: 1, connections: [], dropped: [] });
 
 // i18n: every warning line's params fill the en strings with the {{x}} rule i18n.js uses -- no brace left
 const en = require('../../i18n/en.json');
 const lookup = (key) => key.split('.').reduce((o, k) => (o ? o[k] : undefined), en);
-for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test', node_name: 'Email processing' }])) {
+for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test' }], 'new_mail')) {
     const raw = lookup(key);
     assert.strictEqual(typeof raw, 'string', key);
     const out = raw.replace(/\{\{(\w+)\}\}/g, (m, k) => (params[k] !== undefined ? String(params[k]) : m));

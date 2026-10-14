@@ -2754,6 +2754,8 @@ class WorkflowEditor {
                 e.stopPropagation();
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
+                } else if (this._startOptionActive()) {
+                    // Starts on the event, not on a prompt (spec §10): the button is hidden then.
                 } else if (this._isIngestionWorkflow()) {
                     // Ingestion: run the PHP interpreter from the Start node —
                     // it drives the loader node round-by-round (one file at a
@@ -2790,9 +2792,11 @@ class WorkflowEditor {
                 // How it starts, listed on the node: the links open the form; a checkbox acts on its change event.
                 if (e.target.closest('.node-start-options')) {
                     const open = e.target.closest('[data-start-open]')?.dataset.startOpen;
-                    if (open) this.showPromptForm(null, { schedule: open === 'schedule' });
+                    if (open) this._switchStart(open, { open: true });
                     return;
                 }
+                // On a Start option the workflow starts on the event: there is no prompt to open (spec §10).
+                if (this._startOptionActive()) return;
                 if (this._isSwarm()) {
                     // Start is the door into a swarm, not a prompt to fill in
                     // once: clicking it opens the conversation (spec §3b).
@@ -3049,7 +3053,29 @@ class WorkflowEditor {
                 playBtn.title = this.t('workflow.batchSession.openSession');
             }
         });
+        this._refreshStartHint();
         this._renderStartNodeOptions();
+    }
+
+    /** Start is on a Start option (its data, the canvas truth): it starts on the event, never on a prompt. */
+    _startOptionActive() {
+        const id = this._startNodeId();
+        return !!(id && this.editor.getNodeFromId(id)?.data?.start_option);
+    }
+
+    /** Start's hint and ▶: on a Start option, "Runs on <option>" and no ▶ (no prompt to open); else the conversation's. */
+    _refreshStartHint() {
+        if (this._isSwarm()) return;
+        const id = this._startNodeId();
+        const d = id ? this.editor.getNodeFromId(id)?.data : null;
+        const card = id ? document.querySelector(`#node-${id} .workflow-node.start-node:not(.ingestion-start)`) : null;
+        if (!card) return;
+        const small = card.querySelector('.node-body small');
+        const playBtn = card.querySelector('.node-play-btn');
+        const label = d?.start_option ? (window.CodeComponents?.cache.get(d.start_option)?.start_trigger?.label || d.start_option_label) : null;
+        if (small) small.textContent = label ? this.t('workflow.startOptions.runsOn', { label }) : this.t('workflow.batchSession.startHint');
+        if (playBtn) playBtn.style.display = label ? 'none' : 'flex';
+        card.classList.toggle('start-on-option', !!label);
     }
 
     /**
@@ -6972,6 +6998,9 @@ class WorkflowEditor {
                     scheduleData.scheduled_time ||= this._localNowStamp();   // required by the server, unused by an event
                 }
 
+                // A schedule replaces a Start option: Start goes back to one port first (asks before removing links).
+                if (repeatTypeSelect.value !== 'event' && !(await this._setStartTrigger(null))) return;
+                await this._persistIfDirty();
                 const success = await this.saveSchedule(scheduleData);
                 if (success) {
                     modal.remove();
@@ -9328,7 +9357,19 @@ class WorkflowEditor {
             }
             try {
                 const body = CC.componentBody(cfg, { name: compName, description: f('description').value });
-                const row = (comp?.id ? await CC.api().update(comp.id, body) : await CC.api().create(body)).data;
+                let row;
+                try {
+                    row = (comp?.id ? await CC.api().update(comp.id, body) : await CC.api().create(body)).data;
+                } catch (e) {
+                    // Removed exits that workflows link from (code nodes, Starts on its option): say which, then confirm.
+                    if (e.kind !== 'links_dropped') throw e;
+                    const t = (k, p) => this.t(`codeLibrary.${k}`, p);
+                    const ok = await this._confirmLinksDialog(t('linksDroppedTitle'), t('linksDroppedIntro', { name: compName }),
+                        (e.data || []).map((l) => t('linksDroppedLine', { workflow: l.workflow_name, node: l.node_name, exit: l.exit, count: l.count })),
+                        t('linksDroppedConfirm'));
+                    if (!ok) return;
+                    row = (await CC.api().update(comp.id, { ...body, confirm_drop_links: true })).data;
+                }
                 CC.cache.put(row);
                 if (node) this.editor.updateNodeDataFromId(nodeId, { ...node.data, name: cfg.name });
                 this._refreshLinkedCodeNodes(row);
@@ -9537,49 +9578,9 @@ class WorkflowEditor {
     }
 
     /**
-     * The node a Start option runs after Start: a code child of Start already linked to this component is reused,
-     * else a new node linked to it. A new one takes over Start's other children on the option's work exit, and
-     * Start's link to another Start option's node is cut (that node and its downstream stay); hand-made code
-     * nodes are never disconnected.
-     */
-    _optionNodeAfterStart(comp) {
-        const nodes = this.editor.drawflow.drawflow.Home.data;
-        const startId = Object.keys(nodes).find((id) => this._wfNodeKind(id, nodes) === 'start');
-        const start = startId ? nodes[startId] : null;
-        const kids = (start?.outputs?.output_1?.connections || []).filter((c) => this._wfNodeKind(String(c.node), nodes) === 'code');
-        const linkedTo = (c) => nodes[String(c.node)]?.data?.code_component_id;
-        const existing = kids.find((c) => linkedTo(c) && Number(linkedTo(c)) === Number(comp.id));
-        if (existing) return String(existing.node);
-        for (const c of kids) {
-            if (linkedTo(c) && window.CodeComponents.cache.get(Number(linkedTo(c)))?.start_trigger) {
-                this.editor.removeSingleConnection(startId, String(c.node), 'output_1', c.output);
-            }
-        }
-        // Ticking again reuses the option's node left on the canvas (spec decision 8): Start is reconnected to it.
-        const kept = startId && Object.keys(nodes).find((nid) => nid !== startId && this._wfNodeKind(nid, nodes) === 'code'
-            && Number(nodes[nid]?.data?.code_component_id) === Number(comp.id));
-        if (kept) {
-            this.editor.addConnection(startId, kept, 'output_1', 'input_1');
-            this._workflowDirty = true;
-            return kept;
-        }
-        const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100, window.CodeComponents.linkedNodeConfig(comp));
-        const moved = window.CodeNode.startChildrenToMove(startId, nodes, (nid) => this._wfNodeKind(nid, nodes));
-        const workPort = window.CodeNode.portForExit(comp.exits, comp.start_trigger.work_exit);
-        for (const c of moved) {
-            this.editor.removeSingleConnection(startId, c.node, 'output_1', c.input);
-            this.editor.addConnection(id, c.node, workPort, c.input);
-        }
-        if (startId) this.editor.addConnection(startId, id, 'output_1', 'input_1');
-        this._refreshCodeNode(id);
-        this._workflowDirty = true;
-        return id;
-    }
-
-    /**
-     * How the workflow starts, listed on the Start node itself (spec §4, revised 2026-10-14): Enter Prompt (always
-     * on), Set Schedule, and every Start option (a code component dropped on a Start node, global to the user).
-     * The boxes show the saved schedule row; clicking "Enter Prompt" / "Set Schedule" opens the form.
+     * How the workflow starts, listed on the Start node itself (spec §4, §10): Enter Prompt, Set Schedule and
+     * every Start option (a code component dropped on a Start node, global to the user) -- one ticked at a time,
+     * the saved schedule row deciding which. Clicking "Enter Prompt" / "Set Schedule" switches to it and opens the form.
      */
     _renderStartNodeOptions() {
         const CC = window.CodeComponents;
@@ -9601,69 +9602,166 @@ class WorkflowEditor {
         }
         const t = (k) => this.t(`workflow.startOptions.${k}`);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
-        const s = this.currentSchedule;
-        const timed = !!(s?.id && !s.trigger_component_id);
-        const event = s?.trigger_component_id ? Number(s.trigger_component_id) : null;
+        const on = window.StartOptions.active(this.currentSchedule);
         const options = (CC?.cache.all() || []).filter((c) => c.start_trigger);
         const html = `
-            <div class="start-opt-row"><input type="checkbox" checked disabled>
+            <div class="start-opt-row"><input type="checkbox" data-start="prompt" ${on === 'prompt' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="prompt">${esc(t('enterPrompt'))}</span></div>
-            <div class="start-opt-row"><input type="checkbox" data-start="schedule" ${timed ? 'checked' : ''}>
+            <div class="start-opt-row"><input type="checkbox" data-start="schedule" ${on === 'schedule' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="schedule">${esc(t('setSchedule'))}</span></div>
             ${options.map((c) => `<label class="start-opt-row" title="${esc(c.name)}">
-                <input type="checkbox" data-start="${Number(c.id)}" ${event === Number(c.id) ? 'checked' : ''}>
+                <input type="checkbox" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
                 <span>${esc(c.start_trigger.label)}</span></label>`).join('')}`;
         boxes.forEach((box) => { box.innerHTML = html; box.title = options.length ? '' : t('none'); });
     }
 
+    /** A box ticked or unticked on the Start node: ticking switches to that row; unticking goes back to Enter Prompt. */
+    _onStartTick(cb) {
+        const key = ['prompt', 'schedule'].includes(cb.dataset.start) ? cb.dataset.start : Number(cb.dataset.start);
+        return this._switchStart(cb.checked ? key : 'prompt', { open: cb.checked && key === 'schedule' });
+    }
+
     /**
-     * A box ticked or unticked on the Start node. Set Schedule opens the schedule fields (ticked once saved);
-     * an option places its linked node and saves the event row; unticking deletes the row (a 'none' row would
-     * still run once). Schedule and an event exclude each other: one row per workflow.
+     * Make `key` ('prompt', 'schedule' or an option's component id) how the workflow starts (spec §10, one at a
+     * time). An option: Start takes its ports and the event row is saved (in place of a schedule's). Prompt or
+     * schedule: Start goes back to one port and the row is deleted; a schedule exists once its form is saved.
+     * Links a switch would remove are confirmed first; a cancel changes nothing. `open`: then open the form.
      */
-    async _onStartTick(cb) {
+    async _switchStart(key, { open = false } = {}) {
         const CC = window.CodeComponents;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
-        const key = cb.dataset.start === 'schedule' ? 'schedule' : Number(cb.dataset.start);
-        const wanted = cb.checked;
+        const openForm = () => this.showPromptForm(null, { schedule: key === 'schedule' });
         this.container.querySelectorAll('.node-start-options input[data-start]').forEach((b) => { b.disabled = true; });
         try {
-            if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.saveFirst'), 'error'); return; }
-            // A save's quiet reload nulls currentSchedule for a moment: read the row from the server, or an untick
-            // would skip its delete (the row stays) and a tick would POST a second row.
+            if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.saveFirst'), 'error'); return false; }
+            // A save's quiet reload nulls currentSchedule for a moment: read the row from the server, or a switch
+            // would skip its delete (the row stays) or POST a second row.
             await this.loadWorkflowSchedule(this.currentWorkflowId);
             const s = this.currentSchedule;
-            const timed = !!(s?.id && !s.trigger_component_id);
-            if (key === 'schedule') {
-                if (wanted) this.showPromptForm(null, { schedule: true });
-                else if (timed) await this.deleteSchedule(s.id);
-                return;
+            const was = window.StartOptions.active(s);
+            if (key === was) { if (open) openForm(); return true; }
+            if (typeof key === 'number') {
+                // The component's servers must be among the user's enabled ones.
+                const comp = CC.cache.get(key);
+                const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
+                const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
+                if (missing.length) {
+                    this.showNotification(this.t('workflow.connect.needServer', { servers: missing.join(', ') }), 'error');
+                    return false;
+                }
+                if (!(await this._setStartTrigger(comp))) return false;
+                await this._persistIfDirty();   // Start's option must be in the DB before the compiled watch runs it
+                const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
+                    repeat_type: 'event', scheduled_time: this._localNowStamp(),
+                    input_prompt: this.lastUserPrompt || s?.input_prompt || '' });
+                if (ok && was !== 'prompt') this.showNotification(t(was === 'schedule' ? 'note_delayOff' : 'note_replaced'), 'info');
+                return ok;
             }
-            if (!wanted) {
-                if (Number(s?.trigger_component_id) === key) await this.deleteSchedule(s.id);
-                return;
-            }
-            // Ticked: the component's servers must be among the user's enabled ones.
-            const comp = CC.cache.get(key);
-            const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
-            const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
-            if (missing.length) {
-                this.showNotification(this.t('workflow.connect.needServer', { servers: missing.join(', ') }), 'error');
-                return;
-            }
-            const note = timed ? 'delayOff' : (s?.trigger_component_id ? 'replaced' : null);
-            this._optionNodeAfterStart(comp);
-            await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
-            // An existing row (schedule or another option) is updated in place: the event replaces it.
-            const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
-                repeat_type: 'event', scheduled_time: this._localNowStamp(),
-                input_prompt: this.lastUserPrompt || s?.input_prompt || '' });
-            if (ok && note) this.showNotification(t(`note_${note}`), 'info');
+            if (!(await this._setStartTrigger(null))) return false;
+            await this._persistIfDirty();
+            if (s?.id) await this.deleteSchedule(s.id);
+            if (open) openForm();
+            return true;
         } catch (err) {
             this.showNotification(err?.message || String(err), 'error');
+            return false;
         } finally {
             this._renderStartNodeOptions();   // the boxes show the saved row, whatever happened
         }
+    }
+
+    /** The canvas's Start node id (not an ingestion Start), or null. */
+    _startNodeId() {
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        return Object.keys(nodes).find((id) => this._wfNodeKind(id, nodes) === 'start') || null;
+    }
+
+    /**
+     * Start becomes the option `comp` (its ports = the component's exits), or a plain Start (comp null), spec §10.
+     * The work exit's links move to the new work port; the others are removed after the user confirms.
+     * Resolves false when the user cancels (nothing changed).
+     */
+    async _setStartTrigger(comp) {
+        const startId = this._startNodeId();
+        if (!startId) return true;
+        const node = this.editor.getNodeFromId(startId);
+        const current = Number(node.data?.start_option) || null;
+        if (current === (comp ? Number(comp.id) : null)) return true;
+        const PLAIN = { exits: ['next'], work: 'next' };
+        const exits = Array.isArray(node.data.exits) && node.data.exits.length ? node.data.exits : ['next'];
+        const from = current ? { exits, work: window.CodeComponents.cache.get(current)?.start_trigger?.work_exit || exits[0] } : PLAIN;
+        const plan = window.StartOptions.startLinks(node.outputs, from, comp ? { exits: comp.exits, work: comp.start_trigger.work_exit } : PLAIN);
+        if (plan.dropped.length) {
+            const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+            const ok = await this._confirmLinksDialog(t('dropTitle'), t('dropIntro', { exit: from.work }),
+                plan.dropped.map((d) => t('dropLine', d)), t('dropConfirm'));
+            if (!ok) return false;
+        }
+        this._applyStartPorts(startId, plan, comp);
+        return true;
+    }
+
+    /** Start's ports and links per `plan` (StartOptions.startLinks or CodeNode.remapExits), and its option fields. */
+    _applyStartPorts(startId, plan, comp) {
+        const node = this.editor.getNodeFromId(startId);
+        for (const [port, out] of Object.entries(node.outputs || {})) {
+            for (const c of [...(out.connections || [])]) this.editor.removeSingleConnection(startId, c.node, port, c.output);
+        }
+        const ports = comp ? comp.exits.length : 1;
+        const before = Object.keys(node.outputs || {}).length;
+        for (let k = before; k < ports; k++) this.editor.addNodeOutput(startId);
+        for (let k = before; k > ports; k--) this.editor.removeNodeOutput(startId, `output_${k}`);
+        for (const c of plan.connections) this.editor.addConnection(startId, c.node, c.port, c.input);
+        const { exits: _e, start_option: _o, start_option_label: _l, start_option_missing: _m, ...kept } = node.data;
+        this.editor.updateNodeDataFromId(startId, comp
+            ? { ...kept, start_option: Number(comp.id), exits: [...comp.exits], start_option_label: comp.start_trigger.label }
+            : kept);
+        this._updateExitTags();
+        this._refreshStartHint();
+        this._workflowDirty = true;
+    }
+
+    /**
+     * A component saved in the library (or its option edited / removed) re-applied to a Start on its option:
+     * the ports follow the exits by name (the server moved the stored links the same way); no longer an
+     * option, Start goes back to one port (the server did too).
+     */
+    _refreshStartOption(row) {
+        const startId = this._startNodeId();
+        const node = startId ? this.editor.getNodeFromId(startId) : null;
+        if (!node || Number(node.data?.start_option) !== Number(row.id)) return;
+        const exits = Array.isArray(node.data.exits) && node.data.exits.length ? node.data.exits : ['next'];
+        if (!row.start_trigger) {
+            const work = window.CodeComponents.cache.get(row.id)?.start_trigger?.work_exit || exits[0];
+            this._applyStartPorts(startId, window.StartOptions.startLinks(node.outputs, { exits, work }, { exits: ['next'], work: 'next' }), null);
+            return;
+        }
+        this._applyStartPorts(startId, window.CodeNode.remapExits(exits, row.exits, node.outputs), row);
+    }
+
+    /** A warning listing the links about to be removed; resolves true on confirm. */
+    _confirmLinksDialog(title, intro, lines, confirmLabel) {
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        const overlay = document.createElement('div');
+        overlay.className = 'storage-config-overlay';
+        overlay.innerHTML = `
+            <div class="storage-config-modal" style="width:min(520px,95vw);">
+                <div class="storage-config-header"><h3>⚠ ${esc(title)}</h3>
+                    <button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-body"><p style="margin:0 0 8px;font-size:14px;">${esc(intro)}</p>
+                    <ul style="margin:0;padding-left:18px;font-size:14px;">${lines.map((l) => `<li style="margin:4px 0;">${esc(l)}</li>`).join('')}</ul></div>
+                <div class="storage-config-footer">
+                    <button class="storage-config-btn cancel" data-act="close">${esc(this.t('common.cancel'))}</button>
+                    <button class="storage-config-btn save" data-act="ok" style="background:#dc2626;">${esc(confirmLabel)}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        return new Promise((resolve) => overlay.addEventListener('click', (ev) => {
+            const act = ev.target?.dataset?.act;
+            if (act !== 'close' && act !== 'ok') return;
+            overlay.remove();
+            resolve(act === 'ok');
+        }));
     }
 
     /**
@@ -9702,6 +9800,7 @@ class WorkflowEditor {
             this._applyCodeNodeConfig(id, { ...window.CodeComponents.linkedNodeConfig(row, n.data.name),
                 code_component_missing: false, disabled: !!n.data.disabled });
         }
+        this._refreshStartOption(row);
     }
 
     /** The Code Library's New / Edit: the code modal on the component itself (no node). */
@@ -9783,6 +9882,7 @@ class WorkflowEditor {
                     const row = (await CC.api().setStartOption(comp.id, { label: f('label').value,
                         watch: { server: f('server').value, tool: f('tool').value, args }, work_exit: f('exit').value })).data;
                     CC.cache.put(row);
+                    this._refreshStartOption(row);
                     this._renderStartNodeOptions();
                     overlay.remove();
                     this.showNotification(t('added', { label: row.start_trigger.label }), 'success');
@@ -9799,7 +9899,7 @@ class WorkflowEditor {
         let impact;
         try { impact = (await CC.api().startOptionImpact(comp.id)).data || []; }
         catch (e) { this.showNotification(e.message, 'error'); return false; }
-        const lines = window.StartOptions.warning(label, impact)
+        const lines = window.StartOptions.warning(label, impact, comp.start_trigger?.work_exit)
             .map((l) => `<li style="margin:4px 0;">${this.escapeHtml(this.t(l.key, l.params))}</li>`).join('');
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
@@ -9823,6 +9923,7 @@ class WorkflowEditor {
             removeBtn.disabled = true;   // one request at a time
             try {
                 await CC.api().clearStartOption(comp.id);
+                this._refreshStartOption({ ...comp, start_trigger: null });   // before the cache forgets the work exit
                 CC.cache.put({ ...comp, start_trigger: null });
                 this._renderStartNodeOptions();
                 if (Number(this.currentSchedule?.trigger_component_id) === Number(comp.id)) {
@@ -12718,7 +12819,9 @@ class WorkflowEditor {
                     case 'start':
                         html = this.createStartNodeHtml();
                         inputs = 0;
-                        outputs = 1;
+                        // On a Start option, one port per exit of the option's component (spec §10).
+                        outputs = node.config?.start_option && !node.config?.start_option_missing && node.config?.exits?.length
+                            ? node.config.exits.length : 1;
                         break;
                     case 'output':
                         html = this.createOutputNodeHtml();
@@ -12794,6 +12897,8 @@ class WorkflowEditor {
                 // Store mapping from database node ID to Drawflow ID (for SSE highlighting)
                 if (dbNodeId) {
                     this.dbNodeToDrawflowMap[dbNodeId] = String(drawflowId);
+                    // A server run expands Start on an option into Start -> a code node with this id (StartOptionGraph).
+                    if (type === 'start') this.dbNodeToDrawflowMap[1000000000 + Number(dbNodeId)] = String(drawflowId);
 
                     // A template node that has been configured (name/provider/
                     // instructions) must look like every other agent node — timer,
@@ -14084,6 +14189,17 @@ class WorkflowEditor {
         }
     }
 
+    /** The graph the code runner reads: a Start on a Start option carries its component's code (spec §10). */
+    _wfStartAsCode(id, nodes) {
+        if (this._wfNodeKind(id, nodes) !== 'start') return nodes;
+        const d = nodes[id].data || {};
+        const comp = window.CodeComponents?.cache.get(d.start_option);
+        const data = comp?.start_trigger
+            ? { ...window.CodeComponents.linkedNodeConfig(comp, comp.start_trigger.label), type: 'code' }
+            : { name: d.start_option_label || 'Start', code_component_id: d.start_option, code_component_missing: true, exits: d.exits };
+        return { ...nodes, [id]: { ...nodes[id], data } };
+    }
+
     async _runNodeAsCodeUnit(id, nodes, userPrompt) {
         const d = nodes[id].data || {};
         if (d.code_component_missing) {
@@ -15354,7 +15470,8 @@ class WorkflowEditor {
         }
         const live = new Set();
         for (const id of Object.keys(nodes)) {
-            if (this._wfNodeKind(id, nodes) !== 'code') continue;
+            const kind = this._wfNodeKind(id, nodes);
+            if (kind !== 'code' && !(kind === 'start' && nodes[id].data?.start_option)) continue;
             for (const t of window.CodeNode.exitTags(id, nodes)) {
                 const svg = this.container.querySelector(`svg.connection.node_out_node-${id}.node_in_node-${t.to}.${t.port}`);
                 const path = svg?.querySelector('path.main-path');
@@ -16205,7 +16322,9 @@ class WorkflowEditor {
         // Seed Start node(s) with the prompt; reset agent node UI.
         for (const id of ids) {
             const kind = this._wfNodeKind(id, nodes);
-            if (kind === 'start') { this._wfOutputs[id] = userPrompt; done.add(id); }
+            // A Start on a Start option runs the component and routes by its exits (spec §10): it waits its turn like a code node.
+            if (kind === 'start' && !nodes[id].data?.start_option) { this._wfOutputs[id] = userPrompt; done.add(id); }
+            else if (kind === 'start') { remaining.add(id); this.nodeExecutionData[id] = {}; }
             else if (!reached.has(String(id))) {
                 if (kind === 'agent' || kind === 'playbook' || kind === 'code') this.highlightNode(id, 'idle', id, 'agent');
             } else {
@@ -16231,8 +16350,8 @@ class WorkflowEditor {
                         const ctx = this._wfBuildContext(id, nodes) || userPrompt;
                         const agentName = nodes[id].data?.agent_name || nodes[id].data?.name || `node ${id}`;
                         try { onProgress?.({ type: 'node_start', node_id: id, agent_name: agentName }); } catch (_) {}
-                        if (this._wfNodeKind(id, nodes) === 'code') {
-                            const r = await this._runNodeAsCodeUnit(id, nodes, userPrompt);
+                        if (this._wfNodeKind(id, nodes) === 'code' || this._wfNodeKind(id, nodes) === 'start') {
+                            const r = await this._runNodeAsCodeUnit(id, this._wfStartAsCode(id, nodes), userPrompt);
                             // Only the children on the exit taken run; a failed node runs none of
                             // them (compiled stops there) and the run fails.
                             const res = window.CodeNode.routeAfter(id, nodes, r, node.data.exits || ['next']);

@@ -38,12 +38,13 @@ En lugar de una hora, una programación puede esperar un **evento**: pon *Repeti
 
 ### Opciones de inicio
 
-El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt** (siempre activo), **Programar** y cada **opción de evento** que hayas añadido. Marca una casilla en el nodo para elegir.
+El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt**, **Programar** y cada **opción de evento** que hayas añadido. Solo una está marcada a la vez; marcar otra cambia a ella.
 
-- **Escribir el prompt / Programar:** haz clic en el texto para abrir el cuadro del prompt o los campos de programación (ejecutar a, repetir, cron). Marcar Programar abre los campos de programación; la casilla queda marcada cuando guardas la programación. Desmarcarla elimina la programación.
+- **Escribir el prompt / Programar:** haz clic en el texto para cambiar a esa opción y abrir el cuadro del prompt o los campos de programación (ejecutar a, repetir, cron). Programar queda marcada cuando guardas la programación. Desmarcarla vuelve a Escribir el prompt y elimina la programación.
 - **Añadir una opción:** arrastra un componente de la Biblioteca de componentes de código sobre cualquier nodo Inicio. Elige la herramienta de espera (para Outlook, `wait_for_new`), sus argumentos y la salida que lleva el trabajo. El Inicio de cada flujo la mostrará.
-- **Usarla:** marca la opción en Inicio. Aparece un nodo enlazado al componente después de Inicio, y el flujo espera el evento en lugar de una programación. Una opción de evento a la vez; una programación y un evento se excluyen.
-- **Editarla o quitarla:** en la Biblioteca de componentes de código, ⋮ en el componente → Editar la opción de inicio o Quitar la opción de inicio. Una advertencia enumera primero los flujos que la usan. Sus nodos se quedan donde están; dejan de comenzar con el evento.
+- **Usarla:** marca la opción en Inicio. Inicio se convierte en el componente: muestra un conector por salida (para Outlook, `new_mail`, `no_mail`, `error`) y enlazas cada uno con lo que debe ocurrir después. El flujo se ejecuta cuando llega el evento; lo que sale por un conector (el correo en `new_mail`) es la entrada del nodo siguiente. Los enlaces que ya tenía Inicio pasan a la salida que lleva el trabajo.
+- **Volver atrás:** marca Escribir el prompt o Programar. Inicio vuelve a tener un solo conector: los enlaces de la salida que lleva el trabajo se quedan, los demás se eliminan. Una advertencia los enumera antes; Cancelar no cambia nada.
+- **Editarla o quitarla:** el componente solo se edita en la Biblioteca de componentes de código, y cada Inicio que lo usa se actualiza. Si al guardar se quitan salidas que tienen enlaces en algún flujo, una advertencia enumera esos flujos y enlaces antes. ⋮ en el componente → Editar la opción de inicio o Quitar la opción de inicio; al quitarla, esos Inicio vuelven a ser un Inicio normal.
 
 ## Compilar a Python
 
