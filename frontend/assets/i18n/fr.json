@@ -260,7 +260,8 @@
     "linkedTitle": "Lié à un composant de la Bibliothèque de code : les modifications s'appliquent à tous les flux qui l'utilisent",
     "linkedHeader": "Composant de bibliothèque « {{name}} » · utilisé par {{count}} nœud(s). Enregistrer le modifie partout.",
     "missing": "manquant",
-    "missingTitle": "Le composant de code lié n'existe plus"
+    "missingTitle": "Le composant de code lié n'existe plus",
+    "loadFailed": "Impossible de charger la Bibliothèque de code ; réessayez."
   },
   "playbookLibrary": {
     "newPlaybook": "Nouveau playbook",

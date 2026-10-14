@@ -9063,6 +9063,9 @@ class WorkflowEditor {
         }
         // The component being edited: from the library, or the one this node links to.
         const comp = opts.component || (linkId ? CC.cache.get(linkId) : null);
+        // The library did not load: the component may well exist, so this is not "missing" -- the
+        // inline Save (which drops the link) and Save to library stay off until a load succeeds.
+        const libraryUnavailable = !!(linkId && !node.data.code_component_missing && !comp && CC.cache.loadFailed());
         const d = node ? node.data || {} : { name: comp.name || '', ...(comp.id ? comp : this._defaultCodeConfig()) };
         const CN = window.CodeNode;
         const tab = (k, label) => `<button data-tab="${k}" class="agent-modal-tab px-4 py-2 text-sm font-medium border-b-2 -mb-px">${label}</button>`;
@@ -9139,8 +9142,13 @@ class WorkflowEditor {
             CC.api().usedBy(comp.id).then((r) => {
                 f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: (r.data || []).length });
             }).catch(() => {});
+        } else if (libraryUnavailable) {
+            f('link').style.display = '';
+            f('link').style.color = '#b91c1c';
+            f('link').textContent = this.t('codeLibrary.loadFailed');
+            overlay.querySelector('[data-act="save"]').style.display = 'none';
         } else if (node && (node.data.code_component_missing || node.data.code_component_id)) {
-            // Its component is gone (or did not load): Save turns it into an inline node, or Save to library re-links it.
+            // Its component is gone (flagged, or absent from a library that loaded): Save turns it into an inline node, or Save to library re-links it.
             f('link').style.display = '';
             f('link').textContent = this.t('codeLibrary.missingTitle');
             overlay.querySelector('[data-act="tolib"]').style.display = '';
@@ -9257,6 +9265,7 @@ class WorkflowEditor {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
             if (!['test', 'save', 'tolib'].includes(act)) return;
+            if (act !== 'test' && libraryUnavailable) { show(this.t('codeLibrary.loadFailed'), true); return; }
             const cfg = read();
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
@@ -9288,7 +9297,7 @@ class WorkflowEditor {
                     return;
                 }
                 try {
-                    const row = (await CC.api().create(CC.componentBody(cfg, { name, description: '' }))).data;
+                    const row = (await CC.api().create(CC.componentBody(cfg, { name, description: clash?.description || '' }))).data;
                     CC.cache.put(row);
                     this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled });
                     this._refreshLinkedCodeNodes(row);
@@ -9592,7 +9601,7 @@ class WorkflowEditor {
     /** The Code Library's New / Edit: the code modal on the component itself (no node). */
     async showCodeComponentForm(id) {
         const CC = window.CodeComponents;
-        if (id && !CC.cache.get(id)) await CC.cache.load(CC.api());
+        if (id && !CC.cache.get(id)) await CC.cache.load(CC.api()).catch(() => {});
         this.showCodeNodeModal(null, { component: id ? CC.cache.get(id) || {} : {} });
     }
 
@@ -12586,6 +12595,13 @@ class WorkflowEditor {
             if (fromId && toId) {
                 const outputPort = edge.from_port || 'output_1';
                 const inputPort = edge.to_port || 'input_1';
+                // A port that no longer exists (e.g. a linked code node's component lost an exit)
+                // would make addConnection throw and abort the remaining edges: skip that one edge.
+                const data = this.editor.drawflow.drawflow.Home.data;
+                if (!data[fromId]?.outputs?.[outputPort] || !data[toId]?.inputs?.[inputPort]) {
+                    console.warn(`[WorkflowEditor] Skipping edge ${fromId}.${outputPort} -> ${toId}.${inputPort}: port not found`, edge);
+                    return;
+                }
 
                 this.editor.addConnection(fromId, toId, outputPort, inputPort);
             }

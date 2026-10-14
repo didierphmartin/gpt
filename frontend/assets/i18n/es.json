@@ -260,7 +260,8 @@
     "linkedTitle": "Vinculado a un componente de la Biblioteca de código: los cambios se aplican a todos los flujos que lo usan",
     "linkedHeader": "Componente de biblioteca \"{{name}}\" · usado por {{count}} nodo(s). Guardar lo cambia en todas partes.",
     "missing": "falta",
-    "missingTitle": "El componente de código vinculado ya no existe"
+    "missingTitle": "El componente de código vinculado ya no existe",
+    "loadFailed": "No se pudo cargar la Biblioteca de código; inténtalo de nuevo."
   },
   "playbookLibrary": {
     "newPlaybook": "Nuevo playbook",

@@ -260,7 +260,8 @@
     "linkedTitle": "Linked to a Code Library component: edits apply to every workflow using it",
     "linkedHeader": "Library component \"{{name}}\" · used by {{count}} workflow node(s). Saving changes it everywhere.",
     "missing": "missing",
-    "missingTitle": "The linked code component no longer exists"
+    "missingTitle": "The linked code component no longer exists",
+    "loadFailed": "Could not load the Code Library; try again."
   },
   "playbookLibrary": {
     "newPlaybook": "New Playbook",
