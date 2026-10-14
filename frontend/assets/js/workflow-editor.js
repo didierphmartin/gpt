@@ -9100,8 +9100,9 @@ class WorkflowEditor {
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
                     ${pane('logs', '<div data-f="logs"></div>')}
-                    <pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:12px 0 0;"></pre>
                 </div>
+                <!-- Outside the scrolling body: a Save refused by validation must show why, whatever the tab. -->
+                <pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:160px;overflow:auto;margin:0;padding:0 16px;"></pre>
                 <div class="storage-config-footer">
                     <button class="storage-config-btn" data-act="test">Test</button>
                     <button class="storage-config-btn" data-act="tolib" style="display:none;">${this.escapeHtml(this.t('codeLibrary.saveToLibrary'))}</button>
