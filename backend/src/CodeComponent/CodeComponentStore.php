@@ -49,12 +49,14 @@ final class CodeComponentStore
     public function save(int $userId, ?int $id, array $data): array
     {
         $c = self::validate($data);
-        if ($id !== null && $this->get($userId, $id) === null) {
+        $before = $id === null ? null : $this->get($userId, $id);
+        if ($id !== null && $before === null) {
             throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         }
         $clash = $this->getByName($userId, $c['name']);
         if ($id === null && $clash !== null) {
             $id = $clash['id'];
+            $before = $clash;
         } elseif ($clash !== null && $clash['id'] !== $id) {
             throw new CodeComponentError('name_taken', "A code component named \"{$c['name']}\" already exists.", 409);
         }
@@ -64,8 +66,25 @@ final class CodeComponentStore
                 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)')->execute([$userId, ...$vals]);
             $id = (int) $this->db->lastInsertId();
         } else {
-            $this->db->prepare('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?,
-                updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')->execute([...$vals, $id, $userId]);
+            $outer = !$this->db->inTransaction();
+            if ($outer) {
+                $this->db->beginTransaction();
+            }
+            try {
+                $this->db->prepare('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')->execute([...$vals, $id, $userId]);
+                if ($before['exits'] !== $c['exits']) {
+                    $this->remapExits($userId, $id, $before['exits'], $c['exits']);
+                }
+                if ($outer) {
+                    $this->db->commit();
+                }
+            } catch (\Throwable $e) {
+                if ($outer && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
         }
         return $this->get($userId, $id);
     }
@@ -86,8 +105,14 @@ final class CodeComponentStore
     /** The user's workflow code nodes that link to the component. */
     public function usedBy(int $userId, int $id): array
     {
+        return array_map(fn($n) => array_diff_key($n, ['node_id' => 1]), $this->linkedNodes($userId, $id));
+    }
+
+    /** usedBy plus each node's workflow_nodes.id. */
+    private function linkedNodes(int $userId, int $id): array
+    {
         // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-        $st = $this->db->prepare("SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
+        $st = $this->db->prepare("SELECT n.id AS node_id, n.config, w.id AS workflow_id, w.name AS workflow_name
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
             WHERE w.user_id = ? AND n.node_type = 'code' ORDER BY w.name, n.id");
         $st->execute([(string) $userId]);
@@ -96,10 +121,57 @@ final class CodeComponentStore
             $cfg = json_decode((string) $r['config'], true);
             if (is_array($cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id) {
                 $nodes[] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
-                    'node_name' => (string) ($cfg['name'] ?? 'Code')];
+                    'node_name' => (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id']];
             }
         }
         return $nodes;
+    }
+
+    /**
+     * Edges are stored by port index (output_k = exit k), so an exit change moves each linked node's
+     * edges BY NAME, as the editor's CodeNode.remapExits does: a surviving exit keeps its edges on its
+     * new port, a removed exit's edges go; one exit left moves every edge onto output_1 (duplicates
+     * dropped); one exit before lands on output_1 unless its name survives. Ports beyond the old exits
+     * are left alone.
+     */
+    private function remapExits(int $userId, int $id, array $oldExits, array $newExits): void
+    {
+        $select = $this->db->prepare('SELECT id, to_node_id, to_port, from_port FROM workflow_edges WHERE from_node_id = ? ORDER BY id');
+        $move = $this->db->prepare('UPDATE workflow_edges SET from_port = ? WHERE id = ?');
+        $drop = $this->db->prepare('DELETE FROM workflow_edges WHERE id = ?');
+        foreach ($this->linkedNodes($userId, $id) as $node) {
+            $select->execute([$node['node_id']]);
+            $edges = [];
+            foreach ($select->fetchAll(PDO::FETCH_ASSOC) as $e) {
+                $k = preg_match('/^output_(\d+)$/', (string) $e['from_port'], $m) ? (int) $m[1] : 0;
+                if ($k >= 1 && $k <= count($oldExits)) {
+                    $edges[] = $e + ['k' => $k];
+                }
+            }
+            // old port order, so a collapse keeps the edge of the earliest exit (as the editor does)
+            usort($edges, fn($a, $b) => [$a['k'], (int) $a['id']] <=> [$b['k'], (int) $b['id']]);
+            $seen = [];
+            foreach ($edges as $e) {
+                if (count($newExits) === 1) {
+                    $key = $e['to_node_id'] . '|' . $e['to_port'];
+                    if (isset($seen[$key])) {
+                        $drop->execute([$e['id']]);
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $j = 0;
+                } else {
+                    $exit = $oldExits[$e['k'] - 1];
+                    $found = array_search($exit, $newExits, true);
+                    $j = count($oldExits) === 1 && $found === false ? 0 : ($found === false ? -1 : $found);
+                }
+                if ($j < 0) {
+                    $drop->execute([$e['id']]);
+                } elseif ('output_' . ($j + 1) !== $e['from_port']) {
+                    $move->execute(['output_' . ($j + 1), $e['id']]);
+                }
+            }
+        }
     }
 
     /** The editor's rules (CodeNode.validateConfig): a name, 1-8 unique exits, server names, 1-300 s. */
