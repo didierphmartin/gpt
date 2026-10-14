@@ -6738,7 +6738,9 @@ class WorkflowEditor {
         // Get current schedule data
         const schedule = this.currentSchedule || {};
         const hasSchedule = !!schedule.id;
-        const scheduleEnabled = hasSchedule || schedule.enabled;
+        // An active Start option's row is not the Delay schedule: its fields open collapsed (the Starts-on list owns it).
+        const optionActive = !!schedule.trigger_component_id;
+        const scheduleEnabled = !optionActive && (hasSchedule || schedule.enabled);
 
         // Format datetime for input (local time)
         const formatDateTimeLocal = (dateStr) => {
@@ -6775,8 +6777,9 @@ class WorkflowEditor {
                         <div id="starts-on" style="margin-bottom: 12px;"></div>
 
                         <!-- Schedule Section -->
-                        <div id="schedule-section" style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f9fafb;">
-                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                        <div id="schedule-section" style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f9fafb; display: ${scheduleEnabled ? 'block' : 'none'};">
+                            <!-- The old "Enable scheduled execution" box: hidden, driven by Starts on's Delay row (code still reads it). -->
+                            <div style="display: none; align-items: center; gap: 8px; margin-bottom: 12px;">
                                 <input type="checkbox" id="schedule-enabled" ${scheduleEnabled ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;">
                                 <label for="schedule-enabled" style="font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px;">
                                     <span style="font-size: 16px;">🕐</span>
@@ -6894,12 +6897,17 @@ class WorkflowEditor {
         textarea.focus();
 
         // Toggle schedule fields visibility
+        const scheduleSection = document.getElementById('schedule-section');
         scheduleEnabledChk.addEventListener('change', () => {
             scheduleFields.style.display = scheduleEnabledChk.checked ? 'block' : 'none';
+            scheduleSection.style.display = scheduleEnabledChk.checked ? 'block' : 'none';
             if (saveScheduleBtn) {
                 saveScheduleBtn.style.display = scheduleEnabledChk.checked ? 'inline-block' : 'none';
             }
         });
+
+        // An option's event row: the Delay fields must not open on "On event" (that is the option, not a Delay).
+        if (optionActive && repeatTypeSelect.value === 'event') repeatTypeSelect.value = 'none';
 
         // Show/hide repeat interval based on repeat type
         const cronContainer = document.getElementById('cron-container');
@@ -9551,48 +9559,68 @@ class WorkflowEditor {
         const say = (text, isError = false) => {
             msg.textContent = text || ''; msg.style.display = text ? 'block' : 'none'; msg.style.color = isError ? '#dc2626' : '#6b7280';
         };
-        box.querySelectorAll('input[data-start]').forEach((cb) => cb.addEventListener('change', async () => {
-            const key = cb.dataset.start === 'delay' ? 'delay' : Number(cb.dataset.start);
-            const next = window.StartOptions.tick(state, key);
-            if (typeof key === 'number' && next.state.event === key) {
-                // Ticked: needs a saved workflow and the component's servers among the user's enabled ones.
-                const comp = CC.cache.get(key);
-                const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
-                const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
-                if (!this.currentWorkflowId || missing.length) {
-                    cb.checked = false;
-                    say(!this.currentWorkflowId ? this.t('workflow.messages.saveFirst')
-                        : this.t('workflow.connect.needServer', { servers: missing.join(', ') }), true);
-                    return;
-                }
-                if (scheduleEnabledChk.checked) {
-                    scheduleEnabledChk.checked = false;
-                    scheduleEnabledChk.dispatchEvent(new Event('change'));   // the event save replaces the Delay row
-                }
-                this._optionNodeAfterStart(comp);
-                await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
-                const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
-                    repeat_type: 'event', scheduled_time: this._localNowStamp(),
-                    input_prompt: document.getElementById('prompt-form-textarea')?.value.trim() || '' });
-                if (!ok) { cb.checked = false; return; }
-            } else if (typeof key === 'number') {
-                // Unticked: the event schedule goes (a 'none' row would still run once); the node stays.
-                if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { cb.checked = true; return; }
-            } else if (key === 'delay' && next.state.delay && state.event !== null) {
-                // Delay on while an event option is active: the event schedule goes first.
-                if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { cb.checked = false; return; }
-                scheduleEnabledChk.checked = true;
-                scheduleEnabledChk.dispatchEvent(new Event('change'));
-            } else if (next.state.delay !== scheduleEnabledChk.checked) {
-                scheduleEnabledChk.checked = next.state.delay;
-                scheduleEnabledChk.dispatchEvent(new Event('change'));   // shows/hides the Delay fields, as before
-            }
-            state = next.state;
+        // The boxes and the hidden schedule checkbox shown from `state` (Delay box = scheduleEnabledChk = state.delay).
+        const sync = () => {
             box.querySelectorAll('input[data-start]').forEach((other) => {
                 if (other.dataset.start === 'prompt') return;
                 other.checked = other.dataset.start === 'delay' ? state.delay : Number(other.dataset.start) === state.event;
             });
-            say(next.note ? t(`note_${next.note}`) : '');
+            if (scheduleEnabledChk.checked !== state.delay) {
+                scheduleEnabledChk.checked = state.delay;
+                scheduleEnabledChk.dispatchEvent(new Event('change'));   // shows/hides the Delay fields, as before
+            }
+        };
+        box.querySelectorAll('input[data-start]').forEach((cb) => cb.addEventListener('change', async () => {
+            const key = cb.dataset.start === 'delay' ? 'delay' : Number(cb.dataset.start);
+            const next = window.StartOptions.tick(state, key);
+            const inputs = [...box.querySelectorAll('input[data-start]')].filter((i) => i.dataset.start !== 'prompt');
+            inputs.forEach((i) => { i.disabled = true; });   // one change at a time
+            try {
+                if (typeof key === 'number' && next.state.event === key) {
+                    // Ticked: needs a saved workflow and the component's servers among the user's enabled ones.
+                    const comp = CC.cache.get(key);
+                    const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
+                    const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
+                    if (!this.currentWorkflowId || missing.length) {
+                        sync();
+                        say(!this.currentWorkflowId ? this.t('workflow.messages.saveFirst')
+                            : this.t('workflow.connect.needServer', { servers: missing.join(', ') }), true);
+                        return;
+                    }
+                    if (scheduleEnabledChk.checked) {
+                        scheduleEnabledChk.checked = false;
+                        scheduleEnabledChk.dispatchEvent(new Event('change'));   // the event save replaces the Delay row
+                    }
+                    this._optionNodeAfterStart(comp);
+                    await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
+                    const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
+                        repeat_type: 'event', scheduled_time: this._localNowStamp(),
+                        input_prompt: document.getElementById('prompt-form-textarea')?.value.trim() || '' });
+                    if (!ok) { sync(); return; }   // the Delay row (if any) is still there: its box comes back
+                } else if (typeof key === 'number') {
+                    // Unticked: the event schedule goes (a 'none' row would still run once); the node stays.
+                    if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
+                } else if (key === 'delay' && next.state.delay && state.event !== null) {
+                    // Delay on while an event option is active: the event schedule goes first.
+                    if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
+                    const repeatSel = document.getElementById('schedule-repeat-type');
+                    if (repeatSel?.value === 'event') {
+                        repeatSel.value = 'none';
+                        repeatSel.dispatchEvent(new Event('change'));
+                    }
+                } else if (key === 'delay' && !next.state.delay && this.currentSchedule?.id && !this.currentSchedule.trigger_component_id) {
+                    // Delay off: its schedule stops, as unticking an event does.
+                    if (!(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
+                }
+                state = next.state;
+                sync();
+                say(next.note ? t(`note_${next.note}`) : '');
+            } catch (err) {
+                sync();
+                say(err?.message || String(err), true);
+            } finally {
+                inputs.forEach((i) => { i.disabled = false; });
+            }
         }));
         box.querySelectorAll('[data-start-menu]').forEach((btn) => btn.addEventListener('click', (ev) => {
             ev.preventDefault();
@@ -9774,6 +9802,9 @@ class WorkflowEditor {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); resolve(false); return; }
             if (act !== 'remove') return;
+            const removeBtn = ev.target;
+            if (removeBtn.disabled) return;
+            removeBtn.disabled = true;   // one request at a time
             try {
                 await CC.api().clearStartOption(comp.id);
                 CC.cache.put({ ...comp, start_trigger: null });
@@ -9783,7 +9814,7 @@ class WorkflowEditor {
                 }
                 overlay.remove();
                 resolve(true);
-            } catch (e) { this.showNotification(e.message, 'error'); }
+            } catch (e) { this.showNotification(e.message, 'error'); } finally { removeBtn.disabled = false; }
         }));
     }
 
