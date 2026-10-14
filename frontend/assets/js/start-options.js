@@ -9,10 +9,11 @@
 })(typeof self !== 'undefined' ? self : this, function () {
     const CN = () => (typeof window !== 'undefined' ? window.CodeNode : global.CodeNode);
 
-    /** The Start node a drop landed on; an ingestion Start takes files, not triggers. */
+    /** The Start node a drop landed on, its Drawflow frame included; an ingestion Start takes files, not triggers. */
     function isStartDrop(target) {
-        const start = target?.closest?.('.workflow-node.start-node');
-        if (!start || target.closest('.ingestion-start')) return null;
+        const start = target?.closest?.('.workflow-node.start-node')
+            || target?.closest?.('.drawflow-node')?.querySelector?.('.workflow-node.start-node');
+        if (!start || start.classList.contains('ingestion-start')) return null;
         return start;
     }
 

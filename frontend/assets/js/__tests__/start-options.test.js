@@ -2,11 +2,19 @@ const assert = require('assert');
 global.CodeNode = require('../code-node.js');
 const SO = require('../start-options.js');
 
-// isStartDrop -- review focus 4: only a drop on a (non-ingestion) Start node
-const el = (classes) => ({ closest: (sel) => (sel.split(',').some((s) => classes.includes(s.trim())) ? { classes } : null) });
-assert.ok(SO.isStartDrop(el(['.workflow-node.start-node'])));
-assert.strictEqual(SO.isStartDrop(el(['.workflow-node.start-node', '.ingestion-start'])), null);
-assert.strictEqual(SO.isStartDrop(el(['.workflow-node.agent-node'])), null);
+// isStartDrop -- review focus 4: only a drop on a (non-ingestion) Start node, its Drawflow frame included
+const card = (cls) => ({ classList: { contains: (c) => cls.includes(c) } });
+const startCard = card(['workflow-node', 'start-node']);
+const ingestCard = card(['workflow-node', 'start-node', 'ingestion-start']);
+// A drop target: `ancestors` maps the selectors it closest()-matches; `frame` is the Drawflow node around it.
+const el = (ancestors, frameCard = null) => ({
+    closest: (sel) => (sel === '.drawflow-node' && frameCard ? { querySelector: () => frameCard } : ancestors[sel] || null),
+});
+assert.strictEqual(SO.isStartDrop(el({ '.workflow-node.start-node': startCard })), startCard);
+assert.strictEqual(SO.isStartDrop(el({}, startCard)), startCard);            // on the frame, outside the card
+assert.strictEqual(SO.isStartDrop(el({ '.workflow-node.start-node': ingestCard })), null);
+assert.strictEqual(SO.isStartDrop(el({}, ingestCard)), null);
+assert.strictEqual(SO.isStartDrop(el({}, null)), null);                      // an agent node, the bare canvas
 assert.strictEqual(SO.isStartDrop(null), null);
 
 // tools and exits
