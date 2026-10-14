@@ -176,6 +176,7 @@ class WorkflowEditor {
         this.setupEditorEvents();
         this.setupDragAndDrop();
         this.setupDocumentDragDrop();
+        this._setupStartOptionDragHighlight();
 
         // Load agents from API (excluding managers)
         await this.loadAgents();
@@ -7993,6 +7994,35 @@ class WorkflowEditor {
             this.container.classList.remove('drag-over');
             this.onDrop(e);
         });
+    }
+
+    /**
+     * Spec §4: while a Code Library row is dragged over a Start node, the node is outlined (a drop there adds a
+     * Start option). Only drags carrying `code-component-id` light it; file and other drops are not touched.
+     */
+    _setupStartOptionDragHighlight() {
+        const CLS = 'start-option-drag-over';
+        if (!document.getElementById('start-option-drag-style')) {
+            const style = document.createElement('style');
+            style.id = 'start-option-drag-style';
+            style.textContent = `.${CLS} { outline: 2px dashed #059669; outline-offset: 2px; }`;
+            document.head.appendChild(style);
+        }
+        const isComponentDrag = (e) => [...(e.dataTransfer?.types || [])].includes('code-component-id');
+        const clear = (except = null) => this.container.querySelectorAll(`.${CLS}`)
+            .forEach((n) => { if (n !== except) n.classList.remove(CLS); });
+        this.container.addEventListener('dragover', (e) => {
+            if (!isComponentDrag(e)) return;
+            const start = window.StartOptions?.isStartDrop(e.target) || null;
+            clear(start);
+            start?.classList.add(CLS);
+        });
+        this.container.addEventListener('dragleave', (e) => {
+            const start = window.StartOptions?.isStartDrop(e.target);
+            if (start && !(e.relatedTarget && start.contains(e.relatedTarget))) start.classList.remove(CLS);
+        });
+        this.container.addEventListener('drop', () => clear(), true);   // capture: the canvas drop stops propagation
+        document.addEventListener('dragend', () => clear());
     }
 
     /**
