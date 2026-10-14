@@ -59,27 +59,47 @@ class WorkflowGraphRepository
             return $row;
         }, $stmt->fetchAll(PDO::FETCH_ASSOC));
 
-        // Playbook nodes link to the collection: fill in the linked text for the workflow's
-        // owner, so every reader (compilers, docs) keeps receiving config['playbook'].
+        // Linked nodes are filled for the workflow's owner, so every reader (compilers, docs) keeps
+        // receiving the node's own fields: playbook text, and a code component's body.
         $owner = null;
+        $ownerId = function () use (&$owner, $workflowId): int {
+            if ($owner === null) {
+                $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
+                $st->execute([$workflowId]);
+                $owner = (int) $st->fetchColumn();
+            }
+            return $owner;
+        };
         $store = new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db);
         foreach ($rows as &$row) {
             $cfg = $row['config'];
             if (($row['node_type'] ?? '') !== 'playbook' || !is_array($cfg) || !isset($cfg['playbook_id'])) {
                 continue;
             }
-            if ($owner === null) {
-                $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
-                $st->execute([$workflowId]);
-                $owner = (int) $st->fetchColumn();
-            }
-            $pb = $store->get($owner, (int) $cfg['playbook_id']);
+            $pb = $store->get($ownerId(), (int) $cfg['playbook_id']);
             if ($pb === null) {
                 unset($cfg['playbook']);
                 $cfg['playbook_missing'] = true;
             } else {
                 unset($cfg['playbook_missing']);
                 $cfg['playbook'] = $pb['text'];
+            }
+            $row['config'] = $cfg;
+        }
+        unset($row);
+
+        $codeStore = new \Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore($this->db);
+        foreach ($rows as &$row) {
+            $cfg = $row['config'];
+            if (($row['node_type'] ?? '') !== 'code' || !is_array($cfg) || empty($cfg['code_component_id'])) {
+                continue;
+            }
+            $c = $codeStore->get($ownerId(), (int) $cfg['code_component_id']);
+            unset($cfg['code'], $cfg['exits'], $cfg['mcp_servers'], $cfg['timeout_s'], $cfg['code_component_missing']);
+            if ($c === null) {
+                $cfg['code_component_missing'] = true;
+            } else {
+                $cfg += ['code' => $c['code'], 'exits' => $c['exits'], 'mcp_servers' => $c['mcp_servers'], 'timeout_s' => $c['timeout_s']];
             }
             $row['config'] = $cfg;
         }
@@ -136,6 +156,10 @@ class WorkflowGraphRepository
         if (isset($config['playbook_id'])) {
             unset($config['playbook'], $config['playbook_missing']);
         }
+        // A linked code node stores only the link; its body and the missing flag are derived on read.
+        if ($nodeType === 'code' && isset($config['code_component_id'])) {
+            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
+        }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)
         // Strings like "node_3" are not valid - treat them as null
@@ -183,6 +207,10 @@ class WorkflowGraphRepository
         // A linked playbook node stores only the link; the text and the missing flag are derived on read.
         if (isset($config['playbook_id'])) {
             unset($config['playbook'], $config['playbook_missing']);
+        }
+        // A linked code node stores only the link; its body and the missing flag are derived on read.
+        if ($nodeType === 'code' && isset($config['code_component_id'])) {
+            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
         }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)

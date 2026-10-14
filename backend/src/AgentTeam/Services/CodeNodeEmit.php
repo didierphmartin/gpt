@@ -46,6 +46,9 @@ final class CodeNodeEmit
         $nid = (string) ($node['id'] ?? '');
         $display = trim((string) ($cfg['name'] ?? '')) ?: 'Code';
         $fail = fn(string $why) => throw new RuntimeException("Code node '{$display}' ({$nid}): {$why}");
+        if (!empty($cfg['code_component_missing'])) {
+            throw new RuntimeException("Code component #{$cfg['code_component_id']} not found (node {$display}).");
+        }
 
         $exits = $cfg['exits'] ?? ['next'];
         if (!is_array($exits) || $exits === [] || count($exits) > 8 || count(array_unique($exits)) !== count($exits)) {
