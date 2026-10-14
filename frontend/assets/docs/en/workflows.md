@@ -36,6 +36,14 @@ Instead of a time, a schedule can wait for an **event**: set *Repeat* to **On ev
 - In the app, an event schedule does not run on its own yet.
 - For Outlook, the notifications come through Azure Event Hubs (see the Outlook server's README). Without them, the tool still answers every 15 minutes.
 
+### Start options
+
+A workflow starts from its **Prompt**, from a **Delay** (a schedule), or from an **event option**.
+
+- **Add an option:** drag a component from the Code Library onto any Start node. Choose the wait tool (for Outlook, `wait_for_new`), its arguments and the exit that carries work. Every workflow's Start then lists it.
+- **Use it:** open Start, tick the option. A node linked to the component appears after Start, and the workflow waits for the event instead of a schedule. One event option at a time; it turns Delay off.
+- **Remove it:** ⋮ → Remove option. A warning lists the workflows using it first. Their nodes stay; they stop starting on the event.
+
 ## Compile to Python
 
 Any workflow can be **compiled into a standalone Python application**. The generated script uses LangGraph and can run independently of the web app — useful when you want to ship a workflow as a CLI or scheduled script.

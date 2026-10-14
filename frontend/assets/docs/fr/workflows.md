@@ -36,6 +36,14 @@ Au lieu d'une heure, une planification peut attendre un **événement** : régle
 - Dans l'application, une planification sur événement ne s'exécute pas encore d'elle-même.
 - Pour Outlook, les notifications passent par Azure Event Hubs (voir le README du serveur Outlook). Sans elles, l'outil répond quand même toutes les 15 minutes.
 
+### Options de démarrage
+
+Un workflow démarre à partir de son **Invite**, d'un **Délai** (une planification) ou d'une **option d'événement**.
+
+- **Ajouter une option :** faites glisser un composant de la Bibliothèque de composants de code sur n'importe quel nœud Démarrer. Choisissez l'outil d'attente (pour Outlook, `wait_for_new`), ses arguments et la sortie qui transporte le travail. Le nœud Démarrer de chaque workflow la proposera ensuite.
+- **L'utiliser :** ouvrez Démarrer et cochez l'option. Un nœud lié au composant apparaît après Démarrer, et le workflow attend l'événement au lieu d'une planification. Une seule option d'événement à la fois ; l'activer désactive le Délai.
+- **La retirer :** ⋮ → Retirer l'option. Un avertissement liste d'abord les workflows qui l'utilisent. Leurs nœuds restent en place ; ils ne démarrent plus sur l'événement.
+
 ## Compiler en Python
 
 Tout workflow peut être **compilé en application Python autonome**. Le script généré utilise LangGraph et peut tourner indépendamment de l'application web — pratique quand vous voulez livrer un workflow comme CLI ou comme script planifié.
