@@ -63,4 +63,23 @@ final class ScheduledWorkflowServiceStartOptionTest extends TestCase
         $this->assertNull($u['trigger_component_id']);
         $this->assertNull($u['event_trigger']);
     }
+
+    /** Final review 5: a hand-made event save (a trigger, no option named) no longer claims the option. */
+    public function testAHandMadeEventSaveClearsTheComponent(): void
+    {
+        $s = $this->svc()->create(['user_id' => 3, 'workflow_id' => 64, 'scheduled_time' => '2026-10-14 10:00:00',
+            'repeat_type' => 'event', 'event_trigger' => self::WATCH, 'trigger_component_id' => 7]);
+        $u = $this->svc()->update((int) $s['id'], 3, ['repeat_type' => 'event',
+            'event_trigger' => ['server' => 'Outlook', 'tool' => 'wait_for_new', 'args' => []]]);
+        $this->assertNull($u['trigger_component_id']);
+        $this->assertSame('event', $u['repeat_type']);
+    }
+
+    public function testAnEventSaveWithoutATriggerKeepsTheComponent(): void
+    {
+        $s = $this->svc()->create(['user_id' => 3, 'workflow_id' => 64, 'scheduled_time' => '2026-10-14 10:00:00',
+            'repeat_type' => 'event', 'event_trigger' => self::WATCH, 'trigger_component_id' => 7]);
+        $u = $this->svc()->update((int) $s['id'], 3, ['repeat_type' => 'event', 'input_prompt' => 'go']);
+        $this->assertSame(7, (int) $u['trigger_component_id']);
+    }
 }

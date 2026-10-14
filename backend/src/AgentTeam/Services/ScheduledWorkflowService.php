@@ -195,6 +195,8 @@ class ScheduledWorkflowService
             if (array_key_exists('trigger_component_id', $data)) {
                 $fields[] = 'trigger_component_id = :trigger_component_id';
                 $params['trigger_component_id'] = $data['trigger_component_id'] ? (int) $data['trigger_component_id'] : null;
+            } elseif (array_key_exists('event_trigger', $data)) {   // a hand-made trigger: no longer the option's
+                $fields[] = 'trigger_component_id = NULL';
             }
         } elseif (($schedule['repeat_type'] ?? '') === 'event') {
             $fields[] = 'event_trigger = NULL';
