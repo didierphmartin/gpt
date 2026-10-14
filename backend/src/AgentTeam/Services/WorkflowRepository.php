@@ -185,12 +185,17 @@ class WorkflowRepository
     }
 
     /**
-     * Delete a workflow
+     * Delete a workflow and its schedules. scheduled_workflows is MyISAM (no foreign key, no transaction):
+     * the workflow goes first, so a failure in between leaves an orphan schedule rather than a workflow
+     * that lost its schedule.
      */
     public function delete(int $id): bool
     {
         $stmt = $this->db->prepare("DELETE FROM agent_workflows WHERE id = ?");
-        return $stmt->execute([$id]);
+        if (!$stmt->execute([$id])) {
+            return false;
+        }
+        return $this->db->prepare("DELETE FROM scheduled_workflows WHERE workflow_id = ?")->execute([$id]);
     }
 
     /**
