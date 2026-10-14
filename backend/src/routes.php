@@ -414,6 +414,14 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/playbooks/{id:\d+}', ['PlaybooksController', 'destroy']);
         $r->get('/api/v1/playbooks/{id:\d+}/used-by', ['PlaybooksController', 'usedBy']);
         $r->post('/api/v1/playbooks/{id:\d+}/publish', ['PlaybooksController', 'publish']);
+
+        // The code components collection (CodeComponentsController, over CodeComponentStore).
+        $r->get('/api/v1/code-components', ['CodeComponentsController', 'index']);
+        $r->post('/api/v1/code-components', ['CodeComponentsController', 'create']);
+        $r->get('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'show']);
+        $r->put('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'update']);
+        $r->delete('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'destroy']);
+        $r->get('/api/v1/code-components/{id:\d+}/used-by', ['CodeComponentsController', 'usedBy']);
         $r->get('/api/v1/robot', ['RobotController', 'show']);
         $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
