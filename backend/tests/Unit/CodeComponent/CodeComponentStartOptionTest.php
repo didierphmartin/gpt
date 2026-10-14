@@ -167,4 +167,29 @@ final class CodeComponentStartOptionTest extends TestCase
         $this->store->delete(3, $this->id);
         $this->assertNull($this->store->get(3, $this->id));
     }
+
+    public function testScheduleBodyFillsTheEventFromTheOption(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'repeat_type' => 'cron', 'cron' => '* * * * *',
+            'trigger_component_id' => (string) $this->id]);
+        $this->assertSame('event', $b['repeat_type']);
+        $this->assertNull($b['cron']);
+        $this->assertSame($this->id, $b['trigger_component_id']);
+        $this->assertSame(self::TRIGGER['watch'], $b['event_trigger']);
+    }
+
+    public function testScheduleBodyLeavesOtherSchedulesAlone(): void
+    {
+        $body = ['workflow_id' => 64, 'repeat_type' => 'daily'];
+        $this->assertSame($body, $this->store->scheduleBody(3, $body));
+    }
+
+    /** Review focus 3. */
+    public function testScheduleBodyRefusesAForeignOrNonOptionComponent(): void
+    {
+        $this->assertSame('not_option', $this->error(fn() => $this->store->scheduleBody(3, ['trigger_component_id' => $this->id]))->kind);
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $this->assertSame('not_found', $this->error(fn() => $this->store->scheduleBody(4, ['trigger_component_id' => $this->id]))->kind);
+    }
 }

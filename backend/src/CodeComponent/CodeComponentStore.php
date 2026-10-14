@@ -174,6 +174,17 @@ final class CodeComponentStore
         return $impact;
     }
 
+    /** A schedule save naming an option becomes that option's event schedule (spec §3); other bodies pass through. */
+    public function scheduleBody(int $userId, array $body): array
+    {
+        if (empty($body['trigger_component_id'])) {
+            return $body;
+        }
+        $id = (int) $body['trigger_component_id'];
+        return ['repeat_type' => 'event', 'event_trigger' => $this->watchFor($userId, $id), 'cron' => null,
+            'trigger_component_id' => $id] + $body;
+    }
+
     /** The option's watch, as an event schedule stores it: {server, tool, args}. */
     public function watchFor(int $userId, int $id): array
     {

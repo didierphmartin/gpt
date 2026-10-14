@@ -107,6 +107,9 @@ class ScheduledWorkflowService
         // the event migration has not reached yet.
         $eventCol = $event !== null ? ', event_trigger' : '';
         $eventVal = $event !== null ? ', :event_trigger' : '';
+        $optionId = $event !== null && !empty($data['trigger_component_id']) ? (int) $data['trigger_component_id'] : null;
+        $eventCol .= $optionId !== null ? ', trigger_component_id' : '';
+        $eventVal .= $optionId !== null ? ', :trigger_component_id' : '';
 
         $stmt = $this->db->prepare("
             INSERT INTO scheduled_workflows
@@ -124,6 +127,7 @@ class ScheduledWorkflowService
             'cron' => $cron,
             'next_run' => $nextRun,
             ...($event !== null ? ['event_trigger' => $event] : []),
+            ...($optionId !== null ? ['trigger_component_id' => $optionId] : []),
         ]);
 
         return $this->findById((int) $this->db->lastInsertId());
@@ -188,8 +192,13 @@ class ScheduledWorkflowService
             $fields[] = 'event_trigger = :event_trigger';
             $fields[] = 'next_run = NULL';
             $params['event_trigger'] = self::eventTrigger($data['event_trigger'] ?? $schedule['event_trigger'] ?? null);
+            if (array_key_exists('trigger_component_id', $data)) {
+                $fields[] = 'trigger_component_id = :trigger_component_id';
+                $params['trigger_component_id'] = $data['trigger_component_id'] ? (int) $data['trigger_component_id'] : null;
+            }
         } elseif (($schedule['repeat_type'] ?? '') === 'event') {
             $fields[] = 'event_trigger = NULL';
+            $fields[] = 'trigger_component_id = NULL';
             if (!in_array('next_run = :next_run', $fields, true)) {   // back to a timed schedule: from its time
                 $fields[] = 'next_run = :next_run';
                 $params['next_run'] = $schedule['scheduled_time'];

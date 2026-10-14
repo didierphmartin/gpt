@@ -20,7 +20,7 @@ final class ScheduledWorkflowServiceEventTest extends TestCase
         $this->pdo->exec("CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
             workflow_id INTEGER, input_prompt TEXT, scheduled_time TEXT, status TEXT DEFAULT 'pending',
             repeat_type TEXT DEFAULT 'none', repeat_interval INTEGER DEFAULT 1, cron TEXT, event_trigger TEXT,
-            last_run TEXT, next_run TEXT, running_since TEXT, created_at TEXT, error_message TEXT)");
+            trigger_component_id INTEGER, last_run TEXT, next_run TEXT, running_since TEXT, created_at TEXT, error_message TEXT)");
         $this->pdo->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, name TEXT)');
         $this->pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
     }

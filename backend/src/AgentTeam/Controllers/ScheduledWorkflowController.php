@@ -8,6 +8,8 @@ use AgentTeam\Services\CronExpression;
 use AgentTeam\Services\ScheduledWorkflowService;
 use AgentTeam\Services\WorkflowRepository;
 use PDO;
+use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError;
+use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 
 /**
  * Scheduled Workflow Controller
@@ -80,6 +82,12 @@ class ScheduledWorkflowController
             ];
         }
 
+        try {   // a Start option names its component; the component supplies the event (spec §3)
+            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body);
+        } catch (CodeComponentError $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
+        }
+
         // Validate required fields
         if (empty($body['workflow_id'])) {
             return [
@@ -136,6 +144,7 @@ class ScheduledWorkflowController
                 'repeat_interval' => (int) ($body['repeat_interval'] ?? 1),
                 'cron' => $body['cron'] ?? null,
                 'event_trigger' => $body['event_trigger'] ?? null,
+                'trigger_component_id' => $body['trigger_component_id'] ?? null,
             ]);
 
             return [
@@ -211,6 +220,12 @@ class ScheduledWorkflowController
                 'error' => 'Authentication required',
                 'status_code' => 401
             ];
+        }
+
+        try {   // a Start option names its component; the component supplies the event (spec §3)
+            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body);
+        } catch (CodeComponentError $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
         }
 
         // Validate repeat_type if provided
