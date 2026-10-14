@@ -4,6 +4,7 @@ namespace Quantis\AIPortfolioAssistant\Tests\Unit\CodeComponent;
 
 use PDO;
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 
 /** A component's exit change remaps workflow_edges.from_port BY NAME in every linked node of the owner's workflows. */
@@ -84,11 +85,36 @@ final class CodeComponentExitRemapTest extends TestCase
         $this->assertSame([$e1 => 'output_1', $e2 => 'output_3', $e3 => 'output_4'], $this->ports());
     }
 
-    public function testRemovedExitDropsItsEdges(): void
+    public function testRemovedExitDropsItsEdgesOnceConfirmed(): void
     {
         [$e1, , $e3] = $this->linkedNodeWithThreeChildren($this->workflow('3', 'First'));
-        $this->saveExits(['new_mail', 'error']);
+        $this->store->save(3, $this->cid, ['exits' => ['new_mail', 'error'], 'confirm_drop_links' => true] + CodeComponentStoreTest::POLL);
         $this->assertSame([$e1 => 'output_1', $e3 => 'output_2'], $this->ports());
+    }
+
+    public function testRemovingALinkedExitIsRefusedUntilConfirmed(): void
+    {
+        [$e1, $e2, $e3] = $this->linkedNodeWithThreeChildren($this->workflow('3', 'First'));
+        try {
+            $this->saveExits(['new_mail', 'error']);
+            $this->fail('expected links_dropped');
+        } catch (CodeComponentError $e) {
+            $this->assertSame('links_dropped', $e->kind);
+            $this->assertSame(409, $e->status);
+            $this->assertSame([['workflow_id' => 1, 'workflow_name' => 'First', 'node_name' => 'Poll', 'exit' => 'no_mail', 'count' => 1]],
+                $e->data);
+        }
+        $this->assertSame(['new_mail', 'no_mail', 'error'], $this->store->get(3, $this->cid)['exits']);
+        $this->assertSame([$e1 => 'output_1', $e2 => 'output_2', $e3 => 'output_3'], $this->ports());
+    }
+
+    public function testRemovingAnUnlinkedExitNeedsNoConfirmation(): void
+    {
+        $wf = $this->workflow('3', 'First');
+        $code = $this->node($wf, 'code', ['name' => 'Poll', 'code_component_id' => $this->cid]);
+        $e1 = $this->edge($wf, $code, $this->node($wf, 'agent', []), 'output_1');
+        $this->saveExits(['new_mail', 'error']);
+        $this->assertSame([$e1 => 'output_1'], $this->ports());
     }
 
     public function testCollapseToOneExitMovesAllToOutput1AndDropsDuplicates(): void

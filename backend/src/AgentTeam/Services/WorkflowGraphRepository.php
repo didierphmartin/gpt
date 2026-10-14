@@ -106,6 +106,24 @@ class WorkflowGraphRepository
         }
         unset($row);
 
+        // A Start on a Start option shows the option's exits as its ports: read like a linked code node's.
+        foreach ($rows as &$row) {
+            $cid = StartOptionGraph::optionId($row);
+            if ($cid === null) {
+                continue;
+            }
+            $cfg = $row['config'];
+            unset($cfg['exits'], $cfg['start_option_label'], $cfg['start_option_missing']);
+            $c = $codeStore->get($ownerId(), $cid);
+            if ($c === null || $c['start_trigger'] === null) {
+                $cfg['start_option_missing'] = true;
+            } else {
+                $cfg += ['exits' => $c['exits'], 'start_option_label' => $c['start_trigger']['label']];
+            }
+            $row['config'] = $cfg;
+        }
+        unset($row);
+
         return $rows;
     }
 
@@ -122,14 +140,25 @@ class WorkflowGraphRepository
     }
 
     /**
-     * Get full graph (nodes + edges) for a workflow
+     * Get full graph (nodes + edges) for a workflow, as runners and compilers read it: a Start on a Start
+     * option is expanded into Start -> the option's code node (StartOptionGraph).
      */
     public function getGraph(int $workflowId): array
     {
-        return [
+        $graph = [
             'nodes' => $this->getNodes($workflowId),
             'edges' => $this->getEdges($workflowId)
         ];
+        $owner = null;
+        $codeStore = new \Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore($this->db);
+        return StartOptionGraph::expand($graph, function (int $id) use (&$owner, $codeStore, $workflowId): ?array {
+            if ($owner === null) {
+                $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
+                $st->execute([$workflowId]);
+                $owner = (int) $st->fetchColumn();
+            }
+            return $codeStore->get($owner, $id);
+        });
     }
 
     /**
@@ -160,6 +189,10 @@ class WorkflowGraphRepository
         // A linked code node stores only the link; its body and the missing flag are derived on read.
         if ($nodeType === 'code' && isset($config['code_component_id'])) {
             unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
+        }
+        // A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
+        if ($nodeType === 'start') {
+            unset($config['exits'], $config['start_option_label'], $config['start_option_missing']);
         }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)
@@ -212,6 +245,10 @@ class WorkflowGraphRepository
         // A linked code node stores only the link; its body and the missing flag are derived on read.
         if ($nodeType === 'code' && isset($config['code_component_id'])) {
             unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
+        }
+        // A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
+        if ($nodeType === 'start') {
+            unset($config['exits'], $config['start_option_label'], $config['start_option_missing']);
         }
 
         // Validate agent_id: must be null or a valid integer (foreign key constraint)

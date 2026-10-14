@@ -137,11 +137,10 @@ final class CodeComponentStartOptionTest extends TestCase
                    (4, 99, 'event', '{}', {$this->id}, 'pending')");
     }
 
-    public function testImpactNamesTheWorkflowsAndTheirNode(): void
+    public function testImpactNamesTheWorkflows(): void
     {
         $this->seedTwoWorkflows();
-        $this->assertSame([['workflow_id' => 64, 'workflow_name' => 'email prototype', 'node_name' => 'Email processing']],
-            $this->store->startTriggerImpact(3, $this->id));
+        $this->assertSame([['workflow_id' => 64, 'workflow_name' => 'email prototype']], $this->store->startTriggerImpact(3, $this->id));
     }
 
     public function testClearRemovesTheOptionAndOnlyItsScheduleRows(): void

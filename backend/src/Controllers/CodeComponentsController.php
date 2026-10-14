@@ -81,7 +81,7 @@ final class CodeComponentsController
         return is_array($b) ? $b : [];
     }
 
-    /** Authentication, then the action; a CodeComponentError becomes {success:false, error, kind, status_code}. */
+    /** Authentication, then the action; a CodeComponentError becomes {success:false, error, kind, status_code[, data]}. */
     private function guard(array $request, \Closure $action): array
     {
         $userId = (int) ($request['user_id'] ?? 0);
@@ -91,7 +91,8 @@ final class CodeComponentsController
         try {
             return $action($userId);
         } catch (CodeComponentError $e) {
-            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
+            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status]
+                + ($e->data !== [] ? ['data' => $e->data] : []);
         }
     }
 }

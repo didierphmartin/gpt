@@ -4,6 +4,7 @@ namespace Quantis\AIPortfolioAssistant\CodeComponent;
 
 use AgentTeam\Services\CodeNodeEmit;
 use AgentTeam\Services\ScheduledWorkflowService;
+use AgentTeam\Services\StartOptionGraph;
 use PDO;
 
 /**
@@ -71,6 +72,14 @@ final class CodeComponentStore
             if (!in_array($t['watch']['server'], $c['mcp_servers'], true)) {
                 throw new CodeComponentError('start_exit',
                     "MCP server \"{$t['watch']['server']}\" starts workflows: keep it or change the Start option first.", 422);
+            }
+        }
+        if ($before !== null && $before['exits'] !== $c['exits'] && empty($data['confirm_drop_links'])) {
+            $lost = $this->droppedLinks($userId, $id, $before['exits'], $c['exits']);
+            if ($lost !== []) {
+                $what = array_map(fn($l) => "\"{$l['exit']}\" on {$l['node_name']} in \"{$l['workflow_name']}\"", $lost);
+                throw new CodeComponentError('links_dropped', 'Removing these exits removes the links on '
+                    . implode(', ', $what) . '. Save again to confirm.', 409, $lost);
             }
         }
         $vals = [$c['name'], $c['description'], $c['code'], json_encode($c['exits']), json_encode($c['mcp_servers']), $c['timeout_s']];
@@ -146,30 +155,34 @@ final class CodeComponentStore
         return $this->get($userId, $id);
     }
 
-    /** The user's workflows whose schedule runs on this option, with the linked node's name when there is one. */
+    /** The user's workflows on this option: their schedule runs on it, or their Start shows its exits. */
     public function startTriggerImpact(int $userId, int $id): array
     {
         $st = $this->db->prepare('SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s
             JOIN agent_workflows w ON w.id = s.workflow_id
-            WHERE s.user_id = ? AND s.trigger_component_id = ? ORDER BY w.name');
+            WHERE s.user_id = ? AND s.trigger_component_id = ?');
         $st->execute([$userId, $id]);
-        $nodes = [];
-        foreach ($this->linkedNodes($userId, $id) as $n) {
-            $nodes[$n['workflow_id']] ??= $n['node_name'];
+        $names = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $names[(int) $r['workflow_id']] = (string) $r['name'];
         }
-        return array_map(fn($r) => ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['name'],
-            'node_name' => $nodes[(int) $r['workflow_id']] ?? null], $st->fetchAll(PDO::FETCH_ASSOC));
+        foreach ($this->linkedNodes($userId, $id) as $n) {
+            if ($n['is_start']) {
+                $names[$n['workflow_id']] = $n['workflow_name'];
+            }
+        }
+        asort($names);
+        return array_map(fn($wid, $name) => ['workflow_id' => $wid, 'workflow_name' => $name],
+            array_keys($names), array_values($names));
     }
 
     /**
      * Remove the option: its schedule rows are deleted (a 'none' row would still run once at its time) and the
-     * component stops being an option. Graphs are not touched; their linked nodes stay (spec decision 6).
+     * component stops being an option. Start nodes on it go back to one port (revertStarts); linked code nodes stay.
      */
     public function clearStartTrigger(int $userId, int $id): array
     {
-        if ($this->get($userId, $id) === null) {
-            throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
-        }
+        $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         $impact = $this->startTriggerImpact($userId, $id);
         $outer = !$this->db->inTransaction();
         if ($outer) {
@@ -177,6 +190,9 @@ final class CodeComponentStore
         }
         try {
             $this->db->prepare('DELETE FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?')->execute([$userId, $id]);
+            if ($c['start_trigger'] !== null) {
+                $this->revertStarts($userId, $id, $c['exits'], $c['start_trigger']['work_exit']);
+            }
             $this->db->prepare('UPDATE code_components SET start_trigger = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
                 ->execute([$id, $userId]);
             if ($outer) {
@@ -221,10 +237,10 @@ final class CodeComponentStore
         return ($nodeType ?? '') !== '' ? $nodeType === 'code' : is_array($cfg) && ($cfg['type'] ?? null) === 'code';
     }
 
-    /** The user's workflow code nodes that link to the component. */
+    /** The user's workflow code nodes that link to the component, and the Start nodes on its option. */
     public function usedBy(int $userId, int $id): array
     {
-        return array_map(fn($n) => array_diff_key($n, ['node_id' => 1]), $this->linkedNodes($userId, $id));
+        return array_map(fn($n) => array_diff_key($n, ['node_id' => 1, 'is_start' => 1]), $this->linkedNodes($userId, $id));
     }
 
     /** usedBy plus each node's workflow_nodes.id. */
@@ -238,12 +254,73 @@ final class CodeComponentStore
         $nodes = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cfg = json_decode((string) $r['config'], true);
-            if (self::isCodeNode($r['node_type'], $cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id) {
+            $code = self::isCodeNode($r['node_type'], $cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id;
+            $start = !$code && is_array($cfg) && StartOptionGraph::optionId(['node_type' => $r['node_type'], 'config' => $cfg]) === $id;
+            if ($code || $start) {
                 $nodes[] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
-                    'node_name' => (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id']];
+                    'node_name' => $start ? 'Start' : (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id'],
+                    'is_start' => $start];
             }
         }
         return $nodes;
+    }
+
+    /**
+     * The links an exit change would remove (remapExits' rules): [{workflow_id, workflow_name, node_name, exit,
+     * count}], one per linked node and removed exit that has links. Collapsing to one exit removes none.
+     */
+    public function droppedLinks(int $userId, int $id, array $oldExits, array $newExits): array
+    {
+        if (count($newExits) === 1 || count($oldExits) === 1) {
+            return [];
+        }
+        $count = $this->db->prepare('SELECT COUNT(*) FROM workflow_edges WHERE from_node_id = ? AND from_port = ?');
+        $lost = [];
+        foreach ($this->linkedNodes($userId, $id) as $node) {
+            foreach ($oldExits as $k => $exit) {
+                if (in_array($exit, $newExits, true)) {
+                    continue;
+                }
+                $count->execute([$node['node_id'], 'output_' . ($k + 1)]);
+                $n = (int) $count->fetchColumn();
+                if ($n > 0) {
+                    $lost[] = ['workflow_id' => $node['workflow_id'], 'workflow_name' => $node['workflow_name'],
+                        'node_name' => $node['node_name'], 'exit' => $exit, 'count' => $n];
+                }
+            }
+        }
+        return $lost;
+    }
+
+    /**
+     * Start nodes on the option go back to a plain Start: one port, holding the work exit's links; the other
+     * exits' links are removed, and so is config.start_option.
+     */
+    private function revertStarts(int $userId, int $id, array $exits, string $workExit): void
+    {
+        $work = 'output_' . ((int) array_search($workExit, $exits, true) + 1);
+        $select = $this->db->prepare('SELECT id, from_port FROM workflow_edges WHERE from_node_id = ?');
+        $move = $this->db->prepare("UPDATE workflow_edges SET from_port = 'output_1' WHERE id = ?");
+        $drop = $this->db->prepare('DELETE FROM workflow_edges WHERE id = ?');
+        $config = $this->db->prepare('SELECT config FROM workflow_nodes WHERE id = ?');
+        $save = $this->db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = ?');
+        foreach ($this->linkedNodes($userId, $id) as $node) {
+            if (!$node['is_start']) {
+                continue;
+            }
+            $select->execute([$node['node_id']]);
+            foreach ($select->fetchAll(PDO::FETCH_ASSOC) as $e) {
+                if ($e['from_port'] === $work) {
+                    $move->execute([$e['id']]);
+                } else {
+                    $drop->execute([$e['id']]);
+                }
+            }
+            $config->execute([$node['node_id']]);
+            $cfg = json_decode((string) $config->fetchColumn(), true) ?: [];
+            unset($cfg['start_option']);
+            $save->execute([json_encode($cfg), $node['node_id']]);
+        }
     }
 
     /**
