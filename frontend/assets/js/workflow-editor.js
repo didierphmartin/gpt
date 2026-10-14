@@ -9095,7 +9095,7 @@ class WorkflowEditor {
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
                             <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
-                        <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3"></textarea></div>
+                        <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3" style="width:100%;box-sizing:border-box;"></textarea></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
