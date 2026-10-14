@@ -192,4 +192,22 @@ final class CodeComponentStartOptionTest extends TestCase
         $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
         $this->assertSame('not_found', $this->error(fn() => $this->store->scheduleBody(4, ['trigger_component_id' => $this->id]))->kind);
     }
+
+    /** Final review 4: editing the option's watch reaches the schedules already using it, and only those. */
+    public function testEditingTheWatchUpdatesTheSchedulesUsingTheOption(): void
+    {
+        $this->seedTwoWorkflows();
+        $other = $this->store->save(3, null, ['name' => 'Poll Archive'] + CodeComponentStoreTest::POLL)['id'];
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, event_trigger, trigger_component_id, status)
+            VALUES (3, 66, 'event', '{}', {$other}, 'pending')");
+        $t = self::TRIGGER;
+        $t['watch']['args'] = ['args' => ['folder' => 'Archive']];
+        $this->store->setStartTrigger(3, $this->id, $t);
+        $rows = $this->db->query('SELECT user_id, workflow_id, event_trigger FROM scheduled_workflows ORDER BY workflow_id')->fetchAll();
+        $by = array_column($rows, 'event_trigger', 'workflow_id');
+        $this->assertSame('{"server":"Outlook","tool":"wait_for_new","args":{"args":{"folder":"Archive"}}}', $by[64]);
+        $this->assertNull($by[65]);
+        $this->assertSame('{}', $by[66]);   // another component's schedule
+        $this->assertSame('{}', $by[99]);   // another user's schedule
+    }
 }

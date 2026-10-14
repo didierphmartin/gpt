@@ -124,8 +124,25 @@ final class CodeComponentStore
     {
         $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         $t = self::validateStartTrigger($c, $trigger);
-        $this->db->prepare('UPDATE code_components SET start_trigger = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
-            ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
+        $outer = !$this->db->inTransaction();
+        if ($outer) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $this->db->prepare('UPDATE code_components SET start_trigger = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+                ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
+            // the schedules already on this option carry a copy of its watch: an edit reaches them too
+            $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE user_id = ? AND trigger_component_id = ?')
+                ->execute([ScheduledWorkflowService::eventTrigger(json_encode($t['watch'])), $userId, $id]);
+            if ($outer) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($outer && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
         return $this->get($userId, $id);
     }
 
