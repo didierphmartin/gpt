@@ -155,6 +155,7 @@ CREATE TABLE `code_components` (
   `exits` json NOT NULL,
   `mcp_servers` json NOT NULL,
   `timeout_s` smallint UNSIGNED NOT NULL DEFAULT 30,
+  `start_trigger` text DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -647,6 +648,7 @@ CREATE TABLE `scheduled_workflows` (
   `repeat_interval` int DEFAULT '1',
   `cron` varchar(100) DEFAULT NULL,
   `event_trigger` text,
+  `trigger_component_id` int UNSIGNED DEFAULT NULL,
   `last_run` datetime DEFAULT NULL,
   `next_run` datetime DEFAULT NULL,
   `running_since` datetime DEFAULT NULL,

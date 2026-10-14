@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\CodeComponent;
 
 use AgentTeam\Services\CodeNodeEmit;
+use AgentTeam\Services\ScheduledWorkflowService;
 use PDO;
 
 /**
@@ -13,7 +14,8 @@ use PDO;
 final class CodeComponentStore
 {
     private const NAME_MAX = 191;
-    private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, updated_at';
+    private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, updated_at';
+    private const LABEL_MAX = 60;
 
     public function __construct(private readonly PDO $db) {}
 
@@ -60,6 +62,17 @@ final class CodeComponentStore
         } elseif ($clash !== null && $clash['id'] !== $id) {
             throw new CodeComponentError('name_taken', "A code component named \"{$c['name']}\" already exists.", 409);
         }
+        if ($before !== null && $before['start_trigger'] !== null) {
+            $t = $before['start_trigger'];
+            if (!in_array($t['work_exit'], $c['exits'], true)) {
+                throw new CodeComponentError('start_exit',
+                    "Exit \"{$t['work_exit']}\" starts workflows: keep it or change the Start option first.", 422);
+            }
+            if (!in_array($t['watch']['server'], $c['mcp_servers'], true)) {
+                throw new CodeComponentError('start_exit',
+                    "MCP server \"{$t['watch']['server']}\" starts workflows: keep it or change the Start option first.", 422);
+            }
+        }
         $vals = [$c['name'], $c['description'], $c['code'], json_encode($c['exits']), json_encode($c['mcp_servers']), $c['timeout_s']];
         if ($id === null) {
             $this->db->prepare('INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, created_at, updated_at)
@@ -100,6 +113,26 @@ final class CodeComponentStore
             throw new CodeComponentError('in_use', 'This code component is used by ' . implode(', ', $names) . '.', 409);
         }
         $this->db->prepare('DELETE FROM code_components WHERE id = ? AND user_id = ?')->execute([$id, $userId]);
+    }
+
+    /** Make the component a Start option (spec §1); the trigger is validated against the component. */
+    public function setStartTrigger(int $userId, int $id, array $trigger): array
+    {
+        $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        $t = self::validateStartTrigger($c, $trigger);
+        $this->db->prepare('UPDATE code_components SET start_trigger = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+            ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
+        return $this->get($userId, $id);
+    }
+
+    /** The option's watch, as an event schedule stores it: {server, tool, args}. */
+    public function watchFor(int $userId, int $id): array
+    {
+        $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        if ($c['start_trigger'] === null) {
+            throw new CodeComponentError('not_option', "\"{$c['name']}\" is not a Start option.", 422);
+        }
+        return $c['start_trigger']['watch'];
     }
 
     /**
@@ -216,11 +249,36 @@ final class CodeComponentStore
             'exits' => array_values($exits), 'mcp_servers' => array_values($servers), 'timeout_s' => $timeout];
     }
 
+    /** {label, watch: {server, tool, args}, work_exit} against the component; args stay a JSON object. */
+    private static function validateStartTrigger(array $c, array $t): array
+    {
+        $bad = fn(string $why) => throw new CodeComponentError('invalid', $why, 422);
+        $label = trim((string) ($t['label'] ?? ''));
+        $label = $label === '' ? $c['name'] : $label;
+        if (mb_strlen($label) > self::LABEL_MAX) {
+            $bad('The option label is at most ' . self::LABEL_MAX . ' characters.');
+        }
+        try {   // the shape an event schedule accepts (ScheduledWorkflowService::eventTrigger), normalised
+            $watch = json_decode(ScheduledWorkflowService::eventTrigger($t['watch'] ?? null));
+        } catch (\InvalidArgumentException $e) {
+            $bad($e->getMessage());
+        }
+        if (!in_array($watch->server, $c['mcp_servers'], true)) {
+            $bad("MCP server \"{$watch->server}\" is not one of this component's servers.");
+        }
+        $exit = (string) ($t['work_exit'] ?? '');
+        if (!in_array($exit, $c['exits'], true)) {
+            $bad("Exit \"{$exit}\" is not one of this component's exits.");
+        }
+        return ['label' => $label, 'watch' => $watch, 'work_exit' => $exit];
+    }
+
     private function row(array $r): array
     {
         return ['id' => (int) $r['id'], 'name' => (string) $r['name'], 'description' => (string) ($r['description'] ?? ''),
             'code' => (string) $r['code'], 'exits' => json_decode((string) $r['exits'], true) ?: [],
             'mcp_servers' => json_decode((string) $r['mcp_servers'], true) ?: [], 'timeout_s' => (int) $r['timeout_s'],
+            'start_trigger' => ($r['start_trigger'] ?? null) ? json_decode((string) $r['start_trigger'], true) : null,
             'updated_at' => $r['updated_at']];
     }
 }
