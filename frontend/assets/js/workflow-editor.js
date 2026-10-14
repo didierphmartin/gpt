@@ -9047,7 +9047,7 @@ class WorkflowEditor {
     }
 
     /**
-     * The code node's window, tabbed like the agent form: Settings (name, template, exits, timeout),
+     * The code node's window, tabbed like the agent form: Settings (name, exits, timeout),
      * Code (the code, a test input and Test, which runs the node in Pyodide), MCP Servers (the
      * user's servers as checkboxes; call_tool may reach any tool on a checked one), and the last
      * run's Input, Output and Logs -- the agent tabs' own renderers over nodeExecutionData.
@@ -9084,9 +9084,6 @@ class WorkflowEditor {
                     ${pane('settings', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text"></div>
                         <div data-f="descwrap" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('codeLibrary.description'))}</label><input data-f="description" type="text"></div>
-                        <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
-                            <select data-f="template"><option value="">— keep current code —</option>
-                                ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                         <div data-f="connect" class="storage-config-folder full" style="display:contents;"></div>
@@ -9249,18 +9246,6 @@ class WorkflowEditor {
             f('result').style.color = isError ? '#b91c1c' : '';
             f('result').style.fontWeight = isError ? '600' : '';
         };
-        f('template').addEventListener('change', () => {
-            const t = CN.TEMPLATES[f('template').value];
-            if (!t) return;
-            f('code').value = t.code; f('exits').value = CN.exitsText(t.exits);
-            // The template's servers, by slug, among the user's own.
-            checked = new Set(servers.filter((m) => t.servers.includes(CN.slug(m.name))).map((m) => m.name));
-            renderServers();
-            const missing = t.servers.filter((sl) => !servers.some((m) => CN.slug(m.name) === sl));
-            show(missing.length ? `This template calls ${missing.join(', ')}: add an MCP server with that name in Settings → MCP Servers.` : '');
-            refreshConnect();
-            callArgs.refresh();
-        });
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
