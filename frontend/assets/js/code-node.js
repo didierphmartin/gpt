@@ -10,6 +10,8 @@
     const EXIT_RE = /^[a-z][a-z0-9_]{0,31}$/;
 
     // Templates name the servers they need by slug; picking one checks the user's servers with that slug.
+    // trigger: the exit that carries work -- the template can start a workflow (Start's "Poll a source").
+    // call: the tool call whose literal argument dict the form edits (one field per key, typed by its default).
     const TEMPLATES = {
         blank: {
             label: 'Blank (pass-through)',
@@ -34,6 +36,7 @@
             label: 'Example: poll ServiceNow jobs',
             exits: ['job', 'no_job', 'error'],
             servers: ['servicenow'],
+            trigger: 'job',
             code: [
                 'def run(input, call_tool):',
                 '    # Oldest open, unclaimed SynergyAI task (optionally: {"tag": "okta-reset"}).',
@@ -49,6 +52,8 @@
             label: 'Poll Outlook (new email)',
             exits: ['new_mail', 'no_mail', 'error'],
             servers: ['outlook'],
+            trigger: 'new_mail',
+            call: { server: 'outlook', tool: 'poll_new_mail', args: { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false } },
             code: [
                 'def run(input, call_tool):',
                 '    # The next unseen email in the folder that matches the filters, or None.',
@@ -77,39 +82,57 @@
         return String(serverName).replace(/[^a-z0-9]+/gi, '_').toLowerCase();
     }
 
-    // The Poll Outlook template's poll_new_mail argument dict, and its default filters.
-    const OUTLOOK_ARGS_RE = /(call_tool\("outlook",\s*"poll_new_mail",\s*)\{([\s\S]*?)\n\s*\}\)/;
-    const OUTLOOK_DEFAULTS = { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false };
-    const OUTLOOK_LINE_RE = /^\s*"(\w+)":\s*("(?:[^"\\]|\\.)*"|True|False),?\s*$/;
+    const reEscape = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    /** call_tool("<server>", "<tool>", {...}) in the code: group 1 the head, group 2 the dict's lines. */
+    const callRe = (call) => new RegExp(`(call_tool\\("${reEscape(call.server)}",\\s*"${reEscape(call.tool)}",\\s*)\\{([\\s\\S]*?)\\n\\s*\\}\\)`);
+    const ARG_LINE_RE = /^\s*"(\w+)":\s*("(?:[^"\\]|\\.)*"|True|False),?\s*$/;
 
-    /**
-     * The filters in the code's poll_new_mail dict, when the dict is exactly what the form writes:
-     * the four keys, each once, each a literal of its type. null otherwise -- no dict, or a dict
-     * edited by hand (an extra key, a variable, ...): the form then leaves the code alone (spec §5).
-     */
-    function readOutlookArgs(code) {
-        const m = String(code || '').match(OUTLOOK_ARGS_RE);
-        if (!m) return null;
-        const out = {};
-        for (const line of m[2].split('\n').filter((l) => l.trim())) {
-            const v = line.match(OUTLOOK_LINE_RE);
-            if (!v || !(v[1] in OUTLOOK_DEFAULTS) || v[1] in out) return null;
-            const isBool = v[2] === 'True' || v[2] === 'False';
-            if (isBool !== (typeof OUTLOOK_DEFAULTS[v[1]] === 'boolean')) return null;
-            try { out[v[1]] = isBool ? v[2] === 'True' : JSON.parse(v[2]); } catch (_) { return null; }
-        }
-        return Object.keys(out).length === Object.keys(OUTLOOK_DEFAULTS).length ? out : null;
+    /** Does the code call this template call's tool at all (form-shaped dict or not)? */
+    function hasCall(code, call) {
+        return !!call && String(code || '').includes(`call_tool("${call.server}", "${call.tool}"`);
     }
 
     /**
-     * The Poll Outlook form's filters written into the code's poll_new_mail argument dict.
-     * null when the form does not own that dict (readOutlookArgs): the code is left alone.
+     * The values in the code's argument dict for `call`, when the dict is exactly what the form writes:
+     * the call's keys, each once, each a literal of its default's type. null otherwise -- no dict, or a
+     * dict edited by hand (an extra key, a variable, ...): the form then leaves the code alone.
      */
-    function outlookArgs(code, args) {
-        if (readOutlookArgs(code) === null) return null;
+    function readCallArgs(code, call) {
+        const m = call && String(code || '').match(callRe(call));
+        if (!m) return null;
+        const defaults = call.args || {};
+        const out = {};
+        for (const line of m[2].split('\n').filter((l) => l.trim())) {
+            const v = line.match(ARG_LINE_RE);
+            if (!v || !(v[1] in defaults) || v[1] in out) return null;
+            const isBool = v[2] === 'True' || v[2] === 'False';
+            if (isBool !== (typeof defaults[v[1]] === 'boolean')) return null;
+            try { out[v[1]] = isBool ? v[2] === 'True' : JSON.parse(v[2]); } catch (_) { return null; }
+        }
+        return Object.keys(out).length === Object.keys(defaults).length ? out : null;
+    }
+
+    /** The form's values written into the code's dict for `call`; null when the form does not own that dict. */
+    function writeCallArgs(code, call, values) {
+        if (readCallArgs(code, call) === null) return null;
+        const defaults = call.args || {};
         const py = (v) => (typeof v === 'boolean' ? (v ? 'True' : 'False') : JSON.stringify(String(v)));
-        const body = Object.keys(OUTLOOK_DEFAULTS).map((k) => `        "${k}": ${py(args[k] ?? OUTLOOK_DEFAULTS[k])},`).join('\n');
-        return code.replace(OUTLOOK_ARGS_RE, (_, head) => `${head}{\n${body}\n    })`);
+        const body = Object.keys(defaults).map((k) => `        "${k}": ${py(values[k] ?? defaults[k])},`).join('\n');
+        return code.replace(callRe(call), (_, head) => `${head}{\n${body}\n    })`);
+    }
+
+    /** The template whose call the code makes, or null: the form's argument fields follow it. */
+    function callTemplate(code) {
+        return Object.values(TEMPLATES).find((t) => hasCall(code, t.call)) || null;
+    }
+
+    // A server that signs in a user implements these tools; connect_status names the header for its key.
+    const CONNECT_TOOLS = ['connect_start', 'connect_status', 'whoami'];
+
+    /** Does a server's tools/list answer offer the connect contract? */
+    function isConnectable(toolNames) {
+        const have = new Set(toolNames || []);
+        return CONNECT_TOOLS.every((n) => have.has(n));
     }
 
     function validateConfig(cfg) {
@@ -149,8 +172,8 @@
     }
 
     /**
-     * Start's children (other than code nodes) the Connect to Outlook shortcut moves behind the poll's
-     * work exit, so they run only when the poll found something: [{node, input}] with their input port.
+     * Start's children (other than code nodes) the Poll a source shortcut moves behind the poll's
+     * trigger exit, so they run only when the poll found something: [{node, input}] with their input port.
      */
     function startChildrenToMove(startId, nodes, kindOf) {
         if (startId == null) return [];
@@ -321,6 +344,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, outlookArgs, readOutlookArgs, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, startChildrenToMove,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor, startChildrenToMove,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
 });

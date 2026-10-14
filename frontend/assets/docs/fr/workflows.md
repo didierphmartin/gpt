@@ -15,6 +15,8 @@ Deux modes d'exécution :
 - **À la demande** — cliquez sur « Exécuter » depuis l'éditeur ou la barre latérale.
 - **Planifiée** — planifications cron-style (par exemple, chaque jour ouvré à 9 h).
 
+Seuls les nœuds connectés à **Start** s'exécutent. Un nœud laissé sans connexion sur le canevas est ignoré : vous pouvez le garder de côté et comparer une exécution avec et sans lui.
+
 ## Sorties
 
 Les sorties peuvent s'afficher de deux manières :
@@ -41,7 +43,48 @@ Tout workflow peut être **compilé en application Python autonome**. Le script 
 ## Types de nœuds
 
 - **Agent** — exécute un appel LLM avec des instructions spécifiques.
+- **Dispatcher** — un agent de type *Dispatcher* : envoie chaque demande à exactement une des branches connectées après lui (voir plus bas).
 - **Appel d'outil** — invoque un outil intégré ou un outil de serveur MCP.
 - **Document** — joint des PDF, documents Office, etc., comme contexte.
 - **Schéma** — applique un schéma JSON pour contraindre la forme de la sortie.
 - **Sortie** — écrit les résultats en ligne, dans un fichier, ou les deux.
+
+## Nœud dispatcher
+
+Un dispatcher lit la demande et l'envoie à **une seule** des branches connectées après lui. Les autres branches ne s'exécutent pas. Usage typique : un classificateur de courriels avec des branches comme *claims*, *information* et *Miscellaneous*.
+
+### Ce qu'il faut régler dans le formulaire du dispatcher
+
+Ouvrez le dispatcher avec son crayon ✏️ :
+
+- **Type** — *Dispatcher*.
+- **Routage** — qui choisit la branche :
+  - un **modèle de décision** (p. ex. *Jev*) : très rapide et peu coûteux, il ne peut répondre qu'avec l'une de vos branches. S'il n'est pas sûr, il le dit au lieu de deviner.
+  - **LLM** : le modèle du dispatcher choisit et peut ajouter des notes pour la branche choisie.
+  - **Par défaut** : le premier modèle de décision autorisé par votre forfait, sinon le LLM.
+- **Branche fourre-tout** (modèle de décision seulement) — la branche qui reçoit tout message ne correspondant à aucune catégorie : le modèle n'est pas sûr, ou sa confiance est sous le minimum. Choisissez n'importe quelle branche connectée, quel que soit son nom (*Miscellaneous*, *Autres*, *À revoir*…). Avec **Aucune**, ces messages arrêtent l'exécution comme *Non classé*.
+- **Confiance minimale** (modèle de décision seulement, 0,6 par défaut) — en dessous, la réponse n'est pas jugée fiable et le message va à la branche fourre-tout. Baissez-la si des demandes claires manquent leur branche.
+- **Description** — indiquez au modèle de décision ce que traite chaque branche, p. ex. *« claims : sinistres et dommages ; information : questions sur nos services ; Miscellaneous : tout le reste »*. C'est ce qui améliore le plus la précision.
+
+### Branches
+
+- Chaque branche est un nœud connecté **après** le dispatcher, choisi par son **nom** : donnez des noms qui disent ce qu'elle traite.
+- Gardez **une seule** branche fourre-tout : deux branches signifiant « tout le reste » se partagent les restes.
+- N'appelez pas une branche *unclear* : ce mot est réservé à la réponse « je ne sais pas » du modèle de décision.
+- Connectez chaque branche à **Output**, sinon sa réponse n'atteint jamais la conversation.
+- Une branche peut être un agent ou un nœud **Code**. Un agent reçoit la demande avec les notes du dispatcher ; un nœud Code reçoit exactement ce que le dispatcher a reçu (par exemple l'e-mail d'un sondage), pour que son code puisse utiliser les champs de l'e-mail comme `id`.
+
+### Sur le canevas
+
+- **1 sur N** sur le dispatcher — une seule branche s'exécutera.
+- Le badge du dispatcher indique qui route (p. ex. **Jev**, ou le fournisseur LLM).
+- **fourre-tout** marque la branche fourre-tout ; **⚠ pas de fourre-tout** signale que les messages non classés s'arrêtent à ce dispatcher.
+- Après une exécution, la branche choisie affiche sa sortie et ses journaux ; les autres sont grisées comme **ignorées**.
+
+### Résultats
+
+- **Routé** — une branche s'exécute.
+- **Non classé** — aucune branche ne convient et il n'y a pas de fourre-tout : l'exécution s'arrête là, normalement (ce n'est pas une erreur).
+- **Erreur** — le modèle de décision est injoignable (pas de clé, réseau). L'exécution s'arrête et indique pourquoi.
+
+Recompilez un workflow compilé (Python) après avoir modifié ces réglages.

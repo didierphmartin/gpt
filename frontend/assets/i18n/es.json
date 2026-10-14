@@ -770,23 +770,23 @@
       "save": "Guardar",
       "run": "Ejecutar Workflow"
     },
-    "outlook": {
-      "connect": "Conectar con Outlook",
-      "reconnect": "Volver a conectar con Outlook",
+    "connect": {
+      "connect": "Conectar",
+      "reconnect": "Volver a conectar",
       "connected": "● Conectado: {{account}}",
       "notConnected": "Sin conexión",
-      "reconnectNeeded": "Debe volver a conectar el buzón.",
-      "checkServer": "Marque el servidor de Outlook en la pestaña Servidores MCP.",
+      "reconnectNeeded": "Debe volver a conectar la cuenta.",
       "deviceCode": "Vaya a {{url}} e introduzca {{code}}",
       "useRedirect": "Su organización bloquea el inicio de sesión con código. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Inicie sesión aquí</a>.",
+      "orBrowser": "O <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">inicie sesión en el navegador</a>.",
+      "useRedirectAfter": "El inicio de sesión con código no terminó ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Inicie sesión en el navegador</a>.",
       "failed": "La conexión falló ({{status}}). Inténtelo de nuevo.",
-      "folder": "Carpeta",
-      "from": "De (opcional)",
-      "subject": "El asunto contiene (opcional)",
-      "hasAttachments": "Solo con adjuntos",
-      "startShortcut": "Conectar con Outlook",
-      "needServer": "Primero añada el servidor MCP de Outlook en Servidores MCP y guarde el flujo.",
-      "handEdited": "Estos filtros se editaron en el código: cámbielos allí."
+      "noHeader": "el servidor no indicó qué cabecera lleva su clave de conexión",
+      "callArgs": "Argumentos de {{tool}}",
+      "handEdited": "Estos argumentos se editaron en el código: cámbielos allí.",
+      "pollLabel": "Consultar una fuente",
+      "pollAdd": "Añadir",
+      "needServer": "Primero añada el/los servidor(es) MCP {{servers}} en Servidores MCP y guarde el flujo."
     },
     "schedule": {
       "title": "Programar Ejecución",

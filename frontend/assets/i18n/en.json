@@ -770,23 +770,23 @@
       "save": "Save",
       "run": "Run Workflow"
     },
-    "outlook": {
-      "connect": "Connect to Outlook",
-      "reconnect": "Reconnect to Outlook",
+    "connect": {
+      "connect": "Connect",
+      "reconnect": "Reconnect",
       "connected": "● Connected: {{account}}",
       "notConnected": "Not connected",
-      "reconnectNeeded": "The mailbox must be connected again.",
-      "checkServer": "Check the Outlook server in the MCP Servers tab.",
+      "reconnectNeeded": "The account must be connected again.",
       "deviceCode": "Go to {{url}} and enter {{code}}",
       "useRedirect": "Your organisation blocks code sign-in. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in here instead</a>.",
+      "orBrowser": "Or <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">sign in in the browser</a>.",
+      "useRedirectAfter": "Code sign-in did not finish ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in in the browser instead</a>.",
       "failed": "Connection failed ({{status}}). Try again.",
-      "folder": "Folder",
-      "from": "From (optional)",
-      "subject": "Subject contains (optional)",
-      "hasAttachments": "Only with attachments",
-      "startShortcut": "Connect to Outlook",
-      "needServer": "Add the Outlook MCP server under MCP Servers first, and save the workflow.",
-      "handEdited": "These filters were edited in the code: change them there."
+      "noHeader": "the server did not say which header carries its connection key",
+      "callArgs": "Arguments of {{tool}}",
+      "handEdited": "These arguments were edited in the code: change them there.",
+      "pollLabel": "Poll a source",
+      "pollAdd": "Add",
+      "needServer": "Add the MCP server(s) {{servers}} under MCP Servers first, and save the workflow."
     },
     "schedule": {
       "title": "Schedule Execution",

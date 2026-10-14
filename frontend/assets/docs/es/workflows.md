@@ -15,6 +15,8 @@ Dos modos de ejecución:
 - **Bajo demanda** — haz clic en «Ejecutar» desde el editor o la barra lateral.
 - **Programado** — programación tipo cron (por ejemplo, todos los días laborables a las 9:00).
 
+Solo se ejecutan los nodos conectados a **Start**. Un nodo sin conexiones en el lienzo se ignora: puedes dejarlo a un lado y comparar una ejecución con y sin él.
+
 ## Salidas
 
 Las salidas se pueden mostrar de dos maneras:
@@ -41,7 +43,48 @@ Cualquier workflow puede **compilarse en una aplicación Python independiente**.
 ## Tipos de nodo
 
 - **Agente** — ejecuta una llamada LLM con instrucciones específicas.
+- **Dispatcher** — un agente de tipo *Dispatcher*: envía cada solicitud a exactamente una de las ramas conectadas después de él (ver más abajo).
 - **Llamada a herramienta** — invoca una herramienta integrada o de servidor MCP.
 - **Documento** — adjunta PDFs, documentos Office, etc., como contexto.
 - **Esquema** — aplica un esquema JSON para restringir la forma de la salida.
 - **Salida** — escribe los resultados en línea, en un archivo o en ambos.
+
+## Nodo dispatcher
+
+Un dispatcher lee la solicitud y la envía a **uno** de los nodos conectados después de él — sus *ramas*. Las demás ramas no se ejecutan. Uso típico: un clasificador de correos con ramas como *claims*, *information* y *Miscellaneous*.
+
+### Qué configurar en el formulario del dispatcher
+
+Abre el dispatcher con su lápiz ✏️:
+
+- **Tipo** — *Dispatcher*.
+- **Enrutamiento** — quién elige la rama:
+  - un **modelo de decisión** (p. ej. *Jev*): muy rápido y económico, y solo puede responder con una de tus ramas. Si no está seguro, lo dice en lugar de adivinar.
+  - **LLM**: el propio modelo del dispatcher elige y puede añadir notas para la rama elegida.
+  - **Por defecto**: el primer modelo de decisión que permite tu plan; si no, el LLM.
+- **Rama por defecto** (solo modelo de decisión) — la rama que recibe todo mensaje que no encaja en ninguna categoría: el modelo no está seguro o su confianza es inferior al mínimo. Elige cualquier rama conectada, sea cual sea su nombre (*Miscellaneous*, *Otros*, *A revisar*…). Con **Ninguna**, esos mensajes detienen la ejecución como *Sin clasificar*.
+- **Confianza mínima** (solo modelo de decisión, 0.6 por defecto) — por debajo, la respuesta no se considera fiable y el mensaje va a la rama por defecto. Bájala si solicitudes claras no llegan a su rama.
+- **Descripción** — indica al modelo de decisión qué gestiona cada rama, p. ej. *"claims: reclamaciones y daños; information: preguntas sobre nuestros servicios; Miscellaneous: todo lo demás"*. Es lo que más mejora la precisión.
+
+### Ramas
+
+- Cada rama es un nodo conectado **después** del dispatcher, elegido por su **nombre**: usa nombres que digan lo que gestiona.
+- Mantén **una sola** rama por defecto: dos ramas que significan "todo lo demás" se reparten los restos.
+- No llames a una rama *unclear*: esa palabra está reservada a la respuesta "no lo sé" del modelo de decisión.
+- Conecta cada rama a **Output**; si no, su respuesta nunca llega a la conversación.
+- Una rama puede ser un agente o un nodo **Code**. Un agente recibe la solicitud con las notas del dispatcher; un nodo Code recibe exactamente lo que recibió el dispatcher (por ejemplo el correo de un sondeo), para que su código pueda usar los campos del correo como `id`.
+
+### En el lienzo
+
+- **1 de N** en el dispatcher — solo se ejecuta una rama.
+- La insignia del dispatcher indica quién enruta (p. ej. **Jev**, o el proveedor LLM).
+- **por defecto** marca la rama por defecto; **⚠ sin rama por defecto** avisa de que los mensajes sin clasificar se detienen en este dispatcher.
+- Tras una ejecución, la rama elegida muestra su salida y sus registros; las demás aparecen en gris como **omitidas**.
+
+### Resultados
+
+- **Enrutado** — se ejecuta una rama.
+- **Sin clasificar** — ninguna rama encaja y no hay rama por defecto: la ejecución termina ahí, con normalidad (no es un error).
+- **Error** — no se pudo contactar con el modelo de decisión (sin clave, red). La ejecución se detiene e indica el motivo.
+
+Recompila un workflow compilado (Python) tras cambiar estos ajustes.

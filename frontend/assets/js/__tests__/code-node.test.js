@@ -194,32 +194,50 @@ assert.ok(po.code.includes('poll_new_mail'));
 assert.ok(!po.code.includes('get_attachment'), 'the template must never open attachments');
 assert.strictEqual(CN.validateConfig({ code: po.code, exits: po.exits, mcp_servers: ['Outlook'], timeout_s: 30 }).length, 0);
 
-const rewritten = CN.outlookArgs(po.code, { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+// The form edits a template's declared call: one field per argument, by the template's data, not its name.
+const call = po.call;
+assert.strictEqual(CN.callTemplate(po.code), po, 'the code names the template whose call it makes');
+assert.strictEqual(CN.callTemplate('def run(input, call_tool):\n    return 1\n'), null);
+const rewritten = CN.writeCallArgs(po.code, call, { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
 assert.ok(rewritten.includes('"folder": "Invoices"'));
 assert.ok(rewritten.includes('"from": "billing@acme.com"'));
 assert.ok(rewritten.includes('"has_attachments": True'));
 assert.ok(rewritten.includes('poll_new_mail'));
-assert.strictEqual(CN.outlookArgs(rewritten, { folder: 'Inbox' }), po.code, 'rewriting back to the defaults restores the template');
-assert.strictEqual(CN.outlookArgs('def run(input, call_tool):\n    return 1\n', { folder: 'X' }), null, 'hand-edited code without the dict is left alone');
-// the form reads the filters back from the code (reopening the node), null when the dict is gone
-assert.deepStrictEqual(CN.readOutlookArgs(rewritten), { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
-assert.deepStrictEqual(CN.readOutlookArgs(po.code), { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false });
-assert.deepStrictEqual(CN.readOutlookArgs(CN.outlookArgs(po.code, { from: 'a "q" \\ b' })).from, 'a "q" \\ b');
-assert.strictEqual(CN.readOutlookArgs('def run(input, call_tool):\n    return 1\n'), null);
-// hand-edited filters (spec §5: the Python stays freely editable): the form leaves them alone
+assert.strictEqual(CN.writeCallArgs(rewritten, call, { folder: 'Inbox' }), po.code, 'rewriting back to the defaults restores the template');
+assert.strictEqual(CN.writeCallArgs('def run(input, call_tool):\n    return 1\n', call, { folder: 'X' }), null, 'hand-edited code without the dict is left alone');
+// the form reads the values back from the code (reopening the node), null when the dict is gone
+assert.deepStrictEqual(CN.readCallArgs(rewritten, call), { folder: 'Invoices', from: 'billing@acme.com', subject_contains: '', has_attachments: true });
+assert.deepStrictEqual(CN.readCallArgs(po.code, call), { folder: 'Inbox', from: '', subject_contains: '', has_attachments: false });
+assert.deepStrictEqual(CN.readCallArgs(CN.writeCallArgs(po.code, call, { from: 'a "q" \\ b' }), call).from, 'a "q" \\ b');
+assert.strictEqual(CN.readCallArgs('def run(input, call_tool):\n    return 1\n', call), null);
+// hand-edited arguments (the Python stays freely editable): the form leaves them alone
 const extraKey = po.code.replace('"has_attachments": False,', '"has_attachments": False,\n        "top": 5,');
-assert.strictEqual(CN.outlookArgs(extraKey, { folder: 'X' }), null, 'an extra key: code unchanged');
-assert.strictEqual(CN.readOutlookArgs(extraKey), null);
+assert.strictEqual(CN.writeCallArgs(extraKey, call, { folder: 'X' }), null, 'an extra key: code unchanged');
+assert.strictEqual(CN.readCallArgs(extraKey, call), null);
+assert.ok(CN.hasCall(extraKey, call), 'still the call: the form says it was edited by hand');
 const nonLiteral = po.code.replace('"from": "",', '"from": sender,');
-assert.strictEqual(CN.outlookArgs(nonLiteral, { folder: 'X' }), null, 'a non-literal value: code unchanged');
-assert.strictEqual(CN.readOutlookArgs(nonLiteral), null);
+assert.strictEqual(CN.writeCallArgs(nonLiteral, call, { folder: 'X' }), null, 'a non-literal value: code unchanged');
+assert.strictEqual(CN.readCallArgs(nonLiteral, call), null);
 const missingKey = po.code.replace('        "subject_contains": "",\n', '');
-assert.strictEqual(CN.outlookArgs(missingKey, { folder: 'X' }), null, 'a missing key: code unchanged');
+assert.strictEqual(CN.writeCallArgs(missingKey, call, { folder: 'X' }), null, 'a missing key: code unchanged');
 const wrongType = po.code.replace('"has_attachments": False', '"has_attachments": "no"');
-assert.strictEqual(CN.outlookArgs(wrongType, { folder: 'X' }), null, 'a value of the wrong type: code unchanged');
-assert.ok(CN.outlookArgs(po.code, { folder: 'X' }).includes('"folder": "X"'), 'the form-shaped dict still rewrites');
-// Connect to Outlook inserts Start -> Poll Outlook: Start's other children move behind the poll's
-// work exit (agents run only when there is mail); code children stay on Start.
+assert.strictEqual(CN.writeCallArgs(wrongType, call, { folder: 'X' }), null, 'a value of the wrong type: code unchanged');
+assert.ok(CN.writeCallArgs(po.code, call, { folder: 'X' }).includes('"folder": "X"'), 'the form-shaped dict still rewrites');
+// any server and tool: nothing is tied to one vendor (names with regex characters included)
+const other = { server: 'my.crm', tool: 'next_lead', args: { queue: 'sales', urgent: false } };
+const otherCode = 'def run(input, call_tool):\n    r = call_tool("my.crm", "next_lead", {\n        "queue": "sales",\n        "urgent": False,\n    })\n    return r\n';
+assert.deepStrictEqual(CN.readCallArgs(otherCode, other), { queue: 'sales', urgent: false });
+assert.deepStrictEqual(CN.readCallArgs(CN.writeCallArgs(otherCode, other, { queue: 'vip', urgent: true }), other), { queue: 'vip', urgent: true });
+assert.strictEqual(CN.readCallArgs(otherCode.replace('my.crm', 'myXcrm'), other), null, 'the server name is matched literally');
+// the connect contract: a server that implements its three tools gets a Connect box
+assert.ok(CN.isConnectable(['whoami', 'connect_start', 'poll_new_mail', 'connect_status']));
+assert.ok(!CN.isConnectable(['connect_start', 'connect_status']), 'whoami missing');
+assert.ok(!CN.isConnectable([]));
+assert.ok(!CN.isConnectable(undefined));
+// trigger templates: the exit that carries work is declared, and is one of the template's exits
+for (const t of Object.values(CN.TEMPLATES).filter((x) => x.trigger)) assert.ok(t.exits.includes(t.trigger), t.label);
+// Poll a source inserts Start -> poll node: Start's other children move behind the poll's
+// trigger exit (agents run only when there is work); code children stay on Start.
 const startNodes = {
     1: { outputs: { output_1: { connections: [{ node: '9', output: 'input_1' }, { node: '2', output: 'input_1' }, { node: '4', output: 'input_2' }] } } },
 };
