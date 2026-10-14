@@ -9280,6 +9280,7 @@ class WorkflowEditor {
                 if (errs.length) { show(errs.join('\n'), true); return; }
                 const name = cfg.name;
                 // A name already in the library: the first click warns, the second replaces it.
+                await CC.cache.load(CC.api()).catch(() => {});   // the clash check needs the library rows
                 const clash = CC.nameClash(name, null);
                 if (clash && overlay.dataset.armed !== name) {
                     overlay.dataset.armed = name;
@@ -9306,6 +9307,7 @@ class WorkflowEditor {
             }
             // Component mode, or a linked node: the collection is written and every linked node follows.
             const compName = node ? comp.name : cfg.name;
+            if (!comp?.id) await CC.cache.load(CC.api()).catch(() => {});
             if (!comp?.id && CC.nameClash(compName, null) && overlay.dataset.armed !== compName) {
                 overlay.dataset.armed = compName;
                 show(this.t('codeLibrary.replacesConfirm', { name: compName }), true);
