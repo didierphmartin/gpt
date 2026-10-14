@@ -422,6 +422,9 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->put('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'update']);
         $r->delete('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'destroy']);
         $r->get('/api/v1/code-components/{id:\d+}/used-by', ['CodeComponentsController', 'usedBy']);
+        $r->put('/api/v1/code-components/{id:\d+}/start-option', ['CodeComponentsController', 'setStartOption']);
+        $r->get('/api/v1/code-components/{id:\d+}/start-option/impact', ['CodeComponentsController', 'startOptionImpact']);
+        $r->delete('/api/v1/code-components/{id:\d+}/start-option', ['CodeComponentsController', 'clearStartOption']);
         $r->get('/api/v1/robot', ['RobotController', 'show']);
         $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);

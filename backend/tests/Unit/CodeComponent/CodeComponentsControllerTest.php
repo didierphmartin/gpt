@@ -53,4 +53,24 @@ final class CodeComponentsControllerTest extends TestCase
         $this->assertSame(404, $this->c->show($this->req([], ['id' => $id]))['status_code']);
         $this->assertSame(404, $this->c->usedBy($this->req([], ['id' => $id]))['status_code']);
     }
+
+    public function testStartOptionRoundTrip(): void
+    {
+        $id = $this->c->create($this->req(CodeComponentStoreTest::POLL))['data']['id'];
+        $set = $this->c->setStartOption($this->req(CodeComponentStartOptionTest::TRIGGER, ['id' => $id]));
+        $this->assertTrue($set['success']);
+        $this->assertSame('New email', $set['data']['start_trigger']['label']);
+        $this->assertSame([], $this->c->startOptionImpact($this->req([], ['id' => $id]))['data']);
+        $del = $this->c->destroy($this->req([], ['id' => $id]));
+        $this->assertSame(['is_option', 409], [$del['kind'], $del['status_code']]);
+        $this->assertSame([], $this->c->clearStartOption($this->req([], ['id' => $id]))['data']);
+        $this->assertTrue($this->c->destroy($this->req([], ['id' => $id]))['success']);
+    }
+
+    public function testABadStartOptionIs422(): void
+    {
+        $id = $this->c->create($this->req(CodeComponentStoreTest::POLL))['data']['id'];
+        $r = $this->c->setStartOption($this->req(['work_exit' => 'job'] + CodeComponentStartOptionTest::TRIGGER, ['id' => $id]));
+        $this->assertSame([false, 'invalid', 422], [$r['success'], $r['kind'], $r['status_code']]);
+    }
 }

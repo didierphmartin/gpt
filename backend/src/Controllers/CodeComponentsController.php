@@ -51,6 +51,24 @@ final class CodeComponentsController
             'data' => $this->store->usedBy($u, $this->found($u, $request)['id'])]);
     }
 
+    public function setStartOption(array $request): array
+    {
+        return $this->guard($request, fn(int $u) => ['success' => true,
+            'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request))]);
+    }
+
+    public function startOptionImpact(array $request): array
+    {
+        return $this->guard($request, fn(int $u) => ['success' => true,
+            'data' => $this->store->startTriggerImpact($u, $this->found($u, $request)['id'])]);
+    }
+
+    public function clearStartOption(array $request): array
+    {
+        return $this->guard($request, fn(int $u) => ['success' => true,
+            'data' => $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0))]);
+    }
+
     private function found(int $u, array $request): array
     {
         $id = (int) ($request['params']['id'] ?? 0);
