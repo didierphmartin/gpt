@@ -104,8 +104,12 @@ final class CodeComponentStore
 
     public function delete(int $userId, int $id): void
     {
-        if ($this->get($userId, $id) === null) {
+        $c = $this->get($userId, $id);
+        if ($c === null) {
             throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        }
+        if ($c['start_trigger'] !== null) {
+            throw new CodeComponentError('is_option', 'This code component is a Start option: remove the option first.', 409);
         }
         $used = $this->usedBy($userId, $id);
         if ($used !== []) {
@@ -123,6 +127,51 @@ final class CodeComponentStore
         $this->db->prepare('UPDATE code_components SET start_trigger = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
             ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
         return $this->get($userId, $id);
+    }
+
+    /** The user's workflows whose schedule runs on this option, with the linked node's name when there is one. */
+    public function startTriggerImpact(int $userId, int $id): array
+    {
+        $st = $this->db->prepare('SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s
+            JOIN agent_workflows w ON w.id = s.workflow_id
+            WHERE s.user_id = ? AND s.trigger_component_id = ? ORDER BY w.name');
+        $st->execute([$userId, $id]);
+        $nodes = [];
+        foreach ($this->linkedNodes($userId, $id) as $n) {
+            $nodes[$n['workflow_id']] ??= $n['node_name'];
+        }
+        return array_map(fn($r) => ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['name'],
+            'node_name' => $nodes[(int) $r['workflow_id']] ?? null], $st->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    /**
+     * Remove the option: its schedule rows are deleted (a 'none' row would still run once at its time) and the
+     * component stops being an option. Graphs are not touched; their linked nodes stay (spec decision 6).
+     */
+    public function clearStartTrigger(int $userId, int $id): array
+    {
+        if ($this->get($userId, $id) === null) {
+            throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        }
+        $impact = $this->startTriggerImpact($userId, $id);
+        $outer = !$this->db->inTransaction();
+        if ($outer) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $this->db->prepare('DELETE FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?')->execute([$userId, $id]);
+            $this->db->prepare('UPDATE code_components SET start_trigger = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+                ->execute([$id, $userId]);
+            if ($outer) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($outer && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+        return $impact;
     }
 
     /** The option's watch, as an event schedule stores it: {server, tool, args}. */

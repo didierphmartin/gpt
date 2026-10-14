@@ -124,4 +124,47 @@ final class CodeComponentStartOptionTest extends TestCase
         $this->assertSame(90, $row['timeout_s']);
         $this->assertSame('new_mail', $row['start_trigger']['work_exit']);
     }
+
+    /** Workflow 64 uses the option (schedule row + linked node after Start); 65 has only an unrelated schedule. */
+    private function seedTwoWorkflows(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (64, '3', 'email prototype'), (65, '3', 'AA test')");
+        $this->db->exec("INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES
+            (64, 'code', '{\"type\":\"code\",\"name\":\"Email processing\",\"code_component_id\":{$this->id}}')");
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, event_trigger, trigger_component_id, status)
+            VALUES (3, 64, 'event', '{}', {$this->id}, 'pending'), (3, 65, 'cron', NULL, NULL, 'pending'),
+                   (4, 99, 'event', '{}', {$this->id}, 'pending')");
+    }
+
+    public function testImpactNamesTheWorkflowsAndTheirNode(): void
+    {
+        $this->seedTwoWorkflows();
+        $this->assertSame([['workflow_id' => 64, 'workflow_name' => 'email prototype', 'node_name' => 'Email processing']],
+            $this->store->startTriggerImpact(3, $this->id));
+    }
+
+    public function testClearRemovesTheOptionAndOnlyItsScheduleRows(): void
+    {
+        $this->seedTwoWorkflows();
+        $impact = $this->store->clearStartTrigger(3, $this->id);
+        $this->assertSame([64], array_column($impact, 'workflow_id'));
+        $this->assertNull($this->store->get(3, $this->id)['start_trigger']);
+        $left = $this->db->query('SELECT user_id, workflow_id FROM scheduled_workflows ORDER BY workflow_id')->fetchAll();
+        $this->assertSame([['user_id' => 3, 'workflow_id' => 65], ['user_id' => 4, 'workflow_id' => 99]], $left);
+        // the graphs are not touched: the linked node stays (decision 6)
+        $this->assertSame(1, (int) $this->db->query('SELECT COUNT(*) FROM workflow_nodes')->fetchColumn());
+    }
+
+    /** Review focus 2. */
+    public function testAnOptionCannotBeDeletedBeforeItIsRemoved(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $e = $this->error(fn() => $this->store->delete(3, $this->id));
+        $this->assertSame('is_option', $e->kind);
+        $this->assertSame(409, $e->status);
+        $this->store->clearStartTrigger(3, $this->id);
+        $this->store->delete(3, $this->id);
+        $this->assertNull($this->store->get(3, $this->id));
+    }
 }
