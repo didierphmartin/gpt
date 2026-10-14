@@ -9550,6 +9550,14 @@ class WorkflowEditor {
                 this.editor.removeSingleConnection(startId, String(c.node), 'output_1', c.output);
             }
         }
+        // Ticking again reuses the option's node left on the canvas (spec decision 8): Start is reconnected to it.
+        const kept = startId && Object.keys(nodes).find((nid) => nid !== startId && this._wfNodeKind(nid, nodes) === 'code'
+            && Number(nodes[nid]?.data?.code_component_id) === Number(comp.id));
+        if (kept) {
+            this.editor.addConnection(startId, kept, 'output_1', 'input_1');
+            this._workflowDirty = true;
+            return kept;
+        }
         const id = this.addCodeNode((start?.pos_x ?? 100) + 280, start?.pos_y ?? 100, window.CodeComponents.linkedNodeConfig(comp));
         const moved = window.CodeNode.startChildrenToMove(startId, nodes, (nid) => this._wfNodeKind(nid, nodes));
         const workPort = window.CodeNode.portForExit(comp.exits, comp.start_trigger.work_exit);
@@ -9740,7 +9748,9 @@ class WorkflowEditor {
         let meta, toolsFor, start;
         try {
             meta = await this._loadMcpServersMeta();
-            toolsFor = async (name) => this._mcpProxyListTools(meta.find((m) => m.name === name));
+            // the user's own server row first, then any (a global one) with that name
+            toolsFor = async (name) => this._mcpProxyListTools(meta.find((m) => m.name === name && !m.is_global)
+                || meta.find((m) => m.name === name));
             start = comp.start_trigger || window.StartOptions.defaultTrigger(comp, await toolsFor(servers[0]));
         } catch (err) { this.showNotification(err.message, 'error'); return null; }
         const overlay = document.createElement('div');

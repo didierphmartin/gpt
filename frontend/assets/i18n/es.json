@@ -694,7 +694,7 @@
       "remove": "Quitar opción",
       "note_delayOff": "Retraso desactivado: este flujo ahora comienza con el evento.",
       "note_eventOff": "Opción de evento desactivada: este flujo ahora comienza según su programación.",
-      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó."
+      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó. Sus agentes siguen conectados detrás del nodo de esa opción."
     },
     "loadingWorkflow": "Cargando el workflow…",
     "toolbar": {

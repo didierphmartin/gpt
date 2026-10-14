@@ -694,7 +694,7 @@
       "remove": "Remove option",
       "note_delayOff": "Delay is off: this workflow now starts on the event.",
       "note_eventOff": "The event option is off: this workflow now starts on its schedule.",
-      "note_replaced": "Only one event at a time: the other option is off."
+      "note_replaced": "Only one event at a time: the other option is off. Its agents stay connected behind that option's node."
     },
     "loadingWorkflow": "Loading workflow…",
     "toolbar": {

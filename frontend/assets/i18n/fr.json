@@ -694,7 +694,7 @@
       "remove": "Retirer l'option",
       "note_delayOff": "Délai désactivé : ce workflow démarre maintenant sur l'événement.",
       "note_eventOff": "Option d'événement désactivée : ce workflow démarre maintenant selon sa planification.",
-      "note_replaced": "Un seul événement à la fois : l'autre option est désactivée."
+      "note_replaced": "Un seul événement à la fois : l'autre option est désactivée. Ses agents restent connectés derrière le nœud de cette option."
     },
     "loadingWorkflow": "Chargement du workflow…",
     "toolbar": {
