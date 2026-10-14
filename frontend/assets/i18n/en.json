@@ -261,7 +261,9 @@
     "linkedHeader": "Library component \"{{name}}\" · used by {{count}} workflow node(s). Saving changes it everywhere.",
     "missing": "missing",
     "missingTitle": "The linked code component no longer exists",
-    "loadFailed": "Could not load the Code Library; try again."
+    "loadFailed": "Could not load the Code Library; try again.",
+    "optionEdit": "Edit Start option",
+    "optionRemove": "Remove Start option"
   },
   "playbookLibrary": {
     "newPlaybook": "New Playbook",
@@ -680,11 +682,7 @@
       "badJson": "The arguments are not valid JSON.",
       "needsServer": "A Start option needs a component with an MCP server that has a wait tool.",
       "added": "\"{{label}}\" is now a Start option.",
-      "startsOn": "Starts on",
-      "prompt": "Prompt",
-      "delay": "Delay (schedule)",
       "none": "Drop a component from the Code Library on Start to add an option.",
-      "edit": "Edit",
       "warnTitle": "Remove \"{{label}}\" from the Start options?",
       "warnActive": "It is active in {{count}} workflow(s): {{names}}.",
       "warnStops": "These workflows will no longer start on \"{{label}}\". Their event watch stops; they run only from the prompt or a schedule you set.",
@@ -694,7 +692,9 @@
       "remove": "Remove option",
       "note_delayOff": "Delay is off: this workflow now starts on the event.",
       "note_eventOff": "The event option is off: this workflow now starts on its schedule.",
-      "note_replaced": "Only one event at a time: the other option is off. Its agents stay connected behind that option's node."
+      "note_replaced": "Only one event at a time: the other option is off. Its agents stay connected behind that option's node.",
+      "enterPrompt": "Enter Prompt",
+      "setSchedule": "Set Schedule"
     },
     "loadingWorkflow": "Loading workflow…",
     "toolbar": {

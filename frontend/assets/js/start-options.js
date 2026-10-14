@@ -1,7 +1,7 @@
 /**
  * Code components as Start options (spec 2026-10-13 start-trigger-options): the pure parts -- where a drop
- * registers an option, the register dialog's prefill, the Starts-on ticking rules and the removal warning's
- * lines. The editor (workflow-editor.js) does the DOM and the API calls.
+ * registers an option, the register dialog's prefill and the removal warning's lines. The editor
+ * (workflow-editor.js) does the DOM and the API calls.
  */
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -46,17 +46,6 @@
         };
     }
 
-    /** One event option at a time; Delay and an event exclude each other (spec decision 7). */
-    function tick(state, key) {
-        if (key === 'delay') {
-            if (state.delay) return { state: { delay: false, event: state.event }, note: null };
-            return { state: { delay: true, event: null }, note: state.event !== null ? 'eventOff' : null };
-        }
-        if (state.event === key) return { state: { delay: state.delay, event: null }, note: null };
-        const note = state.delay ? 'delayOff' : (state.event !== null ? 'replaced' : null);
-        return { state: { delay: false, event: key }, note };
-    }
-
     /** The removal warning's lines, as i18n keys + params (spec §4). */
     function warning(label, impact) {
         const tail = [{ key: 'workflow.startOptions.warnEverywhere', params: {} },
@@ -71,5 +60,5 @@
         ];
     }
 
-    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, tick, warning };
+    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, warning };
 });

@@ -36,13 +36,6 @@ assert.deepStrictEqual(SO.defaultTrigger({ ...comp, code: 'def run(input, call_t
 // no wait tool, no server
 assert.deepStrictEqual(SO.defaultTrigger({ ...comp, mcp_servers: [] }, []).watch, { server: '', tool: '', args: {} });
 
-// tick -- review focus 5
-assert.deepStrictEqual(SO.tick({ delay: true, event: null }, 7), { state: { delay: false, event: 7 }, note: 'delayOff' });
-assert.deepStrictEqual(SO.tick({ delay: false, event: 7 }, 8), { state: { delay: false, event: 8 }, note: 'replaced' });
-assert.deepStrictEqual(SO.tick({ delay: false, event: 7 }, 7), { state: { delay: false, event: null }, note: null });
-assert.deepStrictEqual(SO.tick({ delay: false, event: 7 }, 'delay'), { state: { delay: true, event: null }, note: 'eventOff' });
-assert.deepStrictEqual(SO.tick({ delay: true, event: null }, 'delay'), { state: { delay: false, event: null }, note: null });
-
 // warning: the active form names workflows and nodes; the idle form keeps the last two lines
 assert.deepStrictEqual(SO.warning('New email', [
     { workflow_name: 'AA test', node_name: 'Email processing' }, { workflow_name: 'email prototype', node_name: null },

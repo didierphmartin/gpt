@@ -177,6 +177,10 @@ class WorkflowEditor {
         this.setupDragAndDrop();
         this.setupDocumentDragDrop();
         this._setupStartOptionDragHighlight();
+        this.container.addEventListener('change', (e) => {
+            const cb = e.target.closest?.('.node-start-options input[data-start]');
+            if (cb) this._onStartTick(cb);
+        });
 
         // Load agents from API (excluding managers)
         await this.loadAgents();
@@ -1519,7 +1523,7 @@ class WorkflowEditor {
         // prompt is what every compiled package bakes in as DEFAULT_PROMPT.
         // They live here beside "Run as a swarm" rather than on the Start node,
         // whose clicks are for running.
-        document.getElementById('workflow-schedule-btn')?.addEventListener('click', () => this.showPromptForm());
+        document.getElementById('workflow-schedule-btn')?.addEventListener('click', () => this.showPromptForm(null, { schedule: true }));
         document.querySelector('.wf-swarm-toggle')?.addEventListener('change', (e) => {
             const wanted = e.target.checked ? 'swarm' : 'workflow';
             if (wanted === 'swarm') {
@@ -2783,8 +2787,10 @@ class WorkflowEditor {
                     e.target.closest('.doc-remove')) {
                     return;
                 }
-                if (e.target.closest('.node-start-schedule')) {
-                    this.showPromptForm();
+                // How it starts, listed on the node: the links open the form; a checkbox acts on its change event.
+                if (e.target.closest('.node-start-options')) {
+                    const open = e.target.closest('[data-start-open]')?.dataset.startOpen;
+                    if (open) this.showPromptForm(null, { schedule: open === 'schedule' });
                     return;
                 }
                 if (this._isSwarm()) {
@@ -3013,7 +3019,7 @@ class WorkflowEditor {
             // The has-a-prompt styling means nothing here, so skip it; the
             // play button stays visible and relabeled to say what it opens.
             if (this._isSwarm()) {
-                node.querySelector('.node-start-schedule')?.remove();
+                node.querySelector('.node-start-options')?.remove();
                 node.classList.remove('has-prompt');
                 if (small) {
                     small.textContent = this.t('workflow.swarmSession.startHint');
@@ -3027,15 +3033,12 @@ class WorkflowEditor {
             }
 
             node.classList.toggle('has-prompt', !!hasPrompt);
-            // The node's way to the prompt/schedule form (the body click opens
-            // the conversation): an option row like the Output node's, created
-            // here so Start nodes built by any template get it.
-            if (!node.querySelector('.node-start-schedule')) {
-                const row = document.createElement('button');
-                row.type = 'button';
-                row.className = 'node-start-schedule';
-                row.innerHTML = `<span class="gen-label">⏱ ${this.escapeHtml(this.t('workflow.batchSession.configureLabel'))}</span>`;
-                node.querySelector('.node-body')?.after(row);
+            // How the workflow starts (Enter Prompt, Set Schedule, Start options), listed under the body (the
+            // body click opens the conversation); created here so Start nodes built by any template get it.
+            if (!node.querySelector('.node-start-options')) {
+                const box = document.createElement('div');
+                box.className = 'node-start-options';
+                node.querySelector('.node-body')?.after(box);
             }
             if (small) {
                 small.textContent = this.t('workflow.batchSession.startHint');
@@ -3046,6 +3049,7 @@ class WorkflowEditor {
                 playBtn.title = this.t('workflow.batchSession.openSession');
             }
         });
+        this._renderStartNodeOptions();
     }
 
     /**
@@ -6728,7 +6732,11 @@ class WorkflowEditor {
     /**
      * Show prompt form overlay for entering/viewing user prompt
      */
-    showPromptForm(callback = null) {
+    /**
+     * The prompt box, with the schedule fields when `schedule` (Start's "Set Schedule"). How the workflow starts is
+     * chosen on the Start node itself (_renderStartNodeOptions); this form holds the prompt and the schedule details.
+     */
+    showPromptForm(callback = null, { schedule: withSchedule = false } = {}) {
         // Remove existing modal if any
         const existingModal = document.getElementById('prompt-form-modal');
         if (existingModal) existingModal.remove();
@@ -6739,9 +6747,9 @@ class WorkflowEditor {
         // Get current schedule data
         const schedule = this.currentSchedule || {};
         const hasSchedule = !!schedule.id;
-        // An active Start option's row is not the Delay schedule: its fields open collapsed (the Starts-on list owns it).
+        // An active Start option's row is not a schedule: saving the schedule fields replaces it (the option goes off).
         const optionActive = !!schedule.trigger_component_id;
-        const scheduleEnabled = !optionActive && (hasSchedule || schedule.enabled);
+        const scheduleEnabled = !!withSchedule;
 
         // Format datetime for input (local time)
         const formatDateTimeLocal = (dateStr) => {
@@ -6775,11 +6783,9 @@ class WorkflowEditor {
                             placeholder="${this.t('workflow.promptForm.placeholder')}"
                         >${this.lastUserPrompt || schedule.input_prompt || ''}</textarea>
 
-                        <div id="starts-on" style="margin-bottom: 12px;"></div>
-
                         <!-- Schedule Section -->
                         <div id="schedule-section" style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f9fafb; display: ${scheduleEnabled ? 'block' : 'none'};">
-                            <!-- The old "Enable scheduled execution" box: hidden, driven by Starts on's Delay row (code still reads it). -->
+                            <!-- The old "Enable scheduled execution" box: hidden, set by how the form opened (code still reads it). -->
                             <div style="display: none; align-items: center; gap: 8px; margin-bottom: 12px;">
                                 <input type="checkbox" id="schedule-enabled" ${scheduleEnabled ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;">
                                 <label for="schedule-enabled" style="font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px;">
@@ -6850,7 +6856,7 @@ class WorkflowEditor {
                                     <div style="font-size:12px; color:#6b7280; margin-top:6px;">${this.escapeHtml(this.t('workflow.schedule.event.hint'))}</div>
                                 </div>
 
-                                ${hasSchedule ? `
+                                ${hasSchedule && !optionActive ? `
                                 <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #e5e7eb;">
                                     <button id="delete-schedule-btn" style="padding: 8px 16px; border: 1px solid #fca5a5; background: #fef2f2; color: #dc2626; border-radius: 6px; cursor: pointer; font-size: 13px;">
                                         ${this.t('workflow.schedule.deleteSchedule')}
@@ -6932,9 +6938,6 @@ class WorkflowEditor {
         }));
         refreshCron();
 
-        // Starts on (spec §4): Prompt, Delay, and the user's Start options; one event at a time.
-        this._renderStartsOn(document.getElementById('starts-on'), scheduleEnabledChk);
-
         // Show save schedule button if enabled
         if (saveScheduleBtn && scheduleEnabledChk.checked) {
             saveScheduleBtn.style.display = 'inline-block';
@@ -6972,6 +6975,8 @@ class WorkflowEditor {
                 const success = await this.saveSchedule(scheduleData);
                 if (success) {
                     modal.remove();
+                    // The row was the option's event: the schedule replaced it.
+                    if (optionActive) this.showNotification(this.t('workflow.startOptions.note_eventOff'), 'info');
                 }
             });
         }
@@ -9571,127 +9576,94 @@ class WorkflowEditor {
         return id;
     }
 
-    /** The Start form's "Starts on" list: Prompt (always), Delay (the schedule fields), then each Start option. */
-    async _renderStartsOn(box, scheduleEnabledChk) {
+    /**
+     * How the workflow starts, listed on the Start node itself (spec §4, revised 2026-10-14): Enter Prompt (always
+     * on), Set Schedule, and every Start option (a code component dropped on a Start node, global to the user).
+     * The boxes show the saved schedule row; clicking "Enter Prompt" / "Set Schedule" opens the form.
+     */
+    _renderStartNodeOptions() {
         const CC = window.CodeComponents;
-        const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
-        await CC.cache.load(CC.api()).catch(() => {});
-        const options = CC.cache.all().filter((c) => c.start_trigger);
-        let state = { delay: !!(scheduleEnabledChk.checked && !this.currentSchedule?.trigger_component_id),
-            event: this.currentSchedule?.trigger_component_id ? Number(this.currentSchedule.trigger_component_id) : null };
+        const boxes = this.container?.querySelectorAll('.workflow-node.start-node:not(.ingestion-start) .node-start-options');
+        if (!boxes?.length) return;
+        if (CC && !this._startOptionsLoaded) {   // the options live in the Code Library cache
+            this._startOptionsLoaded = true;
+            CC.cache.load(CC.api()).then(() => this._renderStartNodeOptions()).catch(() => {});
+        }
+        if (!document.getElementById('start-node-options-style')) {
+            const style = document.createElement('style');
+            style.id = 'start-node-options-style';
+            style.textContent = `.node-start-options { padding: 4px 10px 6px; border-top: 1px solid #e5e7eb; font-size: 12px; }
+                .node-start-options .start-opt-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+                .node-start-options input { margin: 0; cursor: pointer; }
+                .node-start-options .start-opt-open { color: #2563eb; }
+                .node-start-options .start-opt-open:hover { text-decoration: underline; }`;
+            document.head.appendChild(style);
+        }
+        const t = (k) => this.t(`workflow.startOptions.${k}`);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
-        const row = (key, label, sub, checked, menu) => `
-            <label class="flex items-center gap-2 py-1" style="font-size:13px;">
-                <input type="checkbox" data-start="${esc(key)}" ${checked ? 'checked' : ''} ${key === 'prompt' ? 'disabled' : ''}>
-                <span style="font-weight:500;">${esc(label)}</span>
-                ${sub ? `<span class="text-xs text-gray-500 truncate">${esc(sub)}</span>` : ''}
-                ${menu ? `<button type="button" data-start-menu="${esc(key)}" style="margin-left:auto;background:none;border:none;cursor:pointer;">⋮</button>` : ''}
-            </label>`;
-        box.innerHTML = `<div style="font-weight:500;margin-bottom:4px;">${esc(t('startsOn'))}</div>`
-            + row('prompt', t('prompt'), '', true, false)
-            + row('delay', t('delay'), '', state.delay, false)
-            + options.map((c) => row(c.id, c.start_trigger.label, c.name, state.event === c.id, true)).join('')
-            + (options.length ? '' : `<p class="text-xs text-gray-400" style="margin:4px 0 0;">${esc(t('none'))}</p>`)
-            + '<div data-start-msg class="text-xs" style="display:none;margin-top:4px;"></div>';
-        const msg = box.querySelector('[data-start-msg]');
-        const say = (text, isError = false) => {
-            msg.textContent = text || ''; msg.style.display = text ? 'block' : 'none'; msg.style.color = isError ? '#dc2626' : '#6b7280';
-        };
-        // The boxes and the hidden schedule checkbox shown from `state` (Delay box = scheduleEnabledChk = state.delay).
-        const sync = () => {
-            box.querySelectorAll('input[data-start]').forEach((other) => {
-                if (other.dataset.start === 'prompt') return;
-                other.checked = other.dataset.start === 'delay' ? state.delay : Number(other.dataset.start) === state.event;
-            });
-            if (scheduleEnabledChk.checked !== state.delay) {
-                scheduleEnabledChk.checked = state.delay;
-                scheduleEnabledChk.dispatchEvent(new Event('change'));   // shows/hides the Delay fields, as before
-            }
-        };
-        box.querySelectorAll('input[data-start]').forEach((cb) => cb.addEventListener('change', async () => {
-            const key = cb.dataset.start === 'delay' ? 'delay' : Number(cb.dataset.start);
-            const next = window.StartOptions.tick(state, key);
-            const inputs = [...box.querySelectorAll('input[data-start]')].filter((i) => i.dataset.start !== 'prompt');
-            inputs.forEach((i) => { i.disabled = true; });   // one change at a time
-            try {
-                // The save's quiet reload nulls currentSchedule for a moment: read the row from the server, or an
-                // untick would skip its delete (the row stays) and a tick would POST a second row.
-                if (this.currentWorkflowId) await this.loadWorkflowSchedule(this.currentWorkflowId);
-                if (typeof key === 'number' && next.state.event === key) {
-                    // Ticked: needs a saved workflow and the component's servers among the user's enabled ones.
-                    const comp = CC.cache.get(key);
-                    const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
-                    const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
-                    if (!this.currentWorkflowId || missing.length) {
-                        sync();
-                        say(!this.currentWorkflowId ? this.t('workflow.messages.saveFirst')
-                            : this.t('workflow.connect.needServer', { servers: missing.join(', ') }), true);
-                        return;
-                    }
-                    if (scheduleEnabledChk.checked) {
-                        scheduleEnabledChk.checked = false;
-                        scheduleEnabledChk.dispatchEvent(new Event('change'));   // the event save replaces the Delay row
-                    }
-                    this._optionNodeAfterStart(comp);
-                    await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
-                    const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
-                        repeat_type: 'event', scheduled_time: this._localNowStamp(),
-                        input_prompt: document.getElementById('prompt-form-textarea')?.value.trim() || '' });
-                    if (!ok) { sync(); return; }   // the Delay row (if any) is still there: its box comes back
-                } else if (typeof key === 'number') {
-                    // Unticked: the event schedule goes (a 'none' row would still run once); the node stays.
-                    if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
-                } else if (key === 'delay' && next.state.delay && state.event !== null) {
-                    // Delay on while an event option is active: the event schedule goes first.
-                    if (this.currentSchedule?.id && !(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
-                    const repeatSel = document.getElementById('schedule-repeat-type');
-                    if (repeatSel?.value === 'event') {
-                        repeatSel.value = 'none';
-                        repeatSel.dispatchEvent(new Event('change'));
-                    }
-                } else if (key === 'delay' && !next.state.delay && this.currentSchedule?.id && !this.currentSchedule.trigger_component_id) {
-                    // Delay off: its schedule stops, as unticking an event does.
-                    if (!(await this.deleteSchedule(this.currentSchedule.id))) { sync(); return; }
-                }
-                state = next.state;
-                sync();
-                say(next.note ? t(`note_${next.note}`) : '');
-            } catch (err) {
-                sync();
-                say(err?.message || String(err), true);
-            } finally {
-                inputs.forEach((i) => { i.disabled = false; });
-            }
-        }));
-        box.querySelectorAll('[data-start-menu]').forEach((btn) => btn.addEventListener('click', (ev) => {
-            ev.preventDefault();
-            const comp = CC.cache.get(btn.dataset.startMenu);
-            this._startOptionMenu(btn, comp, () => this._renderStartsOn(box, scheduleEnabledChk));
-        }));
+        const s = this.currentSchedule;
+        const timed = !!(s?.id && !s.trigger_component_id);
+        const event = s?.trigger_component_id ? Number(s.trigger_component_id) : null;
+        const options = (CC?.cache.all() || []).filter((c) => c.start_trigger);
+        const html = `
+            <div class="start-opt-row"><input type="checkbox" checked disabled>
+                <span class="start-opt-open" data-start-open="prompt">${esc(t('enterPrompt'))}</span></div>
+            <div class="start-opt-row"><input type="checkbox" data-start="schedule" ${timed ? 'checked' : ''}>
+                <span class="start-opt-open" data-start-open="schedule">${esc(t('setSchedule'))}</span></div>
+            ${options.map((c) => `<label class="start-opt-row" title="${esc(c.name)}">
+                <input type="checkbox" data-start="${Number(c.id)}" ${event === Number(c.id) ? 'checked' : ''}>
+                <span>${esc(c.start_trigger.label)}</span></label>`).join('')}`;
+        boxes.forEach((box) => { box.innerHTML = html; box.title = options.length ? '' : t('none'); });
     }
 
-    /** ⋮ on an option: Edit (the register dialog) and, once Task 8 lands, Remove option. */
-    _startOptionMenu(anchor, comp, refresh) {
-        document.getElementById('start-option-menu')?.remove();
-        const menu = document.createElement('div');
-        menu.id = 'start-option-menu';
-        menu.style.cssText = 'position:fixed;z-index:10001;background:#fff;border:1px solid #e5e7eb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);font-size:13px;';
-        const r = anchor.getBoundingClientRect();
-        menu.style.left = `${r.right - 160}px`; menu.style.top = `${r.bottom + 4}px`; menu.style.width = '160px';
-        const item = (act, label) => `<button type="button" data-act="${act}" style="display:block;width:100%;text-align:left;padding:6px 10px;background:none;border:none;cursor:pointer;">${this.escapeHtml(label)}</button>`;
-        menu.innerHTML = item('edit', this.t('workflow.startOptions.edit'))
-            + (this._confirmRemoveStartOption ? item('remove', this.t('workflow.startOptions.remove')) : '');
-        document.body.appendChild(menu);
-        const close = () => { menu.remove(); document.removeEventListener('click', outside, true); };
-        const outside = (e) => { if (!menu.contains(e.target)) close(); };
-        setTimeout(() => document.addEventListener('click', outside, true));
-        menu.addEventListener('click', async (e) => {
-            const act = e.target?.dataset?.act;
-            if (!act) return;
-            close();
-            if (act === 'edit' && await this._showStartOptionDialog(comp)) refresh();
-            if (act === 'remove' && await this._confirmRemoveStartOption(comp)) refresh();
-        });
+    /**
+     * A box ticked or unticked on the Start node. Set Schedule opens the schedule fields (ticked once saved);
+     * an option places its linked node and saves the event row; unticking deletes the row (a 'none' row would
+     * still run once). Schedule and an event exclude each other: one row per workflow.
+     */
+    async _onStartTick(cb) {
+        const CC = window.CodeComponents;
+        const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        const key = cb.dataset.start === 'schedule' ? 'schedule' : Number(cb.dataset.start);
+        const wanted = cb.checked;
+        this.container.querySelectorAll('.node-start-options input[data-start]').forEach((b) => { b.disabled = true; });
+        try {
+            if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.saveFirst'), 'error'); return; }
+            // A save's quiet reload nulls currentSchedule for a moment: read the row from the server, or an untick
+            // would skip its delete (the row stays) and a tick would POST a second row.
+            await this.loadWorkflowSchedule(this.currentWorkflowId);
+            const s = this.currentSchedule;
+            const timed = !!(s?.id && !s.trigger_component_id);
+            if (key === 'schedule') {
+                if (wanted) this.showPromptForm(null, { schedule: true });
+                else if (timed) await this.deleteSchedule(s.id);
+                return;
+            }
+            if (!wanted) {
+                if (Number(s?.trigger_component_id) === key) await this.deleteSchedule(s.id);
+                return;
+            }
+            // Ticked: the component's servers must be among the user's enabled ones.
+            const comp = CC.cache.get(key);
+            const enabled = (await this._loadMcpServersMeta(true)).filter((m) => m.effective_on !== false).map((m) => m.name);
+            const missing = comp.mcp_servers.filter((n) => !enabled.includes(n));
+            if (missing.length) {
+                this.showNotification(this.t('workflow.connect.needServer', { servers: missing.join(', ') }), 'error');
+                return;
+            }
+            const note = timed ? 'delayOff' : (s?.trigger_component_id ? 'replaced' : null);
+            this._optionNodeAfterStart(comp);
+            await this._persistIfDirty();   // the node must exist in the DB before the compiled watch runs it
+            // An existing row (schedule or another option) is updated in place: the event replaces it.
+            const ok = await this.saveSchedule({ workflow_id: this.currentWorkflowId, trigger_component_id: key,
+                repeat_type: 'event', scheduled_time: this._localNowStamp(),
+                input_prompt: this.lastUserPrompt || s?.input_prompt || '' });
+            if (ok && note) this.showNotification(t(`note_${note}`), 'info');
+        } catch (err) {
+            this.showNotification(err?.message || String(err), 'error');
+        } finally {
+            this._renderStartNodeOptions();   // the boxes show the saved row, whatever happened
+        }
     }
 
     /**
@@ -9811,6 +9783,7 @@ class WorkflowEditor {
                     const row = (await CC.api().setStartOption(comp.id, { label: f('label').value,
                         watch: { server: f('server').value, tool: f('tool').value, args }, work_exit: f('exit').value })).data;
                     CC.cache.put(row);
+                    this._renderStartNodeOptions();
                     overlay.remove();
                     this.showNotification(t('added', { label: row.start_trigger.label }), 'success');
                     resolve(row);
@@ -9851,6 +9824,7 @@ class WorkflowEditor {
             try {
                 await CC.api().clearStartOption(comp.id);
                 CC.cache.put({ ...comp, start_trigger: null });
+                this._renderStartNodeOptions();
                 if (Number(this.currentSchedule?.trigger_component_id) === Number(comp.id)) {
                     this.currentSchedule = null;   // the server deleted the row
                     this.updateStartNodeScheduleIndicator(false);
@@ -21337,20 +21311,8 @@ Based on the analysis...
                 indicator.remove();
             }
         });
-        // The active Start option, as a badge under Start's title (spec §4).
-        const optionId = this.currentSchedule?.trigger_component_id;
-        const label = optionId ? window.CodeComponents?.cache.get(optionId)?.start_trigger?.label : null;
-        startNodes.forEach((node) => {
-            let badge = node.querySelector('.start-option-badge');
-            if (!label) { badge?.remove(); return; }
-            if (!badge) {
-                badge = document.createElement('div');
-                badge.className = 'start-option-badge';
-                badge.style.cssText = 'font-size:11px;color:#059669;background:#d1fae5;border-radius:4px;padding:1px 6px;margin-top:4px;display:inline-block;';
-                node.querySelector('.node-body')?.prepend(badge);
-            }
-            badge.textContent = `✓ ${label}`;
-        });
+        // The ticks on Start follow the saved row.
+        this._renderStartNodeOptions();
     }
 
     /**

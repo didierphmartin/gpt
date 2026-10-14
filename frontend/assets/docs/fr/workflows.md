@@ -38,11 +38,12 @@ Au lieu d'une heure, une planification peut attendre un **événement** : régle
 
 ### Options de démarrage
 
-Un workflow démarre à partir de son **Invite**, d'un **Délai** (une planification) ou d'une **option d'événement**.
+Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt** (toujours actif), **Planifier**, et chaque **option d'événement** que vous avez ajoutée. Cochez une case sur le nœud pour choisir.
 
+- **Saisir le prompt / Planifier :** cliquez sur le texte pour ouvrir la zone du prompt ou les champs de planification (exécuter à, répéter, cron). Cocher Planifier ouvre les champs de planification ; la case reste cochée une fois la planification enregistrée. La décocher supprime la planification.
 - **Ajouter une option :** faites glisser un composant de la Bibliothèque de composants de code sur n'importe quel nœud Démarrer. Choisissez l'outil d'attente (pour Outlook, `wait_for_new`), ses arguments et la sortie qui transporte le travail. Le nœud Démarrer de chaque workflow la proposera ensuite.
-- **L'utiliser :** ouvrez Démarrer et cochez l'option. Un nœud lié au composant apparaît après Démarrer, et le workflow attend l'événement au lieu d'une planification. Une seule option d'événement à la fois ; l'activer désactive le Délai.
-- **La retirer :** ⋮ → Retirer l'option. Un avertissement liste d'abord les workflows qui l'utilisent. Leurs nœuds restent en place ; ils ne démarrent plus sur l'événement.
+- **L'utiliser :** cochez l'option sur Démarrer. Un nœud lié au composant apparaît après Démarrer, et le workflow attend l'événement au lieu d'une planification. Une seule option d'événement à la fois ; une planification et un événement s'excluent.
+- **La modifier ou la retirer :** dans la Bibliothèque de composants de code, ⋮ sur le composant → Modifier l'option de démarrage ou Retirer l'option de démarrage. Un avertissement liste d'abord les workflows qui l'utilisent. Leurs nœuds restent en place ; ils ne démarrent plus sur l'événement.
 
 ## Compiler en Python
 

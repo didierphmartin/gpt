@@ -29,6 +29,7 @@ class CodeLibrary {
             this.hideMenu();
             if (action === 'edit') this.openForm(this.contextTarget);
             if (action === 'delete') this.remove(this.contextTarget);
+            if (action === 'option-edit' || action === 'option-remove') this.startOption(action, this.contextTarget);
         });
         document.addEventListener('click', () => this.hideMenu());
     }
@@ -71,6 +72,9 @@ class CodeLibrary {
             this.setStatus('');
             this.contextTarget = Number(btn.dataset.ccId);
             this.menu.querySelector('[data-cc-usedby]').classList.add('hidden');
+            // A Start option is edited or removed here (the Start node only lists it).
+            const isOption = !!window.CodeComponents.cache.get(this.contextTarget)?.start_trigger;
+            this.menu.querySelectorAll('[data-action^="option-"]').forEach((b) => b.classList.toggle('hidden', !isOption));
             this.menu.classList.remove('hidden');
             const r = this.menu.getBoundingClientRect();
             this.menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - r.width - 4))}px`;
@@ -94,6 +98,17 @@ class CodeLibrary {
                 return line;
             }));
         } catch (err) { box.textContent = err.message; }
+    }
+
+    /** Edit (the register dialog) or remove (after the warning) the component's Start option. */
+    async startOption(action, id) {
+        const comp = window.CodeComponents.cache.get(id);
+        const editor = await this.ensureWorkflowEditor();
+        if (!comp?.start_trigger || !editor) return;
+        const done = action === 'option-edit'
+            ? await editor._showStartOptionDialog(comp)
+            : await editor._confirmRemoveStartOption(comp);
+        if (done) await this.loadTree();
     }
 
     async remove(id) {

@@ -38,11 +38,12 @@ En lugar de una hora, una programación puede esperar un **evento**: pon *Repeti
 
 ### Opciones de inicio
 
-Un flujo comienza con su **Instrucción**, con un **Retraso** (una programación) o con una **opción de evento**.
+El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt** (siempre activo), **Programar** y cada **opción de evento** que hayas añadido. Marca una casilla en el nodo para elegir.
 
+- **Escribir el prompt / Programar:** haz clic en el texto para abrir el cuadro del prompt o los campos de programación (ejecutar a, repetir, cron). Marcar Programar abre los campos de programación; la casilla queda marcada cuando guardas la programación. Desmarcarla elimina la programación.
 - **Añadir una opción:** arrastra un componente de la Biblioteca de componentes de código sobre cualquier nodo Inicio. Elige la herramienta de espera (para Outlook, `wait_for_new`), sus argumentos y la salida que lleva el trabajo. El Inicio de cada flujo la mostrará.
-- **Usarla:** abre Inicio y marca la opción. Aparece un nodo enlazado al componente después de Inicio, y el flujo espera el evento en lugar de una programación. Una opción de evento a la vez; activarla desactiva el Retraso.
-- **Quitarla:** ⋮ → Quitar opción. Una advertencia enumera primero los flujos que la usan. Sus nodos se quedan donde están; dejan de comenzar con el evento.
+- **Usarla:** marca la opción en Inicio. Aparece un nodo enlazado al componente después de Inicio, y el flujo espera el evento en lugar de una programación. Una opción de evento a la vez; una programación y un evento se excluyen.
+- **Editarla o quitarla:** en la Biblioteca de componentes de código, ⋮ en el componente → Editar la opción de inicio o Quitar la opción de inicio. Una advertencia enumera primero los flujos que la usan. Sus nodos se quedan donde están; dejan de comenzar con el evento.
 
 ## Compilar a Python
 

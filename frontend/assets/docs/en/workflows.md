@@ -38,11 +38,12 @@ Instead of a time, a schedule can wait for an **event**: set *Repeat* to **On ev
 
 ### Start options
 
-A workflow starts from its **Prompt**, from a **Delay** (a schedule), or from an **event option**.
+The Start node lists how the workflow starts: **Enter Prompt** (always on), **Set Schedule**, and every **event option** you added. Tick a box on the node to choose.
 
+- **Enter Prompt / Set Schedule:** click the text to open the prompt box or the schedule fields (run at, repeat, cron). Ticking Set Schedule opens the schedule fields; the box stays ticked once the schedule is saved. Unticking it deletes the schedule.
 - **Add an option:** drag a component from the Code Library onto any Start node. Choose the wait tool (for Outlook, `wait_for_new`), its arguments and the exit that carries work. Every workflow's Start then lists it.
-- **Use it:** open Start, tick the option. A node linked to the component appears after Start, and the workflow waits for the event instead of a schedule. One event option at a time; it turns Delay off.
-- **Remove it:** ⋮ → Remove option. A warning lists the workflows using it first. Their nodes stay; they stop starting on the event.
+- **Use it:** tick the option on Start. A node linked to the component appears after Start, and the workflow waits for the event instead of a schedule. One event option at a time; a schedule and an event exclude each other.
+- **Edit or remove it:** in the Code Library, ⋮ on the component → Edit Start option or Remove Start option. A warning lists the workflows using it first. Their nodes stay; they stop starting on the event.
 
 ## Compile to Python
 

@@ -261,7 +261,9 @@
     "linkedHeader": "Componente de biblioteca \"{{name}}\" · usado por {{count}} nodo(s). Guardar lo cambia en todas partes.",
     "missing": "falta",
     "missingTitle": "El componente de código vinculado ya no existe",
-    "loadFailed": "No se pudo cargar la Biblioteca de código; inténtalo de nuevo."
+    "loadFailed": "No se pudo cargar la Biblioteca de código; inténtalo de nuevo.",
+    "optionEdit": "Editar la opción de inicio",
+    "optionRemove": "Quitar la opción de inicio"
   },
   "playbookLibrary": {
     "newPlaybook": "Nuevo playbook",
@@ -680,11 +682,7 @@
       "badJson": "Los argumentos no son JSON válido.",
       "needsServer": "Una opción de inicio necesita un componente con un servidor MCP que tenga una herramienta de espera.",
       "added": "«{{label}}» es ahora una opción de inicio.",
-      "startsOn": "Comienza con",
-      "prompt": "Instrucción",
-      "delay": "Retraso (programación)",
       "none": "Arrastra un componente de la biblioteca de código sobre Inicio para añadir una opción.",
-      "edit": "Editar",
       "warnTitle": "¿Quitar «{{label}}» de las opciones de inicio?",
       "warnActive": "Está activa en {{count}} flujo(s): {{names}}.",
       "warnStops": "Estos flujos ya no comenzarán con «{{label}}». Su vigilancia de eventos se detiene; solo se ejecutan desde la instrucción o una programación que definas.",
@@ -694,7 +692,9 @@
       "remove": "Quitar opción",
       "note_delayOff": "Retraso desactivado: este flujo ahora comienza con el evento.",
       "note_eventOff": "Opción de evento desactivada: este flujo ahora comienza según su programación.",
-      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó. Sus agentes siguen conectados detrás del nodo de esa opción."
+      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó. Sus agentes siguen conectados detrás del nodo de esa opción.",
+      "enterPrompt": "Escribir el prompt",
+      "setSchedule": "Programar"
     },
     "loadingWorkflow": "Cargando el workflow…",
     "toolbar": {
