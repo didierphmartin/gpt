@@ -9614,6 +9614,9 @@ class WorkflowEditor {
             const inputs = [...box.querySelectorAll('input[data-start]')].filter((i) => i.dataset.start !== 'prompt');
             inputs.forEach((i) => { i.disabled = true; });   // one change at a time
             try {
+                // The save's quiet reload nulls currentSchedule for a moment: read the row from the server, or an
+                // untick would skip its delete (the row stays) and a tick would POST a second row.
+                if (this.currentWorkflowId) await this.loadWorkflowSchedule(this.currentWorkflowId);
                 if (typeof key === 'number' && next.state.event === key) {
                     // Ticked: needs a saved workflow and the component's servers among the user's enabled ones.
                     const comp = CC.cache.get(key);
