@@ -143,6 +143,26 @@ CREATE TABLE `playbooks` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `code_components`
+--
+
+CREATE TABLE `code_components` (
+  `id` int UNSIGNED NOT NULL,
+  `user_id` int NOT NULL,
+  `name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `code` mediumtext COLLATE utf8mb4_unicode_ci NOT NULL,
+  `exits` json NOT NULL,
+  `mcp_servers` json NOT NULL,
+  `timeout_s` smallint UNSIGNED NOT NULL DEFAULT 30,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_code_components_user_name` (`user_id`,`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `agent_conversations`
 --
 

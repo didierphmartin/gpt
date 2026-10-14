@@ -8,7 +8,7 @@ use RuntimeException;
 /** What the compilers need from a code node (spec §2, §5): validated settings and exit -> children. */
 final class CodeNodeEmit
 {
-    private const EXIT_RE = '/^[a-z][a-z0-9_]{0,31}$/';
+    public const EXIT_RE = '/^[a-z][a-z0-9_]{0,31}$/';
 
     /** The playbook node's server slug rule (LoaderMcpExecutor::slug). */
     public static function slug(string $serverName): string
