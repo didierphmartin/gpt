@@ -156,8 +156,7 @@ CREATE TABLE `code_components` (
   `mcp_servers` json NOT NULL,
   `timeout_s` smallint UNSIGNED NOT NULL DEFAULT 30,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY `uq_code_components_user_name` (`user_id`,`name`)
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -1084,6 +1083,13 @@ ALTER TABLE `playbooks`
   ADD KEY `idx_playbooks_user` (`user_id`);
 
 --
+-- Indexes for table `code_components`
+--
+ALTER TABLE `code_components`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_code_components_user_name` (`user_id`,`name`);
+
+--
 -- Indexes for table `agent_conversations`
 --
 ALTER TABLE `agent_conversations`
@@ -1484,6 +1490,12 @@ ALTER TABLE `agents`
 --
 ALTER TABLE `playbooks`
   MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1;
+
+--
+-- AUTO_INCREMENT for table `code_components`
+--
+ALTER TABLE `code_components`
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `agent_conversations`
