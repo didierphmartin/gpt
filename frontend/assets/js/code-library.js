@@ -98,6 +98,12 @@ class CodeLibrary {
 
     async remove(id) {
         this.setStatus('');
+        const comp = window.CodeComponents.cache.get(id);
+        if (comp?.start_trigger) {
+            // A Start option: the warning first (spec §4); the server refuses the delete until it is removed.
+            const editor = await this.ensureWorkflowEditor();
+            if (!(await editor?._confirmRemoveStartOption?.(comp))) return;
+        }
         try {
             await window.CodeComponents.api().remove(id);
             window.CodeComponents.cache.drop(id);

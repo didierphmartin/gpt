@@ -9748,6 +9748,45 @@ class WorkflowEditor {
         });
     }
 
+    /** Remove a Start option after the warning (spec §4); true when it was removed. */
+    async _confirmRemoveStartOption(comp) {
+        const CC = window.CodeComponents;
+        const label = comp.start_trigger?.label || comp.name;
+        let impact;
+        try { impact = (await CC.api().startOptionImpact(comp.id)).data || []; }
+        catch (e) { this.showNotification(e.message, 'error'); return false; }
+        const lines = window.StartOptions.warning(label, impact)
+            .map((l) => `<li style="margin:4px 0;">${this.escapeHtml(this.t(l.key, l.params))}</li>`).join('');
+        const overlay = document.createElement('div');
+        overlay.className = 'storage-config-overlay';
+        overlay.innerHTML = `
+            <div class="storage-config-modal" style="width:min(520px,95vw);">
+                <div class="storage-config-header"><h3>⚠ ${this.escapeHtml(this.t('workflow.startOptions.warnTitle', { label }))}</h3>
+                    <button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-body"><ul style="margin:0;padding-left:18px;font-size:14px;">${lines}</ul></div>
+                <div class="storage-config-footer">
+                    <button class="storage-config-btn cancel" data-act="close">${this.escapeHtml(this.t('common.cancel'))}</button>
+                    <button class="storage-config-btn save" data-act="remove" style="background:#dc2626;">${this.escapeHtml(this.t('workflow.startOptions.remove'))}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        return new Promise((resolve) => overlay.addEventListener('click', async (ev) => {
+            const act = ev.target?.dataset?.act;
+            if (act === 'close') { overlay.remove(); resolve(false); return; }
+            if (act !== 'remove') return;
+            try {
+                await CC.api().clearStartOption(comp.id);
+                CC.cache.put({ ...comp, start_trigger: null });
+                if (Number(this.currentSchedule?.trigger_component_id) === Number(comp.id)) {
+                    this.currentSchedule = null;   // the server deleted the row
+                    this.updateStartNodeScheduleIndicator(false);
+                }
+                overlay.remove();
+                resolve(true);
+            } catch (e) { this.showNotification(e.message, 'error'); }
+        }));
+    }
+
     /**
      * Console-style pretty rendering of a playbook text: section headers,
      * numbered instruction steps with branch sub-bullets, #Action chips and
