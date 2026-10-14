@@ -11982,7 +11982,10 @@ class WorkflowEditor {
         }
         this._saveInFlight = (async () => {
             try {
-                return await this._withSaveButtonBusy(() => this._saveWorkflowImpl());
+                const result = await this._withSaveButtonBusy(() => this._saveWorkflowImpl());
+                // A save adds or removes code-component links: the Code Library's "used by" follows.
+                window.codeLibrary?.loadTree?.();
+                return result;
             } finally {
                 this._saveInFlight = null;
                 if (this._savePending) { this._savePending = false; this.saveWorkflow().catch(() => {}); }
