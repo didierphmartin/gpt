@@ -62,5 +62,13 @@
         return cache.all().find((r) => String(r.name).trim().toLowerCase() === n && Number(r.id) !== Number(ownId)) || null;
     }
 
-    return { CONTENT_KEYS, cache, CodeComponentApi, linkedNodeConfig, componentBody, nameClash };
+    let shared = null;
+    // One client for the page (the pane and the editor), built on first use from the app's base URL and auth.
+    function api() {
+        if (!shared) shared = new CodeComponentApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
+            () => window.chatApp?.getAuthHeaders?.() || {});
+        return shared;
+    }
+
+    return { CONTENT_KEYS, cache, api, CodeComponentApi, linkedNodeConfig, componentBody, nameClash };
 });

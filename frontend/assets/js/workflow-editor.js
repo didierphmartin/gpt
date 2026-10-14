@@ -8793,9 +8793,13 @@ class WorkflowEditor {
                 this.addPlaybookNode(x, y, pbId ? { name: row?.title || 'Playbook', playbook_id: parseInt(pbId, 10) } : null);
                 break;
             }
-            case 'code':
-                this.addCodeNode(x, y);
+            case 'code': {
+                // A Code Library row carries its component id; the palette node does not (an inline node).
+                const ccId = e.dataTransfer.getData('code-component-id');
+                const row = ccId ? window.CodeComponents?.cache.get(ccId) : null;
+                this.addCodeNode(x, y, row ? window.CodeComponents.linkedNodeConfig(row) : null);
                 break;
+            }
             case 'realtime-start':
                 this.addRealtimeStartNode(x, y);
                 break;
@@ -8991,9 +8995,13 @@ class WorkflowEditor {
         return drawflowId;
     }
 
-    addCodeNode(x, y, config = null) {
+    _defaultCodeConfig() {
         const t = window.CodeNode.TEMPLATES[window.CodeNode.DEFAULT_TEMPLATE];
-        const defaults = { name: 'Code', code: t.code, exits: [...t.exits], mcp_servers: [], timeout_s: 30, disabled: false };
+        return { name: 'Code', code: t.code, exits: [...t.exits], mcp_servers: [], timeout_s: 30, disabled: false };
+    }
+
+    addCodeNode(x, y, config = null) {
+        const defaults = this._defaultCodeConfig();
         // A loaded config may carry exits / mcp_servers that are null or not arrays: those take the defaults.
         const cfg = window.CodeNode.normalizeConfig(config ? { ...defaults, ...config } : { ...defaults }, defaults);
         const html = `
@@ -9012,13 +9020,19 @@ class WorkflowEditor {
         const id = this.editor.addNode('code', 1, cfg.exits.length, x, y, 'code', {
             type: 'code', node_type: 'code', name: cfg.name, code: cfg.code, exits: [...cfg.exits],
             mcp_servers: [...cfg.mcp_servers], timeout_s: cfg.timeout_s, disabled: !!cfg.disabled,
+            code_component_id: cfg.code_component_id ? Number(cfg.code_component_id) : null,
+            code_component_missing: !!cfg.code_component_missing,
         }, html);
         this.hideHelpOverlay();
         return id;
     }
 
     _codeBadgesHtml(cfg) {
-        return (cfg.mcp_servers || []).map((n) =>
+        const link = !cfg.code_component_id ? ''
+            : cfg.code_component_missing
+                ? `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(this.t('codeLibrary.missingTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.missing'))}</span> `
+                : `<span class="tool-badge" title="${this.escapeHtml(this.t('codeLibrary.linkedTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.linked'))}</span> `;
+        return link + (cfg.mcp_servers || []).map((n) =>
             `<span class="tool-badge" title="MCP server checked on this node">🔌 ${this.escapeHtml(n)}</span>`).join(' ');
     }
 
@@ -9038,10 +9052,18 @@ class WorkflowEditor {
      * user's servers as checkboxes; call_tool may reach any tool on a checked one), and the last
      * run's Input, Output and Logs -- the agent tabs' own renderers over nodeExecutionData.
      */
-    showCodeNodeModal(nodeId) {
-        const node = this.editor.getNodeFromId(nodeId);
-        if (!node) return;
-        const d = node.data || {};
+    showCodeNodeModal(nodeId, opts = {}) {
+        const CC = window.CodeComponents;
+        const node = nodeId ? this.editor.getNodeFromId(nodeId) : null;
+        if (!node && !opts.component) return;
+        // A linked node reads its component from the cache, which only the library pane loads: load it once.
+        const linkId = node?.data?.code_component_id;
+        if (linkId && !node.data.code_component_missing && !CC.cache.get(linkId) && !opts._cacheTried) {
+            return CC.cache.load(CC.api()).catch(() => {}).then(() => this.showCodeNodeModal(nodeId, { ...opts, _cacheTried: true }));
+        }
+        // The component being edited: from the library, or the one this node links to.
+        const comp = opts.component || (linkId ? CC.cache.get(linkId) : null);
+        const d = node ? node.data || {} : { name: comp.name || '', ...(comp.id ? comp : this._defaultCodeConfig()) };
         const CN = window.CodeNode;
         const tab = (k, label) => `<button data-tab="${k}" class="agent-modal-tab px-4 py-2 text-sm font-medium border-b-2 -mb-px">${label}</button>`;
         const pane = (k, html) => `<div data-pane="${k}" style="display:none;">${html}</div>`;
@@ -9050,13 +9072,15 @@ class WorkflowEditor {
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
             <div class="storage-config-modal" style="width:min(900px,95vw);height:min(720px,92vh);display:flex;flex-direction:column;">
-                <div class="storage-config-header"><h3>🐍 Code node</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-header"><h3>🐍 ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
                     ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Name</label><input data-f="name" type="text"></div>
+                        <div data-f="descwrap" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('codeLibrary.description'))}</label><input data-f="description" type="text"></div>
                         <div class="storage-config-folder full"><label>Template (replaces the code, exits and checked servers)</label>
                             <select data-f="template"><option value="">— keep current code —</option>
                                 ${Object.entries(CN.TEMPLATES).map(([k, t]) => `<option value="${k}">${this.escapeHtml(t.label)}</option>`).join('')}</select></div>
@@ -9080,6 +9104,7 @@ class WorkflowEditor {
                 </div>
                 <div class="storage-config-footer">
                     <button class="storage-config-btn" data-act="test">Test</button>
+                    <button class="storage-config-btn" data-act="tolib" style="display:none;">${this.escapeHtml(this.t('codeLibrary.saveToLibrary'))}</button>
                     <button class="storage-config-btn cancel" data-act="close">Cancel</button>
                     <button class="storage-config-btn save" data-act="save">Save</button>
                 </div>
@@ -9102,12 +9127,34 @@ class WorkflowEditor {
         f('code').value = d.code || '';
         f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
         f('timeout').value = String(Number(d.timeout_s) || 30);
+        // Linked node or component mode: the link line says how far a Save reaches. Unlinked node: Save to library.
+        const editingComponent = !node || !!comp;
+        if (editingComponent) {
+            f('descwrap').style.display = '';
+            f('description').value = comp?.description || '';
+        }
+        if (node && comp) {
+            f('link').style.display = '';
+            f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: '…' });
+            CC.api().usedBy(comp.id).then((r) => {
+                f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: (r.data || []).length });
+            }).catch(() => {});
+        } else if (node && (node.data.code_component_missing || node.data.code_component_id)) {
+            // Its component is gone (or did not load): Save turns it into an inline node, or Save to library re-links it.
+            f('link').style.display = '';
+            f('link').textContent = this.t('codeLibrary.missingTitle');
+            overlay.querySelector('[data-act="tolib"]').style.display = '';
+        } else if (node) {
+            overlay.querySelector('[data-act="tolib"]').style.display = '';
+        }
         // The last run, as the agent tabs show it.
-        const run = this.nodeExecutionData?.[nodeId];
+        const run = nodeId ? this.nodeExecutionData?.[nodeId] : null;
         f('input').textContent = run?.input ?? '(No run yet. Run the workflow to see what this node received.)';
         f('output').textContent = run ? (run.output ?? '') : '(No run yet. Run the workflow to see what this node returned.)';
-        f('logs').innerHTML = this.getNodeLogsHtml(nodeId);
-        f('logs').querySelector('#logs-close-btn')?.addEventListener('click', () => overlay.remove());
+        if (node) {
+            f('logs').innerHTML = this.getNodeLogsHtml(nodeId);
+            f('logs').querySelector('#logs-close-btn')?.addEventListener('click', () => overlay.remove());
+        }
 
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
@@ -9209,7 +9256,7 @@ class WorkflowEditor {
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
-            if (act !== 'test' && act !== 'save') return;
+            if (!['test', 'save', 'tolib'].includes(act)) return;
             const cfg = read();
             const errs = CN.validateConfig(cfg);
             if (act === 'test') {
@@ -9229,9 +9276,50 @@ class WorkflowEditor {
                 } catch (e) { show('error: ' + (e.message || e)); }
                 return;
             }
+            if (act === 'tolib') {
+                if (errs.length) { show(errs.join('\n'), true); return; }
+                const name = cfg.name;
+                // A name already in the library: the first click warns, the second replaces it.
+                const clash = CC.nameClash(name, null);
+                if (clash && overlay.dataset.armed !== name) {
+                    overlay.dataset.armed = name;
+                    show(this.t('codeLibrary.replacesConfirm', { name: clash.name }), true);
+                    return;
+                }
+                try {
+                    const row = (await CC.api().create(CC.componentBody(cfg, { name, description: '' }))).data;
+                    CC.cache.put(row);
+                    this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled });
+                    this._refreshLinkedCodeNodes(row);
+                    window.codeLibrary?.loadTree?.();
+                    overlay.remove();
+                } catch (e) { show(e.message, true); }
+                return;
+            }
             if (errs.length) { show(errs.join('\n'), true); return; }
-            this._applyCodeNodeConfig(nodeId, cfg);
-            overlay.remove();
+            if (!editingComponent) {
+                // Inline node, or a node whose component is gone, which becomes inline (the server would
+                // otherwise strip its code as a linked node's).
+                this._applyCodeNodeConfig(nodeId, { ...cfg, code_component_id: null, code_component_missing: false });
+                overlay.remove();
+                return;
+            }
+            // Component mode, or a linked node: the collection is written and every linked node follows.
+            const compName = node ? comp.name : cfg.name;
+            if (!comp?.id && CC.nameClash(compName, null) && overlay.dataset.armed !== compName) {
+                overlay.dataset.armed = compName;
+                show(this.t('codeLibrary.replacesConfirm', { name: compName }), true);
+                return;
+            }
+            try {
+                const body = CC.componentBody(cfg, { name: compName, description: f('description').value });
+                const row = (comp?.id ? await CC.api().update(comp.id, body) : await CC.api().create(body)).data;
+                CC.cache.put(row);
+                if (node) this.editor.updateNodeDataFromId(nodeId, { ...node.data, name: cfg.name });
+                this._refreshLinkedCodeNodes(row);
+                window.codeLibrary?.loadTree?.();
+                overlay.remove();
+            } catch (e) { show(e.message, true); }
         });
     }
 
@@ -9487,6 +9575,23 @@ class WorkflowEditor {
         // Like an agent node's form: the DB write is flushed by _persistIfDirty() (Run, Compile,
         // loading another workflow, Clear) or by Save Workflow.
         this._workflowDirty = true;
+    }
+
+    /** A saved component re-applied to every node on this canvas that links to it (its own label kept). */
+    _refreshLinkedCodeNodes(row) {
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        for (const [id, n] of Object.entries(nodes)) {
+            if (n.data?.type !== 'code' || Number(n.data.code_component_id) !== Number(row.id)) continue;
+            this._applyCodeNodeConfig(id, { ...window.CodeComponents.linkedNodeConfig(row, n.data.name),
+                code_component_missing: false, disabled: !!n.data.disabled });
+        }
+    }
+
+    /** The Code Library's New / Edit: the code modal on the component itself (no node). */
+    async showCodeComponentForm(id) {
+        const CC = window.CodeComponents;
+        if (id && !CC.cache.get(id)) await CC.cache.load(CC.api());
+        this.showCodeNodeModal(null, { component: id ? CC.cache.get(id) || {} : {} });
     }
 
     /**
@@ -13730,6 +13835,12 @@ class WorkflowEditor {
 
     async _runNodeAsCodeUnit(id, nodes, userPrompt) {
         const d = nodes[id].data || {};
+        if (d.code_component_missing) {
+            const r = window.CodeNode.failureResult(d.exits || ['next'], `Code component #${d.code_component_id} not found (node ${d.name || 'Code'}).`);
+            this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents: [], user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
+            this.highlightNode(id, 'error', id, 'agent');
+            return r;
+        }
         this.highlightNode(id, 'running', id, 'agent');
         const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes),
             (u) => nodes[u]?.data?.agent_type === 'dispatcher');
