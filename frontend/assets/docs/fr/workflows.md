@@ -88,3 +88,7 @@ Ouvrez le dispatcher avec son crayon ✏️ :
 - **Erreur** — le modèle de décision est injoignable (pas de clé, réseau). L'exécution s'arrête et indique pourquoi.
 
 Recompilez un workflow compilé (Python) après avoir modifié ces réglages.
+
+## Bibliothèque de composants de code
+
+Enregistrez un nœud de code dans la **Bibliothèque de code** (bouton *Enregistrer dans la bibliothèque* du nœud, ou *Nouveau composant de code* dans la barre latérale) pour le réutiliser dans n'importe quel flux : faites-le glisser depuis la bibliothèque vers un canevas. Un composant placé est un lien : son code, ses sorties, ses serveurs MCP et son délai appartiennent au composant, et le modifier (depuis n'importe quel flux ou depuis la bibliothèque) change tous les flux qui l'utilisent. Pour une variante, par exemple un autre dossier de courrier, enregistrez-la sous un nouveau nom. Un composant ne peut pas être supprimé tant qu'un flux l'utilise ; *Utilisé par* dans son menu les énumère.

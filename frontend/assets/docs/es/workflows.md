@@ -88,3 +88,7 @@ Abre el dispatcher con su lápiz ✏️:
 - **Error** — no se pudo contactar con el modelo de decisión (sin clave, red). La ejecución se detiene e indica el motivo.
 
 Recompila un workflow compilado (Python) tras cambiar estos ajustes.
+
+## Biblioteca de componentes de código
+
+Guarda un nodo de código en la **Biblioteca de código** (botón *Guardar en la biblioteca* del nodo, o *Nuevo componente de código* en la barra lateral) para reutilizarlo en cualquier flujo: arrástralo desde la biblioteca a un lienzo. Un componente colocado es un vínculo: su código, salidas, servidores MCP y tiempo límite pertenecen al componente, y editarlo (desde cualquier flujo o desde la biblioteca) cambia todos los flujos que lo usan. Para una variante, por ejemplo otra carpeta de correo, guárdala con un nombre nuevo. Un componente no se puede eliminar mientras un flujo lo use; *Usado por* en su menú los enumera.

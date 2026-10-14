@@ -2308,6 +2308,7 @@
                 <button data-rail-target="skills"         class="rail-btn" title="Skills Library"            aria-label="Skills Library">🎯</button>
                 <button data-rail-target="agents"         class="rail-btn" title="Agents Library"            aria-label="Agents Library">🤖</button>
                 <button data-rail-target="playbooks"      class="rail-btn" title="Playbooks Library"         aria-label="Playbooks Library">📖</button>
+                <button data-rail-target="code-library"   class="rail-btn" title="Code Library"              aria-label="Code Library">🐍</button>
                 <button data-rail-target="mcp-servers"    class="rail-btn" title="MCP Servers Library"       aria-label="MCP Servers Library">🔌</button>
                 <button data-rail-target="file-storage"   class="rail-btn" title="File Storage"      aria-label="File Storage">📁</button>
             </aside>
@@ -2348,6 +2349,9 @@
                         </button>
                         <button id="nav-playbooks" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             📖 <span data-i18n="sidebar.playbooks">Playbooks Library</span>
+                        </button>
+                        <button id="nav-code-library" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
+                            🐍 <span data-i18n="sidebar.codeLibrary">Code Library</span>
                         </button>
                         <button id="nav-mcp-servers" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
                             🔌 <span data-i18n="sidebar.mcpServers">MCP Servers Library</span>
@@ -2416,6 +2420,20 @@
                         </div>
                         <div id="playbooks-status" class="hidden flex-shrink-0 px-2 py-1 text-xs text-red-600 bg-red-50 border-b border-red-200"></div>
                         <div id="playbooks-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
+                            <div class="text-center text-gray-400 text-xs py-6">Loading…</div>
+                        </div>
+                    </div>
+
+                    <!-- Code Library View (hidden by default) -->
+                    <div id="code-library-view" class="h-full hidden bg-gray-200 flex flex-col">
+                        <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex flex-col gap-2">
+                            <button id="code-library-new-btn" class="text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
+                                ➕ <span data-i18n="codeLibrary.newComponent">New Code Component</span>
+                            </button>
+                            <input id="code-library-search" type="text" class="w-full text-xs border border-gray-300 rounded px-2 py-1" placeholder="Search code components..." data-i18n-placeholder="codeLibrary.search">
+                        </div>
+                        <div id="code-library-status" class="hidden flex-shrink-0 px-2 py-1 text-xs text-red-600 bg-red-50 border-b border-red-200"></div>
+                        <div id="code-library-tree" class="flex-1 min-h-0 overflow-y-auto px-2 py-2">
                             <div class="text-center text-gray-400 text-xs py-6">Loading…</div>
                         </div>
                     </div>
@@ -4245,6 +4263,12 @@
         <button data-action="unpublish" class="hidden block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="playbookLibrary.unpublish">Unpublish</button>
         <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="playbookLibrary.delete">Delete</button>
     </div>
+    <div id="code-library-context-menu" class="hidden fixed bg-white border border-gray-200 rounded shadow-lg py-1 z-50 text-xs" style="min-width: 140px;">
+        <button data-action="edit" class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="mcpLibrary.edit">Edit</button>
+        <button data-action="usedby" class="block w-full text-left px-3 py-1 hover:bg-gray-100" data-i18n="codeLibrary.usedByMenu">Used by</button>
+        <div data-cc-usedby class="hidden pb-1"></div>
+        <button data-action="delete" class="block w-full text-left px-3 py-1 hover:bg-gray-100 text-red-600" data-i18n="codeLibrary.delete">Delete</button>
+    </div>
 
     <!-- Functions Modal -->
     <div id="functions-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -4359,6 +4383,7 @@
     <script src="assets/js/code-components.js?v=20261013-code-lib"></script>
     <script src="assets/js/playbook-collection.js?v=20261006-robot-pub2"></script>
     <script src="assets/js/playbooks-library.js?v=20261006-pb-info"></script>
+    <script src="assets/js/code-library.js?v=20261013-code-lib"></script>
     <script src="assets/js/hover-peek.js?v=20261006-hover-peek"></script>
     <script src="assets/js/decision-routing.js?v=20261008-unclear"></script>
     <script src="assets/js/cron-text.js?v=20261007-cron"></script>
@@ -4367,7 +4392,7 @@
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261006-hover-peek"></script>
+    <script src="assets/js/chat.js?v=20261013-code-lib"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

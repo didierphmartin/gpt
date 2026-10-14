@@ -88,3 +88,7 @@ Open the dispatcher with its ✏️ pencil:
 - **Error** — the decision model could not be reached (no key, network). The run stops and says why.
 
 Recompile a compiled (Python) workflow after changing these settings.
+
+## Code components library
+
+Save a code node to the **Code Library** (the node's *Save to library* button, or *New Code Component* in the sidebar) to reuse it in any workflow: drag it from the library onto a canvas. A placed component is a link: its code, exits, MCP servers and timeout belong to the component, and editing it (from any workflow or from the library) changes every workflow that uses it. For a variant — say another mail folder — save it under a new name. A component can't be deleted while a workflow uses it; *Used by* in its menu lists them.

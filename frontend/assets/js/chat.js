@@ -106,6 +106,8 @@ class ChatApp {
         this.mcpServersView = document.getElementById('mcp-servers-view');
         this.navPlaybooks = document.getElementById('nav-playbooks');
         this.playbooksView = document.getElementById('playbooks-view');
+        this.navCodeLibrary = document.getElementById('nav-code-library');
+        this.codeLibraryView = document.getElementById('code-library-view');
 
         // File Storage elements
         this.navFileStorage = document.getElementById('nav-file-storage');
@@ -477,6 +479,9 @@ class ChatApp {
         }
         if (this.navPlaybooks) {
             this.navPlaybooks.addEventListener('click', () => this.switchView('playbooks'));
+        }
+        if (this.navCodeLibrary) {
+            this.navCodeLibrary.addEventListener('click', () => this.switchView('code-library'));
         }
         if (this.navSkills) {
             this.navSkills.addEventListener('click', () => this.switchView('skills'));
@@ -10424,6 +10429,7 @@ class ChatApp {
         if (this.agentsView) this.agentsView.classList.add('hidden');
         if (this.mcpServersView) this.mcpServersView.classList.add('hidden');
         if (this.playbooksView) this.playbooksView.classList.add('hidden');
+        if (this.codeLibraryView) this.codeLibraryView.classList.add('hidden');
         if (this.fileStorageView) this.fileStorageView.classList.add('hidden');
         this.navConversations.classList.remove('active');
         this.navPromptLibrary.classList.remove('active');
@@ -10434,6 +10440,7 @@ class ChatApp {
         if (this.navAgents) this.navAgents.classList.remove('active');
         if (this.navMcpServers) this.navMcpServers.classList.remove('active');
         if (this.navPlaybooks) this.navPlaybooks.classList.remove('active');
+        if (this.navCodeLibrary) this.navCodeLibrary.classList.remove('active');
         if (this.navFileStorage) this.navFileStorage.classList.remove('active');
 
         if (view === 'conversations') {
@@ -10588,6 +10595,16 @@ class ChatApp {
                 window.playbooksLibrary.init();
             }
             window.playbooksLibrary?.loadTree();
+            if (window.i18n && window.i18n.updateAllTranslations) window.i18n.updateAllTranslations();
+        } else if (view === 'code-library') {
+            if (this.codeLibraryView) this.codeLibraryView.classList.remove('hidden');
+            if (this.navCodeLibrary) this.navCodeLibrary.classList.add('active');
+            // Lazy-init the Code library on first visit, then reload its list.
+            if (!window.codeLibrary && window.CodeLibrary) {
+                window.codeLibrary = new window.CodeLibrary((k, p) => (window.i18n?.t ? window.i18n.t(k, p) : k));
+                window.codeLibrary.init();
+            }
+            window.codeLibrary?.loadTree();
             if (window.i18n && window.i18n.updateAllTranslations) window.i18n.updateAllTranslations();
         }
 
