@@ -679,7 +679,16 @@
       "save": "Save",
       "badJson": "The arguments are not valid JSON.",
       "needsServer": "A Start option needs a component with an MCP server that has a wait tool.",
-      "added": "\"{label}\" is now a Start option."
+      "added": "\"{label}\" is now a Start option.",
+      "startsOn": "Starts on",
+      "prompt": "Prompt",
+      "delay": "Delay (schedule)",
+      "none": "Drop a component from the Code Library on Start to add an option.",
+      "edit": "Edit",
+      "remove": "Remove option",
+      "note_delayOff": "Delay is off: this workflow now starts on the event.",
+      "note_eventOff": "The event option is off: this workflow now starts on its schedule.",
+      "note_replaced": "Only one event at a time: the other option is off."
     },
     "loadingWorkflow": "Loading workflow…",
     "toolbar": {
@@ -821,8 +830,6 @@
       "noHeader": "the server did not say which header carries its connection key",
       "callArgs": "Arguments of {{tool}}",
       "handEdited": "These arguments were edited in the code: change them there.",
-      "pollLabel": "Poll a source",
-      "pollAdd": "Add",
       "needServer": "Add the MCP server(s) {{servers}} under MCP Servers first, and save the workflow."
     },
     "schedule": {

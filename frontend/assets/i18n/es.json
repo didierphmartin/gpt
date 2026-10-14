@@ -679,7 +679,16 @@
       "save": "Guardar",
       "badJson": "Los argumentos no son JSON válido.",
       "needsServer": "Una opción de inicio necesita un componente con un servidor MCP que tenga una herramienta de espera.",
-      "added": "«{label}» es ahora una opción de inicio."
+      "added": "«{label}» es ahora una opción de inicio.",
+      "startsOn": "Comienza con",
+      "prompt": "Instrucción",
+      "delay": "Retraso (programación)",
+      "none": "Arrastre un componente de la biblioteca de código sobre Inicio para añadir una opción.",
+      "edit": "Editar",
+      "remove": "Quitar opción",
+      "note_delayOff": "Retraso desactivado: este flujo ahora comienza con el evento.",
+      "note_eventOff": "Opción de evento desactivada: este flujo ahora comienza según su programación.",
+      "note_replaced": "Solo un evento a la vez: la otra opción se desactivó."
     },
     "loadingWorkflow": "Cargando el workflow…",
     "toolbar": {
@@ -821,8 +830,6 @@
       "noHeader": "el servidor no indicó qué cabecera lleva su clave de conexión",
       "callArgs": "Argumentos de {{tool}}",
       "handEdited": "Estos argumentos se editaron en el código: cámbielos allí.",
-      "pollLabel": "Consultar una fuente",
-      "pollAdd": "Añadir",
       "needServer": "Primero añada el/los servidor(es) MCP {{servers}} en Servidores MCP y guarde el flujo."
     },
     "schedule": {

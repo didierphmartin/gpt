@@ -679,7 +679,16 @@
       "save": "Enregistrer",
       "badJson": "Les arguments ne sont pas du JSON valide.",
       "needsServer": "Une option de démarrage demande un composant avec un serveur MCP qui a un outil d'attente.",
-      "added": "« {label} » est maintenant une option de démarrage."
+      "added": "« {label} » est maintenant une option de démarrage.",
+      "startsOn": "Démarre sur",
+      "prompt": "Invite",
+      "delay": "Délai (planification)",
+      "none": "Déposez un composant de la bibliothèque de code sur Démarrer pour ajouter une option.",
+      "edit": "Modifier",
+      "remove": "Retirer l'option",
+      "note_delayOff": "Délai désactivé : ce workflow démarre maintenant sur l'événement.",
+      "note_eventOff": "Option d'événement désactivée : ce workflow démarre maintenant selon sa planification.",
+      "note_replaced": "Un seul événement à la fois : l'autre option est désactivée."
     },
     "loadingWorkflow": "Chargement du workflow…",
     "toolbar": {
@@ -821,8 +830,6 @@
       "noHeader": "le serveur n’a pas indiqué quel en-tête porte sa clé de connexion",
       "callArgs": "Arguments de {{tool}}",
       "handEdited": "Ces arguments ont été modifiés dans le code : changez-les là.",
-      "pollLabel": "Interroger une source",
-      "pollAdd": "Ajouter",
       "needServer": "Ajoutez d’abord le ou les serveurs MCP {{servers}} dans Serveurs MCP, puis enregistrez le flux."
     },
     "schedule": {
