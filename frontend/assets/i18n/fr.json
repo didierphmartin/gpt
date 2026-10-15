@@ -684,6 +684,8 @@
       "needsReconnect": "Pas à l'écoute : le serveur doit être reconnecté",
       "unreachable": "Pas à l'écoute : serveur injoignable",
       "errorOther": "Pas à l'écoute : {{message}}",
+      "runFailed": "Pas à l'écoute : la dernière exécution a échoué — nouvel essai",
+      "lastRunFailed": "À l'écoute — la dernière exécution a échoué",
       "noLinks": "Pas à l'écoute : Start n'a aucun lien",
       "disabled": "Pas à l'écoute : le workflow est désactivé",
       "modeGone": "Pas à l'écoute : le mode d'entrée a changé",

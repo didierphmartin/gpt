@@ -103,6 +103,25 @@ for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test
     test('unreachable', () => assert.strictEqual(v(1, row({ watch_state: 'error', watch_message: 'http_502' })).hint.key, 'workflow.active.unreachable'));
     test('other error', () => assert.deepStrictEqual(v(1, row({ watch_state: 'error', watch_message: 'bad_answer' })).hint,
         { key: 'workflow.active.errorOther', params: { message: 'bad_answer' } }));
+    test('a failed run, backing off', () => assert.deepStrictEqual(v(1, row({ watch_state: 'error', watch_message: 'run_failed' })).hint,
+        { key: 'workflow.active.runFailed', params: {} }));
+    test('a failed run, listening again', () => assert.deepStrictEqual(v(1, row({ watch_message: 'run_failed' })),
+        { button: 'deactivate', hint: { key: 'workflow.active.lastRunFailed', params: {} } }));
+    test('run failure keys exist in en/es/fr', () => {
+        for (const lang of ['en', 'es', 'fr']) {
+            const t = require(`../../i18n/${lang}.json`).workflow.active;
+            for (const key of ['runFailed', 'lastRunFailed']) assert.strictEqual(typeof t[key], 'string', `${lang} ${key}`);
+        }
+    });
+    test('a paused schedule is not offered Activate', () => {
+        assert.strictEqual(SO.startMode({ id: 9, status: 'paused', repeat_type: 'daily' }), 'prompt');
+        assert.strictEqual(SO.startMode({ id: 9, status: 'paused', repeat_type: 'event', trigger_component_id: 2 }), 'prompt');
+        assert.deepStrictEqual(v(SO.startMode({ id: 9, status: 'paused' }), null), { button: 'run', hint: null });
+        assert.strictEqual(SO.startMode({ id: 9, status: 'pending' }), 'schedule');
+        assert.strictEqual(SO.startMode({ id: 9, status: 'pending', trigger_component_id: '2' }), 2);
+        assert.strictEqual(SO.startMode(null), 'prompt');
+        assert.strictEqual(v(SO.startMode({ id: 9, status: 'pending' }), null).button, 'activate');
+    });
     test('idle reasons', () => {
         assert.strictEqual(v(1, row({ watch_state: 'idle', watch_message: 'no_links' })).hint.key, 'workflow.active.noLinks');
         assert.strictEqual(v(1, row({ watch_state: 'idle', watch_message: 'disabled' })).hint.key, 'workflow.active.disabled');

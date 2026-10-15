@@ -3079,7 +3079,7 @@ class WorkflowEditor {
 
     /** ▶ in schedule or option mode, spec 2026-10-14 event-worker §5. */
     _startView() {
-        return window.StartOptions.startView(window.StartOptions.active(this.currentSchedule), this.activeWorkflow || null,
+        return window.StartOptions.startView(window.StartOptions.startMode(this.currentSchedule), this.activeWorkflow || null,
             this.currentWorkflowId);
     }
 

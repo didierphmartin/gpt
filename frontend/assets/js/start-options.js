@@ -85,7 +85,15 @@
     }
 
     /**
-     * Start's ▶ and state line (spec 2026-10-14 event-worker §5). `mode`: active(schedule); `act`: the user's active
+     * The mode ▶ acts in: active(schedule), except that a paused schedule row cannot be activated (the server reads
+     * only pending / running rows), so ▶ stays the prompt-mode run door for it instead of offering "Activate".
+     */
+    function startMode(schedule) {
+        return schedule?.status === 'paused' ? 'prompt' : active(schedule);
+    }
+
+    /**
+     * Start's ▶ and state line (spec 2026-10-14 event-worker §5). `mode`: startMode(schedule); `act`: the user's active
      * row (GET /workflows/active) or null; ▶ runs in prompt mode, else activates / deactivates this workflow.
      */
     function startView(mode, act, workflowId) {
@@ -99,8 +107,11 @@
         switch (act.watch_state) {
             case 'running': return off(k('running'));
             case 'scheduled': return off(k('scheduled', { next: m || '' }));
-            case 'waiting': return off(k(m === 'fallback' ? 'listeningFallback' : 'listening'));
+            case 'waiting':
+                if (m === 'run_failed') return off(k('lastRunFailed'));
+                return off(k(m === 'fallback' ? 'listeningFallback' : 'listening'));
             case 'error':
+                if (m === 'run_failed') return off(k('runFailed'));
                 if (m === 'reconnect_needed' || m === 'not_connected') return off(k('needsReconnect'));
                 if (m === 'unreachable' || m === 'server_missing' || /^http_/.test(m || '')) return off(k('unreachable'));
                 return off(k('errorOther', { message: m || '' }));
@@ -110,5 +121,5 @@
         }
     }
 
-    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startLinks, warning, startView };
+    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView };
 });

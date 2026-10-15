@@ -684,6 +684,8 @@
       "needsReconnect": "Not listening: the server needs reconnecting",
       "unreachable": "Not listening: server unreachable",
       "errorOther": "Not listening: {{message}}",
+      "runFailed": "Not listening: the last run failed — retrying",
+      "lastRunFailed": "Listening — the last run failed",
       "noLinks": "Not listening: Start has no links",
       "disabled": "Not listening: the workflow is disabled",
       "modeGone": "Not listening: the input mode changed",
