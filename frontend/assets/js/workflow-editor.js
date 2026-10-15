@@ -6744,6 +6744,8 @@ class WorkflowEditor {
                     const contentDiv = nodeElement.querySelector('.drawflow_content_node');
                     if (contentDiv) {
                         contentDiv.innerHTML = newHtml;
+                        // The new HTML has no option rows or "Runs on" hint: draw them again.
+                        this.updateStartNodeIndicator(!!(this.lastUserPrompt && String(this.lastUserPrompt).trim()));
                         // The variant change alters the node's height, which moves
                         // its input/output ports — recalc its connections so the
                         // connector still reaches the endpoints.
