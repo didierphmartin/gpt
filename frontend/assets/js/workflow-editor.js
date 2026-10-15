@@ -3136,15 +3136,14 @@ class WorkflowEditor {
             playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession') : this.t(`workflow.active.${view.button}`);
         }
         card.classList.toggle('start-active', view.button === 'deactivate');
-        let line = card.querySelector('.start-active-state');
-        if (!view.hint) { line?.remove(); return; }
-        if (!line) {
-            line = document.createElement('div');
-            line.className = 'start-active-state';
-            line.style.cssText = 'font-size: 11px; color: #6b7280; margin-top: 2px;';
-            small?.after(line);
-        }
-        line.textContent = this.t(view.hint.key, view.hint.params);
+        // In schedule / option mode the body is the state alone, a dot and a few words beside ▶: the ticked
+        // option below already says what Start runs on.
+        if (!small) return;
+        small.classList.remove('start-state', 'state-off', 'state-ok', 'state-warn', 'state-err');
+        if (!view.hint) return;
+        small.textContent = this.t(view.hint.key, view.hint.params);
+        small.style.color = '';
+        small.classList.add('start-state', `state-${window.StartOptions.stateTone(view.hint.key)}`);
     }
 
     /**

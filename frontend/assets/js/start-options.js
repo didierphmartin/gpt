@@ -121,5 +121,14 @@
         }
     }
 
-    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView };
+    /** The dot beside Start's state: off (not active), ok (working), warn (working, with a caveat), err (not listening). */
+    function stateTone(key) {
+        const k = String(key || '').replace(/^workflow\.active\./, '');
+        if (k === 'notActive') return 'off';
+        if (['listening', 'scheduled', 'running'].includes(k)) return 'ok';
+        if (['starting', 'listeningFallback', 'lastRunFailed'].includes(k)) return 'warn';
+        return 'err';
+    }
+
+    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone };
 });

@@ -135,3 +135,16 @@ for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test
 }
 
 console.log('start-options.test.js: OK');
+
+// Start's state dot: grey when not active, green when working, amber with a caveat, red when not listening.
+assert.strictEqual(SO.stateTone('workflow.active.notActive'), 'off');
+assert.strictEqual(SO.stateTone('workflow.active.listening'), 'ok');
+assert.strictEqual(SO.stateTone('workflow.active.scheduled'), 'ok');
+assert.strictEqual(SO.stateTone('workflow.active.starting'), 'warn');
+assert.strictEqual(SO.stateTone('workflow.active.lastRunFailed'), 'warn');
+assert.strictEqual(SO.stateTone('workflow.active.serviceDown'), 'err');
+assert.strictEqual(SO.stateTone('workflow.active.unreachable'), 'err');
+for (const view of [SO.startView('option', null, 7), SO.startView('option', { workflow_id: 7, checked_age_s: 3, watch_state: 'waiting' }, 7)]) {
+    assert.ok(['off', 'ok', 'warn', 'err'].includes(SO.stateTone(view.hint.key)));
+}
+console.log('start-options stateTone: ok');

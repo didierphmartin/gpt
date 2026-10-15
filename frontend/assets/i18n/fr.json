@@ -675,7 +675,7 @@
     "active": {
       "activate": "Activer : exécuter selon sa planification ou son événement",
       "deactivate": "Désactiver",
-      "notActive": "Inactif — cliquez sur ▶ pour activer",
+      "notActive": "Inactif",
       "starting": "Démarrage…",
       "listening": "À l'écoute des événements",
       "listeningFallback": "À l'écoute (vérification toutes les 15 min)",

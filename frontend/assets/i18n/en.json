@@ -675,7 +675,7 @@
     "active": {
       "activate": "Activate: run on its schedule or event",
       "deactivate": "Deactivate",
-      "notActive": "Not active — click ▶ to activate",
+      "notActive": "Not active",
       "starting": "Starting…",
       "listening": "Listening for events",
       "listeningFallback": "Listening (checks every 15 min)",
