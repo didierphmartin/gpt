@@ -701,6 +701,7 @@
       "err_generic": "Activation impossible (HTTP {{status}})"
     },
     "live": {
+      "stop": "Arrêter",
       "open": "Ouvrir la vue en direct",
       "overlayTitle": "En direct",
       "newEvent": "Nouvel événement",

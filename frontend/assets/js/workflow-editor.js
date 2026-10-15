@@ -3213,7 +3213,7 @@ class WorkflowEditor {
             document.getElementById('pb-ov-hide')?.before(btn);
         }
         btn.textContent = v.button === 'deactivate'
-            ? `■ ${this.t('workflow.active.deactivate')}`
+            ? `■ ${this.t('workflow.live.stop')}`
             : `▶ ${this.t('workflow.live.activate')}`;
     }
 
@@ -3275,8 +3275,8 @@ class WorkflowEditor {
         const view = this.currentWorkflowId ? this._startView() : { button: 'run', hint: null };
         if (playBtn) {
             playBtn.style.display = 'flex';
-            // ▶ opens the live overlay in schedule / option mode; ■ (deactivate) lives there only.
-            playBtn.textContent = '▶';
+            // ■ while the workflow is active (it opens the live view; Stop is in its footer), else ▶.
+            playBtn.textContent = view.button === 'deactivate' ? '■' : '▶';
             playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession')
                 : this.t(view.button === 'deactivate' ? 'workflow.live.open' : 'workflow.active.activate');
         }
