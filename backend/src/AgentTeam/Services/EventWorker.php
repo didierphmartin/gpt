@@ -36,27 +36,44 @@ final class EventWorker
     {
         $now = ($this->now)();
         if ($now - $this->lastReconcile >= self::RECONCILE_S) {
-            $this->reconcile();
-            $this->lastReconcile = $now;
+            try {
+                $this->reconcile();
+                $this->lastReconcile = $now;
+            } catch (\Throwable) {
+                // retried on the next step; the slots already drained below must still be handled
+            }
         }
         foreach ($this->transport->done() as $user => [$body, $http, $err]) {
-            $this->onAnswer((int) $user, WatchCall::answer($body, (int) $http, (string) $err), $now);
+            try {
+                $this->onAnswer((int) $user, WatchCall::answer($body, (int) $http, (string) $err), $now);
+            } catch (\Throwable) {
+                // one user's failure must not lose the others' answers
+            }
         }
         foreach ($this->runs->done() as $user => $exit) {
-            $this->onRunEnd((int) $user, (int) $exit);
+            try {
+                $this->onRunEnd((int) $user, (int) $exit);
+            } catch (\Throwable) {
+            }
         }
         foreach (array_keys($this->slots) as $user) {
-            $s = $this->slots[$user];
-            if ($s['state'] === 'open' || ($s['state'] === 'backoff' && $now >= $s['until'])) {
-                $this->openWait($user, $now);
-            }
-            if (isset($this->slots[$user]) && $now - $this->slots[$user]['written_at'] >= self::HEARTBEAT_S) {
-                $this->write($user, true);
+            try {
+                $s = $this->slots[$user];
+                if ($s['state'] === 'open' || ($s['state'] === 'backoff' && $now >= $s['until'])) {
+                    $this->openWait($user, $now);
+                }
+                if (isset($this->slots[$user]) && $now - $this->slots[$user]['written_at'] >= self::HEARTBEAT_S) {
+                    $this->write($user, true);
+                }
+            } catch (\Throwable) {
             }
         }
         if ($now - $this->lastTick >= self::SCHEDULE_TICK_S) {
-            $this->runs->scheduleTick();
             $this->lastTick = $now;
+            try {
+                $this->runs->scheduleTick();
+            } catch (\Throwable) {
+            }
         }
     }
 
@@ -85,6 +102,11 @@ final class EventWorker
             $schedule = $check['mode']['schedule'];
             $key = [(int) $row['workflow_id'], $schedule ? (int) $schedule['id'] : 0];
             $slot = $this->slots[$user] ?? null;
+            if ($slot !== null && $slot['state'] === 'running') {
+                // a run is in flight: nothing for this user changes until it ends, then the slot is rebuilt
+                $this->slots[$user]['gone'] = true;
+                continue;
+            }
             if ($slot !== null && [$slot['workflow_id'], $slot['schedule_id']] !== $key) {
                 $this->drop($user);   // another workflow (or row) is active now
                 $slot = null;
@@ -130,7 +152,12 @@ final class EventWorker
     private function openWait(int $user, float $now): void
     {
         $s = $this->slots[$user];
-        $server = is_array($s['watch']) ? ($this->serverFor)($s['owner'], (string) ($s['watch']['server'] ?? '')) : null;
+        try {
+            $server = is_array($s['watch']) ? ($this->serverFor)($s['owner'], (string) ($s['watch']['server'] ?? '')) : null;
+        } catch (\Throwable) {
+            $this->backoff($user, 'unreachable', $now);
+            return;
+        }
         if ($server === null) {
             $this->backoff($user, 'server_missing', $now);
             return;
@@ -156,8 +183,23 @@ final class EventWorker
             $this->slots[$user]['state'] = 'open';
             return;
         }
-        $this->runs->start($user, $this->slots[$user]['schedule_id']);
+        try {
+            $row = $this->active->get($user);
+        } catch (\Throwable) {
+            $this->backoff($user, 'unreachable', $now);
+            return;
+        }
+        if ($row === null || (int) $row['workflow_id'] !== $this->slots[$user]['workflow_id'] || ($row['mode'] ?? null) !== 'option') {
+            unset($this->slots[$user]);   // deactivated since the wait opened (the request has finished): no run
+            return;
+        }
         $this->slots[$user]['state'] = 'running';
+        try {
+            $this->runs->start($user, $this->slots[$user]['schedule_id']);
+        } catch (\Throwable) {
+            $this->backoff($user, 'run_failed', $now);
+            return;
+        }
         $this->write($user);
     }
 
@@ -168,6 +210,7 @@ final class EventWorker
         }
         if ($this->slots[$user]['gone']) {
             unset($this->slots[$user]);
+            $this->lastReconcile = -INF;   // re-evaluate before anything opens for this user
             return;
         }
         $this->slots[$user]['state'] = 'open';
@@ -204,7 +247,11 @@ final class EventWorker
         if (!$force && $s['written'] === $written) {
             return;
         }
-        $this->active->setState($user, $state, $s['message']);
+        try {
+            $this->active->setState($user, $state, $s['message']);
+        } catch (\Throwable) {
+            return;   // 'written' stays as it was: the heartbeat retries
+        }
         $this->slots[$user]['written'] = $written;
         $this->slots[$user]['written_at'] = ($this->now)();
     }

@@ -241,4 +241,109 @@ final class EventWorkerTest extends TestCase
         $this->assertSame($other, $this->w->slots()[3]['schedule_id']);
         $this->assertSame(2, $this->tr->started);
     }
+
+    private function running(): void
+    {
+        $this->active();
+        $this->step();
+        $this->tr->answer(3, ['status' => 'ready']);
+        $this->step(1);
+        $this->assertSame('running', $this->w->slots()[3]['state']);
+    }
+
+    public function testSwitchingDuringARunStartsNothingUntilItEnds(): void
+    {
+        EventWorkerSchema::workflow($this->db, 66, 3, 1);
+        EventWorkerSchema::row($this->db, 66, 3, 'event', 1);
+        $this->running();
+        $this->active(3, 66);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame([], $this->tr->open);
+        $this->assertSame(64, $this->w->slots()[3]['workflow_id']);
+        $this->assertSame('running', $this->w->slots()[3]['state']);
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->assertSame([], $this->tr->open);                  // re-evaluated first
+        $this->step(1);
+        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame(66, $this->w->slots()[3]['workflow_id']);
+        $this->assertSame(2, $this->tr->started);
+        $this->assertCount(1, $this->runs->started);
+    }
+
+    public function testDisablingDuringARunIdlesAfterIt(): void
+    {
+        $this->running();
+        $this->db->exec('UPDATE agent_workflows SET enabled = 0');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->step(1);
+        $this->assertSame([], $this->tr->open);
+        $this->assertCount(1, $this->runs->started);
+        $this->assertSame(['idle', 'disabled'], array_values($this->state()));
+    }
+
+    public function testReenablingDuringARunOpensNoWaitUntilItEnds(): void
+    {
+        $this->running();
+        $this->db->exec('UPDATE agent_workflows SET enabled = 0');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->db->exec('UPDATE agent_workflows SET enabled = 1');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame([], $this->tr->open);
+        $this->assertSame('running', $this->w->slots()[3]['state']);
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->step(1);
+        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertCount(1, $this->runs->started);
+    }
+
+    public function testAThrowingServerLookupBacksOffWithoutBlockingOthers(): void
+    {
+        EventWorkerSchema::option($this->db, 2, 4);
+        EventWorkerSchema::workflow($this->db, 80, 4, 2);
+        EventWorkerSchema::row($this->db, 80, 4, 'event', 2);
+        $this->db->exec("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (4, 'Outlook', 'http://fake4/mcp', '{}')");
+        $w = new EventWorker(new ActiveWorkflowService($this->db), function (int $u, string $n) {
+            if ($u === 3) { throw new \RuntimeException('db gone'); }
+            return \AgentTeam\Services\WatchCall::server($this->db, $u, $n);
+        }, $this->tr, $this->runs, fn() => $this->t);
+        $this->active();
+        $this->active(4, 80);
+        $w->step();
+        $this->assertSame(['error', 'unreachable'], array_values($this->state(3)));
+        $this->assertSame(30, $w->slots()[3]['backoff']);
+        $this->assertArrayHasKey(4, $this->tr->open);
+        $this->assertArrayNotHasKey(3, $this->tr->open);
+    }
+
+    public function testAReadyBetweenDeactivationAndReconcileStartsNoRun(): void
+    {
+        $this->active();
+        $this->step();
+        (new ActiveWorkflowService($this->db))->deactivate(3, 64);
+        $this->tr->answer(3, ['status' => 'ready']);
+        $this->step(1);
+        $this->assertSame([], $this->runs->started);
+        $this->assertSame([], $this->w->slots());
+    }
+
+    public function testAFailedStateWriteDoesNotLoseARunEnd(): void
+    {
+        $this->running();
+        $this->db->exec('CREATE TABLE flag (v INTEGER)');
+        $this->db->exec('INSERT INTO flag VALUES (1)');
+        $this->db->exec("CREATE TRIGGER no_update BEFORE UPDATE ON active_workflows WHEN (SELECT v FROM flag) = 1
+            BEGIN SELECT RAISE(ABORT, 'locked'); END");
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->assertSame('waiting', $this->w->slots()[3]['state']);     // the run end was taken
+        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame('running', $this->state()['watch_state']);      // the write failed
+        $this->db->exec('UPDATE flag SET v = 0');
+        $this->step(EventWorker::HEARTBEAT_S + 1);
+        $this->assertSame('waiting', $this->state()['watch_state']);      // the heartbeat caught up
+    }
 }
