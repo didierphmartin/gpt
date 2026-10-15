@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The event worker (spec 2026-10-14 event-worker). Install: copy to ~/Library/LaunchAgents/ and
-     `launchctl load ~/Library/LaunchAgents/com.synergyai.event-worker.plist`. -->
+     `launchctl load ~/Library/LaunchAgents/com.synergyai.event-worker.plist`.
+     Log: ~/Library/Logs/synergyai-event-worker.log (the agent runs as the user, so it cannot write XAMPP's logs dir). -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.synergyai.event-worker</string>
@@ -15,7 +16,8 @@
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
-    <key>StandardOutPath</key><string>/Applications/XAMPP/xamppfiles/logs/event-worker.log</string>
-    <key>StandardErrorPath</key><string>/Applications/XAMPP/xamppfiles/logs/event-worker.log</string>
+    <key>ExitTimeOut</key><integer>40</integer>
+    <key>StandardOutPath</key><string>/Users/didierphmartin/Library/Logs/synergyai-event-worker.log</string>
+    <key>StandardErrorPath</key><string>/Users/didierphmartin/Library/Logs/synergyai-event-worker.log</string>
 </dict>
 </plist>

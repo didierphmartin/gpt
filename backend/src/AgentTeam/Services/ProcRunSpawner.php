@@ -14,6 +14,7 @@ final class ProcRunSpawner implements RunSpawner
     private array $runs = [];
     /** @var resource|null */
     private $tick = null;
+    private float $tickStarted = 0.0;
     private \Closure $log;
 
     public function __construct(private string $php, private string $backendDir, private int $runLimitS = 1800, ?\Closure $log = null)
@@ -25,7 +26,7 @@ final class ProcRunSpawner implements RunSpawner
     {
         if (isset($this->runs[$key])) {
             ($this->log)("run for user {$key} is still in flight: schedule {$scheduleId} not started");
-            return;
+            throw new \RuntimeException("a run for user {$key} is still in flight");
         }
         $proc = proc_open([$this->php, $this->backendDir . '/bin/run-schedule.php', (string) $scheduleId],
             [0 => ['file', '/dev/null', 'r'], 1 => STDOUT, 2 => STDERR], $pipes, $this->backendDir);
@@ -39,6 +40,7 @@ final class ProcRunSpawner implements RunSpawner
 
     public function done(): array
     {
+        $this->reapTick();
         $out = [];
         foreach ($this->runs as $key => $r) {
             if ($r['proc'] === null) {
@@ -61,26 +63,47 @@ final class ProcRunSpawner implements RunSpawner
         return $out;
     }
 
+    /** Close a finished tick; kill one past $runLimitS so a hung tick never blocks the schedule-mode workflows. */
+    private function reapTick(): void
+    {
+        if ($this->tick === null) {
+            return;
+        }
+        if (proc_get_status($this->tick)['running']) {
+            if (microtime(true) - $this->tickStarted <= $this->runLimitS) {
+                return;
+            }
+            ($this->log)("scheduler tick passed {$this->runLimitS} s: killed");
+            proc_terminate($this->tick, 9);
+        }
+        proc_close($this->tick);
+        $this->tick = null;
+    }
+
     public function scheduleTick(): void
     {
-        if ($this->tick !== null && proc_get_status($this->tick)['running']) {
-            return;   // the previous minute's tick still runs
-        }
+        $this->reapTick();
         if ($this->tick !== null) {
-            proc_close($this->tick);
+            return;   // the previous minute's tick still runs
         }
         $proc = proc_open([$this->php, $this->backendDir . '/scheduler/run-scheduled-workflows.php'],
             [0 => ['file', '/dev/null', 'r'], 1 => STDOUT, 2 => STDERR], $pipes, $this->backendDir);
         $this->tick = is_resource($proc) ? $proc : null;
+        $this->tickStarted = microtime(true);
     }
 
     /** SIGTERM: let the children finish up to $graceS, then kill them. */
     public function stopAll(int $graceS): void
     {
         $end = microtime(true) + $graceS;
-        while ($this->runs && microtime(true) < $end) {
+        while (($this->runs || $this->tick !== null) && microtime(true) < $end) {
             $this->done();
             usleep(200000);
+        }
+        if ($this->tick !== null) {
+            proc_terminate($this->tick, 9);
+            proc_close($this->tick);
+            $this->tick = null;
         }
         foreach ($this->runs as $r) {
             if ($r['proc'] !== null) {

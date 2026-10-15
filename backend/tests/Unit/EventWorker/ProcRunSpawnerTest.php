@@ -59,10 +59,31 @@ final class ProcRunSpawnerTest extends TestCase
         $lines = [];
         $s = new ProcRunSpawner(PHP_BINARY, $this->dir, 1, function (string $l) use (&$lines) { $lines[] = $l; });
         $s->start(1, 9);     // sleeps
-        $s->start(1, 5);     // refused: key 1 still runs
+        try {
+            $s->start(1, 5);     // refused: key 1 still runs
+            $this->fail('expected a RuntimeException');
+        } catch (\RuntimeException) {
+        }
         $this->assertCount(1, $lines);
         $code = $this->waitFor($s, 1, 5.0);
         $this->assertNotSame(0, $code);   // it was the sleeping run, killed at the limit
         $s->stopAll(1);
+    }
+
+    public function testAHungSchedulerTickIsKilled(): void
+    {
+        file_put_contents($this->dir . '/scheduler/run-scheduled-workflows.php', '<?php sleep(30);');
+        $lines = [];
+        $s = new ProcRunSpawner(PHP_BINARY, $this->dir, 1, function (string $l) use (&$lines) { $lines[] = $l; });
+        $s->scheduleTick();
+        $end = microtime(true) + 5;
+        while (!$lines && microtime(true) < $end) {
+            $s->done();
+            usleep(50000);
+        }
+        $this->assertCount(1, $lines);
+        $this->assertStringContainsString('tick', $lines[0]);
+        $s->scheduleTick();   // a fresh tick may start now
+        $s->stopAll(0);
     }
 }

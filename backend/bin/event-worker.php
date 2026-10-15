@@ -20,7 +20,7 @@ $connect = static function () use ($config): PDO {
     $db = $config['contexts_database'] ?? $config['database'];
     return new PDO("mysql:host={$db['host']};dbname={$db['database']};charset={$db['charset']}", $db['username'], $db['password'], [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES => false]);
+        PDO::ATTR_EMULATE_PREPARES => false, PDO::ATTR_TIMEOUT => 5]);
 };
 
 $stop = false;
@@ -31,6 +31,8 @@ pcntl_signal(SIGINT, function () use (&$stop) { $stop = true; });
 $transport = new CurlMultiTransport();
 $runs = new ProcRunSpawner(PHP_BINARY, dirname(__DIR__), 1800, $log);
 $worker = null;
+$pdo = null;
+$lastPing = 0.0;
 $log('event worker started (pid ' . getmypid() . ')');
 while (!$stop) {
     try {
@@ -40,12 +42,18 @@ while (!$stop) {
                 fn(int $user, string $name) => WatchCall::server($pdo, $user, $name),
                 $transport, $runs, fn() => microtime(true));
         }
+        // EventWorker::step() swallows its own errors, so a dead connection is found here, every 5 s.
+        if (microtime(true) - $lastPing >= 5.0) {
+            $pdo->query('SELECT 1');
+            $lastPing = microtime(true);
+        }
         $worker->step();
         $transport->wait(1.0);
     } catch (\PDOException $e) {
         // The database went away: keep the waits, reconnect in 10 s (spec §4).
         $log('database: ' . $e->getMessage() . ' -- retrying in 10 s');
         $worker = null;
+        $lastPing = 0.0;
         sleep(10);
     } catch (\Throwable $e) {
         // A bug must not kill the process: log it, carry on after 1 s.
