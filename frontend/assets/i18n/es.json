@@ -700,6 +700,12 @@
       "err_not_found": "Workflow no encontrado",
       "err_generic": "No se pudo activar (HTTP {{status}})"
     },
+    "live": {
+      "overlayTitle": "En vivo",
+      "newEvent": "Nuevo evento",
+      "event": "Evento",
+      "activate": "Activar"
+    },
     "startOptions": {
       "addTitle": "Añadir como opción de inicio",
       "editTitle": "Editar opción de inicio",

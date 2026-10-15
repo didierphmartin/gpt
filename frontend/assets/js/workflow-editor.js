@@ -2755,8 +2755,11 @@ class WorkflowEditor {
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
                 } else if (!this._isIngestionWorkflow() && !this._isSwarm() && this._startView().button !== 'run') {
-                    // Schedule or option mode: ▶ activates / deactivates (spec 2026-10-14 event-worker §5).
-                    (this._startView().button === 'activate' ? this._activate() : this._deactivate())
+                    // Schedule or option mode (spec 2026-10-15 live-overlay §2): ▶ activates when needed, then opens
+                    // the live overlay on the server runs; ■ in its header deactivates.
+                    const activate = this._startView().button === 'activate';
+                    (activate ? this._activate() : Promise.resolve())
+                        .then(() => this._openLiveSession())
                         .catch(err => this.showNotification(err?.message || String(err), 'error'));
                 } else if (this._isIngestionWorkflow()) {
                     // Ingestion: run the PHP interpreter from the Start node —
@@ -3075,6 +3078,141 @@ class WorkflowEditor {
             this._activeTimer = setInterval(() => { if (this.currentWorkflowId) this._loadActive(); }, 15000);
         }
         this._refreshStartHint();
+        if (this._pbSessionMode === 'live') this._liveHeader();
+    }
+
+    /** The live overlay (spec 2026-10-15 live-overlay): the server runner's runs of this workflow, as they happen. */
+    _openLiveSession() {
+        this._liveStop?.();
+        this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
+        this._liveTurn = null;
+        this._liveActiveNode = null;
+        this._liveHeader();
+        const ctrl = new AbortController();
+        this._liveStop = () => ctrl.abort();
+        this._liveConnect(ctrl.signal, this.currentWorkflowId).catch(() => {});
+    }
+
+    /** Follows GET /workflows/{id}/live until closed: reconnects on `bye` at once, on a failure with a growing pause. */
+    async _liveConnect(signal, workflowId) {
+        let cursor = '';
+        let delay = 1000;
+        const live = () => !signal.aborted && this.currentWorkflowId === workflowId;
+        while (live()) {
+            try {
+                const resp = await fetch(`${this.apiBase}/workflows/${workflowId}/live?cursor=${encodeURIComponent(cursor || '')}`,
+                    { headers: this.getAuthHeaders(), signal });
+                if (!resp.ok || !resp.body) throw new Error(`live HTTP ${resp.status}`);
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = '';
+                while (live()) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+                    let sep;
+                    while ((sep = buf.indexOf('\n\n')) !== -1) {
+                        const rawBlock = buf.slice(0, sep);
+                        buf = buf.slice(sep + 2);
+                        let eventType = 'message';
+                        let dataStr = '';
+                        for (const line of rawBlock.split('\n')) {
+                            if (line.startsWith(':')) continue;
+                            if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                            else if (line.startsWith('data:')) dataStr += (dataStr ? '\n' : '') + line.slice(5).trim();
+                        }
+                        if (!dataStr) continue;
+                        let data;
+                        try { data = JSON.parse(dataStr); } catch (_) { continue; }
+                        if (eventType === 'run') {
+                            cursor = data.cursor || cursor;
+                            this._liveApply(data.event);
+                        } else if (eventType === 'state') {
+                            this.activeWorkflow = data.active || null;
+                            this._refreshStartHint();
+                            this._liveHeader();
+                        } else if (eventType === 'bye') {
+                            cursor = data.cursor || cursor;
+                            delay = 1000;
+                        } else if (eventType === 'error') {
+                            const st = document.getElementById('pb-ov-status');
+                            if (st) st.textContent = data.error || '';
+                            reader.cancel().catch(() => {});
+                            return;
+                        }
+                    }
+                }
+                if (!live()) { reader.cancel().catch(() => {}); return; }
+                continue;   // the stream ended (bye or a dropped connection): reconnect with the last cursor
+            } catch (err) {
+                if (err?.name === 'AbortError' || !live()) return;
+            }
+            await new Promise(r => setTimeout(r, delay));
+            delay = Math.min(delay * 2, 10000);
+        }
+    }
+
+    /** One server run event on the canvas and in the feed; a no-op when the overlay was closed meanwhile. */
+    _liveApply(ev) {
+        if (this._pbSessionMode !== 'live') return;
+        const a = window.StartOptions.liveAction(ev, this._startNodeId());
+        if (!a) return;
+        const feed = this._pbOverlayEl();
+        if (a.turn) {
+            // A new email starts a new run: forget the canvas colours of the previous one.
+            document.querySelectorAll('.drawflow-node .workflow-node').forEach(el =>
+                el.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'));
+            document.querySelectorAll('.drawflow-node').forEach(el =>
+                el.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'));
+            this._liveActiveNode = null;
+            const time = new Date().toLocaleTimeString();
+            this._liveTurn = this._pbAppend(`<div class="pb-live-turn" style="font-size:12px;font-weight:600;color:#475569;border-top:1px solid #e2e8f0;padding-top:6px;">${this.escapeHtml(time)} · ${this.escapeHtml(this.t('workflow.live.newEvent'))}</div>`);
+        }
+        if (a.node) {
+            this.highlightNode(a.node, a.state, a.node);
+            this._liveActiveNode = a.state === 'active' ? a.node : null;
+        }
+        if (a.subject) this._pbBubble('you', a.subject, { label: this.t('workflow.live.event') });
+        if (a.trace) this._pbAppend(`<div class="pb-live-trace" style="font-size:11px;color:#64748b;">${this.escapeHtml(a.trace)}</div>`);
+        if (a.answer) this._pbBubble('agent', a.answer, { label: this.currentWorkflowName || 'Workflow' });
+        if (a.error) {
+            if (this._liveActiveNode) this.highlightNode(this._liveActiveNode, 'error', this._liveActiveNode);
+            this._pbAppend(`<div style="color:#dc2626;font-size:13px;">${this.escapeHtml(a.error)}</div>`);
+        }
+        if (feed) feed.scrollTop = feed.scrollHeight;
+    }
+
+    /** The live overlay's footer: Start's state line and the activate / deactivate button. */
+    _liveHeader() {
+        const st = document.getElementById('pb-ov-status');
+        if (!st || this._pbSessionMode !== 'live') return;
+        const v = this._startView();
+        const tones = { off: '#9ca3af', ok: '#16a34a', warn: '#d97706', err: '#dc2626' };
+        st.classList.remove('start-state', 'state-off', 'state-ok', 'state-warn', 'state-err');
+        if (v.hint) {
+            const tone = window.StartOptions.stateTone(v.hint.key);
+            st.classList.add('start-state', `state-${tone}`);
+            st.style.color = tones[tone] || '#9ca3af';
+            st.textContent = this.t(v.hint.key, v.hint.params);
+        } else {
+            st.textContent = '';
+        }
+        let btn = document.getElementById('pb-ov-live-toggle');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = 'pb-ov-live-toggle';
+            btn.className = 'storage-config-btn';
+            btn.addEventListener('click', () => {
+                const stop = this._startView().button === 'deactivate';
+                (stop ? this._deactivate() : this._activate())
+                    .catch(err => this.showNotification(err?.message || String(err), 'error'))
+                    .then(() => this._liveHeader());
+            });
+            document.getElementById('pb-ov-hide')?.before(btn);
+        }
+        btn.textContent = v.button === 'deactivate'
+            ? `■ ${this.t('workflow.active.deactivate')}`
+            : `▶ ${this.t('workflow.live.activate')}`;
     }
 
     /** ▶ in schedule or option mode, spec 2026-10-14 event-worker §5. */
@@ -14399,6 +14537,7 @@ class WorkflowEditor {
         // the node directly left the resize listener and the ResizeObserver
         // alive on a detached modal — and re-opening a live session is a
         // supported flow, so they accumulated one pair per re-open.
+        this._liveStop?.(); this._liveStop = null;   // another overlay replacing the live one ends its stream
         this._pbOverlayTeardown?.();
         this._pbOverlayTeardown = null;
         document.getElementById('playbook-run-overlay')?.remove();
@@ -14423,14 +14562,15 @@ class WorkflowEditor {
         // playbook run is — it's a standing conversation — so the header
         // reads differently from the start.
         const titleSuffix = session
-            ? ` — ${this.t(mode === 'batch' ? 'workflow.batchSession.overlayTitle' : 'workflow.swarmSession.overlayTitle')}`
+            ? ` — ${this.t(mode === 'live' ? 'workflow.live.overlayTitle' : mode === 'batch' ? 'workflow.batchSession.overlayTitle' : 'workflow.swarmSession.overlayTitle')}`
             : ' — running…';
         // The composer only exists in session mode. The one overlay left that
         // opens without it is a playbook NODE's own run (session=false): its
         // prompt came from the graph, it is replayed at open, and there is
         // nothing more to type. Every compiled run is a session now, so it
         // gets the composer.
-        const composerHtml = session ? `
+        // The live overlay only watches server runs: nothing to type.
+        const composerHtml = session && mode !== 'live' ? `
                         <div id="pb-ov-composer" style="display:flex;gap:8px;flex-basis:100%;order:-1;margin-bottom:8px;">
                             <input id="pb-ov-input" type="text" autocomplete="off" placeholder="${this.escapeHtml(this.t(mode === 'batch' ? 'workflow.batchSession.placeholder' : 'workflow.swarmSession.placeholder'))}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
                             <button class="storage-config-btn" id="pb-ov-send">${this.escapeHtml(this.t('workflow.swarmSession.send'))}</button>
@@ -14482,6 +14622,7 @@ class WorkflowEditor {
         // or they leak across sessions.
         let windowCleanup = null;
         const hide = () => {
+            this._liveStop?.(); this._liveStop = null;
             // A closed session starts fresh — the next Start click or Run
             // begins a new conversation rather than resuming this one.
             // Hide means hide. Ending a conversation here threw away the
@@ -14546,6 +14687,7 @@ class WorkflowEditor {
             // interpreter, the transport is a POST to that server carrying
             // the one session id minted when the overlay opened (§10).
             const send = async () => {
+                if (!input) return;
                 const text = input.value.trim();
                 if (!text || this._swarmBusy) return;
                 input.value = '';
@@ -14591,7 +14733,7 @@ class WorkflowEditor {
             input?.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); send(); }
             });
-            this._pbUpdateSwarmStatus();
+            if (mode !== 'live') this._pbUpdateSwarmStatus();
             input?.focus();
         }
     }
