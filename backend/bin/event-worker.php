@@ -27,7 +27,7 @@ $connect = static function () use ($config): PDO {
 // and run the workflow twice. The lock is held by $lock for the process's lifetime and freed by the OS on exit.
 $lockPath = (getenv('HOME') ?: '/Users/didierphmartin') . '/Library/Caches/synergyai-event-worker.lock';
 @mkdir(dirname($lockPath), 0755, true);
-$lock = fopen($lockPath, 'c');
+$lock = fopen($lockPath, 'ce'); // 'e' = O_CLOEXEC: close-on-exec, so child runs do not hold the lock
 if ($lock === false) {
     $log("cannot open the lock file {$lockPath}");
     exit(1);
