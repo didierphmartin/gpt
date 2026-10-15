@@ -29,6 +29,18 @@ final class FakeTransport implements WatchTransport
     }
 }
 
+final class ThrowingStatement extends \PDOStatement
+{
+    public static int $boomOn = 0;
+    public function execute(?array $params = null): bool
+    {
+        if ($params !== null && str_contains($this->queryString, 'FROM workflow_edges') && $params === [self::$boomOn]) {
+            throw new \RuntimeException('db gone');
+        }
+        return parent::execute($params);
+    }
+}
+
 final class FakeRuns implements RunSpawner
 {
     public array $started = [];   // [key, scheduleId]
@@ -345,5 +357,43 @@ final class EventWorkerTest extends TestCase
         $this->db->exec('UPDATE flag SET v = 0');
         $this->step(EventWorker::HEARTBEAT_S + 1);
         $this->assertSame('waiting', $this->state()['watch_state']);      // the heartbeat caught up
+    }
+
+    public function testALongFailedRunStillRecordsRunFailed(): void
+    {
+        $this->running();
+        $this->step(EventWorker::RECONCILE_S);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->runs->ended[3] = 1;
+        $this->step(1);
+        $this->step(1);
+        $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
+        $this->assertArrayHasKey(3, $this->tr->open);
+    }
+
+    public function testAReadyAfterADisableBeforeTheNextReconcileStartsNoRun(): void
+    {
+        $this->active();
+        $this->step();
+        $this->db->exec('UPDATE agent_workflows SET enabled = 0');
+        $this->tr->answer(3, ['status' => 'ready']);
+        $this->step(1);
+        $this->assertSame([], $this->runs->started);
+        $this->assertArrayNotHasKey(3, $this->tr->open);
+    }
+
+    public function testARowWhoseCheckThrowsDoesNotStopTheOthers(): void
+    {
+        EventWorkerSchema::option($this->db, 2, 4);
+        EventWorkerSchema::workflow($this->db, 80, 4, 2);
+        EventWorkerSchema::row($this->db, 80, 4, 'event', 2);
+        $this->db->exec("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (4, 'Outlook', 'http://fake4/mcp', '{}')");
+        $this->active();
+        $this->active(4, 80);
+        // startHasLinks() raises for workflow 64's Start node only
+        ThrowingStatement::$boomOn = (int) $this->db->query("SELECT id FROM workflow_nodes WHERE workflow_id = 64 AND node_type = 'start'")->fetchColumn();
+        $this->db->setAttribute(PDO::ATTR_STATEMENT_CLASS, [ThrowingStatement::class]);
+        $this->step();
+        $this->assertArrayHasKey(4, $this->tr->open);
     }
 }

@@ -22,6 +22,8 @@ final class EventWorker
     private float $lastReconcile = -INF;
     private float $lastTick = -INF;
     private int $requestId = 0;
+    /** @var array<int, array> user id => [workflow_id, schedule_id] of a run that failed while its slot was flagged for rebuild */
+    private array $carry = [];
 
     public function __construct(
         private ActiveWorkflowService $active,
@@ -96,38 +98,11 @@ final class EventWorker
         $this->active->sweep();
         $seen = [];
         foreach ($this->active->all() as $row) {
-            $user = (int) $row['user_id'];
-            $seen[$user] = true;
-            $check = $this->active->check($row);
-            $schedule = $check['mode']['schedule'];
-            $key = [(int) $row['workflow_id'], $schedule ? (int) $schedule['id'] : 0];
-            $slot = $this->slots[$user] ?? null;
-            if ($slot !== null && $slot['state'] === 'running') {
-                // a run is in flight: nothing for this user changes until it ends, then the slot is rebuilt
-                $this->slots[$user]['gone'] = true;
-                continue;
-            }
-            if ($slot !== null && [$slot['workflow_id'], $slot['schedule_id']] !== $key) {
-                $this->drop($user);   // another workflow (or row) is active now
-                $slot = null;
-            }
-            if (!$check['ok']) {
-                if ($slot !== null && $slot['state'] !== 'running') {
-                    $this->transport->cancel($user);
-                }
-                $this->slots[$user] = $this->slot($key, $row, $schedule, 'idle', $slot);
-                $this->slots[$user]['message'] = $check['reason'];
-                $this->write($user);
-                continue;
-            }
-            if ($row['mode'] === 'schedule') {
-                $this->slots[$user] = $this->slot($key, $row, $schedule, 'scheduled', $slot);
-                $this->slots[$user]['message'] = $schedule['next_run'] ?? null;
-                $this->write($user);
-                continue;
-            }
-            if ($slot === null || in_array($slot['state'], ['idle', 'scheduled'], true)) {
-                $this->slots[$user] = $this->slot($key, $row, $schedule, 'open', $slot);
+            $seen[(int) $row['user_id']] = true;
+            try {
+                $this->reconcileRow($row);
+            } catch (\Throwable) {
+                // one row's failure must not stop the later rows
             }
         }
         foreach (array_keys($this->slots) as $user) {
@@ -141,11 +116,54 @@ final class EventWorker
         }
     }
 
+    private function reconcileRow(array $row): void
+    {
+        $user = (int) $row['user_id'];
+        $check = $this->active->check($row);
+        $schedule = $check['mode']['schedule'];
+        $key = [(int) $row['workflow_id'], $schedule ? (int) $schedule['id'] : 0];
+        $slot = $this->slots[$user] ?? null;
+        if ($slot !== null && $slot['state'] === 'running') {
+            // a run is in flight: nothing for this user changes until it ends; if the row changed, the slot is then rebuilt
+            if (!$check['ok'] || [$slot['workflow_id'], $slot['schedule_id']] !== $key || $slot['mode'] !== $row['mode']) {
+                $this->slots[$user]['gone'] = true;
+            }
+            return;
+        }
+        $carried = null;
+        if ($slot === null && isset($this->carry[$user])) {
+            $carried = $this->carry[$user] === $key ? ['message' => 'run_failed'] : null;   // a failed run that ended while the row changed
+            unset($this->carry[$user]);
+        }
+        if ($slot !== null && [$slot['workflow_id'], $slot['schedule_id']] !== $key) {
+            $this->drop($user);   // another workflow (or row) is active now
+            $slot = null;
+        }
+        if (!$check['ok']) {
+            if ($slot !== null && $slot['state'] !== 'running') {
+                $this->transport->cancel($user);
+            }
+            $this->slots[$user] = $this->slot($key, $row, $schedule, 'idle', $slot ?? $carried);
+            $this->slots[$user]['message'] = $check['reason'];
+            $this->write($user);
+            return;
+        }
+        if ($row['mode'] === 'schedule') {
+            $this->slots[$user] = $this->slot($key, $row, $schedule, 'scheduled', $slot ?? $carried);
+            $this->slots[$user]['message'] = $schedule['next_run'] ?? null;
+            $this->write($user);
+            return;
+        }
+        if ($slot === null || in_array($slot['state'], ['idle', 'scheduled'], true)) {
+            $this->slots[$user] = $this->slot($key, $row, $schedule, 'open', $slot ?? $carried);
+        }
+    }
+
     private function slot(array $key, array $row, ?array $schedule, string $state, ?array $old): array
     {
         $trigger = $schedule && is_string($schedule['event_trigger'] ?? null) ? json_decode($schedule['event_trigger'], true) : null;
         return ['workflow_id' => $key[0], 'schedule_id' => $key[1], 'owner' => (int) $row['owner_id'], 'watch' => $trigger,
-            'state' => $state, 'until' => 0.0, 'backoff' => $old['backoff'] ?? 0, 'message' => $old['message'] ?? null,
+            'mode' => $row['mode'], 'state' => $state, 'until' => 0.0, 'backoff' => $old['backoff'] ?? 0, 'message' => $old['message'] ?? null,
             'written_at' => $old['written_at'] ?? -INF, 'written' => $old['written'] ?? null, 'gone' => false];
     }
 
@@ -184,13 +202,19 @@ final class EventWorker
             return;
         }
         try {
-            $row = $this->active->get($user);
+            $row = null;
+            foreach ($this->active->all() as $r) {
+                if ((int) $r['user_id'] === $user) {
+                    $row = $r;
+                }
+            }
+            $ok = $row !== null && $this->active->check($row)['ok'];
         } catch (\Throwable) {
             $this->backoff($user, 'unreachable', $now);
             return;
         }
-        if ($row === null || (int) $row['workflow_id'] !== $this->slots[$user]['workflow_id'] || ($row['mode'] ?? null) !== 'option') {
-            unset($this->slots[$user]);   // deactivated since the wait opened (the request has finished): no run
+        if (!$ok || (int) $row['workflow_id'] !== $this->slots[$user]['workflow_id'] || $row['mode'] !== 'option') {
+            unset($this->slots[$user]);   // deactivated or disabled since the wait opened (the request has finished): no run
             return;
         }
         $this->slots[$user]['state'] = 'running';
@@ -209,6 +233,9 @@ final class EventWorker
             return;
         }
         if ($this->slots[$user]['gone']) {
+            if ($exit !== 0) {
+                $this->carry[$user] = [$this->slots[$user]['workflow_id'], $this->slots[$user]['schedule_id']];
+            }
             unset($this->slots[$user]);
             $this->lastReconcile = -INF;   // re-evaluate before anything opens for this user
             return;
