@@ -54,90 +54,34 @@ set_error_handler(function ($errno, $errstr, $errfile, $errline) use ($isCli) {
     return true;
 });
 
-// Load configuration and dependencies
-require_once __DIR__ . '/../vendor/autoload.php';
-
-$configPath = __DIR__ . '/../config/ai_config.php';
-if (!file_exists($configPath)) {
-    $error = 'Configuration file not found';
-    if ($isCli) {
-        fwrite(STDERR, $error . "\n");
-        exit(1);
-    }
-    echo json_encode(['error' => $error]);
-    exit(1);
-}
-
-$config = require $configPath;
-
-// Connect to database
 try {
-    $dbConfig = $config['contexts_database'] ?? $config['database'];
-    $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['database']};charset={$dbConfig['charset']}";
-    $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES => false
-    ]);
-} catch (PDOException $e) {
-    $error = 'Database connection failed: ' . $e->getMessage();
+    $boot = require __DIR__ . '/bootstrap.php';
+} catch (\RuntimeException $e) {
     if ($isCli) {
-        fwrite(STDERR, $error . "\n");
+        fwrite(STDERR, $e->getMessage() . "\n");
         exit(1);
     }
-    echo json_encode(['error' => $error]);
+    echo json_encode(['error' => $e->getMessage()]);
     exit(1);
 }
-
-// Initialize services
-use AgentTeam\Services\ScheduledWorkflowService;
-use AgentTeam\Services\WorkflowRepository;
-use AgentTeam\Services\AgentRepository;
-use AgentTeam\Services\AgentRunner;
-use AgentTeam\Services\GraphWorkflowRunner;
-use AgentTeam\Services\WorkflowRunner;
-use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
-use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
-
-$scheduleService = new ScheduledWorkflowService($pdo);
-$workflowRepository = new WorkflowRepository($pdo);
-$graphRepository = $workflowRepository->getGraphRepository();
-$agentRepository = new AgentRepository($pdo);
-
-// Create AI assistant for LLM and tools
-$assistant = new AIPortfolioAssistant($config);
-$assistant->setDatabase($pdo);
-$mcpToolsLoader = new MCPToolsLoader($pdo);
-
-$agentRunner = new AgentRunner(
-    $assistant->getLLMManager(),
-    $assistant->getToolsManager(),
-    $mcpToolsLoader,
-    $pdo,
-    $config
-);
-
-$graphWorkflowRunner = new GraphWorkflowRunner(
-    $pdo,
-    $agentRepository,
-    $agentRunner,
-    $graphRepository,
-    $config
-);
-
-$workflowRunner = new WorkflowRunner(
-    $pdo,
-    $agentRepository,
-    $agentRunner,
-    $config
-);
 
 $tick = new AgentTeam\Services\ScheduleTick(
-    $scheduleService,
-    AgentTeam\Services\ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner),
+    $boot['schedules'],
+    $boot['runSchedule'],
     $isCli ? static fn(string $line) => print('[' . date('Y-m-d H:i:s') . "] {$line}\n") : null
 );
-$results = $tick->run();
+// Only the active schedule-mode workflows run (spec 2026-10-14 event-worker §3). A missing active_workflows table
+// (not migrated yet) must not break the tick: then nothing is due, never every schedule.
+try {
+    $activeWorkflowIds = (new AgentTeam\Services\ActiveWorkflowService($boot['pdo']))->scheduleWorkflowIds();
+} catch (\Throwable $e) {
+    error_log('Scheduler: active workflows unavailable, running none: ' . $e->getMessage());
+    if ($isCli) {
+        fwrite(STDERR, 'Scheduler: active workflows unavailable, running none: ' . $e->getMessage() . "\n");
+    }
+    $activeWorkflowIds = [];
+}
+$results = $tick->run($activeWorkflowIds);
 
 if ($isCli) {
     echo "[" . date('Y-m-d H:i:s') . "] Completed: " . $results['executed_count'] . " succeeded, " . $results['failed_count'] . " failed\n";
