@@ -148,3 +148,26 @@ for (const view of [SO.startView('option', null, 7), SO.startView('option', { wo
     assert.ok(['off', 'ok', 'warn', 'err'].includes(SO.stateTone(view.hint.key)));
 }
 console.log('start-options stateTone: ok');
+
+// The live overlay (spec 2026-10-15 live-overlay §4): one action per server run event.
+const LA = (e) => SO.liveAction(e, '17');
+assert.deepStrictEqual(LA({ type: 'workflow_start', run_id: 'x' }), { turn: 'open' });
+assert.deepStrictEqual(LA({ type: 'node_start', node_id: 2598, drawflow_id: '18' }), { node: '18', state: 'active' });
+assert.deepStrictEqual(LA({ type: 'node_complete', node_id: 2598, drawflow_id: '18', success: true }), { node: '18', state: 'completed' });
+assert.deepStrictEqual(LA({ type: 'node_complete', node_id: 2601, drawflow_id: '21', success: false, error: 'boom' }),
+    { node: '21', state: 'error', trace: 'boom' });
+// The Start option's hidden code node is Start on the canvas; its output is the event.
+assert.deepStrictEqual(LA({ type: 'node_start', node_id: '1000002597', drawflow_id: null }), { node: '17', state: 'active' });
+assert.deepStrictEqual(LA({ type: 'node_complete', node_id: '1000002597', drawflow_id: null, success: true,
+    output: 'From: a@b.com\nSubject: test 23\nReceived: 2026-10-15T14:19:12Z\n\nbody' }),
+    { node: '17', state: 'completed', subject: 'From: a@b.com\nSubject: test 23' });
+assert.deepStrictEqual(LA({ type: 'node_log', message: 'jev did not classify' }), { trace: 'jev did not classify' });
+assert.strictEqual(LA({ type: 'node_log' }), null);
+assert.deepStrictEqual(LA({ type: 'workflow_complete', success: true, output: 'done' }), { answer: 'done' });
+assert.deepStrictEqual(LA({ type: 'workflow_error', error: 'Unconfigured agent template' }), { error: 'Unconfigured agent template' });
+assert.deepStrictEqual(LA({ type: 'workflow_complete', success: false }), { error: 'Run failed' });
+assert.strictEqual(LA({ type: 'node_trace' }), null);
+assert.strictEqual(LA(null), null);
+assert.strictEqual(SO.eventSubject('x'.repeat(300)).length, 200);
+assert.strictEqual(SO.eventSubject(''), '');
+console.log('start-options liveAction: ok');

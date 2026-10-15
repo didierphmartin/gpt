@@ -130,5 +130,39 @@
         return 'err';
     }
 
-    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone };
+    /** The event a run started on, for the live overlay's turn: From and Subject lines, else the first 200 characters. */
+    function eventSubject(output) {
+        const s = String(output ?? '');
+        const lines = ['From', 'Subject'].map((k) => new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(s)).filter(Boolean)
+            .map((m) => m[0].trim());
+        return lines.length ? lines.join('\n') : s.slice(0, 200);
+    }
+
+    /**
+     * What the live overlay does with one server run event (spec 2026-10-15 live-overlay §4). The Start option's
+     * code node runs as a hidden node (no drawflow id, id >= 1 000 000 000, StartOptionGraph::ID_OFFSET): on the
+     * canvas it is Start, and its output is the event the run started on.
+     */
+    function liveAction(ev, startDrawflowId) {
+        if (!ev || typeof ev !== 'object') return null;
+        const trigger = ev.drawflow_id == null && Number(ev.node_id) >= 1000000000;
+        switch (ev.type) {
+            case 'workflow_start': return { turn: 'open' };
+            case 'node_start': return { node: trigger ? startDrawflowId : String(ev.drawflow_id ?? ''), state: 'active' };
+            case 'node_complete': {
+                const out = { node: trigger ? startDrawflowId : String(ev.drawflow_id ?? ''), state: ev.success === false ? 'error' : 'completed' };
+                if (trigger && ev.success !== false) out.subject = eventSubject(ev.output);
+                if (ev.success === false && ev.error) out.trace = String(ev.error);
+                return out;
+            }
+            case 'node_log': return ev.message ? { trace: String(ev.message) } : null;
+            case 'workflow_complete':
+                return ev.success === false ? { error: String(ev.error || 'Run failed') } : { answer: String(ev.output ?? '') };
+            case 'workflow_error': return { error: String(ev.error || 'Run failed') };
+            default: return null;
+        }
+    }
+
+    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone,
+        liveAction, eventSubject };
 });
