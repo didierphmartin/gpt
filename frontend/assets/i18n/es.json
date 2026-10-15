@@ -695,7 +695,8 @@
       "deactivated": "Workflow desactivado",
       "err_no_trigger": "Elija primero una programación o una opción de código en Start",
       "err_no_links": "Start no tiene enlaces: conéctelo antes de activar",
-      "err_not_found": "Workflow no encontrado"
+      "err_not_found": "Workflow no encontrado",
+      "err_generic": "No se pudo activar (HTTP {{status}})"
     },
     "startOptions": {
       "addTitle": "Añadir como opción de inicio",

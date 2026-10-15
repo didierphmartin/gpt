@@ -2754,7 +2754,7 @@ class WorkflowEditor {
                 e.stopPropagation();
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
-                } else if (this._startView().button !== 'run') {
+                } else if (!this._isIngestionWorkflow() && !this._isSwarm() && this._startView().button !== 'run') {
                     // Schedule or option mode: ▶ activates / deactivates (spec 2026-10-14 event-worker §5).
                     (this._startView().button === 'activate' ? this._activate() : this._deactivate())
                         .catch(err => this.showNotification(err?.message || String(err), 'error'));
@@ -3095,16 +3095,24 @@ class WorkflowEditor {
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
         const body = await r.json().catch(() => ({}));
         if (!r.ok || body.success === false) {
-            this.showNotification(this.t(`workflow.active.err_${body.kind || 'not_found'}`), 'error');
+            this.showNotification(this._activeError(r, body), 'error');
         } else {
             this.showNotification(this.t('workflow.active.activated'), 'success');
         }
         await this._loadActive();
     }
 
+    /** A refused (de)activation as text: the three known kinds, else the server's message, else a generic line. */
+    _activeError(r, body) {
+        if (['no_trigger', 'no_links', 'not_found'].includes(body?.kind)) return this.t(`workflow.active.err_${body.kind}`);
+        return body?.error || this.t('workflow.active.err_generic', { status: r.status });
+    }
+
     async _deactivate() {
-        await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'DELETE', headers: this.getAuthHeaders() });
-        this.showNotification(this.t('workflow.active.deactivated'), 'info');
+        const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'DELETE', headers: this.getAuthHeaders() });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || body.success === false) this.showNotification(this._activeError(r, body), 'error');
+        else this.showNotification(this.t('workflow.active.deactivated'), 'info');
         await this._loadActive();
     }
 

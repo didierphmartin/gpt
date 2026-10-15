@@ -695,7 +695,8 @@
       "deactivated": "Workflow désactivé",
       "err_no_trigger": "Choisissez d'abord une planification ou une option de code sur Start",
       "err_no_links": "Start n'a aucun lien : connectez-le avant d'activer",
-      "err_not_found": "Workflow introuvable"
+      "err_not_found": "Workflow introuvable",
+      "err_generic": "Activation impossible (HTTP {{status}})"
     },
     "startOptions": {
       "addTitle": "Ajouter comme option de démarrage",

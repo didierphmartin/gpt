@@ -33,7 +33,7 @@ Cada nodo puede asociarse con un **esquema JSON** para decodificación restringi
 En lugar de una hora, una programación puede esperar un **evento**: pon *Repetir* en **Por evento (herramienta MCP)** y elige un servidor MCP y su herramienta disparadora — p. ej. *Outlook* → *wait_for_new*, que responde en cuanto llega un correo nuevo. *Argumentos de la herramienta* es la entrada JSON de la herramienta, p. ej. `{"args": {"folder": "Inbox"}}` para la carpeta que lee un nodo *Poll Outlook* (`{}` = Inbox).
 
 - El script Python compilado lo ejecuta: `python <archivo> --watch` espera esa herramienta y ejecuta el workflow cada vez que responde *ready*, y de nuevo mientras quede trabajo.
-- En la aplicación, una programación por evento aún no se ejecuta por sí sola.
+- Una vez activado un workflow con ▶ en Start, se ejecuta por sí solo (véase *Activar un workflow* más abajo).
 - Para Outlook, las notificaciones llegan por Azure Event Hubs (ver el README del servidor Outlook). Sin ellas, la herramienta igual responde cada 15 minutos.
 
 ### Opciones de inicio
@@ -48,13 +48,13 @@ El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt**, **Progra
 
 #### Activar un workflow
 
-Marcar un modo de entrada solo lo selecciona. Para que un workflow se ejecute solo, haga clic en ▶ en Start:
+Marcar un modo de entrada solo lo selecciona. Para que un workflow se ejecute solo, haz clic en ▶ en Start:
 
 - **Enter Prompt:** ▶ abre la conversación, como antes.
 - **Set Schedule** o una **opción de código** (por ejemplo «Outlook: Get New Email»): ▶ activa el workflow. El
   servicio de eventos lo ejecuta a las horas programadas, o espera el evento y lo ejecuta en cada uno. ■ lo desactiva.
 
-Solo hay un workflow activo a la vez: activar otro desactiva el primero (se le pregunta antes). Cambiar el modo de
+Solo hay un workflow activo a la vez: activar otro desactiva el primero (se te pregunta antes). Cambiar el modo de
 entrada del workflow activo lo desactiva. Un Start sin enlaces no se puede activar. Start muestra el estado:
 *Escuchando eventos*, *Ejecutando…*, *Activo — próxima ejecución …*, *Sin escuchar:* y el motivo, o *El servicio de
 eventos no está funcionando* cuando el servicio en segundo plano está detenido.

@@ -33,7 +33,7 @@ Chaque nœud peut être associé à un **schéma JSON** pour un décodage contra
 Au lieu d'une heure, une planification peut attendre un **événement** : réglez *Répéter* sur **Sur événement (outil MCP)** et choisissez un serveur MCP et son outil déclencheur — par ex. *Outlook* → *wait_for_new*, qui répond dès qu'un nouveau courriel arrive. *Arguments de l'outil* est l'entrée JSON de l'outil, par ex. `{"args": {"folder": "Inbox"}}` pour le dossier que lit un nœud *Poll Outlook* (`{}` = Inbox).
 
 - Le script Python compilé l'exécute : `python <fichier> --watch` attend cet outil et lance le workflow chaque fois qu'il répond *ready*, puis encore tant qu'il reste du travail.
-- Dans l'application, une planification sur événement ne s'exécute pas encore d'elle-même.
+- Une fois un workflow activé avec ▶ sur Start, il s'exécute de lui-même (voir *Activer un workflow* plus bas).
 - Pour Outlook, les notifications passent par Azure Event Hubs (voir le README du serveur Outlook). Sans elles, l'outil répond quand même toutes les 15 minutes.
 
 ### Options de démarrage

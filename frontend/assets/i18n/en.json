@@ -695,7 +695,8 @@
       "deactivated": "Workflow deactivated",
       "err_no_trigger": "Pick Set Schedule or a code option on Start first",
       "err_no_links": "Start has no links: connect it before activating",
-      "err_not_found": "Workflow not found"
+      "err_not_found": "Workflow not found",
+      "err_generic": "Could not activate (HTTP {{status}})"
     },
     "startOptions": {
       "addTitle": "Add as a Start option",
