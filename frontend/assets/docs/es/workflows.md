@@ -46,6 +46,22 @@ El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt**, **Progra
 - **Volver atrás:** marca Escribir el prompt o Programar. Inicio vuelve a tener un solo conector: los enlaces de la salida que lleva el trabajo se quedan, los demás se eliminan. Una advertencia los enumera antes; Cancelar no cambia nada.
 - **Editarla o quitarla:** el componente solo se edita en la Biblioteca de componentes de código, y cada Inicio que lo usa se actualiza. Si al guardar se quitan salidas que tienen enlaces en algún flujo, una advertencia enumera esos flujos y enlaces antes. ⋮ en el componente → Editar la opción de inicio o Quitar la opción de inicio; al quitarla, esos Inicio vuelven a ser un Inicio normal.
 
+#### Activar un workflow
+
+Marcar un modo de entrada solo lo selecciona. Para que un workflow se ejecute solo, haga clic en ▶ en Start:
+
+- **Enter Prompt:** ▶ abre la conversación, como antes.
+- **Set Schedule** o una **opción de código** (por ejemplo «Outlook: Get New Email»): ▶ activa el workflow. El
+  servicio de eventos lo ejecuta a las horas programadas, o espera el evento y lo ejecuta en cada uno. ■ lo desactiva.
+
+Solo hay un workflow activo a la vez: activar otro desactiva el primero (se le pregunta antes). Cambiar el modo de
+entrada del workflow activo lo desactiva. Un Start sin enlaces no se puede activar. Start muestra el estado:
+*Escuchando eventos*, *Ejecutando…*, *Activo — próxima ejecución …*, *Sin escuchar:* y el motivo, o *El servicio de
+eventos no está funcionando* cuando el servicio en segundo plano está detenido.
+
+Cualquier servidor MCP puede ser una fuente de eventos para una opción de código si ofrece una herramienta de espera
+que responde `{"status": "ready"}` o `{"status": "timeout"}`, como `wait_for_new` de Outlook.
+
 ## Compilar a Python
 
 Cualquier workflow puede **compilarse en una aplicación Python independiente**. El script generado usa LangGraph y puede ejecutarse independientemente de la aplicación web — útil cuando quieres distribuir un workflow como CLI o como script programado.

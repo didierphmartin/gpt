@@ -672,6 +672,31 @@
     "noteNotExported": "Nota: la memoria se aplica solo en tiempo de ejecución. No se incluye en los exports Python LangGraph generados, que permanecen portables e independientes del usuario."
   },
   "workflow": {
+    "active": {
+      "activate": "Activar: ejecutar según su programación o evento",
+      "deactivate": "Desactivar",
+      "notActive": "Inactivo — haga clic en ▶ para activar",
+      "starting": "Iniciando…",
+      "listening": "Escuchando eventos",
+      "listeningFallback": "Escuchando (comprueba cada 15 min)",
+      "scheduled": "Activo — próxima ejecución {{next}}",
+      "running": "Ejecutando…",
+      "needsReconnect": "Sin escuchar: hay que volver a conectar el servidor",
+      "unreachable": "Sin escuchar: servidor inaccesible",
+      "errorOther": "Sin escuchar: {{message}}",
+      "noLinks": "Sin escuchar: Start no tiene enlaces",
+      "disabled": "Sin escuchar: el workflow está desactivado",
+      "modeGone": "Sin escuchar: cambió el modo de entrada",
+      "serviceDown": "El servicio de eventos no está funcionando",
+      "replaceTitle": "¿Activar este workflow?",
+      "replaceIntro": "«{{name}}» está activo. Solo puede haber un workflow activo: se desactivará.",
+      "replaceConfirm": "Activar",
+      "activated": "Workflow activado",
+      "deactivated": "Workflow desactivado",
+      "err_no_trigger": "Elija primero una programación o una opción de código en Start",
+      "err_no_links": "Start no tiene enlaces: conéctelo antes de activar",
+      "err_not_found": "Workflow no encontrado"
+    },
     "startOptions": {
       "addTitle": "Añadir como opción de inicio",
       "editTitle": "Editar opción de inicio",

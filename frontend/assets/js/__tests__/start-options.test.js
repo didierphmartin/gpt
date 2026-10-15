@@ -85,4 +85,34 @@ for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test
     assert.ok(!out.includes('{'), `${key}: ${out}`);
 }
 
+// startView (spec 2026-10-14 event-worker §5)
+{
+    const test = (name, fn) => { try { fn(); } catch (e) { e.message = `startView ${name}: ${e.message}`; throw e; } };
+    const row = (o) => ({ workflow_id: 64, workflow_name: 'email prototype', mode: 'option', watch_state: 'waiting',
+        watch_message: null, checked_age_s: 3, activated_age_s: 100, ...o });
+    const v = (mode, active, wf = 64) => SO.startView(mode, active, wf);
+    test('prompt mode keeps ▶ as the run door', () => assert.deepStrictEqual(v('prompt', row()), { button: 'run', hint: null }));
+    test('not active', () => assert.deepStrictEqual(v(1, null), { button: 'activate', hint: { key: 'workflow.active.notActive', params: {} } }));
+    test('another workflow active', () => assert.strictEqual(v(1, row({ workflow_id: 70 })).button, 'activate'));
+    test('listening', () => assert.deepStrictEqual(v(1, row()), { button: 'deactivate', hint: { key: 'workflow.active.listening', params: {} } }));
+    test('fallback', () => assert.strictEqual(v(1, row({ watch_message: 'fallback' })).hint.key, 'workflow.active.listeningFallback'));
+    test('running', () => assert.strictEqual(v(1, row({ watch_state: 'running' })).hint.key, 'workflow.active.running'));
+    test('scheduled', () => assert.deepStrictEqual(v('schedule', row({ mode: 'schedule', watch_state: 'scheduled', watch_message: '2026-10-15 09:00:00' })).hint,
+        { key: 'workflow.active.scheduled', params: { next: '2026-10-15 09:00:00' } }));
+    test('reconnect', () => assert.strictEqual(v(1, row({ watch_state: 'error', watch_message: 'reconnect_needed' })).hint.key, 'workflow.active.needsReconnect'));
+    test('unreachable', () => assert.strictEqual(v(1, row({ watch_state: 'error', watch_message: 'http_502' })).hint.key, 'workflow.active.unreachable'));
+    test('other error', () => assert.deepStrictEqual(v(1, row({ watch_state: 'error', watch_message: 'bad_answer' })).hint,
+        { key: 'workflow.active.errorOther', params: { message: 'bad_answer' } }));
+    test('idle reasons', () => {
+        assert.strictEqual(v(1, row({ watch_state: 'idle', watch_message: 'no_links' })).hint.key, 'workflow.active.noLinks');
+        assert.strictEqual(v(1, row({ watch_state: 'idle', watch_message: 'disabled' })).hint.key, 'workflow.active.disabled');
+        assert.strictEqual(v(1, row({ watch_state: 'idle', watch_message: 'mode_gone' })).hint.key, 'workflow.active.modeGone');
+    });
+    test('stale heartbeat', () => {
+        assert.strictEqual(v(1, row({ checked_age_s: 61 })).hint.key, 'workflow.active.serviceDown');
+        assert.strictEqual(v(1, row({ checked_age_s: null, watch_state: 'starting', activated_age_s: 61 })).hint.key, 'workflow.active.serviceDown');
+        assert.strictEqual(v(1, row({ checked_age_s: null, watch_state: 'starting', activated_age_s: 4 })).hint.key, 'workflow.active.starting');
+    });
+}
+
 console.log('start-options.test.js: OK');

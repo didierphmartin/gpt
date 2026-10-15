@@ -672,6 +672,31 @@
     "noteNotExported": "Remarque : la mémoire est appliquée uniquement à l'exécution. Elle n'est pas incluse dans les exports Python LangGraph générés, qui restent portables et indépendants de l'utilisateur."
   },
   "workflow": {
+    "active": {
+      "activate": "Activer : exécuter selon sa planification ou son événement",
+      "deactivate": "Désactiver",
+      "notActive": "Inactif — cliquez sur ▶ pour activer",
+      "starting": "Démarrage…",
+      "listening": "À l'écoute des événements",
+      "listeningFallback": "À l'écoute (vérification toutes les 15 min)",
+      "scheduled": "Actif — prochaine exécution {{next}}",
+      "running": "En cours…",
+      "needsReconnect": "Pas à l'écoute : le serveur doit être reconnecté",
+      "unreachable": "Pas à l'écoute : serveur injoignable",
+      "errorOther": "Pas à l'écoute : {{message}}",
+      "noLinks": "Pas à l'écoute : Start n'a aucun lien",
+      "disabled": "Pas à l'écoute : le workflow est désactivé",
+      "modeGone": "Pas à l'écoute : le mode d'entrée a changé",
+      "serviceDown": "Le service d'événements ne fonctionne pas",
+      "replaceTitle": "Activer ce workflow ?",
+      "replaceIntro": "« {{name}} » est actif. Un seul workflow peut être actif : il sera désactivé.",
+      "replaceConfirm": "Activer",
+      "activated": "Workflow activé",
+      "deactivated": "Workflow désactivé",
+      "err_no_trigger": "Choisissez d'abord une planification ou une option de code sur Start",
+      "err_no_links": "Start n'a aucun lien : connectez-le avant d'activer",
+      "err_not_found": "Workflow introuvable"
+    },
     "startOptions": {
       "addTitle": "Ajouter comme option de démarrage",
       "editTitle": "Modifier l'option de démarrage",

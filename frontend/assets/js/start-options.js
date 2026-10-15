@@ -84,5 +84,31 @@
         ];
     }
 
-    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startLinks, warning };
+    /**
+     * Start's ▶ and state line (spec 2026-10-14 event-worker §5). `mode`: active(schedule); `act`: the user's active
+     * row (GET /workflows/active) or null; ▶ runs in prompt mode, else activates / deactivates this workflow.
+     */
+    function startView(mode, act, workflowId) {
+        if (mode === 'prompt') return { button: 'run', hint: null };
+        const k = (key, params = {}) => ({ key: `workflow.active.${key}`, params });
+        if (!act || Number(act.workflow_id) !== Number(workflowId)) return { button: 'activate', hint: k('notActive') };
+        const off = (s) => ({ button: 'deactivate', hint: s });
+        if (act.checked_age_s == null) return off(act.activated_age_s > 60 ? k('serviceDown') : k('starting'));
+        if (act.checked_age_s > 60) return off(k('serviceDown'));
+        const m = act.watch_message;
+        switch (act.watch_state) {
+            case 'running': return off(k('running'));
+            case 'scheduled': return off(k('scheduled', { next: m || '' }));
+            case 'waiting': return off(k(m === 'fallback' ? 'listeningFallback' : 'listening'));
+            case 'error':
+                if (m === 'reconnect_needed' || m === 'not_connected') return off(k('needsReconnect'));
+                if (m === 'unreachable' || m === 'server_missing' || /^http_/.test(m || '')) return off(k('unreachable'));
+                return off(k('errorOther', { message: m || '' }));
+            case 'idle':
+                return off(k({ no_links: 'noLinks', disabled: 'disabled' }[m] || 'modeGone'));
+            default: return off(k('starting'));
+        }
+    }
+
+    return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startLinks, warning, startView };
 });

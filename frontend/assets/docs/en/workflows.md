@@ -46,6 +46,22 @@ The Start node lists how the workflow starts: **Enter Prompt**, **Set Schedule**
 - **Switch back:** tick Enter Prompt or Set Schedule. Start goes back to one connector: the links on the exit that carries work stay, the others are removed. A warning lists them first; Cancel changes nothing.
 - **Edit or remove it:** the component is edited only in the Code Library, and every Start using it follows. If a save removes exits that workflows link from, a warning lists those workflows and links first. ⋮ on the component → Edit Start option or Remove Start option; removing it turns those Starts back into a plain Start.
 
+#### Activating a workflow
+
+Ticking an input mode only selects it. To make a workflow run on its own, click ▶ on Start:
+
+- **Enter Prompt:** ▶ opens the conversation, as before.
+- **Set Schedule** or a **code option** (for example "Outlook: Get New Email"): ▶ activates the workflow. The event
+  service runs it at its scheduled times, or waits for the event and runs it on each one. ■ deactivates it.
+
+Only one workflow is active at a time: activating another one deactivates the first (you are asked first). Changing
+the active workflow's input mode deactivates it. A Start with no links cannot be activated. Start shows the state:
+*Listening for events*, *Running…*, *Active — next run …*, *Not listening:* and the reason, or *Event service isn't
+running* when the background service is stopped.
+
+Any MCP server can be an event source for a code option if it offers a waiting tool that answers
+`{"status": "ready"}` or `{"status": "timeout"}`, like Outlook's `wait_for_new`.
+
 ## Compile to Python
 
 Any workflow can be **compiled into a standalone Python application**. The generated script uses LangGraph and can run independently of the web app — useful when you want to ship a workflow as a CLI or scheduled script.

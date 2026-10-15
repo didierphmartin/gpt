@@ -46,6 +46,22 @@ Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt**, **
 - **Revenir en arrière :** cochez Saisir le prompt ou Planifier. Démarrer revient à un seul connecteur : les liens de la sortie qui transporte le travail restent, les autres sont supprimés. Un avertissement les liste d'abord ; Annuler ne change rien.
 - **La modifier ou la retirer :** le composant se modifie uniquement dans la Bibliothèque de composants de code, et chaque Démarrer qui l'utilise suit. Si un enregistrement retire des sorties reliées dans des workflows, un avertissement liste d'abord ces workflows et liens. ⋮ sur le composant → Modifier l'option de démarrage ou Retirer l'option de démarrage ; la retirer rend à ces Démarrer leur forme ordinaire.
 
+#### Activer un workflow
+
+Cocher un mode d'entrée ne fait que le sélectionner. Pour qu'un workflow s'exécute seul, cliquez sur ▶ sur Start :
+
+- **Enter Prompt :** ▶ ouvre la conversation, comme avant.
+- **Set Schedule** ou une **option de code** (par exemple « Outlook : Get New Email ») : ▶ active le workflow. Le
+  service d'événements l'exécute aux heures prévues, ou attend l'événement et l'exécute à chaque fois. ■ le désactive.
+
+Un seul workflow est actif à la fois : en activer un autre désactive le premier (une confirmation est demandée).
+Changer le mode d'entrée du workflow actif le désactive. Un Start sans lien ne peut pas être activé. Start affiche
+l'état : *À l'écoute des événements*, *En cours…*, *Actif — prochaine exécution …*, *Pas à l'écoute :* et la raison,
+ou *Le service d'événements ne fonctionne pas* lorsque le service d'arrière-plan est arrêté.
+
+Tout serveur MCP peut être une source d'événements pour une option de code s'il offre un outil d'attente qui répond
+`{"status": "ready"}` ou `{"status": "timeout"}`, comme `wait_for_new` d'Outlook.
+
 ## Compiler en Python
 
 Tout workflow peut être **compilé en application Python autonome**. Le script généré utilise LangGraph et peut tourner indépendamment de l'application web — pratique quand vous voulez livrer un workflow comme CLI ou comme script planifié.

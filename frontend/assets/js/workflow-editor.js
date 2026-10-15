@@ -2754,8 +2754,10 @@ class WorkflowEditor {
                 e.stopPropagation();
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
-                } else if (this._startOptionActive()) {
-                    // Starts on the event, not on a prompt (spec §10): the button is hidden then.
+                } else if (this._startView().button !== 'run') {
+                    // Schedule or option mode: ▶ activates / deactivates (spec 2026-10-14 event-worker §5).
+                    (this._startView().button === 'activate' ? this._activate() : this._deactivate())
+                        .catch(err => this.showNotification(err?.message || String(err), 'error'));
                 } else if (this._isIngestionWorkflow()) {
                     // Ingestion: run the PHP interpreter from the Start node —
                     // it drives the loader node round-by-round (one file at a
@@ -3063,7 +3065,50 @@ class WorkflowEditor {
         return !!(id && this.editor.getNodeFromId(id)?.data?.start_option);
     }
 
-    /** Start's hint and ▶: on a Start option, "Runs on <option>" and no ▶ (no prompt to open); else the conversation's. */
+    /** The user's active workflow (spec 2026-10-14 event-worker §5), refreshed every 15 s while a workflow is open. */
+    async _loadActive() {
+        try {
+            const r = await fetch(`${this.apiBase}/workflows/active`, { headers: this.getAuthHeaders() });
+            this.activeWorkflow = r.ok ? ((await r.json()).data || null) : this.activeWorkflow;
+        } catch (_) { /* keep the last known state */ }
+        if (!this._activeTimer) {
+            this._activeTimer = setInterval(() => { if (this.currentWorkflowId) this._loadActive(); }, 15000);
+        }
+        this._refreshStartHint();
+    }
+
+    /** ▶ in schedule or option mode, spec 2026-10-14 event-worker §5. */
+    _startView() {
+        return window.StartOptions.startView(window.StartOptions.active(this.currentSchedule), this.activeWorkflow || null,
+            this.currentWorkflowId);
+    }
+
+    async _activate() {
+        const cur = this.activeWorkflow;
+        if (cur && Number(cur.workflow_id) !== Number(this.currentWorkflowId)) {
+            const ok = await this._confirmLinksDialog(this.t('workflow.active.replaceTitle'),
+                this.t('workflow.active.replaceIntro', { name: cur.workflow_name || `#${cur.workflow_id}` }), [],
+                this.t('workflow.active.replaceConfirm'));
+            if (!ok) return;
+        }
+        await this._persistIfDirty();   // the worker reads Start's links and option from the database
+        const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || body.success === false) {
+            this.showNotification(this.t(`workflow.active.err_${body.kind || 'not_found'}`), 'error');
+        } else {
+            this.showNotification(this.t('workflow.active.activated'), 'success');
+        }
+        await this._loadActive();
+    }
+
+    async _deactivate() {
+        await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'DELETE', headers: this.getAuthHeaders() });
+        this.showNotification(this.t('workflow.active.deactivated'), 'info');
+        await this._loadActive();
+    }
+
+    /** Start's hint, ▶ and state line: "Runs on <option>"; ▶ runs in prompt mode, else activates / deactivates. */
     _refreshStartHint() {
         if (this._isSwarm()) return;
         const id = this._startNodeId();
@@ -3074,8 +3119,24 @@ class WorkflowEditor {
         const playBtn = card.querySelector('.node-play-btn');
         const label = d?.start_option ? (window.CodeComponents?.cache.get(d.start_option)?.start_trigger?.label || d.start_option_label) : null;
         if (small) small.textContent = label ? this.t('workflow.startOptions.runsOn', { label }) : this.t('workflow.batchSession.startHint');
-        if (playBtn) playBtn.style.display = label ? 'none' : 'flex';
         card.classList.toggle('start-on-option', !!label);
+        // ▶ runs in prompt mode; in schedule / option mode it activates or deactivates (spec 2026-10-14 event-worker §5).
+        const view = this.currentWorkflowId ? this._startView() : { button: 'run', hint: null };
+        if (playBtn) {
+            playBtn.style.display = 'flex';
+            playBtn.textContent = view.button === 'deactivate' ? '■' : '▶';
+            playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession') : this.t(`workflow.active.${view.button}`);
+        }
+        card.classList.toggle('start-active', view.button === 'deactivate');
+        let line = card.querySelector('.start-active-state');
+        if (!view.hint) { line?.remove(); return; }
+        if (!line) {
+            line = document.createElement('div');
+            line.className = 'start-active-state';
+            line.style.cssText = 'font-size: 11px; color: #6b7280; margin-top: 2px;';
+            small?.after(line);
+        }
+        line.textContent = this.t(view.hint.key, view.hint.params);
     }
 
     /**
@@ -9669,6 +9730,7 @@ class WorkflowEditor {
             return false;
         } finally {
             this._renderStartNodeOptions();   // the boxes show the saved row, whatever happened
+            this._loadActive();
         }
     }
 
@@ -21315,6 +21377,7 @@ Based on the analysis...
             if (!response.ok) {
                 console.log('[WorkflowEditor] No schedules found for workflow');
                 this.currentSchedule = null;
+                this._loadActive();
                 return;
             }
 
@@ -21333,6 +21396,7 @@ Based on the analysis...
             } else {
                 this.updateStartNodeScheduleIndicator(false);
             }
+            this._loadActive();
         } catch (error) {
             console.error('[WorkflowEditor] Error loading schedule:', error);
             this.currentSchedule = null;

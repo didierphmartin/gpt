@@ -672,6 +672,31 @@
     "noteNotExported": "Note: memory is applied at runtime only. It is not included in generated LangGraph Python exports, which remain portable and user-agnostic."
   },
   "workflow": {
+    "active": {
+      "activate": "Activate: run on its schedule or event",
+      "deactivate": "Deactivate",
+      "notActive": "Not active — click ▶ to activate",
+      "starting": "Starting…",
+      "listening": "Listening for events",
+      "listeningFallback": "Listening (checks every 15 min)",
+      "scheduled": "Active — next run {{next}}",
+      "running": "Running…",
+      "needsReconnect": "Not listening: the server needs reconnecting",
+      "unreachable": "Not listening: server unreachable",
+      "errorOther": "Not listening: {{message}}",
+      "noLinks": "Not listening: Start has no links",
+      "disabled": "Not listening: the workflow is disabled",
+      "modeGone": "Not listening: the input mode changed",
+      "serviceDown": "Event service isn't running",
+      "replaceTitle": "Activate this workflow?",
+      "replaceIntro": "\"{{name}}\" is active. Only one workflow can be active: it will be deactivated.",
+      "replaceConfirm": "Activate",
+      "activated": "Workflow activated",
+      "deactivated": "Workflow deactivated",
+      "err_no_trigger": "Pick Set Schedule or a code option on Start first",
+      "err_no_links": "Start has no links: connect it before activating",
+      "err_not_found": "Workflow not found"
+    },
     "startOptions": {
       "addTitle": "Add as a Start option",
       "editTitle": "Edit Start option",
