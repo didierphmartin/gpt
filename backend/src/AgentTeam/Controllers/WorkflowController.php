@@ -11,6 +11,10 @@ use AgentTeam\Services\WorkflowOutputStorage;
 use AgentTeam\Services\AgentRepository;
 use AgentTeam\Services\AgentRunner;
 use AgentTeam\Services\StreamContext;
+use AgentTeam\Services\ActiveWorkflowService;
+use AgentTeam\Services\LiveFeed;
+use AgentTeam\Services\LiveStream;
+use AgentTeam\Services\WorkflowRunLog;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
 use Quantis\AIPortfolioAssistant\Services\LLMProviderResolver;
@@ -1263,6 +1267,50 @@ class WorkflowController
                 'status_code' => 500
             ];
         }
+    }
+
+    /**
+     * GET /api/v1/workflows/{id}/live?cursor=… — the live overlay's stream (spec 2026-10-15 live-overlay §3.3):
+     * the workflow's run events as the server runner writes them, and the user's active row, for 50 s; the
+     * client reconnects with the cursor of the closing "bye".
+     */
+    public function live(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+        header('Content-Type: text/event-stream');
+        header('Cache-Control: no-cache');
+        header('X-Accel-Buffering: no');
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+        set_time_limit(60);
+        $emit = function (string $event, array $data): void {
+            echo $event === 'ping' ? ": ping\n\n" : "event: {$event}\ndata: " . json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n\n";
+            flush();
+        };
+        // streaming_handled keeps index.php from appending a JSON body after the stream.
+        $handled = ['streaming_handled' => true];
+        if (!$userId || !$workflowId || !$this->workflowRepository->canUserAccess($userId, $workflowId)) {
+            $emit('error', ['error' => $userId ? 'Workflow not found or access denied' : 'Authentication required']);
+            return $handled;
+        }
+        $log = new WorkflowRunLog(WorkflowRunLog::defaultDir($this->config));
+        $active = new ActiveWorkflowService($this->db);
+        $cursor = isset($request['query']['cursor']) ? (string) $request['query']['cursor'] : null;
+        LiveStream::run(
+            fn(?string $c) => LiveFeed::next($log, $workflowId, $c),
+            fn() => $active->get($userId),
+            $emit,
+            fn(float $s) => usleep((int) ($s * 1e6)),
+            fn() => microtime(true),
+            fn() => connection_aborted() === 1,
+            $cursor === '' ? null : $cursor
+        );
+        return $handled;
     }
 
     /**
