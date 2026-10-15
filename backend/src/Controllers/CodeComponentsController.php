@@ -69,9 +69,18 @@ final class CodeComponentsController
     {
         return $this->guard($request, function (int $u) use ($request) {
             $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0));
-            (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();   // reverted Starts: their mode is gone
+            $this->sweepActive();   // reverted Starts: their mode is gone
             return ['success' => true, 'data' => $data];
         });
+    }
+
+    private function sweepActive(): void
+    {
+        try {   // never fails the write it follows: the write already happened, and the event worker sweeps every 5 s
+            (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();
+        } catch (\Throwable $e) {
+            error_log('[ActiveWorkflow] sweep failed: ' . $e->getMessage());
+        }
     }
 
     private function found(int $u, array $request): array

@@ -411,7 +411,11 @@ class ScheduledWorkflowController
     /** A schedule write may change the workflow's input mode: an active workflow whose mode changed is deactivated (spec 2026-10-14 event-worker §2). */
     private function sweepActive(): void
     {
-        (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();
+        try {   // never fails the write it follows: the write already happened, and the event worker sweeps every 5 s
+            (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();
+        } catch (\Throwable $e) {
+            error_log('[ActiveWorkflow] sweep failed: ' . $e->getMessage());
+        }
     }
 
     /**

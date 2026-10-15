@@ -52,4 +52,18 @@ final class ActiveWorkflowControllerTest extends TestCase
         $this->assertTrue($r['success']);
         $this->assertNull((new ActiveWorkflowService($this->db))->get(3));
     }
+
+    public function testAFailingSweepDoesNotFailTheWrite(): void
+    {
+        $row = EventWorkerSchema::row($this->db, 64, 3, 'event', 1);
+        $this->db->exec('DROP TABLE active_workflows');   // the table is not migrated yet
+        $prev = ini_set('error_log', '/dev/null');
+        try {
+            $r = (new ScheduledWorkflowController($this->db, []))->destroy(['user_id' => 3, 'params' => ['id' => $row]]);
+        } finally {
+            ini_set('error_log', (string) $prev);
+        }
+        $this->assertTrue($r['success']);
+        $this->assertSame(0, (int) $this->db->query("SELECT COUNT(*) FROM scheduled_workflows WHERE id = $row")->fetchColumn());
+    }
 }
