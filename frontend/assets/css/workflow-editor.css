@@ -694,6 +694,24 @@
         0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
+/* A code node's (or a Start on a Start option's) output port names its exit on hover. The port is scaled 1.4
+   on hover, so the label's sizes are divided by 1.4. */
+.drawflow .drawflow-node .output[data-exit]:hover { z-index: 1000; }
+.drawflow .drawflow-node .output[data-exit]:hover::after {
+    content: attr(data-exit);
+    position: absolute;
+    left: calc(100% + 4px);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #1e293b;
+    color: #fff;
+    font: 600 8px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 /* Connection lines - animated flowing dashed line */
 /* Use high specificity selectors to override Drawflow defaults */
 #drawflow .connection .main-path,
