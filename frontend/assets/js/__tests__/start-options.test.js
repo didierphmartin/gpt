@@ -173,3 +173,10 @@ assert.strictEqual(SO.eventSubject(''), '');
 // An empty Subject line does not reach across the blank line into the body.
 assert.strictEqual(SO.eventSubject('From: ana@example.com\nSubject:\n\nbody text'), 'From: ana@example.com');
 console.log('start-options liveAction: ok');
+
+// A dispatcher's node_complete carries its route (the chosen node's database id): the live view fades the other links.
+assert.deepStrictEqual(SO.liveAction({ type: 'node_complete', node_id: 2598, drawflow_id: '18', success: true,
+    route: { id: 2600, name: 'information', notes: '' } }, '17'), { node: '18', state: 'completed', route: '2600' });
+assert.deepStrictEqual(SO.liveAction({ type: 'node_complete', node_id: 2598, drawflow_id: '18', success: true, route: null }, '17'),
+    { node: '18', state: 'completed' });
+console.log('start-options liveAction route: ok');

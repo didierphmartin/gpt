@@ -3140,10 +3140,23 @@ class WorkflowEditor {
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
-    /** Removes the run colours (running / done / failed) from every canvas node. */
+    /** Removes the run colours (running / done / failed / skipped) and the dispatch marks from the canvas. */
     _clearRunColours() {
         const states = ['node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'];
         document.querySelectorAll('.drawflow-node, .drawflow-node .workflow-node').forEach(el => el.classList.remove(...states));
+        this._clearDispatchEdges();
+    }
+
+    /** A dispatcher's choice in a server run, drawn as a browser run draws it: the chosen link full, the others faint, their branches skipped. */
+    _liveRoute(fromDf, toDf) {
+        const nodes = this.editor?.drawflow?.drawflow?.Home?.data;
+        if (!nodes || !toDf) return;
+        this._markDispatchCandidates(fromDf);
+        this._markDispatchChosen(fromDf, toDf);
+        const children = new Set();
+        for (const out of Object.values(nodes[fromDf]?.outputs || {})) for (const c of (out.connections || [])) children.add(String(c.node));
+        children.delete(String(toDf));
+        for (const s of this._wfSkipSet([...children], nodes)) this.highlightNode(null, 'skipped', s);
     }
 
     /** Follows GET /workflows/{id}/live until closed: reconnects on `bye` at once, on a failure with a growing pause. */
@@ -3228,6 +3241,7 @@ class WorkflowEditor {
             this.highlightNode(null, a.state, df);
             this._liveActiveNode = a.state === 'active' ? df : null;
         }
+        if (df && a.route) this._liveRoute(df, this.dbNodeToDrawflowMap?.[a.route]);
         if (a.error && this._liveActiveNode) this.highlightNode(null, 'error', this._liveActiveNode);
         if (!inFeed) return;
         if (a.subject) this._pbBubble('you', a.subject, { label: this.t('workflow.live.event') });

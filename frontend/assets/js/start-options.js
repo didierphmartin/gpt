@@ -153,6 +153,7 @@
                 const out = { node: trigger ? startDrawflowId : String(ev.drawflow_id ?? ''), state: ev.success === false ? 'error' : 'completed' };
                 if (trigger && ev.success !== false) out.subject = eventSubject(ev.output);
                 if (ev.success === false && ev.error) out.trace = String(ev.error);
+                if (ev.route && ev.route.id != null) out.route = String(ev.route.id);   // a dispatcher's choice (database id)
                 return out;
             }
             case 'node_log': return ev.message ? { trace: String(ev.message) } : null;

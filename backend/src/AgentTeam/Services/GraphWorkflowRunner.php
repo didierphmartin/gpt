@@ -463,6 +463,8 @@ class GraphWorkflowRunner
                     'input_tokens' => $inputTokens,
                     'output_tokens' => $outputTokens,
                     'cost_usd' => $this->computeNodeCost($output['provider'] ?? null, $inputTokens, $outputTokens),
+                    // A dispatcher's choice, so a viewer of the run log (the live overlay) can fade the other links.
+                    'route' => $output['route'] ?? null,
                 ]);
 
                 // Phase 0: record an execution trace for agent nodes.
