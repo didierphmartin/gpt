@@ -706,7 +706,7 @@
       "overlayTitle": "En vivo",
       "newEvent": "Nuevo evento",
       "event": "Evento",
-      "activate": "Activar",
+      "activate": "Reproducir",
       "target": "ejecuciones en el servidor"
     },
     "startOptions": {
