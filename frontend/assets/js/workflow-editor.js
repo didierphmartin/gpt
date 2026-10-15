@@ -3081,16 +3081,69 @@ class WorkflowEditor {
         if (this._pbSessionMode === 'live') this._liveHeader();
     }
 
-    /** The live overlay (spec 2026-10-15 live-overlay): the server runner's runs of this workflow, as they happen. */
+    /** ■ on Start: Monitoring on, which opens the live overlay (spec 2026-10-15 live-overlay). */
     _openLiveSession() {
+        this._setMonitoring(true);
+    }
+
+    /**
+     * Monitoring (the toolbar button): on, the canvas follows the server runner's runs of this workflow and the live
+     * overlay opens with their feed; closing the overlay keeps the canvas following. Off: no stream, no colours, no
+     * overlay. It never outlives the open workflow (_refreshMonitoring turns it off on a switch).
+     */
+    _setMonitoring(on) {
         this._liveStop?.();
-        this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
-        this._liveTurn = null;
-        this._liveActiveNode = null;
-        this._liveHeader();
-        const ctrl = new AbortController();
-        this._liveStop = () => ctrl.abort();
-        this._liveConnect(ctrl.signal, this.currentWorkflowId).catch(() => {});
+        this._liveStop = null;
+        this._monitoring = on ? this.currentWorkflowId : null;
+        if (on) {
+            this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
+            this._liveTurn = null;
+            this._liveActiveNode = null;
+            this._liveHeader();
+            const ctrl = new AbortController();
+            this._liveStop = () => ctrl.abort();
+            // An empty cursor replays a run in progress, so the canvas and the feed catch up on it.
+            this._liveConnect(ctrl.signal, this.currentWorkflowId).catch(() => {});
+        } else {
+            this._clearRunColours();
+            if (this._pbSessionMode === 'live') document.getElementById('pb-ov-hide')?.click();
+        }
+        this._refreshMonitoring();
+    }
+
+    /** The Monitoring button: shown for a listening workflow (schedule / option mode), blue while on. */
+    _refreshMonitoring() {
+        if (this._monitoring && this._monitoring !== this.currentWorkflowId) {
+            this._liveStop?.();
+            this._liveStop = null;
+            this._monitoring = null;
+        }
+        const btn = document.getElementById('wf-monitoring');
+        if (!btn) return;
+        if (!btn.dataset.wired) {
+            btn.dataset.wired = '1';
+            btn.addEventListener('click', () => this._setMonitoring(!this._monitoring));
+        }
+        const listening = !!this.currentWorkflowId && !this._isIngestionWorkflow() && !this._isSwarm()
+            && this._startView().button !== 'run';
+        if (!listening && this._monitoring) this._setMonitoring(false);
+        btn.style.display = listening ? 'flex' : 'none';
+        const on = !!this._monitoring;
+        btn.classList.toggle('bg-blue-600', on);
+        btn.classList.toggle('text-white', on);
+        btn.classList.toggle('border-blue-600', on);
+        btn.classList.toggle('hover:bg-blue-700', on);
+        btn.classList.toggle('bg-white', !on);
+        btn.classList.toggle('text-gray-700', !on);
+        btn.classList.toggle('border-gray-300', !on);
+        btn.classList.toggle('hover:bg-gray-50', !on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+
+    /** Removes the run colours (running / done / failed) from every canvas node. */
+    _clearRunColours() {
+        const states = ['node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'];
+        document.querySelectorAll('.drawflow-node, .drawflow-node .workflow-node').forEach(el => el.classList.remove(...states));
     }
 
     /** Follows GET /workflows/{id}/live until closed: reconnects on `bye` at once, on a failure with a growing pause. */
@@ -3154,21 +3207,19 @@ class WorkflowEditor {
         }
     }
 
-    /** One server run event on the canvas and in the feed; a no-op when the overlay was closed meanwhile. */
+    /** One server run event: on the canvas while Monitoring is on, in the feed while the live overlay is open. */
     _liveApply(ev) {
-        if (this._pbSessionMode !== 'live') return;
+        if (!this._monitoring) return;
         const a = window.StartOptions.liveAction(ev, this._startNodeId());
         if (!a) return;
-        const feed = this._pbOverlayEl();
+        const inFeed = this._pbSessionMode === 'live';
+        const feed = inFeed ? this._pbOverlayEl() : null;
         if (a.turn) {
             // A new email starts a new run: forget the canvas colours of the previous one.
-            document.querySelectorAll('.drawflow-node .workflow-node').forEach(el =>
-                el.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'));
-            document.querySelectorAll('.drawflow-node').forEach(el =>
-                el.classList.remove('node-active', 'node-completed', 'node-error', 'node-warning', 'node-skipped'));
+            this._clearRunColours();
             this._liveActiveNode = null;
             const time = new Date().toLocaleTimeString();
-            this._liveTurn = this._pbAppend(`<div class="pb-live-turn" style="font-size:12px;font-weight:600;color:#475569;border-top:1px solid #e2e8f0;padding-top:6px;">${this.escapeHtml(time)} · ${this.escapeHtml(this.t('workflow.live.newEvent'))}</div>`);
+            if (inFeed) this._liveTurn = this._pbAppend(`<div class="pb-live-turn" style="font-size:12px;font-weight:600;color:#475569;border-top:1px solid #e2e8f0;padding-top:6px;">${this.escapeHtml(time)} · ${this.escapeHtml(this.t('workflow.live.newEvent'))}</div>`);
         }
         // The run log's drawflow ids are the ones saved with the nodes; the editor renumbers the canvas on load,
         // so the node is found by its database id (dbNodeToDrawflowMap), the saved id only as a fallback.
@@ -3177,11 +3228,12 @@ class WorkflowEditor {
             this.highlightNode(null, a.state, df);
             this._liveActiveNode = a.state === 'active' ? df : null;
         }
+        if (a.error && this._liveActiveNode) this.highlightNode(null, 'error', this._liveActiveNode);
+        if (!inFeed) return;
         if (a.subject) this._pbBubble('you', a.subject, { label: this.t('workflow.live.event') });
         if (a.trace) this._pbAppend(`<div class="pb-live-trace" style="font-size:11px;color:#64748b;">${this.escapeHtml(a.trace)}</div>`);
         if (a.answer) this._pbBubble('agent', a.answer, { label: this.currentWorkflowName || 'Workflow' });
         if (a.error) {
-            if (this._liveActiveNode) this.highlightNode(null, 'error', this._liveActiveNode);
             this._pbAppend(`<div style="color:#dc2626;font-size:13px;">${this.escapeHtml(a.error)}</div>`);
         }
         if (feed) feed.scrollTop = feed.scrollHeight;
@@ -3264,6 +3316,7 @@ class WorkflowEditor {
 
     /** Start's hint, ▶ and state line: "Runs on <option>"; ▶ runs in prompt mode, else activates / deactivates. */
     _refreshStartHint() {
+        this._refreshMonitoring();
         if (this._isSwarm()) return;
         const id = this._startNodeId();
         const d = id ? this.editor.getNodeFromId(id)?.data : null;
@@ -14547,7 +14600,6 @@ class WorkflowEditor {
         // the node directly left the resize listener and the ResizeObserver
         // alive on a detached modal — and re-opening a live session is a
         // supported flow, so they accumulated one pair per re-open.
-        this._liveStop?.(); this._liveStop = null;   // another overlay replacing the live one ends its stream
         this._pbOverlayTeardown?.();
         this._pbOverlayTeardown = null;
         document.getElementById('playbook-run-overlay')?.remove();
@@ -14634,7 +14686,6 @@ class WorkflowEditor {
         // or they leak across sessions.
         let windowCleanup = null;
         const hide = () => {
-            this._liveStop?.(); this._liveStop = null;
             // A closed session starts fresh — the next Start click or Run
             // begins a new conversation rather than resuming this one.
             // Hide means hide. Ending a conversation here threw away the
@@ -15996,8 +16047,10 @@ class WorkflowEditor {
         // this browser has left drive gates and bubbles in whatever
         // conversation opens next (see _detachCompiledStream).
         this._detachCompiledStream();
-        // ... nor the live overlay's stream of server runs, which would keep reconnecting.
+        // ... nor Monitoring's stream of server runs, which would keep reconnecting.
         this._liveStop?.(); this._liveStop = null;
+        this._monitoring = null;
+        this._refreshMonitoring();
         this._runTarget = null;
         // Stale-state guard: this teardown already nulls _swarmSession and
         // _compiledSession, but left _pbSessionMode behind — the same class

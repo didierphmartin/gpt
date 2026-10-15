@@ -701,6 +701,8 @@
       "err_generic": "Activation impossible (HTTP {{status}})"
     },
     "live": {
+      "monitoring": "Surveillance",
+      "monitoringTitle": "Suivre sur le canevas les exécutions de ce workflow sur le serveur",
       "stop": "Arrêter",
       "open": "Ouvrir la vue en direct",
       "overlayTitle": "En direct",

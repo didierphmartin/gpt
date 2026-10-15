@@ -701,6 +701,8 @@
       "err_generic": "No se pudo activar (HTTP {{status}})"
     },
     "live": {
+      "monitoring": "Monitorización",
+      "monitoringTitle": "Sigue en el lienzo las ejecuciones de este flujo en el servidor",
       "stop": "Detener",
       "open": "Abrir la vista en vivo",
       "overlayTitle": "En vivo",

@@ -701,6 +701,8 @@
       "err_generic": "Could not activate (HTTP {{status}})"
     },
     "live": {
+      "monitoring": "Monitoring",
+      "monitoringTitle": "Follow this workflow's server runs on the canvas",
       "stop": "Stop",
       "open": "Open the live view",
       "overlayTitle": "Live",
