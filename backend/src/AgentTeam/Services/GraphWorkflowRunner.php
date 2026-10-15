@@ -316,7 +316,8 @@ class GraphWorkflowRunner
             // Get all nodes and edges for traversal -- only what Start reaches: an
             // unconnected canvas node is not part of the workflow, and as a parent of
             // a reached node it would hold that node's merge wait forever.
-            $graph = WorkflowGraphAnalyzer::reachableGraph($this->graphRepository->getGraph($workflow->getId()));
+            $graph = self::configuredTemplatesAsAgents(
+                WorkflowGraphAnalyzer::reachableGraph($this->graphRepository->getGraph($workflow->getId())));
             $nodes = $this->indexNodesById($graph['nodes']);
             $this->graphNodes = $nodes;
             $this->workflowName = (string)$workflow->getName();
@@ -756,6 +757,31 @@ class GraphWorkflowRunner
             }
         }
         return true;
+    }
+
+    /**
+     * An agent-template node set up on the canvas -- linked to a saved agent, or defined in the node (agent_name,
+     * instructions or a skill; a dispatcher keeps its type, provider and routing in config) -- runs as an agent, as it
+     * does in the editor's browser run. One never set up (isTemplate, or nothing filled in) keeps its type and stops
+     * the run in executeNode.
+     */
+    public static function configuredTemplatesAsAgents(array $graph): array
+    {
+        foreach ($graph['nodes'] ?? [] as $i => $n) {
+            $c = is_array($n['config'] ?? null) ? $n['config'] : [];
+            if (WorkflowGraphAnalyzer::typeOf($n) !== 'agent-template' || ($c['isTemplate'] ?? false) === true) {
+                continue;
+            }
+            $agentId = ($n['agent_id'] ?? null) ?: ($c['agent_id'] ?? null);
+            $inline = trim((string) ($c['agent_name'] ?? '')) !== '' || trim((string) ($c['instructions'] ?? '')) !== ''
+                || trim((string) ($c['skill_content'] ?? '')) !== '' || !empty($c['bound_skill']);
+            if (!$agentId && !$inline) {
+                continue;
+            }
+            $graph['nodes'][$i]['node_type'] = 'agent';
+            $graph['nodes'][$i]['agent_id'] = $agentId ?: null;
+        }
+        return $graph;
     }
 
     /** Why this runner cannot execute a node of $nodeType, or null when it can. */
