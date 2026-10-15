@@ -3170,15 +3170,18 @@ class WorkflowEditor {
             const time = new Date().toLocaleTimeString();
             this._liveTurn = this._pbAppend(`<div class="pb-live-turn" style="font-size:12px;font-weight:600;color:#475569;border-top:1px solid #e2e8f0;padding-top:6px;">${this.escapeHtml(time)} · ${this.escapeHtml(this.t('workflow.live.newEvent'))}</div>`);
         }
-        if (a.node) {
-            this.highlightNode(a.node, a.state, a.node);
-            this._liveActiveNode = a.state === 'active' ? a.node : null;
+        // The run log's drawflow ids are the ones saved with the nodes; the editor renumbers the canvas on load,
+        // so the node is found by its database id (dbNodeToDrawflowMap), the saved id only as a fallback.
+        const df = 'node' in a ? (this.dbNodeToDrawflowMap?.[String(ev.node_id)] || a.node) : null;
+        if (df) {
+            this.highlightNode(null, a.state, df);
+            this._liveActiveNode = a.state === 'active' ? df : null;
         }
         if (a.subject) this._pbBubble('you', a.subject, { label: this.t('workflow.live.event') });
         if (a.trace) this._pbAppend(`<div class="pb-live-trace" style="font-size:11px;color:#64748b;">${this.escapeHtml(a.trace)}</div>`);
         if (a.answer) this._pbBubble('agent', a.answer, { label: this.currentWorkflowName || 'Workflow' });
         if (a.error) {
-            if (this._liveActiveNode) this.highlightNode(this._liveActiveNode, 'error', this._liveActiveNode);
+            if (this._liveActiveNode) this.highlightNode(null, 'error', this._liveActiveNode);
             this._pbAppend(`<div style="color:#dc2626;font-size:13px;">${this.escapeHtml(a.error)}</div>`);
         }
         if (feed) feed.scrollTop = feed.scrollHeight;
