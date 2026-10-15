@@ -701,6 +701,7 @@
       "err_generic": "No se pudo activar (HTTP {{status}})"
     },
     "live": {
+      "open": "Abrir la vista en vivo",
       "overlayTitle": "En vivo",
       "newEvent": "Nuevo evento",
       "event": "Evento",

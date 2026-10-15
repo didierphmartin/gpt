@@ -3106,6 +3106,7 @@ class WorkflowEditor {
                 const reader = resp.body.getReader();
                 const decoder = new TextDecoder();
                 let buf = '';
+                let bye = false;
                 while (live()) {
                     const { done, value } = await reader.read();
                     if (done) break;
@@ -3133,6 +3134,7 @@ class WorkflowEditor {
                             this._liveHeader();
                         } else if (eventType === 'bye') {
                             cursor = data.cursor || cursor;
+                            bye = true;
                             delay = 1000;
                         } else if (eventType === 'error') {
                             const st = document.getElementById('pb-ov-status');
@@ -3143,7 +3145,7 @@ class WorkflowEditor {
                     }
                 }
                 if (!live()) { reader.cancel().catch(() => {}); return; }
-                continue;   // the stream ended (bye or a dropped connection): reconnect with the last cursor
+                if (bye) continue;   // a clean `bye`: reconnect at once with its cursor; a bare end backs off below
             } catch (err) {
                 if (err?.name === 'AbortError' || !live()) return;
             }
@@ -3270,8 +3272,10 @@ class WorkflowEditor {
         const view = this.currentWorkflowId ? this._startView() : { button: 'run', hint: null };
         if (playBtn) {
             playBtn.style.display = 'flex';
-            playBtn.textContent = view.button === 'deactivate' ? '■' : '▶';
-            playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession') : this.t(`workflow.active.${view.button}`);
+            // ▶ opens the live overlay in schedule / option mode; ■ (deactivate) lives there only.
+            playBtn.textContent = '▶';
+            playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession')
+                : this.t(view.button === 'deactivate' ? 'workflow.live.open' : 'workflow.active.activate');
         }
         card.classList.toggle('start-active', view.button === 'deactivate');
         // In schedule / option mode the body is the state alone, a dot and a few words beside ▶: the ticked
