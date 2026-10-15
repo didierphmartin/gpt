@@ -112,6 +112,9 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertCount(1, $rows);
         self::assertSame('completed', $rows[0]['status']);
         self::assertCount(1, $this->runLogs());
+        $runId = (new \AgentTeam\Services\WorkflowRunLog($this->runsDir))->current(44);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/', (string) $runId, 'the workflow points at its run');
+        self::assertFileExists($this->runsDir . '/' . $runId . '.jsonl');
     }
 
     public function testWorkBesideThePollDoesNotDrain(): void

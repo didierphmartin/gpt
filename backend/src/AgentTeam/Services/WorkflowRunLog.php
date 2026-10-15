@@ -58,6 +58,32 @@ class WorkflowRunLog
         }
     }
 
+    public function dir(): string
+    {
+        return $this->baseDir;
+    }
+
+    /** The workflow's latest run, read by the live overlay (LiveFeed); temp file + rename, so a reader never sees half a run id. */
+    public function markCurrent(int $workflowId, string $runId): void
+    {
+        if (!$this->isValidRunId($runId)) {
+            return;
+        }
+        if (!is_dir($this->baseDir)) {
+            @mkdir($this->baseDir, 0775, true);
+        }
+        $tmp = $this->baseDir . '/wf-' . $workflowId . '.current.' . getmypid();
+        if (@file_put_contents($tmp, $runId) !== false) {
+            @rename($tmp, $this->baseDir . '/wf-' . $workflowId . '.current');
+        }
+    }
+
+    public function current(int $workflowId): ?string
+    {
+        $id = @file_get_contents($this->baseDir . '/wf-' . $workflowId . '.current');
+        return is_string($id) && $this->isValidRunId(trim($id)) ? trim($id) : null;
+    }
+
     public function read(string $runId): ?array
     {
         if (!$this->isValidRunId($runId)) {

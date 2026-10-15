@@ -329,6 +329,8 @@ class GraphWorkflowRunner
                 'execution_id' => $this->executionId,
                 'total_nodes' => count($nodes),
             ]);
+            // The live overlay follows this workflow's latest run (LiveFeed).
+            $this->runLog->markCurrent((int) $workflow->getId(), $this->runId);
 
             // Emit start node events (node_start for active glow, then node_complete)
             $this->emitNodeEvent('node_start', $startNode, ['input' => $userPrompt]);
