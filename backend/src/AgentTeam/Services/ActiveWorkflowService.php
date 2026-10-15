@@ -147,11 +147,20 @@ final class ActiveWorkflowService
             ->execute([$state, $message, $userId]);
     }
 
-    /** @return int[] */
+    /**
+     * The schedule-mode workflows the scheduler tick may run: only the rows that qualify now (check(): enabled, Start
+     * linked, still in schedule mode), the ones the worker shows as scheduled -- an idle one must not run.
+     * @return int[]
+     */
     public function scheduleWorkflowIds(): array
     {
-        return array_map('intval', $this->db->query("SELECT workflow_id FROM active_workflows WHERE mode = 'schedule'")
-            ->fetchAll(PDO::FETCH_COLUMN));
+        $ids = [];
+        foreach ($this->all() as $row) {
+            if ($row['mode'] === 'schedule' && $this->check($row)['ok']) {
+                $ids[] = (int) $row['workflow_id'];
+            }
+        }
+        return $ids;
     }
 
     /** The workflow's Start node (not its other nodes), config decoded. */

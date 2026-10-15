@@ -23,6 +23,20 @@ $connect = static function () use ($config): PDO {
         PDO::ATTR_EMULATE_PREPARES => false, PDO::ATTR_TIMEOUT => 5]);
 };
 
+// One worker at a time: a second one (a manual start beside launchd's) would hold a second wait on the same mailbox
+// and run the workflow twice. The lock is held by $lock for the process's lifetime and freed by the OS on exit.
+$lockPath = (getenv('HOME') ?: '/Users/didierphmartin') . '/Library/Caches/synergyai-event-worker.lock';
+@mkdir(dirname($lockPath), 0755, true);
+$lock = fopen($lockPath, 'c');
+if ($lock === false) {
+    $log("cannot open the lock file {$lockPath}");
+    exit(1);
+}
+if (!flock($lock, LOCK_EX | LOCK_NB)) {
+    $log('another event worker is running (lock ' . $lockPath . ' held): exiting');
+    exit(0);
+}
+
 $stop = false;
 pcntl_async_signals(true);
 pcntl_signal(SIGTERM, function () use (&$stop) { $stop = true; });
@@ -40,7 +54,7 @@ while (!$stop) {
             $pdo = $connect();
             $worker = new EventWorker(new ActiveWorkflowService($pdo),
                 fn(int $user, string $name) => WatchCall::server($pdo, $user, $name),
-                $transport, $runs, fn() => microtime(true));
+                $transport, $runs, fn() => microtime(true), $log);
         }
         // EventWorker::step() swallows its own errors, so a dead connection is found here, every 5 s.
         if (microtime(true) - $lastPing >= 5.0) {

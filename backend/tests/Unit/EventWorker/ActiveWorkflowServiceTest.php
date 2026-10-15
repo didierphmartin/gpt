@@ -159,4 +159,20 @@ final class ActiveWorkflowServiceTest extends TestCase
         $this->db->exec('DELETE FROM agent_workflows WHERE id = 70');
         $this->assertNull($this->svc()->get(3));
     }
+
+    public function testScheduleWorkflowIdsSkipsRowsThatDoNotQualify(): void
+    {
+        EventWorkerSchema::workflow($this->db, 70, 3, null);
+        EventWorkerSchema::row($this->db, 70, 3, 'daily');
+        $this->svc()->activate(3, 70);
+        EventWorkerSchema::workflow($this->db, 71, 4, null);
+        EventWorkerSchema::row($this->db, 71, 4, 'daily');
+        $this->svc()->activate(4, 71);
+        $this->assertSame([70, 71], $this->svc()->scheduleWorkflowIds());
+        $this->db->exec('UPDATE agent_workflows SET enabled = 0 WHERE id = 70');   // disabled
+        $this->db->exec('DELETE FROM workflow_edges WHERE workflow_id = 71');      // no links
+        $this->assertSame([], $this->svc()->scheduleWorkflowIds());
+        $this->db->exec('UPDATE agent_workflows SET enabled = 1 WHERE id = 70');
+        $this->assertSame([70], $this->svc()->scheduleWorkflowIds());
+    }
 }

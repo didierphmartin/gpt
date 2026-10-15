@@ -137,7 +137,7 @@ final class EventWorkerTest extends TestCase
         $this->assertSame(0, $this->w->slots()[3]['backoff']);              // a good answer resets it
     }
 
-    public function testAFailedRunKeepsTheWatch(): void
+    public function testAFailedRunKeepsTheWatchAfterABackoff(): void
     {
         $this->active();
         $this->step();
@@ -145,8 +145,64 @@ final class EventWorkerTest extends TestCase
         $this->step(1);
         $this->runs->ended[3] = 1;
         $this->step(1);
-        $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
+        $this->assertSame(['error', 'run_failed'], array_values($this->state()));
+        $this->assertArrayNotHasKey(3, $this->tr->open);                   // no wait at once: no ready -> fail loop
+        $this->step(EventWorker::BACKOFF_MIN_S);
         $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
+        $this->tr->answer(3, ['status' => 'timeout', 'events' => 'off']);
+        $this->step(1);
+        $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));   // a timeout does not clear it
+        $this->assertSame(30, $this->w->slots()[3]['backoff']);
+    }
+
+    public function testFailedRunsBackOffDoublingAndASuccessResets(): void
+    {
+        $this->active();
+        $this->step();
+        $delays = [];
+        for ($i = 0; $i < 2; $i++) {
+            $this->tr->answer(3, ['status' => 'ready', 'via' => 'event', 'events' => 'on']);
+            $this->step(1);
+            $this->assertSame('running', $this->w->slots()[3]['state']);
+            $this->runs->ended[3] = 1;
+            $this->step(1);
+            $delays[] = $this->w->slots()[3]['backoff'];
+            $this->assertSame(['error', 'run_failed'], array_values($this->state()));
+            $this->step($this->w->slots()[3]['until'] - $this->t - 0.5);   // not yet
+            $this->assertArrayNotHasKey(3, $this->tr->open);
+            $this->step(1);                                                  // due: wait again
+            $this->assertArrayHasKey(3, $this->tr->open);
+        }
+        $this->assertSame([30, 60], $delays);
+        $this->assertCount(2, $this->runs->started);
+        $this->tr->answer(3, ['status' => 'ready']);
+        $this->step(1);
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->assertSame(0, $this->w->slots()[3]['backoff']);              // a run that succeeds resets it
+        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame(['waiting', null], array_values($this->state()));
+    }
+
+    public function testARunThatCannotStartBacksOff(): void
+    {
+        $runs = new class implements RunSpawner {
+            public function start(int $key, int $scheduleId): void { throw new \RuntimeException('proc_open failed'); }
+            public function done(): array { return []; }
+            public function scheduleTick(): void {}
+        };
+        $lines = [];
+        $w = new EventWorker(new ActiveWorkflowService($this->db), fn(int $u, string $n) => \AgentTeam\Services\WatchCall::server($this->db, $u, $n),
+            $this->tr, $runs, fn() => $this->t, function (string $l) use (&$lines) { $lines[] = $l; });
+        $this->active();
+        $w->step();
+        $this->tr->answer(3, ['status' => 'ready']);
+        $this->t += 1;
+        $w->step();
+        $this->assertSame(['error', 'run_failed'], array_values($this->state()));
+        $this->assertSame(30, $w->slots()[3]['backoff']);
+        $this->assertSame(['event worker: run start (user 3): RuntimeException: proc_open failed'], $lines);
     }
 
     public function testAReadyAfterDeactivationStartsNoRun(): void
@@ -212,6 +268,82 @@ final class EventWorkerTest extends TestCase
         $this->assertSame(1, $this->runs->ticks);
         $this->step(31);
         $this->assertSame(2, $this->runs->ticks);
+    }
+
+    public function testNoScheduleModeSlotNoTick(): void
+    {
+        $this->active();                                   // option mode only
+        $this->step();
+        $this->step(EventWorker::SCHEDULE_TICK_S + 1);
+        $this->assertSame(0, $this->runs->ticks);
+    }
+
+    public function testAnIdleScheduleModeWorkflowDoesNotTick(): void
+    {
+        EventWorkerSchema::workflow($this->db, 70, 3, null);
+        EventWorkerSchema::row($this->db, 70, 3, 'daily');
+        $this->active(3, 70);
+        $this->db->exec('UPDATE agent_workflows SET enabled = 0 WHERE id = 70');
+        $this->step();
+        $this->assertSame(['idle', 'disabled'], array_values($this->state()));
+        $this->step(EventWorker::SCHEDULE_TICK_S + 1);
+        $this->assertSame(0, $this->runs->ticks);
+        $this->db->exec('UPDATE agent_workflows SET enabled = 1 WHERE id = 70');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame(1, $this->runs->ticks);         // scheduled again: the tick resumes at once
+    }
+
+    private function editWatch(string $folder): void
+    {
+        $watch = EventWorkerSchema::WATCH;
+        $watch['args']['args']['folder'] = $folder;
+        $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?')->execute([json_encode($watch), $this->row]);
+    }
+
+    public function testAnEditedWatchReopensTheWait(): void
+    {
+        $this->active();
+        $this->step();
+        $this->assertStringContainsString('"Inbox"', $this->tr->open[3]);
+        $this->editWatch('Archive');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame(2, $this->tr->started);
+        $this->assertStringContainsString('"Archive"', $this->tr->open[3]);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame(2, $this->tr->started);         // unchanged since: the wait stays
+    }
+
+    public function testAWatchEditedDuringARunIsUsedAfterIt(): void
+    {
+        $this->running();
+        $this->editWatch('Archive');
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame([], $this->tr->open);
+        $this->runs->ended[3] = 0;
+        $this->step(1);
+        $this->step(1);
+        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertStringContainsString('"Archive"', $this->tr->open[3]);
+        $this->assertCount(1, $this->runs->started);
+    }
+
+    public function testASwallowedErrorIsLoggedOnceAMinute(): void
+    {
+        $lines = [];
+        $w = new EventWorker(new ActiveWorkflowService($this->db), fn(int $u, string $n) => \AgentTeam\Services\WatchCall::server($this->db, $u, $n),
+            $this->tr, $this->runs, fn() => $this->t, function (string $l) use (&$lines) { $lines[] = $l; });
+        $this->active();
+        $this->db->exec("CREATE TRIGGER no_update BEFORE UPDATE ON active_workflows BEGIN SELECT RAISE(ABORT, 'locked'); END");
+        for ($i = 0; $i < 6; $i++) {                      // 0 .. 50 s: the write fails on every heartbeat
+            $w->step();
+            $this->t += 10;
+        }
+        $this->assertCount(1, $lines);
+        $this->assertStringContainsString('state write (user 3)', $lines[0]);
+        $this->assertStringContainsString('locked', $lines[0]);
+        $this->t += 10;                                    // 60 s after the first: logged again
+        $w->step();
+        $this->assertCount(2, $lines);
     }
 
     public function testTheHeartbeatRefreshesTheCheckedTime(): void
@@ -367,6 +499,8 @@ final class EventWorkerTest extends TestCase
         $this->runs->ended[3] = 1;
         $this->step(1);
         $this->step(1);
+        $this->assertSame(['error', 'run_failed'], array_values($this->state()));
+        $this->step(EventWorker::BACKOFF_MIN_S);
         $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
         $this->assertArrayHasKey(3, $this->tr->open);
     }
