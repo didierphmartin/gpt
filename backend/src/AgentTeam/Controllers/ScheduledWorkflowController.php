@@ -147,6 +147,7 @@ class ScheduledWorkflowController
                 'trigger_component_id' => $body['trigger_component_id'] ?? null,
             ]);
 
+            $this->sweepActive();
             return [
                 'success' => true,
                 'data' => $schedule,
@@ -260,6 +261,7 @@ class ScheduledWorkflowController
                 ];
             }
 
+            $this->sweepActive();
             return [
                 'success' => true,
                 'data' => $schedule,
@@ -305,6 +307,7 @@ class ScheduledWorkflowController
                 ];
             }
 
+            $this->sweepActive();
             return [
                 'success' => true,
                 'message' => 'Schedule deleted successfully',
@@ -347,6 +350,7 @@ class ScheduledWorkflowController
                 ];
             }
 
+            $this->sweepActive();
             return [
                 'success' => true,
                 'message' => 'Schedule paused successfully',
@@ -389,6 +393,7 @@ class ScheduledWorkflowController
                 ];
             }
 
+            $this->sweepActive();
             return [
                 'success' => true,
                 'message' => 'Schedule resumed successfully',
@@ -401,6 +406,12 @@ class ScheduledWorkflowController
                 'status_code' => 500
             ];
         }
+    }
+
+    /** A schedule write may change the workflow's input mode: an active workflow whose mode changed is deactivated (spec 2026-10-14 event-worker §2). */
+    private function sweepActive(): void
+    {
+        (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();
     }
 
     /**

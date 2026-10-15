@@ -16,6 +16,9 @@ final class CodeComponentsControllerTest extends TestCase
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         CodeComponentStoreTest::schema($db);
+        $db->exec('CREATE TABLE active_workflows (user_id INTEGER PRIMARY KEY, workflow_id INTEGER NOT NULL, mode TEXT NOT NULL,
+            trigger_component_id INTEGER, activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT \'starting\', watch_message TEXT, watch_checked_at TEXT)');
+        $db->exec('ALTER TABLE agent_workflows ADD COLUMN enabled INTEGER DEFAULT 1');   // the sweep after clearStartOption reads both
         $this->c = new CodeComponentsController($db, []);
     }
 

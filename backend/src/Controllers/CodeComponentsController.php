@@ -10,9 +10,11 @@ use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 final class CodeComponentsController
 {
     private CodeComponentStore $store;
+    private PDO $db;
 
     public function __construct(PDO $db, array $config)
     {
+        $this->db = $db;
         $this->store = new CodeComponentStore($db);
     }
 
@@ -65,8 +67,11 @@ final class CodeComponentsController
 
     public function clearStartOption(array $request): array
     {
-        return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0))]);
+        return $this->guard($request, function (int $u) use ($request) {
+            $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0));
+            (new \AgentTeam\Services\ActiveWorkflowService($this->db))->sweep();   // reverted Starts: their mode is gone
+            return ['success' => true, 'data' => $data];
+        });
     }
 
     private function found(int $u, array $request): array

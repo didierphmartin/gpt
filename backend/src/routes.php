@@ -499,6 +499,9 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/schedules/{id:\d+}/pause', ['AgentTeam:ScheduledWorkflowController', 'pause']);
         $r->post('/api/v1/schedules/{id:\d+}/resume', ['AgentTeam:ScheduledWorkflowController', 'resume']);
         $r->get('/api/v1/workflows/{id:\d+}/schedules', ['AgentTeam:ScheduledWorkflowController', 'byWorkflow']);
+        $r->get('/api/v1/workflows/active', ['AgentTeam:ActiveWorkflowController', 'show']);
+        $r->post('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'activate']);
+        $r->delete('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'deactivate']);
 
         // ============================================
         // SCHEDULER ROUTES (Cron/Admin)
