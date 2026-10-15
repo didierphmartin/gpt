@@ -21422,6 +21422,8 @@ Based on the analysis...
      * Update Start node to show schedule indicator
      */
     updateStartNodeScheduleIndicator(hasSchedule) {
+        // A Start option's row (repeat_type 'event') is no schedule: Start already reads "Runs on <option>".
+        if (this.currentSchedule?.repeat_type === 'event') hasSchedule = false;
         const startNodes = this.container.querySelectorAll('.workflow-node.start-node');
         startNodes.forEach(node => {
             let indicator = node.querySelector('.schedule-indicator');
