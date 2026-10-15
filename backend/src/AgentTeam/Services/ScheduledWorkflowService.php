@@ -284,16 +284,20 @@ class ScheduledWorkflowService
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    /** Due schedules: pending and due, or 'running' for longer than STALE_RUNNING_MINUTES (a crashed run). */
-    public function getDueSchedules(): array
+    /** Due schedules: pending and due, or 'running' for longer than STALE_RUNNING_MINUTES (a crashed run). $workflowIds limits them (spec 2026-10-14 event-worker: only active workflows run). */
+    public function getDueSchedules(?array $workflowIds = null): array
     {
+        if ($workflowIds === []) {
+            return [];
+        }
+        $only = $workflowIds === null ? '' : ' AND sw.workflow_id IN (' . implode(',', array_map('intval', $workflowIds)) . ')';
         $stmt = $this->db->prepare("
             SELECT sw.*, w.name as workflow_name, u.email as user_email
             FROM scheduled_workflows sw
             LEFT JOIN agent_workflows w ON sw.workflow_id = w.id
             LEFT JOIN users u ON sw.user_id = u.id
-            WHERE (sw.status = 'pending' AND sw.next_run <= :now)
-               OR (sw.status = 'running' AND (sw.running_since IS NULL OR sw.running_since < :stale))
+            WHERE ((sw.status = 'pending' AND sw.next_run <= :now)
+               OR (sw.status = 'running' AND (sw.running_since IS NULL OR sw.running_since < :stale))){$only}
             ORDER BY sw.next_run ASC
             LIMIT 50
         ");
@@ -342,6 +346,13 @@ class ScheduledWorkflowService
 
         $repeatType = $schedule['repeat_type'];
         $repeatInterval = (int) $schedule['repeat_interval'];
+
+        if ($repeatType === 'event') {
+            // An event row has no next run: it runs when its event fires (spec 2026-10-14 event-worker §3).
+            $this->db->prepare("UPDATE scheduled_workflows SET status = 'pending', last_run = NOW(), running_since = NULL WHERE id = :id")
+                ->execute(['id' => $id]);
+            return;
+        }
 
         if ($repeatType === 'none') {
             // One-time schedule - mark as completed

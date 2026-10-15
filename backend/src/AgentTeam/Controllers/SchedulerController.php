@@ -159,6 +159,13 @@ class SchedulerController
             $this->scheduleService,
             ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner)
         );
-        return $tick->run();
+        // A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due, never every schedule.
+        try {
+            $activeWorkflowIds = (new \AgentTeam\Services\ActiveWorkflowService($this->db))->scheduleWorkflowIds();
+        } catch (\Throwable $e) {
+            error_log('Scheduler: active workflows unavailable, running none: ' . $e->getMessage());
+            $activeWorkflowIds = [];
+        }
+        return $tick->run($activeWorkflowIds);
     }
 }

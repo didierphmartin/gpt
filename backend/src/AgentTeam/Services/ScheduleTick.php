@@ -23,9 +23,10 @@ final class ScheduleTick
         $this->log = $log ?? static fn(string $line) => null;
     }
 
-    public function run(): array
+    /** $workflowIds: run only these workflows' due rows (the active schedule-mode ones); null runs every due row. */
+    public function run(?array $workflowIds = null): array
     {
-        $due = $this->schedules->getDueSchedules();
+        $due = $this->schedules->getDueSchedules($workflowIds);
         $results = ['timestamp' => date('Y-m-d H:i:s'), 'due_count' => count($due),
             'executed' => [], 'failed' => [], 'quiet_count' => 0];
         ($this->log)('Found ' . count($due) . ' due schedule(s)');
@@ -36,25 +37,14 @@ final class ScheduleTick
                 continue;   // another tick took it
             }
             try {
-                $runs = 0;
-                do {
-                    $this->schedules->touchRunning($id);   // a long drain stays claimed
-                    $result = ($this->runSchedule)($schedule);
-                    $runs++;
-                    if (empty($result['success'])) {
-                        throw new \RuntimeException($result['error'] ?? 'Workflow execution failed');
-                    }
-                    $quiet = !empty($result['quiet']);
-                    if ($quiet) {
-                        $results['quiet_count']++;
-                    } else {
-                        $results['executed'][] = ['schedule_id' => $id, 'workflow_id' => (int) $schedule['workflow_id'],
-                            'workflow_name' => $schedule['workflow_name'] ?? null, 'execution_id' => $result['execution_id'] ?? null];
-                    }
-                    // Drain only when a code node ran and the run found work.
-                } while (!$quiet && !empty($result['drain']) && $runs < self::MAX_RUNS_PER_TICK);
+                $r = self::drain(fn() => ($this->runSchedule)($schedule), fn() => $this->schedules->touchRunning($id));
+                $results['quiet_count'] += $r['quiet_count'];
+                foreach ($r['execution_ids'] as $executionId) {
+                    $results['executed'][] = ['schedule_id' => $id, 'workflow_id' => (int) $schedule['workflow_id'],
+                        'workflow_name' => $schedule['workflow_name'] ?? null, 'execution_id' => $executionId];
+                }
                 $this->schedules->markCompleted($id);
-                ($this->log)("✓ Schedule #{$id}: {$runs} run(s)");
+                ($this->log)("✓ Schedule #{$id}: {$r['runs']} run(s)");
             } catch (\Throwable $e) {
                 $this->schedules->markFailed($id, $e->getMessage());
                 $results['failed'][] = ['schedule_id' => $id, 'workflow_id' => (int) $schedule['workflow_id'],
@@ -67,6 +57,35 @@ final class ScheduleTick
         $results['executed_count'] = count($results['executed']);
         $results['failed_count'] = count($results['failed']);
         return $results;
+    }
+
+    /**
+     * Run once, or, for a run that did work after a code node (drain), again at once until it reports nothing to do,
+     * at most MAX_RUNS_PER_TICK times. Shared by the tick and bin/run-schedule.php (an event's runs).
+     */
+    public static function drain(callable $runOnce, ?callable $touch = null): array
+    {
+        $runs = 0;
+        $quietCount = 0;
+        $executionIds = [];
+        do {
+            if ($touch !== null) {
+                $touch();   // a long drain stays claimed
+            }
+            $result = $runOnce();
+            $runs++;
+            if (empty($result['success'])) {
+                throw new \RuntimeException($result['error'] ?? 'Workflow execution failed');
+            }
+            $quiet = !empty($result['quiet']);
+            if ($quiet) {
+                $quietCount++;
+            } else {
+                $executionIds[] = $result['execution_id'] ?? null;
+            }
+            // Drain only when a code node ran and the run found work.
+        } while (!$quiet && !empty($result['drain']) && $runs < self::MAX_RUNS_PER_TICK);
+        return ['runs' => $runs, 'quiet_count' => $quietCount, 'execution_ids' => $executionIds];
     }
 
     /** The runSchedule callable both entry points use: load the workflow and run it once. */
