@@ -170,4 +170,6 @@ assert.strictEqual(LA({ type: 'node_trace' }), null);
 assert.strictEqual(LA(null), null);
 assert.strictEqual(SO.eventSubject('x'.repeat(300)).length, 200);
 assert.strictEqual(SO.eventSubject(''), '');
+// An empty Subject line does not reach across the blank line into the body.
+assert.strictEqual(SO.eventSubject('From: ana@example.com\nSubject:\n\nbody text'), 'From: ana@example.com');
 console.log('start-options liveAction: ok');

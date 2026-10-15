@@ -705,7 +705,8 @@
       "overlayTitle": "Live",
       "newEvent": "New event",
       "event": "Event",
-      "activate": "Activate"
+      "activate": "Activate",
+      "target": "server runs"
     },
     "startOptions": {
       "addTitle": "Add as a Start option",

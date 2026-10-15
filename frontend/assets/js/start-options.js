@@ -133,7 +133,7 @@
     /** The event a run started on, for the live overlay's turn: From and Subject lines, else the first 200 characters. */
     function eventSubject(output) {
         const s = String(output ?? '');
-        const lines = ['From', 'Subject'].map((k) => new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(s)).filter(Boolean)
+        const lines = ['From', 'Subject'].map((k) => new RegExp(`^${k}:[ \\t]*(.+)$`, 'm').exec(s)).filter(Boolean)
             .map((m) => m[0].trim());
         return lines.length ? lines.join('\n') : s.slice(0, 200);
     }

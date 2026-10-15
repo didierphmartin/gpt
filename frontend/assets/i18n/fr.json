@@ -705,7 +705,8 @@
       "overlayTitle": "En direct",
       "newEvent": "Nouvel événement",
       "event": "Événement",
-      "activate": "Activer"
+      "activate": "Activer",
+      "target": "exécutions sur le serveur"
     },
     "startOptions": {
       "addTitle": "Ajouter comme option de démarrage",

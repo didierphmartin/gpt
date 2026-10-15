@@ -2758,8 +2758,8 @@ class WorkflowEditor {
                     // Schedule or option mode (spec 2026-10-15 live-overlay §2): ▶ activates when needed, then opens
                     // the live overlay on the server runs; ■ in its header deactivates.
                     const activate = this._startView().button === 'activate';
-                    (activate ? this._activate() : Promise.resolve())
-                        .then(() => this._openLiveSession())
+                    (activate ? this._activate() : Promise.resolve(true))
+                        .then(ok => ok ? this._openLiveSession() : undefined)   // cancelled or refused: no overlay
                         .catch(err => this.showNotification(err?.message || String(err), 'error'));
                 } else if (this._isIngestionWorkflow()) {
                     // Ingestion: run the PHP interpreter from the Start node —
@@ -3223,23 +3223,26 @@ class WorkflowEditor {
             this.currentWorkflowId);
     }
 
+    /** @returns {Promise<boolean>} true once activated; false when the replace dialog is cancelled or the server refuses. */
     async _activate() {
         const cur = this.activeWorkflow;
         if (cur && Number(cur.workflow_id) !== Number(this.currentWorkflowId)) {
             const ok = await this._confirmLinksDialog(this.t('workflow.active.replaceTitle'),
                 this.t('workflow.active.replaceIntro', { name: cur.workflow_name || `#${cur.workflow_id}` }), [],
                 this.t('workflow.active.replaceConfirm'));
-            if (!ok) return;
+            if (!ok) return false;
         }
         await this._persistIfDirty();   // the worker reads Start's links and option from the database
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
         const body = await r.json().catch(() => ({}));
-        if (!r.ok || body.success === false) {
+        const activated = r.ok && body.success !== false;
+        if (!activated) {
             this.showNotification(this._activeError(r, body), 'error');
         } else {
             this.showNotification(this.t('workflow.active.activated'), 'success');
         }
         await this._loadActive();
+        return activated;
     }
 
     /** A refused (de)activation as text: the three known kinds, else the server's message, else a generic line. */
@@ -14558,8 +14561,10 @@ class WorkflowEditor {
         ).join('');
         // Show which engine is executing this run — a compiled run's own
         // server (with its host:port, in case of the URL-override path), or
-        // the live interpreter (the server-side playbook-node/run path).
-        const target = this._runTarget
+        // the live interpreter (the server-side playbook-node/run path). The live overlay watches the
+        // server's own runs, neither of those.
+        const target = mode === 'live' ? this.t('workflow.live.target')
+            : this._runTarget
             ? `${this.t('workflow.output.runTargetCompiled') || 'compiled'} · ${this._runTarget.base.replace(/^https?:\/\//, '')}`
             : (this.t('workflow.output.runTargetLive') || 'live interpreter');
         // A swarm session isn't "running" toward one finish line the way a
@@ -14593,7 +14598,7 @@ class WorkflowEditor {
             <div id="playbook-run-overlay" class="${overlayClass}">
                 <div class="storage-config-modal"${modalStyleAttr}>
                     <div class="storage-config-header" style="flex-wrap:wrap;">
-                        <h3 style="margin:0;"><span>📖</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
+                        <h3 style="margin:0;"><span>${mode === 'live' ? '🔄' : '📖'}</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
                         <button class="storage-config-close" id="pb-ov-close" title="Close (run continues)">×</button>
                         ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
@@ -15988,6 +15993,8 @@ class WorkflowEditor {
         // this browser has left drive gates and bubbles in whatever
         // conversation opens next (see _detachCompiledStream).
         this._detachCompiledStream();
+        // ... nor the live overlay's stream of server runs, which would keep reconnecting.
+        this._liveStop?.(); this._liveStop = null;
         this._runTarget = null;
         // Stale-state guard: this teardown already nulls _swarmSession and
         // _compiledSession, but left _pbSessionMode behind — the same class
