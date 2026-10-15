@@ -15473,6 +15473,14 @@ class WorkflowEditor {
         const live = new Set();
         for (const id of Object.keys(nodes)) {
             const kind = this._wfNodeKind(id, nodes);
+            if (kind !== 'code' && kind !== 'start') continue;
+            // Each output port names its exit on hover (none on a plain Start or a no-exit code node).
+            const exits = kind === 'code' || nodes[id].data?.start_option ? nodes[id].data?.exits : null;
+            this.container.querySelectorAll(`#node-${id} .outputs .output`).forEach((port) => {
+                const n = Number((port.className.match(/\boutput_(\d+)\b/) || [])[1]);
+                const exit = exits && !window.CodeNode.isPlain(exits) ? exits[n - 1] : null;
+                if (exit) port.title = exit; else port.removeAttribute('title');
+            });
             if (kind !== 'code' && !(kind === 'start' && nodes[id].data?.start_option)) continue;
             for (const t of window.CodeNode.exitTags(id, nodes)) {
                 const svg = this.container.querySelector(`svg.connection.node_out_node-${id}.node_in_node-${t.to}.${t.port}`);
