@@ -252,6 +252,9 @@ class LangGraphGenerator
     public function generate(int $workflowId, ?string $userId = null, array $options = []): array
     {
         $facts = $this->analyzeForEmit($workflowId, $userId);
+        if ($facts['triggerNodeId'] !== null && (!empty($options['a2a']) || ($facts['orchestration'] ?? 'workflow') === 'swarm')) {
+            throw new RuntimeException('A Start option (' . $facts['startOptionLabel'] . ') needs the single-file or modular format.');
+        }
         if ($facts['codeData'] !== [] && ($facts['orchestration'] ?? 'workflow') === 'swarm') {
             throw new RuntimeException('Code nodes are not supported by the swarm packaging yet. '
                 . 'Compile this workflow as a single file or with agents in separate files.');
@@ -548,6 +551,7 @@ class LangGraphGenerator
         $lines[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($startPrompt);
         $lines[] = self::defaultCronLine($facts);
         $lines[] = self::defaultWatchLine($facts);
+        array_push($lines, ...self::startModeLines($facts));
         $lines[] = '';
         // Output-node storage setting baked in so the compiled script persists the final
         // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
@@ -1259,12 +1263,28 @@ class LangGraphGenerator
         // read it here rather than taking it as a generate() option, so every
         // caller agrees without having to remember to pass it.
         $orchestration = $workflow->getOrchestration();
+        // The Start option, if any: the hidden code node StartOptionGraph::expand added (spec 2026-10-15 §2).
+        $triggerNodeId = null;
+        $startTrigger = null;
+        foreach ($order as $nid) {
+            $st = ($byId[$nid]['config'] ?? [])['start_trigger'] ?? null;
+            if (self::nodeType($byId[$nid]) === 'code' && is_array($st)) {
+                $triggerNodeId = (string) $nid;
+                $startTrigger = $st;
+                break;
+            }
+        }
         $defaultCron = $this->defaultCron($workflowId);
-        $defaultWatch = $this->defaultWatch($workflowId, $serverSlugs);
+        $startMode = $startTrigger !== null ? 'watch' : ($defaultCron !== null ? 'cron' : 'prompt');
+        $defaultWatch = $startTrigger !== null
+            ? $this->watchFromTrigger((array) ($startTrigger['watch'] ?? []), $serverSlugs)
+            : $this->defaultWatch($workflowId, $serverSlugs);
+        $workExit = $startTrigger !== null ? (string) ($startTrigger['work_exit'] ?? '') : null;
+        $startOptionLabel = $startTrigger !== null ? (string) ($startTrigger['label'] ?? 'Start option') : null;
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
             'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
-            'orchestration', 'defaultCron', 'defaultWatch');
+            'orchestration', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
     }
 
     /** The workflow's active cron schedule (newest scheduled_workflows row), baked as DEFAULT_CRON for --cron. */
@@ -1299,12 +1319,30 @@ class LangGraphGenerator
         if (!is_array($t) || trim((string) ($t['server'] ?? '')) === '' || trim((string) ($t['tool'] ?? '')) === '') {
             return null;
         }
+        return $this->watchFromTrigger($t, $serverSlugs);
+    }
+
+    /** {server, tool, args} (server = a name) as DEFAULT_WATCH, the server slugged; one the workflow does not use is an error. */
+    private function watchFromTrigger(array $t, array $serverSlugs): ?array
+    {
+        if (trim((string) ($t['server'] ?? '')) === '' || trim((string) ($t['tool'] ?? '')) === '') {
+            return null;
+        }
         $slug = CodeNodeEmit::slug((string) $t['server']);
         if (!in_array($slug, $serverSlugs, true)) {
             throw new \RuntimeException('The event trigger waits on MCP server "' . $t['server'] . '", which no node of this'
                 . ' workflow uses; check it on the node that polls it (e.g. the code node calling poll_new_mail).');
         }
         return ['server' => $slug, 'tool' => (string) $t['tool'], 'args' => is_array($t['args'] ?? null) ? $t['args'] : []];
+    }
+
+    /** START_MODE / WORK_EXIT / TRIGGER_NODE_ID: the Start's mode and its option's work exit and node (spec 2026-10-15 §2). */
+    private static function startModeLines(array $facts): array
+    {
+        $s = fn(?string $v) => $v === null || $v === '' ? 'None' : PythonEmitHelpers::pyStr($v);
+        return ['START_MODE = ' . PythonEmitHelpers::pyStr($facts['startMode']),
+            'WORK_EXIT = ' . $s($facts['workExit']),
+            'TRIGGER_NODE_ID = ' . $s($facts['triggerNodeId'])];
     }
 
     /** DEFAULT_WATCH's line: the baked event trigger, or None. */
@@ -3711,6 +3749,7 @@ TXT;
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr($facts['startPrompt']);
         $L[] = self::defaultCronLine($facts);
         $L[] = self::defaultWatchLine($facts);
+        array_push($L, ...self::startModeLines($facts));
         $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($facts['startDocuments'] ?: []);
         $L[] = '';
         $L[] = $sep;
