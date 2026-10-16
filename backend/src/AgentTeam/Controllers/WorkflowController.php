@@ -398,11 +398,18 @@ class WorkflowController
             }
 
             $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            // A packaged Start document is copied only from this user's own document storage.
             $gen = new \AgentTeam\Services\ADKGenerator(
                 $this->db,
                 $this->workflowRepository,
                 $this->graphRepository,
-                $agentRepo
+                $agentRepo,
+                null,
+                new \AgentTeam\Services\StartDocumentStore(
+                    $this->getUserStorageFolder((int) $userId),
+                    fn() => $this->getUniversalFSAdapter((int) $userId),
+                    $this->config['storage_path'] ?? __DIR__ . '/../../../../storage'
+                )
             );
 
             if (!empty($request['query']['package'])) {

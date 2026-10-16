@@ -92,6 +92,7 @@ from dotenv import load_dotenv
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
     load_dotenv(os.path.join(_d, ".env"))
+PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
@@ -574,6 +575,8 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
         for doc in START_DOCUMENTS:
             name = doc.get("name", "Document")
             path = doc.get("path", "")
+            if path and not os.path.isabs(path):
+                path = os.path.join(PACKAGE_DIR, path)   # start_documents/ in the package
             if not path:
                 doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
                 continue

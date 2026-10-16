@@ -143,7 +143,7 @@ final class LangGraphPackage
      *
      * @return list<array{dir:string,rel:string,bytes:string,entry:array}>
      */
-    private static function skillFiles(array $facts, string $skillsRoot): array
+    public static function skillFiles(array $facts, string $skillsRoot): array
     {
         $out = [];
         $root = realpath($skillsRoot);
@@ -180,7 +180,7 @@ final class LangGraphPackage
     }
 
     /** `dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it. */
-    private static function skillDependencies(string $skillMd): array
+    public static function skillDependencies(string $skillMd): array
     {
         $lines = preg_split('/\r\n|\r|\n/', $skillMd);
         if (!$lines || trim($lines[0]) !== '---') {

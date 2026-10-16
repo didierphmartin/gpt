@@ -25,7 +25,9 @@ class ADKGenerator
         private PDO $db,
         private WorkflowRepository $workflowRepo,
         private WorkflowGraphRepository $graphRepo,
-        private AgentRepository $agentRepo
+        private AgentRepository $agentRepo,
+        private ?string $skillsRoot = null,                     // the package copies the used skills from here
+        private ?StartDocumentStore $startDocuments = null      // the package copies the Start's documents from here
     ) {}
 
     /**
@@ -34,6 +36,17 @@ class ADKGenerator
      * @return array{filename: string, code: string}
      */
     public function generate(int $workflowId, ?string $userId = null): array
+    {
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        return [
+            'filename' => strtolower($name) . '_adk.py',
+            'code'     => self::emitAdk($analyzed),
+        ];
+    }
+
+    /** Everything emitAdk() needs, read from the database at compile time (the program itself never reads it). */
+    private function analyzeWorkflow(int $workflowId, ?string $userId): array
     {
         // A swarm is a different architecture, not a packaging choice: one active
         // agent at a time with control moving by hand-off, against this target's
@@ -111,11 +124,7 @@ class ADKGenerator
             }
         }
         $analyzed['serverSlugs'] = self::serverSlugs($urlName);
-
-        return [
-            'filename' => strtolower($name) . '_adk.py',
-            'code'     => self::emitAdk($analyzed),
-        ];
+        return $analyzed;
     }
 
     /**
@@ -181,6 +190,9 @@ class ADKGenerator
                 'input_files are repaired if a model delivers them',
                 'JSON-over-escaped. Scripts run as async subprocesses here.');
             $lines[] = PythonEmitHelpers::skillDepsBlock();
+            if (!empty($analyzed['package'])) {
+                $lines[] = 'SKILLS_DIR = os.environ.get("SYNERGYAI_SKILLS_DIR") or os.path.join(PACKAGE_DIR, "skills")   # the package\'s own skills/';
+            }
             $lines[] = self::skillRunnerBlock();
         }
 
@@ -262,21 +274,28 @@ class ADKGenerator
     }
 
     /**
-     * The compiled package: the same script, plus the run server that makes it
-     * conversational. The single-file generate() is unchanged and still the
-     * only way to run this outside the editor.
+     * The compiled package: a folder that runs on its own, like LangGraph's modular package --
+     * workflow.py (the script, reading its code nodes from code/ and its skills from skills/),
+     * the run server (api.py, common.py), and ADKPackage's files.
      */
     public function generatePackage(int $workflowId, ?string $userId = null): array
     {
         $wf = $this->workflowRepo->findById($workflowId);
         $name = $wf ? $wf->getName() : 'workflow';
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        $analyzed['package'] = true;
+        $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
+        $analyzed['startDocuments'] = $docs['docs'];
 
-        return RunServerEmitter::package(
-            $this->generate($workflowId, $userId),
+        $pkg = RunServerEmitter::package(
+            ['code' => self::emitAdk($analyzed)],
             $name,
             'adk',
             'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks'
         );
+        $pkg['files'] = array_merge($pkg['files'],
+            ADKPackage::files($analyzed, $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files']));
+        return $pkg;
     }
 
     // -------------------------------------------------------------------------
@@ -328,6 +347,7 @@ from dotenv import load_dotenv
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
     load_dotenv(os.path.join(_d, ".env"))
+PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
@@ -593,7 +613,8 @@ PY;
         """
         node_id: str = ""
         display: str = ""
-        source: str = ""
+        source: str = ""        # the code, in the single file
+        source_file: str = ""   # or its file in the package (relative to PACKAGE_DIR), read at each run
         exits: list = []
         mcp_servers: list = []
         timeout_s: int = 30
@@ -605,7 +626,11 @@ PY;
                        for key, name, is_start in self.parents if key in st]
             value = CODE_HARNESS.decode_input(parents, str(st.get("user_prompt", "")))
             print(f"[node {self.node_id}] {self.display!r} code -- exits={self.exits}, mcp_servers={self.mcp_servers}", flush=True)
-            res = await asyncio.to_thread(CODE_HARNESS.execute, self.source, value, self.exits, self.mcp_servers,
+            source = self.source
+            if self.source_file:   # read at each run, so an edit of code/<file> takes effect on the next one
+                with open(os.path.join(PACKAGE_DIR, self.source_file), encoding="utf-8") as fh:
+                    source = fh.read()
+            res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, self.exits, self.mcp_servers,
                                           _code_transport, self.timeout_s, node_name=self.display)
             for call in res["tool_calls"]:
                 print(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)", flush=True)
@@ -636,7 +661,9 @@ PY;
                 . "    name=\"node_{$id}\",\n"
                 . "    node_id=\"{$id}\",\n"
                 . '    display=' . PythonEmitHelpers::pyStr($cd['display']) . ",\n"
-                . '    source=' . PythonEmitHelpers::pyStr($cd['source']) . ",\n"
+                . (!empty($analyzed['package'])
+                    ? '    source_file=' . PythonEmitHelpers::pyStr(ADKPackage::codePath($analyzed, $id)) . ",\n"
+                    : '    source=' . PythonEmitHelpers::pyStr($cd['source']) . ",\n")
                 . '    exits=' . PythonEmitHelpers::jsonToPython($cd['exits']) . ",\n"
                 . '    mcp_servers=' . PythonEmitHelpers::jsonToPython($cd['mcp_servers']) . ",\n"
                 . "    timeout_s={$cd['timeout_s']},\n"
@@ -1635,6 +1662,9 @@ PY;
     {
         $sp = PythonEmitHelpers::pyStr($analyzed['startPrompt']);
         $name = PythonEmitHelpers::pyStr($analyzed['workflow']['name']);
+        // The package saves into its own folder (outputs/), as LangGraph's package does.
+        $outRoot = !empty($analyzed['package']) ? 'os.path.join(PACKAGE_DIR, "outputs")'
+            : 'os.path.expanduser("~/Documents/synergyAI/outputs")';
         $wfId = (int) ($analyzed['workflow']['id'] ?? 0);
         $storageEnabled = !empty($analyzed['outputStorageEnabled']) ? 'True' : 'False';
         $folder = $analyzed['outputFolder'] ?? null;
@@ -1663,6 +1693,8 @@ PY;
             "        for doc in START_DOCUMENTS:\n" .
             "            name = doc.get(\"name\", \"Document\")\n" .
             "            path = doc.get(\"path\", \"\")\n" .
+            "            if path and not os.path.isabs(path):\n" .
+            "                path = os.path.join(PACKAGE_DIR, path)   # start_documents/ in the package\n" .
             "            if not path:\n" .
             "                doc_parts.append(f\"### {name}\\n\\n_(no path on attachment record)_\")\n" .
             "                continue\n" .
@@ -1777,7 +1809,7 @@ PY;
             "            _ext = \"md\"\n" .
             "        _slug = \"\".join(c if c.isalnum() else \"_\" for c in WORKFLOW_NAME).strip(\"_\")[:60] or \"workflow\"\n" .
             "        _ts = time.strftime(\"%Y%m%d-%H%M%S\")\n" .
-            "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or os.path.expanduser(\"~/Documents/synergyAI/outputs\")\n" .
+            "        _root = os.environ.get(\"SYNERGYAI_OUTPUT_ROOT\") or " . $outRoot . "\n" .
             "        if OUTPUT_FOLDER:\n" .
             "            _cf = os.path.expanduser(OUTPUT_FOLDER)\n" .
             "            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)\n" .
