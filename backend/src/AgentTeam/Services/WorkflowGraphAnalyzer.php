@@ -541,6 +541,20 @@ class WorkflowGraphAnalyzer
      * differently would bind the same playbook to different tools, which is the
      * one thing a "the same workflow on four runtimes" promise cannot allow.
      */
+    /** slug => ['url', 'name'] for every MCP server the user can call (CodeNodeEmit::slug of the name). */
+    public function serverIndex(?string $userId = null): array
+    {
+        $out = [];
+        foreach ($this->loadMcpToolsWithServers($userId) as $t) {
+            $url = (string) ($t['server_url'] ?? '');
+            $name = (string) ($t['server_name'] ?? '');
+            if ($url !== '' && $name !== '') {
+                $out[CodeNodeEmit::slug($name)] = ['url' => $url, 'name' => $name];
+            }
+        }
+        return $out;
+    }
+
     public function availableToolsById(?string $userId = null): array
     {
         $out = [];

@@ -80,6 +80,22 @@ class ADKGenerator
                 PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
         }
 
+        // MCP_SERVER_SLUGS: every URL this script calls -> its server's slug (MCP_HEADERS_<SLUG>).
+        $index = $analyzer->serverIndex($userId);
+        $urlName = [];
+        foreach ((array) ($analyzed['usedServers'] ?? []) as $surl => $meta) {
+            $urlName[(string) $surl][CodeNodeEmit::slug((string) ($meta['name'] ?? ''))] = (string) ($meta['name'] ?? '');
+        }
+        foreach ($analyzed['playbooks'] as $pd) {
+            foreach ($pd['actions'] as $a) {
+                if (($a['kind'] ?? '') === 'mcp') {
+                    $slg = CodeNodeEmit::slug(explode('.', (string) $a['target'], 2)[0]);
+                    $urlName[(string) $a['server_url']][$slg] = $index[$slg]['name'] ?? $slg;
+                }
+            }
+        }
+        $analyzed['serverSlugs'] = self::serverSlugs($urlName);
+
         return [
             'filename' => strtolower($name) . '_adk.py',
             'code'     => self::emitAdk($analyzed),
@@ -123,7 +139,7 @@ class ADKGenerator
         $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
         $lines[] = self::banner('MCP CLIENT',
             'HTTP JSON-RPC client used by every generated _tool_* function.');
-        $lines[] = PythonEmitHelpers::mcpClientBlock();
+        $lines[] = self::mcpClientBlock($analyzed);
         $lines[] = self::banner('DOCUMENT CONVERTER',
             'Turns a start-node attachment into markdown for the prompt.');
         $lines[] = PythonEmitHelpers::documentConverterBlock();
@@ -180,7 +196,7 @@ class ADKGenerator
                 're-decides each round from the running transcript, with the',
                 'native verbs, the human gates, one tool per bound #Action and',
                 'a stub per unbound one. The node output is that transcript.');
-            // ADK already emits PythonEmitHelpers::mcpClientBlock() above, so the
+            // ADK already emits its own mcpClientBlock() above, so the
             // interpreter's _call_mcp_tool is already defined -- do not re-emit it.
             $lines[] = PlaybookEmit::supportBlock(false);
             $lines[] = PlaybookEmit::runtimeBlock();
@@ -249,6 +265,7 @@ class ADKGenerator
         $docBody = $esc(PythonEmitHelpers::workflowDocBlock([
             'target' => 'Google ADK (Python) -- LlmAgent per node, Sequential/Parallel layers',
             'dispatch_supported' => true,
+            'generated_at' => $analyzed['generated_at'] ?? null,   // tests pin it; otherwise now
             'workflow' => $analyzed['workflow'],
             'nodes' => self::docNodes($analyzed),
             'edges' => array_map(fn($e) => [$e['from'], $e['to']], (array) ($analyzed['edges'] ?? [])),
@@ -273,11 +290,12 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Load provider API keys from the runner env's .env (one dir up from scripts/).
-# Without this, a DIRECT terminal run has no credentials and every LiteLLM call
-# fails with "Missing credentials … set the OPENAI_API_KEY" — runner-mediated
-# runs only worked because main.py loads the same file and subprocesses inherit.
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+# Provider keys and MCP headers come from .env: this folder's own first, then the runner's
+# python/.env -- one level up for the single file in scripts/, two for the package in
+# scripts/<folder>/. load_dotenv never overrides, so the nearest value wins.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
+    load_dotenv(os.path.join(_d, ".env"))
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
@@ -310,6 +328,166 @@ def _agent_instruction(prompt: str, parent_keys: list):
         return text
     return _instr
 PY;
+    }
+
+    /**
+     * ADK's own MCP client (PythonEmitHelpers::mcpClientBlock() stays for MAF and NOOA): per-server
+     * headers from MCP_HEADERS_<SLUG>, a moved server from MCP_URL_<SLUG>, and a raw call for code nodes.
+     */
+    private static function mcpClientBlock(array $analyzed): string
+    {
+        $slugs = (array) ($analyzed['serverSlugs'] ?? []);
+        $head = 'MCP_SERVER_SLUGS = ' . ($slugs === [] ? '{}' : PythonEmitHelpers::jsonToPython($slugs, true))
+            . "   # registered URL -> slug: MCP_HEADERS_<SLUG> / MCP_URL_<SLUG> in .env\n"
+            . "MCP_SLUGS = {v: k for k, v in MCP_SERVER_SLUGS.items()}   # slug -> URL (a code node's call_tool)\n\n";
+        return $head . <<<'PY'
+_MCP_BASE_HEADERS = {"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream, */*"}
+_MCP_ENDPOINTS: dict = {}   # registered server URL -> endpoint that accepted the handshake
+
+
+def _mcp_headers(server_url: str) -> dict:
+    """The base headers plus the server's own from MCP_HEADERS_<SLUG> in .env (a JSON object).
+
+    Header values (keys, account ids) never live in this script: the editor's MCP server
+    entry holds them, and .env carries them to the compiled run.
+    """
+    slug = MCP_SERVER_SLUGS.get(server_url, "")
+    var = f"MCP_HEADERS_{slug.upper()}"
+    raw = os.environ.get(var, "") if slug else ""
+    if not raw:
+        return dict(_MCP_BASE_HEADERS)
+    try:
+        extra = json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
+    if not isinstance(extra, dict):
+        raise RuntimeError(f"{var} in .env must be a JSON object")
+    for k, v in extra.items():
+        if not isinstance(v, str) or "\r" in v or "\n" in v or "\r" in str(k) or "\n" in str(k):
+            raise RuntimeError(f"{var} in .env: every header value must be a single-line string (check header {str(k)!r})")
+    return {**_MCP_BASE_HEADERS, **{str(k): v for k, v in extra.items()}}
+
+
+def _mcp_live_url(server_url: str) -> str:
+    """Where the server answers: MCP_URL_<SLUG> from .env when set (the server moved), else the
+    registered URL. The registered URL stays the key for headers and endpoints."""
+    slug = MCP_SERVER_SLUGS.get(server_url, "")
+    return (os.environ.get(f"MCP_URL_{slug.upper()}", "").strip() if slug else "") or server_url
+
+
+def _normalize_mcp_url(url: str) -> str:
+    """The MCP endpoint: as given when it ends with /mcp or .php, else with /mcp appended."""
+    url = url.rstrip("/")
+    if url.endswith("/mcp") or url.endswith(".php"):
+        return url
+    return url + "/mcp"
+
+
+def _parse_mcp_response(text: str) -> dict | None:
+    """A JSON-RPC response as plain JSON, or the first parsable SSE `data:` line."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("data:"):
+            data = line[5:].strip()
+            if data:
+                try:
+                    return json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+    return None
+
+
+def _init_mcp_session(server_url: str) -> str | None:
+    """The initialize handshake; tries the /mcp-normalised live URL, then the live URL as is.
+    Returns the endpoint that answered (remembered per server), or None."""
+    h = _mcp_headers(server_url)   # outside the try: a bad MCP_HEADERS_<SLUG> stops the run
+    init_req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05",
+                           "clientInfo": {"name": "ADK-Workflow", "version": "1.0.0"}, "capabilities": {}}}
+    candidates = [_MCP_ENDPOINTS[server_url]] if server_url in _MCP_ENDPOINTS else []
+    live = _mcp_live_url(server_url)
+    for cand in (_normalize_mcp_url(live), live):
+        if cand not in candidates:
+            candidates.append(cand)
+    last_err = None
+    for mcp_url in candidates:
+        try:
+            with httpx.Client(timeout=30) as c:
+                r = c.post(mcp_url, json=init_req, headers=h)
+                r.raise_for_status()
+                data = _parse_mcp_response(r.text)
+                if data is None or "error" in data:
+                    last_err = (data or {}).get("error") if data else "invalid response"
+                    continue
+                c.post(mcp_url, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, headers=h)
+                _MCP_ENDPOINTS[server_url] = mcp_url
+                return mcp_url
+        except Exception as e:
+            last_err = e
+    print(f"[warn] MCP init failed for {server_url}: {last_err}")
+    return None
+
+
+def _call_mcp_tool_raw(server_url: str, tool_name: str, arguments: dict) -> dict:
+    """tools/call; the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
+    mcp_url = _init_mcp_session(server_url) or _normalize_mcp_url(_mcp_live_url(server_url))
+    request = {"jsonrpc": "2.0", "id": int(time.time()), "method": "tools/call",
+               "params": {"name": tool_name, "arguments": arguments or {}}}
+    try:
+        with httpx.Client(timeout=180) as c:
+            r = c.post(mcp_url, json=request, headers=_mcp_headers(server_url))
+            r.raise_for_status()
+            data = _parse_mcp_response(r.text)
+    except Exception as e:   # refused, timed out, HTTP error
+        return {"isError": True, "transport_error": True, "content": [{"type": "text", "text": str(e)}]}
+    if data is None:
+        return {"isError": True, "content": [{"type": "text", "text": "invalid response"}]}
+    if "error" in data:
+        return {"isError": True, "content": [{"type": "text", "text": data["error"].get("message", "unknown")}]}
+    return data.get("result") or {}
+
+
+def _call_mcp_tool(server_url: str, tool_name: str, arguments: dict) -> str:
+    """tools/call for an agent's tool or a playbook #Action: the result's text items joined,
+    the raw result as JSON when it has none, {"error": ...} on failure."""
+    res = _call_mcp_tool_raw(server_url, tool_name, arguments)
+    texts = [c.get("text", "") for c in res.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"]
+    if res.get("isError"):
+        return json.dumps({"error": "\n".join(t for t in texts if t) or "tool error"})
+    return "\n".join(t for t in texts if t) or json.dumps(res)[:8000]
+PY;
+    }
+
+    /** @param array<string, array<string,string>> $urlName url => [slug => name]; returns url => slug */
+    private static function serverSlugs(array $urlName): array
+    {
+        $out = [];
+        $owner = [];
+        foreach ($urlName as $url => $names) {
+            $names = array_filter($names, fn($n, $s) => $s !== '', ARRAY_FILTER_USE_BOTH);
+            if ($names === []) {
+                continue;
+            }
+            if (count($names) > 1) {
+                $n = array_values($names);
+                throw new RuntimeException('MCP servers "' . $n[0] . '" and "' . $n[1] . '" share the URL ' . $url
+                    . '; a compiled script supports one connection per MCP URL. For a second mailbox (or account), run a second'
+                    . ' server instance on its own URL and register that.');
+            }
+            $slug = (string) array_key_first($names);
+            if (isset($owner[$slug]) && $owner[$slug] !== $url) {
+                throw new RuntimeException('Two MCP servers both map to MCP_HEADERS_' . strtoupper($slug)
+                    . '; rename one so each server has its own header variable.');
+            }
+            $owner[$slug] = (string) $url;
+            $out[(string) $url] = $slug;
+        }
+        return $out;
     }
 
     /**

@@ -64,6 +64,7 @@ class AdkGeneratorCompileTest extends TestCase
         $base = WorkflowGraphAnalyzer::analyzeGraph($graph);
         return array_merge($base, [
             'workflow'       => ['id' => 1, 'name' => 'diamond'],
+            'generated_at'   => '2026-01-01 00:00:00 UTC',
             'usedCatalog'    => [],
             'usedServers'    => [],
             'startPrompt'    => 'GO',
@@ -214,9 +215,9 @@ class AdkGeneratorCompileTest extends TestCase
             'temperature must be emitted in GenerateContentConfig');
         $this->assertStringContainsString('max_output_tokens=2048', $code,
             'max_output_tokens must be emitted in GenerateContentConfig');
-        $this->assertStringContainsString('_make_model("claude", "claude-sonnet-4-6")', $code,
+        $this->assertStringContainsString('_make_model("claude", "claude-sonnet-4-6", thinking=', $code,
             'Claude agent must use correct model factory call');
-        $this->assertStringContainsString('_make_model("gemini", "gemini-2.5-pro")', $code,
+        $this->assertStringContainsString('_make_model("gemini", "gemini-2.5-pro", thinking=', $code,
             'Gemini agent must use correct model factory call');
 
         // The primary gate: syntax-valid Python

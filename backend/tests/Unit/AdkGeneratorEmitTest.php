@@ -38,7 +38,7 @@ class AdkGeneratorEmitTest extends TestCase
     public function testModelFactoryMapsProviders(): void
     {
         $code = ADKGenerator::emitAdk($this->analyzed());
-        $this->assertStringContainsString('def _make_model(provider: str, model: str)', $code);
+        $this->assertStringContainsString('def _make_model(provider: str, model: str, thinking: str | None = None)', $code);
         // Gemini => bare model string; others => LiteLlm(...)
         $this->assertStringContainsString('return model', $code);          // gemini path
         $this->assertStringContainsString('return LiteLlm(model=', $code); // non-gemini path
@@ -191,7 +191,7 @@ class AdkGeneratorEmitTest extends TestCase
         $code = ADKGenerator::emitAdk($a);
         $this->assertStringContainsString('node_2 = LlmAgent(', $code);
         $this->assertStringContainsString('output_key="node_2"', $code);
-        $this->assertStringContainsString('model=_make_model("claude", "claude-sonnet-4-6")', $code);
+        $this->assertStringContainsString('model=_make_model("claude", "claude-sonnet-4-6", thinking=', $code);
         $this->assertStringContainsString('You are A', $code);
     }
 
@@ -582,7 +582,7 @@ class AdkGeneratorEmitTest extends TestCase
         // Each skill step = an LLM turn (applies the skill) + a capture step (makes the node
         // output the produced deliverable file, else the LLM text).
         $this->assertStringContainsString('node_2_skill_1_llm = LlmAgent(', $code);
-        $this->assertStringContainsString('_make_model("claude", "m")', $code);
+        $this->assertStringContainsString('_make_model("claude", "m", thinking=', $code);
         $this->assertStringContainsString('_make_skill_tool("GEO/geo-report")', $code);
         $this->assertStringContainsString('_skill_instruction("GEO/geo-report", "node_2_agent"', $code);
         // capture: the last step writes the node key (out_key), pulling the produced file.
