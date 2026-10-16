@@ -204,15 +204,17 @@ PY);
             'start_trigger' => ['label' => 'Outlook: get new email', 'work_exit' => 'new_mail'] + ($watch !== null ? ['watch' => $watch] : [])]);
     }
 
-    /** Start -> code node "Check" (exits work / no_mail) -> Output on `work` only: no_mail ends the run quietly. */
+    /** Start -> code node "Check" (exits work / no_mail / error) -> Output on `work` only: no_mail ends the run
+     *  quietly; FAILNOW takes the error exit. */
     private function codeGraph(): array
     {
         return ['nodes' => [
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'NOTHING']],
                 ['id' => '2', 'node_type' => 'code', 'config' => ['type' => 'code', 'name' => 'Check',
                     'code' => "def run(input, call_tool):\n    if 'WORKNOW' in str(input):\n        return {'route': 'work', 'output': 'mail for you'}\n"
+                        . "    if 'FAILNOW' in str(input):\n        return {'route': 'error', 'output': 'mailbox gone'}\n"
                         . "    return {'route': 'no_mail', 'output': None}\n",
-                    'exits' => ['work', 'no_mail'], 'mcp_servers' => [], 'timeout_s' => 30]],
+                    'exits' => ['work', 'no_mail', 'error'], 'mcp_servers' => [], 'timeout_s' => 30]],
                 ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ], 'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']]];
     }
@@ -263,16 +265,19 @@ PY);
         return self::VENV;
     }
 
-    /** Writes $files to a new temp dir; runs workflow.py with $args there; returns [rc, output, dir]. */
-    private function runProgram(array $files, array $args): array
+    /** Writes $files to a new temp dir; runs workflow.py (or $script, written next to it) with $args; returns [rc, output, dir]. */
+    private function runProgram(array $files, array $args, ?string $script = null): array
     {
+        if ($script !== null) {
+            $files['drive.py'] = $script;
+        }
         $dir = sys_get_temp_dir() . '/lgcli_' . bin2hex(random_bytes(4));
         mkdir($dir . '/pkg', 0777, true);
         foreach ($files as $path => $code) {
             @mkdir(dirname("$dir/pkg/$path"), 0777, true);
             file_put_contents("$dir/pkg/$path", $code);
         }
-        $proc = proc_open([$this->venv(), 'workflow.py', ...$args], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, "$dir/pkg",
+        $proc = proc_open([$this->venv(), $script !== null ? 'drive.py' : 'workflow.py', ...$args], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, "$dir/pkg",
             ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'SYNERGYAI_OUTPUT_ROOT' => "$dir/outputs"]);
         $text = stream_get_contents($pipes[1]);
         $rc = proc_close($proc);
@@ -310,6 +315,57 @@ PY);
             self::assertSame('mail for you', $last['output'], $label);
             self::assertStringContainsString('  ✓ Check', $text, $label);
             self::assertMatchesRegularExpression('~\[\d\d:\d\d\] Done in \d+\.\d s~', $text, $label);
+        }
+    }
+
+    /** Loads workflow.py as a module and calls make_run_once as --cron / --watch do (loop_mode) at verbosity argv[1] on argv[2]. */
+    private const LOOP_DRIVER = <<<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("prog", "workflow.py")
+m = importlib.util.module_from_spec(spec)
+sys.modules["prog"] = m
+spec.loader.exec_module(m)
+view = m.ConsoleView(sys.argv[1])
+rec = m.RunRecorder(m.RUNS_DIR, m.WORKFLOW_ID, m.WORKFLOW_NAME, listeners=[view])
+m.RUN_OUT.chatty = sys.argv[1] == "verbose"
+print("RESULT", repr(m.make_run_once(sys.argv[2], m.RunLoop(), view, rec, loop_mode=True)()))
+PY;
+
+    /** Fix round 1 (spec §4.1/§4.2): in a loop mode a quiet run prints nothing, a real run only the view's block
+     *  (the progress lines under --verbose); --once --quiet prints only the Done / Failed line. */
+    public function testLoopRunsPrintOnlyTheBlockAndQuietRunsNothing(): void
+    {
+        $this->venv();
+        foreach (['single' => [], 'modular' => ['modular' => true]] as $label => $opts) {
+            $files = $this->files($this->generate($this->codeGraph(), $opts));
+
+            [$rc, $text] = $this->runProgram($files, ['normal', 'NOTHING'], self::LOOP_DRIVER);
+            self::assertSame(0, $rc, "$label: $text");
+            self::assertSame("RESULT ''", trim($text), "$label: a quiet loop run prints nothing");
+
+            [$rc, $text] = $this->runProgram($files, ['normal', 'WORKNOW'], self::LOOP_DRIVER);
+            self::assertSame(0, $rc, "$label: $text");
+            $lines = explode("\n", rtrim($text));
+            self::assertSame(["    · 'Check' code -- exits=['work', 'no_mail', 'error'], mcp_servers=[]", "    · exit 'work'",
+                              '  ✓ Check', '  ✓ Output'], array_slice($lines, 0, 4), "$label: $text");
+            self::assertMatchesRegularExpression('~^\[\d\d:\d\d\] Done in \d+\.\d s$~', $lines[4], "$label: $text");
+            self::assertSame("RESULT 'mail for you'", $lines[5], "$label: $text");
+            self::assertCount(6, $lines, "$label: no [node], [info], FINAL OUTPUT or RUN SUMMARY\n$text");
+
+            [$rc, $text] = $this->runProgram($files, ['verbose', 'WORKNOW'], self::LOOP_DRIVER);
+            self::assertSame(0, $rc, "$label: $text");
+            self::assertStringContainsString('[info] Running...', $text, $label);
+            self::assertStringContainsString("[node] [2] exit 'work'", $text, $label);
+            self::assertStringNotContainsString('FINAL OUTPUT', $text, $label);
+            self::assertLessThan(strpos($text, '  ✓ Check'), strpos($text, '[info] Running...'), "$label: progress lines before the block");
+
+            [$rc, $text] = $this->runProgram($files, ['--once', '--quiet', 'WORKNOW']);
+            self::assertSame(0, $rc, "$label: $text");
+            self::assertMatchesRegularExpression('~^\[\d\d:\d\d\] Done in \d+\.\d s$~', trim($text), "$label --once --quiet: $text");
+
+            [$rc, $text] = $this->runProgram($files, ['--once', '--quiet', 'FAILNOW']);
+            self::assertSame(1, $rc, "$label: $text");
+            self::assertMatchesRegularExpression("~^\\[\\d\\d:\\d\\d\\] Failed: ErrorExitTaken: code node 'Check' took its error exit: mailbox gone$~", trim($text), "$label --once --quiet: $text");
         }
     }
 

@@ -815,6 +815,45 @@ class RunRecorder:
 NULL_RECORDER = RunRecorder(None, 0, "")
 
 
+class RunOutput:
+    """Where a run's progress lines go ([info] Running..., [node] ...): `mode` print (as they come, the
+    default), hold (kept until the run ends, then printed or dropped by release()) or drop. The
+    program sets it per run: a --cron / --watch run holds them (shown only under --verbose, never
+    for a quiet run), a --once --quiet run drops them. once() is for startup lines: printed the
+    first time only, and only when `chatty`."""
+
+    def __init__(self):
+        self.mode = "print"
+        self.held: list[str] = []
+        self.chatty = True
+        self._said: set[str] = set()
+
+    def __call__(self, line: str) -> None:
+        if self.mode == "print":
+            print(line, flush=True)
+        elif self.mode == "hold":
+            self.held.append(line)
+
+    def begin(self, mode: str) -> None:
+        """A new run: its lines go to `mode` (print | hold | drop)."""
+        self.mode, self.held = mode, []
+
+    def release(self, show: bool) -> None:
+        """The run is over: print its held lines when `show`, else drop them."""
+        lines, self.held = self.held, []
+        for line in lines if show else ():
+            print(line, flush=True)
+
+    def once(self, line: str, always: bool = False) -> None:
+        """A startup line: printed the first time it is said, when `chatty` (or `always`, for warnings)."""
+        if line not in self._said and (self.chatty or always):
+            self._said.add(line)
+            print(line, flush=True)
+
+
+RUN_OUT = RunOutput()   # the run's progress lines (WorkflowGraph, each node's trace)
+
+
 PY;
     }
 
@@ -1004,7 +1043,7 @@ class WorkflowGraph:
                         + "\n\n---\n\n"
                         + text
                     )
-            print(f"[node] [{nid}] start -- {len(text)} chars", flush=True)
+            RUN_OUT(f"[node] [{nid}] start -- {len(text)} chars")
             self.ran.append(nid)
             self.recorder.node_start(nid, "Start", "start")
             self.recorder.node_complete(nid, "Start", "start", output=text)
@@ -1063,7 +1102,7 @@ class WorkflowGraph:
                 # a request it did not route ends the run with its message.
                 route = out["route"] if out["route"] in {t["id"] for t in ad["dispatch"]} else END
                 if route == END:
-                    print(f"[node] [{nid}] ⚠ dispatcher did not route; ending the run", flush=True)
+                    RUN_OUT(f"[node] [{nid}] ⚠ dispatcher did not route; ending the run")
                     result["final_output"] = out["text"]
                 result["routes"] = {nid: route}
             return result
@@ -1079,7 +1118,7 @@ class WorkflowGraph:
             else:
                 blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
                 final = "\n\n---\n\n".join(blocks)
-            print(f"[node] [{nid}] output -- {len(final)} chars", flush=True)
+            RUN_OUT(f"[node] [{nid}] output -- {len(final)} chars")
             self.ran.append(nid)
             self.recorder.node_start(nid, "Output", "output")
             self.recorder.node_complete(nid, "Output", "output", output=final)
@@ -1140,7 +1179,7 @@ class WorkflowGraph:
         """
         self.ran = []
         graph = self.compile()
-        print("[info] Running...", flush=True)
+        RUN_OUT("[info] Running...")
         self.started = time.monotonic()
         result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
         self.routes = result.get("routes", {})

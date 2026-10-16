@@ -682,7 +682,7 @@ class LangGraphGenerator
         $lines[] = $sep;
         $lines[] = '';
         $lines[] = self::singleRunBlock(!empty($missing)
-            ? '    print("[warn] Missing tools (not MCP): ' . self::pythonListRepr($missing) . '")' . "\n"
+            ? '    RUN_OUT.once("[warn] Missing tools (not MCP): ' . self::pythonListRepr($missing) . '", always=True)' . "\n"
             : '');
 
         $code = implode("\n", $lines);
@@ -3767,8 +3767,8 @@ TXT;
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, NULL_RECORDER, ConsoleView, ErrorExitTaken, RunRecorder, WorkflowGraph, '
-            . 'is_quiet, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, NULL_RECORDER, RUN_OUT, ConsoleView, ErrorExitTaken, RunRecorder, '
+            . 'WorkflowGraph, is_quiet, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3866,7 +3866,7 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
 
     async def trace(line: str):
         """Progress callback the module calls; in one process this is just a print."""
-        print(f"[node] [{nid}] {line}", flush=True)
+        RUN_OUT(f"[node] [{nid}] {line}")
         GRAPH_RECORDER.node_log(nid, line)
 
     out = await _NODE_RUNNERS[nid](request_text, trace)
@@ -3874,7 +3874,7 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     # The node's whole time (model turns and skills), written once per node, so
     # the RUN SUMMARY counts each node exactly once.
     NODE_DURATIONS[ad["display"]] = dt
-    print(f"[node] [{nid}] {ad['display']!r} done -- {len(out['text'])} chars ({dt:.1f}s)", flush=True)
+    RUN_OUT(f"[node] [{nid}] {ad['display']!r} done -- {len(out['text'])} chars ({dt:.1f}s)")
     # A playbook node already streamed its own transcript through the sink --
     # re-posting its answer here would double it in the overlay.
     if ad.get("kind") != "playbook" and out.get("text"):
@@ -3902,12 +3902,17 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     return await build_graph().run(user_prompt)
 
 
-def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder) -> Callable[[], str]:
+def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder, *,
+                  loop_mode: bool = False) -> Callable[[], str]:
     """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
     log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
     run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
-    leaves no log and prints no block. Raises ErrorExitTaken when a code node took its error exit,
-    and whatever the run raised, once the failure is recorded."""
+    leaves no log and prints nothing. Raises ErrorExitTaken when a code node took its error exit,
+    and whatever the run raised, once the failure is recorded.
+
+    Console: under --cron / --watch (`loop_mode`) the view's block is the run's only output -- the
+    progress lines (RUN_OUT) show only under --verbose, no FINAL OUTPUT or RUN SUMMARY; a --once
+    run prints as it goes, except under --quiet (the done / failed line only)."""
     def run_once() -> str:
         """One run (see make_run_once)."""
         global GRAPH_RECORDER
@@ -3915,22 +3920,28 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         recorder.begin()
         GRAPH_RECORDER = recorder
+        RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
+        show_held = loop_mode and view.verbosity == "verbose"
+        chatty = not loop_mode and view.verbosity != "quiet"   # FINAL OUTPUT and RUN SUMMARY
         try:
             graph = build_graph(recorder)
             output = ev_loop.run_until_complete(graph.run(prompt))
             if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
                 view.discard()
+                RUN_OUT.release(False)
                 recorder.end(quiet=True)
                 return ""
+            RUN_OUT.release(show_held)
             if output:
-                if view.verbosity != "quiet":
+                if chatty:
                     print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
                 saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
                                     workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-                if view.verbosity != "quiet":
+                if chatty:
                     print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
             graph.check_error_exits()
         except BaseException as e:
+            RUN_OUT.release(show_held)
             recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
             recorder.end(quiet=False)
             raise
@@ -3960,19 +3971,20 @@ if __name__ == "__main__":
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
     recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
-    run_once = make_run_once(prompt, runs, view, recorder)
+    RUN_OUT.chatty = a.verbose if mode != "once" else not a.quiet   # startup lines (tools ready)
+    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once")
     drains = any(ad["kind"] == "code" for ad in AGENTS.values())
     # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
     # stops here (exit 2), before any agent starts.
     cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
     watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
     if mode == "once":
-        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        RUN_OUT.once(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
         try:
             if not run_once():
-                print("[info] The run ended without output (a branch ended).", flush=True)
+                RUN_OUT.once("[info] The run ended without output (a branch ended).")
         except ErrorExitTaken as e:
-            sys.exit(f"[error] {e}")
+            sys.exit(1 if a.quiet else f"[error] {e}")   # --quiet: the view's Failed line says it
     else:
         Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
                  lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
@@ -4299,7 +4311,7 @@ async def _run_local_node(nid: str, request: str) -> dict:
 
     async def trace(line: str):
         """Progress line of this node, printed with its id."""
-        print(f"[node] [{nid}] {line}", flush=True)
+        RUN_OUT(f"[node] [{nid}] {line}")
         GRAPH_RECORDER.node_log(nid, line)
 
     t0 = time.monotonic()
@@ -4323,20 +4335,25 @@ async def run(user_prompt: str, graph: WorkflowGraph | None = None) -> str:
     2. Run the WorkflowGraph (`graph`, else build_graph()): one Node per agent/playbook
        node, each building its own chat model on first use
     """
-    print("[info] Building tools from embedded catalog...")
+    RUN_OUT.once("[info] Building tools from embedded catalog...")
     catalog = TOOLS.build()   # built once here; every node then takes its own tools from TOOLS
-    print(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
+    RUN_OUT.once(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
 
 PY . $missingWarning . <<<'PY'
     return await (graph or build_graph()).run(user_prompt)
 
 
-def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder) -> Callable[[], str]:
+def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder, *,
+                  loop_mode: bool = False) -> Callable[[], str]:
     """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
     log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
     run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
-    leaves no log and prints no block. Raises ErrorExitTaken when a code node took its error exit,
-    and whatever the run raised, once the failure is recorded."""
+    leaves no log and prints nothing. Raises ErrorExitTaken when a code node took its error exit,
+    and whatever the run raised, once the failure is recorded.
+
+    Console: under --cron / --watch (`loop_mode`) the view's block is the run's only output -- the
+    progress lines (RUN_OUT) show only under --verbose, no FINAL OUTPUT or RUN SUMMARY; a --once
+    run prints as it goes, except under --quiet (the done / failed line only)."""
     def run_once() -> str:
         """One run (see make_run_once)."""
         global GRAPH_RECORDER
@@ -4344,22 +4361,28 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         recorder.begin()
         GRAPH_RECORDER = recorder
+        RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
+        show_held = loop_mode and view.verbosity == "verbose"
+        chatty = not loop_mode and view.verbosity != "quiet"   # FINAL OUTPUT and RUN SUMMARY
         try:
             graph = build_graph(recorder)
             output = ev_loop.run_until_complete(run(prompt, graph))
             if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
                 view.discard()
+                RUN_OUT.release(False)
                 recorder.end(quiet=True)
                 return ""
+            RUN_OUT.release(show_held)
             if output:
-                if view.verbosity != "quiet":
+                if chatty:
                     print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output)
                 saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
                                     workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-                if view.verbosity != "quiet":
+                if chatty:
                     print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
             graph.check_error_exits()
         except BaseException as e:
+            RUN_OUT.release(show_held)
             recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
             recorder.end(quiet=False)
             raise
@@ -4388,19 +4411,20 @@ if __name__ == "__main__":
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
     recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
-    run_once = make_run_once(prompt, runs, view, recorder)
+    RUN_OUT.chatty = a.verbose if mode != "once" else not a.quiet   # startup lines (tools ready)
+    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once")
     drains = bool(CODE_NODES)
     # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
     # stops here (exit 2), before any agent starts.
     cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
     watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
     if mode == "once":
-        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        RUN_OUT.once(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
         try:
             if not run_once():
-                print("[info] The run ended without output (a branch ended).", flush=True)
+                RUN_OUT.once("[info] The run ended without output (a branch ended).")
         except ErrorExitTaken as e:
-            sys.exit(f"[error] {e}")
+            sys.exit(1 if a.quiet else f"[error] {e}")   # --quiet: the view's Failed line says it
     else:
         Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
                  lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
