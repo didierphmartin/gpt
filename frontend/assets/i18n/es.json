@@ -709,7 +709,8 @@
       "newEvent": "Nuevo evento",
       "event": "Evento",
       "activate": "Reproducir",
-      "target": "ejecuciones en el servidor"
+      "target": "ejecuciones en el servidor",
+      "compiledTarget": "compilado (local)"
     },
     "startOptions": {
       "addTitle": "Añadir como opción de inicio",

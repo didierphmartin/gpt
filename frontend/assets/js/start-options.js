@@ -164,6 +164,18 @@
         }
     }
 
+    /** The compiled server's own state line (a `state` frame's `compiled` member). */
+    function compiledLiveState(data) {
+        const c = data && data.compiled;
+        if (!c || typeof c !== 'object') return { text: '', tone: 'off', listening: false };
+        return { text: String(c.line ?? ''), tone: c.tone || 'off', listening: !!c.listening };
+    }
+
+    /** The live overlay's target word: the SynergyAI server runner, or the compiled program on this machine. */
+    function liveSourceLabel(kind, t) {
+        return t(kind === 'compiled' ? 'workflow.live.compiledTarget' : 'workflow.live.target');
+    }
+
     return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone,
-        liveAction, eventSubject };
+        liveAction, eventSubject, compiledLiveState, liveSourceLabel };
 });

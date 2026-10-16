@@ -709,7 +709,8 @@
       "newEvent": "Nouvel événement",
       "event": "Événement",
       "activate": "Lancer",
-      "target": "exécutions sur le serveur"
+      "target": "exécutions sur le serveur",
+      "compiledTarget": "compilé (local)"
     },
     "startOptions": {
       "addTitle": "Ajouter comme option de démarrage",

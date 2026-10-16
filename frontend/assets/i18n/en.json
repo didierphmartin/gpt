@@ -709,7 +709,8 @@
       "newEvent": "New event",
       "event": "Event",
       "activate": "Play",
-      "target": "server runs"
+      "target": "server runs",
+      "compiledTarget": "compiled (local)"
     },
     "startOptions": {
       "addTitle": "Add as a Start option",

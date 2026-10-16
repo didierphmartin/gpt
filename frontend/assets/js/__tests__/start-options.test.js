@@ -180,3 +180,13 @@ assert.deepStrictEqual(SO.liveAction({ type: 'node_complete', node_id: 2598, dra
 assert.deepStrictEqual(SO.liveAction({ type: 'node_complete', node_id: 2598, drawflow_id: '18', success: true, route: null }, '17'),
     { node: '18', state: 'completed' });
 console.log('start-options liveAction route: ok');
+
+// compiled live source (spec 2026-10-15 §6)
+assert.deepStrictEqual(SO.compiledLiveState({ compiled: { line: 'Listening for events', tone: 'ok', listening: true } }),
+    { text: 'Listening for events', tone: 'ok', listening: true });
+assert.deepStrictEqual(SO.compiledLiveState({}), { text: '', tone: 'off', listening: false });
+assert.strictEqual(SO.liveSourceLabel('compiled', k => k), 'workflow.live.compiledTarget');
+assert.strictEqual(SO.liveSourceLabel('server', k => k), 'workflow.live.target');
+// a compiled run's trigger event maps like a server one (drawflow_id null, node_id >= 1e9)
+assert.deepStrictEqual(SO.liveAction({ type: 'node_start', node_id: '1000000017', drawflow_id: null }, '5'), { node: '5', state: 'active' });
+console.log('start-options compiled live: ok');

@@ -3096,6 +3096,8 @@ class WorkflowEditor {
         this._liveStop = null;
         this._monitoring = on ? this.currentWorkflowId : null;
         if (on) {
+            this._liveSource = { kind: 'server' };
+            this._compiledLive = null;
             this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
             this._liveTurn = null;
             this._liveActiveNode = null;
@@ -3103,12 +3105,48 @@ class WorkflowEditor {
             const ctrl = new AbortController();
             this._liveStop = () => ctrl.abort();
             // An empty cursor replays a run in progress, so the canvas and the feed catch up on it.
-            this._liveConnect(ctrl.signal, this.currentWorkflowId).catch(() => {});
+            this._liveConnect(ctrl.signal, this.currentWorkflowId, this._liveSource).catch(() => {});
         } else {
             this._clearRunColours();
             if (this._pbSessionMode === 'live') document.getElementById('pb-ov-hide')?.click();
         }
         this._refreshMonitoring();
+    }
+
+    /**
+     * Follow a listening compiled workflow's own run server in the live overlay: like Monitoring, but the stream
+     * is `${url}live` on the compiled program (no auth) and the footer button drives its POST /listen.
+     */
+    _openCompiledLive(url) {
+        const base = url.endsWith('/') ? url : `${url}/`;
+        this._liveStop?.();
+        this._liveStop = null;
+        this._liveSource = { kind: 'compiled', base };
+        this._compiledLive = null;
+        this._monitoring = this.currentWorkflowId;
+        this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
+        this._liveTurn = null;
+        this._liveActiveNode = null;
+        this._liveHeader();
+        const ctrl = new AbortController();
+        this._liveStop = () => ctrl.abort();
+        this._liveConnect(ctrl.signal, this.currentWorkflowId, this._liveSource).catch(() => {});
+        this._refreshMonitoring();
+    }
+
+    /** POST /listen on the compiled server; a 409 carries a `detail` worth showing. Returns true when it answered. */
+    async _compiledListen(base, body) {
+        try {
+            const r = await fetch(`${base}listen`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+            if (j.state) this._compiledLive = { text: j.state.line || '', tone: j.state.tone || 'off', listening: !!j.listening };
+            return true;
+        } catch (err) {
+            this.showNotification(err?.message || String(err), 'error');
+            return false;
+        }
     }
 
     /** The Monitoring button: shown for a listening workflow (schedule / option mode), blue while on. */
@@ -3160,14 +3198,16 @@ class WorkflowEditor {
     }
 
     /** Follows GET /workflows/{id}/live until closed: reconnects on `bye` at once, on a failure with a growing pause. */
-    async _liveConnect(signal, workflowId) {
+    async _liveConnect(signal, workflowId, source = { kind: 'server' }) {
+        const compiled = source.kind === 'compiled';
         let cursor = '';
         let delay = 1000;
         const live = () => !signal.aborted && this.currentWorkflowId === workflowId;
         while (live()) {
             try {
-                const resp = await fetch(`${this.apiBase}/workflows/${workflowId}/live?cursor=${encodeURIComponent(cursor || '')}`,
-                    { headers: this.getAuthHeaders(), signal });
+                const liveUrl = compiled ? `${source.base}live` : `${this.apiBase}/workflows/${workflowId}/live`;
+                const resp = await fetch(`${liveUrl}?cursor=${encodeURIComponent(cursor || '')}`,
+                    compiled ? { signal } : { headers: this.getAuthHeaders(), signal });
                 if (!resp.ok || !resp.body) throw new Error(`live HTTP ${resp.status}`);
                 const reader = resp.body.getReader();
                 const decoder = new TextDecoder();
@@ -3194,6 +3234,9 @@ class WorkflowEditor {
                         if (eventType === 'run') {
                             cursor = data.cursor || cursor;
                             this._liveApply(data.event);
+                        } else if (eventType === 'state' && compiled) {
+                            this._compiledLive = window.StartOptions.compiledLiveState(data);
+                            this._liveHeader();
                         } else if (eventType === 'state') {
                             this.activeWorkflow = data.active || null;
                             this._refreshStartHint();
@@ -3257,10 +3300,16 @@ class WorkflowEditor {
     _liveHeader() {
         const st = document.getElementById('pb-ov-status');
         if (!st || this._pbSessionMode !== 'live') return;
-        const v = this._startView();
+        const src = this._liveSource || { kind: 'server' };
+        const cl = src.kind === 'compiled' ? (this._compiledLive || window.StartOptions.compiledLiveState(null)) : null;
+        const v = cl ? { button: cl.listening ? 'deactivate' : 'activate', hint: null } : this._startView();
         const tones = { off: '#9ca3af', ok: '#16a34a', warn: '#d97706', err: '#dc2626' };
         st.classList.remove('start-state', 'state-off', 'state-ok', 'state-warn', 'state-err');
-        if (v.hint) {
+        if (cl) {
+            st.classList.add('start-state', `state-${cl.tone}`);
+            st.style.color = tones[cl.tone] || '#9ca3af';
+            st.textContent = cl.text;
+        } else if (v.hint) {
             const tone = window.StartOptions.stateTone(v.hint.key);
             st.classList.add('start-state', `state-${tone}`);
             st.style.color = tones[tone] || '#9ca3af';
@@ -3274,6 +3323,12 @@ class WorkflowEditor {
             btn.id = 'pb-ov-live-toggle';
             btn.className = 'storage-config-btn';
             btn.addEventListener('click', () => {
+                const s = this._liveSource || { kind: 'server' };
+                if (s.kind === 'compiled') {
+                    const listening = !!this._compiledLive?.listening;
+                    this._compiledListen(s.base, listening ? { stop: true } : {}).then(() => this._liveHeader());
+                    return;
+                }
                 const stop = this._startView().button === 'deactivate';
                 (stop ? this._deactivate() : this._activate())
                     .catch(err => this.showNotification(err?.message || String(err), 'error'))
@@ -5270,6 +5325,12 @@ class WorkflowEditor {
      * this._runTarget.
      */
     async _acquireRunTarget(root) {
+        const { url } = await this._compiledServer(root);
+        return this._verifyRunTarget(url);
+    }
+
+    /** Ask the local runner to start (or reuse) the compiled package's run server. Returns {url}. */
+    async _compiledServer(root) {
         const resp = await fetch(`${this._langgraphRunnerBase}/api/workflow-server/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5285,7 +5346,7 @@ class WorkflowEditor {
         }
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
-        return this._verifyRunTarget(url);
+        return { url };
     }
 
     /**
@@ -6055,6 +6116,28 @@ class WorkflowEditor {
      * call shape matches RunFileReq in langchain_runner/main.py:
      *   POST /api/run-file  body={ filename, args }
      */
+    /** Start a listening compiled workflow's server, POST /listen, and open its live overlay. */
+    async _runListening(root) {
+        try {
+            const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
+            if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
+        } catch (_) {
+            this._hideCompiledScrim();
+            this._showCompiledRunnerNotRunningModal(root, this.t('workflow.toolbar.compileLangGraph'));
+            return;
+        }
+        try {
+            const { url } = await this._compiledServer(root);
+            const base = url.endsWith('/') ? url : `${url}/`;
+            if (!(await this._compiledListen(base, {}))) { this._hideCompiledScrim(); return; }
+            this._hideCompiledScrim();
+            this._openCompiledLive(base);
+        } catch (e) {
+            this._hideCompiledScrim();
+            alert(`Could not start the workflow server: ${e?.message || e}`);
+        }
+    }
+
     async _runLangGraphScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click, before the first
         // await, for both conversational modes. Everything below — persisting
@@ -6081,6 +6164,10 @@ class WorkflowEditor {
             let data;
             try { data = await this._writeManifest(codegenMode); }
             catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+            if (codegenMode === 'modular' && this._startView().button !== 'run') {
+                // Cron / option Start: the program listens by itself; follow it in the live overlay.
+                return this._runListening(data.root);
+            }
             return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileLangGraph'));
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
@@ -14645,7 +14732,7 @@ class WorkflowEditor {
         // server (with its host:port, in case of the URL-override path), or
         // the live interpreter (the server-side playbook-node/run path). The live overlay watches the
         // server's own runs, neither of those.
-        const target = mode === 'live' ? this.t('workflow.live.target')
+        const target = mode === 'live' ? window.StartOptions.liveSourceLabel(this._liveSource?.kind || 'server', k => this.t(k))
             : this._runTarget
             ? `${this.t('workflow.output.runTargetCompiled') || 'compiled'} · ${this._runTarget.base.replace(/^https?:\/\//, '')}`
             : (this.t('workflow.output.runTargetLive') || 'live interpreter');
