@@ -105,4 +105,51 @@ PY;
         self::assertSame(['10', '3'], $ran);
         self::assertSame(['10' => 'new_mail'], $routes);
     }
+
+    /** The wf 64-shaped package as files (no DB): workflow.py, common.py, api.py and ADKPackage's. */
+    public static function listeningPackage(string $url = 'http://localhost:8770'): array
+    {
+        $a = AdkCodeNodeTest::wf64Analyzed();
+        $a['serverSlugs'] = [$url => 'outlook'];
+        $a['startMode'] = 'watch';
+        $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
+        $a['package'] = true;
+        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => ADKGenerator::emitAdk($a)], 'wf64', 'adk', 'ADK run server',
+            ADKGenerator::packageCommonBlock(), true);
+        $files = array_column($pkg['files'], 'code', 'path');
+        foreach (\AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir()) as $f) {
+            $files[$f['path']] = $f['code'];
+        }
+        return $files;
+    }
+
+    public function testPackageServesListenAndLive(): void
+    {
+        $f = self::listeningPackage();
+        self::assertStringContainsString('@app.post("/listen")', $f['api.py']);
+        self::assertStringContainsString('from workflow import make_listener, RUNS_DIR, START_MODE, LoopState', $f['api.py']);
+        self::assertStringContainsString('class RunRecorder', $f['common.py']);
+        self::assertStringContainsString('def live_next(', $f['common.py']);
+        self::assertStringContainsString('def make_listener(state', $f['workflow.py']);
+        self::assertStringContainsString('MCP = _McpShim()', $f['workflow.py']);
+        self::assertStringContainsString('class Listener:', $f['workflow.py']);
+    }
+
+    public function testPackageImportsUnderTheRunnerVenv(): void
+    {
+        $py = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
+        if (!is_file($py)) {
+            self::markTestSkipped('runner venv missing');
+        }
+        $dir = sys_get_temp_dir() . '/adklisten_' . bin2hex(random_bytes(4));
+        foreach (self::listeningPackage() as $path => $code) {
+            @mkdir(dirname("$dir/$path"), 0777, true);
+            file_put_contents("$dir/$path", $code);
+        }
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && ANTHROPIC_API_KEY=x ' . escapeshellarg($py)
+            . ' -c "import common, workflow, api; l = workflow.make_listener(workflow.LoopState()); print(type(l).__name__, workflow.START_MODE)" 2>&1';
+        exec($cmd, $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame('Listener watch', end($out));
+    }
 }

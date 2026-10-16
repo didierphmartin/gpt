@@ -298,7 +298,9 @@ class ADKGenerator
             ['code' => self::emitAdk($analyzed)],
             $name,
             'adk',
-            'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks'
+            'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+            self::packageCommonBlock(),
+            true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
         $pkg['files'] = array_merge($pkg['files'],
             ADKPackage::files($analyzed, $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files']));
@@ -859,6 +861,184 @@ def _attach_recording(agent) -> None:
     for sub in getattr(agent, "sub_agents", None) or []:
         _attach_recording(sub)
 PY;
+    }
+
+    /**
+     * The package's listener and CLI, as the LangGraph modular package has them: the Start's cron or watch
+     * loop (LangGraph's framework-free cron / watch / listener blocks, copied in), each run recorded under
+     * RUNS_DIR for GET /live, make_listener() for api.py (POST /listen), and the CLI's modes
+     * (prompt: one run; --cron; --watch; --once). The single file keeps its one-prompt __main__.
+     */
+    private static function packageListenBlock(): string
+    {
+        $head = <<<'PY'
+# ==============================================================
+# LISTENER -- the Start's schedule or event trigger
+# The cron / watch / listener code below is the LangGraph package's,
+# copied in as is: it has no framework in it. Each run is recorded
+# under RUNS_DIR (runs/), which api.py streams as GET /live.
+# ==============================================================
+import argparse, re, signal
+from datetime import datetime, timedelta
+from typing import Callable
+
+from common import RUN_OUT, NULL_RECORDER, RunRecorder, ConsoleView, is_quiet
+
+
+class _McpShim:
+    """The watch trigger's MCP calls (WatchTrigger.wait), through this program's MCP client."""
+    call_tool_raw = staticmethod(_call_mcp_tool_raw)
+
+
+MCP = _McpShim()
+
+PY;
+        $tail = <<<'PY'
+RUNS_DIR = os.environ.get("RUNS_DIR") or os.path.join(PACKAGE_DIR, "runs")
+NODE_TYPES = {meta[0]: meta[1] for meta in NODE_META.values()}   # node id -> type (the quiet rule)
+if START_NODE:
+    NODE_TYPES[START_NODE[0]] = "start"
+
+
+class ErrorExitTaken(Exception):
+    """A code node took its error exit: the run failed although nothing raised."""
+
+
+def _save_output(text: str) -> str | None:
+    """The Output node's storage rule: when ON, the answer goes to outputs/ in this folder (SYNERGYAI_OUTPUT_ROOT
+    overrides) or the workflow's custom folder; returns the file's path, or None when OFF."""
+    if not OUTPUT_STORAGE_ENABLED:
+        return None
+    m = re.search(r"(?is)<!doctype html.*?</html\s*>", text) or re.search(r"(?is)<html[\s>].*?</html\s*>", text)
+    text, ext = (m.group(0), "html") if m else (text, "md")
+    slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
+    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(PACKAGE_DIR, "outputs")
+    if OUTPUT_FOLDER:
+        cf = os.path.expanduser(OUTPUT_FOLDER)
+        save_dir = cf if os.path.isabs(cf) else os.path.join(root, OUTPUT_FOLDER)
+    else:
+        save_dir = os.path.join(root, "workflow")
+    os.makedirs(save_dir, exist_ok=True)
+    out = os.path.join(save_dir, f"{WORKFLOW_ID}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(text)
+    return os.path.abspath(out)
+
+
+def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder, *,
+                  loop_mode: bool = False) -> Callable[[], str]:
+    """One run of the workflow on `prompt`, recorded by `recorder` (runs/ and `view`). Returns the answer
+    ('' when no Output node ran). A quiet run (a code node's non-error exit, no agent, playbook or output
+    node ran) leaves no run file. Raises ErrorExitTaken when a code node took its error exit."""
+    def run_once() -> str:
+        global GRAPH_RECORDER
+        ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
+        this_run = recorder.begin()
+        GRAPH_RECORDER = recorder
+        RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
+        try:
+            output = ev_loop.run_until_complete(run_workflow(prompt))
+            kinds = {nid: {"kind": t} for nid, t in NODE_TYPES.items()}
+            if is_quiet(NODE_TYPES, _RUN["routes"], kinds, _RUN["ran"]):
+                view.discard()
+                RUN_OUT.release(False)
+                recorder.end(quiet=True)
+                return ""
+            RUN_OUT.release(loop_mode and view.verbosity == "verbose")
+            if output:
+                saved = _save_output(output)
+                if saved:
+                    print(f"  Document saved to: {saved}", flush=True)
+            failed = [nid for nid, ex in _RUN["routes"].items() if ex == "error"]
+            if failed:
+                raise ErrorExitTaken(f"code node {failed[0]} took its error exit")
+        except BaseException as e:
+            RUN_OUT.release(loop_mode and view.verbosity == "verbose")
+            recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
+            recorder.end(quiet=False)
+            raise
+        finally:
+            # Back to no recorder -- only while this run still owns it: a run abandoned at the cap that
+            # ends late must not reset the run that replaced it.
+            if GRAPH_RECORDER is recorder and recorder.run_id == this_run:
+                RUN_OUT.begin("print")
+                GRAPH_RECORDER = NULL_RECORDER
+        recorder.complete(success=True, output=output)
+        recorder.end(quiet=False)
+        return output
+    return run_once
+
+
+def _refuse(message: str):
+    """make_listener's parser error: a usage error becomes a ValueError instead of an exit."""
+    raise ValueError(message)
+
+
+def make_listener(state: LoopState) -> Listener | None:
+    """The Start's cron or watch loop for api.py (POST /listen), not yet started; None when the Start
+    takes a prompt. ValueError: the Start's schedule or trigger is missing or bad."""
+    if START_MODE not in ("cron", "watch"):
+        return None
+    ap = argparse.ArgumentParser()
+    ap.error = _refuse
+    cron = CronExpression.from_cli(ap, "" if START_MODE == "cron" else None, DEFAULT_CRON)
+    watch = WatchTrigger.from_cli(ap, "" if START_MODE == "watch" else None, DEFAULT_WATCH)
+    runs = RunLoop()
+    view = ConsoleView("quiet")
+    recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
+    run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True)
+    drains = "code" in NODE_TYPES.values()
+    return Listener(START_MODE, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=state,
+                    lock_path=os.path.join(PACKAGE_DIR, ".run.lock"))
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=f"ADK workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
+    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
+    when = ap.add_mutually_exclusive_group()
+    when.add_argument("--once", action="store_true", help="run once, even when the Start listens or is scheduled")
+    when.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                      help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER",
+                      help="run whenever an MCP tool says something new arrived, until Ctrl-C "
+                           "(default: the Start option's trigger; or 'server.tool {json args}')")
+    talk = ap.add_mutually_exclusive_group()
+    talk.add_argument("--quiet", action="store_true", help="print only each run's done / failed line")
+    talk.add_argument("--verbose", action="store_true", help="also print each node's output")
+    a = ap.parse_args()
+    mode = choose_mode(a, START_MODE)
+    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
+    runs = RunLoop()
+    view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
+    recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
+    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once")
+    cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
+    watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
+    if mode == "once":
+        try:
+            run_once()
+        except ErrorExitTaken as e:
+            sys.exit(1 if a.quiet else f"[error] {e}")
+    else:
+        Listener(mode, run_once, drains="code" in NODE_TYPES.values(), loop=runs, cron_expr=cron, trigger=watch,
+                 state=LoopState(), lock_path=os.path.join(PACKAGE_DIR, ".run.lock"),
+                 verbosity=view.verbosity).run_blocking()
+PY;
+        return $head . LangGraphRuntime::cronBlock() . "\n\n" . LangGraphRuntime::watchBlock() . "\n\n"
+            . LangGraphRuntime::listenerBlock() . "\n\n" . $tail;
+    }
+
+    /** The package's common.py: the run server's event sink, and the run records, live feed and console view (LangGraph's, copied). */
+    public static function packageCommonBlock(): string
+    {
+        return "\"\"\"Shared by workflow.py and api.py: the event sink, run records (runs/), the live feed (GET /live), the console view.\"\"\"\n"
+            . "import json, os, re, threading, time, uuid\n"
+            . "from datetime import datetime\n"
+            . "from typing import Callable\n\n"
+            . PythonEmitHelpers::eventSinkBlock() . "\n\n"
+            . LangGraphRuntime::runRecordBlock() . "\n\n"
+            . LangGraphRuntime::liveFeedBlock() . "\n\n"
+            . LangGraphRuntime::consoleBlock() . "\n";
     }
 
     /**
@@ -1919,6 +2099,7 @@ PY;
             "# the editor runs this same extraction on what it receives, so narration\n" .
             "# wrapped around a document (or a second document, which the non-greedy\n" .
             "# regex would discard) must still be there when the answer arrives.\n" .
+            (!empty($analyzed['package']) ? self::packageListenBlock() :
             "if __name__ == \"__main__\":\n" .
             "    # argparse would fight the prompt's own spaces; the runner\n" .
             "    # passes it space-split; sys.argv[1] alone would keep only the first word.\n" .
@@ -1952,7 +2133,7 @@ PY;
             "        print(f\"  Document saved to: {_saved_path}\", flush=True)\n" .
             "    else:\n" .
             "        print(\"  Document not saved (output storage is OFF in the workflow settings) -- \"\n" .
-            "              \"the output is printed above.\", flush=True)";
+            "              \"the output is printed above.\", flush=True)");
     }
 
     /**

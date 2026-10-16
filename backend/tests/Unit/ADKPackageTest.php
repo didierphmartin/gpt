@@ -49,34 +49,32 @@ final class ADKPackageTest extends TestCase
         $this->assertStringContainsString('from workflow import run_workflow', $files['api.py']);
     }
 
-    public function testSavingStaysInTheCliEntry(): void
+    /** run_workflow()'s own body: from its def to the next top-level statement. */
+    private static function runWorkflowBody(string $wf): string
     {
-        // A conversational turn must not write a file per prompt. The save
-        // block belongs to __main__, after the call, not inside run_workflow.
-        // Same rule (and same needle) as MAFPackageTest: OUTPUT_STORAGE_ENABLED
-        // is also a module-level global baked ahead of __main__, so the needle
-        // is the `if OUTPUT_STORAGE_ENABLED:` usage that guards the save block,
-        // not the bare name. Both needles occur exactly once in ADK's output.
+        $at = strpos($wf, 'async def run_workflow(');
+        preg_match('/\n(?=\S)/', $wf, $m, PREG_OFFSET_CAPTURE, $at + 1);
+        return substr($wf, $at, $m[0][1] - $at);
+    }
+
+    public function testSavingStaysOutOfRunWorkflow(): void
+    {
+        // A conversational turn (POST /runs -> run_workflow) must not write a file per prompt: saving belongs
+        // to the CLI and the listener's runs (run_once), never to run_workflow itself.
         $files = array_column($this->pkg()['files'], 'code', 'path');
         $wf = $files['workflow.py'];
-        $this->assertSame(1, substr_count($wf, 'if __name__ == "__main__":'));
-        $this->assertSame(1, substr_count($wf, 'if OUTPUT_STORAGE_ENABLED:'));
-        $mainAt = strpos($wf, 'if __name__ == "__main__":');
-        $saveAt = strpos($wf, 'if OUTPUT_STORAGE_ENABLED:');
-        $this->assertGreaterThan($mainAt, $saveAt, 'saving leaked into run_workflow');
+        $this->assertStringNotContainsString('OUTPUT_STORAGE_ENABLED', self::runWorkflowBody($wf), 'saving leaked into run_workflow');
+        $this->assertStringContainsString('saved = _save_output(output)', $wf);
     }
 
     public function testRunWorkflowDoesNotPreStripTheDocument(): void
     {
-        // The editor extracts the document from the answer itself; stripping
-        // here would lose any narration around it, and with two documents in
-        // one answer the non-greedy regex would keep only the first.
+        // The editor extracts the document from the answer itself; stripping in run_workflow would lose any
+        // narration around it, and with two documents the non-greedy regex would keep only the first.
         $files = array_column($this->pkg()['files'], 'code', 'path');
         $wf = $files['workflow.py'];
         $this->assertSame(1, substr_count($wf, '<!doctype html'));
-        $mainAt = strpos($wf, 'if __name__ == "__main__":');
-        $reAt = strpos($wf, '<!doctype html');
-        $this->assertGreaterThan($mainAt, $reAt, 'document extraction leaked into run_workflow');
+        $this->assertStringNotContainsString('<!doctype html', self::runWorkflowBody($wf), 'document extraction leaked into run_workflow');
     }
 
     /** A workflow with a code node on an MCP server, as the package emits it. */

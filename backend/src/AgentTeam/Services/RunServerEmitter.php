@@ -233,7 +233,13 @@ PY;
      * @param string $docLine The api.py docstring's "what this is" line.
      * @return array{root: string, files: list<array{path: string, code: string}>}
      */
-    public static function package(array $single, string $name, string $suffix, string $docLine): array
+    /**
+     * @param ?string $common the target's own common.py (null: the event sink only, commonBlock())
+     * @param bool    $listen api.py also runs the Start's cron / watch loop (see emit()); workflow.py and
+     *                        $common must then expose what emit()'s $listen documents
+     */
+    public static function package(array $single, string $name, string $suffix, string $docLine,
+        ?string $common = null, bool $listen = false): array
     {
         return [
             'root' => preg_replace('/[^a-z0-9_]+/i', '_', strtolower($name)) . '_' . $suffix,
@@ -243,14 +249,15 @@ PY;
                 // marker the emitted package loses to an installed one.
                 ['path' => '__init__.py', 'code' => "\n"],
                 ['path' => 'workflow.py', 'code' => (string) ($single['code'] ?? '')],
-                ['path' => 'common.py',   'code' => self::commonBlock()],
+                ['path' => 'common.py',   'code' => $common ?? self::commonBlock()],
                 ['path' => 'api.py',      'code' => self::emit(
                     $name,
                     $docLine,
                     'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
                     // These targets carry no version of their own; the identity
                     // route and the startup print both need the name defined.
-                    'WORKFLOW_VERSION = "1"'
+                    'WORKFLOW_VERSION = "1"',
+                    $listen
                 )],
             ],
         ];
