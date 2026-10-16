@@ -223,6 +223,98 @@ PY);
         self::assertContains('leftover cancelled True', $out);
     }
 
+    public function testDrainReturnsTheErrorLineWhenARunRaises(): void
+    {
+        $out = $this->py(<<<'PY'
+def run_once():
+    raise RuntimeError("model down")
+print(drain(run_once, drains=True, max_runs=20))
+PY);
+        self::assertSame(['error after 0 run(s) that did work: RuntimeError: model down'], $out);
+    }
+
+    public function testEachRunAndItsEventLoopStayOnOneWorkerThread(): void
+    {
+        $out = $this->py(<<<'PY'
+import threading
+loop = asyncio.new_event_loop()
+threads = []
+async def bad_run():
+    threads.append(threading.current_thread())
+    loop.create_task(asyncio.sleep(1000))
+    raise RuntimeError("boom")
+def run_once():
+    threads.append(threading.current_thread())
+    return loop.run_until_complete(bad_run())
+orig = cancel_leftovers
+def spy(l):
+    threads.append(threading.current_thread())
+    orig(l)
+cancel_leftovers = spy
+print(drain(run_once, drains=True, max_runs=20, loop=loop))
+print("off main", all(t is not threading.main_thread() for t in threads), "one thread", len(set(threads)) == 1, len(threads))
+print("pending", len([t for t in asyncio.all_tasks(loop) if not t.done()]))
+PY);
+        self::assertSame(['error after 0 run(s) that did work: RuntimeError: boom', 'off main True one thread True 3', 'pending 0'], $out);
+    }
+
+    public function testAFailedRunMakesTheStateWarn(): void
+    {
+        $out = $this->py(<<<'PY'
+outputs = iter(["boom", "", ""])
+def run_once():
+    if next(outputs) == "boom":
+        raise RuntimeError("model down")
+    return ""
+st = LoopState(); seen = []
+st.on_change.append(lambda s: seen.append((s.line, s.tone)))
+c = Clock(2026, 10, 7, 10, 0)
+CronLoop("* * * * *", run_once, drains=True, max_runs=20, sleep=c.sleep, now=c.now, state=st).run(ticks=1)
+print(st.line, "|", st.tone, "|", st.last_failed, "|", st.listening)
+print(("Scheduled — the last run failed", "warn") in seen, seen[0])
+PY);
+        self::assertSame(['Scheduled — the last run failed | warn | True | False',
+                          "True ('Scheduled: * * * * * — next run 10:01', 'ok')"], array_slice($out, -2));
+        self::assertNotContains('Scheduled — the last run failed', $out, 'cron state lines are not echoed: its [tick] line is the console');
+    }
+
+    public function testTheRunCapAndAStopEventInAThread(): void
+    {
+        $out = $this->py(<<<'PY'
+import threading
+before = signal.getsignal(signal.SIGTERM)
+stop = threading.Event()
+gate = threading.Event()
+def slow():
+    gate.wait(5)
+    return "late"
+print(drain(slow, drains=True, max_runs=20, run_cap_s=0.2))
+gate.set()
+st = LoopState()
+threading.Timer(0.2, stop.set).start()   # while the loop naps until 1 January: the nap ends at once
+t = threading.Thread(target=run_cron, args=("0 0 1 1 *", lambda: ""), kwargs=dict(drains=False, state=st, stop=stop), daemon=True)
+t.start(); t.join(5)
+print("alive", t.is_alive(), "handler kept", signal.getsignal(signal.SIGTERM) is before, "listening", st.listening)
+PY);
+        self::assertSame('abandoned a run after 30 min', $out[0]);
+        self::assertSame(['[cron] stopped.', 'alive False handler kept True listening False'], array_slice($out, -2));
+    }
+
+    public function testASecondCopyOfTheCronLoopExitsZero(): void
+    {
+        $out = $this->py(<<<'PY'
+import tempfile, os
+p = os.path.join(tempfile.mkdtemp(), ".run.lock")
+with SingleInstance(p):
+    try:
+        run_cron("* * * * *", lambda: "", drains=False, lock_path=p, ticks=1)
+    except SystemExit as e:
+        print("exit", e.code)
+PY);
+        self::assertStringStartsWith('[cron] already running (', $out[0]);
+        self::assertSame(['exit 0'], array_slice($out, 1));
+    }
+
     public function testCliExpressionFallsBackToTheBakedScheduleAndRefusesBadInput(): void
     {
         $out = $this->py(<<<'PY'

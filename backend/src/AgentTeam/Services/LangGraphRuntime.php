@@ -1168,8 +1168,11 @@ PY;
      * output did work and, when the workflow has code nodes, drains (runs again at once) up to
      * MAX_RUNS_PER_TICK runs; a run without output is quiet; an error -- an exception, or a code
      * node's error exit (WorkflowGraph.check_error_exits) -- is always printed, never quiet,
-     * never drained, and the loop goes on. The entry file supplies re, time, argparse and
-     * datetime/timedelta, asyncio and signal.
+     * never drained, and the loop goes on. Each run executes in a worker thread with a 30 min cap
+     * (drain()); LoopState is the loop's state line, SingleInstance its lock file (spec 2026-10-15
+     * §3). The entry file supplies re, time, argparse and datetime/timedelta, asyncio and signal;
+     * the block imports sys, threading and (when present) fcntl itself, so every entry file that
+     * embeds it -- single file, modular workflow.py, A2A orchestrator.py, swarm -- compiles as is.
      */
     public static function cronBlock(): string
     {
@@ -1183,8 +1186,15 @@ PY;
 # server's tick: a run with output did work -- in a workflow with code nodes
 # it runs again at once (the next email may be waiting), at most 20 runs per
 # tick; a run without output is quiet (one line); an error is always printed,
-# ends the tick, and the loop goes on.
+# ends the tick, and the loop goes on. Each run has a 30 min cap; a lock
+# file keeps a second copy of the loop from starting.
 # ==============================================================
+
+import sys, threading
+try:
+    import fcntl   # POSIX: SingleInstance's lock; where it is missing the lock is a no-op
+except ImportError:
+    fcntl = None
 
 
 class CronExpression:
@@ -1269,28 +1279,131 @@ class CronExpression:
         return expr
 
 
-def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
-          loop: asyncio.AbstractEventLoop | None = None) -> str:
-    """What one cron tick or one --watch wake runs: the workflow, again while runs do work (only
-    when `drains`), at most max_runs runs; an error ends it. Returns the line the loop prints."""
-    worked = 0
+class LoopState:
+    """What a --cron / --watch loop is doing, as one line and a tone (ok | warn | err | off), the
+    server worker's state line. set() prints the line once when it changes, as "[<tag> HH:MM] <line>"
+    (only when `echo`), and calls each of on_change. Thread-safe: a loop may run in a thread."""
+
+    def __init__(self, tag: str = "watch", now=datetime.now, echo: bool = True):
+        self.line, self.tone = "", "off"
+        self.listening = False     # the loop is running
+        self.last_failed = False   # the last drain ended in an error or an abandoned run
+        self.on_change: list[Callable[["LoopState"], None]] = []
+        self.tag, self.now, self.echo = tag, now, echo
+        self._lock = threading.Lock()
+
+    def set(self, line: str, tone: str) -> None:
+        """The new state: printed (when `echo`) and handed to the listeners only when it changed."""
+        with self._lock:
+            if (line, tone) == (self.line, self.tone):
+                return
+            self.line, self.tone = line, tone
+        if self.echo:
+            print(f"[{self.tag} {self.now():%H:%M}] {line}", flush=True)
+        self.notify()
+
+    def notify(self) -> None:
+        """Hand the state to each on_change listener (e.g. api.py's /live feed)."""
+        for listener in list(self.on_change):
+            listener(self)
+
+
+class SingleInstance:
+    """One loop per package: an exclusive, non-blocking flock on `path` (e.g. <package>/.run.lock)
+    for as long as the loop runs. Held by another process -> prints "[watch] already running
+    (<path>)" and sys.exit(0) (in a thread that only ends the thread). No path, or no fcntl
+    (Windows): a no-op."""
+
+    def __init__(self, path: str | None, tag: str = "watch"):
+        self.path, self.tag, self.fh = path, tag, None
+
+    def __enter__(self):
+        if self.path is None or fcntl is None:
+            return self
+        self.fh = open(self.path, "a")
+        try:
+            fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.fh.close()
+            self.fh = None
+            print(f"[{self.tag}] already running ({self.path})", flush=True)
+            sys.exit(0)
+        return self
+
+    def __exit__(self, *exc):
+        if self.fh is not None:
+            fcntl.flock(self.fh, fcntl.LOCK_UN)
+            self.fh.close()
+            self.fh = None
+        return False
+
+
+RUN_CAP_S = 1800.0   # a run longer than 30 min is abandoned (the server worker's cap)
+
+
+def _capped(fn: Callable[[], str], cap_s: float) -> tuple[bool, str, BaseException | None]:
+    """fn() in a daemon thread: (finished, result, error). Ctrl-C while waiting joins it fully, so
+    the run finishes its output and log, then re-raises."""
+    box: dict = {}
+
+    def target():
+        try:
+            box["r"] = fn()
+        except BaseException as e:  # noqa: BLE001 -- handed to the caller
+            box["e"] = e
+
+    t = threading.Thread(target=target, name="run", daemon=True)
+    t.start()
     try:
-        for _ in range(max_runs):
-            if not run_once():
-                break
-            worked += 1
-            if not drains:
-                break
-    except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001 -- one bad run must not stop the loop
-        cancel_leftovers(loop)
-        return f"error after {worked} run(s) that did work: {type(e).__name__}: {e}"
+        t.join(cap_s)
+    except KeyboardInterrupt:
+        t.join()
+        raise
+    if t.is_alive():
+        return False, "", None
+    return True, box.get("r", ""), box.get("e")
+
+
+def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
+          loop: asyncio.AbstractEventLoop | None = None, run_cap_s: float = RUN_CAP_S) -> str:
+    """What one cron tick or one --watch wake runs: the workflow, again while runs do work (only
+    when `drains`), at most max_runs runs; an error ends it. Returns the line the loop prints.
+
+    Each run executes in a worker thread joined for at most run_cap_s: past it the run is
+    abandoned (the thread is left, its result dropped). The runs' event loop `loop` is only driven
+    from that worker thread, one run at a time: after a failed run, its leftover tasks are
+    cancelled there too. KeyboardInterrupt propagates once the current run has finished."""
+    worked = 0
+
+    def one() -> str:
+        try:
+            return run_once()
+        except BaseException:
+            cancel_leftovers(loop)
+            raise
+
+    for _ in range(max_runs):
+        if loop is not None and loop.is_running():   # an abandoned run still holds the loop
+            return "abandoned run still running: skipped"
+        finished, output, error = _capped(one, run_cap_s)
+        if not finished:
+            return "abandoned a run after 30 min"
+        if isinstance(error, (Exception, asyncio.CancelledError)):   # one bad run must not stop the loop
+            return f"error after {worked} run(s) that did work: {type(error).__name__}: {error}"
+        if error is not None:   # SystemExit, KeyboardInterrupt raised by the run itself
+            raise error
+        if not output:
+            break
+        worked += 1
+        if not drains:
+            break
     return f"{worked} run(s) did work" if worked else "nothing to do"
 
 
 def cancel_leftovers(loop: asyncio.AbstractEventLoop | None) -> None:
     """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
-    wakes up inside the next run."""
-    if loop is None or loop.is_closed():
+    wakes up inside the next run. Called on the thread that ran the run."""
+    if loop is None or loop.is_closed() or loop.is_running():
         return
     leftovers = [t for t in asyncio.all_tasks(loop) if not t.done()]
     for t in leftovers:
@@ -1300,13 +1413,13 @@ def cancel_leftovers(loop: asyncio.AbstractEventLoop | None) -> None:
 
 
 class SigtermAsCtrlC:
-    """While active, SIGTERM stops a loop the way Ctrl-C does (the caller's finally blocks run)."""
+    """While active, SIGTERM stops a loop the way Ctrl-C does (the caller's finally blocks run).
+    Only on the main thread: elsewhere (a loop run by api.py's listener) it does nothing."""
 
     def __enter__(self):
-        try:
+        self.previous = None
+        if threading.current_thread() is threading.main_thread():
             self.previous = signal.signal(signal.SIGTERM, self._raise)
-        except ValueError:   # not the main thread: signals stay as they are
-            self.previous = None
         return self
 
     @staticmethod
@@ -1319,41 +1432,76 @@ class SigtermAsCtrlC:
         return False
 
 
+def _nap(seconds: float, sleep, stop: threading.Event | None) -> None:
+    """A loop's sleep: the given one, or -- with a stop event and the real clock -- a wait that a
+    stop ends at once."""
+    if stop is not None and sleep is time.sleep:
+        stop.wait(seconds)
+    else:
+        sleep(seconds)
+
+
 class CronLoop:
     """The --cron loop: sleep until the next fire, run one tick, print one line, repeat."""
 
     MAX_NAP = 60.0   # seconds: sleep in naps and re-check the clock (DST changes, a laptop asleep)
 
     def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
-                 loop: asyncio.AbstractEventLoop | None = None):
+                 loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
         self.expr, self.cron = expr, CronExpression(expr)
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
-        self.sleep, self.now = sleep, now
+        self.sleep, self.now, self.stop, self.run_cap_s = sleep, now, stop, run_cap_s
+        # the [tick] line is the console; the state line is for listeners (api.py)
+        self.state = state if state is not None else LoopState()
+        self.state.tag, self.state.now, self.state.echo = "cron", now, False
+
+    def _stopped(self) -> bool:
+        return self.stop is not None and self.stop.is_set()
 
     def tick(self) -> str:
         """One tick's runs, as the line it prints (drain())."""
-        return drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop)
+        self.state.set("Running…", "ok")
+        line = drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop, run_cap_s=self.run_cap_s)
+        self.state.last_failed = line.startswith(("error", "abandoned"))
+        return line
+
+    def _idle(self, due: datetime) -> None:
+        if self.state.last_failed:
+            self.state.set("Scheduled — the last run failed", "warn")
+        else:
+            self.state.set(f"Scheduled: {self.expr} — next run {due:%H:%M}", "ok")
 
     def _wait_until(self, due: datetime) -> None:
         """Sleep until `due` in naps of at most MAX_NAP seconds, re-reading the clock after each."""
-        while (left := (due - self.now()).total_seconds()) > 0:
-            self.sleep(min(left, self.MAX_NAP))
+        while not self._stopped() and (left := (due - self.now()).total_seconds()) > 0:
+            _nap(min(left, self.MAX_NAP), self.sleep, self.stop)
 
     def run(self, ticks: int | None = None) -> None:
-        """Tick on every fire until Ctrl-C or SIGTERM (or `ticks` ticks, for tests)."""
+        """Tick on every fire until Ctrl-C, SIGTERM or `stop` (or `ticks` ticks, for tests)."""
         due = self.cron.next_after(self.now())
         print(f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
         done = 0
+        self.state.listening = True
+        self._idle(due)
         with SigtermAsCtrlC():
             try:
-                while ticks is None or done < ticks:
+                while (ticks is None or done < ticks) and not self._stopped():
                     self._wait_until(due)
+                    if self._stopped():
+                        break
                     done += 1
                     print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
                     # The fire after this one -- or after now, when the runs overran the next fires.
                     due = self.cron.next_after(max(due, self.now()))
+                    self._idle(due)
+                if self._stopped():
+                    print("[cron] stopped.", flush=True)
             except KeyboardInterrupt:
                 print("\n[cron] stopped.", flush=True)
+            finally:
+                self.state.listening = False
+                self.state.notify()
 
 
 def cron_next(expr: str, after: datetime) -> datetime:
@@ -1362,15 +1510,20 @@ def cron_next(expr: str, after: datetime) -> datetime:
 
 
 def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20, sleep=time.sleep,
-             now=datetime.now, ticks: int | None = None, loop: asyncio.AbstractEventLoop | None = None) -> None:
-    """Run the workflow on every fire of `expr` until Ctrl-C or SIGTERM (or `ticks` ticks, for tests).
+             now=datetime.now, ticks: int | None = None, loop: asyncio.AbstractEventLoop | None = None,
+             state: LoopState | None = None, stop: threading.Event | None = None, lock_path: str | None = None) -> None:
+    """Run the workflow on every fire of `expr` until Ctrl-C, SIGTERM or `stop` (or `ticks` ticks, for tests).
 
     run_once() runs the workflow once and returns its output ('' = nothing to do). drains is
     True when the workflow has code nodes: a run that did work then runs again at once, up to
     max_runs runs per tick (the server's MAX_RUNS_PER_TICK). `loop` is the event loop the runs
-    use: the tasks a failed run leaves on it are cancelled before the next run.
+    use: the tasks a failed run leaves on it are cancelled before the next run. `state` receives
+    the loop's state line; `lock_path` (e.g. <package>/.run.lock) keeps a second copy from starting.
+    May run in a thread (api.py's listener): it then installs no signal handler.
     """
-    CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop).run(ticks)
+    with SingleInstance(lock_path, "cron"):
+        CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
+                 state=state, stop=stop).run(ticks)
 
 
 PY;
@@ -1378,12 +1531,15 @@ PY;
 
     /**
      * --watch: run when an MCP tool says something new arrived, instead of on a timer (spec
-     * 2026-10-12 mail/drive events §7). The trigger tool blocks until then and answers
-     * {"status": "ready"} -- the workflow then runs and drains exactly like a cron tick (drain()) --
-     * or {"status": "timeout"}, and the loop asks again; any other answer or a failed call is
-     * printed and retried after RETRY_S. Generic: nothing here knows which server or tool it is
-     * (outlook.wait_for_new is one). Emitted after cronBlock(), whose drain() and SigtermAsCtrlC it
-     * uses; the entry file supplies json, MCP and MCP_SERVER_SLUGS.
+     * 2026-10-12 mail/drive events §7), with the server event worker's rules (spec 2026-10-15 §3).
+     * The trigger tool blocks until then and answers {"status": "ready"} -- the workflow then runs
+     * and drains exactly like a cron tick (drain()) -- or {"status": "timeout"}, and the loop asks
+     * again. A failed call (WatchError: unreachable, reconnect_needed, not_connected, bad_answer,
+     * tool_error) is retried after a backoff of 30 s doubling to 300 s, reset by any valid answer.
+     * The loop's state line (LoopState) prints once when it changes. Generic: nothing here knows
+     * which server or tool it is (outlook.wait_for_new is one). Emitted after cronBlock(), whose
+     * drain(), LoopState, SingleInstance and SigtermAsCtrlC it uses; the entry file supplies json,
+     * MCP and MCP_SERVER_SLUGS.
      */
     public static function watchBlock(): string
     {
@@ -1394,12 +1550,19 @@ PY;
 # trigger tool (e.g. outlook.wait_for_new), which waits until something new
 # probably arrived and answers {"status": "ready"} -- the workflow then runs
 # and drains as a cron tick does -- or {"status": "timeout"}, and the loop
-# asks again. A failed call is printed and retried after 30 s.
+# asks again. A failed call is retried after 30 s, doubling to 5 min; the
+# state line ("Listening for events", "Not listening: ...") prints when it
+# changes.
 # ==============================================================
 
 
 class WatchError(Exception):
-    """The trigger tool failed, or did not answer {"status": "ready" | "timeout"}."""
+    """The trigger tool failed, or did not answer {"status": "ready" | "timeout"}. `kind`:
+    unreachable | reconnect_needed | not_connected | bad_answer | tool_error."""
+
+    def __init__(self, kind: str, message: str = ""):
+        super().__init__(message or kind)
+        self.kind = kind
 
 
 class WatchTrigger:
@@ -1446,7 +1609,8 @@ class WatchTrigger:
                     ap.error(f"--watch {value!r}: {e}")
         if trigger.url() is None:
             known = ", ".join(sorted(set(MCP_SERVER_SLUGS.values()))) or "none"
-            ap.error(f"--watch: MCP server {trigger.server!r} is not used by this workflow (its servers: {known})")
+            ap.error(f"--watch: MCP server {trigger.server!r} is not used by this workflow (its servers: {known}); "
+                     f"set MCP_URL_{trigger.server.upper()} in .env if the server moved")
         return trigger
 
     def url(self) -> str | None:
@@ -1454,72 +1618,112 @@ class WatchTrigger:
         return next((u for u, slug in MCP_SERVER_SLUGS.items() if slug == self.server), None)
 
     def wait(self) -> dict:
-        """One call of the tool, as its result object."""
-        raw = MCP.call_tool_raw(self.url(), self.tool, self.args)
+        """One call of the tool, as its result object; anything else raises WatchError."""
+        try:
+            raw = MCP.call_tool_raw(self.url(), self.tool, self.args)
+        except Exception as e:  # noqa: BLE001 -- transport: refused, timed out, HTTP error
+            raise WatchError("unreachable", str(e) or type(e).__name__) from e
         text = "\n".join(c.get("text", "") for c in raw.get("content") or []
                          if isinstance(c, dict) and c.get("type") == "text").strip()
-        if raw.get("isError"):
-            raise WatchError(text or "tool error")
         result = raw.get("structuredContent")
         if result is None:
             try:
                 result = json.loads(text)
             except ValueError:
                 result = None
+        if isinstance(result, dict) and result.get("error"):   # e.g. {"error": "reconnect_needed", "message": ...}
+            code = str(result["error"])
+            kind = code if code in ("reconnect_needed", "not_connected") else "tool_error"
+            raise WatchError(kind, str(result.get("message") or code))
+        if raw.get("isError"):
+            raise WatchError("tool_error", text or "tool error")
         if not isinstance(result, dict) or result.get("status") not in ("ready", "timeout"):
-            raise WatchError(f'expected {{"status": "ready" | "timeout"}}, got {text[:200]!r}')
+            raise WatchError("bad_answer", f'expected {{"status": "ready" | "timeout"}}, got {text[:200]!r}')
         return result
 
 
 class WatchLoop:
     """The --watch loop: wait on the trigger, drain the workflow when it says ready, repeat."""
 
-    RETRY_S = 30.0
+    BACKOFF_START = 30.0
+    BACKOFF_MAX = 300.0
 
     def __init__(self, trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
-                 loop: asyncio.AbstractEventLoop | None = None):
-        self.trigger, self.sleep, self.now = trigger, sleep, now
+                 loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
+        self.trigger, self.sleep, self.now, self.stop = trigger, sleep, now, stop
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
-        self._reason = ""
+        self.run_cap_s = run_cap_s
+        self.state = state if state is not None else LoopState()
+        self.state.tag, self.state.now = "watch", now
+        self.backoff: float | None = None   # the current retry delay; None after a valid answer
 
     def _say(self, text: str) -> None:
         print(f"[watch {self.now():%H:%M}] {text}", flush=True)
 
+    def _stopped(self) -> bool:
+        return self.stop is not None and self.stop.is_set()
+
     def step(self) -> None:
-        """One call of the trigger, and the runs it calls for."""
+        """One call of the trigger, and the runs it calls for (spec 2026-10-15 §3)."""
         try:
             r = self.trigger.wait()
-        except Exception as e:  # noqa: BLE001 -- the server may be down for a while: retry, never stop
-            self._say(f"{self.trigger} failed: {e}; again in {self.RETRY_S:.0f} s")
-            self.sleep(self.RETRY_S)
+        except WatchError as e:
+            self._fail(e.kind, str(e))
             return
-        reason = str(r.get("reason") or "")
-        if reason != self._reason:   # e.g. events off: the trigger fell back to timed polling
-            self._reason = reason
-            self._say(f"{self.trigger}: {reason}" if reason else f"{self.trigger}: {r.get('events', 'ok')}")
+        except Exception:  # noqa: BLE001 -- transport: the server may be down for a while
+            self._fail("unreachable", "server unreachable")
+            return
+        self.backoff = None
+        idle = ("Listening (checks every 15 min)" if (r.get("via") == "fallback" or r.get("events") == "off")
+                else "Listening for events")
         if r["status"] == "ready":
-            runs = drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop)
-            self._say(f"ready ({r.get('via') or 'no reason given'}): {runs}")
+            self.state.set("Running…", "ok")
+            line = drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
+                         run_cap_s=self.run_cap_s)
+            self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
+            self.state.last_failed = line.startswith(("error", "abandoned"))
+        if self.state.last_failed:
+            self.state.set("Listening — the last run failed", "warn")
+        else:
+            self.state.set(idle, "ok")
+
+    def _fail(self, kind: str, message: str) -> None:
+        self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
+        text = "server unreachable" if kind == "unreachable" else message
+        self.state.set(f"Not listening: {text} — retrying in {self.backoff:.0f} s", "err")
+        _nap(self.backoff, self.sleep, self.stop)
 
     def run(self, calls: int | None = None) -> None:
-        """Until Ctrl-C or SIGTERM (or `calls` trigger calls, for tests)."""
+        """Until Ctrl-C, SIGTERM or `stop` (or `calls` trigger calls, for tests). Ctrl-C during a run
+        lets that run finish its output and log first (drain())."""
         print(f"[watch] waiting on {self.trigger}. Ctrl-C to stop.", flush=True)
         done = 0
+        self.state.listening = True
         with SigtermAsCtrlC():
             try:
-                while calls is None or done < calls:
+                while (calls is None or done < calls) and not self._stopped():
                     done += 1
                     self.step()
+                if self._stopped():
+                    print("[watch] stopped.", flush=True)
             except KeyboardInterrupt:
                 print("\n[watch] stopped.", flush=True)
+            finally:
+                self.state.listening = False
+                self.state.notify()
 
 
 def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20,
               sleep=time.sleep, now=datetime.now, calls: int | None = None,
-              loop: asyncio.AbstractEventLoop | None = None) -> None:
-    """Run the workflow each time `trigger` answers ready, until Ctrl-C or SIGTERM. drains, max_runs
-    and loop as in run_cron()."""
-    WatchLoop(trigger, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop).run(calls)
+              loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+              stop: threading.Event | None = None, lock_path: str | None = None) -> None:
+    """Run the workflow each time `trigger` answers ready, until Ctrl-C, SIGTERM or `stop`. drains,
+    max_runs, loop, state and lock_path as in run_cron(). May run in a thread (api.py's listener):
+    it then installs no signal handler."""
+    with SingleInstance(lock_path, "watch"):
+        WatchLoop(trigger, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
+                  state=state, stop=stop).run(calls)
 
 
 PY;
