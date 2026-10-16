@@ -34,7 +34,7 @@ final class CodeNodeExecutor
         $data = CodeNodeEmit::nodeData($node, $edges, $slugToUrl, $nodeIds);
         $request = [
             'source' => $data['source'], 'exits' => $data['exits'], 'timeout_s' => $data['timeout_s'],
-            'parents' => $parents, 'user_prompt' => $userPrompt,
+            'parents' => $parents, 'user_prompt' => $userPrompt, 'name' => $data['display'],
             'servers' => (object) array_intersect_key($servers, array_flip($data['mcp_servers'])),
         ];
         return ['data' => $data, 'result' => $this->spawn($request, $data['timeout_s'] + self::KILL_GRACE_S)];

@@ -4,7 +4,7 @@
 The contract is code_node_harness.py's -- the file the editor and compiled LangGraph run -- so a code
 node behaves the same everywhere. argv[1] is the directory holding code_node_harness.py.
 
-stdin:  {"source", "exits", "timeout_s", "parents", "user_prompt", "servers": {slug: {"url", "headers"}}}
+stdin:  {"source", "exits", "timeout_s", "parents", "user_prompt", "name", "servers": {slug: {"url", "headers"}}}
 stdout: the harness result {"ok", "route"?, "output_text"?, "error"?, "stdout", "tool_calls"}
 
 Needs Python 3.10+. This entry file stays free of 3.10-only syntax (the `match` code lives in
@@ -38,7 +38,7 @@ def main() -> None:
     timeout_s = int(req["timeout_s"])
     value = harness.decode_input(req.get("parents") or [], req.get("user_prompt") or "")
     result = harness.execute(req["source"], value, req["exits"], list(servers),
-                             McpTransport(servers, timeout_s), timeout_s)
+                             McpTransport(servers, timeout_s), timeout_s, node_name=req.get("name") or "")
     json.dump(result, sys.stdout, ensure_ascii=False)
     sys.stdout.flush()
 

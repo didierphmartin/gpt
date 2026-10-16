@@ -232,5 +232,21 @@ class PollOutlookTemplate(unittest.TestCase):
                 self.assertEqual(calls, ["poll_new_mail"])
 
 
+
+class NodeName(unittest.TestCase):
+    """NODE_NAME: the node's name on the canvas, e.g. for a branch filing mail into the folder named like it."""
+
+    SRC = "def run(input, call_tool):\n    return 'Inbox/' + NODE_NAME\n"
+
+    def test_the_code_reads_its_node_name(self):
+        for threaded in (True, False):
+            with self.subTest(threaded=threaded):
+                res = h.execute(self.SRC, None, ["next"], [], None, 5, threaded=threaded, node_name="claims")
+                self.assertEqual(res["output_text"], "Inbox/claims")
+
+    def test_without_a_name_it_is_empty(self):
+        self.assertEqual(run(self.SRC)["output_text"], "Inbox/")
+
+
 if __name__ == "__main__":
     unittest.main()

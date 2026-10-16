@@ -266,7 +266,7 @@ class CodeNode(Node):
         await trace(f"{self.display!r} code -- exits={c['exits']}, mcp_servers={c['mcp_servers']}")
         value = CODE_HARNESS.decode_input(req["parents"], req["user_prompt"])
         res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value, c["exits"], c["mcp_servers"],
-                                      _code_transport, c["timeout_s"])
+                                      _code_transport, c["timeout_s"], node_name=self.display)
         for call in res["tool_calls"]:
             await trace(f"tool {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
         if res["stdout"]:
