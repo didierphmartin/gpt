@@ -530,6 +530,7 @@ class LangGraphGenerator
         // ---------- the graph, output storage and run summary (shared with every mode) ----------
         $lines[] = '';
         $lines[] = LangGraphRuntime::runRecordBlock();
+        $lines[] = LangGraphRuntime::consoleBlock();
         $lines[] = LangGraphRuntime::workflowGraphBlock();
         $lines[] = LangGraphRuntime::outputBlock();
         $lines[] = LangGraphRuntime::cronBlock();
@@ -1691,6 +1692,7 @@ class LangGraphGenerator
         $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
         $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = LangGraphRuntime::runRecordBlock();
+        $L[] = LangGraphRuntime::consoleBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         $L[] = LangGraphRuntime::cronBlock();
@@ -3552,6 +3554,7 @@ TXT;
         $L[] = $sep;
         $L[] = LangGraphRuntime::documentConverterBlock();
         $L[] = LangGraphRuntime::runRecordBlock();
+        $L[] = LangGraphRuntime::consoleBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";

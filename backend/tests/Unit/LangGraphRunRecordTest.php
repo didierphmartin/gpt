@@ -22,7 +22,7 @@ final class LangGraphRunRecordTest extends TestCase
     {
         $file = tempnam(sys_get_temp_dir(), 'rr') . '.py';
         file_put_contents($file, "from __future__ import annotations\nimport json, os, tempfile, time, uuid\nfrom datetime import datetime\nfrom typing import Callable\n"
-            . LangGraphRuntime::runRecordBlock() . "\n" . $tail);
+            . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::consoleBlock() . "\n" . $tail);
         exec($this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
         unlink($file);
         self::assertSame(0, $rc, implode("\n", $out));
@@ -92,6 +92,83 @@ r.complete(success=False, error="boom"); r.end(quiet=False)
 name = open(os.path.join(d, "current")).read().strip()
 last = [json.loads(l) for l in open(os.path.join(d, name + ".jsonl"))][-1]
 assert last == {**last, "type": "workflow_complete", "success": False, "error": "boom"}
+print("ok")
+PY);
+    }
+
+    /*
+     * Ported from frontend/assets/js/start-options.js:
+     *
+     *     function eventSubject(output) {
+     *         const s = String(output ?? '');
+     *         const lines = ['From', 'Subject'].map((k) => new RegExp(`^${k}:[ \\t]*(.+)$`, 'm').exec(s)).filter(Boolean)
+     *             .map((m) => m[0].trim());
+     *         return lines.length ? lines.join('\n') : s.slice(0, 200);
+     *     }
+     *
+     * The JS joins the From and Subject lines with a NEWLINE (not " · "), so the console line is two lines.
+     */
+    public function testConsoleShowsTheLiveOverlayTexts(): void
+    {
+        $this->py(<<<'PY'
+lines = []
+v = ConsoleView(out=lines.append, now=lambda: datetime(2026, 10, 15, 10, 42))
+r = RunRecorder(None, 44, "W", listeners=[v])
+r.begin()
+r.node_start("1", "Start", "start"); r.node_complete("1", "Start", "start", output="poll")
+r.node_complete("1000000017", "Outlook: get new email", "code", output="From: jane@acme.com\nSubject: Claim for water damage\n\nBody", exit="new_mail")
+r.node_log("21", "jev routed to claims (confidence 0.97)")
+r.node_complete("21", "jev", "agent", output="x", route={"id": "23", "name": "claims"})
+r.node_complete("23", "claims", "agent", output="y")
+r.node_complete("24", "bad", "agent", success=False, error="oops")
+assert lines == [], lines   # buffered until the run completes
+r.complete(success=True, output="done")
+assert lines[0] == "[10:42] New event — From: jane@acme.com\nSubject: Claim for water damage", lines
+assert "    · jev routed to claims (confidence 0.97)" in lines
+assert "  ✓ jev → claims" in lines and "  ✓ claims" in lines and "  ✗ bad: oops" in lines
+assert not any("Start" in l for l in lines), lines
+assert lines[-1].startswith("[10:42] Done in ") and "done" not in lines[-1], lines
+print("ok")
+PY);
+    }
+
+    public function testEventSubjectMatchesTheJs(): void
+    {
+        $this->py(<<<'PY'
+assert event_subject("From:\t  a@b.c  \nSubject:x y\nFrom: later") == "From:\t  a@b.c\nSubject:x y"
+assert event_subject("Subject: only") == "Subject: only"
+assert event_subject("x" * 300) == "x" * 200
+assert event_subject("") == ""
+print("ok")
+PY);
+    }
+
+    public function testVerboseAddsOutputsAndTheAnswer(): void
+    {
+        $this->py(<<<'PY'
+lines = []
+v = ConsoleView(verbosity="verbose", out=lines.append, now=lambda: datetime(2026, 10, 15, 10, 42))
+r = RunRecorder(None, 44, "W", listeners=[v])
+r.begin(); r.node_complete("23", "claims", "agent", output="y" * 600); r.complete(success=True, output="a" * 300)
+assert "      " + "y" * 500 in lines and "      " + "y" * 501 not in lines, lines
+assert lines[-1].endswith(" — " + "a" * 200) and "a" * 201 not in lines[-1], lines
+print("ok")
+PY);
+    }
+
+    public function testQuietVerbosityAndDiscard(): void
+    {
+        $this->py(<<<'PY'
+lines = []
+v = ConsoleView(verbosity="quiet", out=lines.append, now=lambda: datetime(2026, 10, 15, 10, 42))
+r = RunRecorder(None, 44, "W", listeners=[v])
+r.begin(); r.node_complete("23", "claims", "agent", output="y"); r.complete(success=False, error="boom")
+assert lines == ["[10:42] Failed: boom"], lines
+lines.clear()
+r.begin(); r.node_complete("1000000017", "T", "code", exit="no_mail"); v.discard()
+assert lines == []
+r.begin()
+assert v.buffered == []   # a new run starts clean
 print("ok")
 PY);
     }

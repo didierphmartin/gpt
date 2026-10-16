@@ -819,6 +819,100 @@ PY;
     }
 
     /**
+     * Console view (spec 2026-10-15 §5): a run's progress as the live overlay words it. Listener of
+     * RunRecorder; buffers a run's lines and prints them at workflow_complete, so a quiet run (which
+     * the program discards) prints nothing. event_subject is start-options.js eventSubject, ported.
+     * Needs datetime and Callable from the entry file.
+     */
+    public static function consoleBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# CONSOLE VIEW
+# One run's progress as lines (the live overlay's texts), printed when
+# the run completes. verbosity: quiet (outcome only), normal, verbose.
+# ==============================================================
+import re as _re
+
+TRIGGER_MIN_ID = 1000000000   # the Start option's hidden code node (StartOptionGraph::ID_OFFSET)
+
+
+def print_line(s: str) -> None:
+    """The console's default sink."""
+    print(s, flush=True)
+
+
+def event_subject(text: str) -> str:
+    """The event a run started on: its From and Subject lines (one per line), else the first 200 characters.
+    Port of start-options.js eventSubject."""
+    s = str(text if text is not None else "")
+    found = [_re.search(rf"^{k}:[ \t]*(.+)$", s, _re.M) for k in ("From", "Subject")]
+    lines = [m.group(0).strip() for m in found if m]
+    return "\n".join(lines) if lines else s[:200]
+
+
+class ConsoleView:
+    """A RunRecorder listener: ConsoleView(verbosity)(event)."""
+
+    def __init__(self, verbosity: str = "normal", out: Callable[[str], None] = print_line, now=datetime.now):
+        self.verbosity, self.out, self.now = verbosity, out, now
+        self.buffered: list[str] = []
+        self.started: float | None = None
+
+    def _stamp(self) -> str:
+        return f"[{self.now():%H:%M}]"
+
+    def discard(self) -> None:
+        """Drop the run's buffered lines (a quiet run prints nothing)."""
+        self.buffered.clear()
+
+    def __call__(self, ev: dict) -> None:
+        kind = ev.get("type")
+        if kind == "workflow_start":
+            self.buffered.clear()
+            self.started = ev.get("timestamp")
+        elif kind == "node_complete":
+            self._node_complete(ev)
+        elif kind == "node_log":
+            if ev.get("message") and self.verbosity != "quiet":
+                self.buffered.append(f"    · {ev['message']}")
+        elif kind == "workflow_complete":
+            self._complete(ev)
+
+    def _node_complete(self, ev: dict) -> None:
+        if ev.get("node_type") == "start" or self.verbosity == "quiet":
+            return
+        name, ok = ev.get("node_name") or ev.get("node_id"), ev.get("success") is not False
+        try:
+            trigger = ev.get("drawflow_id") is None and int(ev.get("node_id")) >= TRIGGER_MIN_ID
+        except (TypeError, ValueError):
+            trigger = False
+        if trigger and ok:
+            self.buffered.append(f"{self._stamp()} New event — {event_subject(ev.get('output'))}")
+        elif not ok:
+            self.buffered.append(f"  ✗ {name}: {ev.get('error') or 'failed'}")
+        else:
+            route = ev.get("route")
+            self.buffered.append(f"  ✓ {name}" + (f" → {route['name']}" if route and route.get("name") else ""))
+            if self.verbosity == "verbose" and ev.get("output"):
+                self.buffered.append("      " + str(ev["output"])[:500])
+
+    def _complete(self, ev: dict) -> None:
+        lines, self.buffered = self.buffered, []
+        if ev.get("success") is False:
+            lines.append(f"{self._stamp()} Failed: {ev.get('error') or 'run failed'}")
+        else:
+            took = (ev["timestamp"] - self.started) if self.started is not None and "timestamp" in ev else 0.0
+            tail = f" — {str(ev.get('output') or '')[:200]}" if self.verbosity == "verbose" and ev.get("output") else ""
+            lines.append(f"{self._stamp()} Done in {took:.1f} s{tail}")
+        for line in (lines[-1:] if self.verbosity == "quiet" else lines):
+            self.out(line)
+
+
+PY;
+    }
+
+    /**
      * WorkflowGraph: the workflow as a LangGraph StateGraph, built from the frozen
      * EDGES / ORDER / NODE_TYPES and one node table. Written once for every mode: the
      * single file and orchestrator.py carry it inline, the modular package in common.py.
