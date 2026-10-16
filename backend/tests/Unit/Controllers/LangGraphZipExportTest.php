@@ -75,6 +75,17 @@ final class LangGraphZipExportTest extends TestCase
         $this->assertSame(['crew_modular_swarm/workflow.py'], array_keys(self::entries($r['raw_body'])));
     }
 
+    public function testABase64EntryIsZippedAsItsBytes(): void
+    {
+        // A skill's binary file (or a Start document) travels base64-encoded in the result.
+        $r = WorkflowController::langGraphZipResponse(['root' => 'crew_modular',
+            'files' => [['path' => 'workflow.py', 'code' => 'print(1)'],
+                        ['path' => 'skills/s/a.png', 'code' => base64_encode("\x00\xff"), 'encoding' => 'base64']]], 'modular');
+        $e = self::entries($r['raw_body']);
+        $this->assertSame("\x00\xff", $e['crew_modular/skills/s/a.png']);
+        $this->assertSame('print(1)', $e['crew_modular/workflow.py']);
+    }
+
     public function testASingleFileWithoutArchitectureZipsTheScriptAlone(): void
     {
         // An ingestion pipeline (or a doc that failed to build) has architecture = null.

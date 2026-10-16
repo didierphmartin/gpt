@@ -343,7 +343,8 @@ class WorkflowController
                 throw new \RuntimeException('could not create the zip archive');
             }
             foreach ($files as $f) {
-                $zip->addFromString("{$folder}/{$f['path']}", $f['code']);
+                // A binary file (a skill's image, a Start document) travels base64-encoded.
+                $zip->addFromString("{$folder}/{$f['path']}", ($f['encoding'] ?? '') === 'base64' ? base64_decode($f['code']) : $f['code']);
             }
             $zip->close();
             $bytes = file_get_contents($tmp);

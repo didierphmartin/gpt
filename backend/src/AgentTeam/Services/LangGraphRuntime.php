@@ -247,9 +247,17 @@ class CodeNode(Node):
         # Fail fast (spec §5.2): the Node is built when the script starts, so a bad import or a
         # missing run() stops the script here, before any node of the workflow has run.
         try:
-            CODE_HARNESS.check_code(cfg["source"])
-        except CODE_HARNESS.CodeNodeError as e:
+            CODE_HARNESS.check_code(self.source())
+        except (CODE_HARNESS.CodeNodeError, OSError) as e:
             raise RuntimeError(f"code node {self.display!r}: {e}") from None
+
+    def source(self) -> str:
+        """The node's code: its file in the package (cfg "source_file", relative to PACKAGE_DIR), read
+        at each run so an edit takes effect on the next run; else the code embedded in cfg "source"."""
+        if self.cfg.get("source_file"):
+            with open(os.path.join(PACKAGE_DIR, self.cfg["source_file"]), encoding="utf-8") as fh:
+                return fh.read()
+        return self.cfg["source"]
 
     async def run(self, request: str, trace) -> dict:
         """request is JSON {"user_prompt", "parents"}; the chosen exit travels back as "route"."""
@@ -257,7 +265,7 @@ class CodeNode(Node):
         req = json.loads(request)
         await trace(f"{self.display!r} code -- exits={c['exits']}, mcp_servers={c['mcp_servers']}")
         value = CODE_HARNESS.decode_input(req["parents"], req["user_prompt"])
-        res = await asyncio.to_thread(CODE_HARNESS.execute, c["source"], value, c["exits"], c["mcp_servers"],
+        res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value, c["exits"], c["mcp_servers"],
                                       _code_transport, c["timeout_s"])
         for call in res["tool_calls"]:
             await trace(f"tool {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
@@ -687,21 +695,28 @@ PY;
 
     /**
      * The code node harness (frontend/assets/py/code_node_harness.py, the file the editor runs)
-     * embedded as a module, plus the transport its call_tool uses: MCP_SLUGS maps a server slug
-     * to its URL, McpClient.call_tool_raw makes the call.
+     * embedded as a module ($fromFile: imported from the package's code_harness.py), plus the
+     * transport its call_tool uses: MCP_SLUGS maps a server slug to its URL, McpClient.call_tool_raw
+     * makes the call.
      */
-    public static function codeHarnessBlock(): string
+    public static function codeHarnessBlock(bool $fromFile = false): string
     {
-        $src = file_get_contents(__DIR__ . '/../../../../frontend/assets/py/code_node_harness.py');
-        if ($src === false) {
-            throw new \RuntimeException('code node harness not found (frontend/assets/py/code_node_harness.py)');
+        if ($fromFile) {
+            // The modular package ships the harness as code_harness.py beside this file (LangGraphPackage).
+            $load = "import code_harness as CODE_HARNESS   # code_harness.py in the package folder\n\n\n";
+        } else {
+            $src = file_get_contents(__DIR__ . '/../../../../frontend/assets/py/code_node_harness.py');
+            if ($src === false) {
+                throw new \RuntimeException('code node harness not found (frontend/assets/py/code_node_harness.py)');
+            }
+            $load = 'CODE_HARNESS_SOURCE = ' . json_encode($src, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n"
+                . "CODE_HARNESS = types.ModuleType(\"code_node_harness\")\n"
+                . "exec(CODE_HARNESS_SOURCE, CODE_HARNESS.__dict__)\n\n\n";
         }
         return "# ==============================================================\n"
             . "# CODE NODE HARNESS -- the same file the workflow editor runs\n"
             . "# ==============================================================\n"
-            . 'CODE_HARNESS_SOURCE = ' . json_encode($src, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n"
-            . "CODE_HARNESS = types.ModuleType(\"code_node_harness\")\n"
-            . "exec(CODE_HARNESS_SOURCE, CODE_HARNESS.__dict__)\n\n\n"
+            . $load
             . "def _code_transport(server: str, tool: str, args: dict) -> dict:\n"
             . "    \"\"\"call_tool's transport in a compiled script: the raw MCP result of server.tool(args).\"\"\"\n"
             . "    url = MCP_SLUGS.get(server)\n"
@@ -1031,6 +1046,8 @@ class WorkflowGraph:
                     if not path:
                         doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
                         continue
+                    if not os.path.isabs(path):
+                        path = os.path.join(PACKAGE_DIR, path)   # a packaged copy (start_documents/...) sits in the program's folder
                     try:
                         md = DOCUMENTS.convert(path)
                         doc_parts.append(f"### {name}\n\n{md}")
@@ -1904,9 +1921,9 @@ PY;
      * answered. One rule for the saved file's name and place (the modular package's),
      * and one RUN SUMMARY whose only per-mode part is the timing label.
      */
-    public static function outputBlock(): string
+    public static function outputBlock(bool $packaged = false): string
     {
-        return <<<'PY'
+        $block = <<<'PY'
 # ==============================================================
 # OUTPUT STORAGE + RUN SUMMARY
 # ==============================================================
@@ -1959,6 +1976,21 @@ def print_run_summary(output: str, saved: str | None, started: float | None, dur
 
 
 PY;
+        if (!$packaged) {
+            return $block;
+        }
+        // The modular package saves inside its own folder (spec 2026-10-15 §4.3).
+        $out = str_replace([
+            'app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via',
+            'root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")',
+        ], [
+            'package stores it (<package>/outputs/workflow/ by default, overridable via',
+            'root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(PACKAGE_DIR, "outputs")',
+        ], $block, $n);
+        if ($n !== 2) {
+            throw new \LogicException('outputBlock: the packaged defaults no longer match the block');
+        }
+        return $out;
     }
 
     /**
@@ -2639,9 +2671,9 @@ PY;
      * (RUN_SKILL_SCRIPT_TOOL, _make_skill_tool, _run_skill_step), restructured into a
      * class. The PythonEmitHelpers blocks stay as they are for ADK, MAF and NOOA.
      */
-    public static function skillRuntimeBlock(): string
+    public static function skillRuntimeBlock(bool $packaged = false): string
     {
-        return <<<'PY'
+        $block = <<<'PY'
 # ---------------------------------------------------------------------------
 # Local run_skill_script — execute a folder-backed skill's Python script as a
 # subprocess. Skills are real CPython (the browser runs them in Pyodide; here
@@ -2937,6 +2969,23 @@ SKILLS = SkillRuntime(
 )
 
 PY;
+        if (!$packaged) {
+            return $block;
+        }
+        // The modular package: skills/, outputs/ and scratch/ are folders of the package (spec 2026-10-15 §5).
+        $out = str_replace([
+            "SKILLS_DIR = os.environ.get(\n    \"SYNERGYAI_SKILLS_DIR\",\n    os.path.join(os.path.expanduser(\"~\"), \"Documents\", \"synergyAI\", \"skills\"),\n)\n",
+            'os.path.join(os.path.dirname(SKILLS_DIR), "outputs")',
+            'os.path.join(os.path.dirname(SKILLS_DIR), "scratch")',
+        ], [
+            "SKILLS_DIR = os.environ.get(\"SYNERGYAI_SKILLS_DIR\") or os.path.join(PACKAGE_DIR, \"skills\")   # the package's own skills/\n",
+            'os.path.join(PACKAGE_DIR, "outputs")',
+            'os.path.join(PACKAGE_DIR, "scratch")',
+        ], $block, $n);
+        if ($n !== 3) {
+            throw new \LogicException('skillRuntimeBlock: the packaged defaults no longer match the block');
+        }
+        return $out;
     }
 
     /**

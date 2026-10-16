@@ -84,7 +84,7 @@ class CompiledRunServerTest extends TestCase
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $t->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo, LangGraphA2AGeneratorTest::skillsRoot());
 
         $root = self::packageRoot('compiled_linear_');
         foreach ($gen->generate(77, '3', ['modular' => true])['files'] as $f) {
@@ -123,6 +123,8 @@ class CompiledRunServerTest extends TestCase
         $this->assertSame([
             'workflow.py', 'common.py', 'api.py', 'agents/__init__.py',
             'agents/techbuddy.py', 'agents/it_claims.py', 'agents/human_resources.py', 'agents/playbook_hr.py',
+            // the package's own files (Task 7): setup, then the bound skill's folder
+            'requirements.txt', '.env.example', 'README.md', 'skills/html/SKILL.md',
             'ARCHITECTURE.md',
         ], array_column($m['files'], 'path'));
         $api = $m['files'][2]['code'];

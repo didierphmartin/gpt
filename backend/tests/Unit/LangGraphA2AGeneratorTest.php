@@ -61,6 +61,23 @@ class LangGraphA2AGeneratorTest extends TestCase
         ];
     }
 
+    /**
+     * A skills root for the fixtures' skill bindings (html, lgtest): the modular package copies each
+     * bound skill's folder, and a test must not read the developer's own ~/Documents skills.
+     */
+    public static function skillsRoot(): string
+    {
+        static $root = null;
+        if ($root === null) {
+            $root = sys_get_temp_dir() . '/lg_fixture_skills_' . bin2hex(random_bytes(4));
+            foreach (['html', 'lgtest'] as $d) {
+                mkdir("{$root}/{$d}", 0777, true);
+                file_put_contents("{$root}/{$d}/SKILL.md", "---\nname: {$d}\n---\nFixture skill.\n");
+            }
+        }
+        return $root;
+    }
+
     public static function generator(): LangGraphGenerator
     {
         $t = new self('x');
@@ -70,7 +87,7 @@ class LangGraphA2AGeneratorTest extends TestCase
         $graphRepo->method('getGraph')->willReturn(self::graph());
         $agentRepo = $t->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        return new LangGraphGenerator(self::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        return new LangGraphGenerator(self::pdo(), $wfRepo, $graphRepo, $agentRepo, self::skillsRoot());
     }
 
     /** Facts as analyzeForEmit() returns them (private): reached through reflection. */

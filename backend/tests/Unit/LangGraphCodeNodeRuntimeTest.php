@@ -69,6 +69,9 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         // spec §5.2: every code node's source passes check_code when its Node is built (single file:
         // NODES at import; modular: each agent module's make_node at import) -- before any node runs.
         $with = LangGraphRuntime::nodeClassesBlock(true, true);
-        self::assertMatchesRegularExpression('~class CodeNode\(Node\):.*?def __init__\(self, cfg: dict\):\n        super\(\).__init__\(cfg\)\n.*?CODE_HARNESS\.check_code\(cfg\["source"\]\)~s', $with);
+        self::assertMatchesRegularExpression('~class CodeNode\(Node\):.*?def __init__\(self, cfg: dict\):\n        super\(\).__init__\(cfg\)\n.*?CODE_HARNESS\.check_code\(self\.source\(\)\)~s', $with);
+        // The code itself: the package's file (read at each run) or the embedded source (Task 7).
+        self::assertStringContainsString('with open(os.path.join(PACKAGE_DIR, self.cfg["source_file"]), encoding="utf-8") as fh:', $with);
+        self::assertStringContainsString('res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value,', $with);
     }
 }

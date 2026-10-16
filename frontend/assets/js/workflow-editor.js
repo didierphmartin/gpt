@@ -5702,6 +5702,11 @@ class WorkflowEditor {
         return data;
     }
 
+    /** What Display Code shows for a manifest file: its text, or "(binary file)" for a base64 entry. */
+    _manifestFileText(f) {
+        return f?.encoding === 'base64' ? '(binary file)' : (f?.code || '');
+    }
+
     /**
      * Fetch a multi-file manifest and write it under python/scripts/<root>/
      * (orchestrator.py + agents/*.py for A2A; workflow.py + common.py +
@@ -5722,7 +5727,15 @@ class WorkflowEditor {
             }
             const fh = await dir.getFileHandle(f.path.slice(f.path.lastIndexOf('/') + 1), { create: true });
             const w = await fh.createWritable();
-            await w.write(f.code);
+            if (f.encoding === 'base64') {
+                // A binary file (a skill's image, a Start document): written back as its bytes.
+                const bin = atob(f.code);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                await w.write(bytes);
+            } else {
+                await w.write(f.code);
+            }
             await w.close();
         }
         await this._syncRunnerEnv();
@@ -5913,7 +5926,7 @@ class WorkflowEditor {
             files = null;
             code = '(no files generated)';
         } else if (files) {
-            code = files[0]?.code || '';
+            code = files[0] ? this._manifestFileText(files[0]) : '';
         }
         if (code === null) {
             try {
@@ -5996,7 +6009,7 @@ class WorkflowEditor {
         // into copied text either.
         render(code);
         const sel = backdrop.querySelector('.code-file-select');
-        if (sel) sel.addEventListener('change', () => { code = files[Number(sel.value)].code; render(code); });
+        if (sel) sel.addEventListener('change', () => { code = this._manifestFileText(files[Number(sel.value)]); render(code); });
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);

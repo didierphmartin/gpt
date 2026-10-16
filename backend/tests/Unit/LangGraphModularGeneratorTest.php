@@ -121,11 +121,13 @@ class LangGraphModularGeneratorTest extends TestCase
         $this->assertSame([
             'workflow.py', 'common.py', 'api.py', 'agents/__init__.py',
             'agents/techbuddy.py', 'agents/it_claims.py', 'agents/human_resources.py', 'agents/playbook_hr.py',
+            // the package's own files (Task 7): setup, then the bound skill's folder
+            'requirements.txt', '.env.example', 'README.md', 'skills/html/SKILL.md',
             'ARCHITECTURE.md',
         ], array_column($m['files'], 'path'));
         foreach ($m['files'] as $f) {
-            if ($f['path'] === 'ARCHITECTURE.md') {
-                continue;   // documentation, not Python: see LangGraphArchitectureDocTest
+            if (!str_ends_with($f['path'], '.py')) {
+                continue;   // ARCHITECTURE.md (see LangGraphArchitectureDocTest) and the package files (LangGraphPackageTest)
             }
             $this->assertCompiles($f['code'], $f['path']);
             if ($f['path'] === 'agents/__init__.py') {

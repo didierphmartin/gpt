@@ -27,17 +27,21 @@ class LangGraphGenerator
     private WorkflowRepository $workflowRepo;
     private WorkflowGraphRepository $graphRepo;
     private AgentRepository $agentRepo;
+    /** Where the skill folders the modular package copies are read from (LangGraphPackage). */
+    private string $skillsRoot;
 
     public function __construct(
         PDO $db,
         WorkflowRepository $workflowRepo,
         WorkflowGraphRepository $graphRepo,
-        AgentRepository $agentRepo
+        AgentRepository $agentRepo,
+        ?string $skillsRoot = null
     ) {
         $this->db = $db;
         $this->workflowRepo = $workflowRepo;
         $this->graphRepo = $graphRepo;
         $this->agentRepo = $agentRepo;
+        $this->skillsRoot = $skillsRoot ?? LangGraphPackage::defaultSkillsRoot();
     }
 
     // ---------- helpers (same as Python generator) ----------
@@ -341,7 +345,8 @@ class LangGraphGenerator
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
                     : [], self::decisionDocLines($agentData), self::mcpHeaderDocLines($facts), self::modeDocLines("{$safeName}_langgraph.py"), self::cronDocLines($facts, "{$safeName}_langgraph.py"),
-                    self::watchDocLines($facts, "{$safeName}_langgraph.py")),
+                    self::watchDocLines($facts, "{$safeName}_langgraph.py"),
+                    ['# Single file: skills are read from SYNERGYAI_SKILLS_DIR (default ~/Documents/synergyAI/skills); use the modular package for a self-contained copy.']),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
         ]);
@@ -1651,6 +1656,7 @@ class LangGraphGenerator
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
         $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))';
+        $L[] = 'PACKAGE_DIR = _HERE   # this program\'s folder: a relative Start document path resolves here';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'from langgraph.graph import END, START, StateGraph';
@@ -2652,12 +2658,15 @@ PY;
         // order, so the manifest is provably in canvas order regardless of how
         // topological order happens to tie-break.
         $layout = self::modularLayout($facts);
+        // The package files of the modular path (spec 2026-10-15 §5): its skills, requirements,
+        // .env.example and README. A swarm reads no Start documents, so none are copied.
+        $package = LangGraphPackage::files(['startDocuments' => []] + $facts, $this->skillsRoot);
         $files = [
             ['path' => 'workflow.py', 'code' => $this->emitSwarmWorkflow($facts, $layout)],
             // common.py and api.py are the EXISTING modular emitters, called
             // (not copied): a swarm shares the shared runtime and run server
             // verbatim with the modular workflow path.
-            ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
+            ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout, true)],
             ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
             // A REGULAR package, not a namespace portion. Without __init__.py,
             // `import agents.<member>` loses to any installed top-level `agents`
@@ -2675,6 +2684,7 @@ PY;
             }
             $files[] = ['path' => $entry['file'], 'code' => $this->emitSwarmAgentFile($facts, $layout, (string) $id)];
         }
+        array_push($files, ...$package);
         return ['root' => $layout['root'] . '_swarm', 'files' => $files];
     }
 
@@ -3182,9 +3192,18 @@ PY;
     private function generateModular(array $facts): array
     {
         $layout = self::modularLayout($facts);
+        // The package carries what it runs on (spec 2026-10-15 §5): read from the original facts, then
+        // START_DOCUMENTS points at the copies and each code node at its code/ file.
+        $package = LangGraphPackage::files($facts, $this->skillsRoot);
+        $facts['startDocuments'] = LangGraphPackage::startDocuments($facts['startDocuments'] ?? [])['docs'];
+        $codeFiles = [];
+        foreach ($facts['codeData'] as $nid => $cd) {
+            $codeFiles[(string) $nid] = LangGraphPackage::codeFile((string) $nid, $cd, (string) $nid === $facts['triggerNodeId']);
+            $facts['codeData'][$nid]['source_file'] = $codeFiles[(string) $nid]['path'];
+        }
         $files = [
             ['path' => 'workflow.py', 'code' => $this->emitModularWorkflow($facts, $layout)],
-            ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout)],
+            ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout, true)],
             ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
             ['path' => 'agents/__init__.py', 'code' => '"""Agent modules of workflow ' . json_encode($facts['wfName'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
                 . " -- one per agent/playbook node.\n\nEach module exposes NODE (the frozen editor settings) and\nrun_node = make_node(NODE).run (common.py's Node classes), which workflow.py\ncalls from its graph as run_node(request_text, trace).\n\"\"\"\n"],
@@ -3192,6 +3211,7 @@ PY;
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitModularAgentFile($facts, $layout, (string) $nid)];
         }
+        array_push($files, ...array_values($codeFiles), ...$package);
         return self::withArchitecture(['root' => $layout['root'], 'files' => $files], $facts, 'modular');
     }
 
@@ -3463,8 +3483,14 @@ once instead of copied per node.
 TXT;
     }
 
-    /** common.py: the shared runtime library, WorkflowGraph included. No graph data, no node definitions. */
-    private function emitModularCommon(array $facts, array $layout): string
+    /**
+     * common.py: the shared runtime library, WorkflowGraph included. No graph data, no node definitions.
+     *
+     * $packaged: a package with its own files (LangGraphPackage): code nodes import code_harness.py;
+     * skills, outputs and scratch default to folders of the package. The modular and swarm paths
+     * both pass it, so their common.py stay byte-identical.
+     */
+    private function emitModularCommon(array $facts, array $layout, bool $packaged = false): string
     {
         $sep = '# ' . str_repeat('=', 62);
         $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
@@ -3479,7 +3505,7 @@ TXT;
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $withPlaybooks = $facts['playbookData'] !== [];
-        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid' . ($facts['codeData'] !== [] ? ', types' : '');
+        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid' . ($facts['codeData'] !== [] && !$packaged ? ', types' : '');
         $L[] = 'from abc import ABC, abstractmethod';
         $L[] = 'from dataclasses import asdict, dataclass, field';
         $L[] = 'from datetime import datetime';
@@ -3497,6 +3523,7 @@ TXT;
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
         $L[] = 'DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps';
+        $L[] = 'PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # the package folder: code/, skills/, outputs/, start_documents/';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'from langchain_core.messages import AIMessage, HumanMessage, SystemMessage';
@@ -3535,13 +3562,13 @@ TXT;
         $L[] = '';
         $L[] = LangGraphRuntime::mcpClientBlock();
         if ($facts['codeData'] !== []) {
-            $L[] = LangGraphRuntime::codeHarnessBlock();
+            $L[] = LangGraphRuntime::codeHarnessBlock($packaged);
             $L[] = '';
         }
         $L[] = $sep;
         $L[] = '# TOOL BUILDER + SKILL RUNTIME';
         $L[] = $sep;
-        $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock();
+        $L[] = LangGraphRuntime::toolCatalogBlock() . LangGraphRuntime::skillRuntimeBlock($packaged);
         $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = $sep;
         $L[] = '# DISPATCHER RUNTIME';
@@ -3566,7 +3593,7 @@ TXT;
         $L[] = LangGraphRuntime::runRecordBlock();
         $L[] = LangGraphRuntime::consoleBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
-        $L[] = LangGraphRuntime::outputBlock();
+        $L[] = LangGraphRuntime::outputBlock($packaged);
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -3663,7 +3690,11 @@ TXT;
         $L[] = $indent . '    "mcp_servers": ' . $j($cd['mcp_servers']) . ',';
         $L[] = $indent . '    "timeout_s": ' . (int) $cd['timeout_s'] . ',';
         $L[] = $indent . '    "exit_targets": ' . $j((object) $cd['exit_targets']) . ',';
-        $L[] = $indent . '    "source": ' . $j($cd['source']) . ',';
+        // The modular package reads the code from its file at each run (an edit takes effect on the
+        // next run); the single file embeds it.
+        $L[] = isset($cd['source_file'])
+            ? $indent . '    "source_file": ' . $j($cd['source_file']) . ',   # relative to the package folder'
+            : $indent . '    "source": ' . $j($cd['source']) . ',';
         $L[] = $indent . '}' . ($indent !== '' ? ',' : '');
         return implode("\n", $L);
     }

@@ -79,6 +79,9 @@ class LangGraphOutputStructureTest extends TestCase
         ];
     }
 
+    /** The skills root the modular package copies from (null: the fixtures' root). */
+    private ?string $skillsRoot = null;
+
     private function generator(array $graph): LangGraphGenerator
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
@@ -87,7 +90,8 @@ class LangGraphOutputStructureTest extends TestCase
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        return new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo,
+            $this->skillsRoot ?? LangGraphA2AGeneratorTest::skillsRoot());
     }
 
     /** path => code of one mode's Python files. api.py is left out unless asked: RunServerEmitter (shared) writes most of it. */
@@ -102,6 +106,9 @@ class LangGraphOutputStructureTest extends TestCase
         foreach ($gen->generate(44, '3', [$mode => true])['files'] as $f) {
             if (!str_ends_with($f['path'], '.py')) {
                 continue;   // ARCHITECTURE.md: documentation, checked by LangGraphArchitectureDocTest
+            }
+            if (str_starts_with($f['path'], 'skills/')) {
+                continue;   // a bound skill's folder, copied as it is: not code the compiler writes
             }
             if ($withApi || $f['path'] !== 'api.py') {
                 $out[$f['path']] = $f['code'];
@@ -391,6 +398,7 @@ class LangGraphOutputStructureTest extends TestCase
             "import sys\nopen(sys.argv[1], 'w', encoding='utf-8').write('<html>made by the skill</html>')\nprint('ok')\n");
         $graph = self::graphs()['linear'];
         $graph['nodes'][2]['config']['bound_skill'] = ['dir_name' => 'lgtest'];
+        $this->skillsRoot = "{$base}/skills";
         $root = self::write($this->files($graph, 'modular'))['root'];
         [$r, $log] = $this->probe(['node', 'module', $root, 'agents.writer', 'write something'], [
             'SYNERGYAI_SKILLS_DIR' => "{$base}/skills", 'SYNERGYAI_OUTPUT_ROOT' => "{$base}/outputs",
@@ -459,6 +467,14 @@ class LangGraphOutputStructureTest extends TestCase
         $pkg = $this->files($graph, 'modular');
         $this->assertStringContainsString('class DocumentConverter:', $pkg['common.py']);
         $this->assertStringNotContainsString('_convert_doc_to_markdown', implode("\n", $pkg));
+        // The package carries its copy of the document (start_documents/, Task 7); START_DOCUMENTS points at it.
+        foreach ($this->generator($graph)->generate(44, '3', ['modular' => true])['files'] as $f) {
+            if (str_starts_with($f['path'], 'start_documents/')) {
+                $pkg[$f['path']] = $f['code'];
+            }
+        }
+        $this->assertSame("# Brief\nWrite about tides.", $pkg['start_documents/' . basename($doc)] ?? null);
+        $this->assertStringContainsString('"path": "start_documents/' . basename($doc) . '"', $pkg['workflow.py']);
         [, $log] = $this->probe(['workflow', 'modular', self::write($pkg)['root'], 'go']);
         // The Start text the graph builds: converted brief + the stricter no-path note (Task 5) + the prompt.
         $start = "## Attached Documents\n\n### brief.md\n\n# Brief\nWrite about tides.\n\n---\n\n"

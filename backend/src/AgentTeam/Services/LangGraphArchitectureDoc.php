@@ -164,6 +164,7 @@ final class LangGraphArchitectureDoc
                 foreach ($layout['agents'] as $nid => $e) {
                     $rows[] = [$e['file'], $agentRole($e, $nid) . ': its `NODE` settings and `run_node = make_node(NODE).run`.'];
                 }
+                array_push($rows, ...self::packageRows($facts));
                 $principle = 'Agent files are data (`NODE` + `run_node = make_node(NODE).run`), `common.py` is behaviour, '
                     . '`workflow.py` wires the graph.';
                 break;
@@ -189,6 +190,35 @@ final class LangGraphArchitectureDoc
         $L[] = '';
         $L[] = $principle;
         return implode("\n", $L);
+    }
+
+    /** The modular package's own files (LangGraphPackage): code files, the harness, setup files, skills, documents. */
+    private static function packageRows(array $facts): array
+    {
+        $rows = [];
+        if (($facts['codeData'] ?? []) !== []) {
+            $rows[] = ['code_harness.py', 'The code-node sandbox, the same file the editor runs: standard library only, '
+                . 'network only through `call_tool`, one of the node\'s exits, its timeout.'];
+            foreach ($facts['codeData'] as $nid => $cd) {
+                if (isset($cd['source_file'])) {
+                    $rows[] = [$cd['source_file'], "Node {$nid} \"" . self::cell($cd['display']) . '" (code): its '
+                        . '`run(input, call_tool)`, read at each run, so an edit takes effect on the next run.'];
+                }
+            }
+        }
+        $rows[] = ['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'];
+        $rows[] = ['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'];
+        $rows[] = ['README.md', 'Install, modes, files written, the run server, running as a service.'];
+        foreach (LangGraphPackage::skillDirs($facts) as $d) {
+            $rows[] = ["skills/{$d}/", 'Skill "' . self::cell($d) . '", copied with all its files: what `SkillRuntime` runs.'];
+        }
+        foreach ($facts['startDocuments'] ?? [] as $doc) {
+            if (str_starts_with((string) (is_array($doc) ? ($doc['path'] ?? '') : ''), 'start_documents/')) {
+                $rows[] = ['start_documents/', 'The Start node\'s documents, converted to Markdown by `DocumentConverter` at each run.'];
+                break;
+            }
+        }
+        return $rows;
     }
 
     /** Mermaid classDiagram of the classes present; relations only between present classes. */

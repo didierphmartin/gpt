@@ -24,7 +24,7 @@ class LangGraphArchitectureDocTest extends TestCase
         $graphRepo->method('getGraph')->willReturn(is_array($graph) ? $graph : LangGraphOutputStructureTest::graphs()[$graph]);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        $gen = new LangGraphGenerator(LangGraphA2AGeneratorTest::pdo(), $wfRepo, $graphRepo, $agentRepo, LangGraphA2AGeneratorTest::skillsRoot());
         return $gen->generate(44, '3', $mode === 'single' ? [] : [$mode => true]);
     }
 
@@ -72,7 +72,12 @@ class LangGraphArchitectureDocTest extends TestCase
 
         $modular = $this->generate('dispatcher_demo', 'modular');
         foreach ($modular['files'] as $f) {
-            $this->assertStringContainsString("| `{$f['path']}` |", $modular['architecture'], $f['path']);
+            // A copied skill is one row for its folder (skills/<dir>/), not one per file.
+            $row = preg_match('~^skills/(.+)/SKILL\.md$~', $f['path'], $m) ? "skills/{$m[1]}/" : $f['path'];
+            if (str_starts_with($f['path'], 'skills/') && $row === $f['path']) {
+                continue;
+            }
+            $this->assertStringContainsString("| `{$row}` |", $modular['architecture'], $f['path']);
         }
         $this->assertStringContainsString('`run_node = make_node(NODE).run`', $modular['architecture']);
 
