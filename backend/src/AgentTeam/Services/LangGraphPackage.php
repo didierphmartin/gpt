@@ -148,8 +148,9 @@ final class LangGraphPackage
         $out = [];
         $root = realpath($skillsRoot);
         foreach (self::skillDirs($facts) as $d) {
-            // dir_name comes from the client-saved node config: one plain path segment, resolved inside the root.
-            $safe = $d !== '' && $d !== '.' && $d !== '..' && !str_contains($d, '/') && !str_contains($d, '\\') && !str_contains($d, "\0");
+            // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
+            // skill; none empty, "." or "..", no "\"), resolved inside the root.
+            $safe = StartDocumentStore::safeSegments($d) !== null;
             $base = $safe && $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
             if ($base === false || !str_starts_with($base, $root . DIRECTORY_SEPARATOR) || !is_dir($base)) {
                 throw new RuntimeException("Skill folder \"{$d}\" is not available on this server, so it can't be packaged.");

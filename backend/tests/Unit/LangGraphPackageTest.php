@@ -335,10 +335,10 @@ final class LangGraphPackageTest extends TestCase
         $this->files('nope');
     }
 
-    /** Fix round 1: dir_name is one plain path segment inside the skills root. */
+    /** Fix rounds 1-2: dir_name is plain path segments (a grouped skill has two) inside the skills root. */
     public function testUnsafeSkillDirNamesAreRefused(): void
     {
-        foreach (['.', '..', '../pdf-report', 'pdf-report/..', 'a\\b', '/tmp'] as $bad) {
+        foreach (['.', '..', '../pdf-report', 'pdf-report/..', 'GEO/../x', './x', 'GEO//x', 'a\\b', '/tmp'] as $bad) {
             try {
                 $this->files($bad);
                 self::fail("accepted skill dir " . json_encode($bad));
@@ -347,6 +347,49 @@ final class LangGraphPackageTest extends TestCase
                 self::assertStringNotContainsString(sys_get_temp_dir(), $e->getMessage());
             }
         }
+    }
+
+    public function testAGroupedSkillIsPackagedUnderItsGroup(): void
+    {
+        $root = $this->skillsRoot();
+        mkdir("$root/GEO/geo-report/scripts", 0777, true);
+        file_put_contents("$root/GEO/geo-report/SKILL.md", "---\nname: geo-report\ndependencies: [beautifulsoup4]\n---\nReport.\n");
+        file_put_contents("$root/GEO/geo-report/scripts/make.py", "print('geo')\n");
+        $result = $this->generator($this->graph('GEO/geo-report'), $root)->generate(44, '3', ['modular' => true]);
+        $files = array_column($result['files'], null, 'path');
+        self::assertSame("print('geo')\n", $files['skills/GEO/geo-report/scripts/make.py']['code']);
+        self::assertArrayHasKey('skills/GEO/geo-report/SKILL.md', $files);
+        self::assertStringContainsString("beautifulsoup4\n", $files['requirements.txt']['code']);
+        self::assertStringContainsString('| `skills/GEO/geo-report/` |', $result['architecture']);
+    }
+
+    /** Fix round 2: the universalFS adapter path -- the read goes to the user's own folder, never through fullPath. */
+    public function testStoreReadsThroughTheUsersAdapter(): void
+    {
+        $adapter = new class {
+            public array $reads = [];
+            public function readStream(string $path)
+            {
+                $this->reads[] = $path;
+                if ($path !== '/synergyaichatroot/user_3/workflow_docs/44/doc_1_a.txt') {
+                    throw new \RuntimeException('not found');
+                }
+                $s = fopen('php://memory', 'r+');
+                fwrite($s, "from the adapter\n");
+                rewind($s);
+                return $s;
+            }
+        };
+        $connects = 0;
+        $store = new StartDocumentStore('user_3', function () use ($adapter, &$connects) { $connects++; return $adapter; }, null);
+        self::assertSame("from the adapter\n", $store->read(['path' => 'workflow_docs/44/doc_1_a.txt',
+            'fullPath' => 'synergyaichatroot/user_4/secret.txt']));
+        self::assertNull($store->read(['path' => 'workflow_docs/44/gone.txt']));
+        self::assertNull($store->read(['path' => '../user_4/secret.txt']));
+        self::assertNull($store->read(['path' => 'workflow_docs/44/doc_1_a.txt', 'storage' => 'local']));
+        self::assertSame(['/synergyaichatroot/user_3/workflow_docs/44/doc_1_a.txt', '/synergyaichatroot/user_3/workflow_docs/44/gone.txt'],
+            $adapter->reads, 'unsafe and local documents never reach the adapter; fullPath is ignored');
+        self::assertSame(1, $connects, 'the adapter is connected once');
     }
 
     public function testEnvFilesOfASkillAreNotCopied(): void
