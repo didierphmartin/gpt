@@ -133,6 +133,9 @@ class AdkCodeNodeE2ETest extends TestCase
         [$rc, $text] = $this->run_($this->analyzed(self::FILE));
         self::assertSame(0, $rc, $text);
         self::assertStringContainsString('skipped (its branch was not taken)', $text);
+        // nothing to do: the answer is the Output's, empty -- not the trigger's text (review I1)
+        self::assertStringContainsString('[workflow] done in', $text);
+        self::assertMatchesRegularExpression('/\[workflow\] done in [0-9.]+s, 0 chars/', $text);
         self::assertSame([], array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
     }
 

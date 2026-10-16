@@ -540,6 +540,77 @@ class _PassThroughAgent(BaseAgent):
 # so formatting such as HTML is preserved. Single parent = pass-through.
 node_4 = _PassThroughAgent(name="node_4", source_keys=["node_2", "node_3"])
 # ==============================================================
+# RUN EVENTS
+# Each node's start and completion (a code node's exit, a
+# dispatcher's route) go to GRAPH_RECORDER when the package's
+# listener set one: runs/ and GET /live, the editor's live canvas.
+# ==============================================================
+NODE_META = {
+    "node_2": [
+        "2",
+        "agent",
+        "A"
+    ],
+    "node_3": [
+        "3",
+        "agent",
+        "B"
+    ],
+    "node_4": [
+        "4",
+        "output",
+        "Output"
+    ]
+}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded
+START_NODE = ["1", "Start"]   # [id, name] of the Start node
+OUTPUT_NODE_KEYS = ["node_4"]   # the Output nodes: their answers are the workflow's answer
+GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
+_RUN = {"ran": [], "routes": {}, "open": {}}   # this run: nodes that ran, code exits, nodes started not completed
+
+
+def _run_reset() -> None:
+    _RUN["ran"], _RUN["routes"], _RUN["open"] = [], {}, {}
+
+
+def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+    _RUN["open"][nid] = (name, ntype)
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_start(nid, name, ntype)
+
+
+def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
+    _RUN["open"].pop(nid, None)
+    _RUN["ran"].append(nid)
+    if "exit" in extra:
+        _RUN["routes"][nid] = extra["exit"]
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_complete(nid, name, ntype, output=str(output or ""), **extra)
+
+
+def _rec_before(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        _rec_node_start(meta[0], meta[2], meta[1])
+    return None
+
+
+def _rec_after(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        nid, ntype, name = meta
+        extra = {"exit": callback_context.state.get("route_" + nid)} if ntype == "code" else {}
+        _rec_node_complete(nid, name, ntype, output=callback_context.state.get("node_" + nid, ""), **extra)
+    return None
+
+
+def _attach_recording(agent) -> None:
+    """Every recorded node's agent gets the before/after callbacks, wherever it sits in the tree."""
+    if agent.name in NODE_META:
+        agent.before_agent_callback = _rec_before
+        agent.after_agent_callback = _rec_after
+    for sub in getattr(agent, "sub_agents", None) or []:
+        _attach_recording(sub)
+# ==============================================================
 # ORCHESTRATION
 # The workflow graph as TOPOLOGICAL LAYERS: independent nodes at
 # the same depth run together in a ParallelAgent; the layers run
@@ -552,6 +623,7 @@ root_agent = SequentialAgent(
     node_4
     ],
 )
+_attach_recording(root_agent)   # run events for every recorded node (see RUN EVENTS)
 # ==============================================================
 # CLI ENTRY
 # Seeds the prompt (+ attached documents), runs the graph via
@@ -600,6 +672,11 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
     session_service = InMemorySessionService()
     runner = Runner(agent=root_agent, app_name="workflow", session_service=session_service)
     adk_session = await session_service.create_session(app_name="workflow", user_id="local", state={"user_prompt": prompt})
+    _run_reset()
+    if START_NODE:
+        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
+    outputs = {}   # the Output nodes' answers (the workflow's answer, when it has Output nodes)
     final = ""
     t0 = time.monotonic()
     seen = set()
@@ -637,8 +714,14 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
                         print(f"[{author}] {txt[:240]}", flush=True)
             if event.is_final_response() and event.content and event.content.parts:
                 final = event.content.parts[0].text or final
+                if author in OUTPUT_NODE_KEYS:
+                    outputs[author] = event.content.parts[0].text or ""
+        if OUTPUT_NODE_KEYS:   # the answer is what the Output nodes gave: none ran (nothing to do) = ""
+            final = "\n\n---\n\n".join(v for v in outputs.values() if v)
         print(f"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars", flush=True)
-    except Exception:
+    except Exception as e:
+        for _nid, (_name, _type) in list(_RUN["open"].items()):   # a node that failed mid-run ends as failed
+            _rec_node_complete(_nid, _name, _type, success=False, error=f"{type(e).__name__}: {e}")
         print("[workflow] ERROR:", flush=True)
         traceback.print_exc()
         raise

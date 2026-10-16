@@ -260,6 +260,11 @@ class ADKGenerator
                 'the exit it took leads here. Untaken branches are skipped.');
             $lines[] = self::gateAgentBlock();
         }
+        $lines[] = self::banner('RUN EVENTS',
+            'Each node\'s start and completion (a code node\'s exit, a',
+            'dispatcher\'s route) go to GRAPH_RECORDER when the package\'s',
+            'listener set one: runs/ and GET /live, the editor\'s live canvas.');
+        $lines[] = self::recordingBlock($analyzed);
         $lines[] = self::banner('ORCHESTRATION',
             'The workflow graph as TOPOLOGICAL LAYERS: independent nodes at',
             'the same depth run together in a ParallelAgent; the layers run',
@@ -759,6 +764,100 @@ class _Gate(BaseAgent):
             return
         async for ev in self.sub_agents[0].run_async(ctx):
             yield ev
+PY;
+    }
+
+    /**
+     * Run events (spec 2026-10-15 §4): each node's start and completion -- its exit for a code node, its
+     * route for a dispatcher -- go to GRAPH_RECORDER, the run's recorder, which the package's listener sets
+     * (runs/ and GET /live, what the editor's live canvas shows). None (the single file, a served run):
+     * nothing is recorded. Agents are recorded through ADK's before/after agent callbacks, a dispatcher
+     * by _DispatcherAgent itself (its chooser is not the node: the route is).
+     */
+    private static function recordingBlock(array $analyzed): string
+    {
+        $menus = WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'];
+        $routed = [];
+        foreach ($menus as $did => $targets) {
+            foreach ($targets as $t) {
+                if (self::menuNestable($analyzed, (string) $t['id'])) {
+                    $routed[(string) $did] = true;   // a _DispatcherAgent stands for this node
+                }
+            }
+        }
+        $meta = [];
+        $outputs = [];
+        $start = null;
+        foreach ((array) ($analyzed['order'] ?? []) as $id) {
+            $id = (string) $id;
+            $type = WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$id] ?? []);
+            $name = self::displayName($analyzed, $id);
+            if ($type === 'start') {
+                $start ??= [$id, $name === $id ? 'Start' : $name];
+            } elseif (isset($analyzed['code'][$id])) {
+                $meta["node_{$id}"] = [$id, 'code', $name];
+            } elseif (isset($analyzed['playbooks'][$id])) {
+                $meta["node_{$id}"] = [$id, 'playbook', $name];
+            } elseif ($type === 'output') {
+                $meta["node_{$id}"] = [$id, 'output', $name === $id ? 'Output' : $name];
+                $outputs[] = "node_{$id}";
+            } elseif (isset($analyzed['agents'][$id]) && !isset($routed[$id])) {
+                $meta["node_{$id}"] = [$id, 'agent', $name];
+            }
+        }
+        $metaPy = $meta === [] ? '{}' : PythonEmitHelpers::jsonToPython($meta);
+        $startPy = $start === null ? 'None' : '[' . PythonEmitHelpers::pyStr($start[0]) . ', ' . PythonEmitHelpers::pyStr($start[1]) . ']';
+        $outPy = '[' . implode(', ', array_map([PythonEmitHelpers::class, 'pyStr'], $outputs)) . ']';
+        return "NODE_META = {$metaPy}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded\n"
+            . "START_NODE = {$startPy}   # [id, name] of the Start node\n"
+            . "OUTPUT_NODE_KEYS = {$outPy}   # the Output nodes: their answers are the workflow's answer\n"
+            . <<<'PY'
+GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
+_RUN = {"ran": [], "routes": {}, "open": {}}   # this run: nodes that ran, code exits, nodes started not completed
+
+
+def _run_reset() -> None:
+    _RUN["ran"], _RUN["routes"], _RUN["open"] = [], {}, {}
+
+
+def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+    _RUN["open"][nid] = (name, ntype)
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_start(nid, name, ntype)
+
+
+def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
+    _RUN["open"].pop(nid, None)
+    _RUN["ran"].append(nid)
+    if "exit" in extra:
+        _RUN["routes"][nid] = extra["exit"]
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_complete(nid, name, ntype, output=str(output or ""), **extra)
+
+
+def _rec_before(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        _rec_node_start(meta[0], meta[2], meta[1])
+    return None
+
+
+def _rec_after(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        nid, ntype, name = meta
+        extra = {"exit": callback_context.state.get("route_" + nid)} if ntype == "code" else {}
+        _rec_node_complete(nid, name, ntype, output=callback_context.state.get("node_" + nid, ""), **extra)
+    return None
+
+
+def _attach_recording(agent) -> None:
+    """Every recorded node's agent gets the before/after callbacks, wherever it sits in the tree."""
+    if agent.name in NODE_META:
+        agent.before_agent_callback = _rec_before
+        agent.after_agent_callback = _rec_after
+    for sub in getattr(agent, "sub_agents", None) or []:
+        _attach_recording(sub)
 PY;
     }
 
@@ -1448,10 +1547,13 @@ class _DispatcherAgent(BaseAgent):
     {node_<dispatcher>} placeholder resolves to a task, never to a bare name.
     """
     route_key: str = ""
+    node_id: str = ""        # the dispatcher's node id and canvas name, for its run events
+    display: str = ""
     task_keys: list = []     # the dispatcher's own parent state keys, in canvas order
     menu: list = []          # [[child_id, display_name, agent_name], ...] in edge order
 
     async def _run_async_impl(self, ctx):
+        _rec_node_start(self.node_id, self.display, "agent")
         async for ev in self.sub_agents[0].run_async(ctx):
             yield ev
         reply = str(ctx.session.state.get(self.route_key, "") or "")
@@ -1475,6 +1577,7 @@ class _DispatcherAgent(BaseAgent):
             msg = (f"Error: dispatcher {self.name!r} did not route the request. "
                    f"Expected one of: {', '.join(names)}.")
             print(f"[node] [{self.name}] \u26a0 {msg}", flush=True)
+            _rec_node_complete(self.node_id, self.display, "agent", success=False, output=msg, error=msg)
             yield Event(
                 author=self.name,
                 content=types.Content(role="model", parts=[types.Part(text=msg)]),
@@ -1493,6 +1596,8 @@ class _DispatcherAgent(BaseAgent):
             content=types.Content(role="model", parts=[types.Part(text=text)]),
             actions=EventActions(state_delta={self.route_key: text}),
         )
+        _rec_node_complete(self.node_id, self.display, "agent", output=text,
+                           route={"id": str(chosen[0]), "name": str(chosen[1])})
         picked = next(a for a in self.sub_agents[1:] if a.name == str(chosen[2]))
         async for ev in picked.run_async(ctx):
             yield ev
@@ -1570,6 +1675,8 @@ PY;
             $entry .= "node_{$did}__dispatch = _DispatcherAgent(\n";
             $entry .= "    name=\"node_{$did}__dispatch\",\n";
             $entry .= "    route_key=\"node_{$did}\",\n";
+            $entry .= "    node_id=\"{$did}\",\n";
+            $entry .= '    display=' . PythonEmitHelpers::pyStr(self::displayName($analyzed, $did)) . ",\n";
             $entry .= "    task_keys={$taskKeysPy},\n";
             $entry .= "    menu=[" . implode(', ', $entries) . "],\n";
             $entry .= "    sub_agents=[" . implode(', ', $subs) . "],\n";
@@ -1639,7 +1746,8 @@ PY;
             }
         }
         $body = implode(",\n    ", $layerExprs);
-        return "root_agent = SequentialAgent(\n    name=\"workflow\",\n    sub_agents=[\n    {$body}\n    ],\n)";
+        return "root_agent = SequentialAgent(\n    name=\"workflow\",\n    sub_agents=[\n    {$body}\n    ],\n)\n"
+            . "_attach_recording(root_agent)   # run events for every recorded node (see RUN EVENTS)";
     }
 
     /**
@@ -1730,6 +1838,11 @@ PY;
             // no {node_<id>} to read, and the playbook interpreter falls back to
             // this key for the REQUEST it is asked to execute.
             "    adk_session = await session_service.create_session(app_name=\"workflow\", user_id=\"local\", state={\"user_prompt\": prompt})\n" .
+            "    _run_reset()\n" .
+            "    if START_NODE:\n" .
+            "        _rec_node_start(START_NODE[0], START_NODE[1], \"start\")\n" .
+            "        _rec_node_complete(START_NODE[0], START_NODE[1], \"start\", output=prompt)\n" .
+            "    outputs = {}   # the Output nodes' answers (the workflow's answer, when it has Output nodes)\n" .
             "    final = \"\"\n" .
             "    t0 = time.monotonic()\n" .
             "    seen = set()\n" .
@@ -1767,8 +1880,14 @@ PY;
             "                        print(f\"[{author}] {txt[:240]}\", flush=True)\n" .
             "            if event.is_final_response() and event.content and event.content.parts:\n" .
             "                final = event.content.parts[0].text or final\n" .
+            "                if author in OUTPUT_NODE_KEYS:\n" .
+            "                    outputs[author] = event.content.parts[0].text or \"\"\n" .
+            "        if OUTPUT_NODE_KEYS:   # the answer is what the Output nodes gave: none ran (nothing to do) = \"\"\n" .
+            "            final = \"\\n\\n---\\n\\n\".join(v for v in outputs.values() if v)\n" .
             "        print(f\"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars\", flush=True)\n" .
-            "    except Exception:\n" .
+            "    except Exception as e:\n" .
+            "        for _nid, (_name, _type) in list(_RUN[\"open\"].items()):   # a node that failed mid-run ends as failed\n" .
+            "            _rec_node_complete(_nid, _name, _type, success=False, error=f\"{type(e).__name__}: {e}\")\n" .
             "        print(\"[workflow] ERROR:\", flush=True)\n" .
             "        traceback.print_exc()\n" .
             "        raise\n" .
