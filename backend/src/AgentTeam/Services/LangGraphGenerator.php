@@ -340,7 +340,7 @@ class LangGraphGenerator
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
-                    : [], self::decisionDocLines($agentData), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, "{$safeName}_langgraph.py"),
+                    : [], self::decisionDocLines($agentData), self::mcpHeaderDocLines($facts), self::modeDocLines("{$safeName}_langgraph.py"), self::cronDocLines($facts, "{$safeName}_langgraph.py"),
                     self::watchDocLines($facts, "{$safeName}_langgraph.py")),
             ],
             'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
@@ -535,6 +535,7 @@ class LangGraphGenerator
         $lines[] = LangGraphRuntime::outputBlock();
         $lines[] = LangGraphRuntime::cronBlock();
         $lines[] = LangGraphRuntime::watchBlock();
+        $lines[] = LangGraphRuntime::listenerBlock();
 
         // ---------- start node config ----------
         $lines[] = '';
@@ -1377,6 +1378,15 @@ class LangGraphGenerator
             . ($w !== null ? " ({$w['server']}.{$w['tool']})" : ' (none saved: pass one)'),
             "python {$file} --watch 'outlook.wait_for_new {\"args\": {\"folder\": \"Inbox\"}}'   # or any server.tool + JSON arguments",
             '# --watch: the tool answers {"status": "ready" | "timeout"}; on ready the workflow runs and drains as a --cron tick does'];
+    }
+
+    /** TO RUN lines for the default mode and --once (single file and modular package: the entry files with choose_mode). */
+    private static function modeDocLines(string $file): array
+    {
+        return ["python {$file}                   # the Start's mode (prompt: one run; schedule: --cron; Start option: --watch)",
+            "python {$file} --once \"text\"     # one run on \"text\", even when the Start listens or is scheduled",
+            "python {$file} --quiet | --verbose   # print only each run's done / failed line | also each node's output",
+            '# runs/<date>_<run id>.jsonl: each real run\'s events (RUNS_DIR overrides); a quiet run (nothing to do) leaves none'];
     }
 
     /** DEFAULT_CRON's line: the baked schedule, or None. */
@@ -3736,7 +3746,7 @@ TXT;
              'usage' => 'python workflow.py "your prompt here"',
              'extra' => array_merge(!empty($facts['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]
-                 : [], self::cronDocLines($facts, 'workflow.py'), self::watchDocLines($facts, 'workflow.py')),
+                 : [], self::modeDocLines('workflow.py'), self::cronDocLines($facts, 'workflow.py'), self::watchDocLines($facts, 'workflow.py')),
              'env_path' => '../../.env'], null, true);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
@@ -3751,13 +3761,14 @@ TXT;
         $L[] = '"""';
         $L[] = 'from __future__ import annotations';
         $L[] = '';
-        $L[] = 'import argparse, asyncio, json, re, signal, sys, time';
+        $L[] = 'import argparse, asyncio, json, os, re, signal, sys, time';
         $L[] = 'from datetime import datetime, timedelta';
         $L[] = 'from typing import Callable';
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, NULL_RECORDER, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, NULL_RECORDER, ConsoleView, ErrorExitTaken, RunRecorder, WorkflowGraph, '
+            . 'is_quiet, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3817,6 +3828,7 @@ TXT;
         $L[] = '';
         $L[] = LangGraphRuntime::cronBlock();
         $L[] = LangGraphRuntime::watchBlock();
+        $L[] = LangGraphRuntime::listenerBlock();
         $L[] = self::modularRunnerBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
@@ -3832,6 +3844,8 @@ TXT;
 # ==============================================================
 NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
 GRAPH_RECORDER = NULL_RECORDER   # the run's RunRecorder; the program sets it before each run (trace reads it)
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # this program's folder: runs/, .run.lock
+RUNS_DIR = os.environ.get("RUNS_DIR") or os.path.join(PACKAGE_DIR, "runs")   # one JSONL log per run (RUNS_DIR overrides)
 
 
 async def _run_node_module(nid: str, request_text: str) -> dict:
@@ -3872,10 +3886,10 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
 # ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over the agent modules
 # ==============================================================
-def build_graph() -> WorkflowGraph:
-    """The workflow's graph (common.WorkflowGraph): agent nodes call their modules."""
+def build_graph(recorder: RunRecorder | None = None) -> WorkflowGraph:
+    """The workflow's graph (common.WorkflowGraph): agent nodes call their modules; `recorder` records the run."""
     return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents=AGENTS,
-                         run_node=_run_node_module, start_documents=START_DOCUMENTS)
+                         run_node=_run_node_module, start_documents=START_DOCUMENTS, recorder=recorder)
 
 
 async def run(user_prompt: str, session: str | None = None) -> str:
@@ -3888,49 +3902,80 @@ async def run(user_prompt: str, session: str | None = None) -> str:
     return await build_graph().run(user_prompt)
 
 
+def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder) -> Callable[[], str]:
+    """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
+    log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
+    run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
+    leaves no log and prints no block. Raises ErrorExitTaken when a code node took its error exit,
+    and whatever the run raised, once the failure is recorded."""
+    def run_once() -> str:
+        """One run (see make_run_once)."""
+        global GRAPH_RECORDER
+        ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
+        recorder.begin()
+        GRAPH_RECORDER = recorder
+        try:
+            graph = build_graph(recorder)
+            output = ev_loop.run_until_complete(graph.run(prompt))
+            if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
+                view.discard()
+                recorder.end(quiet=True)
+                return ""
+            if output:
+                if view.verbosity != "quiet":
+                    print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
+                saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                    workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+                if view.verbosity != "quiet":
+                    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
+            graph.check_error_exits()
+        except BaseException as e:
+            recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
+            recorder.end(quiet=False)
+            raise
+        recorder.complete(success=True, output=output)
+        recorder.end(quiet=False)
+        return output
+    return run_once
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r} (agents in separate files)",
                                  allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     when = ap.add_mutually_exclusive_group()
+    when.add_argument("--once", action="store_true", help="run once, even when the Start listens or is scheduled")
     when.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
                       help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
     when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER",
                       help="run whenever an MCP tool says something new arrived, until Ctrl-C "
-                           "(default: the Start node's event trigger; or 'server.tool {json args}')")
+                           "(default: the Start option's trigger; or 'server.tool {json args}')")
+    talk = ap.add_mutually_exclusive_group()
+    talk.add_argument("--quiet", action="store_true", help="print only each run's done / failed line")
+    talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
+    mode = choose_mode(a, START_MODE)
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
-
-    def run_once() -> str:
-        """One run: its output printed and saved ('' when it ended without one). A code node
-        that took its error exit raises ErrorExitTaken once the output is saved."""
-        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
-        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
-        graph = build_graph()
-        output = runs.loop.run_until_complete(graph.run(prompt))
-        if output:
-            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (LLM + skills)")
-        graph.check_error_exits()
-        return output
-
-    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron or --watch stops here, before any agent starts
-    watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)
+    view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
+    recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
+    run_once = make_run_once(prompt, runs, view, recorder)
     drains = any(ad["kind"] == "code" for ad in AGENTS.values())
-    match cron, watch:
-        case None, None:
-            try:
-                if not run_once():
-                    print("[info] The run ended without output (a branch ended).", flush=True)
-            except ErrorExitTaken as e:
-                sys.exit(f"[error] {e}")
-        case None, trigger:
-            run_watch(trigger, run_once, drains=drains, loop=runs)
-        case expr, _:
-            run_cron(expr, run_once, drains=drains, loop=runs)
+    # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
+    # stops here (exit 2), before any agent starts.
+    cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
+    watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
+    if mode == "once":
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        try:
+            if not run_once():
+                print("[info] The run ended without output (a branch ended).", flush=True)
+        except ErrorExitTaken as e:
+            sys.exit(f"[error] {e}")
+    else:
+        Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
+                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
 PY;
     }
 
@@ -4243,6 +4288,8 @@ PY;
 NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS, **CODE_NODES}.items()}
 NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
 GRAPH_RECORDER = NULL_RECORDER   # the run's RunRecorder; the program sets it before each run (trace reads it)
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # this program's folder: runs/, .run.lock
+RUNS_DIR = os.environ.get("RUNS_DIR") or os.path.join(PACKAGE_DIR, "runs")   # one JSONL log per run (RUNS_DIR overrides)
 
 
 async def _run_local_node(nid: str, request: str) -> dict:
@@ -4261,10 +4308,11 @@ async def _run_local_node(nid: str, request: str) -> dict:
     return out
 
 
-def build_graph() -> WorkflowGraph:
-    """The workflow's graph over this file's nodes (AGENTS, PLAYBOOKS and CODE_NODES, run in this process)."""
+def build_graph(recorder: RunRecorder | None = None) -> WorkflowGraph:
+    """The workflow's graph over this file's nodes (AGENTS, PLAYBOOKS and CODE_NODES, run in this process);
+    `recorder` records the run."""
     return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents={**AGENTS, **PLAYBOOKS, **CODE_NODES},
-                         run_node=_run_local_node, start_documents=START_DOCUMENTS)
+                         run_node=_run_local_node, start_documents=START_DOCUMENTS, recorder=recorder)
 
 
 async def run(user_prompt: str, graph: WorkflowGraph | None = None) -> str:
@@ -4283,48 +4331,79 @@ PY . $missingWarning . <<<'PY'
     return await (graph or build_graph()).run(user_prompt)
 
 
+def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder) -> Callable[[], str]:
+    """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
+    log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
+    run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
+    leaves no log and prints no block. Raises ErrorExitTaken when a code node took its error exit,
+    and whatever the run raised, once the failure is recorded."""
+    def run_once() -> str:
+        """One run (see make_run_once)."""
+        global GRAPH_RECORDER
+        ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
+        recorder.begin()
+        GRAPH_RECORDER = recorder
+        try:
+            graph = build_graph(recorder)
+            output = ev_loop.run_until_complete(run(prompt, graph))
+            if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
+                view.discard()
+                recorder.end(quiet=True)
+                return ""
+            if output:
+                if view.verbosity != "quiet":
+                    print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output)
+                saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                    workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+                if view.verbosity != "quiet":
+                    print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
+            graph.check_error_exits()
+        except BaseException as e:
+            recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
+            recorder.end(quiet=False)
+            raise
+        recorder.complete(success=True, output=output)
+        recorder.end(quiet=False)
+        return output
+    return run_once
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=f"LangGraph workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
     ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
     when = ap.add_mutually_exclusive_group()
+    when.add_argument("--once", action="store_true", help="run once, even when the Start listens or is scheduled")
     when.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
                       help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
     when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER",
                       help="run whenever an MCP tool says something new arrived, until Ctrl-C "
-                           "(default: the Start node's event trigger; or 'server.tool {json args}')")
+                           "(default: the Start option's trigger; or 'server.tool {json args}')")
+    talk = ap.add_mutually_exclusive_group()
+    talk.add_argument("--quiet", action="store_true", help="print only each run's done / failed line")
+    talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
+    mode = choose_mode(a, START_MODE)
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
-
-    def run_once() -> str:
-        """One run: its output printed and saved ('' when it ended without one). A code node
-        that took its error exit raises ErrorExitTaken once the output is saved."""
-        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
-        graph = build_graph()
-        output = runs.loop.run_until_complete(run(prompt, graph))
-        if output:
-            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output)
-            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node")
-        graph.check_error_exits()
-        return output
-
-    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron or --watch stops here, before any agent starts
-    watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)
+    view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
+    recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
+    run_once = make_run_once(prompt, runs, view, recorder)
     drains = bool(CODE_NODES)
-    match cron, watch:
-        case None, None:
-            try:
-                if not run_once():
-                    print("[info] The run ended without output (a branch ended).", flush=True)
-            except ErrorExitTaken as e:
-                sys.exit(f"[error] {e}")
-        case None, trigger:
-            run_watch(trigger, run_once, drains=drains, loop=runs)
-        case expr, _:
-            run_cron(expr, run_once, drains=drains, loop=runs)
+    # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
+    # stops here (exit 2), before any agent starts.
+    cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
+    watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
+    if mode == "once":
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        try:
+            if not run_once():
+                print("[info] The run ended without output (a branch ended).", flush=True)
+        except ErrorExitTaken as e:
+            sys.exit(f"[error] {e}")
+    else:
+        Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
+                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
 
 PY;
     }

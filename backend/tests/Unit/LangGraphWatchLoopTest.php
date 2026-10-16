@@ -425,8 +425,10 @@ PY);
         self::assertStringContainsString("DEFAULT_WATCH = {$default}\n", $code, $label);
         self::assertSame(1, substr_count($code, 'def run_watch('), $label);
         self::assertStringContainsString('when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER"', $code, $label);
-        self::assertStringContainsString('watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)', $code, $label);
-        self::assertStringContainsString('run_watch(trigger, run_once, drains=drains, loop=runs)', $code, $label);
+        // the Start's mode decides, and the loop runs in a Listener (standalone task 6)
+        self::assertStringContainsString('watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)', $code, $label);
+        self::assertStringContainsString('Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),', $code, $label);
+        self::assertStringContainsString('run_watch(self.trigger, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,', $code, $label);
         self::assertStringContainsString("python {$file} --watch ", $code, $label);
         $f = tempnam(sys_get_temp_dir(), 'wlc') . '.py';
         file_put_contents($f, $code);

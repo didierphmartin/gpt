@@ -475,11 +475,14 @@ PY);
         self::assertMatchesRegularExpression('~^import argparse, ~m', $code, $label);
         self::assertSame(1, substr_count($code, 'def run_cron('), $label);
         self::assertStringContainsString(($watch ? 'when' : 'ap') . '.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR"', $code, $label);
-        self::assertStringContainsString('CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)', $code, $label);
         if ($watch) {
+            // single file / modular: the Start's mode decides, and the loop runs in a Listener (standalone task 6)
+            self::assertStringContainsString('CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)', $code, $label);
             self::assertStringContainsString("    drains = {$drains}\n", $code, $label);
-            self::assertStringContainsString('run_cron(expr, run_once, drains=drains, loop=runs)', $code, $label);
+            self::assertStringContainsString('Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),', $code, $label);
+            self::assertStringContainsString('run_cron(self.cron_expr, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,', $code, $label);
         } else {
+            self::assertStringContainsString('CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)', $code, $label);
             self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=runs)", $code, $label);
         }
         self::assertMatchesRegularExpression('~^import argparse, asyncio, [a-z, ]*\bsignal\b~m', $code, $label);

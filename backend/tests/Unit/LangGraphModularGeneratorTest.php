@@ -207,7 +207,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $code = self::files()['workflow.py'];
         foreach (['"""LangGraph workflow: Dispatcher demo', 'from agents.techbuddy import run_node as techbuddy_run',
                   'from agents.playbook_hr import run_node as playbook_hr_run', 'from common import',
-                  'EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'def build_graph() -> WorkflowGraph:',
+                  'EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'def build_graph(recorder: RunRecorder | None = None) -> WorkflowGraph:',
                   'async def run(', 'save_output(', 'print_run_summary(',
                   'if __name__ == "__main__":', 'AGENT MODULES'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");

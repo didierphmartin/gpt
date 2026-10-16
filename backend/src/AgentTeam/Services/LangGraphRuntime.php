@@ -1303,19 +1303,24 @@ class LoopState:
         self.notify()
 
     def notify(self) -> None:
-        """Hand the state to each on_change listener (e.g. api.py's /live feed)."""
+        """Hand the state to each on_change listener (e.g. api.py's /live feed); one that raises is
+        reported and skipped, so a broken listener never stops the loop."""
         for listener in list(self.on_change):
-            listener(self)
+            try:
+                listener(self)
+            except Exception as e:  # noqa: BLE001 -- a broken listener must not break the loop
+                print(f"[warn] state listener failed: {e}", flush=True)
 
 
 class SingleInstance:
     """One loop per package: an exclusive, non-blocking flock on `path` (e.g. <package>/.run.lock)
-    for as long as the loop runs. Held by another process -> prints "[watch] already running
-    (<path>)" and sys.exit(0) (in a thread that only ends the thread). No path, or no fcntl
+    for as long as the loop runs. Held by another process -> the state (when given) becomes
+    "Not listening: already running (<path>)", tone off -- else "[watch] already running (<path>)"
+    is printed -- and sys.exit(0) (in a thread that only ends the thread). No path, or no fcntl
     (Windows): a no-op."""
 
-    def __init__(self, path: str | None, tag: str = "watch"):
-        self.path, self.tag, self.fh = path, tag, None
+    def __init__(self, path: str | None, tag: str = "watch", state: LoopState | None = None):
+        self.path, self.tag, self.state, self.fh = path, tag, state, None
 
     def __enter__(self):
         if self.path is None or fcntl is None:
@@ -1326,7 +1331,11 @@ class SingleInstance:
         except OSError:
             self.fh.close()
             self.fh = None
-            print(f"[{self.tag}] already running ({self.path})", flush=True)
+            if self.state is not None:
+                self.state.tag = self.tag
+                self.state.set(f"Not listening: already running ({self.path})", "off")
+            if self.state is None or not self.state.echo:
+                print(f"[{self.tag}] already running ({self.path})", flush=True)
             sys.exit(0)
         return self
 
@@ -1546,7 +1555,7 @@ def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: 
     the loop's state line; `lock_path` (e.g. <package>/.run.lock) keeps a second copy from starting.
     May run in a thread (api.py's listener): it then installs no signal handler.
     """
-    with SingleInstance(lock_path, "cron"):
+    with SingleInstance(lock_path, "cron", state):
         CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
                  state=state, stop=stop).run(ticks)
 
@@ -1746,9 +1755,106 @@ def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: boo
     """Run the workflow each time `trigger` answers ready, until Ctrl-C, SIGTERM or `stop`. drains,
     max_runs, loop, state and lock_path as in run_cron(). May run in a thread (api.py's listener):
     it then installs no signal handler."""
-    with SingleInstance(lock_path, "watch"):
+    with SingleInstance(lock_path, "watch", state):
         WatchLoop(trigger, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
                   state=state, stop=stop).run(calls)
+
+
+PY;
+    }
+
+    /**
+     * The program's mode (spec 2026-10-15 §2): choose_mode() picks one run, --cron or --watch from
+     * the flags and the Start's baked START_MODE; Listener runs the cron or watch loop, either in
+     * the foreground (run_blocking(): workflow.py's default mode) or in a daemon thread that a
+     * stop event ends (start()/stop(): api.py). A thread installs no signal handler (R3). Emitted
+     * after watchBlock(), whose run_watch/run_cron, LoopState and WatchTrigger it uses; the entry
+     * file supplies json, threading and datetime.
+     */
+    public static function listenerBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# MODE AND LISTENER
+# choose_mode(): one run, --cron or --watch, from the flags and the
+# Start's mode. Listener runs the cron or watch loop: in the foreground
+# (run_blocking, Ctrl-C / SIGTERM stop it) or in a background thread
+# (start / stop, e.g. api.py), with a lock so one copy listens.
+# ==============================================================
+
+
+def choose_mode(args, start_mode: str) -> str:
+    """"once" | "cron" | "watch": a flag decides, then a prompt given on the command line (one run),
+    then the Start's mode (prompt -> one run)."""
+    if args.once:
+        return "once"
+    if args.cron is not None:
+        return "cron"
+    if args.watch is not None:
+        return "watch"
+    if args.prompt:
+        return "once"
+    return start_mode if start_mode in ("cron", "watch") else "once"
+
+
+class Listener:
+    """The cron or watch loop of the workflow: run_blocking() in this thread, or start()/stop() in a
+    daemon thread. `state` carries the loop's state line; `lock_path` keeps a second copy out."""
+
+    def __init__(self, mode: str, run_once: Callable[[], str], *, drains: bool, loop: RunLoop | None,
+                 cron_expr: str | None, trigger: "WatchTrigger | None", state: LoopState, lock_path: str | None,
+                 max_runs: int = 20):
+        if mode not in ("cron", "watch"):
+            raise ValueError(f"a Listener runs --cron or --watch, not {mode!r}")
+        if (mode == "cron" and not cron_expr) or (mode == "watch" and trigger is None):
+            raise ValueError(f"{mode} needs its " + ("cron expression" if mode == "cron" else "trigger"))
+        self.mode, self.run_once, self.drains, self.loop = mode, run_once, drains, loop
+        self.cron_expr, self.trigger, self.state, self.lock_path = cron_expr, trigger, state, lock_path
+        self.max_runs = max_runs
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._guard = threading.Lock()
+
+    @property
+    def running(self) -> bool:
+        """The background loop is alive (False for run_blocking, and once a stop has taken effect)."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def banner(self, now: datetime | None = None) -> str:
+        """The startup line naming the mode."""
+        if self.mode == "cron":
+            due = cron_next(self.cron_expr, now or datetime.now())
+            return f"Scheduled: {self.cron_expr} — next run {due:%Y-%m-%d %H:%M} (Ctrl-C to stop)"
+        args = json.dumps(self.trigger.args, ensure_ascii=False, separators=(",", ":"))
+        return f"Listening for events: {self.trigger} {args} (Ctrl-C to stop)"
+
+    def _loop(self) -> None:
+        """The loop itself, in the calling thread; a held lock sets the state and ends it (SystemExit 0)."""
+        if self.mode == "cron":
+            run_cron(self.cron_expr, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
+                     state=self.state, stop=self._stop_event, lock_path=self.lock_path)
+        else:
+            run_watch(self.trigger, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
+                      state=self.state, stop=self._stop_event, lock_path=self.lock_path)
+
+    def run_blocking(self) -> None:
+        """The program's default mode: the banner, then the loop in this thread until Ctrl-C or SIGTERM."""
+        print(self.banner(), flush=True)
+        self._loop()
+
+    def start(self) -> None:
+        """Run the loop in a daemon thread; does nothing while it already runs."""
+        with self._guard:
+            if self.running:
+                return
+            self._stop_event = threading.Event()
+            print(self.banner(), flush=True)
+            self._thread = threading.Thread(target=self._loop, name=f"listener-{self.mode}", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        """Ask the loop to stop; returns at once (the loop ends after the current trigger call or run)."""
+        self._stop_event.set()
 
 
 PY;
