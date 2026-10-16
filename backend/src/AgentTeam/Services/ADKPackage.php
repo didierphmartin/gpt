@@ -122,6 +122,20 @@ final class ADKPackage
             $L[] = '# No LLM provider is used by a node of this workflow.';
         }
         $L[] = '';
+        $decision = [];
+        foreach ((array) ($analyzed['decisions'] ?? []) as $d) {
+            foreach ($d['decision'] as $c) {
+                $decision[(string) $c['key_env']] = (string) $c['url_env'];
+            }
+        }
+        if ($decision) {
+            $L[] = '# Decision models the dispatchers may route with (each URL variable is optional: a gateway)';
+            foreach ($decision as $key => $url) {
+                $L[] = "# {$key}=";
+                $L[] = "# {$url}=";
+            }
+            $L[] = '';
+        }
         $slugs = $analyzed['serverSlugs'] ?? [];
         if ($slugs) {
             $L[] = '# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)';

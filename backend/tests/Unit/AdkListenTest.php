@@ -152,4 +152,18 @@ PY;
         self::assertSame(0, $rc, implode("\n", $out));
         self::assertSame('Listener watch', end($out));
     }
+
+    public function testEnvExampleNamesTheDecisionKeys(): void
+    {
+        $a = AdkCodeNodeTest::wf64Analyzed();
+        $a['decisions'] = ['2' => ['decision_question' => 'q', 'routing_mode' => 'jev', 'unclear_branch' => '', 'min_confidence' => 0.6,
+            'decision' => [['provider' => 'jev', 'protocol' => 'typesafe', 'url' => 'https://x', 'model' => 'jev-latest',
+                'key_env' => 'JEV_API_KEY', 'url_env' => 'JEV_BASE_URL']]]];
+        $env = array_column(\AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir()), 'code', 'path')['.env.example'];
+        self::assertStringContainsString("# JEV_API_KEY=\n# JEV_BASE_URL=", $env);
+        $code = ADKGenerator::emitAdk($a);
+        self::assertStringContainsString('routing_mode="jev",', $code);
+        self::assertStringContainsString('class JevRouter:', $code);
+        self::assertStringContainsString('DECISION_ADAPTERS = {', $code);
+    }
 }

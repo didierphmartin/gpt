@@ -337,10 +337,18 @@ PY;
      */
     public static function dispatcherBlock(array $protocols): string
     {
+        return self::decisionAdaptersBlock($protocols) . self::dispatcherClasses();
+    }
+
+    /**
+     * DecisionResult, one adapter class per protocol and DECISION_ADAPTERS: standard library only (no
+     * framework), so a target without LangChain (ADK) copies it as is. Needs dataclass/field, json, os, time.
+     */
+    public static function decisionAdaptersBlock(array $protocols): string
+    {
         return self::decisionHead()
             . implode('', array_map(fn(string $p) => self::adapterBlock($p), $protocols))
-            . self::adaptersTable($protocols)
-            . self::dispatcherClasses();
+            . self::adaptersTable($protocols);
     }
 
     /** Python adapter class per decision protocol: the runtime twin of DecisionProtocols' 'adapter'. */

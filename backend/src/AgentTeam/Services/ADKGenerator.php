@@ -124,6 +124,12 @@ class ADKGenerator
             }
         }
         $analyzed['serverSlugs'] = self::serverSlugs($urlName);
+        // Each dispatcher's decision-model routing (Jev...), baked: the program never reads the database.
+        $analyzed['decisions'] = [];
+        foreach (array_keys(WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus']) as $did) {
+            $analyzed['decisions'][(string) $did] = DispatcherDecisionFacts::of($this->db, $this->agentRepo,
+                (array) $analyzed['byId'][$did], (string) $analyzed['workflow']['name']);
+        }
         $ordered = array_map(fn($id) => ['id' => (string) $id] + (array) $analyzed['byId'][$id], (array) $analyzed['order']);
         $analyzed += StartTriggerFacts::of($this->db, $workflowId, $ordered, $analyzed['serverSlugs']);
         return $analyzed;
@@ -250,6 +256,15 @@ class ADKGenerator
                 'node names ONE child and only that child runs. Its menu is',
                 'nested here, which is why those children are absent from the',
                 'topological layers below.');
+            $protocols = [];
+            foreach ((array) ($analyzed['decisions'] ?? []) as $d) {
+                foreach ($d['decision'] as $c) {
+                    $protocols[$c['protocol']] = true;
+                }
+            }
+            $lines[] = "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
+                . LangGraphRuntime::decisionAdaptersBlock(array_values(array_intersect(array_keys($protocols),
+                    array_keys(LangGraphRuntime::ADAPTER_CLASSES))));
             $lines[] = self::dispatcherAgentBlock();
             $lines[] = $dispatchers;
         }
@@ -1729,11 +1744,38 @@ class _DispatcherAgent(BaseAgent):
     route_key: str = ""
     node_id: str = ""        # the dispatcher's node id and canvas name, for its run events
     display: str = ""
+    routing_mode: str = ""   # "llm", a decision provider key, or "" (the first provider with a key set, else llm)
+    decision: list = []      # the decision providers compiled in: [{provider, protocol, url, model, key_env, url_env}]
+    decision_question: str = ""
+    min_confidence: float = 0.6
+    unclear_branch: str = ""   # the branch (by name) a not-classified request goes to; "" = stop there
     task_keys: list = []     # the dispatcher's own parent state keys, in canvas order
     menu: list = []          # [[child_id, display_name, agent_name], ...] in edge order
 
+    def _router(self, provider: str):
+        """The decision adapter for one compiled provider, None when it was not compiled in or has no adapter."""
+        c = next((c for c in self.decision if c["provider"] == provider), None)
+        cls = DECISION_ADAPTERS.get(c["protocol"]) if c else None
+        return cls(key_env=c["key_env"], url_env=c["url_env"], url=c["url"], model=c["model"]) if cls else None
+
+    def _mode(self) -> str:
+        """"llm", or the decision provider this run routes with (GraphWorkflowRunner's rule): a key routes with
+        that provider only (no model fallback); unset takes the first compiled provider whose key is set."""
+        if self.routing_mode:
+            return self.routing_mode
+        for c in self.decision:
+            r = self._router(c["provider"])
+            if r is not None and r.available():
+                return c["provider"]
+        return "llm"
+
     async def _run_async_impl(self, ctx):
         _rec_node_start(self.node_id, self.display, "agent")
+        mode = self._mode()
+        if mode != "llm":
+            async for ev in self._run_decision(ctx, mode):
+                yield ev
+            return
         async for ev in self.sub_agents[0].run_async(ctx):
             yield ev
         reply = str(ctx.session.state.get(self.route_key, "") or "")
@@ -1778,6 +1820,59 @@ class _DispatcherAgent(BaseAgent):
         )
         _rec_node_complete(self.node_id, self.display, "agent", output=text,
                            route={"id": str(chosen[0]), "name": str(chosen[1])})
+        picked = next(a for a in self.sub_agents[1:] if a.name == str(chosen[2]))
+        async for ev in picked.run_async(ctx):
+            yield ev
+
+    async def _run_decision(self, ctx, key: str):
+        """Decision model `key` only (no LLM turn): routed -> that child; unclear / low confidence -> the
+        unclear branch when set, else the run stops here ("Not classified"); anything else stops it (Error)."""
+        st = ctx.session.state
+        task = "\n\n".join(str(st.get(k, "")) for k in self.task_keys
+                           if str(st.get(k, "")).strip()) or str(st.get("user_prompt", ""))
+        targets = [{"id": str(e[0]), "name": str(e[1]), "description": ""} for e in self.menu]
+        router = self._router(key)
+        if router is None:
+            res = DecisionResult("unavailable", reason=f"'{key}' is not an available decision provider")
+        else:
+            try:
+                res = await asyncio.wait_for(asyncio.to_thread(router.route, task, targets, self.decision_question,
+                                                               self.min_confidence), router.TIMEOUT_S + 1)
+            except Exception as e:   # a timeout included: an 'error' outcome (did not route)
+                res = DecisionResult("error", reason=f"{type(e).__name__}: no answer within {router.TIMEOUT_S + 1}s"
+                                     if isinstance(e, asyncio.TimeoutError) else str(e))
+        conf = f"{res.confidence:.2f}" if res.confidence is not None else "?"
+        not_classified = res.outcome in ("unclear", "low_confidence")
+        chosen = None
+        if res.outcome == "routed":
+            chosen = next((e for e in self.menu if str(e[0]) == str(res.target["id"])), None)
+            print(f"[node] [{self.name}] {key} routed to {res.target['name']!r} (confidence {conf}, {res.ms}ms, no LLM turn)",
+                  flush=True)
+        elif not_classified and self.unclear_branch:
+            chosen = next((e for e in self.menu if str(e[1]) == self.unclear_branch), None)
+            if chosen is not None:
+                print(f"[node] [{self.name}] {key} did not classify ({res.outcome}: {res.reason}, confidence {conf})"
+                      f" -- sent to the unclear branch {self.unclear_branch!r}", flush=True)
+        if chosen is None:
+            msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{self.display}" did not route the '
+                   f"request ({key}: {res.outcome}: {res.reason}).")
+            print(f"[node] [{self.name}] \u26a0 {msg}", flush=True)
+            _rec_node_complete(self.node_id, self.display, "agent", success=not_classified, output=msg,
+                               **({} if not_classified else {"error": msg}))
+            yield Event(
+                author=self.name,
+                content=types.Content(role="model", parts=[types.Part(text=msg)]),
+                actions=EventActions(state_delta={self.route_key: msg}),
+                turn_complete=True,
+            )
+            return
+        _rec_node_complete(self.node_id, self.display, "agent", output=task,
+                           route={"id": str(chosen[0]), "name": str(chosen[1])})
+        yield Event(
+            author=self.name,
+            content=types.Content(role="model", parts=[types.Part(text=task)]),
+            actions=EventActions(state_delta={self.route_key: task}),
+        )
         picked = next(a for a in self.sub_agents[1:] if a.name == str(chosen[2]))
         async for ev in picked.run_async(ctx):
             yield ev
@@ -1857,6 +1952,14 @@ PY;
             $entry .= "    route_key=\"node_{$did}\",\n";
             $entry .= "    node_id=\"{$did}\",\n";
             $entry .= '    display=' . PythonEmitHelpers::pyStr(self::displayName($analyzed, $did)) . ",\n";
+            $dec = $analyzed['decisions'][$did] ?? null;
+            if ($dec !== null) {
+                $entry .= '    routing_mode=' . PythonEmitHelpers::pyStr($dec['routing_mode']) . ",\n";
+                $entry .= '    decision=' . ($dec['decision'] === [] ? '[]' : PythonEmitHelpers::jsonToPython($dec['decision'])) . ",\n";
+                $entry .= '    decision_question=' . PythonEmitHelpers::pyStr($dec['decision_question']) . ",\n";
+                $entry .= '    min_confidence=' . var_export((float) $dec['min_confidence'], true) . ",\n";
+                $entry .= '    unclear_branch=' . PythonEmitHelpers::pyStr($dec['unclear_branch']) . ",\n";
+            }
             $entry .= "    task_keys={$taskKeysPy},\n";
             $entry .= "    menu=[" . implode(', ', $entries) . "],\n";
             $entry .= "    sub_agents=[" . implode(', ', $subs) . "],\n";

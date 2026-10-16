@@ -38,15 +38,15 @@ class AdkCodeNodeE2ETest extends TestCase
         }
     }
 
-    private function startServer(bool $empty = false): void
+    private function startServer(bool $empty = false, string $mode = ''): void
     {
         $sock = stream_socket_server('tcp://127.0.0.1:0');
         $port = (int) substr(strrchr(stream_socket_get_name($sock, false), ':'), 1);
         fclose($sock);
         $this->log = sys_get_temp_dir() . '/adk_e2e_' . bin2hex(random_bytes(4)) . '.jsonl';
         $args = ['python3', dirname(__DIR__) . '/fixtures/fake_mcp_server.py', (string) $port, $this->log];
-        if ($empty) {
-            $args[] = 'empty';
+        if ($empty || $mode !== '') {
+            $args[] = $empty ? 'empty' : $mode;
         }
         $this->server = proc_open($args, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
         $this->url = "http://127.0.0.1:{$port}";
@@ -249,6 +249,10 @@ class AdkCodeNodeE2ETest extends TestCase
         self::assertSame(['1', '10', '3', '5'], array_map('strval', array_keys($completed)));
         self::assertSame('new_mail', $completed['10']['exit']);
         self::assertSame('start', $completed['1']['node_type']);
+        // the drain runs again at once; that quiet run's file exists while it runs, then goes
+        for ($i = 0; $i < 50 && count(glob("$dir/runs/*.jsonl")) !== 1; $i++) {
+            usleep(200000);
+        }
         self::assertCount(1, glob("$dir/runs/*.jsonl"), 'the drain\'s second, quiet run leaves no file');
         self::assertCount(1, array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
         // GET /live streams the run to the canvas
@@ -281,5 +285,92 @@ class AdkCodeNodeE2ETest extends TestCase
         sleep(2);   // the run after the wake has ended
         self::assertSame([], glob("$dir/runs/*.jsonl") ?: [], 'a quiet run leaves no run file');
         self::assertMatchesRegularExpression('/"listening":\\s*true/', self::live($base, 2));
+    }
+
+    /** Start -> trigger T -> dispatcher D (Jev) -> code A | code B -> Output; no LLM turn at all. */
+    private function jevAnalyzed(string $unclearBranch = ''): array
+    {
+        $file = "def run(input, call_tool):\n    call_tool('outlook', 'move_mail', {'id': input['id'], 'folder': 'Inbox/' + NODE_NAME})\n"
+            . "    return 'filed ' + input['subject']\n";
+        $trigger = "def run(input, call_tool):\n    m = call_tool('outlook', 'next_mail', {})\n"
+            . "    return {'route': 'new_mail' if m else 'no_mail', 'output': m}\n";
+        $code = fn(string $id, string $name, string $src, array $exits) => ['id' => $id, 'type' => 'code',
+            'config' => ['type' => 'code', 'name' => $name, 'code' => $src, 'exits' => $exits, 'mcp_servers' => ['Outlook'], 'timeout_s' => 30]];
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
+            $code('10', 'T', $trigger, ['new_mail', 'no_mail']),
+            ['id' => '2', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'D', 'agent_type' => 'dispatcher', 'provider' => 'claude', 'model' => 'm']],
+            $code('3', 'A', $file, ['next']),
+            $code('4', 'B', $file, ['next']),
+            ['id' => '5', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [
+            ['from' => '1', 'to' => '10', 'from_port' => 'output_1'], ['from' => '10', 'to' => '2', 'from_port' => 'output_1'],
+            ['from' => '2', 'to' => '3'], ['from' => '2', 'to' => '4'], ['from' => '3', 'to' => '5'], ['from' => '4', 'to' => '5'],
+        ]];
+        $a = array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 98, 'name' => 'adk jev'], 'usedCatalog' => [], 'usedServers' => [],
+            'serverSlugs' => [$this->url => 'outlook'], 'startPrompt' => 'go', 'startDocuments' => [], 'playbooks' => [],
+            'agents' => ['2' => ['name' => 'D', 'systemPrompt' => 'Route the email.', 'provider' => 'claude', 'model' => 'm',
+                'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '', 'output_schema_id' => null, 'documents' => []]],
+            'decisions' => ['2' => ['decision_question' => 'Which team handles this email?', 'routing_mode' => 'jev',
+                'unclear_branch' => $unclearBranch, 'min_confidence' => 0.6,
+                'decision' => [['provider' => 'jev', 'protocol' => 'typesafe', 'url' => $this->url . '/systemone',
+                    'model' => 'jev-latest', 'key_env' => 'JEV_API_KEY', 'url_env' => 'JEV_BASE_URL']]]],
+        ]);
+        $byId = array_column($graph['nodes'], null, 'id');
+        $a['code'] = [];
+        foreach (['10', '3', '4'] as $cid) {
+            $a['code'][$cid] = CodeNodeEmit::nodeData($byId[$cid], $graph['edges'], ['outlook' => $this->url], array_keys($byId));
+        }
+        return $a;
+    }
+
+    private function runJev(array $analyzed): array
+    {
+        $dir = sys_get_temp_dir() . '/adk_jev_' . bin2hex(random_bytes(4));
+        mkdir($dir);
+        file_put_contents("$dir/workflow.py", ADKGenerator::emitAdk($analyzed));
+        file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\nJEV_API_KEY=jev-test-key\n");
+        $proc = proc_open([self::PY, 'workflow.py', 'go'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
+            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')]);
+        $text = (string) stream_get_contents($pipes[1]);
+        $rc = proc_close($proc);
+        fwrite(STDERR, "\n--- ADK Jev output ($dir) ---\n$text\n");
+        return [$rc, $text];
+    }
+
+    public function testJevRoutesWithoutAnLlmTurn(): void
+    {
+        $this->startServer(false, 'claim');
+        [$rc, $text] = $this->runJev($this->jevAnalyzed());
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString("jev routed to 'B' (confidence 0.97", $text);
+        $jev = array_values(array_filter($this->calls(), fn($c) => ($c['method'] ?? '') === 'jev'));
+        self::assertCount(1, $jev);
+        self::assertSame('Bearer jev-test-key', $jev[0]['headers']['authorization']);
+        self::assertSame(['A', 'B', 'unclear'], $jev[0]['criteria']);
+        self::assertStringContainsString('my car claim', $jev[0]['request']);   // the trigger's email, not a prompt
+        $moves = array_values(array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
+        self::assertSame('Inbox/B', $moves[0]['args']['folder'] ?? null);
+        self::assertCount(1, $moves);
+    }
+
+    public function testUnclearStopsAsNotClassified(): void
+    {
+        $this->startServer();   // "test 50": no "claim" -> the fake Jev answers unclear
+        [$rc, $text] = $this->runJev($this->jevAnalyzed());
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('Not classified: dispatcher "D" did not route the request (jev: unclear', $text);
+        self::assertSame([], array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
+    }
+
+    public function testUnclearGoesToTheUnclearBranch(): void
+    {
+        $this->startServer();
+        [$rc, $text] = $this->runJev($this->jevAnalyzed('A'));
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString("sent to the unclear branch 'A'", $text);
+        $moves = array_values(array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
+        self::assertSame('Inbox/A', $moves[0]['args']['folder'] ?? null);
     }
 }

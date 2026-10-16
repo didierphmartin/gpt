@@ -8,11 +8,26 @@ NEXT = [0]    # next_mail calls so far
 WAITS = [0]   # wait_for_new: "ready" on the first call, then a 1 s wait and "timeout"
 if len(sys.argv) > 3 and sys.argv[3] == "empty":
     RESULTS["next_mail"] = None   # no new mail: the tool answers null
+if len(sys.argv) > 3 and sys.argv[3] == "claim":
+    RESULTS["next_mail"] = {"subject": "my car claim", "id": "m2"}
 
 
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path.endswith("/systemone"):   # a fake TypeSafe Jev: "claim" in the request -> B, else unclear
+            with open(LOG, "a") as f:
+                f.write(json.dumps({"method": "jev", "request": req.get("state", {}).get("request"),
+                                    "criteria": sorted(req["questions"]["route"]["criteria"]),
+                                    "headers": {k.lower(): v for k, v in self.headers.items()}}) + "\n")
+            choice = "B" if "claim" in str(req.get("state", {}).get("request", "")) else "unclear"
+            data = json.dumps({"answers": {"route": {"choice": choice, "confidence": 0.97}}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         params = req.get("params") or {}
         with open(LOG, "a") as f:
             f.write(json.dumps({"method": req.get("method"), "tool": params.get("name"), "args": params.get("arguments"),
