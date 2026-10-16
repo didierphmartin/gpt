@@ -734,7 +734,21 @@ class LangGraphGenerator
         }
 
         // Only what Start reaches is the workflow: unconnected canvas nodes stay out.
-        $graph = WorkflowGraphAnalyzer::reachableGraph($this->graphRepo->getGraph($workflowId));
+        $graph = GraphWorkflowRunner::configuredTemplatesAsAgents(
+            WorkflowGraphAnalyzer::reachableGraph($this->graphRepo->getGraph($workflowId)));
+        // The server runner's node rules (spec 2026-10-15 §7): a template it would refuse, and any type
+        // nothing runs, are compile errors -- not a silent no-op in the compiled graph.
+        foreach ($graph['nodes'] ?? [] as $n) {
+            $t = self::nodeType($n);
+            if ($t === 'agent-template') {
+                throw new RuntimeException('Unconfigured agent template node found: ' . self::displayName($n)
+                    . ' — pick an agent or fill in its instructions.');
+            }
+            if (!in_array($t, ['start', 'agent', 'playbook', 'code', 'output'], true)) {
+                throw new RuntimeException('Node "' . self::displayName($n) . '" (' . $t . ') cannot be compiled: '
+                    . 'LangGraph runs start, agent, playbook, code and output nodes.');
+            }
+        }
         // Route pure graph analysis through WorkflowGraphAnalyzer.
         // Returns: byId, order (Kahn topo), edges (normalised), startNodeId.
         $gdata   = WorkflowGraphAnalyzer::analyzeGraph($graph);

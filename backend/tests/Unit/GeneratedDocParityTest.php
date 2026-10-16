@@ -101,7 +101,7 @@ class GeneratedDocParityTest extends TestCase
             }
             $this->assertMatchesRegularExpression('/Generated:  \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+ by the SynergyAI workflow editor/', $doc, $target);
             // Uniform per-node comment block before every agent definition.
-            $this->assertStringContainsString('# ---- node 2: techBuddy (agent-template) ', $code, $target);
+            $this->assertStringContainsString('# ---- node 2: techBuddy (' . ($target === 'LangGraph' ? 'agent' : 'agent-template') . ') ', $code, $target);
             $this->assertStringContainsString('#   provider/model : claude / claude-sonnet-4-5   temp 0.7   max_tokens 4096   thinking default', $code, $target);
             $this->assertStringContainsString('#   dispatcher     : routes to one of: IT claims | Human resources', $code, $target);
             $this->assertStringContainsString('#   children       : IT claims (3) | Human resources (4)', $code, $target);

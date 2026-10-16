@@ -140,10 +140,11 @@ class LangGraphArchitectureDocTest extends TestCase
         $this->assertStringNotContainsString('choice', $linear);
     }
 
-    /** An ingestion pipeline is not an agent graph: its single-file result carries no architecture doc (null, key kept). */
-    public function testIngestionWorkflowGetsNoArchitectureDoc(): void
+    /** An ingestion pipeline is not an agent graph: the node rules (Task 2) refuse it at compile time rather than emit a no-op loader. */
+    public function testIngestionWorkflowIsRefused(): void
     {
-        $r = $this->generate([
+        $this->expectExceptionMessage('Node "node_2" (loader) cannot be compiled: LangGraph runs start, agent, playbook, code and output nodes.');
+        $this->generate([
             'nodes' => [
                 ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start']],
                 ['id' => '2', 'node_type' => 'loader', 'config' => ['type' => 'loader']],
@@ -151,9 +152,6 @@ class LangGraphArchitectureDocTest extends TestCase
             ],
             'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3']],
         ], 'single');
-        $this->assertSame(['filename', 'code', 'architecture'], array_keys($r));
-        $this->assertNull($r['architecture']);
-        $this->assertNotSame('', $r['code'], 'the script itself is still generated');
     }
 
     /**

@@ -168,7 +168,7 @@ class LangGraphModularGeneratorTest extends TestCase
         $code = self::files()['agents/it_claims.py'];
         foreach (['"""Agent module "IT claims" -- node 3 of workflow "Dispatcher demo"',
                   'from common import', 'run_node = make_node(NODE).run', 'NODE = {', '"kind": "agent"',
-                  '# ---- node 3: IT claims (agent-template)', '<== this module'] as $needle) {
+                  '# ---- node 3: IT claims (agent)', '<== this module'] as $needle) {
             $this->assertStringContainsString($needle, $code, "missing: {$needle}");
         }
         $this->assertStringContainsString('"tool_names": ["get_news","run_skill_script"]', $code);
