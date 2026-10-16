@@ -165,11 +165,22 @@ v = ConsoleView(verbosity="quiet", out=lines.append, now=lambda: datetime(2026, 
 r = RunRecorder(None, 44, "W", listeners=[v])
 r.begin(); r.node_complete("23", "claims", "agent", output="y"); r.complete(success=False, error="boom")
 assert lines == ["[10:42] Failed: boom"], lines
-lines.clear()
-r.begin(); r.node_complete("1000000017", "T", "code", exit="no_mail"); v.discard()
-assert lines == []
+# discard() on a normal view: the buffer is real, and discarding it prints nothing
+lines = []
+v = ConsoleView(out=lines.append, now=lambda: datetime(2026, 10, 15, 10, 42))
+r = RunRecorder(None, 44, "W", listeners=[v])
 r.begin()
-assert v.buffered == []   # a new run starts clean
+r.node_complete("1000000017", "T", "code", output="From: a@b.c", exit="new_mail")
+r.node_complete("23", "claims", "agent", output="y")
+assert len(v.buffered) == 2 and lines == [], (v.buffered, lines)
+v.discard()
+assert v.buffered == [] and lines == [], (v.buffered, lines)
+# a run left uncompleted: the next begin() clears its lines, which never print
+r.begin()
+r.node_complete("23", "claims", "agent", output="y")
+assert len(v.buffered) == 1 and lines == []
+r.begin()
+assert v.buffered == [] and lines == [], (v.buffered, lines)
 print("ok")
 PY);
     }
