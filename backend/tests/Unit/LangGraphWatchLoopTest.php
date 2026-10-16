@@ -153,6 +153,22 @@ PY);
                           'tool_error | quota', 'bad_answer | expected {"status": "ready" | "timeout"}, got \'{"status": "later"}\''], $out);
     }
 
+    /** Plan task 8 (found by api.py's listen test): McpClient.call_tool_raw turns a refused connection into an
+     *  isError result marked transport_error instead of raising -- that is "server unreachable", not a tool error. */
+    public function testTheClientsTransportFailureIsUnreachable(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([{"isError": True, "transport_error": True, "content": [{"type": "text", "text": "[Errno 61] Connection refused"}]}])
+try:
+    TRIGGER.wait()
+except WatchError as e:
+    print(e.kind, "|", e)
+PY);
+        self::assertSame(['unreachable | [Errno 61] Connection refused'], $out);
+        self::assertStringContainsString('return {"isError": True, "transport_error": True, "content": [{"type": "text", "text": str(e)}]}',
+            \AgentTeam\Services\LangGraphRuntime::mcpClientBlock());
+    }
+
     public function testBackoffDoublesToFiveMinutesAndResets(): void
     {
         $this->py(<<<'PY'

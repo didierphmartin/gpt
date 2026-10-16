@@ -51,7 +51,9 @@ api = importlib.import_module("api")
 
 # The graph really is the two-agent one, and api.py really is driving it.
 assert [n for n, t in workflow.NODE_TYPES.items() if t == "agent"] == ["2", "3"], workflow.NODE_TYPES
-assert api.run_workflow is workflow.run, "api.py is not driving the compiled graph"
+# A listening api.py (the modular package) drives it through a wrapper that takes turns with the
+# listener's runs; _run_graph is what that wrapper calls.
+assert getattr(api, "_run_graph", api.run_workflow) is workflow.run, "api.py is not driving the compiled graph"
 
 from starlette.testclient import TestClient
 

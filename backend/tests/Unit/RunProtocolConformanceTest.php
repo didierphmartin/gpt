@@ -20,7 +20,7 @@ class RunProtocolConformanceTest extends TestCase
     {
         $root = CompiledRunServerTest::writePackage();
         $probe = __DIR__ . '/../fixtures/compiled/conformance_probe.py';
-        exec('python3 ' . escapeshellarg($probe) . ' ' . escapeshellarg($root)
+        exec(CompiledRunServerTest::python() . ' ' . escapeshellarg($probe) . ' ' . escapeshellarg($root)
             . ' ' . escapeshellarg(__DIR__ . '/../../schema/run-protocol-v1.json') . ' 2>&1', $out, $rc);
         $this->assertSame(0, $rc, implode("\n", $out));
     }

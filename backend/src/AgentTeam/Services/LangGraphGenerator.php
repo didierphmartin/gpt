@@ -2671,7 +2671,7 @@ PY;
             // (not copied): a swarm shares the shared runtime and run server
             // verbatim with the modular workflow path.
             ['path' => 'common.py', 'code' => $this->emitModularCommon($facts, $layout, true)],
-            ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout)],
+            ['path' => 'api.py', 'code' => $this->emitModularApi($facts, $layout, false)],
             // A REGULAR package, not a namespace portion. Without __init__.py,
             // `import agents.<member>` loses to any installed top-level `agents`
             // package -- openai-agents ships one, and PEP 420 lets a regular package
@@ -3595,27 +3595,36 @@ TXT;
         $L[] = $sep;
         $L[] = LangGraphRuntime::documentConverterBlock();
         $L[] = LangGraphRuntime::runRecordBlock();
+        $L[] = LangGraphRuntime::liveFeedBlock();
         $L[] = LangGraphRuntime::consoleBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock($packaged);
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
-    /** api.py: the run server — the graph behind POST /runs + an SSE event stream. */
-    private function emitModularApi(array $facts, array $layout): string
+    /**
+     * api.py: the run server — the graph behind POST /runs + an SSE event stream. With $listen (the
+     * modular package; plan task 8) it also runs the Start's cron / watch loop: POST /listen, GET /live
+     * and --listen, over workflow.py's make_listener(). A swarm's workflow.py has none, so it passes false.
+     */
+    private function emitModularApi(array $facts, array $layout, bool $listen = true): string
     {
         $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
         $body = $this->apiPyDocBody($facts,
             'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
             'pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-            ['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
+            array_merge(['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
              '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
-             '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)']);
+             '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'], $listen ? [
+             '#',
+             "#   python api.py --listen    # also run the Start's schedule / event trigger (POST /listen toggles it;",
+             '#                             # GET /live streams the runs and the listener\'s state)'] : []));
         return RunServerEmitter::emit(
             $facts['wfName'],
             $esc($body),
             'from workflow import run as run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME',
-            'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts))
+            'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::a2aVersion($facts)),
+            $listen
         );
     }
 
@@ -3984,6 +3993,32 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         recorder.end(quiet=False)
         return output
     return run_once
+
+
+def _refuse(message: str):
+    """make_listener's parser error: a usage error becomes a ValueError instead of an exit."""
+    raise ValueError(message)
+
+
+def make_listener(state: LoopState) -> Listener | None:
+    """The Start's cron or watch loop for a host (api.py --listen, POST /listen), not yet started: each
+    run on the Start's prompt, recorded under RUNS_DIR, printing only its done / failed line (a quiet
+    run nothing). None when the Start takes a prompt (POST /runs runs it). Its lock is the program's
+    own, so api.py and `python workflow.py` never listen at once. ValueError: the Start's schedule or
+    trigger is missing or bad."""
+    if START_MODE not in ("cron", "watch"):
+        return None
+    ap = argparse.ArgumentParser()
+    ap.error = _refuse
+    cron = CronExpression.from_cli(ap, "" if START_MODE == "cron" else None, DEFAULT_CRON)
+    watch = WatchTrigger.from_cli(ap, "" if START_MODE == "watch" else None, DEFAULT_WATCH)
+    runs = RunLoop()
+    view = ConsoleView("quiet")
+    recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
+    run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True)
+    drains = any(ad["kind"] == "code" for ad in AGENTS.values())
+    return Listener(START_MODE, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=state,
+                    lock_path=os.path.join(PACKAGE_DIR, ".run.lock"))
 
 
 if __name__ == "__main__":

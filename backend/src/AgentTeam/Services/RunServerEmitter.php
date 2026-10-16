@@ -29,8 +29,14 @@ final class RunServerEmitter
      *                             it raises NameError and exits before binding.
      *                             Targets with no version of their own pass
      *                             `WORKFLOW_VERSION = "1"`.
+     * @param bool   $listen       The modular LangGraph package only (plan task 8): the server
+     *                             also runs the Start's cron / watch loop -- POST /listen,
+     *                             GET /live, --listen (listenBlock()). Its workflow.py must
+     *                             expose make_listener, RUNS_DIR, START_MODE and LoopState,
+     *                             its common.py live_next, RUN_OUT and NULL_RECORDER.
      */
-    public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine): string
+    public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine,
+        bool $listen = false): string
     {
         $L = [];
         $L[] = '"""Run server for workflow ' . json_encode($workflowName, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -50,11 +56,170 @@ final class RunServerEmitter
         $L[] = '';
         $L[] = 'from common import set_event_sink, resolve_gate';
         $L[] = $importLine;
+        if ($listen) {
+            $L[] = 'from common import live_next, RUN_OUT, NULL_RECORDER';
+            $L[] = 'from workflow import make_listener, RUNS_DIR, START_MODE, LoopState';
+            $L[] = 'import workflow as _workflow   # GRAPH_RECORDER, which a listener run leaves set';
+        }
         $L[] = '';
         $L[] = $versionLine;
         $L[] = '';
-        $L[] = self::runtimeBlock();
+        $L[] = $listen ? self::withListen(self::runtimeBlock()) : self::runtimeBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    private const MAIN = "\n\nif __name__ == \"__main__\":\n";
+    private const PARSE = "    a = ap.parse_args()\n";
+    private const SERVE = "    uvicorn.run(app, host=a.host, port=a.port, log_level=\"warning\")";
+
+    /** The runtime block with listenBlock() ahead of __main__, and --listen in it. */
+    private static function withListen(string $runtime): string
+    {
+        foreach ([self::MAIN, self::PARSE, self::SERVE] as $anchor) {
+            if (substr_count($runtime, $anchor) !== 1) {
+                throw new \LogicException('runtimeBlock() changed: the listen anchors are gone');
+            }
+        }
+        return str_replace(
+            [self::MAIN, self::PARSE, self::SERVE],
+            ["\n\n" . self::listenBlock() . "\n" . self::MAIN,
+             "    ap.add_argument(\"--listen\", action=\"store_true\",\n"
+                . "                    help=\"also run the Start's schedule / event trigger (as POST /listen does)\")\n" . self::PARSE,
+             "    if a.listen:\n"
+                . "        try:\n"
+                . "            _listener().start()\n"
+                . "        except ListenRefused as e:\n"
+                . "            ap.error(f\"--listen: {e}\")\n" . self::SERVE],
+            $runtime
+        );
+    }
+
+    /**
+     * api.py's listener (plan task 8): the Start's cron / watch loop in a background thread
+     * (workflow.make_listener), toggled by POST /listen, and GET /live -- the stream SynergyAI's
+     * GET /workflows/{id}/live serves (LiveStream.php), over this program's runs/ folder.
+     */
+    public static function listenBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# LISTEN (POST /listen, GET /live, --listen)
+# The Start's schedule or event trigger, run by this server in a background
+# thread, as `python workflow.py` would run it (same lock: one of them
+# listens). GET /live streams what SynergyAI's live overlay shows: each
+# run's events as its run log gets them, and the listener's state line.
+# Its runs and POST /runs share the run log pointer, the console sink and
+# the trace's recorder, so they take turns (RUN_SERIAL).
+# ==============================================================
+import threading
+
+LOOP_STATE = LoopState()   # the listener's state line ("Listening for events", "Not listening: ...")
+LISTENER = None            # built on first use (_listener)
+RUN_SERIAL = threading.Lock()   # one run at a time: a listener run or a POST /runs one
+LIVE_SECONDS = 50.0        # a /live connection lasts this long, then says "bye" with its cursor
+STATE_EVERY = 5.0          # a changed state is sent at most this often
+PING_EVERY = 15.0
+
+
+class ListenRefused(Exception):
+    """This workflow has nothing to listen to (its Start takes a prompt) or its trigger is unusable."""
+
+
+def _one_at_a_time(run_once):
+    """A listener run, taken in turn with POST /runs' runs."""
+    def run():
+        with RUN_SERIAL:
+            return run_once()
+    return run
+
+
+def _listener():
+    """The listener, built once; ListenRefused when the Start takes a prompt or its trigger is bad."""
+    global LISTENER
+    if LISTENER is None:
+        try:
+            listener = make_listener(LOOP_STATE)
+        except ValueError as e:
+            raise ListenRefused(str(e)) from None
+        if listener is None:
+            raise ListenRefused("This workflow's Start takes a prompt; use POST /runs.")
+        listener.run_once = _one_at_a_time(listener.run_once)
+        LISTENER = listener
+    return LISTENER
+
+
+_run_graph = run_workflow   # workflow.run, which POST /runs drives through the wrapper below
+
+
+async def run_workflow(prompt: str, session: str | None = None) -> str:
+    """POST /runs' run (_drive calls it), in turn with the listener's: the console sink back to
+    printing and no run log, as before any listener run."""
+    await asyncio.to_thread(RUN_SERIAL.acquire)
+    try:
+        RUN_OUT.begin("print")
+        _workflow.GRAPH_RECORDER = NULL_RECORDER
+        return await _run_graph(prompt, session)
+    finally:
+        RUN_SERIAL.release()
+
+
+def _listen_state() -> dict:
+    """The listener's state as GET /live and POST /listen report it."""
+    return {"line": LOOP_STATE.line, "tone": LOOP_STATE.tone,
+            "listening": LISTENER is not None and LISTENER.listening}
+
+
+@app.post("/listen")
+async def listen(body: dict | None = None) -> dict:
+    """Start listening -- the Start's schedule or event trigger -- or stop with {"stop": true}. Starting
+    twice is harmless. 409 when the Start takes a prompt (POST /runs is for that)."""
+    try:
+        listener = _listener()
+    except ListenRefused as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if (body or {}).get("stop"):
+        listener.stop()
+    else:
+        listener.start()
+    state = _listen_state()
+    return {"listening": state["listening"], "mode": START_MODE,
+            "state": {"line": state["line"], "tone": state["tone"]}}
+
+
+def _live_frame(name: str, data: dict) -> str:
+    """One /live frame (no id: the cursor in the data is what a reconnect sends back)."""
+    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/live")
+async def live(request: Request, cursor: str | None = None) -> StreamingResponse:
+    """The live view's stream, as SynergyAI's GET /workflows/{id}/live: `run` frames {cursor, event} for
+    this program's runs after `cursor`, a `state` frame {compiled: {line, tone, listening}} when the
+    listener's state changes (checked every 0.5 s, sent at most every 5 s), a ping every 15 s, and after
+    50 s `bye` {cursor}: reconnect with that cursor."""
+    async def frames():
+        cur = cursor or None
+        start = ping_at = time.monotonic()
+        sent, sent_at = None, None
+        while time.monotonic() - start < LIVE_SECONDS:
+            if await request.is_disconnected():
+                return
+            events, cur = await asyncio.to_thread(live_next, RUNS_DIR, cur)
+            for ev in events:
+                yield _live_frame("run", {"cursor": cur, "event": ev})
+            state = _listen_state()
+            if state != sent and (sent_at is None or time.monotonic() - sent_at >= STATE_EVERY):
+                yield _live_frame("state", {"compiled": state})
+                sent, sent_at = state, time.monotonic()
+            if time.monotonic() - ping_at >= PING_EVERY:
+                yield ": ping\n\n"
+                ping_at = time.monotonic()
+            await asyncio.sleep(0.5)
+        yield _live_frame("bye", {"cursor": cur})
+
+    return StreamingResponse(frames(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+PY;
     }
 
     /**

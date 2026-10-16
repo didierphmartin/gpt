@@ -109,6 +109,49 @@ print("ok")
 PY);
     }
 
+    /** Task 6 review: start() right after stop() -- the thread still finishing its trigger call -- leaves a listener that
+     *  listens, in the same thread (a second thread would find the lock held); a later stop() still stops it. */
+    public function testStopThenStartAtOnceLeavesARunningListener(): void
+    {
+        $this->py(<<<'PY'
+import tempfile, threading
+MCP_SERVER_SLUGS = {"http://mail.local/mcp": "outlook"}
+calls = []
+class SlowMcp:
+    def call_tool_raw(self, url, tool, args):
+        calls.append(time.monotonic())
+        time.sleep(0.3)
+        return {"structuredContent": {"status": "timeout"}, "content": []}
+MCP = SlowMcp()
+L = Listener("watch", lambda: "", drains=False, loop=RunLoop(), cron_expr=None,
+             trigger=WatchTrigger("outlook", "wait_for_new", {}), state=LoopState(echo=False),
+             lock_path=os.path.join(tempfile.mkdtemp(), ".run.lock"))
+L.start(); time.sleep(0.1)                     # inside the first trigger call
+L.stop(); assert not L.listening               # stopping: no longer reported as listening
+L.start()                                      # the old thread is still in its call
+assert L.listening
+time.sleep(1.0)
+assert L.running and L.listening and len(calls) >= 3, calls        # it went on calling the trigger
+assert threading.active_count() == 2, threading.enumerate()       # one listener thread, not two
+L.stop(); time.sleep(0.5)
+assert not L.running and not L.listening
+# the loop already left (a nap the stop woke): the same thread runs it again
+class FailingMcp:
+    def call_tool_raw(self, url, tool, args):
+        calls.append(time.monotonic())
+        raise OSError("refused")
+MCP = FailingMcp()
+L.start(); time.sleep(0.1)                     # now napping 30 s after a failed call
+n = len(calls)
+L.stop(); L.start()
+time.sleep(0.3)
+assert L.running and L.listening and len(calls) == n + 1, (n, calls)
+L.stop(); time.sleep(0.3)
+assert not L.running
+print("ok")
+PY);
+    }
+
     public function testBannerNamesTheMode(): void
     {
         $out = $this->py(<<<'PY'

@@ -873,6 +873,117 @@ PY;
     }
 
     /**
+     * The live feed (plan task 8): LiveFeed::next ported, over the files runRecordBlock() writes --
+     * RUNS_DIR/current naming `<stem>_<runId>` and one `<stem>.jsonl` per run. api.py's GET /live
+     * streams what live_next() returns. Emitted into the modular common.py; the entry file supplies
+     * json, os and re.
+     */
+    public static function liveFeedBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# LIVE FEED (api.py's GET /live)
+# What a live view has not been sent yet of this program's runs, with the
+# rules of SynergyAI's LiveFeed::next. The cursor is "<runId>:<complete
+# lines read>". On a first connect only a run in progress is sent (a
+# finished one is history). A quiet poll writes Start and the trigger node,
+# then deletes its file, so a run is held back until a work node or its end
+# appears; when the pointer has moved on, the rest of the cursor's run is
+# sent first.
+# ==============================================================
+import glob, math
+
+LIVE_TRIGGER_ID_FROM = 1000000000   # node ids from here on are a Start option's trigger node (StartOptionGraph::ID_OFFSET)
+_LIVE_CURSOR = re.compile(r"([a-f0-9]{32}):([0-9]+)")
+
+
+def live_next(runs_dir: str, cursor: str | None) -> tuple[list[dict], str | None]:
+    """The events after `cursor` and the cursor to ask from next time (LiveFeed::next)."""
+    m = _LIVE_CURSOR.fullmatch(cursor or "")
+    cur_run, cur_lines = (m.group(1), int(m.group(2))) if m else (None, 0)
+    run_id = _live_current(runs_dir)
+    tail: list[dict] = []
+    if cur_run is not None and cur_run != run_id:
+        prev = _live_read(runs_dir, cur_run)
+        if prev is not None:
+            tail = prev[cur_lines:]
+            cursor = f"{cur_run}:{max(cur_lines, len(prev))}"
+    events = None if run_id is None else _live_read(runs_dir, run_id)
+    if events is None:
+        return tail, cursor
+    nxt = f"{run_id}:{len(events)}"
+    if cur_run == run_id:
+        return events[cur_lines:], nxt
+    if not _live_real(events):
+        return tail, cursor
+    if cur_run is None and _live_finished(events):
+        return [], nxt
+    return tail + events, nxt
+
+
+def _live_current(runs_dir: str) -> str | None:
+    """The run RUNS_DIR/current names (its 32-hex id), or None."""
+    try:
+        with open(os.path.join(runs_dir, "current"), encoding="utf-8") as fh:
+            m = re.search(r"([a-f0-9]{32})$", fh.read().strip())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def _live_read(runs_dir: str, run_id: str) -> list[dict] | None:
+    """The run's complete lines as events (an undecodable one is {"type": "unreadable"}), or None when its
+    file is gone. A last line without its newline is left for next time: the run may be mid-append."""
+    paths = glob.glob(os.path.join(glob.escape(runs_dir), f"*_{run_id}.jsonl"))
+    if not paths:
+        return None
+    try:
+        with open(paths[0], "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    complete = raw[:raw.rfind(b"\n") + 1].rstrip(b"\n")
+    events = []
+    for line in complete.split(b"\n") if complete else []:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            e = None
+        events.append(e if isinstance(e, dict) else {"type": "unreadable"})
+    return events
+
+
+def _live_node_id(v) -> int | None:
+    """A node id as PHP's is_numeric + (int) read it, or None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str):
+        try:
+            v = float(v)
+        except ValueError:
+            return None
+    return int(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+
+def _live_real(events: list[dict]) -> bool:
+    """A work node ran (not Start, not the Start option's trigger node) or the run ended."""
+    for e in events:
+        nid = _live_node_id(e.get("node_id"))
+        if (e.get("type") in ("node_start", "node_complete") and e.get("node_type") != "start"
+                and nid is not None and nid < LIVE_TRIGGER_ID_FROM):
+            return True
+    return _live_finished(events)
+
+
+def _live_finished(events: list[dict]) -> bool:
+    """The run wrote workflow_complete or workflow_error."""
+    return any(e.get("type") in ("workflow_complete", "workflow_error") for e in events)
+
+
+PY;
+    }
+
+    /**
      * Console view (spec 2026-10-15 §5): a run's progress as the live overlay words it. Listener of
      * RunRecorder; buffers a run's lines and prints them at workflow_complete, so a quiet run (which
      * the program discards) prints nothing. event_subject is start-options.js eventSubject, ported.
@@ -1715,6 +1826,8 @@ class WatchTrigger:
             raise WatchError("unreachable", str(e) or type(e).__name__) from e
         text = "\n".join(c.get("text", "") for c in raw.get("content") or []
                          if isinstance(c, dict) and c.get("type") == "text").strip()
+        if raw.get("transport_error"):   # McpClient's own transport failure, returned rather than raised
+            raise WatchError("unreachable", text or "server unreachable")
         result = raw.get("structuredContent")
         if result is None:
             try:
@@ -1869,12 +1982,18 @@ class Listener:
         self.max_runs = max_runs
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._restart = False   # start() came while a stop was taking effect: run the loop again
         self._guard = threading.Lock()
 
     @property
     def running(self) -> bool:
         """The background loop is alive (False for run_blocking, and once a stop has taken effect)."""
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def listening(self) -> bool:
+        """Running and not asked to stop: what api.py reports (a stopping loop may still finish a call)."""
+        return self.running and not self._stop_event.is_set()
 
     def banner(self, now: datetime | None = None) -> str:
         """The startup line naming the mode."""
@@ -1899,18 +2018,39 @@ class Listener:
         self._loop()
 
     def start(self) -> None:
-        """Run the loop in a daemon thread; does nothing while it already runs."""
+        """Run the loop in a daemon thread; does nothing while it already runs. Right after a stop() the
+        thread may still be finishing its trigger call or run: the stop is then called off, and should
+        the loop have left already, the same thread runs it again (a second thread would find the lock
+        held by the first)."""
         with self._guard:
             if self.running:
+                if self._stop_event.is_set():
+                    self._stop_event.clear()
+                    self._restart = True
                 return
             self._stop_event = threading.Event()
+            self._restart = False
             print(self.banner(), flush=True)
-            self._thread = threading.Thread(target=self._loop, name=f"listener-{self.mode}", daemon=True)
+            self._thread = threading.Thread(target=self._serve, name=f"listener-{self.mode}", daemon=True)
             self._thread.start()
+
+    def _serve(self) -> None:
+        """The thread: the loop, again while start() asked for it during a stop; then the state says so."""
+        while True:
+            self._loop()
+            with self._guard:
+                if not self._restart:
+                    self.state.set("Not listening: stopped", "off")
+                    self._thread = None   # from here on start() starts a new thread
+                    return
+                self._restart = False
+            print(self.banner(), flush=True)
 
     def stop(self) -> None:
         """Ask the loop to stop; returns at once (the loop ends after the current trigger call or run)."""
-        self._stop_event.set()
+        with self._guard:
+            self._restart = False
+            self._stop_event.set()
 
 
 PY;
@@ -2516,8 +2656,8 @@ class McpClient:
             r = self._http.post(mcp_url, json=request, headers=self._headers(server_url), timeout=180)
             r.raise_for_status()
             data = self._parse(r.text)
-        except Exception as e:
-            return {"isError": True, "content": [{"type": "text", "text": str(e)}]}
+        except Exception as e:   # transport: refused, timed out, HTTP error -- marked, so --watch says "unreachable"
+            return {"isError": True, "transport_error": True, "content": [{"type": "text", "text": str(e)}]}
         if data is None:
             return {"isError": True, "content": [{"type": "text", "text": "invalid response"}]}
         if "error" in data:

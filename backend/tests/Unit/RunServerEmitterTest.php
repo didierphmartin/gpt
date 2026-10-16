@@ -21,6 +21,19 @@ final class RunServerEmitterTest extends TestCase
         $this->assertStringContainsString('@app.get("/.well-known/workflow.json")', $out);
     }
 
+    /** Plan task 8: only the modular LangGraph package listens; A2A, swarm and ADK/MAF/NOOA servers do not. */
+    public function testListenRoutesOnlyWhenAsked(): void
+    {
+        $with = RunServerEmitter::emit('Demo', 'doc body', 'from workflow import run_workflow', 'WORKFLOW_VERSION = "1"', listen: true);
+        $this->assertStringContainsString('@app.post("/listen")', $with);
+        $this->assertStringContainsString('@app.get("/live")', $with);
+        $this->assertStringContainsString('"--listen"', $with);
+        $without = RunServerEmitter::emit('Demo', 'doc body', 'from workflow import run_workflow', 'WORKFLOW_VERSION = "1"');
+        foreach (['/listen', '/live', '--listen', 'make_listener'] as $needle) {
+            $this->assertStringNotContainsString($needle, $without, $needle);
+        }
+    }
+
     public function testCarriesTheCallersImportLineVerbatim(): void
     {
         $line = 'from workflow import run_workflow, DEFAULT_PROMPT, WORKFLOW_ID, WORKFLOW_NAME';

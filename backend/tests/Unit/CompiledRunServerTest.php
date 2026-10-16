@@ -95,11 +95,23 @@ class CompiledRunServerTest extends TestCase
         return $root;
     }
 
+    /** The SynergyAI venv: the probes import the package, which needs python-dotenv, langchain and fastapi. */
+    private const VENV = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
+
+    /**
+     * The python the probes run with: the venv when it is there (the system python3 has none of the
+     * package's dependencies, so every probe failed on `import common`), else python3.
+     */
+    public static function python(): string
+    {
+        return is_executable(self::VENV) ? escapeshellarg(self::VENV) : 'python3';
+    }
+
     /** Run a probe script from tests/fixtures/compiled/ with the package root as argv[1]. */
     protected function probe(string $name, string $root): array
     {
         $probe = __DIR__ . '/../fixtures/compiled/' . $name;
-        exec('python3 ' . escapeshellarg($probe) . ' ' . escapeshellarg($root) . ' 2>&1', $out, $rc);
+        exec(self::python() . ' ' . escapeshellarg($probe) . ' ' . escapeshellarg($root) . ' 2>&1', $out, $rc);
         return [$rc, implode("\n", $out)];
     }
 
