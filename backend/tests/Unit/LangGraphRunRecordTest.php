@@ -106,7 +106,7 @@ PY);
      *         return lines.length ? lines.join('\n') : s.slice(0, 200);
      *     }
      *
-     * The JS joins the From and Subject lines with a NEWLINE (not " · "), so the console line is two lines.
+     * The JS joins the From and Subject lines with a NEWLINE (not " · "), so ConsoleView joins those lines with " · " to keep one console line (spec §4.2).
      */
     public function testConsoleShowsTheLiveOverlayTexts(): void
     {
@@ -123,7 +123,8 @@ r.node_complete("23", "claims", "agent", output="y")
 r.node_complete("24", "bad", "agent", success=False, error="oops")
 assert lines == [], lines   # buffered until the run completes
 r.complete(success=True, output="done")
-assert lines[0] == "[10:42] New event — From: jane@acme.com\nSubject: Claim for water damage", lines
+assert lines[0] == "[10:42] New event — From: jane@acme.com · Subject: Claim for water damage", lines
+assert not any("\n" in l for l in lines), lines
 assert "    · jev routed to claims (confidence 0.97)" in lines
 assert "  ✓ jev → claims" in lines and "  ✓ claims" in lines and "  ✗ bad: oops" in lines
 assert not any("Start" in l for l in lines), lines

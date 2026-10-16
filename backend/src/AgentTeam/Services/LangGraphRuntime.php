@@ -888,7 +888,7 @@ class ConsoleView:
         except (TypeError, ValueError):
             trigger = False
         if trigger and ok:
-            self.buffered.append(f"{self._stamp()} New event — {event_subject(ev.get('output'))}")
+            self.buffered.append(f"{self._stamp()} New event — {' · '.join(l for l in event_subject(ev.get('output')).split(chr(10)) if l.strip())}")
         elif not ok:
             self.buffered.append(f"  ✗ {name}: {ev.get('error') or 'failed'}")
         else:
