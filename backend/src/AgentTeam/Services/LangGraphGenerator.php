@@ -3963,6 +3963,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         recorder.begin()
+        # Left as found when the run ends: a host that also runs the graph itself (api.py's POST /runs
+        # after its listener ran) must not inherit this run's recorder or held console lines.
+        found_recorder, found_out = GRAPH_RECORDER, RUN_OUT.mode
         GRAPH_RECORDER = recorder
         RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
         show_held = loop_mode and view.verbosity == "verbose"
@@ -3989,6 +3992,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
             recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
             recorder.end(quiet=False)
             raise
+        finally:
+            RUN_OUT.begin(found_out)
+            GRAPH_RECORDER = found_recorder
         recorder.complete(success=True, output=output)
         recorder.end(quiet=False)
         return output
@@ -4430,6 +4436,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         recorder.begin()
+        # Left as found when the run ends: a host that also runs the graph itself (api.py's POST /runs
+        # after its listener ran) must not inherit this run's recorder or held console lines.
+        found_recorder, found_out = GRAPH_RECORDER, RUN_OUT.mode
         GRAPH_RECORDER = recorder
         RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
         show_held = loop_mode and view.verbosity == "verbose"
@@ -4456,6 +4465,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
             recorder.complete(success=False, error=f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
             recorder.end(quiet=False)
             raise
+        finally:
+            RUN_OUT.begin(found_out)
+            GRAPH_RECORDER = found_recorder
         recorder.complete(success=True, output=output)
         recorder.end(quiet=False)
         return output

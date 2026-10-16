@@ -293,6 +293,90 @@ PY;
         }
     }
 
+    /**
+     * Fix round 1 (ruling): listening and POST /runs exclude each other (409 both ways; a stop is always
+     * accepted), and a /runs run after the listener stopped gets its own trace lines and nothing foreign --
+     * a listener run used to leave RUN_OUT holding and GRAPH_RECORDER set, so a later served run lost its
+     * [info] / [node] lines. Driven in-process (TestClient) with the MCP client faked: no server is reached.
+     */
+    public function testListeningAndServedRunsExcludeEachOther(): void
+    {
+        $venv = $this->venv();
+        $script = <<<'PY'
+import asyncio, json, os, sys, time
+sys.path.insert(0, os.getcwd())
+import common
+fake = {"ready": 1}
+def call_tool_raw(url, tool, args):
+    if tool == "wait_for_new":
+        if fake["ready"]:
+            fake["ready"] -= 1
+            return {"structuredContent": {"status": "ready", "via": "test"}, "content": []}
+        time.sleep(0.05)
+        return {"structuredContent": {"status": "timeout"}, "content": []}
+    body = {"mail": None}                                   # the poll finds nothing: a quiet run
+    return {"structuredContent": body, "content": [{"type": "text", "text": json.dumps(body)}]}
+common.MCP.call_tool_raw = call_tool_raw
+import api, workflow
+from starlette.testclient import TestClient
+
+def until(cond, what, limit=20.0):
+    end = time.monotonic() + limit
+    while not cond():
+        assert time.monotonic() < end, what
+        time.sleep(0.05)
+
+with TestClient(api.app) as c:
+    # a served run in progress: no listening (a stop is still accepted)
+    real_run = api.run_workflow
+    async def slow(prompt, session=None):
+        await asyncio.sleep(1.0)
+        return "slow"
+    api.run_workflow = slow
+    rid = c.post("/runs", json={"prompt": "x"}).json()["run_id"]
+    r = c.post("/listen", json={})
+    assert r.status_code == 409 and r.json() == {"detail": "A POST /runs run is in progress; listen when it ends."}, r.text
+    r = c.post("/listen", json={"stop": True})
+    assert r.status_code == 200 and r.json()["listening"] is False, r.text
+    until(lambda: api.RUNS[rid].status != "running", "the slow run did not end")
+    api.run_workflow = real_run
+
+    # listening: one (quiet) listener run, and no served run meanwhile
+    assert c.post("/listen", json={}).json()["listening"] is True
+    until(lambda: fake["ready"] == 0 and api.LOOP_STATE.line == "Listening for events", "no listener run")
+    assert common.RUN_OUT.mode == "print", common.RUN_OUT.mode              # left as found
+    assert workflow.GRAPH_RECORDER is common.NULL_RECORDER
+    r = c.post("/runs", json={"prompt": "x"})
+    assert r.status_code == 409 and r.json() == {"detail": 'This workflow is listening; stop it (POST /listen {"stop": true}) before POST /runs.'}, r.text
+    assert c.post("/listen", json={"stop": True}).json()["listening"] is False
+    until(lambda: not api.LISTENER.running, "the listener did not stop")
+
+    # a served run after it: its own trace lines, nothing from the listener
+    rid = c.post("/runs", json={"prompt": "x"}).json()["run_id"]
+    traces, name = [], "message"
+    with c.stream("GET", f"/runs/{rid}/events") as resp:
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                if name in ("done", "error"):
+                    assert name == "done", line
+                    break
+                ev = json.loads(line.split(":", 1)[1])
+                if ev.get("type") == "trace":
+                    traces.append(ev["text"])
+    assert any(t.startswith("[info] Running") for t in traces), traces
+    assert any(t.startswith("[node] [") for t in traces), traces
+    assert not any("watch" in t or "Listening" in t or "Done in" in t for t in traces), traces
+print("ok")
+PY;
+        $dir = $this->writePackage($this->generate($this->optionGraph()) + ['probe.py' => $script]);
+        $proc = proc_open([$venv, 'probe.py'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir, self::env());
+        $text = (string) stream_get_contents($pipes[1]);
+        self::assertSame(0, proc_close($proc), $text);
+        self::assertStringEndsWith("ok\n", $text, $text);
+    }
+
     private static function freePort(): int
     {
         $s = stream_socket_server('tcp://127.0.0.1:0');
@@ -356,6 +440,9 @@ PY;
             self::assertTrue($r2['listening']);
             self::assertSame('watch', $r2['mode']);
             self::assertSame(['line', 'tone'], array_keys($r2['state']));
+            [$st, $r] = self::http('POST', "$base/runs", ['prompt' => 'x']);
+            self::assertSame(409, $st, json_encode($r));
+            self::assertSame(['detail' => 'This workflow is listening; stop it (POST /listen {"stop": true}) before POST /runs.'], $r);
 
             usleep(1500000);   // the trigger's first call fails at once (closed port)
             // A run in progress in the package's runs/ (what RunRecorder writes): /live replays it.
@@ -389,17 +476,18 @@ PY;
             self::assertTrue($state['compiled']['listening']);
 
             [$st, $r3] = self::http('POST', "$base/listen", ['stop' => true]);
-            self::assertSame(200, $st);
-            self::assertFalse($r3['listening']);
-            fwrite(STDERR, "\n[testListenRoutes] POST /listen -> " . json_encode($r1, JSON_UNESCAPED_UNICODE)
-                . "\n[testListenRoutes] POST /listen -> " . json_encode($r2, JSON_UNESCAPED_UNICODE)
-                . "\n[testListenRoutes] GET /live state -> " . json_encode($state, JSON_UNESCAPED_UNICODE)
-                . "\n[testListenRoutes] POST /listen {stop} -> " . json_encode($r3, JSON_UNESCAPED_UNICODE) . "\n");
+            self::assertSame(200, $st, json_encode($r3));
+            self::assertFalse($r3['listening'], json_encode($r3));
+            // Once the stop has taken effect (the backoff nap ends at once), POST /runs is served again.
+            for ($i = 0, $st = 409; $i < 50 && $st === 409; $i++) {
+                usleep(100000);
+                [$st, $r] = self::http('POST', "$base/runs", ['prompt' => 'x']);
+            }
+            self::assertSame(200, $st, json_encode($r) . "\n" . @file_get_contents($log));
         } finally {
             proc_terminate($proc);
             proc_close($proc);
         }
-        fwrite(STDERR, "[testListenRoutes] server log:\n" . @file_get_contents($log));
     }
 
     /** Opt-in: `python api.py --listen` starts the listener before serving. */

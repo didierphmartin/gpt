@@ -33,7 +33,7 @@ final class RunServerEmitter
      *                             also runs the Start's cron / watch loop -- POST /listen,
      *                             GET /live, --listen (listenBlock()). Its workflow.py must
      *                             expose make_listener, RUNS_DIR, START_MODE and LoopState,
-     *                             its common.py live_next, RUN_OUT and NULL_RECORDER.
+     *                             its common.py live_next.
      */
     public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine,
         bool $listen = false): string
@@ -57,9 +57,8 @@ final class RunServerEmitter
         $L[] = 'from common import set_event_sink, resolve_gate';
         $L[] = $importLine;
         if ($listen) {
-            $L[] = 'from common import live_next, RUN_OUT, NULL_RECORDER';
+            $L[] = 'from common import live_next';
             $L[] = 'from workflow import make_listener, RUNS_DIR, START_MODE, LoopState';
-            $L[] = 'import workflow as _workflow   # GRAPH_RECORDER, which a listener run leaves set';
         }
         $L[] = '';
         $L[] = $versionLine;
@@ -70,18 +69,19 @@ final class RunServerEmitter
 
     private const MAIN = "\n\nif __name__ == \"__main__\":\n";
     private const PARSE = "    a = ap.parse_args()\n";
+    private const RUN_PROMPT = "    prompt = str((body or {}).get(\"prompt\") or \"\").strip() or DEFAULT_PROMPT or \"Hello\"\n";
     private const SERVE = "    uvicorn.run(app, host=a.host, port=a.port, log_level=\"warning\")";
 
-    /** The runtime block with listenBlock() ahead of __main__, and --listen in it. */
+    /** The runtime block with listenBlock() ahead of __main__, --listen in it, and POST /runs refused while listening. */
     private static function withListen(string $runtime): string
     {
-        foreach ([self::MAIN, self::PARSE, self::SERVE] as $anchor) {
+        foreach ([self::MAIN, self::PARSE, self::SERVE, self::RUN_PROMPT] as $anchor) {
             if (substr_count($runtime, $anchor) !== 1) {
                 throw new \LogicException('runtimeBlock() changed: the listen anchors are gone');
             }
         }
         return str_replace(
-            [self::MAIN, self::PARSE, self::SERVE],
+            [self::MAIN, self::PARSE, self::SERVE, self::RUN_PROMPT],
             ["\n\n" . self::listenBlock() . "\n" . self::MAIN,
              "    ap.add_argument(\"--listen\", action=\"store_true\",\n"
                 . "                    help=\"also run the Start's schedule / event trigger (as POST /listen does)\")\n" . self::PARSE,
@@ -89,7 +89,8 @@ final class RunServerEmitter
                 . "        try:\n"
                 . "            _listener().start()\n"
                 . "        except ListenRefused as e:\n"
-                . "            ap.error(f\"--listen: {e}\")\n" . self::SERVE],
+                . "            ap.error(f\"--listen: {e}\")\n" . self::SERVE,
+             "    _refuse_while_listening()\n" . self::RUN_PROMPT],
             $runtime
         );
     }
@@ -108,14 +109,12 @@ final class RunServerEmitter
 # thread, as `python workflow.py` would run it (same lock: one of them
 # listens). GET /live streams what SynergyAI's live overlay shows: each
 # run's events as its run log gets them, and the listener's state line.
-# Its runs and POST /runs share the run log pointer, the console sink and
-# the trace's recorder, so they take turns (RUN_SERIAL).
+# Listening and POST /runs exclude each other: a listener run and a served
+# run would share the console sink, the trace's recorder and the event
+# stream, so each refuses (409) while the other is going.
 # ==============================================================
-import threading
-
 LOOP_STATE = LoopState()   # the listener's state line ("Listening for events", "Not listening: ...")
 LISTENER = None            # built on first use (_listener)
-RUN_SERIAL = threading.Lock()   # one run at a time: a listener run or a POST /runs one
 LIVE_SECONDS = 50.0        # a /live connection lasts this long, then says "bye" with its cursor
 STATE_EVERY = 5.0          # a changed state is sent at most this often
 PING_EVERY = 15.0
@@ -123,14 +122,6 @@ PING_EVERY = 15.0
 
 class ListenRefused(Exception):
     """This workflow has nothing to listen to (its Start takes a prompt) or its trigger is unusable."""
-
-
-def _one_at_a_time(run_once):
-    """A listener run, taken in turn with POST /runs' runs."""
-    def run():
-        with RUN_SERIAL:
-            return run_once()
-    return run
 
 
 def _listener():
@@ -143,24 +134,15 @@ def _listener():
             raise ListenRefused(str(e)) from None
         if listener is None:
             raise ListenRefused("This workflow's Start takes a prompt; use POST /runs.")
-        listener.run_once = _one_at_a_time(listener.run_once)
         LISTENER = listener
     return LISTENER
 
 
-_run_graph = run_workflow   # workflow.run, which POST /runs drives through the wrapper below
-
-
-async def run_workflow(prompt: str, session: str | None = None) -> str:
-    """POST /runs' run (_drive calls it), in turn with the listener's: the console sink back to
-    printing and no run log, as before any listener run."""
-    await asyncio.to_thread(RUN_SERIAL.acquire)
-    try:
-        RUN_OUT.begin("print")
-        _workflow.GRAPH_RECORDER = NULL_RECORDER
-        return await _run_graph(prompt, session)
-    finally:
-        RUN_SERIAL.release()
+def _refuse_while_listening() -> None:
+    """POST /runs' guard: 409 while the listener runs or is still stopping."""
+    if LISTENER is not None and LISTENER.running:
+        raise HTTPException(status_code=409, detail="This workflow is listening; stop it "
+                                                    "(POST /listen {\"stop\": true}) before POST /runs.")
 
 
 def _listen_state() -> dict:
@@ -172,13 +154,16 @@ def _listen_state() -> dict:
 @app.post("/listen")
 async def listen(body: dict | None = None) -> dict:
     """Start listening -- the Start's schedule or event trigger -- or stop with {"stop": true}. Starting
-    twice is harmless. 409 when the Start takes a prompt (POST /runs is for that)."""
+    twice is harmless. 409 when the Start takes a prompt (POST /runs is for that), or for a start while a
+    POST /runs run is in progress; a stop is always accepted."""
     try:
         listener = _listener()
     except ListenRefused as e:
         raise HTTPException(status_code=409, detail=str(e))
     if (body or {}).get("stop"):
         listener.stop()
+    elif any(r.status == "running" for r in RUNS.values()):
+        raise HTTPException(status_code=409, detail="A POST /runs run is in progress; listen when it ends.")
     else:
         listener.start()
     state = _listen_state()
