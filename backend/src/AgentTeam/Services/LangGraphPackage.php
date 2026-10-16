@@ -239,9 +239,14 @@ final class LangGraphPackage
         return implode("\n", $req) . "\n";
     }
 
-    /** .env.example: every variable the program reads, commented. */
+    /**
+     * .env.example: every variable the program reads, commented. A variable with no value to suggest is
+     * a comment too: an empty KEY= line in a copied .env would mask the runner's python/.env (the program
+     * reads its own .env first, and an empty value counts as set).
+     */
     private static function envExample(array $facts): string
     {
+        $swarm = isset($facts['swarm']);   // a swarm writes no run logs
         $L = [];
         $L[] = '# Environment of the workflow "' . $facts['wfName'] . '" -- copy this file to .env and fill it in.';
         $L[] = '# The program reads .env from its own folder first, then from the folder two levels up';
@@ -258,7 +263,7 @@ final class LangGraphPackage
             $L[] = '# API keys of the LLM providers this workflow uses';
             foreach ($keys as $k => $provs) {
                 $L[] = '# ' . implode(', ', array_unique($provs));
-                $L[] = "{$k}=";
+                $L[] = "# {$k}=";
             }
         } else {
             $L[] = '# No LLM provider is used by a node of this workflow.';
@@ -273,7 +278,7 @@ final class LangGraphPackage
         if ($decision) {
             $L[] = '# Decision models the dispatchers may route with (each URL variable is optional: a gateway)';
             foreach ($decision as $key => $url) {
-                $L[] = "{$key}=";
+                $L[] = "# {$key}=";
                 $L[] = "# {$url}=";
             }
             $L[] = '';
@@ -285,7 +290,7 @@ final class LangGraphPackage
                 $up = strtoupper((string) $slug);
                 $L[] = "MCP_URL_{$up}={$url}";
                 $L[] = '# JSON object of HTTP headers, e.g. {"Authorization": "Bearer …"}';
-                $L[] = "MCP_HEADERS_{$up}=";
+                $L[] = "# MCP_HEADERS_{$up}=";
             }
             $L[] = '';
         }
@@ -294,8 +299,10 @@ final class LangGraphPackage
         $L[] = '# MODEL_NAME=';
         $L[] = '# Where saved outputs go (default: outputs/ in this folder)';
         $L[] = '# SYNERGYAI_OUTPUT_ROOT=./outputs';
-        $L[] = '# Where run logs go (default: runs/ in this folder)';
-        $L[] = '# RUNS_DIR=./runs';
+        if (!$swarm) {
+            $L[] = '# Where run logs go (default: runs/ in this folder)';
+            $L[] = '# RUNS_DIR=./runs';
+        }
         if (self::skillDirs($facts) !== []) {
             $L[] = '# Where the skills are read from (default: skills/ in this folder)';
             $L[] = '# SYNERGYAI_SKILLS_DIR=./skills';
@@ -347,14 +354,18 @@ final class LangGraphPackage
         $L[] = '## Files written';
         $L[] = '';
         $L[] = '- `outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).';
-        $L[] = '- `runs/` -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).';
-        $L[] = '  A run with nothing to do leaves no file.';
+        if (!$swarm) {
+            $L[] = '- `runs/` -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).';
+            $L[] = '  A run with nothing to do leaves no file.';
+        }
         $L[] = '';
         $L[] = '## Run server';
         $L[] = '';
         $L[] = '```sh';
         $L[] = 'python api.py            # HTTP run server: POST /runs, an SSE event stream per run';
-        $L[] = 'python api.py --listen   # the same, plus the default mode running in the background';
+        if (!$swarm) {
+            $L[] = 'python api.py --listen   # the same, plus the default mode running in the background';
+        }
         $L[] = '```';
         $L[] = '';
         $L[] = '## Running as a service';
@@ -384,10 +395,11 @@ final class LangGraphPackage
         $L[] = "  <string>/path/to/{$root}</string>";
         $L[] = '  <key>KeepAlive</key>';
         $L[] = '  <true/>';
+        // In the package folder itself: launchd creates no folder, and a fresh unzip has no runs/.
         $L[] = '  <key>StandardOutPath</key>';
-        $L[] = "  <string>/path/to/{$root}/runs/service.log</string>";
+        $L[] = "  <string>/path/to/{$root}/service.log</string>";
         $L[] = '  <key>StandardErrorPath</key>';
-        $L[] = "  <string>/path/to/{$root}/runs/service.log</string>";
+        $L[] = "  <string>/path/to/{$root}/service.log</string>";
         $L[] = '</dict>';
         $L[] = '</plist>';
         $L[] = '```';

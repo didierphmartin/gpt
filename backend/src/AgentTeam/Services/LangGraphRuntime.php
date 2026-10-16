@@ -2150,12 +2150,12 @@ PY;
         if (!$packaged) {
             return $block;
         }
-        // The modular package saves inside its own folder (spec 2026-10-15 §4.3).
+        // The modular package and the single file save inside their own folder (spec 2026-10-15 §4.3).
         $out = str_replace([
             'app stores it (~/Documents/synergyAI/outputs/workflow/ by default, overridable via',
             'root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")',
         ], [
-            'package stores it (<package>/outputs/workflow/ by default, overridable via',
+            'program stores it (<program folder>/outputs/workflow/ by default, overridable via',
             'root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(PACKAGE_DIR, "outputs")',
         ], $block, $n);
         if ($n !== 2) {

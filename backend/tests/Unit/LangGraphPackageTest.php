@@ -152,12 +152,37 @@ final class LangGraphPackageTest extends TestCase
         }
         $readme = $files['README.md']['code'];
         foreach (['python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt', 'cp .env.example .env',
-                  '<string>ai.synergy.email-prototype</string>', 'runs/service.log', 'Restart=always', 'python api.py',
+                  '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py',
                   'outputs/', 'runs/', 'code/'] as $needle) {
             self::assertStringContainsString($needle, $readme);
         }
         self::assertMatchesRegularExpression('~\| `python workflow\.py --watch[^\n]*\(default\)~', $readme, 'this workflow\'s START_MODE is marked default');
         self::assertSame(1, substr_count($readme, '(default)'));
+    }
+
+    /**
+     * Final review M-d: `cp .env.example .env` sets no variable to an empty value (an empty key or header line
+     * would mask the runner's python/.env); the placeholders are comments, MCP_HEADERS_<SLUG>= still named.
+     */
+    public function testEnvExampleSetsNothingEmpty(): void
+    {
+        $env = $this->files()['.env.example']['code'];
+        foreach (explode("\n", $env) as $line) {
+            if (trim($line) === '' || str_starts_with(ltrim($line), '#')) {
+                continue;
+            }
+            self::assertMatchesRegularExpression('/^[A-Z0-9_]+=\S/', $line, ".env.example sets an empty value: $line");
+        }
+        self::assertStringContainsString('# MCP_HEADERS_OUTLOOK=', $env);
+        self::assertStringContainsString('# ANTHROPIC_API_KEY=', $env);
+    }
+
+    /** Final review M-h: launchd writes its log in the package folder (a fresh unzip has no runs/; launchd makes no folder). */
+    public function testTheLaunchdLogIsInThePackageFolder(): void
+    {
+        $readme = $this->files()['README.md']['code'];
+        self::assertSame(2, substr_count($readme, '<string>/path/to/email_prototype_modular/service.log</string>'), $readme);
+        self::assertStringNotContainsString('runs/service.log', $readme);
     }
 
     public function testCodeModuleReadsItsFile(): void
@@ -294,7 +319,15 @@ final class LangGraphPackageTest extends TestCase
                         self::assertStringNotContainsString('synergyAI/', $line, "$label $path: $line");
                     }
                 }
-            } elseif ($path !== 'ARCHITECTURE.md' && !str_ends_with($label, 'single') && !str_ends_with($label, 'a2a')) {
+            } elseif (str_ends_with($label, 'single')) {
+                // Final review I2 (ruling): the single file reads its skills from SYNERGYAI_SKILLS_DIR, and its
+                // header says where by default; that one line is the only synergyAI/ path it may name.
+                foreach (explode("\n", $code) as $line) {
+                    if (!str_contains($line, '# Single file: skills are read from SYNERGYAI_SKILLS_DIR (default ~/Documents/synergyAI/skills)')) {
+                        self::assertStringNotContainsString('synergyAI/', $line, "$label $path: $line");
+                    }
+                }
+            } elseif ($path !== 'ARCHITECTURE.md' && !str_ends_with($label, 'a2a')) {
                 self::assertStringNotContainsString('synergyAI/', $code, "$label $path");
             }
         }
@@ -327,6 +360,28 @@ final class LangGraphPackageTest extends TestCase
         foreach (['single' => [], 'modular' => ['modular' => true]] as $mode => $opts) {
             self::assertSelfContained(self::byPath($this->generator($this->graph(), $this->skillsRoot())->generate(44, '3', $opts)), "header $mode");
         }
+    }
+
+    /**
+     * Final review I2/I3: output storage ON. The single file saves next to itself (outputs/, SYNERGYAI_OUTPUT_ROOT
+     * overrides) and the modular workflow.py says where the package saves; neither names a synergyAI/ path.
+     */
+    public function testOutputStorageOnStaysSelfContained(): void
+    {
+        foreach (['single' => [], 'modular' => ['modular' => true]] as $mode => $opts) {
+            $files = self::byPath($this->generator($this->graph(), $this->skillsRoot(), true)->generate(44, '3', $opts));
+            self::assertSelfContained($files, "storage on $mode");
+            $entry = $mode === 'single' ? (string) reset($files) : $files['workflow.py']['code'];
+            self::assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $entry, $mode);
+            self::assertStringContainsString('# Output storage (Output node setting): ON -> outputs/workflow/ '
+                . ($mode === 'single' ? 'next to this script' : 'in this folder') . ' (SYNERGYAI_OUTPUT_ROOT overrides)', $entry, $mode);
+        }
+        $single = $this->generator($this->graph(), $this->skillsRoot(), true)->generate(44, '3')['code'];
+        self::assertStringContainsString('root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(PACKAGE_DIR, "outputs")', $single);
+        self::assertStringContainsString("SKILLS_DIR = os.environ.get(\n    \"SYNERGYAI_SKILLS_DIR\",", $single, 'the single file keeps the skills default (spec §5)');
+        // A custom folder is named as it is.
+        $custom = self::byPath($this->generator($this->graph(), $this->skillsRoot(), true, null, 'reports/weekly')->generate(44, '3', ['modular' => true]));
+        self::assertStringContainsString('# Output storage (Output node setting): ON -> reports/weekly', $custom['workflow.py']['code']);
     }
 
     public function testMissingSkillFolderIsAnError(): void

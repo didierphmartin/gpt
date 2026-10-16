@@ -792,7 +792,7 @@ PY;
         }
         $st = $doc['storage'] ?? [];
         $L[] = '  # Output storage (Output node setting): ' . (!empty($st['enabled'])
-            ? 'ON -> ' . (($st['folder'] ?? '') !== '' ? $st['folder'] : '~/Documents/synergyAI/outputs/workflow/')
+            ? 'ON -> ' . (($st['folder'] ?? '') !== '' ? $st['folder'] : ($st['default'] ?? '~/Documents/synergyAI/outputs/workflow/'))
             : 'OFF (the result is printed, not saved)');
         return implode("\n", $L);
     }

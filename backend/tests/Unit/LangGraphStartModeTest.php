@@ -30,10 +30,11 @@ final class LangGraphStartModeTest extends TestCase
         return $pdo;
     }
 
-    private function generate(array $graph, array $options = [], ?\PDO $pdo = null): array
+    private function generate(array $graph, array $options = [], ?\PDO $pdo = null, string $orchestration = 'workflow'): array
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
-        $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Email prototype', 'user_id' => '3']));
+        $wfRepo->method('findById')->willReturn((new Workflow(['id' => 44, 'name' => 'Email prototype', 'user_id' => '3']))
+            ->setOrchestration($orchestration));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $this->createMock(AgentRepository::class);
@@ -100,6 +101,13 @@ final class LangGraphStartModeTest extends TestCase
     {
         $files = array_column($this->generate($this->optionGraph(), ['modular' => true])['files'], 'code', 'path');
         self::assertStringContainsString('START_MODE = "watch"', $files['workflow.py']);
+    }
+
+    /** Final review M-j: a swarm cannot carry a Start option either (Task 1 tested only A2A). */
+    public function testStartOptionRefusedInASwarm(): void
+    {
+        $this->expectExceptionMessage('A Start option (Outlook: get new email) needs the single-file or modular format.');
+        $this->generate($this->optionGraph(), ['modular' => true], null, 'swarm');
     }
 
     public function testStartOptionRefusedInA2A(): void

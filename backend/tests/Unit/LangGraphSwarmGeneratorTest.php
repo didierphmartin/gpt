@@ -103,12 +103,12 @@ class LangGraphSwarmGeneratorTest extends TestCase
         return $g;
     }
 
-    private static function generator(array $graph, string $orchestration = 'swarm'): LangGraphGenerator
+    private static function generator(array $graph, string $orchestration = 'swarm', bool $storage = false): LangGraphGenerator
     {
         $t = new self('x');
         $wfRepo = $t->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(
-            (new Workflow(['id' => 90, 'name' => 'Trip planning swarm', 'user_id' => '3']))
+            (new Workflow(['id' => 90, 'name' => 'Trip planning swarm', 'user_id' => '3', 'output_storage_enabled' => $storage]))
                 ->setOrchestration($orchestration)
         );
         $graphRepo = $t->createMock(WorkflowGraphRepository::class);
@@ -119,9 +119,9 @@ class LangGraphSwarmGeneratorTest extends TestCase
     }
 
     /** Facts as analyzeForEmit() returns them (private): reached through reflection. */
-    private static function facts(array $graph, string $orchestration = 'swarm'): array
+    private static function facts(array $graph, string $orchestration = 'swarm', bool $storage = false): array
     {
-        $gen = self::generator($graph, $orchestration);
+        $gen = self::generator($graph, $orchestration, $storage);
         $m = new \ReflectionMethod($gen, 'analyzeForEmit');
         $m->setAccessible(true);
         return $m->invoke($gen, 90, '3');
@@ -143,12 +143,31 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $this->assertStringNotContainsString('--watch', $files['README.md'], 'a swarm has no --watch');
     }
 
-    private function generateSwarm(array $graph): array
+    /**
+     * Final review M-g: the swarm package claims only what it has (no runs/ logs, no api.py --listen) and saves
+     * its outputs in its own outputs/ folder, so no generated swarm file names a synergyAI/ path.
+     */
+    public function testTheSwarmPackageSavesInItsFolderAndClaimsNoListener(): void
     {
-        $gen = self::generator($graph);
+        $files = $this->generateSwarm(self::twoAgentSwarm(), true);
+        foreach (['runs/', '--listen', 'RUNS_DIR'] as $absent) {
+            $this->assertStringNotContainsString($absent, $files['README.md'] . $files['.env.example'], $absent);
+        }
+        $this->assertStringContainsString('python api.py', $files['README.md']);
+        foreach ($files as $path => $code) {
+            $this->assertStringNotContainsString('synergyAI/', $code, $path);
+        }
+        $wf = $files['workflow.py'];
+        $this->assertStringContainsString('root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")', $wf);
+        $this->assertStringContainsString('# Output storage (Output node setting): ON -> outputs/workflow/ in this folder (SYNERGYAI_OUTPUT_ROOT overrides)', $wf);
+    }
+
+    private function generateSwarm(array $graph, bool $storage = false): array
+    {
+        $gen = self::generator($graph, 'swarm', $storage);
         $m = new \ReflectionMethod($gen, 'generateSwarm');
         $m->setAccessible(true);
-        $manifest = $m->invoke($gen, self::facts($graph));
+        $manifest = $m->invoke($gen, self::facts($graph, 'swarm', $storage));
         $out = [];
         foreach ($manifest['files'] as $f) {
             $out[$f['path']] = $f['code'];

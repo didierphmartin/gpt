@@ -352,7 +352,8 @@ class LangGraphGenerator
                     self::watchDocLines($facts, "{$safeName}_langgraph.py"),
                     ['# Single file: skills are read from SYNERGYAI_SKILLS_DIR (default ~/Documents/synergyAI/skills); use the modular package for a self-contained copy.']),
             ],
-            'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder()],
+            'storage' => ['enabled' => $workflow->isOutputStorageEnabled(), 'folder' => $workflow->getOutputFolder(),
+                          'default' => 'outputs/workflow/ next to this script (SYNERGYAI_OUTPUT_ROOT overrides)'],
         ]);
         $lines[] = '"""Standalone LangGraph workflow: ' . $wfName;
         $lines[] = '';
@@ -541,7 +542,7 @@ class LangGraphGenerator
         $lines[] = LangGraphRuntime::runRecordBlock();
         $lines[] = LangGraphRuntime::consoleBlock();
         $lines[] = LangGraphRuntime::workflowGraphBlock();
-        $lines[] = LangGraphRuntime::outputBlock();
+        $lines[] = LangGraphRuntime::outputBlock(true);   // outputs/ next to the script (spec 2026-10-15 §4.3)
         $lines[] = LangGraphRuntime::cronBlock();
         $lines[] = LangGraphRuntime::watchBlock();
         $lines[] = LangGraphRuntime::listenerBlock();
@@ -566,8 +567,8 @@ class LangGraphGenerator
         array_push($lines, ...self::startModeLines($facts));
         $lines[] = '';
         // Output-node storage setting baked in so the compiled script persists the final
-        // result where the app does (~/Documents/synergyAI/outputs/workflow/, or a custom
-        // folder) only when storage is enabled. Mirrors the ADK generator.
+        // result (outputs/workflow/ next to the script, SYNERGYAI_OUTPUT_ROOT overriding, or a
+        // custom folder) only when storage is enabled.
         $ofolder = $workflow->getOutputFolder();
         $lines[] = 'WORKFLOW_ID = ' . (int) $workflowId;
         $lines[] = 'WORKFLOW_NAME = ' . PythonEmitHelpers::pyStr($wfName);
@@ -3034,7 +3035,7 @@ PY;
         $L[] = '    import os, re';
         $L[] = '    if not OUTPUT_STORAGE_ENABLED:';
         $L[] = '        return None';
-        $L[] = '    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")';
+        $L[] = '    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")';
         $L[] = '    folder = OUTPUT_FOLDER or os.path.join(root, "workflow")';
         $L[] = '    if not os.path.isabs(folder):';
         $L[] = '        folder = os.path.join(root, folder)';
@@ -3166,7 +3167,7 @@ PY;
         $storageOn = $facts['workflow']->isOutputStorageEnabled();
         $folder = $facts['workflow']->getOutputFolder();
         $L[] = '  # Output storage (Output node setting): ' . ($storageOn
-            ? 'ON -> ' . (($folder ?? '') !== '' ? $folder : '~/Documents/synergyAI/outputs/workflow/')
+            ? 'ON -> ' . (($folder ?? '') !== '' ? $folder : 'outputs/workflow/ in this folder (SYNERGYAI_OUTPUT_ROOT overrides)')
             : 'OFF (the result is printed, not saved)');
         return implode("\n", $L);
     }
@@ -3461,7 +3462,8 @@ PY;
             'data_flow' => $dataFlow ?? self::modularDataFlowDoc(),
             'run' => ['extra' => array_merge((array) ($run['extra'] ?? []), self::decisionDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts))] + $run,
             'storage' => $storage
-                ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()]
+                ? ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder(),
+                   'default' => 'outputs/workflow/ in this folder (SYNERGYAI_OUTPUT_ROOT overrides)']
                 : ['enabled' => false, 'folder' => null],
         ]);
     }
