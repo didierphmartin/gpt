@@ -1341,9 +1341,26 @@ class SingleInstance:
 RUN_CAP_S = 1800.0   # a run longer than 30 min is abandoned (the server worker's cap)
 
 
-def _capped(fn: Callable[[], str], cap_s: float) -> tuple[bool, str, BaseException | None]:
-    """fn() in a daemon thread: (finished, result, error). Ctrl-C while waiting joins it fully, so
-    the run finishes its output and log, then re-raises."""
+class RunLoop:
+    """The runs' event loop, behind a holder: each run reads `.loop` when it starts. When drain()
+    abandons a run stuck past the cap, it swaps in a fresh loop here; the stuck run keeps the old
+    one (never cancelled, never closed) and the next run starts on the new one. Accepted: a stuck
+    run that wakes up late may still write into the shared GRAPH_RECORDER / NODE_DURATIONS, so its
+    late events can land in the next run's log."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
+        self.loop = loop if loop is not None else asyncio.new_event_loop()
+        self.abandoned: list[threading.Thread] = []   # worker threads of abandoned runs, still alive or not
+
+    def abandon(self, thread: threading.Thread) -> None:
+        """`thread`'s run passed the cap: leave it its loop, give the next runs a fresh one."""
+        self.abandoned.append(thread)
+        self.loop = asyncio.new_event_loop()
+
+
+def _capped(fn: Callable[[], str], cap_s: float) -> tuple[bool, str, BaseException | None, threading.Thread]:
+    """fn() in a daemon thread: (finished, result, error, thread). Ctrl-C while waiting joins it
+    fully, so the run finishes its output and log, then re-raises."""
     box: dict = {}
 
     def target():
@@ -1360,33 +1377,40 @@ def _capped(fn: Callable[[], str], cap_s: float) -> tuple[bool, str, BaseExcepti
         t.join()
         raise
     if t.is_alive():
-        return False, "", None
-    return True, box.get("r", ""), box.get("e")
+        return False, "", None, t
+    return True, box.get("r", ""), box.get("e"), t
 
 
 def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
-          loop: asyncio.AbstractEventLoop | None = None, run_cap_s: float = RUN_CAP_S) -> str:
+          loop: RunLoop | None = None, run_cap_s: float = RUN_CAP_S) -> str:
     """What one cron tick or one --watch wake runs: the workflow, again while runs do work (only
     when `drains`), at most max_runs runs; an error ends it. Returns the line the loop prints.
 
     Each run executes in a worker thread joined for at most run_cap_s: past it the run is
-    abandoned (the thread is left, its result dropped). The runs' event loop `loop` is only driven
-    from that worker thread, one run at a time: after a failed run, its leftover tasks are
-    cancelled there too. KeyboardInterrupt propagates once the current run has finished."""
+    abandoned (the thread is left, its result dropped) and `loop` (the RunLoop the runs read their
+    event loop from) gets a fresh event loop, so the loop goes on. An event loop is only driven
+    from one worker thread, one run at a time: after a failed run, its leftover tasks are
+    cancelled there too -- never on an abandoned run's loop. KeyboardInterrupt propagates once the
+    current run has finished."""
     worked = 0
 
-    def one() -> str:
-        try:
-            return run_once()
-        except BaseException:
-            cancel_leftovers(loop)
-            raise
+    def one(event_loop: asyncio.AbstractEventLoop | None, abandoned: threading.Event) -> Callable[[], str]:
+        def run() -> str:
+            try:
+                return run_once()
+            except BaseException:
+                if not abandoned.is_set():
+                    cancel_leftovers(event_loop)
+                raise
+        return run
 
     for _ in range(max_runs):
-        if loop is not None and loop.is_running():   # an abandoned run still holds the loop
-            return "abandoned run still running: skipped"
-        finished, output, error = _capped(one, run_cap_s)
+        abandoned = threading.Event()
+        finished, output, error, thread = _capped(one(loop.loop if loop else None, abandoned), run_cap_s)
         if not finished:
+            abandoned.set()
+            if loop is not None:
+                loop.abandon(thread)
             return "abandoned a run after 30 min"
         if isinstance(error, (Exception, asyncio.CancelledError)):   # one bad run must not stop the loop
             return f"error after {worked} run(s) that did work: {type(error).__name__}: {error}"
@@ -1403,7 +1427,7 @@ def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
 def cancel_leftovers(loop: asyncio.AbstractEventLoop | None) -> None:
     """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
     wakes up inside the next run. Called on the thread that ran the run."""
-    if loop is None or loop.is_closed() or loop.is_running():
+    if loop is None or loop.is_closed() or loop.is_running():   # running: on another thread, not ours to touch
         return
     leftovers = [t for t in asyncio.all_tasks(loop) if not t.done()]
     for t in leftovers:
@@ -1447,7 +1471,7 @@ class CronLoop:
     MAX_NAP = 60.0   # seconds: sleep in naps and re-check the clock (DST changes, a laptop asleep)
 
     def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
-                 loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+                 loop: RunLoop | None = None, state: LoopState | None = None,
                  stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
         self.expr, self.cron = expr, CronExpression(expr)
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
@@ -1510,14 +1534,15 @@ def cron_next(expr: str, after: datetime) -> datetime:
 
 
 def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20, sleep=time.sleep,
-             now=datetime.now, ticks: int | None = None, loop: asyncio.AbstractEventLoop | None = None,
+             now=datetime.now, ticks: int | None = None, loop: RunLoop | None = None,
              state: LoopState | None = None, stop: threading.Event | None = None, lock_path: str | None = None) -> None:
     """Run the workflow on every fire of `expr` until Ctrl-C, SIGTERM or `stop` (or `ticks` ticks, for tests).
 
     run_once() runs the workflow once and returns its output ('' = nothing to do). drains is
     True when the workflow has code nodes: a run that did work then runs again at once, up to
-    max_runs runs per tick (the server's MAX_RUNS_PER_TICK). `loop` is the event loop the runs
-    use: the tasks a failed run leaves on it are cancelled before the next run. `state` receives
+    max_runs runs per tick (the server's MAX_RUNS_PER_TICK). `loop` is the RunLoop the runs read
+    their event loop from: the tasks a failed run leaves on it are cancelled before the next run,
+    and a run abandoned past the 30 min cap leaves the next runs a fresh one. `state` receives
     the loop's state line; `lock_path` (e.g. <package>/.run.lock) keeps a second copy from starting.
     May run in a thread (api.py's listener): it then installs no signal handler.
     """
@@ -1649,7 +1674,7 @@ class WatchLoop:
     BACKOFF_MAX = 300.0
 
     def __init__(self, trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
-                 loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+                 loop: RunLoop | None = None, state: LoopState | None = None,
                  stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
         self.trigger, self.sleep, self.now, self.stop = trigger, sleep, now, stop
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
@@ -1716,7 +1741,7 @@ class WatchLoop:
 
 def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20,
               sleep=time.sleep, now=datetime.now, calls: int | None = None,
-              loop: asyncio.AbstractEventLoop | None = None, state: LoopState | None = None,
+              loop: RunLoop | None = None, state: LoopState | None = None,
               stop: threading.Event | None = None, lock_path: str | None = None) -> None:
     """Run the workflow each time `trigger` answers ready, until Ctrl-C, SIGTERM or `stop`. drains,
     max_runs, loop, state and lock_path as in run_cron(). May run in a thread (api.py's listener):

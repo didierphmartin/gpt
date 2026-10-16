@@ -426,7 +426,7 @@ PY);
         self::assertSame(1, substr_count($code, 'def run_watch('), $label);
         self::assertStringContainsString('when.add_argument("--watch", nargs="?", const="", default=None, metavar="TRIGGER"', $code, $label);
         self::assertStringContainsString('watch = WatchTrigger.from_cli(ap, a.watch, DEFAULT_WATCH)', $code, $label);
-        self::assertStringContainsString('run_watch(trigger, run_once, drains=drains, loop=loop)', $code, $label);
+        self::assertStringContainsString('run_watch(trigger, run_once, drains=drains, loop=runs)', $code, $label);
         self::assertStringContainsString("python {$file} --watch ", $code, $label);
         $f = tempnam(sys_get_temp_dir(), 'wlc') . '.py';
         file_put_contents($f, $code);

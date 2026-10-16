@@ -200,7 +200,8 @@ PY);
     public function testACancelledRunIsAnErrorAndItsLeftoverTasksAreCancelled(): void
     {
         $out = $this->py(<<<'PY'
-loop = asyncio.new_event_loop()
+runs = RunLoop()
+loop = runs.loop
 started = []
 async def bad_run():
     started.append(loop.create_task(asyncio.sleep(1000)))   # a task the failed run leaves behind
@@ -213,7 +214,7 @@ def run_once():
     print("pending before run 2:", len([t for t in asyncio.all_tasks(loop) if not t.done()]))
     return ""
 c = Clock(2026, 10, 7, 10, 0)
-run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=2, loop=loop)
+run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=2, loop=runs)
 print("leftover cancelled", started[0].cancelled())
 PY);
         $text = implode("\n", $out);
@@ -237,7 +238,8 @@ PY);
     {
         $out = $this->py(<<<'PY'
 import threading
-loop = asyncio.new_event_loop()
+runs = RunLoop()
+loop = runs.loop
 threads = []
 async def bad_run():
     threads.append(threading.current_thread())
@@ -245,17 +247,55 @@ async def bad_run():
     raise RuntimeError("boom")
 def run_once():
     threads.append(threading.current_thread())
-    return loop.run_until_complete(bad_run())
+    return runs.loop.run_until_complete(bad_run())
 orig = cancel_leftovers
 def spy(l):
     threads.append(threading.current_thread())
     orig(l)
 cancel_leftovers = spy
-print(drain(run_once, drains=True, max_runs=20, loop=loop))
+print(drain(run_once, drains=True, max_runs=20, loop=runs))
 print("off main", all(t is not threading.main_thread() for t in threads), "one thread", len(set(threads)) == 1, len(threads))
-print("pending", len([t for t in asyncio.all_tasks(loop) if not t.done()]))
+print("pending", len([t for t in asyncio.all_tasks(loop) if not t.done()]), "same loop", runs.loop is loop)
 PY);
-        self::assertSame(['error after 0 run(s) that did work: RuntimeError: boom', 'off main True one thread True 3', 'pending 0'], $out);
+        self::assertSame(['error after 0 run(s) that did work: RuntimeError: boom', 'off main True one thread True 3', 'pending 0 same loop True'], $out);
+    }
+
+    public function testAnAbandonedRunKeepsItsLoopAndTheNextRunGetsAFreshOne(): void
+    {
+        $out = $this->py(<<<'PY'
+import threading
+runs = RunLoop()
+first = runs.loop
+gate = threading.Event()
+cancelled_on = []
+orig = cancel_leftovers
+def spy(l):
+    cancelled_on.append(l)
+    orig(l)
+cancel_leftovers = spy
+async def stuck():
+    while not gate.is_set():
+        await asyncio.sleep(0.02)
+    raise RuntimeError("late failure")   # fails after the cap: its loop must not be cleaned by drain
+def stuck_run():
+    return runs.loop.run_until_complete(stuck())
+print(drain(stuck_run, drains=False, max_runs=1, loop=runs, run_cap_s=0.2))
+second = runs.loop
+used = []
+async def quick():
+    used.append(asyncio.get_running_loop())
+    return "done"
+def quick_run():
+    return runs.loop.run_until_complete(quick())
+print(drain(quick_run, drains=False, max_runs=1, loop=runs, run_cap_s=5))
+print("fresh", second is not first, "ran on fresh", used == [second], "old still busy", first.is_running())
+gate.set()
+for t in runs.abandoned:
+    t.join(5)
+print("old loop never cancelled", all(l is not first for l in cancelled_on), "abandoned threads", len(runs.abandoned))
+PY);
+        self::assertSame(['abandoned a run after 30 min', '1 run(s) did work', 'fresh True ran on fresh True old still busy True',
+                          'old loop never cancelled True abandoned threads 1'], $out);
     }
 
     public function testAFailedRunMakesTheStateWarn(): void
@@ -438,9 +478,9 @@ PY);
         self::assertStringContainsString('CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)', $code, $label);
         if ($watch) {
             self::assertStringContainsString("    drains = {$drains}\n", $code, $label);
-            self::assertStringContainsString('run_cron(expr, run_once, drains=drains, loop=loop)', $code, $label);
+            self::assertStringContainsString('run_cron(expr, run_once, drains=drains, loop=runs)', $code, $label);
         } else {
-            self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=loop)", $code, $label);
+            self::assertStringContainsString("run_cron(expr, run_once, drains={$drains}, loop=runs)", $code, $label);
         }
         self::assertMatchesRegularExpression('~^import argparse, asyncio, [a-z, ]*\bsignal\b~m', $code, $label);
         self::assertStringContainsString('allow_abbrev=False)', $code, $label);   // --cron is never guessed from a prefix

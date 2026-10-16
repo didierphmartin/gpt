@@ -2082,14 +2082,14 @@ if __name__ == "__main__":
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron stops here, before any agent starts
-    loop = asyncio.new_event_loop()   # one loop for every run
+    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
 
     def run_once() -> str:
         """One run over the agent servers: its output printed and saved ('' when it ended without one)."""
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
-        output = loop.run_until_complete(graph.run(prompt))
+        output = runs.loop.run_until_complete(graph.run(prompt))
         if output:
             print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
             saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
@@ -2106,7 +2106,7 @@ if __name__ == "__main__":
                 if not run_once():
                     print("[info] The run ended without output (a branch ended).", flush=True)
             case expr:
-                run_cron(expr, run_once, drains=False, loop=loop)   # A2A packaging has no code nodes
+                run_cron(expr, run_once, drains=False, loop=runs)   # A2A packaging has no code nodes
     finally:
         if not a.keep_serving:
             sup.stop()
@@ -3032,7 +3032,7 @@ PY;
         $L[] = '                    help="run on a cron schedule until Ctrl-C (default: the Start node\'s schedule)")';
         $L[] = '    a = ap.parse_args()';
         $L[] = '    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"';
-        $L[] = '    loop = asyncio.new_event_loop()   # one loop for every run: the compiled graph stays usable';
+        $L[] = '    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)';
         $L[] = '';
         $L[] = '    def run_once() -> str:';
         $L[] = '        """One run of the swarm (a fresh conversation): its output printed and saved (\'\' when none)."""';
@@ -3040,7 +3040,7 @@ PY;
         $L[] = '        t0 = time.monotonic()';
         $L[] = '        session = uuid.uuid4().hex';
         $L[] = '        try:';
-        $L[] = '            output = loop.run_until_complete(run(prompt, session))';
+        $L[] = '            output = runs.loop.run_until_complete(run(prompt, session))';
         $L[] = '        finally:';
         $L[] = '            if _GRAPH is not None:   # a run\'s conversation is not kept, so memory stays flat';
         $L[] = '                _GRAPH.checkpointer.delete_thread(session)';
@@ -3059,7 +3059,7 @@ PY;
         $L[] = '            if not run_once():';
         $L[] = '                print("[info] The run ended without output.", flush=True)';
         $L[] = '        case expr:';
-        $L[] = '            run_cron(expr, run_once, drains=False, loop=loop)   # a swarm has no code nodes';
+        $L[] = '            run_cron(expr, run_once, drains=False, loop=runs)   # a swarm has no code nodes';
         return rtrim(implode("\n", $L), "\n") . "\n";
     }
 
@@ -3900,7 +3900,7 @@ if __name__ == "__main__":
                            "(default: the Start node's event trigger; or 'server.tool {json args}')")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
-    loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
+    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
 
     def run_once() -> str:
         """One run: its output printed and saved ('' when it ended without one). A code node
@@ -3908,7 +3908,7 @@ if __name__ == "__main__":
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
-        output = loop.run_until_complete(graph.run(prompt))
+        output = runs.loop.run_until_complete(graph.run(prompt))
         if output:
             print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
             saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
@@ -3928,9 +3928,9 @@ if __name__ == "__main__":
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
         case None, trigger:
-            run_watch(trigger, run_once, drains=drains, loop=loop)
+            run_watch(trigger, run_once, drains=drains, loop=runs)
         case expr, _:
-            run_cron(expr, run_once, drains=drains, loop=loop)
+            run_cron(expr, run_once, drains=drains, loop=runs)
 PY;
     }
 
@@ -4294,7 +4294,7 @@ if __name__ == "__main__":
                            "(default: the Start node's event trigger; or 'server.tool {json args}')")
     a = ap.parse_args()
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
-    loop = asyncio.new_event_loop()   # one loop for every run: the clients nodes keep stay usable
+    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
 
     def run_once() -> str:
         """One run: its output printed and saved ('' when it ended without one). A code node
@@ -4302,7 +4302,7 @@ if __name__ == "__main__":
         print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
         graph = build_graph()
-        output = loop.run_until_complete(run(prompt, graph))
+        output = runs.loop.run_until_complete(run(prompt, graph))
         if output:
             print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output)
             saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
@@ -4322,9 +4322,9 @@ if __name__ == "__main__":
             except ErrorExitTaken as e:
                 sys.exit(f"[error] {e}")
         case None, trigger:
-            run_watch(trigger, run_once, drains=drains, loop=loop)
+            run_watch(trigger, run_once, drains=drains, loop=runs)
         case expr, _:
-            run_cron(expr, run_once, drains=drains, loop=loop)
+            run_cron(expr, run_once, drains=drains, loop=runs)
 
 PY;
     }
