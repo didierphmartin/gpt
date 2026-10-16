@@ -611,7 +611,7 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
                 if isinstance(author, str) and author.startswith("node_"):
                     _ap = author.split("_")
                     _nid = _ap[1] if len(_ap) > 1 else author
-                    _kind = "skill step" if "skill" in author else "agent"
+                    _kind = "skill step" if "skill" in author else "node"
                     print(f"[node {_nid}] {NODE_NAMES.get(_nid, _nid)!r} \u2192 {_kind} active", flush=True)
                 else:
                     print(f"[node] > {author}", flush=True)

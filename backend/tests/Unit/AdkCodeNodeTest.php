@@ -81,4 +81,59 @@ class AdkCodeNodeTest extends TestCase
         self::assertSame(0, $rc, $out);
         self::assertSame('http://h:1', trim($out));
     }
+
+    /** Start -> code C (exits next, server Outlook) -> Output. */
+    public static function codeAnalyzed(string $src = "def run(input, call_tool):\n    return {'output': {'got': input}}\n"): array
+    {
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+            ['id' => '2', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'C', 'code' => $src,
+                'exits' => ['next'], 'mcp_servers' => ['Outlook'], 'timeout_s' => 30]],
+            ['id' => '3', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']]];
+        $a = array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 8, 'name' => 'code'], 'generated_at' => '2026-01-01 00:00:00 UTC',
+            'usedCatalog' => [], 'usedServers' => [], 'serverSlugs' => ['http://localhost:8770' => 'outlook'],
+            'startPrompt' => 'GO', 'startDocuments' => [], 'agents' => [], 'playbooks' => [],
+        ]);
+        $a['code'] = ['2' => \AgentTeam\Services\CodeNodeEmit::nodeData($graph['nodes'][1], $graph['edges'],
+            ['outlook' => 'http://localhost:8770'], ['1', '2', '3'])];
+        return $a;
+    }
+
+    public function testCodeNodeEmitsCodeAgentWithHarness(): void
+    {
+        $code = ADKGenerator::emitAdk(self::codeAnalyzed());
+        // the single file embeds the editor's harness, as LangGraph's single file does
+        self::assertStringContainsString('CODE_HARNESS = types_module.ModuleType("code_node_harness")', $code);
+        self::assertStringContainsString('class _CodeAgent(BaseAgent):', $code);
+        self::assertStringContainsString('node_2 = _CodeAgent(', $code);
+        self::assertStringContainsString('parents=[["user_prompt", "Start", True]]', $code);
+        self::assertStringContainsString('node_name=self.display', $code);
+        self::assertMatchesRegularExpression('/sub_agents=\[\s*node_2,\s*node_3\s*\]/', $code);
+        [$rc, $out] = self::pyCompile($code);
+        self::assertSame(0, $rc, $out);
+    }
+
+    private static function pyCompile(string $code): array
+    {
+        $f = sys_get_temp_dir() . '/adkcn_' . bin2hex(random_bytes(4)) . '.py';
+        file_put_contents($f, $code);
+        exec('python3 -m py_compile ' . escapeshellarg($f) . ' 2>&1', $out, $rc);
+        return [$rc, implode("\n", $out)];
+    }
+
+    public function testCodeParentsSubstituteDispatcher(): void
+    {
+        // Start -> code T -> dispatcher D (agent with menu) -> code B
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start']],
+            ['id' => '2', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'T', 'code' => "def run(input, call_tool):\n    return 1\n", 'exits' => ['next'], 'mcp_servers' => []]],
+            ['id' => '3', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'D', 'agent_type' => 'dispatcher']],
+            ['id' => '4', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'B', 'code' => "def run(input, call_tool):\n    return 1\n", 'exits' => ['next'], 'mcp_servers' => []]],
+        ], 'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3'], ['from' => '3', 'to' => '4']]];
+        $a = WorkflowGraphAnalyzer::analyzeGraph($graph);
+        self::assertSame([['user_prompt', 'Start', true]], ADKGenerator::codeParents($a, '2'));
+        self::assertSame([['node_2', 'T', false]], ADKGenerator::codeParents($a, '4'));
+    }
 }

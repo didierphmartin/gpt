@@ -47,7 +47,6 @@ class ADKGenerator
                 . 'Compile it with LangGraph, or switch the workflow to "workflow" orchestration.'
             );
         }
-        CodeNodeEmit::refuseUnsupported($this->graphRepo->getGraph($workflowId), 'ADK');
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
 
@@ -80,8 +79,20 @@ class ADKGenerator
                 PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
         }
 
+        $index = $analyzer->serverIndex($userId);   // slug => {url, name}: the user's MCP servers
+        // Code nodes (spec 2026-10-04): validated settings, exit -> children, the servers they call.
+        $slugToUrl = array_map(fn($s) => $s['url'], $index);
+        $graphRaw = $this->graphRepo->getGraph($workflowId);
+        $analyzed['code'] = [];
+        foreach ((array) $analyzed['order'] as $nid) {   // analyzeGraph()'s topological order
+            $node = $analyzed['byId'][$nid] ?? null;
+            if ($node !== null && WorkflowGraphAnalyzer::typeOf($node) === 'code') {
+                $analyzed['code'][(string) $nid] = CodeNodeEmit::nodeData($node, $graphRaw['edges'] ?? [], $slugToUrl,
+                    array_keys((array) $analyzed['byId']));
+            }
+        }
+
         // MCP_SERVER_SLUGS: every URL this script calls -> its server's slug (MCP_HEADERS_<SLUG>).
-        $index = $analyzer->serverIndex($userId);
         $urlName = [];
         foreach ((array) ($analyzed['usedServers'] ?? []) as $surl => $meta) {
             $urlName[(string) $surl][CodeNodeEmit::slug((string) ($meta['name'] ?? ''))] = (string) ($meta['name'] ?? '');
@@ -92,6 +103,11 @@ class ADKGenerator
                     $slg = CodeNodeEmit::slug(explode('.', (string) $a['target'], 2)[0]);
                     $urlName[(string) $a['server_url']][$slg] = $index[$slg]['name'] ?? $slg;
                 }
+            }
+        }
+        foreach ($analyzed['code'] as $cd) {
+            foreach ($cd['mcp_servers'] as $slg) {
+                $urlName[$index[$slg]['url']][$slg] = $index[$slg]['name'];
             }
         }
         $analyzed['serverSlugs'] = self::serverSlugs($urlName);
@@ -203,6 +219,15 @@ class ADKGenerator
             $lines[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
             $lines[] = self::playbookAgentBlock();
             $lines[] = self::playbookInstancesBlock($analyzed);
+        }
+        if (!empty($analyzed['code'])) {
+            $lines[] = self::banner('CODE NODES',
+                'A code node runs its own Python run(input, call_tool) through the',
+                'harness the workflow editor runs (CODE_HARNESS): no model. Its',
+                'output is state["node_<id>"], the exit it took state["route_<id>"].');
+            $lines[] = self::codeHarnessBlock(!empty($analyzed['package']));
+            $lines[] = self::codeAgentBlock();
+            $lines[] = self::codeInstancesBlock($analyzed);
         }
         $dispatchers = self::dispatcherInstancesBlock($analyzed);
         if ($dispatchers !== '') {
@@ -488,6 +513,130 @@ PY;
             $out[(string) $url] = $slug;
         }
         return $out;
+    }
+
+    /**
+     * The code-node contract as the editor runs it (frontend/assets/py/code_node_harness.py): the single
+     * file embeds a copy, as LangGraph's single file does; the package imports its own copy, code_harness.py
+     * in its folder (ADKPackage). Either way the compiled program reads nothing outside itself.
+     */
+    private static function codeHarnessBlock(bool $package): string
+    {
+        if ($package) {
+            $load = "import code_harness as CODE_HARNESS   # code_harness.py in this folder\n\n\n";
+        } else {
+            $src = file_get_contents(__DIR__ . '/../../../../frontend/assets/py/code_node_harness.py');
+            if ($src === false) {
+                throw new RuntimeException('code node harness not found (frontend/assets/py/code_node_harness.py)');
+            }
+            $load = "import types as types_module   # google.genai's `types` already holds the name\n"
+                . 'CODE_HARNESS_SOURCE = ' . json_encode($src, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n"
+                . "CODE_HARNESS = types_module.ModuleType(\"code_node_harness\")\n"
+                . "exec(CODE_HARNESS_SOURCE, CODE_HARNESS.__dict__)\n\n\n";
+        }
+        return $load
+            . "def _code_transport(server: str, tool: str, args: dict) -> dict:\n"
+            . "    \"\"\"call_tool's transport: the raw MCP result of server.tool(args).\"\"\"\n"
+            . "    url = MCP_SLUGS.get(server)\n"
+            . "    if not url:\n"
+            . "        return {\"isError\": True, \"content\": [{\"type\": \"text\", \"text\": f\"MCP server {server!r} is not in this workflow\"}]}\n"
+            . "    return _call_mcp_tool_raw(url, tool, args)\n";
+    }
+
+    /** A code node's inputs as [state_key, name, is_start]; a dispatcher parent stands for its own parents (it receives the email, not the dispatcher's notes). */
+    public static function codeParents(array $analyzed, string $id, array $seen = []): array
+    {
+        $menus = WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'];
+        $out = [];
+        foreach ((array) ($analyzed['parents'][$id] ?? []) as $p) {
+            $p = (string) $p;
+            $node = $analyzed['byId'][$p] ?? [];
+            $type = WorkflowGraphAnalyzer::typeOf($node);
+            if ($type === 'start') {
+                $out[] = ['user_prompt', 'Start', true];
+            } elseif (isset($menus[$p])) {
+                if (!isset($seen[$p])) {
+                    $out = array_merge($out, self::codeParents($analyzed, $p, $seen + [$p => true]));
+                }
+            } else {
+                $out[] = ['node_' . $p, self::displayName($analyzed, $p), false];
+            }
+        }
+        return $out;
+    }
+
+    /** Display name of a node: a code node's, an agent's, a playbook's, else its canvas name, else its id. */
+    private static function displayName(array $analyzed, string $id): string
+    {
+        $cfg = (array) ($analyzed['byId'][$id]['config'] ?? []);
+        $own = trim((string) ($cfg['name'] ?? $cfg['agent_name'] ?? ''));
+        return (string) ($analyzed['code'][$id]['display'] ?? $analyzed['agents'][$id]['name']
+            ?? $analyzed['playbooks'][$id]['display'] ?? ($own !== '' ? $own : $id));
+    }
+
+    private static function codeAgentBlock(): string
+    {
+        return <<<'PY'
+    class _CodeAgent(BaseAgent):
+        """A code node: the node's own Python run(input, call_tool) -- deterministic, no model.
+
+        The contract (input, exits, declared servers, error exit, timeout) is CODE_HARNESS's, the
+        file the workflow editor runs, so the compiled node behaves like the debugged one. Its
+        output lands in state["node_<id>"], the exit it took in state["route_<id>"].
+        """
+        node_id: str = ""
+        display: str = ""
+        source: str = ""
+        exits: list = []
+        mcp_servers: list = []
+        timeout_s: int = 30
+        parents: list = []      # [[state_key, name, is_start], ...]; a key not in state = a branch not taken
+
+        async def _run_async_impl(self, ctx):
+            st = ctx.session.state
+            parents = [{"name": name, "text": str(st.get(key, "")), "start": bool(is_start)}
+                       for key, name, is_start in self.parents if key in st]
+            value = CODE_HARNESS.decode_input(parents, str(st.get("user_prompt", "")))
+            print(f"[node {self.node_id}] {self.display!r} code -- exits={self.exits}, mcp_servers={self.mcp_servers}", flush=True)
+            res = await asyncio.to_thread(CODE_HARNESS.execute, self.source, value, self.exits, self.mcp_servers,
+                                          _code_transport, self.timeout_s, node_name=self.display)
+            for call in res["tool_calls"]:
+                print(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)", flush=True)
+            if res["stdout"]:
+                print(f"[node {self.node_id}] stdout: {res['stdout'][:2000]}", flush=True)
+            if not res["ok"]:
+                raise RuntimeError(f"code node {self.display!r} failed: {res['error']}")
+            print(f"[node {self.node_id}] exit {res['route']!r}", flush=True)
+            text = res["output_text"]
+            yield Event(
+                author=self.name,
+                content=types.Content(role="model", parts=[types.Part(text=text)]),
+                actions=EventActions(state_delta={"node_" + self.node_id: text, "route_" + self.node_id: res["route"]}),
+                turn_complete=True,
+            )
+    PY;
+    }
+
+    private static function codeInstancesBlock(array $analyzed): string
+    {
+        $out = [];
+        foreach ((array) ($analyzed['code'] ?? []) as $id => $cd) {
+            $id = (string) $id;
+            $parents = array_map(fn($p) => '[' . PythonEmitHelpers::pyStr($p[0]) . ', ' . PythonEmitHelpers::pyStr($p[1]) . ', '
+                . ($p[2] ? 'True' : 'False') . ']', self::codeParents($analyzed, $id));
+            $out[] = "# Code node {$id} -- " . str_replace(["\n", '"'], [' ', "'"], $cd['display']) . "\n"
+                . "node_{$id} = _CodeAgent(\n"
+                . "    name=\"node_{$id}\",\n"
+                . "    node_id=\"{$id}\",\n"
+                . '    display=' . PythonEmitHelpers::pyStr($cd['display']) . ",\n"
+                . '    source=' . PythonEmitHelpers::pyStr($cd['source']) . ",\n"
+                . '    exits=' . PythonEmitHelpers::jsonToPython($cd['exits']) . ",\n"
+                . '    mcp_servers=' . PythonEmitHelpers::jsonToPython($cd['mcp_servers']) . ",\n"
+                . "    timeout_s={$cd['timeout_s']},\n"
+                . '    parents=[' . implode(', ', $parents) . "],\n"
+                . ")";
+        }
+        return implode("\n\n", $out);
     }
 
     /**
@@ -1323,7 +1472,7 @@ PY;
             $t = WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$id]);
             // 'playbook' is here because the target runs playbook nodes now: a
             // node missing from this list is silently dropped from root_agent.
-            return in_array($t, ['agent', 'agent-template', 'output', 'playbook'], true);
+            return in_array($t, ['agent', 'agent-template', 'output', 'playbook', 'code'], true);
         };
         // A dispatcher owns its menu (see dispatcherInstancesBlock): the wrapper
         // stands in for the dispatcher node, and the children it may pick are
@@ -1394,6 +1543,9 @@ PY;
         foreach (($analyzed['agents'] ?? []) as $nid => $ag) {
             $nodeNames[(string) $nid] = (string) ($ag['name'] ?? ('node ' . $nid));
         }
+        foreach (($analyzed['code'] ?? []) as $nid => $cd) {
+            $nodeNames[(string) $nid] = (string) $cd['display'];
+        }
         $nodeNamesPy = PythonEmitHelpers::jsonToPython($nodeNames);
         return
             "WORKFLOW_NAME = {$name}\n" .
@@ -1454,7 +1606,7 @@ PY;
             "                if isinstance(author, str) and author.startswith(\"node_\"):\n" .
             "                    _ap = author.split(\"_\")\n" .
             "                    _nid = _ap[1] if len(_ap) > 1 else author\n" .
-            "                    _kind = \"skill step\" if \"skill\" in author else \"agent\"\n" .
+            "                    _kind = \"skill step\" if \"skill\" in author else \"node\"\n" .
             "                    print(f\"[node {_nid}] {NODE_NAMES.get(_nid, _nid)!r} \\u2192 {_kind} active\", flush=True)\n" .
             "                else:\n" .
             "                    print(f\"[node] > {author}\", flush=True)\n" .
