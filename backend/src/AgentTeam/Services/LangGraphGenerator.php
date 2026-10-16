@@ -3962,10 +3962,7 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         global GRAPH_RECORDER
         ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
-        recorder.begin()
-        # Left as found when the run ends: a host that also runs the graph itself (api.py's POST /runs
-        # after its listener ran) must not inherit this run's recorder or held console lines.
-        found_recorder, found_out = GRAPH_RECORDER, RUN_OUT.mode
+        this_run = recorder.begin()
         GRAPH_RECORDER = recorder
         RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
         show_held = loop_mode and view.verbosity == "verbose"
@@ -3993,8 +3990,11 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
             recorder.end(quiet=False)
             raise
         finally:
-            RUN_OUT.begin(found_out)
-            GRAPH_RECORDER = found_recorder
+            # Back to the baseline (console printing, no recorder) -- but only while this run still owns
+            # them: a run abandoned at the cap that ends late must not reset the run that replaced it.
+            if GRAPH_RECORDER is recorder and recorder.run_id == this_run:
+                RUN_OUT.begin("print")
+                GRAPH_RECORDER = NULL_RECORDER
         recorder.complete(success=True, output=output)
         recorder.end(quiet=False)
         return output
@@ -4435,10 +4435,7 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         global GRAPH_RECORDER
         ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
         NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
-        recorder.begin()
-        # Left as found when the run ends: a host that also runs the graph itself (api.py's POST /runs
-        # after its listener ran) must not inherit this run's recorder or held console lines.
-        found_recorder, found_out = GRAPH_RECORDER, RUN_OUT.mode
+        this_run = recorder.begin()
         GRAPH_RECORDER = recorder
         RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
         show_held = loop_mode and view.verbosity == "verbose"
@@ -4466,8 +4463,11 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
             recorder.end(quiet=False)
             raise
         finally:
-            RUN_OUT.begin(found_out)
-            GRAPH_RECORDER = found_recorder
+            # Back to the baseline (console printing, no recorder) -- but only while this run still owns
+            # them: a run abandoned at the cap that ends late must not reset the run that replaced it.
+            if GRAPH_RECORDER is recorder and recorder.run_id == this_run:
+                RUN_OUT.begin("print")
+                GRAPH_RECORDER = NULL_RECORDER
         recorder.complete(success=True, output=output)
         recorder.end(quiet=False)
         return output

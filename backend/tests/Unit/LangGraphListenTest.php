@@ -377,6 +377,92 @@ PY;
         self::assertStringEndsWith("ok\n", $text, $text);
     }
 
+    /**
+     * Fix round 2: (1) a run abandoned at the cap that ends late must not reset the run that replaced it
+     * (same recorder object: runs of one loop share it), and a served run always starts from the baseline;
+     * (2) POST /runs is refused while an abandoned listener run is still alive.
+     */
+    public function testALateAbandonedRunLeavesTheNextOneAloneAndServedRunsStartClean(): void
+    {
+        $venv = $this->venv();
+        $script = <<<'PY'
+import asyncio, os, sys, threading, time, tempfile
+sys.path.insert(0, os.getcwd())
+import common, workflow, api
+from starlette.testclient import TestClient
+
+def until(cond, what, limit=10.0):
+    end = time.monotonic() + limit
+    while not cond():
+        assert time.monotonic() < end, what
+        time.sleep(0.02)
+
+def _fail_fast(kind, value, tb):
+    """A failed assert must not hang on the gate threads: report and leave at once."""
+    import traceback
+    traceback.print_exception(kind, value, tb)
+    sys.stdout.flush()
+    os._exit(1)
+sys.excepthook = _fail_fast
+
+class Graph:
+    """Stands in for WorkflowGraph: run() waits for its gate."""
+    def __init__(self):
+        self.gate, self.routes, self.agents, self.ran, self.started = threading.Event(), {}, {}, [], time.time()
+    async def run(self, prompt):
+        await asyncio.to_thread(self.gate.wait)
+        return ""
+    def check_error_exits(self):
+        pass
+
+graphs = [Graph(), Graph()]
+workflow.build_graph = lambda recorder=None: graphs.pop(0)
+gate_a, gate_b = graphs[0].gate, graphs[1].gate
+runs = workflow.RunLoop()
+recorder = workflow.RunRecorder(tempfile.mkdtemp(), 44, "W")
+run_once = workflow.make_run_once("x", runs, workflow.ConsoleView("quiet"), recorder, loop_mode=True)
+
+ta = threading.Thread(target=run_once, daemon=True); ta.start()          # run A ...
+until(lambda: workflow.GRAPH_RECORDER is recorder, "A did not start")
+run_a = recorder.run_id
+runs.loop = asyncio.new_event_loop()                                     # ... abandoned at the cap (drain swaps the loop)
+tb = threading.Thread(target=run_once, daemon=True); tb.start()          # run B begins
+until(lambda: recorder.run_id != run_a, "B did not start")
+gate_a.set(); ta.join(5)                                                 # A's late finally
+assert workflow.GRAPH_RECORDER is recorder and common.RUN_OUT.mode == "hold", (workflow.GRAPH_RECORDER, common.RUN_OUT.mode)
+gate_b.set(); tb.join(5)                                                 # B ends: the baseline
+assert workflow.GRAPH_RECORDER is common.NULL_RECORDER and common.RUN_OUT.mode == "print"
+
+seen = []
+async def served(prompt, session=None):
+    seen.append((common.RUN_OUT.mode, workflow.GRAPH_RECORDER is common.NULL_RECORDER))
+    return "ok"
+api.run_workflow = served
+with TestClient(api.app) as c:
+    workflow.GRAPH_RECORDER = recorder; common.RUN_OUT.begin("hold")     # whatever a listener run left
+    assert c.post("/runs", json={"prompt": "x"}).status_code == 200
+    until(lambda: seen, "the served run did not start")
+    assert seen == [("print", True)], seen                               # a served run starts clean
+
+    assert c.post("/listen", json={}).json()["listening"] is True       # (the trigger: closed port 9)
+    c.post("/listen", json={"stop": True})
+    until(lambda: not api.LISTENER.running, "the listener did not stop")
+    stuck = threading.Event()
+    late = threading.Thread(target=stuck.wait, daemon=True); late.start()
+    api.LISTENER.loop.abandoned.append(late)                             # an abandoned listener run, still alive
+    r = c.post("/runs", json={"prompt": "x"})
+    assert r.status_code == 409 and r.json() == {"detail": "A listener run is still finishing; try again when it ends."}, r.text
+    stuck.set(); late.join(5)
+    assert c.post("/runs", json={"prompt": "x"}).status_code == 200
+print("ok")
+PY;
+        $dir = $this->writePackage($this->generate($this->optionGraph()) + ['probe.py' => $script]);
+        $proc = proc_open([$venv, 'probe.py'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir, self::env());
+        $text = (string) stream_get_contents($pipes[1]);
+        self::assertSame(0, proc_close($proc), $text);
+        self::assertStringEndsWith("ok\n", $text, $text);
+    }
+
     private static function freePort(): int
     {
         $s = stream_socket_server('tcp://127.0.0.1:0');

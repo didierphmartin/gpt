@@ -33,7 +33,7 @@ final class RunServerEmitter
      *                             also runs the Start's cron / watch loop -- POST /listen,
      *                             GET /live, --listen (listenBlock()). Its workflow.py must
      *                             expose make_listener, RUNS_DIR, START_MODE and LoopState,
-     *                             its common.py live_next.
+     *                             its common.py live_next, RUN_OUT and NULL_RECORDER.
      */
     public static function emit(string $workflowName, string $docBody, string $importLine, string $versionLine,
         bool $listen = false): string
@@ -57,7 +57,8 @@ final class RunServerEmitter
         $L[] = 'from common import set_event_sink, resolve_gate';
         $L[] = $importLine;
         if ($listen) {
-            $L[] = 'from common import live_next';
+            $L[] = 'from common import live_next, RUN_OUT, NULL_RECORDER';
+            $L[] = 'import workflow as _workflow   # its GRAPH_RECORDER, reset before each served run';
             $L[] = 'from workflow import make_listener, RUNS_DIR, START_MODE, LoopState';
         }
         $L[] = '';
@@ -90,7 +91,7 @@ final class RunServerEmitter
                 . "            _listener().start()\n"
                 . "        except ListenRefused as e:\n"
                 . "            ap.error(f\"--listen: {e}\")\n" . self::SERVE,
-             "    _refuse_while_listening()\n" . self::RUN_PROMPT],
+             "    _before_served_run()\n" . self::RUN_PROMPT],
             $runtime
         );
     }
@@ -138,11 +139,17 @@ def _listener():
     return LISTENER
 
 
-def _refuse_while_listening() -> None:
-    """POST /runs' guard: 409 while the listener runs or is still stopping."""
+def _before_served_run() -> None:
+    """POST /runs' guard: 409 while the listener runs or is still stopping, or while a listener run it
+    abandoned at the 30 min cap is still going; then the baseline a served run starts from (console
+    printing, no run recorder), whatever a listener run left."""
     if LISTENER is not None and LISTENER.running:
         raise HTTPException(status_code=409, detail="This workflow is listening; stop it "
                                                     "(POST /listen {\"stop\": true}) before POST /runs.")
+    if LISTENER is not None and LISTENER.loop is not None and any(t.is_alive() for t in LISTENER.loop.abandoned):
+        raise HTTPException(status_code=409, detail="A listener run is still finishing; try again when it ends.")
+    RUN_OUT.begin("print")
+    _workflow.GRAPH_RECORDER = NULL_RECORDER
 
 
 def _listen_state() -> dict:
