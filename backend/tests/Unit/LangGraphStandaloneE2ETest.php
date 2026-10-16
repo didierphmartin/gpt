@@ -69,7 +69,7 @@ final class LangGraphStandaloneE2ETest extends TestCase
                 'watch' => ['server' => 'Outlook', 'tool' => 'wait_for_new', 'args' => ['folder' => 'Inbox']]]]);
     }
 
-    private function generate(): array
+    private function generate(array $options = ['modular' => true]): array
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Email triage', 'user_id' => '3',
@@ -78,7 +78,82 @@ final class LangGraphStandaloneE2ETest extends TestCase
         $graphRepo->method('getGraph')->willReturn($this->graph());
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        return (new LangGraphGenerator($this->pdo(), $wfRepo, $graphRepo, $agentRepo))->generate(44, '3', ['modular' => true]);
+        return (new LangGraphGenerator($this->pdo(), $wfRepo, $graphRepo, $agentRepo))->generate(44, '3', $options);
+    }
+
+    /** Starts the fake Outlook server on a free port; returns [process, port]. */
+    private static function startFake(string $callLog, string ...$extra): array
+    {
+        $port = self::freePort();
+        $fake = proc_open([self::VENV, __DIR__ . '/../fixtures/compiled/fake_outlook_mcp.py', (string) $port, $callLog, ...$extra],
+            [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $fp);
+        for ($i = 0; $i < 50; $i++) {
+            if (($c = @fsockopen('127.0.0.1', $port)) !== false) {
+                fclose($c);
+                return [$fake, $port];
+            }
+            usleep(100000);
+        }
+        proc_terminate($fake, SIGKILL);
+        proc_close($fake);
+        self::fail('the fake Outlook server never started listening');
+    }
+
+    /**
+     * Final review I1: the single file against a mailbox that keeps changing without new mail (every wait answers
+     * ready, no poll finds mail). Over many wakes the console shows the startup banner and one listening line --
+     * no "Running…", no "ready (event): nothing to do" -- with or without --quiet; no run log, no output.
+     */
+    public function testQuietWakesOfTheSingleFilePrintNothing(): void
+    {
+        $dir = sys_get_temp_dir() . '/lgstandalone_' . bin2hex(random_bytes(4));
+        mkdir($dir, 0777, true);
+        $fake = $wf = null;
+        try {
+            $single = $this->generate([]);
+            file_put_contents("$dir/{$single['filename']}", $single['code']);
+            [$fake, $port] = self::startFake("$dir/calls.log", 'always-ready');
+            foreach ([[], ['--quiet']] as $flags) {
+                $wf = proc_open([self::VENV, $single['filename'], ...$flags], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
+                    ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'MCP_URL_OUTLOOK' => "http://127.0.0.1:$port/mcp",
+                     'SYNERGYAI_OUTPUT_ROOT' => "$dir/outputs", 'PYTHONUNBUFFERED' => '1']);
+                $before = is_file("$dir/calls.log") ? count(file("$dir/calls.log")) : 0;
+                stream_set_blocking($pipes[1], false);
+                $text = '';
+                $until = microtime(true) + 20;
+                while (microtime(true) < $until) {   // until five more wakes have been answered and polled
+                    $text .= (string) stream_get_contents($pipes[1]);
+                    $now = is_file("$dir/calls.log") ? array_count_values(array_slice(file("$dir/calls.log", FILE_IGNORE_NEW_LINES), $before)) : [];
+                    if (($now['poll_new_mail'] ?? 0) >= 5) {
+                        break;
+                    }
+                    usleep(100000);
+                }
+                usleep(300000);
+                proc_terminate($wf, SIGTERM);
+                stream_set_blocking($pipes[1], true);
+                $text .= (string) stream_get_contents($pipes[1]);
+                proc_close($wf);
+                $wf = null;
+                echo "\n--- single file " . implode(' ', $flags) . " ---\n$text------------------\n";
+                $lines = array_values(array_filter(explode("\n", $text), fn($l) => trim($l) !== ''));
+                self::assertGreaterThanOrEqual(5, $now['poll_new_mail'] ?? 0, $text);
+                self::assertCount(3, $lines, $text);
+                self::assertStringStartsWith('Listening for events: outlook.wait_for_new {"folder":"Inbox"} (Ctrl-C to stop)', $lines[0]);
+                self::assertMatchesRegularExpression('~^\[watch \d\d:\d\d\] Listening for events$~', $lines[1]);
+                self::assertSame('[watch] stopped.', $lines[2]);
+            }
+            self::assertSame([], glob("$dir/runs/*.jsonl"), 'quiet runs leave no log');
+            self::assertDirectoryDoesNotExist("$dir/outputs");
+        } finally {
+            foreach ([$wf, $fake] as $p) {
+                if (is_resource($p)) {
+                    proc_terminate($p, SIGKILL);
+                    proc_close($p);
+                }
+            }
+            self::rmrf($dir);
+        }
     }
 
     private static function freePort(): int

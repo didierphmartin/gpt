@@ -89,7 +89,8 @@ def namespace():
           # What the Node classes need to be defined and to build a dispatcher's turn.
           "ABC": ABC, "abstractmethod": abstractmethod, "cached_property": cached_property, "Enum": Enum,
           "SystemMessage": lambda content: content, "HumanMessage": lambda content: content,
-          "AIMessage": FakeResp, "inject_datetime": lambda s: s}
+          "AIMessage": FakeResp, "inject_datetime": lambda s: s,
+          "node_print": lambda line: print(line, flush=True)}   # the runtime's node_print with no RUN_OUT
     exec(compile(BLOCK, "dispatch_block", "exec"), ns)
     return ns
 

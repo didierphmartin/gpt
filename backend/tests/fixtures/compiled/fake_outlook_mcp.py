@@ -1,7 +1,8 @@
-"""A stand-in Outlook MCP server for the standalone end-to-end test: python fake_outlook_mcp.py <port> [call-log].
+"""A stand-in Outlook MCP server for the standalone end-to-end test: python fake_outlook_mcp.py <port> [call-log] [always-ready].
 
 wait_for_new: first call -> ready (via event); later calls wait 0.2 s -> timeout.
 poll_new_mail: first call -> one mail; later calls -> no mail.
+always-ready: every wait_for_new waits 0.2 s -> ready (a mailbox change that is not new mail); no poll finds mail.
 """
 import json
 import sys
@@ -15,6 +16,7 @@ TOOLS = [
     {"name": "poll_new_mail", "description": "Poll new mail", "inputSchema": {"type": "object", "properties": {}}},
 ]
 calls = {"wait_for_new": 0, "poll_new_mail": 0}
+ALWAYS_READY = len(sys.argv) > 3 and sys.argv[3] == "always-ready"
 lock = threading.Lock()
 
 
@@ -26,11 +28,14 @@ def answer(name):
             with open(sys.argv[2], "a") as log:
                 log.write(name + "\n")
     if name == "wait_for_new":
+        if ALWAYS_READY:
+            time.sleep(0.2)
+            return {"status": "ready", "via": "event"}
         if first:
             return {"status": "ready", "via": "event"}
         time.sleep(0.2)
         return {"status": "timeout"}
-    return {"mail": MAIL} if first else {"mail": None}
+    return {"mail": MAIL} if first and not ALWAYS_READY else {"mail": None}
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -18,11 +18,11 @@ final class LangGraphRunRecordTest extends TestCase
         return $py;
     }
 
-    private function py(string $tail): array
+    private function py(string $tail, string $head = ''): array
     {
         $file = tempnam(sys_get_temp_dir(), 'rr') . '.py';
         file_put_contents($file, "from __future__ import annotations\nimport json, os, tempfile, time, uuid\nfrom datetime import datetime\nfrom typing import Callable\n"
-            . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::consoleBlock() . "\n" . $tail);
+            . $head . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::consoleBlock() . "\n" . $tail);
         exec($this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
         unlink($file);
         self::assertSame(0, $rc, implode("\n", $out));
@@ -183,6 +183,56 @@ r.begin()
 assert v.buffered == [] and lines == [], (v.buffered, lines)
 print("ok")
 PY);
+    }
+
+    /**
+     * Final review M-a: the node runtime's own lines ([tool], [run_skill_script], a dispatcher's "routed to")
+     * go through node_print(): RUN_OUT where the file has it (so a --cron / --watch run holds them like its
+     * other progress lines), print where it has not (an A2A agent process).
+     */
+    public function testNodeLinesGoThroughRunOutWhereThereIsOne(): void
+    {
+        $head = "import threading\n" . LangGraphRuntime::runEventsBlock() . "\n";
+        $out = $this->py(<<<'PY'
+RUN_OUT.begin("hold")
+node_print("  [tool] -> x()")
+assert RUN_OUT.held == ["  [tool] -> x()"], RUN_OUT.held
+RUN_OUT.begin("drop")
+node_print("dropped")
+RUN_OUT.begin("print")
+node_print("printed")
+print("ok")
+PY, $head);
+        self::assertSame(['printed', 'ok'], $out);
+        $file = tempnam(sys_get_temp_dir(), 'rr') . '.py';
+        file_put_contents($file, "from __future__ import annotations\nfrom typing import Callable\n" . $head . "node_print('no RUN_OUT here')\n");
+        exec($this->python() . ' ' . escapeshellarg($file) . ' 2>&1', $plain, $rc);
+        unlink($file);
+        self::assertSame([0, ['no RUN_OUT here']], [$rc, $plain]);
+
+        $gen = LangGraphA2AGeneratorTest::generator();
+        $codes = ['single' => $gen->generate(44, '3')['code']];
+        foreach (['modular', 'a2a'] as $mode) {
+            foreach ($gen->generate(44, '3', [$mode => true])['files'] as $f) {
+                $codes["$mode/{$f['path']}"] = $f['code'];
+            }
+        }
+        $checked = 0;
+        foreach ($codes as $label => $code) {
+            if (($label !== 'single' && !str_ends_with($label, '.py'))
+                || (!str_contains($code, 'class ToolCatalog') && !str_contains($code, 'class DispatcherNode'))) {
+                continue;
+            }
+            $checked++;
+            self::assertMatchesRegularExpression('/^def node_print\(/m', $code, $label);
+            if (str_contains($code, 'RUN_OUT = RunOutput()')) {   // the hook is set after node_print's default, not reset by it
+                self::assertLessThan(strpos($code, 'NODE_OUT = RUN_OUT'), strpos($code, 'NODE_OUT: Callable'), $label);
+            }
+            foreach (['print(f"  [tool]', 'print(f"[node] [{nid}]', 'print(f"  [run_skill_script]'] as $bare) {
+                self::assertDoesNotMatchRegularExpression('/(?<!node_)' . preg_quote($bare, '/') . '/', $code, "$label: $bare");
+            }
+        }
+        self::assertGreaterThanOrEqual(3, $checked);
     }
 
     /** The block must land in every emission that carries WorkflowGraph, and the result must compile. */

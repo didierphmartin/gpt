@@ -624,24 +624,24 @@ class Dispatcher:
         if res.outcome == "routed":
             chosen = res.target
             # Same shape the model path returns, minus notes: a decision model writes no prose.
-            print(f"[node] [{nid}] {self.display!r} {key} routed to {chosen['name']!r} "
-                  f"(confidence {conf}, {res.ms}ms, no LLM turn)", flush=True)
+            node_print(f"[node] [{nid}] {self.display!r} {key} routed to {chosen['name']!r} "
+                       f"(confidence {conf}, {res.ms}ms, no LLM turn)")
             return RouteDecision(text=task, route=chosen["id"], notes="", status="ok")
         not_classified = res.outcome in ("unclear", "low_confidence")
         # Not classified goes to the branch the form names for it (by name), while it is on the menu.
         unclear = self.cfg.get("unclear_branch", "")
         chosen = next((t for t in self.targets if t["name"] == unclear), None) if not_classified and unclear else None
         if chosen is not None:
-            print(f"[node] [{nid}] {self.display!r} {key} did not classify ({res.outcome}: {res.reason}, "
-                  f"confidence {conf}) -- sent to the unclear branch {chosen['name']!r}", flush=True)
+            node_print(f"[node] [{nid}] {self.display!r} {key} did not classify ({res.outcome}: {res.reason}, "
+                       f"confidence {conf}) -- sent to the unclear branch {chosen['name']!r}")
             return RouteDecision(text=task, route=chosen["id"], notes="", status="ok")
         # Decision model only: no model fallback, so the run stops here and says why
         # (the reason names a missing key, too). Same message as the interpreter.
         # A request no branch fits is a normal ending ("Not classified"), anything else an error.
         msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{self.display}" did not route the request '
                f'({key}: {res.outcome}: {res.reason}).')
-        print(f"[node] [{nid}] ⚠ {self.display!r} {key} did not route ({res.outcome}: {res.reason}, "
-              f"confidence {conf}) — decision-model dispatcher, no model fallback", flush=True)
+        node_print(f"[node] [{nid}] ⚠ {self.display!r} {key} did not route ({res.outcome}: {res.reason}, "
+                   f"confidence {conf}) — decision-model dispatcher, no model fallback")
         return RouteDecision(text=msg, route="", notes="", status="unrouted")
 
     def _route_tool(self) -> StructuredTool:
@@ -682,10 +682,10 @@ class Dispatcher:
         if chosen is None:
             msg = (f"Error: dispatcher {self.display!r} did not route the request. "
                    f"Expected route_to with one of: {', '.join(self.names)}.")
-            print(f"[node] [{nid}] ⚠ {msg}", flush=True)
+            node_print(f"[node] [{nid}] ⚠ {msg}")
             return RouteDecision(text=msg, route="", notes="", status="unrouted")
-        print(f"[node] [{nid}] {self.display!r} routed to {chosen['name']!r} ({dt:.1f}s)"
-              + (f" -- notes: {notes[:120]!r}" if notes else ""), flush=True)
+        node_print(f"[node] [{nid}] {self.display!r} routed to {chosen['name']!r} ({dt:.1f}s)"
+                   + (f" -- notes: {notes[:120]!r}" if notes else ""))
         text = task + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")
         return RouteDecision(text=text, route=chosen["id"], notes=notes, status="ok")
 
@@ -867,6 +867,7 @@ class RunOutput:
 
 
 RUN_OUT = RunOutput()   # the run's progress lines (WorkflowGraph, each node's trace)
+NODE_OUT = RUN_OUT      # node_print() (the node runtime's [tool] / [run_skill_script] / route lines) goes here too
 
 
 PY;
@@ -1448,8 +1449,10 @@ class CronExpression:
 
 class LoopState:
     """What a --cron / --watch loop is doing, as one line and a tone (ok | warn | err | off), the
-    server worker's state line. set() prints the line once when it changes, as "[<tag> HH:MM] <line>"
-    (only when `echo`), and calls each of on_change. Thread-safe: a loop may run in a thread."""
+    server worker's state line. set() hands a changed state to each of on_change, and prints it as
+    "[<tag> HH:MM] <line>" (only when `echo`) when it differs from the line last printed -- so a
+    transient state set with show=False ("Running…" on a wake that finds nothing) that goes back to
+    the line already on the console prints nothing. Thread-safe: a loop may run in a thread."""
 
     def __init__(self, tag: str = "watch", now=datetime.now, echo: bool = True):
         self.line, self.tone = "", "off"
@@ -1457,15 +1460,20 @@ class LoopState:
         self.last_failed = False   # the last drain ended in an error or an abandoned run
         self.on_change: list[Callable[["LoopState"], None]] = []
         self.tag, self.now, self.echo = tag, now, echo
+        self.shown: str | None = None   # the line last printed (None: print the next one whatever it is)
         self._lock = threading.Lock()
 
-    def set(self, line: str, tone: str) -> None:
-        """The new state: printed (when `echo`) and handed to the listeners only when it changed."""
+    def set(self, line: str, tone: str, show: bool = True) -> None:
+        """The new state, handed to the listeners only when it changed; printed (when `echo` and
+        `show`) only when it is not the line already printed."""
         with self._lock:
             if (line, tone) == (self.line, self.tone):
                 return
             self.line, self.tone = line, tone
-        if self.echo:
+            say = self.echo and show and line != self.shown
+            if say:
+                self.shown = line
+        if say:
             print(f"[{self.tag} {self.now():%H:%M}] {line}", flush=True)
         self.notify()
 
@@ -1600,6 +1608,15 @@ def drain(run_once: Callable[[], str], *, drains: bool, max_runs: int,
     return f"{worked} run(s) did work" if worked else "nothing to do"
 
 
+def drain_shown(line: str, verbosity: str) -> bool:
+    """Whether a loop prints the line drain() returned: a drain that did nothing prints nothing (but
+    under --verbose); one that did work prints, but under --quiet (each run's done line says it); an
+    error or an abandoned run always prints."""
+    if verbosity == "verbose" or line.startswith(("error", "abandoned")):
+        return True
+    return line != "nothing to do" and verbosity != "quiet"
+
+
 def cancel_leftovers(loop: asyncio.AbstractEventLoop | None) -> None:
     """After a failed run, cancel the tasks it left on the runs' event loop, so none of them
     wakes up inside the next run. Called on the thread that ran the run."""
@@ -1642,16 +1659,19 @@ def _nap(seconds: float, sleep, stop: threading.Event | None) -> None:
 
 
 class CronLoop:
-    """The --cron loop: sleep until the next fire, run one tick, print one line, repeat."""
+    """The --cron loop: sleep until the next fire, run one tick, print its line (drain_shown()), repeat.
+    `banner` replaces the loop's first line (the Listener's, printed once the lock is held)."""
 
     MAX_NAP = 60.0   # seconds: sleep in naps and re-check the clock (DST changes, a laptop asleep)
 
     def __init__(self, expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
                  loop: RunLoop | None = None, state: LoopState | None = None,
-                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
+                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S,
+                 verbosity: str = "normal", banner: str | None = None):
         self.expr, self.cron = expr, CronExpression(expr)
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
         self.sleep, self.now, self.stop, self.run_cap_s = sleep, now, stop, run_cap_s
+        self.verbosity, self.banner = verbosity, banner
         # the [tick] line is the console; the state line is for listeners (api.py)
         self.state = state if state is not None else LoopState()
         self.state.tag, self.state.now, self.state.echo = "cron", now, False
@@ -1680,7 +1700,7 @@ class CronLoop:
     def run(self, ticks: int | None = None) -> None:
         """Tick on every fire until Ctrl-C, SIGTERM or `stop` (or `ticks` ticks, for tests)."""
         due = self.cron.next_after(self.now())
-        print(f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
+        print(self.banner or f"[cron] {self.expr!r}: next run {due:%Y-%m-%d %H:%M}. Ctrl-C to stop.", flush=True)
         done = 0
         self.state.listening = True
         self._idle(due)
@@ -1691,7 +1711,9 @@ class CronLoop:
                     if self._stopped():
                         break
                     done += 1
-                    print(f"[tick {due:%H:%M}] {self.tick()}", flush=True)
+                    line = self.tick()
+                    if drain_shown(line, self.verbosity):
+                        print(f"[tick {due:%H:%M}] {line}", flush=True)
                     # The fire after this one -- or after now, when the runs overran the next fires.
                     due = self.cron.next_after(max(due, self.now()))
                     self._idle(due)
@@ -1711,7 +1733,8 @@ def cron_next(expr: str, after: datetime) -> datetime:
 
 def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20, sleep=time.sleep,
              now=datetime.now, ticks: int | None = None, loop: RunLoop | None = None,
-             state: LoopState | None = None, stop: threading.Event | None = None, lock_path: str | None = None) -> None:
+             state: LoopState | None = None, stop: threading.Event | None = None, lock_path: str | None = None,
+             verbosity: str = "normal", banner: str | None = None) -> None:
     """Run the workflow on every fire of `expr` until Ctrl-C, SIGTERM or `stop` (or `ticks` ticks, for tests).
 
     run_once() runs the workflow once and returns its output ('' = nothing to do). drains is
@@ -1720,11 +1743,13 @@ def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: 
     their event loop from: the tasks a failed run leaves on it are cancelled before the next run,
     and a run abandoned past the 30 min cap leaves the next runs a fresh one. `state` receives
     the loop's state line; `lock_path` (e.g. <package>/.run.lock) keeps a second copy from starting.
-    May run in a thread (api.py's listener): it then installs no signal handler.
+    verbosity (quiet | normal | verbose) decides which tick lines print (drain_shown()); `banner`, when
+    given, is the first line, printed once the lock is held. May run in a thread (api.py's listener):
+    it then installs no signal handler.
     """
     with SingleInstance(lock_path, "cron", state):
         CronLoop(expr, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
-                 state=state, stop=stop).run(ticks)
+                 state=state, stop=stop, verbosity=verbosity, banner=banner).run(ticks)
 
 
 PY;
@@ -1853,10 +1878,11 @@ class WatchLoop:
 
     def __init__(self, trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int, sleep, now,
                  loop: RunLoop | None = None, state: LoopState | None = None,
-                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S):
+                 stop: threading.Event | None = None, run_cap_s: float = RUN_CAP_S,
+                 verbosity: str = "normal", banner: str | None = None):
         self.trigger, self.sleep, self.now, self.stop = trigger, sleep, now, stop
         self.run_once, self.drains, self.max_runs, self.loop = run_once, drains, max_runs, loop
-        self.run_cap_s = run_cap_s
+        self.run_cap_s, self.verbosity, self.banner = run_cap_s, verbosity, banner
         self.state = state if state is not None else LoopState()
         self.state.tag, self.state.now = "watch", now
         self.backoff: float | None = None   # the current retry delay; None after a valid answer
@@ -1868,7 +1894,9 @@ class WatchLoop:
         return self.stop is not None and self.stop.is_set()
 
     def step(self) -> None:
-        """One call of the trigger, and the runs it calls for (spec 2026-10-15 §3)."""
+        """One call of the trigger, and the runs it calls for (spec 2026-10-15 §3). A wake that finds
+        nothing to do prints nothing: "Running…" goes to the listeners only, and the idle line that
+        follows is the one already printed."""
         try:
             r = self.trigger.wait()
         except WatchError as e:
@@ -1881,10 +1909,12 @@ class WatchLoop:
         idle = ("Listening (checks every 15 min)" if (r.get("via") == "fallback" or r.get("events") == "off")
                 else "Listening for events")
         if r["status"] == "ready":
-            self.state.set("Running…", "ok")
+            self.state.set("Running…", "ok", show=False)
             line = drain(self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
                          run_cap_s=self.run_cap_s)
-            self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
+            if drain_shown(line, self.verbosity):
+                self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
+                self.state.shown = None   # the console moved on: say the idle line again
             self.state.last_failed = line.startswith(("error", "abandoned"))
         if self.state.last_failed:
             self.state.set("Listening — the last run failed", "warn")
@@ -1900,7 +1930,7 @@ class WatchLoop:
     def run(self, calls: int | None = None) -> None:
         """Until Ctrl-C, SIGTERM or `stop` (or `calls` trigger calls, for tests). Ctrl-C during a run
         lets that run finish its output and log first (drain())."""
-        print(f"[watch] waiting on {self.trigger}. Ctrl-C to stop.", flush=True)
+        print(self.banner or f"[watch] waiting on {self.trigger}. Ctrl-C to stop.", flush=True)
         done = 0
         self.state.listening = True
         with SigtermAsCtrlC():
@@ -1920,13 +1950,14 @@ class WatchLoop:
 def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: bool, max_runs: int = 20,
               sleep=time.sleep, now=datetime.now, calls: int | None = None,
               loop: RunLoop | None = None, state: LoopState | None = None,
-              stop: threading.Event | None = None, lock_path: str | None = None) -> None:
+              stop: threading.Event | None = None, lock_path: str | None = None,
+              verbosity: str = "normal", banner: str | None = None) -> None:
     """Run the workflow each time `trigger` answers ready, until Ctrl-C, SIGTERM or `stop`. drains,
-    max_runs, loop, state and lock_path as in run_cron(). May run in a thread (api.py's listener):
-    it then installs no signal handler."""
+    max_runs, loop, state, lock_path, verbosity and banner as in run_cron(). May run in a thread
+    (api.py's listener): it then installs no signal handler."""
     with SingleInstance(lock_path, "watch", state):
         WatchLoop(trigger, run_once, drains=drains, max_runs=max_runs, sleep=sleep, now=now, loop=loop,
-                  state=state, stop=stop).run(calls)
+                  state=state, stop=stop, verbosity=verbosity, banner=banner).run(calls)
 
 
 PY;
@@ -1972,14 +2003,14 @@ class Listener:
 
     def __init__(self, mode: str, run_once: Callable[[], str], *, drains: bool, loop: RunLoop | None,
                  cron_expr: str | None, trigger: "WatchTrigger | None", state: LoopState, lock_path: str | None,
-                 max_runs: int = 20):
+                 max_runs: int = 20, verbosity: str = "normal"):
         if mode not in ("cron", "watch"):
             raise ValueError(f"a Listener runs --cron or --watch, not {mode!r}")
         if (mode == "cron" and not cron_expr) or (mode == "watch" and trigger is None):
             raise ValueError(f"{mode} needs its " + ("cron expression" if mode == "cron" else "trigger"))
         self.mode, self.run_once, self.drains, self.loop = mode, run_once, drains, loop
         self.cron_expr, self.trigger, self.state, self.lock_path = cron_expr, trigger, state, lock_path
-        self.max_runs = max_runs
+        self.max_runs, self.verbosity = max_runs, verbosity
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._restart = False   # start() came while a stop was taking effect: run the loop again
@@ -2004,17 +2035,19 @@ class Listener:
         return f"Listening for events: {self.trigger} {args} (Ctrl-C to stop)"
 
     def _loop(self) -> None:
-        """The loop itself, in the calling thread; a held lock sets the state and ends it (SystemExit 0)."""
+        """The loop itself, in the calling thread, its banner first once the lock is held; a held lock
+        sets the state and ends it (SystemExit 0) with no banner."""
         if self.mode == "cron":
             run_cron(self.cron_expr, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
-                     state=self.state, stop=self._stop_event, lock_path=self.lock_path)
+                     state=self.state, stop=self._stop_event, lock_path=self.lock_path,
+                     verbosity=self.verbosity, banner=self.banner())
         else:
             run_watch(self.trigger, self.run_once, drains=self.drains, max_runs=self.max_runs, loop=self.loop,
-                      state=self.state, stop=self._stop_event, lock_path=self.lock_path)
+                      state=self.state, stop=self._stop_event, lock_path=self.lock_path,
+                      verbosity=self.verbosity, banner=self.banner())
 
     def run_blocking(self) -> None:
         """The program's default mode: the banner, then the loop in this thread until Ctrl-C or SIGTERM."""
-        print(self.banner(), flush=True)
         self._loop()
 
     def start(self) -> None:
@@ -2030,7 +2063,6 @@ class Listener:
                 return
             self._stop_event = threading.Event()
             self._restart = False
-            print(self.banner(), flush=True)
             self._thread = threading.Thread(target=self._serve, name=f"listener-{self.mode}", daemon=True)
             self._thread.start()
 
@@ -2044,7 +2076,6 @@ class Listener:
                     self._thread = None   # from here on start() starts a new thread
                     return
                 self._restart = False
-            print(self.banner(), flush=True)
 
     def stop(self) -> None:
         """Ask the loop to stop; returns at once (the loop ends after the current trigger call or run)."""
@@ -2744,12 +2775,12 @@ class ToolCatalog:
         def invoke(**kwargs):
             argv = json.dumps(kwargs, default=str)
             argv_preview = argv if len(argv) <= 250 else argv[:250] + f" ... +{len(argv) - 250} chars"
-            print(f"  [tool] -> {name}({argv_preview})")
+            node_print(f"  [tool] -> {name}({argv_preview})")
             t0 = time.monotonic()
             result = MCP.call_tool(server_url, name, kwargs)
             dt = time.monotonic() - t0
             summary = self._summarize(result)
-            print(f"  [tool] ← {name}: {summary} ({len(result)} chars, {dt:.1f}s)")
+            node_print(f"  [tool] ← {name}: {summary} ({len(result)} chars, {dt:.1f}s)")
             return result
 
         return StructuredTool.from_function(
@@ -2877,14 +2908,14 @@ class SkillRuntime:
                     continue
                 self._installed_deps.add(d)
                 try:
-                    print(f"  [run_skill_script] ensuring dependency: {d}", flush=True)
+                    node_print(f"  [run_skill_script] ensuring dependency: {d}")
                     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],
                                        capture_output=True, text=True, timeout=600)
                     if r.returncode != 0:
-                        print(f"  [run_skill_script] pip install {d} FAILED: "
-                              f"{(r.stderr or '')[-300:]}", flush=True)
+                        node_print(f"  [run_skill_script] pip install {d} FAILED: "
+                                   f"{(r.stderr or '')[-300:]}")
                 except Exception as e:
-                    print(f"  [run_skill_script] pip install {d} error: {e}", flush=True)
+                    node_print(f"  [run_skill_script] pip install {d} error: {e}")
 
     def output_dir(self, dir_name: str) -> str:
         """The real /outputs dir of a skill: <outputs root>/<group> for a grouped skill ('GEO/x'), else the root."""
@@ -2950,7 +2981,7 @@ class SkillRuntime:
         try:
             out = self._exec(dir_name, script, skill_dir, script_path, argv, out_dir)
         except subprocess.TimeoutExpired:
-            print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s", flush=True)
+            node_print(f"  [run_skill_script] ← {dir_name}/{script}: TIMEOUT after 300s")
             return f"ERROR: skill {dir_name}/{script} timed out after 300s"
         # Read back requested outputs AND stash them so the skill step can use the produced
         # document as the node output.
@@ -2967,7 +2998,7 @@ class SkillRuntime:
                     with open(target, "w", encoding="utf-8") as fh:
                         fh.write(self.fix_overescaped(content))
                 except Exception as e:
-                    print(f"  [run_skill_script] could not stage {raw_path}: {e}")
+                    node_print(f"  [run_skill_script] could not stage {raw_path}: {e}")
 
     def _exec(self, dir_name: str, script: str, skill_dir: str, script_path: str, argv: list, out_dir: str) -> str:
         """Run the script in its skill dir with the SYNERGYAI_* env; stdout, plus the exit code and
@@ -2980,7 +3011,7 @@ class SkillRuntime:
             SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),
         )
         cmd = [sys.executable, script_path] + [str(a) for a in argv]
-        print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}", flush=True)
+        node_print(f"  [run_skill_script] → {dir_name}/{script} argv={argv}")
         _t0 = time.monotonic()
         proc = subprocess.run(cmd, cwd=skill_dir, env=env, capture_output=True,
                               text=True, timeout=300)
@@ -2988,10 +3019,10 @@ class SkillRuntime:
         out = proc.stdout or ""
         _stderr = (proc.stderr or "").strip()
         _head = out.replace(chr(10), " ")[:160]
-        print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
-              f"{len(out)} chars stdout, {_dt:.1f}s | {_head}", flush=True)
+        node_print(f"  [run_skill_script] ← {dir_name}/{script}: exit={proc.returncode}, "
+                   f"{len(out)} chars stdout, {_dt:.1f}s | {_head}")
         if proc.returncode != 0 and _stderr:
-            print(f"  [run_skill_script]   stderr tail: {_stderr[-400:]}", flush=True)
+            node_print(f"  [run_skill_script]   stderr tail: {_stderr[-400:]}")
         if proc.returncode != 0:
             out = (out + f"\n[run_skill_script exit {proc.returncode}]\n"
                    + _stderr[-2000:]).strip()
@@ -3211,6 +3242,20 @@ class RunEvents:
 
 
 EVENTS = RunEvents()
+
+
+NODE_OUT: Callable[[str], None] | None = None   # RUN_OUT where this file has one (set after RUN_OUT is made)
+
+
+def node_print(line: str) -> None:
+    """A node runtime line ([tool], [run_skill_script], a dispatcher's route): through RUN_OUT where
+    this file has it -- a --cron / --watch run then holds it with its other progress lines, a --once
+    --quiet run drops it -- else printed (an A2A agent process)."""
+    if NODE_OUT is not None:
+        NODE_OUT(line)
+    else:
+        print(line, flush=True)
+
 
 # The names api.py (the shared run server) and the run-server test probes import.
 set_event_sink = EVENTS.set_sink

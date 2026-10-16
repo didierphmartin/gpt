@@ -4063,7 +4063,7 @@ if __name__ == "__main__":
             sys.exit(1 if a.quiet else f"[error] {e}")   # --quiet: the view's Failed line says it
     else:
         Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
-                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
+                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock"), verbosity=view.verbosity).run_blocking()
 PY;
     }
 
@@ -4509,7 +4509,7 @@ if __name__ == "__main__":
             sys.exit(1 if a.quiet else f"[error] {e}")   # --quiet: the view's Failed line says it
     else:
         Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
-                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock")).run_blocking()
+                 lock_path=os.path.join(PACKAGE_DIR, ".run.lock"), verbosity=view.verbosity).run_blocking()
 
 PY;
     }

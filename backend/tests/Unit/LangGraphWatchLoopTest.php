@@ -94,14 +94,53 @@ PY);
         self::assertSame([
             '[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.',
             '[watch 09:00] Listening for events',
-            '[watch 09:00] Running…',
-            '[watch 09:00] ready (event): 2 run(s) did work',
+            '[watch 09:00] ready (event): 2 run(s) did work',   // "Running…" goes to the listeners only (final review I1)
             '[watch 09:00] Listening for events',
-            '[watch 09:00] Running…',
-            '[watch 09:00] ready (fallback): nothing to do',
-            '[watch 09:00] Listening (checks every 15 min)',
+            '[watch 09:00] Listening (checks every 15 min)',    // the fallback wake found nothing: no ready line
             "calls ('http://mail.local/mcp', 'wait_for_new', {'args': {'folder': 'Inbox'}}) 3 slept []",
         ], $out);
+    }
+
+    /**
+     * Final review I1: a wake that finds nothing to do prints nothing -- no "Running…", no "ready (…)" line,
+     * and the idle line stays as it was (printed once) -- whatever the verbosity but verbose; under
+     * --verbose the ready line shows. Listeners still see every state.
+     */
+    public function testAQuietWakePrintsNothing(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="ready", via="event")] * 4)
+clock = Clock(); st = LoopState(); seen = []
+st.on_change.append(lambda s: seen.append(s.line))
+run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now, calls=4, state=st)
+assert seen.count("Running…") == 4, seen
+for verbosity in ("quiet", "normal"):
+    MCP = FakeMcp([ok(status="ready", via="event")] * 3)
+    run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now, calls=3, verbosity=verbosity)
+print("verbose")
+MCP = FakeMcp([ok(status="ready", via="event")])
+run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now, calls=1, verbosity="verbose")
+PY);
+        $quiet = ['[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.', '[watch 09:00] Listening for events'];
+        self::assertSame(array_merge($quiet, $quiet, $quiet, ['verbose', $quiet[0], '[watch 09:00] ready (event): nothing to do', $quiet[1]]), $out);
+    }
+
+    /** Final review I1: --quiet keeps a run that did work to its view's done line; an error still shows. */
+    public function testQuietShowsOnlyErrorsOfTheDrain(): void
+    {
+        $out = $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="ready", via="event"), ok(status="ready", via="event")])
+clock = Clock()
+def run_once(state={"n": 0}):
+    state["n"] += 1
+    if state["n"] == 2:
+        raise RuntimeError("Jev down")
+    return "mail" if state["n"] == 1 else ""
+run_watch(TRIGGER, run_once, drains=False, sleep=clock.sleep, now=clock.now, calls=2, verbosity="quiet")
+PY);
+        self::assertSame(['[watch] waiting on outlook.wait_for_new. Ctrl-C to stop.', '[watch 09:00] Listening for events',
+            '[watch 09:00] ready (event): error after 0 run(s) that did work: RuntimeError: Jev down',
+            '[watch 09:00] Listening — the last run failed'], $out);
     }
 
     public function testWithoutCodeNodesOneRunPerReady(): void
@@ -111,7 +150,7 @@ MCP = FakeMcp([ok(status="ready", via="event")])
 clock = Clock()
 run_watch(TRIGGER, runner(["a", "b"]), drains=False, sleep=clock.sleep, now=clock.now, calls=1)
 PY);
-        self::assertSame('[watch 09:00] ready (event): 1 run(s) did work', $out[2]);
+        self::assertSame('[watch 09:00] ready (event): 1 run(s) did work', $out[1]);
     }
 
     public function testEachFailureKindHasItsLineAndTheBackoffGrows(): void
@@ -134,7 +173,7 @@ PY);
         self::assertStringContainsString('got \'{"answer": 42}\' — retrying in 240 s', $out[4]);
         self::assertSame('[watch 09:07] Not listening: boom — retrying in 300 s', $out[5]);
         self::assertSame('[watch 09:12] Not listening: Outlook is not connected — retrying in 300 s', $out[6]);
-        self::assertSame(['[watch 09:17] Running…', '[watch 09:17] ready (pending): 1 run(s) did work',
+        self::assertSame(['[watch 09:17] ready (pending): 1 run(s) did work',
                           '[watch 09:17] Listening for events', 'slept [30.0, 60.0, 120.0, 240.0, 300.0, 300.0]'], array_slice($out, 7));
     }
 
@@ -265,6 +304,39 @@ PY);
         self::assertContains('exit 0', $out);
     }
 
+    /**
+     * Final review M-c: the Listener's banner prints once the lock is held, in place of the loop's own first
+     * line; a second copy prints only "already running".
+     */
+    public function testTheListenerBannerFollowsTheLock(): void
+    {
+        [$rc, $out] = $this->runPy(LangGraphRuntime::listenerBlock() . <<<'PY'
+import tempfile, os, subprocess
+p = os.path.join(tempfile.mkdtemp(), ".run.lock")
+clock = Clock()
+for mode in ("watch", "cron"):
+    MCP = FakeMcp([ok(status="timeout")])
+    L = Listener(mode, runner([]), drains=True, loop=None, cron_expr="0 0 1 1 *" if mode == "cron" else None,
+                 trigger=TRIGGER if mode == "watch" else None, state=LoopState(), lock_path=p)
+    if mode == "watch":
+        run_watch(TRIGGER, runner([]), drains=True, sleep=clock.sleep, now=clock.now, calls=1, lock_path=p,
+                  state=L.state, banner=L.banner())
+    print("second copy")
+    hold = subprocess.Popen([sys.executable, "-c", "import fcntl,sys,time; f=open(sys.argv[1],'a'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(5)", p], stdout=subprocess.PIPE, text=True)
+    hold.stdout.readline()
+    try:
+        L.run_blocking()
+    except SystemExit as e:
+        print("exit", e.code)
+    hold.kill(); hold.wait()
+PY);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame(['Listening for events: outlook.wait_for_new {"args":{"folder":"Inbox"}} (Ctrl-C to stop)',
+            '[watch 09:00] Listening for events', 'second copy', '[watch 09:00] Not listening: already running (' . '', 'exit 0',
+            'second copy', '[cron HH:MM] Not listening: already running (', 'exit 0'],
+            array_map(fn($l) => preg_replace(['~\(/.*$~', '~^\[cron \d\d:\d\d\]~'], ['(', '[cron HH:MM]'], $l), $out));
+    }
+
     public function testCtrlCDuringARunLetsItFinish(): void   // Review Focus 5
     {
         $out = $this->py(<<<'PY'
@@ -345,10 +417,10 @@ def run_once(state={"n": 0}):
     return ""
 run_watch(TRIGGER, run_once, drains=True, sleep=clock.sleep, now=clock.now, calls=2)
 PY);
-        self::assertSame('[watch 09:00] ready (event): error after 0 run(s) that did work: RuntimeError: Jev down', $out[2]);
-        self::assertSame('[watch 09:00] Listening — the last run failed', $out[3]);
-        self::assertSame('[watch 09:00] ready (event): nothing to do', $out[5]);
-        self::assertSame('[watch 09:00] Listening for events', $out[6]);
+        self::assertSame('[watch 09:00] ready (event): error after 0 run(s) that did work: RuntimeError: Jev down', $out[1]);
+        self::assertSame('[watch 09:00] Listening — the last run failed', $out[2]);
+        self::assertSame('[watch 09:00] Listening for events', $out[3]);   // the second wake found nothing: no ready line
+        self::assertCount(4, $out);
     }
 
     public function testCtrlCStops(): void

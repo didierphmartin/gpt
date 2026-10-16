@@ -104,7 +104,7 @@ def run_once():
         raise RuntimeError("reconnect_needed")
     return o
 c = Clock(2026, 10, 7, 10, 42, 30)
-run_cron("*/2 * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=3)
+run_cron("*/2 * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=3, verbosity="verbose")   # verbose: a quiet tick says so
 print("sleeps", len(c.slept))
 PY);
         $text = implode("\n", $out);
@@ -112,6 +112,29 @@ PY);
         self::assertStringContainsString('reconnect_needed', $text);    // tick 2: error logged, loop continues
         self::assertStringContainsString('nothing to do', $text);       // tick 3: quiet
         self::assertStringContainsString('sleeps 6', $text);           // 90 s, then 120 s twice, in naps of <= 60 s
+    }
+
+    /** Final review I1: a tick with nothing to do prints no [tick] line (but under --verbose); work and errors do. */
+    public function testAQuietTickPrintsNothing(): void
+    {
+        $out = $this->py(<<<'PY'
+outputs = iter(["", "", "mail", "", "boom"])
+def run_once():
+    o = next(outputs)
+    if o == "boom":
+        raise RuntimeError("down")
+    return o
+c = Clock(2026, 10, 7, 10, 0)
+run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=4)
+print("verbose")
+run_cron("* * * * *", lambda: "", drains=True, sleep=c.sleep, now=c.now, ticks=1, verbosity="verbose")
+print("quiet")
+run_cron("* * * * *", lambda: "mail", drains=False, sleep=c.sleep, now=c.now, ticks=1, verbosity="quiet")
+PY);
+        self::assertSame(["[cron] '* * * * *': next run 2026-10-07 10:01. Ctrl-C to stop.",
+            '[tick 10:03] 1 run(s) did work', '[tick 10:04] error after 0 run(s) that did work: RuntimeError: down',
+            'verbose', "[cron] '* * * * *': next run 2026-10-07 10:05. Ctrl-C to stop.", '[tick 10:05] nothing to do',
+            'quiet', "[cron] '* * * * *': next run 2026-10-07 10:06. Ctrl-C to stop."], $out);
     }
 
     public function testNoDrainWithoutCodeNodes(): void
@@ -160,7 +183,7 @@ PY);
     {
         $out = $this->py(<<<'PY'
 c = Clock(2026, 10, 7, 10, 42, 30)
-run_cron("*/2 * * * *", lambda: "", drains=True, sleep=c.sleep, now=c.now, ticks=3)
+run_cron("*/2 * * * *", lambda: "", drains=True, sleep=c.sleep, now=c.now, ticks=3, verbosity="verbose")   # verbose: a quiet tick says so
 print(c.slept)
 PY);
         // first fire 10:44 (90 s away), then 10:46 and 10:48; the clock is re-read after every nap
@@ -173,7 +196,7 @@ PY);
     {
         $out = $this->py(<<<'PY'
 c = Clock(2026, 10, 7, 10, 0, 30, jump=3600)   # the first nap lasts an hour (laptop asleep, DST change)
-run_cron("*/30 * * * *", lambda: "", drains=False, sleep=c.sleep, now=c.now, ticks=2)
+run_cron("*/30 * * * *", lambda: "", drains=False, sleep=c.sleep, now=c.now, ticks=2, verbosity="verbose")   # verbose: a quiet tick says so
 print(c.slept)
 PY);
         // due 10:30: one nap, then the clock reads 11:01:30 -> fire at once; the next fire is 11:30
@@ -214,7 +237,7 @@ def run_once():
     print("pending before run 2:", len([t for t in asyncio.all_tasks(loop) if not t.done()]))
     return ""
 c = Clock(2026, 10, 7, 10, 0)
-run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=2, loop=runs)
+run_cron("* * * * *", run_once, drains=True, sleep=c.sleep, now=c.now, ticks=2, loop=runs, verbosity="verbose")   # verbose: a quiet tick says so
 print("leftover cancelled", started[0].cancelled())
 PY);
         $text = implode("\n", $out);
