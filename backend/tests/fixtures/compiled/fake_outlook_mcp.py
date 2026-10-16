@@ -1,4 +1,4 @@
-"""A stand-in Outlook MCP server for the standalone end-to-end test: python fake_outlook_mcp.py <port>.
+"""A stand-in Outlook MCP server for the standalone end-to-end test: python fake_outlook_mcp.py <port> [call-log].
 
 wait_for_new: first call -> ready (via event); later calls wait 0.2 s -> timeout.
 poll_new_mail: first call -> one mail; later calls -> no mail.
@@ -22,6 +22,9 @@ def answer(name):
     with lock:
         calls[name] += 1
         first = calls[name] == 1
+        if len(sys.argv) > 2:
+            with open(sys.argv[2], "a") as log:
+                log.write(name + "\n")
     if name == "wait_for_new":
         if first:
             return {"status": "ready", "via": "event"}

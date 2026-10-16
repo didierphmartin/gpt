@@ -111,19 +111,33 @@ final class LangGraphStandaloneE2ETest extends TestCase
             }
             file_put_contents("$dir/pkg/.env", "MCP_URL_OUTLOOK=http://127.0.0.1:$port/mcp\n");
 
-            $fake = proc_open([self::VENV, __DIR__ . '/../fixtures/compiled/fake_outlook_mcp.py', (string) $port],
+            $fake = proc_open([self::VENV, __DIR__ . '/../fixtures/compiled/fake_outlook_mcp.py', (string) $port, "$dir/calls.log"],
                 [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $fp);
-            for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) {
-                usleep(100000);
+            $up = false;
+            for ($i = 0; $i < 50 && !$up; $i++) {
+                if (($c = @fsockopen('127.0.0.1', $port)) !== false) {
+                    fclose($c);
+                    $up = true;
+                } else {
+                    usleep(100000);
+                }
             }
+            self::assertTrue($up, 'the fake Outlook server never started listening');
 
             $wf = proc_open([self::VENV, 'workflow.py'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, "$dir/pkg",
                 ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'SYNERGYAI_OUTPUT_ROOT' => "$dir/outputs", 'PYTHONUNBUFFERED' => '1']);
             stream_set_blocking($pipes[1], false);
             $text = '';
-            $until = microtime(true) + 4;
+            $until = microtime(true) + 20;   // wait for the run's Done line, then let one more wait pass
+            $doneAt = null;
             while (microtime(true) < $until) {
                 $text .= (string) stream_get_contents($pipes[1]);
+                if ($doneAt === null && preg_match('~Done in~', $text)) {
+                    $doneAt = microtime(true);
+                }
+                if ($doneAt !== null && microtime(true) - $doneAt > 1.5) {
+                    break;
+                }
                 usleep(100000);
             }
             proc_terminate($wf, SIGTERM);
@@ -150,13 +164,18 @@ final class LangGraphStandaloneE2ETest extends TestCase
 
             self::assertCount(1, glob("$dir/outputs/*/*"), 'one saved output');
 
+            $calls = array_count_values(file("$dir/calls.log", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
+            self::assertSame(2, $calls['poll_new_mail'] ?? 0, 'one poll with mail, one quiet poll');
+            self::assertGreaterThanOrEqual(1, $calls['wait_for_new'] ?? 0);
+
+            self::assertFileExists("$dir/pkg/.run.lock", 'the program took the run lock');
             $lock = <<<'PY'
-import fcntl
-fh = open(".run.lock", "a+")
+import fcntl, sys
+fh = open(sys.argv[1], "a+")
 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 print("LOCKED")
 PY;
-            exec(escapeshellarg(self::VENV) . ' -c ' . escapeshellarg($lock) . ' 2>&1', $out, $rc);
+            exec(escapeshellarg(self::VENV) . ' -c ' . escapeshellarg($lock) . ' ' . escapeshellarg("$dir/pkg/.run.lock") . ' 2>&1', $out, $rc);
             self::assertSame(['LOCKED'], $out, 'the run lock is free after exit');
         } finally {
             foreach ([$wf, $fake] as $p) {
