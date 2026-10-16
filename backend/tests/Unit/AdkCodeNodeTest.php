@@ -136,4 +136,60 @@ class AdkCodeNodeTest extends TestCase
         self::assertSame([['user_prompt', 'Start', true]], ADKGenerator::codeParents($a, '2'));
         self::assertSame([['node_2', 'T', false]], ADKGenerator::codeParents($a, '4'));
     }
+
+    /** wf 64's shape: Start -> trigger T (exits new_mail, no_mail) -> dispatcher D -> code A | code B -> Output O. */
+    public static function wf64Analyzed(): array
+    {
+        $code = "def run(input, call_tool):\n    return {'output': input}\n";
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'GO']],
+            ['id' => '10', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'T', 'code' => "def run(input, call_tool):\n    return {'route': 'new_mail', 'output': {'subject': 'hi'}}\n", 'exits' => ['new_mail', 'no_mail'], 'mcp_servers' => []]],
+            ['id' => '2', 'type' => 'agent', 'config' => ['type' => 'agent', 'agent_name' => 'D', 'agent_type' => 'dispatcher', 'provider' => 'claude', 'model' => 'm']],
+            ['id' => '3', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'A', 'code' => $code, 'exits' => ['next'], 'mcp_servers' => []]],
+            ['id' => '4', 'type' => 'code', 'config' => ['type' => 'code', 'name' => 'B', 'code' => $code, 'exits' => ['next'], 'mcp_servers' => []]],
+            ['id' => '5', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [
+            ['from' => '1', 'to' => '10', 'from_port' => 'output_1'],
+            ['from' => '10', 'to' => '2', 'from_port' => 'output_1'],
+            ['from' => '2', 'to' => '3'], ['from' => '2', 'to' => '4'],
+            ['from' => '3', 'to' => '5'], ['from' => '4', 'to' => '5'],
+        ]];
+        $a = array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 64, 'name' => 'wf64'], 'generated_at' => '2026-01-01 00:00:00 UTC',
+            'usedCatalog' => [], 'usedServers' => [], 'serverSlugs' => [],
+            'startPrompt' => 'GO', 'startDocuments' => [], 'playbooks' => [],
+            'agents' => ['2' => ['name' => 'D', 'systemPrompt' => 'Route the email.', 'provider' => 'claude', 'model' => 'm',
+                'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skill_content' => '',
+                'output_schema_id' => null, 'documents' => []]],
+        ]);
+        $ids = ['1', '10', '2', '3', '4', '5'];
+        $byId = array_column($graph['nodes'], null, 'id');
+        $a['code'] = [];
+        foreach (['10', '3', '4'] as $cid) {
+            $a['code'][$cid] = \AgentTeam\Services\CodeNodeEmit::nodeData($byId[$cid], $graph['edges'], [], $ids);
+        }
+        return $a;
+    }
+
+    public function testWf64ShapeRoutesThroughGatesAndNestsCodeInDispatcher(): void
+    {
+        $code = ADKGenerator::emitAdk(self::wf64Analyzed());
+        // dispatcher menu nests the code branches
+        self::assertMatchesRegularExpression('/node_2__dispatch = _DispatcherAgent\(.*?sub_agents=\[node_2, node_3, node_4\]/s', $code);
+        // dispatcher reads the trigger's output as its task and in its instruction
+        self::assertStringContainsString('task_keys=["node_10"]', $code);
+        self::assertMatchesRegularExpression('/_agent_instruction\(.*?\["node_10"\]\)/s', $code);
+        // the dispatcher runs only on the work exit
+        self::assertStringContainsString('_Gate(name="gate_2", when=[["node_10", "route_10", "new_mail"]], sub_agents=[node_2__dispatch])', $code);
+        // Output runs when one branch ran
+        self::assertStringContainsString('_Gate(name="gate_5", when=[["node_3", "", ""], ["node_4", "", ""]], sub_agents=[node_5])', $code);
+        // branch code nodes read the trigger's output, not the dispatcher's text
+        self::assertStringContainsString('parents=[["node_10", "T", False]]', $code);
+        self::assertSame(0, self::pyCompile($code)[0]);
+    }
+
+    public function testUngatedWorkflowUnchanged(): void
+    {
+        self::assertStringNotContainsString('_Gate(', ADKGenerator::emitAdk(self::mcpAnalyzed()));
+    }
 }

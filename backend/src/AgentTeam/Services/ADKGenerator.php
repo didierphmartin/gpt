@@ -239,6 +239,13 @@ class ADKGenerator
             $lines[] = self::dispatcherAgentBlock();
             $lines[] = $dispatchers;
         }
+        if (self::needsGates($analyzed)) {
+            $lines[] = self::banner('ROUTING',
+                'A node after a choice (a code node with several exits, a',
+                'dispatcher) runs inside a _Gate: only when a parent ran and',
+                'the exit it took leads here. Untaken branches are skipped.');
+            $lines[] = self::gateAgentBlock();
+        }
         $lines[] = self::banner('ORCHESTRATION',
             'The workflow graph as TOPOLOGICAL LAYERS: independent nodes at',
             'the same depth run together in a ParallelAgent; the layers run',
@@ -637,6 +644,93 @@ PY;
                 . ")";
         }
         return implode("\n\n", $out);
+    }
+
+    /** A dispatcher menu child this target nests under the dispatcher: an agent or a code node. */
+    private static function menuNestable(array $analyzed, string $cid): bool
+    {
+        return isset($analyzed['agents'][$cid]) || isset($analyzed['code'][$cid]);
+    }
+
+    /**
+     * The nodes downstream of a choice: a child of a code node with several exits, of a dispatcher's
+     * nested menu child, or of a node already downstream of one. Only these get a _Gate.
+     */
+    private static function conditionalNodes(array $analyzed): array
+    {
+        $nested = [];
+        foreach (WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'] as $targets) {
+            foreach ($targets as $t) {
+                if (self::menuNestable($analyzed, (string) $t['id'])) {
+                    $nested[(string) $t['id']] = true;
+                }
+            }
+        }
+        $cond = [];
+        foreach ((array) ($analyzed['order'] ?? []) as $n) {
+            $n = (string) $n;
+            foreach ((array) ($analyzed['parents'][$n] ?? []) as $p) {
+                $p = (string) $p;
+                if (count($analyzed['code'][$p]['exits'] ?? []) > 1 || isset($nested[$p]) || isset($cond[$p])) {
+                    $cond[$n] = true;
+                    break;
+                }
+            }
+        }
+        return $cond;
+    }
+
+    /**
+     * A conditional node's _Gate rules [parent_key, route_key, exit] (any one holding runs it), or null:
+     * Start -> ["user_prompt", "", ""]; a code node with several exits -> one rule per exit leading here;
+     * any other parent -> it ran.
+     */
+    public static function gateRules(array $analyzed, string $id): ?array
+    {
+        if (!isset(self::conditionalNodes($analyzed)[$id])) {
+            return null;
+        }
+        $rules = [];
+        foreach ((array) ($analyzed['parents'][$id] ?? []) as $p) {
+            $p = (string) $p;
+            if (WorkflowGraphAnalyzer::typeOf($analyzed['byId'][$p] ?? []) === 'start') {
+                $rules[] = ['user_prompt', '', ''];
+            } elseif (count($analyzed['code'][$p]['exits'] ?? []) > 1) {
+                foreach ($analyzed['code'][$p]['exit_targets'] as $exit => $children) {
+                    if (in_array($id, array_map('strval', $children), true)) {
+                        $rules[] = ["node_{$p}", "route_{$p}", (string) $exit];
+                    }
+                }
+            } else {
+                $rules[] = ["node_{$p}", '', ''];
+            }
+        }
+        return $rules;
+    }
+
+    /** True when some top-level node of the workflow needs a _Gate. */
+    private static function needsGates(array $analyzed): bool
+    {
+        return self::conditionalNodes($analyzed) !== [];
+    }
+
+    private static function gateAgentBlock(): string
+    {
+        return <<<'PY'
+class _Gate(BaseAgent):
+    """Runs its node only when the workflow reached it: a parent ran (its state key exists) and,
+    for a code node with several exits, the exit it took leads here. A node after a choice that
+    was not taken is skipped, and so is everything that only follows it."""
+    when: list = []          # [[parent_state_key, route_state_key or "", exit or ""], ...]
+
+    async def _run_async_impl(self, ctx):
+        st = ctx.session.state
+        if not any(k in st and (not rk or st.get(rk) == ex) for k, rk, ex in self.when):
+            print(f"[node] {self.sub_agents[0].name} skipped (its branch was not taken)", flush=True)
+            return
+        async for ev in self.sub_agents[0].run_async(ctx):
+            yield ev
+PY;
     }
 
     /**
@@ -1054,7 +1148,7 @@ TXT;
             // the same route the skill steps already use.
             $agentParents = array_values(array_filter(
                 $analyzed['parents'][$id] ?? [],
-                fn($p) => isset($analyzed['agents'][$p])
+                fn($p) => isset($analyzed['agents'][$p]) || isset($analyzed['code'][$p])
             ));
             $parentKeysPy = '[' . implode(', ', array_map(fn($p) => '"node_' . $p . '"', $agentParents)) . ']';
 
@@ -1283,7 +1377,7 @@ PY;
             foreach ((array) ($analyzed['parents'][$pid] ?? []) as $p) {
                 $p = (string) $p;
                 // Only parents that actually write a state key can be read back.
-                if (isset($analyzed['agents'][$p]) || isset($analyzed['playbooks'][$p])) {
+                if (isset($analyzed['agents'][$p]) || isset($analyzed['playbooks'][$p]) || isset($analyzed['code'][$p])) {
                     $keys[] = '"node_' . $p . '"';
                 }
             }
@@ -1426,7 +1520,7 @@ PY;
             $subs    = ["node_{$did}"];
             foreach ($targets as $t) {
                 $cid = (string) $t['id'];
-                if (!isset($analyzed['agents'][$cid])) {
+                if (!self::menuNestable($analyzed, $cid)) {
                     continue;
                 }
                 $entries[] = '[' . PythonEmitHelpers::pyStr($cid) . ', '
@@ -1439,7 +1533,7 @@ PY;
             }
             $taskKeys = array_values(array_filter(
                 $analyzed['parents'][$did] ?? [],
-                fn($p) => isset($analyzed['agents'][$p])
+                fn($p) => isset($analyzed['agents'][$p]) || isset($analyzed['code'][$p])
             ));
             $taskKeysPy = '[' . implode(', ', array_map(fn($p) => '"node_' . $p . '"', $taskKeys)) . ']';
             $entry  = "# DISPATCHER {$did}: the chooser plus its menu. Only the child it names runs;\n";
@@ -1483,7 +1577,7 @@ PY;
         $nested = [];
         foreach ($dispatch['menus'] as $did => $targets) {
             foreach ($targets as $t) {
-                if (isset($analyzed['agents'][(string) $t['id']])) {
+                if (self::menuNestable($analyzed, (string) $t['id'])) {
                     $nested[(string) $t['id']] = true;
                 }
             }
@@ -1497,7 +1591,13 @@ PY;
                     continue;
                 }
                 if ($isRunnable($id)) {
-                    $vars[] = isset($dispatch['menus'][$id]) ? "node_{$id}__dispatch" : "node_{$id}";
+                    $var = isset($dispatch['menus'][$id]) ? "node_{$id}__dispatch" : "node_{$id}";
+                    $rules = self::gateRules($analyzed, $id);
+                    if ($rules !== null) {
+                        $when = '[' . implode(', ', array_map(fn($r) => '[' . implode(', ', array_map([PythonEmitHelpers::class, 'pyStr'], $r)) . ']', $rules)) . ']';
+                        $var = "_Gate(name=\"gate_{$id}\", when={$when}, sub_agents=[{$var}])";
+                    }
+                    $vars[] = $var;
                 }
             }
             if (!$vars) {
