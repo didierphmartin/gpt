@@ -48,8 +48,8 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
     public function testACodeBranchOfADispatcherReceivesWhatTheDispatcherReceived(): void
     {
         // Start(1) -> Poll(2, code) -> triage(3, dispatcher) -> claims(4, code): claims gets the email.
-        $py = "from __future__ import annotations\nimport json\nfrom typing import Awaitable, Callable\n"
-            . LangGraphRuntime::workflowGraphBlock() . "\n"
+        $py = "from __future__ import annotations\nimport json, os, time, uuid\nfrom datetime import datetime\nfrom typing import Awaitable, Callable\n"
+            . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::workflowGraphBlock() . "\n"
             . "g = WorkflowGraph(edges=[['1','2'],['2','3'],['3','4']], order=['1','2','3','4'],\n"
             . "    node_types={'1':'start','2':'code','3':'agent','4':'code'},\n"
             . "    agents={'2': {'kind':'code','display':'Poll'}, '3': {'kind':'dispatcher','display':'triage','dispatch':[{'id':'4','name':'claims'}]},\n"

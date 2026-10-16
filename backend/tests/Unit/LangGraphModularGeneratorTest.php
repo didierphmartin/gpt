@@ -158,7 +158,8 @@ class LangGraphModularGeneratorTest extends TestCase
         // No graph data and no node definitions: those belong to workflow.py / agents/*.
         // (Node.run and WorkflowGraph.run are methods; a graph run() would be a top-level function.)
         foreach (['EDGES = ', 'ORDER = ', 'NODE_TYPES = ', 'NODE = {', 'AGENTS = {'] as $needle) {
-            $this->assertStringNotContainsString($needle, $code, "common.py must not carry: {$needle}");
+            // Not inside a longer name: NULL_RECORDER = (the run records) ends in "ORDER = ".
+            $this->assertDoesNotMatchRegularExpression('/(?<![A-Z_])' . preg_quote($needle, '/') . '/', $code, "common.py must not carry: {$needle}");
         }
         $this->assertDoesNotMatchRegularExpression('/^async def run\(/m', $code);
     }

@@ -711,6 +711,114 @@ PY;
     }
 
     /**
+     * Run records (spec 2026-10-15 §4): each run's events in the server's run-log format
+     * (GraphWorkflowRunner::emitNodeEvent), one JSONL file per run under RUNS_DIR plus a `current`
+     * pointer, and the server's quiet rule (CodeNodeStep::summarize). The entry file supplies json,
+     * os, time, uuid, datetime and Callable.
+     */
+    public static function runRecordBlock(): string
+    {
+        return <<<'PY'
+# ==============================================================
+# RUN RECORDS
+# Every run's events, in the format the SynergyAI server writes
+# (workflow_start, node_start, node_complete, node_log, workflow_complete),
+# one JSONL file per run under RUNS_DIR, and RUNS_DIR/current naming the
+# latest. A quiet run (a poll that found nothing) leaves no file.
+# ==============================================================
+WORK_TYPES = ("agent", "playbook", "output")
+OUTPUT_IN_LOG = 4000   # characters of a node's output kept in its node_complete event
+
+
+def is_quiet(node_types: dict, routes: dict, agents: dict, ran: list) -> bool:
+    """The server's rule (CodeNodeStep::summarize): a code node took an exit other than `error`,
+    none took `error`, and no agent, playbook or output node ran."""
+    code_exits = [r for nid, r in routes.items() if (agents.get(nid) or {}).get("kind") == "code"]
+    if not code_exits or "error" in code_exits:
+        return False
+    return not any(node_types.get(nid) in WORK_TYPES for nid in ran)
+
+
+class RunRecorder:
+    """One run at a time: its events to a JSONL file (when runs_dir is set) and to each listener."""
+
+    def __init__(self, runs_dir: str | None, workflow_id: int, workflow_name: str,
+                 listeners: list[Callable[[dict], None]] | None = None):
+        self.runs_dir, self.workflow_id, self.workflow_name = runs_dir, workflow_id, workflow_name
+        self.listeners = list(listeners or [])
+        self.run_id: str | None = None
+        self._path: str | None = None
+
+    def current_path(self) -> str | None:
+        """The open run's file, or None (no runs_dir, or the run ended)."""
+        return self._path
+
+    def begin(self) -> str:
+        """Start a run: a new id, its file, the pointer, and workflow_start."""
+        self.run_id = uuid.uuid4().hex
+        if self.runs_dir:
+            os.makedirs(self.runs_dir, exist_ok=True)
+            stem = f"{datetime.now():%Y-%m-%d_%H-%M-%S}_{self.run_id}"
+            self._path = os.path.join(self.runs_dir, stem + ".jsonl")
+            tmp = os.path.join(self.runs_dir, ".current.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(stem)
+            os.replace(tmp, os.path.join(self.runs_dir, "current"))
+        self.emit("workflow_start", run_id=self.run_id, workflow_id=self.workflow_id, workflow_name=self.workflow_name)
+        return self.run_id
+
+    def emit(self, type: str, **fields) -> dict:
+        """Stamp one event, append it to the run file and hand it to every listener; returns it."""
+        ev = {"type": type, **fields, "timestamp": time.time()}
+        if "node_id" in ev:
+            ev.setdefault("drawflow_id", None)
+        if self._path:
+            with open(self._path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
+        for listen in self.listeners:
+            try:
+                listen(ev)
+            except Exception as e:  # noqa: BLE001 -- a broken view must not break the run
+                print(f"[warn] run listener failed: {e}", flush=True)
+        return ev
+
+    def node_start(self, nid: str, name: str, ntype: str) -> None:
+        """A node began."""
+        self.emit("node_start", node_id=nid, node_type=ntype, node_name=name)
+
+    def node_complete(self, nid: str, name: str, ntype: str, *, success: bool = True, output: str = "",
+                      exit: str | None = None, route: dict | None = None, error: str | None = None) -> None:
+        """A node finished: its output (cut to OUTPUT_IN_LOG), a code node's exit, a dispatcher's route, or its error."""
+        extra = {k: v for k, v in (("exit", exit), ("route", route), ("error", error)) if v is not None}
+        self.emit("node_complete", node_id=nid, node_type=ntype, node_name=name, success=success,
+                  output=str(output or "")[:OUTPUT_IN_LOG], **extra)
+
+    def node_log(self, nid: str, message: str) -> None:
+        """A progress line of a node (what its trace callback prints)."""
+        self.emit("node_log", node_id=nid, message=message)
+
+    def complete(self, *, success: bool, output: str = "", error: str | None = None) -> None:
+        """The run is over: workflow_complete with its outcome."""
+        self.emit("workflow_complete", success=success, output=str(output or ""),
+                  **({"error": error} if error is not None else {}))
+
+    def end(self, *, quiet: bool) -> None:
+        """Close the run; a quiet one's file is deleted (the pointer may then name a missing file)."""
+        if quiet and self._path:
+            try:
+                os.remove(self._path)
+            except FileNotFoundError:
+                pass
+        self._path = None
+
+
+NULL_RECORDER = RunRecorder(None, 0, "")
+
+
+PY;
+    }
+
+    /**
      * WorkflowGraph: the workflow as a LangGraph StateGraph, built from the frozen
      * EDGES / ORDER / NODE_TYPES and one node table. Written once for every mode: the
      * single file and orchestrator.py carry it inline, the modular package in common.py.
@@ -758,7 +866,8 @@ class WorkflowGraph:
     """
 
     def __init__(self, *, edges: list, order: list[str], node_types: dict[str, str], agents: dict[str, dict],
-                 run_node: Callable[[str, str], Awaitable[dict]], start_documents: list[dict]):
+                 run_node: Callable[[str, str], Awaitable[dict]], start_documents: list[dict],
+                 recorder: "RunRecorder | None" = None):
         """agents maps an agent/playbook node id to its entry (display, kind, dispatch menu);
         run_node(nid, request) runs that node and returns {"text", "route", "notes", "status"}."""
         self.edges, self.order, self.node_types = edges, order, node_types
@@ -766,6 +875,8 @@ class WorkflowGraph:
         self.started: float | None = None   # time.monotonic() when the run began (RUN SUMMARY)
         self.routes: dict[str, str] = {}     # the last run's exit per code node / child per dispatcher
         self.outputs: dict[str, dict] = {}   # the last run's node_outputs (an error exit's output says why)
+        self.recorder = recorder or NULL_RECORDER
+        self.ran: list[str] = []             # ids of the nodes that ran this run (the quiet rule)
 
     def parents(self, nid: str) -> list[str]:
         """Get direct predecessor node IDs (nodes with edges INTO this node)."""
@@ -800,6 +911,9 @@ class WorkflowGraph:
                         + text
                     )
             print(f"[node] [{nid}] start -- {len(text)} chars", flush=True)
+            self.ran.append(nid)
+            self.recorder.node_start(nid, "Start", "start")
+            self.recorder.node_complete(nid, "Start", "start", output=text)
             return {"node_outputs": {nid: {"source": "start", "text": text}}}
         return _run
 
@@ -833,7 +947,19 @@ class WorkflowGraph:
         """An agent/playbook node: run it, then turn a dispatcher's choice into the conditional edge's input."""
         async def _run(state):
             ad = self.agents[nid]
-            out = await self.run_node(nid, self._request_for(nid, state))
+            self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""))
+            try:
+                out = await self.run_node(nid, self._request_for(nid, state))
+            except Exception as e:
+                self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), success=False, error=f"{type(e).__name__}: {e}")
+                raise
+            self.ran.append(nid)
+            route_info = None
+            if ad.get("dispatch"):
+                chosen = next((t for t in ad["dispatch"] if t["id"] == out.get("route")), None)
+                route_info = {"id": chosen["id"], "name": chosen["name"]} if chosen else None
+            self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), output=out["text"],
+                                        exit=out["route"] if ad.get("kind") == "code" else None, route=route_info)
             result = {"node_outputs": {nid: {"source": ad["display"], "text": out["text"]}}}
             if ad.get("kind") == "code":
                 # Code node: the exit it took selects its children (conditional edge).
@@ -860,6 +986,9 @@ class WorkflowGraph:
                 blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
                 final = "\n\n---\n\n".join(blocks)
             print(f"[node] [{nid}] output -- {len(final)} chars", flush=True)
+            self.ran.append(nid)
+            self.recorder.node_start(nid, "Output", "output")
+            self.recorder.node_complete(nid, "Output", "output", output=final)
             return {"final_output": final}
         return _run
 
@@ -915,6 +1044,7 @@ class WorkflowGraph:
         Steps: compile the graph (nodes from ORDER, edges from EDGES in topological
         order), invoke it on the prompt, and return the final output text.
         """
+        self.ran = []
         graph = self.compile()
         print("[info] Running...", flush=True)
         self.started = time.monotonic()

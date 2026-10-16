@@ -243,8 +243,8 @@ PY);
 
     public function testCodeNodeErrorExitIsReportedByTheGraph(): void
     {
-        $out = $this->py("import json\nfrom typing import Awaitable, Callable\nEND, START, StateGraph, WFState = '__end__', '__start__', None, None\n"
-            . LangGraphRuntime::workflowGraphBlock() . <<<'PY'
+        $out = $this->py("import json, os, time, uuid\nfrom datetime import datetime\nfrom typing import Awaitable, Callable\nEND, START, StateGraph, WFState = '__end__', '__start__', None, None\n"
+            . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::workflowGraphBlock() . <<<'PY'
 g = WorkflowGraph(edges=[], order=[], node_types={}, start_documents=[], run_node=None,
                   agents={"2": {"display": "Poll Outlook", "kind": "code"}, "5": {"display": "D", "kind": "dispatcher"}})
 g.check_error_exits()

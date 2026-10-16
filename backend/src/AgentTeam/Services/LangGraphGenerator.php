@@ -353,7 +353,7 @@ class LangGraphGenerator
         $lines[] = '"""';
         $lines[] = 'from __future__ import annotations';
         $lines[] = '';
-        $lines[] = 'import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time' . ($playbookData !== [] ? ', uuid' : '') . ($codeData !== [] ? ', types' : '');
+        $lines[] = 'import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time, uuid' . ($codeData !== [] ? ', types' : '');
         $lines[] = 'from abc import ABC, abstractmethod';
         $lines[] = 'from dataclasses import asdict, dataclass, field';
         $lines[] = 'from datetime import datetime, timedelta';
@@ -529,6 +529,7 @@ class LangGraphGenerator
 
         // ---------- the graph, output storage and run summary (shared with every mode) ----------
         $lines[] = '';
+        $lines[] = LangGraphRuntime::runRecordBlock();
         $lines[] = LangGraphRuntime::workflowGraphBlock();
         $lines[] = LangGraphRuntime::outputBlock();
         $lines[] = LangGraphRuntime::cronBlock();
@@ -1689,6 +1690,7 @@ class LangGraphGenerator
         // (installed by api.py, consumed by _handle_gate() below) is emitted here.
         $L[] = $sep; $L[] = '# EVENT SINK -- how api.py observes a run (inert for CLI runs)'; $L[] = $sep;
         $L[] = LangGraphRuntime::runEventsBlock();
+        $L[] = LangGraphRuntime::runRecordBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         $L[] = LangGraphRuntime::cronBlock();
@@ -3465,9 +3467,10 @@ TXT;
         $L[] = 'from __future__ import annotations';
         $L[] = '';
         $withPlaybooks = $facts['playbookData'] !== [];
-        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time' . ($withPlaybooks ? ', uuid' : '') . ($facts['codeData'] !== [] ? ', types' : '');
+        $L[] = 'import asyncio, json, os, re, subprocess, sys, threading, time, uuid' . ($facts['codeData'] !== [] ? ', types' : '');
         $L[] = 'from abc import ABC, abstractmethod';
         $L[] = 'from dataclasses import asdict, dataclass, field';
+        $L[] = 'from datetime import datetime';
         $L[] = 'from enum import Enum';
         $L[] = 'from functools import cached_property';
         $L[] = 'from pathlib import Path';
@@ -3548,6 +3551,7 @@ TXT;
         $L[] = '# ATTACHMENT CONVERTER (Start-node documents)';
         $L[] = $sep;
         $L[] = LangGraphRuntime::documentConverterBlock();
+        $L[] = LangGraphRuntime::runRecordBlock();
         $L[] = LangGraphRuntime::workflowGraphBlock();
         $L[] = LangGraphRuntime::outputBlock();
         return rtrim(implode("\n", $L), "\n") . "\n";
@@ -3750,7 +3754,7 @@ TXT;
         $L[] = '';
         $L[] = '# Running this file puts its own folder on sys.path, so `common` and the';
         $L[] = '# `agents` package below resolve wherever the workflow folder is copied.';
-        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
+        $L[] = 'from common import EVENTS, MCP, MCP_SERVER_SLUGS, NULL_RECORDER, ErrorExitTaken, WorkflowGraph, print_run_summary, save_output';
         foreach ($layout['agents'] as $nid => $e) {
             $L[] = 'from ' . $e['module'] . ' import run_node as ' . $e['name'] . '_run';
         }
@@ -3824,6 +3828,7 @@ TXT;
 # already did), call the module, time it, report.
 # ==============================================================
 NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
+GRAPH_RECORDER = NULL_RECORDER   # the run's RunRecorder; the program sets it before each run (trace reads it)
 
 
 async def _run_node_module(nid: str, request_text: str) -> dict:
@@ -3845,6 +3850,7 @@ async def _run_node_module(nid: str, request_text: str) -> dict:
     async def trace(line: str):
         """Progress callback the module calls; in one process this is just a print."""
         print(f"[node] [{nid}] {line}", flush=True)
+        GRAPH_RECORDER.node_log(nid, line)
 
     out = await _NODE_RUNNERS[nid](request_text, trace)
     dt = time.monotonic() - t0
@@ -4233,6 +4239,7 @@ PY;
 # Each node builds its chat model on first use (Node.llm), not here.
 NODES = {nid: make_node(cfg) for nid, cfg in {**AGENTS, **PLAYBOOKS, **CODE_NODES}.items()}
 NODE_DURATIONS = {}   # display name -> seconds of LLM+skill work (RUN SUMMARY)
+GRAPH_RECORDER = NULL_RECORDER   # the run's RunRecorder; the program sets it before each run (trace reads it)
 
 
 async def _run_local_node(nid: str, request: str) -> dict:
@@ -4243,6 +4250,7 @@ async def _run_local_node(nid: str, request: str) -> dict:
     async def trace(line: str):
         """Progress line of this node, printed with its id."""
         print(f"[node] [{nid}] {line}", flush=True)
+        GRAPH_RECORDER.node_log(nid, line)
 
     t0 = time.monotonic()
     out = await node.run(request, trace)
