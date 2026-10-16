@@ -29,19 +29,23 @@ class LangGraphGenerator
     private AgentRepository $agentRepo;
     /** Where the skill folders the modular package copies are read from (LangGraphPackage). */
     private string $skillsRoot;
+    /** The requesting user's document storage: the only place a Start document is copied from (none: no copy). */
+    private ?StartDocumentStore $startDocuments;
 
     public function __construct(
         PDO $db,
         WorkflowRepository $workflowRepo,
         WorkflowGraphRepository $graphRepo,
         AgentRepository $agentRepo,
-        ?string $skillsRoot = null
+        ?string $skillsRoot = null,
+        ?StartDocumentStore $startDocuments = null
     ) {
         $this->db = $db;
         $this->workflowRepo = $workflowRepo;
         $this->graphRepo = $graphRepo;
         $this->agentRepo = $agentRepo;
         $this->skillsRoot = $skillsRoot ?? LangGraphPackage::defaultSkillsRoot();
+        $this->startDocuments = $startDocuments;
     }
 
     // ---------- helpers (same as Python generator) ----------
@@ -3194,8 +3198,8 @@ PY;
         $layout = self::modularLayout($facts);
         // The package carries what it runs on (spec 2026-10-15 §5): read from the original facts, then
         // START_DOCUMENTS points at the copies and each code node at its code/ file.
-        $package = LangGraphPackage::files($facts, $this->skillsRoot);
-        $facts['startDocuments'] = LangGraphPackage::startDocuments($facts['startDocuments'] ?? [])['docs'];
+        $package = LangGraphPackage::files($facts, $this->skillsRoot, $this->startDocuments);
+        $facts['startDocuments'] = LangGraphPackage::startDocuments($facts['startDocuments'] ?? [], $this->startDocuments)['docs'];
         $codeFiles = [];
         foreach ($facts['codeData'] as $nid => $cd) {
             $codeFiles[(string) $nid] = LangGraphPackage::codeFile((string) $nid, $cd, (string) $nid === $facts['triggerNodeId']);

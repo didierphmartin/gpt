@@ -268,11 +268,19 @@ class WorkflowController
             }
 
             $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            // A packaged Start document is copied only from this user's own document storage.
+            $docStore = new \AgentTeam\Services\StartDocumentStore(
+                $this->getUserStorageFolder((int) $userId),
+                fn() => $this->getUniversalFSAdapter((int) $userId),
+                $this->config['storage_path'] ?? __DIR__ . '/../../../../storage'
+            );
             $gen = new \AgentTeam\Services\LangGraphGenerator(
                 $this->db,
                 $this->workflowRepository,
                 $this->graphRepository,
-                $agentRepo
+                $agentRepo,
+                null,
+                $docStore
             );
             $a2a = ($request['query']['a2a'] ?? '0') === '1';
             // A2A wins if both are set: the two are mutually exclusive in the

@@ -6,6 +6,7 @@ use AgentTeam\Models\Workflow;
 use AgentTeam\Services\AgentRepository;
 use AgentTeam\Services\LangGraphGenerator;
 use AgentTeam\Services\LangGraphPackage;
+use AgentTeam\Services\StartDocumentStore;
 use AgentTeam\Services\StartOptionGraph;
 use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
@@ -38,34 +39,40 @@ final class LangGraphPackageTest extends TestCase
         file_put_contents("$root/pdf-report/logo.png", self::PNG);
         file_put_contents("$root/pdf-report/__pycache__/run.cpython-312.pyc", "\x00junk");
         file_put_contents("$root/pdf-report/.DS_Store", "\x00junk");
+        file_put_contents("$root/pdf-report/.env", "OPENAI_API_KEY=sk-skill-secret\n");
+        file_put_contents("$root/pdf-report/.env.local", "OPENAI_API_KEY=sk-skill-secret\n");
         return $root;
     }
+
+    /** A header value saved on the Outlook MCP server row: it must reach no generated file. */
+    private const HEADER_SECRET = 'hdr-secret-5521';
 
     private function pdo(): \PDO
     {
         $pdo = new \PDO('sqlite::memory:');
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER)');
+        $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER, headers TEXT)');
         $pdo->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
         $pdo->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
         $pdo->exec('CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY, workflow_id INTEGER, repeat_type TEXT, cron TEXT, status TEXT, event_trigger TEXT)');
-        $pdo->exec("INSERT INTO mcp_servers VALUES (7, '3', 'Outlook', 'http://127.0.0.1:8770/mcp', 1)");
+        $pdo->exec("INSERT INTO mcp_servers VALUES (7, '3', 'Outlook', 'http://127.0.0.1:8770/mcp', 1, '{\"Authorization\": \"Bearer " . self::HEADER_SECRET . "\"}')");
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (1, 7, 'poll_new_mail', 'Poll', '{}')");
         $pdo->exec("INSERT INTO mcp_server_tools VALUES (2, 7, 'wait_for_new', 'Wait', '{}')");
         $pdo->exec("INSERT INTO system_llm_settings VALUES ('claude', 'claude-sonnet-4-5', 1)");
         return $pdo;
     }
 
-    private function generator(array $graph, string $skillsRoot, bool $storage = false): LangGraphGenerator
+    private function generator(array $graph, string $skillsRoot, bool $storage = false, ?StartDocumentStore $docs = null,
+                               ?string $outputFolder = null): LangGraphGenerator
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Email prototype', 'user_id' => '3',
-            'output_storage_enabled' => $storage]));
+            'output_storage_enabled' => $storage || $outputFolder !== null, 'output_folder' => $outputFolder]));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        return new LangGraphGenerator($this->pdo(), $wfRepo, $graphRepo, $agentRepo, $skillsRoot);
+        return new LangGraphGenerator($this->pdo(), $wfRepo, $graphRepo, $agentRepo, $skillsRoot, $docs);
     }
 
     /** Start (17) on a Start option -> Reporter (19, skill pdf-report) -> Output (18); the Start carries one document. */
@@ -89,9 +96,9 @@ final class LangGraphPackageTest extends TestCase
     }
 
     /** @return array<string, array{path:string,code:string,encoding?:string}> path => entry of the modular package */
-    private function files(string $skillDir = 'pdf-report', array $documents = []): array
+    private function files(string $skillDir = 'pdf-report', array $documents = [], ?StartDocumentStore $docs = null): array
     {
-        $result = $this->generator($this->graph($skillDir, $documents), $this->skillsRoot())->generate(44, '3', ['modular' => true]);
+        $result = $this->generator($this->graph($skillDir, $documents), $this->skillsRoot(), false, $docs)->generate(44, '3', ['modular' => true]);
         $out = [];
         foreach ($result['files'] as $f) {
             $out[$f['path']] = $f;
@@ -190,24 +197,66 @@ final class LangGraphPackageTest extends TestCase
         self::assertStringContainsString('os.environ.get("SYNERGYAI_SCRATCH_DIR") or os.path.join(PACKAGE_DIR, "scratch")', $common);
     }
 
-    public function testStartDocumentsAreCopiedAndTheirPathRewritten(): void
+    /**
+     * Fix round 1 (Critical): a Start document is copied only from the requesting user's own document
+     * storage (<root>/synergyaichatroot/<user folder>/<path>), never from an arbitrary server path.
+     */
+    public function testStartDocumentsAreCopiedOnlyFromTheUsersStorage(): void
     {
-        $dir = self::tempDir('lgpkg_docs_');
-        file_put_contents("$dir/brief.txt", "the brief\n");
-        file_put_contents("$dir/scan.pdf", "%PDF-1.4\n\x00\xff\xfe");
+        $root = self::tempDir('lgpkg_storage_');
+        $mine = "$root/synergyaichatroot/user_3/workflow_docs/44";
+        mkdir($mine, 0777, true);
+        mkdir("$root/synergyaichatroot/user_4", 0777, true);
+        file_put_contents("$mine/doc_1_brief.txt", "the brief\n");
+        file_put_contents("$mine/doc_2_scan.pdf", "%PDF-1.4\n\x00\xff\xfe");
+        file_put_contents("$root/synergyaichatroot/user_4/secret.txt", "user 4's file\n");
+        $outside = self::tempDir('lgpkg_outside_') . '/server.env';
+        file_put_contents($outside, "DB_PASS=hunter2\n");
+        symlink($outside, "$mine/doc_3_link.txt");
+        $store = new StartDocumentStore('user_3', null, $root);
+
         $files = $this->files('pdf-report', [
-            ['name' => 'brief.txt', 'path' => "$dir/brief.txt"],
-            ['name' => 'scan.pdf', 'path' => "$dir/scan.pdf"],
-            ['name' => 'gone.txt', 'path' => "$dir/gone.txt"],
-        ]);
-        self::assertSame("the brief\n", $files['start_documents/brief.txt']['code']);
-        self::assertSame('base64', $files['start_documents/scan.pdf']['encoding']);
+            ['name' => 'brief.txt', 'path' => 'workflow_docs/44/doc_1_brief.txt', 'fullPath' => 'synergyaichatroot/user_3/workflow_docs/44/doc_1_brief.txt'],
+            ['name' => 'scan.pdf', 'path' => 'workflow_docs/44/doc_2_scan.pdf'],
+            ['name' => 'server.env', 'path' => $outside],                                    // absolute, outside storage
+            ['name' => 'escape.txt', 'path' => 'workflow_docs/../../user_4/secret.txt'],     // ../ escape
+            ['name' => 'link.txt', 'path' => 'workflow_docs/44/doc_3_link.txt'],             // symlink out of storage
+            ['name' => 'mine.txt', 'path' => 'workflow_docs/44/doc_1_brief.txt', 'storage' => 'local'],   // on the user's machine
+            ['name' => 'gone.txt', 'path' => 'workflow_docs/44/gone.txt'],
+        ], $store);
+
+        self::assertSame("the brief\n", $files['start_documents/doc_1_brief.txt']['code']);
+        self::assertSame('base64', $files['start_documents/doc_2_scan.pdf']['encoding']);
+        $docFiles = array_values(array_filter(array_keys($files), fn($p) => str_starts_with($p, 'start_documents/')));
+        self::assertSame(['start_documents/doc_1_brief.txt', 'start_documents/doc_2_scan.pdf'], $docFiles);
+        foreach ($files as $path => $f) {
+            $bytes = ($f['encoding'] ?? '') === 'base64' ? base64_decode($f['code']) : $f['code'];
+            self::assertStringNotContainsString('hunter2', $bytes, $path);
+            self::assertStringNotContainsString("user 4's file", $bytes, $path);
+        }
         $wf = $files['workflow.py']['code'];
-        self::assertStringContainsString('"path": "start_documents/brief.txt"', $wf);
-        self::assertStringContainsString('"path": "start_documents/scan.pdf"', $wf);
-        self::assertStringContainsString('"path": "' . $dir . '/gone.txt"', $wf, 'an unreadable path is left as is');
-        self::assertArrayNotHasKey('start_documents/gone.txt', $files);
+        self::assertStringContainsString('"path": "start_documents/doc_1_brief.txt"', $wf);
+        self::assertStringNotContainsString('synergyaichatroot/user_3', $wf, 'the copy drops fullPath');
+        self::assertStringContainsString('"path": "' . $outside . '"', $wf, 'a path outside storage is left as is');
+        self::assertStringContainsString('"path": "workflow_docs/../../user_4/secret.txt"', $wf);
         self::assertStringContainsString("pypdf\n", $files['requirements.txt']['code']);
+    }
+
+    public function testWithoutAStoreNoDocumentIsCopied(): void
+    {
+        $outside = self::tempDir('lgpkg_outside_') . '/brief.txt';
+        file_put_contents($outside, "x\n");
+        $files = $this->files('pdf-report', [['name' => 'brief.txt', 'path' => $outside]]);
+        self::assertSame([], array_values(array_filter(array_keys($files), fn($p) => str_starts_with($p, 'start_documents/'))));
+    }
+
+    public function testStoreRefusesUnsafePaths(): void
+    {
+        foreach (['', '/etc/passwd', '../x', 'a/../../x', 'a/./b', 'a//b', 'a\\b', "a\0b"] as $bad) {
+            self::assertNull(StartDocumentStore::safeSegments($bad), json_encode($bad));
+        }
+        self::assertSame(['workflow_docs', '44', 'doc_1_a.txt'], StartDocumentStore::safeSegments('workflow_docs/44/doc_1_a.txt'));
+        self::assertNull((new StartDocumentStore('../user_4', null, sys_get_temp_dir()))->read(['path' => 'secret.txt']));
     }
 
     public function testNothingPointsBackAtSynergyAI(): void
@@ -223,10 +272,91 @@ final class LangGraphPackageTest extends TestCase
         }
     }
 
+    /**
+     * The self-containment needles, over every file a generation returns: no synergyAI/ path (in
+     * .env.example and README only on comment lines), no API base URL, no DB name, no header value.
+     */
+    private static function assertSelfContained(array $files, string $label): void
+    {
+        foreach ($files as $path => $f) {
+            $code = is_array($f) ? $f['code'] : $f;
+            if (is_array($f) && ($f['encoding'] ?? '') === 'base64') {
+                continue;
+            }
+            self::assertStringNotContainsString(self::HEADER_SECRET, $code, "$label $path: header value");
+            self::assertStringNotContainsString('sekret-conn-key', $code, "$label $path: header value");
+            self::assertStringNotContainsString('/api/v1/', $code, "$label $path");
+            self::assertStringNotContainsString('netfo587', $code, "$label $path");
+            self::assertStringNotContainsString('localhost/gpt', $code, "$label $path");
+            if (in_array($path, ['.env.example', 'README.md'], true)) {
+                foreach (explode("\n", $code) as $line) {
+                    if (!str_starts_with(ltrim($line), '#') || $path === 'README.md') {
+                        self::assertStringNotContainsString('synergyAI/', $line, "$label $path: $line");
+                    }
+                }
+            } elseif ($path !== 'ARCHITECTURE.md' && !str_ends_with($label, 'single') && !str_ends_with($label, 'a2a')) {
+                self::assertStringNotContainsString('synergyAI/', $code, "$label $path");
+            }
+        }
+    }
+
+    /** @return array<string, string|array> path => entry (or code) of one generation */
+    private static function byPath(array $result): array
+    {
+        if (!isset($result['files'])) {
+            return [$result['filename'] => $result['code']];
+        }
+        $out = [];
+        foreach ($result['files'] as $f) {
+            $out[$f['path']] = $f;
+        }
+        return $out;
+    }
+
+    /** Fix round 1: the needles over more fixtures -- the dispatcher demo, a custom output folder, a header value. */
+    public function testNothingPointsBackAtSynergyAIAcrossFixtures(): void
+    {
+        foreach (['single' => [], 'modular' => ['modular' => true], 'a2a' => ['a2a' => true]] as $mode => $opts) {
+            self::assertSelfContained(self::byPath(LangGraphA2AGeneratorTest::generator()->generate(44, '3', $opts)), "dispatcher_demo $mode");
+        }
+        $custom = $this->generator($this->graph(), $this->skillsRoot(), false, null, 'reports/weekly')->generate(44, '3', ['modular' => true]);
+        $files = self::byPath($custom);
+        self::assertSelfContained($files, 'custom folder modular');
+        self::assertStringContainsString('OUTPUT_FOLDER = "reports/weekly"', $files['workflow.py']['code']);
+        // The header value on the server row of this fixture's PDO reaches no file of any mode.
+        foreach (['single' => [], 'modular' => ['modular' => true]] as $mode => $opts) {
+            self::assertSelfContained(self::byPath($this->generator($this->graph(), $this->skillsRoot())->generate(44, '3', $opts)), "header $mode");
+        }
+    }
+
     public function testMissingSkillFolderIsAnError(): void
     {
-        $this->expectExceptionMessage('Skill folder "nope" not found under');
+        $this->expectExceptionMessage('Skill folder "nope" is not available on this server, so it can\'t be packaged.');
         $this->files('nope');
+    }
+
+    /** Fix round 1: dir_name is one plain path segment inside the skills root. */
+    public function testUnsafeSkillDirNamesAreRefused(): void
+    {
+        foreach (['.', '..', '../pdf-report', 'pdf-report/..', 'a\\b', '/tmp'] as $bad) {
+            try {
+                $this->files($bad);
+                self::fail("accepted skill dir " . json_encode($bad));
+            } catch (\RuntimeException $e) {
+                self::assertSame('Skill folder "' . $bad . '" is not available on this server, so it can\'t be packaged.', $e->getMessage());
+                self::assertStringNotContainsString(sys_get_temp_dir(), $e->getMessage());
+            }
+        }
+    }
+
+    public function testEnvFilesOfASkillAreNotCopied(): void
+    {
+        $files = $this->files();
+        self::assertArrayNotHasKey('skills/pdf-report/.env', $files);
+        self::assertArrayNotHasKey('skills/pdf-report/.env.local', $files);
+        foreach ($files as $path => $f) {
+            self::assertStringNotContainsString('sk-skill-secret', $f['code'], $path);
+        }
     }
 
     public function testEveryPythonFileOfThePackageCompiles(): void

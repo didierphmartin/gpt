@@ -29,6 +29,9 @@ final class LangGraphPackage
 
     private const SKIP_NAMES = ['__pycache__', '.DS_Store'];
 
+    /** The swarm package's workflow.py builds its graph with create_swarm() (langgraph_swarm). */
+    private const SWARM_REQUIREMENTS = ['langgraph-swarm'];
+
     private const HARNESS = __DIR__ . '/../../../../frontend/assets/py/code_node_harness.py';
 
     /** Where the editor keeps the skill folders: the default skills root of the generator. */
@@ -43,7 +46,7 @@ final class LangGraphPackage
      *
      * @return list<array{path:string,code:string,encoding?:string}>
      */
-    public static function files(array $facts, string $skillsRoot): array
+    public static function files(array $facts, string $skillsRoot, ?StartDocumentStore $documents = null): array
     {
         $skills = self::skillFiles($facts, $skillsRoot);
         $out = [
@@ -61,7 +64,7 @@ final class LangGraphPackage
         foreach ($skills as $f) {
             $out[] = $f['entry'];
         }
-        foreach (self::startDocuments($facts['startDocuments'] ?? [])['files'] as $f) {
+        foreach (self::startDocuments($facts['startDocuments'] ?? [], $documents)['files'] as $f) {
             $out[] = $f;
         }
         return $out;
@@ -82,24 +85,24 @@ final class LangGraphPackage
 
     /**
      * The Start's documents as package files, and the START_DOCUMENTS entries pointing at them
-     * (start_documents/<basename>, relative to the package). A document whose path cannot be
-     * read is left as it is (the run then reports its conversion failure, as before).
+     * (start_documents/<basename>, relative to the package). Only a document in the requesting
+     * user's own storage is copied ($documents: StartDocumentStore; none without one); any other
+     * entry is left as it is (the run then reads it, or reports its conversion failure, as before).
      *
      * @return array{files: list<array{path:string,code:string,encoding?:string}>, docs: list<array>}
      */
-    public static function startDocuments(array $docs): array
+    public static function startDocuments(array $docs, ?StartDocumentStore $documents = null): array
     {
         $files = [];
         $out = [];
         $taken = [];
         foreach ($docs as $i => $doc) {
-            $path = is_array($doc) ? (string) ($doc['path'] ?? '') : '';
-            $bytes = $path !== '' && is_file($path) && is_readable($path) ? file_get_contents($path) : false;
-            if ($bytes === false) {
+            $bytes = is_array($doc) && $documents !== null ? $documents->read($doc) : null;
+            if ($bytes === null) {
                 $out[] = $doc;
                 continue;
             }
-            $name = basename($path);
+            $name = basename((string) $doc['path']);
             if (isset($taken[$name])) {
                 $name = "{$i}_{$name}";
             }
@@ -143,18 +146,23 @@ final class LangGraphPackage
     private static function skillFiles(array $facts, string $skillsRoot): array
     {
         $out = [];
+        $root = realpath($skillsRoot);
         foreach (self::skillDirs($facts) as $d) {
-            $base = rtrim($skillsRoot, '/') . '/' . $d;
-            $bad = in_array('..', explode('/', $d), true) || str_starts_with($d, '/');
-            if ($bad || !is_dir($base)) {
-                throw new RuntimeException("Skill folder \"{$d}\" not found under {$skillsRoot}.");
+            // dir_name comes from the client-saved node config: one plain path segment, resolved inside the root.
+            $safe = $d !== '' && $d !== '.' && $d !== '..' && !str_contains($d, '/') && !str_contains($d, '\\') && !str_contains($d, "\0");
+            $base = $safe && $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
+            if ($base === false || !str_starts_with($base, $root . DIRECTORY_SEPARATOR) || !is_dir($base)) {
+                throw new RuntimeException("Skill folder \"{$d}\" is not available on this server, so it can't be packaged.");
             }
             $found = [];
             $it = new \RecursiveIteratorIterator(new \RecursiveCallbackFilterIterator(
                 new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
-                fn(\SplFileInfo $f) => !in_array($f->getFilename(), self::SKIP_NAMES, true) && !str_ends_with($f->getFilename(), '.pyc')));
+                fn(\SplFileInfo $f) => !in_array($f->getFilename(), self::SKIP_NAMES, true) && !str_ends_with($f->getFilename(), '.pyc')
+                    && !str_starts_with($f->getFilename(), '.env')));
             foreach ($it as $f) {
-                if ($f->isFile()) {
+                // A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
+                $real = $f->isFile() ? realpath($f->getPathname()) : false;
+                if ($real !== false && str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
                     $found[] = substr($f->getPathname(), strlen($base) + 1);
                 }
             }
@@ -208,7 +216,7 @@ final class LangGraphPackage
     /** requirements.txt: one per line, sorted, unique. */
     private static function requirements(array $facts, array $skillFiles): string
     {
-        $req = self::BASE_REQUIREMENTS;
+        $req = isset($facts['swarm']) ? array_merge(self::BASE_REQUIREMENTS, self::SWARM_REQUIREMENTS) : self::BASE_REQUIREMENTS;
         foreach (self::providers($facts) as $p) {
             if (isset(self::PROVIDER_REQUIREMENTS[$p])) {
                 $req[] = self::PROVIDER_REQUIREMENTS[$p];
@@ -298,7 +306,7 @@ final class LangGraphPackage
     private static function readme(array $facts): string
     {
         $name = (string) $facts['wfName'];
-        $root = (string) $facts['safeName'] . '_modular';
+        $root = (string) $facts['safeName'] . (isset($facts['swarm']) ? '_modular_swarm' : '_modular');
         $slug = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', $name), '-')) ?: 'workflow';
         // A swarm's workflow.py runs a prompt, or --cron; it has no --watch / --once / --quiet.
         $swarm = isset($facts['swarm']);

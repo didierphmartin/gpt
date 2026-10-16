@@ -467,14 +467,9 @@ class LangGraphOutputStructureTest extends TestCase
         $pkg = $this->files($graph, 'modular');
         $this->assertStringContainsString('class DocumentConverter:', $pkg['common.py']);
         $this->assertStringNotContainsString('_convert_doc_to_markdown', implode("\n", $pkg));
-        // The package carries its copy of the document (start_documents/, Task 7); START_DOCUMENTS points at it.
-        foreach ($this->generator($graph)->generate(44, '3', ['modular' => true])['files'] as $f) {
-            if (str_starts_with($f['path'], 'start_documents/')) {
-                $pkg[$f['path']] = $f['code'];
-            }
-        }
-        $this->assertSame("# Brief\nWrite about tides.", $pkg['start_documents/' . basename($doc)] ?? null);
-        $this->assertStringContainsString('"path": "start_documents/' . basename($doc) . '"', $pkg['workflow.py']);
+        // A path outside the user's document storage is never copied into the package (Task 7 fix round 1):
+        // START_DOCUMENTS keeps it, and the run reads it where it is.
+        $this->assertStringContainsString('"path": "' . $doc . '"', $pkg['workflow.py']);
         [, $log] = $this->probe(['workflow', 'modular', self::write($pkg)['root'], 'go']);
         // The Start text the graph builds: converted brief + the stricter no-path note (Task 5) + the prompt.
         $start = "## Attached Documents\n\n### brief.md\n\n# Brief\nWrite about tides.\n\n---\n\n"

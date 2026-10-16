@@ -132,6 +132,17 @@ class LangGraphSwarmGeneratorTest extends TestCase
      * option dispatch, which the refusal tests exercise instead) and returns
      * path => code, the same shape LangGraphModularGeneratorTest::files() uses.
      */
+    /** Fix round 1 (Task 7): the swarm package installs langgraph-swarm and its README names the swarm root. */
+    public function testSwarmPackageNeedsLangGraphSwarmAndNamesItsRoot(): void
+    {
+        $files = $this->generateSwarm(self::twoAgentSwarm());
+        $this->assertContains('langgraph-swarm', explode("\n", $files['requirements.txt']));
+        $this->assertStringContainsString('from langgraph_swarm import', $files['workflow.py'] . implode("\n", $files));
+        $this->assertStringContainsString('/path/to/trip_planning_swarm_modular_swarm/workflow.py', $files['README.md']);
+        $this->assertStringNotContainsString('_modular/', $files['README.md']);
+        $this->assertStringNotContainsString('--watch', $files['README.md'], 'a swarm has no --watch');
+    }
+
     private function generateSwarm(array $graph): array
     {
         $gen = self::generator($graph);
