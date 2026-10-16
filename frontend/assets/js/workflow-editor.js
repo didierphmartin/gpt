@@ -3258,6 +3258,10 @@ class WorkflowEditor {
             } catch (err) {
                 if (err?.name === 'AbortError' || !live()) return;
             }
+            if (compiled) {   // a dead server must not keep showing "Listening" with Stop
+                this._compiledLive = window.StartOptions.compiledLiveState(null);
+                this._liveHeader();
+            }
             await new Promise(r => setTimeout(r, delay));
             delay = Math.min(delay * 2, 10000);
         }
@@ -6109,13 +6113,6 @@ class WorkflowEditor {
         });
     }
 
-    /**
-     * Run — execute the generated .py via the local runner. The runner is
-     * a FastAPI service the user has to start separately; if it isn't
-     * reachable we surface a setup hint instead of silently failing. The
-     * call shape matches RunFileReq in langchain_runner/main.py:
-     *   POST /api/run-file  body={ filename, args }
-     */
     /** Start a listening compiled workflow's server, POST /listen, and open its live overlay. */
     async _runListening(root) {
         try {
@@ -6127,8 +6124,9 @@ class WorkflowEditor {
             return;
         }
         try {
-            const { url } = await this._compiledServer(root);
-            const base = url.endsWith('/') ? url : `${url}/`;
+            // Start (or reuse) the server and confirm it is THIS workflow's current compile (run/1); no _runTarget.
+            const { base: verified } = await this._acquireRunTarget(root);
+            const base = `${verified}/`;
             if (!(await this._compiledListen(base, {}))) { this._hideCompiledScrim(); return; }
             this._hideCompiledScrim();
             this._openCompiledLive(base);
@@ -6138,6 +6136,13 @@ class WorkflowEditor {
         }
     }
 
+    /**
+     * Run — execute the generated .py via the local runner. The runner is
+     * a FastAPI service the user has to start separately; if it isn't
+     * reachable we surface a setup hint instead of silently failing. The
+     * call shape matches RunFileReq in langchain_runner/main.py:
+     *   POST /api/run-file  body={ filename, args }
+     */
     async _runLangGraphScript() {
         // Up SYNCHRONOUSLY, in the same tick as the click, before the first
         // await, for both conversational modes. Everything below — persisting
