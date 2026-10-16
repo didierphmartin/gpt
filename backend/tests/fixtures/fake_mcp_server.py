@@ -3,7 +3,9 @@ import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT, LOG = int(sys.argv[1]), sys.argv[2]
-RESULTS = {"next_mail": {"subject": "test 50", "id": "m1"}, "move_mail": {"ok": True}}
+RESULTS = {"next_mail": {"subject": "test 50", "id": "m1"}, "move_mail": {"ok": True}, "wait_for_new": None}
+NEXT = [0]    # next_mail calls so far
+WAITS = [0]   # wait_for_new: "ready" on the first call, then a 1 s wait and "timeout"
 if len(sys.argv) > 3 and sys.argv[3] == "empty":
     RESULTS["next_mail"] = None   # no new mail: the tool answers null
 
@@ -19,6 +21,15 @@ class H(BaseHTTPRequestHandler):
             body = {"jsonrpc": "2.0", "id": req.get("id"), "result": {"protocolVersion": "2024-11-05", "capabilities": {}}}
         elif req.get("method") == "tools/call":
             res = RESULTS.get(params.get("name"))
+            if params.get("name") == "next_mail":   # one new mail, handed out once (a drain asks again)
+                NEXT[0] += 1
+                res = RESULTS["next_mail"] if NEXT[0] == 1 else None
+            if params.get("name") == "wait_for_new":
+                WAITS[0] += 1
+                if WAITS[0] > 1:
+                    import time
+                    time.sleep(1)
+                res = {"status": "ready" if WAITS[0] == 1 else "timeout"}
             body = {"jsonrpc": "2.0", "id": req.get("id"),
                     "result": {"content": [{"type": "text", "text": json.dumps(res)}], **({"structuredContent": res} if res is not None else {})}
                     if params.get("name") in RESULTS else {"isError": True, "content": [{"type": "text", "text": "no such tool"}]}}
@@ -35,4 +46,5 @@ class H(BaseHTTPRequestHandler):
         pass
 
 
-HTTPServer(("127.0.0.1", PORT), H).serve_forever()
+from http.server import ThreadingHTTPServer
+ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

@@ -28,6 +28,10 @@ class AdkCodeNodeE2ETest extends TestCase
 
     protected function tearDown(): void
     {
+        if (is_resource($this->api ?? null)) {
+            proc_terminate($this->api, 9);
+            proc_close($this->api);
+        }
         if (is_resource($this->server)) {
             proc_terminate($this->server, 9);
             proc_close($this->server);
@@ -104,7 +108,7 @@ class AdkCodeNodeE2ETest extends TestCase
     private function calls(): array
     {
         $out = [];
-        foreach (file($this->log, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $l) {
+        foreach ((is_file($this->log) ? file($this->log, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : []) ?: [] as $l) {   // no request yet: no log file
             $out[] = json_decode($l, true);
         }
         return $out;
@@ -145,5 +149,137 @@ class AdkCodeNodeE2ETest extends TestCase
         [$rc, $text] = $this->run_($this->analyzed("def run(input, call_tool):\n    return call_tool('other', 'x', {})\n"));
         self::assertNotSame(0, $rc, $text);
         self::assertStringContainsString("code node 'B' failed", $text);
+    }
+
+    private $api = null;
+
+    /** The E2E graph as a listening package (watch on outlook.wait_for_new), written to a folder; returns the folder. */
+    private function writeListeningPackage(): string
+    {
+        // the branch takes 3 s, as a real one (an LLM, a mail move) does: /live sends a run it sees in
+        // progress; one already over at its first look is history (LiveFeed's rule)
+        $a = $this->analyzed("import time\n" . self::FILE . "\n# slow\n");
+        $a['code']['3']['source'] = str_replace("def run(input, call_tool):\n", "def run(input, call_tool):\n    time.sleep(3)\n", $a['code']['3']['source']);
+        $a['startMode'] = 'watch';
+        $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
+        $a['package'] = true;
+        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => ADKGenerator::emitAdk($a)], 'adk e2e', 'adk', 'ADK run server',
+            ADKGenerator::packageCommonBlock(), true);
+        $dir = sys_get_temp_dir() . '/adk_listen_' . bin2hex(random_bytes(4));
+        foreach (array_merge($pkg['files'], \AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir())) as $f) {
+            @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
+            file_put_contents("$dir/{$f['path']}", $f['code']);
+        }
+        file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\n");
+        return $dir;
+    }
+
+    private function startApi(string $dir): string
+    {
+        $sock = stream_socket_server('tcp://127.0.0.1:0');
+        $port = (int) substr(strrchr(stream_socket_get_name($sock, false), ':'), 1);
+        fclose($sock);
+        $this->api = proc_open([self::PY, 'api.py', '--port', (string) $port], [1 => ['file', "$dir/api.log", 'w'], 2 => ['file', "$dir/api.log", 'a']],
+            $pipes, $dir, ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')]);
+        $base = "http://127.0.0.1:{$port}";
+        for ($i = 0; $i < 100; $i++) {
+            if (@file_get_contents("$base/.well-known/workflow.json") !== false) {
+                return $base;
+            }
+            usleep(200000);
+        }
+        self::fail("api.py did not start:\n" . @file_get_contents("$dir/api.log"));
+    }
+
+    private static function post(string $url, array $body): array
+    {
+        $ctx = stream_context_create(['http' => ['method' => 'POST', 'header' => "Content-Type: application/json\r\n",
+            'content' => json_encode((object) $body), 'ignore_errors' => true, 'timeout' => 10]]);
+        $text = (string) @file_get_contents($url, false, $ctx);
+        preg_match('{HTTP/\S+ (\d+)}', $http_response_header[0] ?? '', $m);
+        return [(int) ($m[1] ?? 0), json_decode($text, true)];
+    }
+
+    /** GET /live for $seconds: the SSE text (curl: the stream is chunked and never ends on its own). */
+    private static function live(string $base, int $seconds): string
+    {
+        exec('curl -s -N -m ' . $seconds . ' ' . escapeshellarg("$base/live"), $out);
+        return implode("\n", $out);
+    }
+
+    private function runEvents(string $dir): array
+    {
+        $out = [];
+        foreach (glob("$dir/runs/*.jsonl") ?: [] as $f) {
+            foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $l) {
+                $out[] = json_decode($l, true);
+            }
+        }
+        return $out;
+    }
+
+    public function testPackageListensRecordsAndStops(): void
+    {
+        $this->startServer();
+        $dir = $this->writeListeningPackage();
+        $base = $this->startApi($dir);
+        // the canvas connects to /live first, then the runs come (a new connection streams runs from then on)
+        $live = proc_open(['curl', '-s', '-N', '-m', '20', "$base/live"], [1 => ['file', "$dir/live.txt", 'w']], $p);
+        usleep(500000);
+        [$code, $r] = self::post("$base/listen", []);
+        self::assertSame(200, $code, json_encode($r));
+        self::assertTrue($r['listening']);
+        $events = [];
+        for ($i = 0; $i < 150; $i++) {
+            $events = $this->runEvents($dir);
+            if (in_array('workflow_complete', array_column($events, 'type'), true)) {
+                break;
+            }
+            usleep(200000);
+        }
+        $done = array_values(array_filter($events, fn($e) => $e['type'] === 'workflow_complete'));
+        self::assertNotEmpty($done, "no completed run:\n" . file_get_contents("$dir/api.log"));
+        self::assertTrue($done[0]['success'], json_encode($done[0]));
+        $completed = [];
+        foreach ($events as $e) {
+            if ($e['type'] === 'node_complete') {
+                $completed[$e['node_id']] = $e;
+            }
+        }
+        self::assertSame(['1', '10', '3', '5'], array_map('strval', array_keys($completed)));
+        self::assertSame('new_mail', $completed['10']['exit']);
+        self::assertSame('start', $completed['1']['node_type']);
+        self::assertCount(1, glob("$dir/runs/*.jsonl"), 'the drain\'s second, quiet run leaves no file');
+        self::assertCount(1, array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
+        // GET /live streams the run to the canvas
+        proc_close($live);   // curl ends at -m 20
+        $stream = (string) file_get_contents("$dir/live.txt");
+        self::assertMatchesRegularExpression('/event: run\\ndata: .*"node_id":\\s*"10"/', $stream);
+        self::assertMatchesRegularExpression('/"type":\\s*"workflow_complete"/', $stream);
+        // a served run is refused while listening
+        [$code] = self::post("$base/runs", ['prompt' => 'x']);
+        self::assertSame(409, $code);
+        // stop: the state line says so once the wait in flight returns
+        self::post("$base/listen", ['stop' => true]);
+        $state = '';
+        for ($i = 0; $i < 10 && !str_contains($state, 'Not listening: stopped'); $i++) {
+            sleep(1);
+            $state = self::live($base, 2);
+        }
+        self::assertStringContainsString('Not listening: stopped', $state);
+    }
+
+    public function testQuietWakeLeavesNoRun(): void
+    {
+        $this->startServer(true);
+        $dir = $this->writeListeningPackage();
+        $base = $this->startApi($dir);
+        self::post("$base/listen", []);
+        for ($i = 0; $i < 50 && count(array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'next_mail')) < 1; $i++) {
+            usleep(200000);
+        }
+        sleep(2);   // the run after the wake has ended
+        self::assertSame([], glob("$dir/runs/*.jsonl") ?: [], 'a quiet run leaves no run file');
+        self::assertMatchesRegularExpression('/"listening":\\s*true/', self::live($base, 2));
     }
 }
