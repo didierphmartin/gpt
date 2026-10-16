@@ -124,6 +124,8 @@ class ADKGenerator
             }
         }
         $analyzed['serverSlugs'] = self::serverSlugs($urlName);
+        $ordered = array_map(fn($id) => ['id' => (string) $id] + (array) $analyzed['byId'][$id], (array) $analyzed['order']);
+        $analyzed += StartTriggerFacts::of($this->db, $workflowId, $ordered, $analyzed['serverSlugs']);
         return $analyzed;
     }
 
@@ -1680,6 +1682,13 @@ PY;
         return
             "WORKFLOW_NAME = {$name}\n" .
             "WORKFLOW_ID = {$wfId}\n" .
+            // The Start's mode (prompt | cron | watch), its schedule and its event trigger (StartTriggerFacts):
+            // the package's listener and CLI read them.
+            "START_MODE = " . PythonEmitHelpers::pyStr((string) ($analyzed['startMode'] ?? 'prompt')) . "\n" .
+            "DEFAULT_CRON = " . (($analyzed['defaultCron'] ?? null) === null ? 'None' : PythonEmitHelpers::pyStr((string) $analyzed['defaultCron'])) . "\n" .
+            "DEFAULT_WATCH = " . (($analyzed['defaultWatch'] ?? null) === null ? 'None'
+                : PythonEmitHelpers::jsonToPython(['server' => $analyzed['defaultWatch']['server'], 'tool' => $analyzed['defaultWatch']['tool'],
+                    'args' => (object) $analyzed['defaultWatch']['args']])) . "\n" .
             // Named (not just inlined below) so the run server's api.py -- which has
             // no argv of its own -- can import it as the fallback for an empty prompt.
             "DEFAULT_PROMPT = {$sp}\n" .

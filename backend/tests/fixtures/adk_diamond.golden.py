@@ -561,6 +561,9 @@ root_agent = SequentialAgent(
 # ==============================================================
 WORKFLOW_NAME = "diamond"
 WORKFLOW_ID = 1
+START_MODE = "prompt"
+DEFAULT_CRON = None
+DEFAULT_WATCH = None
 DEFAULT_PROMPT = "GO"
 OUTPUT_STORAGE_ENABLED = False
 OUTPUT_FOLDER = None
