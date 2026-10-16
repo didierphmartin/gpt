@@ -378,6 +378,51 @@ PY;
     }
 
     /**
+     * Final review M-e: a POST /runs run ended by a BaseException (a cancellation) is marked failed, with its
+     * error frame, so it does not stay "running" and make every later POST /listen a 409.
+     */
+    public function testAServedRunEndedByABaseExceptionDoesNotBlockListening(): void
+    {
+        $venv = $this->venv();
+        $script = <<<'PY'
+import asyncio, json, os, sys, time
+sys.path.insert(0, os.getcwd())
+import common
+def call_tool_raw(url, tool, args):
+    time.sleep(0.05)
+    return {"structuredContent": {"status": "timeout"}, "content": []}
+common.MCP.call_tool_raw = call_tool_raw
+import api
+from starlette.testclient import TestClient
+
+def until(cond, what, limit=10.0):
+    end = time.monotonic() + limit
+    while not cond():
+        assert time.monotonic() < end, what
+        time.sleep(0.05)
+
+with TestClient(api.app) as c:
+    async def cancelled(prompt, session=None):
+        raise asyncio.CancelledError()
+    api.run_workflow = cancelled
+    rid = c.post("/runs", json={"prompt": "x"}).json()["run_id"]
+    until(lambda: api.RUNS[rid].status != "running", "the run stayed running")
+    assert api.RUNS[rid].status == "failed" and api.RUNS[rid].error == "CancelledError", (api.RUNS[rid].status, api.RUNS[rid].error)
+    assert [e[1] for e in api.RUNS[rid].events][-1] == "error", api.RUNS[rid].events
+    r = c.post("/listen", json={})
+    assert r.status_code == 200 and r.json()["listening"] is True, r.text
+    c.post("/listen", json={"stop": True})
+    until(lambda: not api.LISTENER.running, "the listener did not stop")
+print("ok")
+PY;
+        $dir = $this->writePackage($this->generate($this->optionGraph()) + ['probe.py' => $script]);
+        $proc = proc_open([$venv, 'probe.py'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir, self::env());
+        $text = (string) stream_get_contents($pipes[1]);
+        self::assertSame(0, proc_close($proc), $text);
+        self::assertStringEndsWith("ok\n", $text, $text);
+    }
+
+    /**
      * Fix round 2: (1) a run abandoned at the cap that ends late must not reset the run that replaced it
      * (same recorder object: runs of one loop share it), and a served run always starts from the baseline;
      * (2) POST /runs is refused while an abandoned listener run is still alive.

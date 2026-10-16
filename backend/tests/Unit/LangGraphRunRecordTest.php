@@ -57,6 +57,37 @@ print("ok")
 PY);
     }
 
+    /**
+     * Final review M-b: the run log is best effort. A runs/ that cannot be made, or a file that stops taking
+     * appends, prints one [warn] for the run; the run and its listeners carry on.
+     */
+    public function testARunLogThatCannotBeWrittenWarnsOnceAndTheRunGoesOn(): void
+    {
+        $out = $this->py(<<<'PY'
+d = tempfile.mkdtemp()
+blocker = os.path.join(d, "not_a_dir")
+open(blocker, "w").close()
+seen = []
+r = RunRecorder(os.path.join(blocker, "runs"), 44, "wf", listeners=[seen.append])
+r.begin(); r.node_start("1", "a", "code"); r.complete(success=True, output="x"); r.end(quiet=False)
+assert [e["type"] for e in seen] == ["workflow_start", "node_start", "workflow_complete"], seen
+print("second")
+seen.clear()
+r = RunRecorder(os.path.join(d, "runs"), 44, "wf", listeners=[seen.append])
+r.begin()
+os.chmod(r.current_path(), 0o444)
+r.node_start("1", "a", "code"); r.node_log("1", "x"); r.complete(success=True, output="x"); r.end(quiet=False)
+assert len(seen) == 4, seen
+r.begin(); r.end(quiet=True)   # the next run writes again
+print("ok")
+PY);
+        self::assertCount(4, $out, implode("\n", $out));
+        self::assertStringStartsWith('[warn] run log not written: ', $out[0]);
+        self::assertSame('second', $out[1]);
+        self::assertStringStartsWith('[warn] run log not written: ', $out[2]);
+        self::assertStringContainsString('Permission denied', $out[2]);
+    }
+
     public function testAQuietRunLeavesNoFile(): void
     {
         $this->py(<<<'PY'

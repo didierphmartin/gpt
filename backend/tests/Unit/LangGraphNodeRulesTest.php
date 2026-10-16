@@ -46,6 +46,14 @@ final class LangGraphNodeRulesTest extends TestCase
         self::assertStringContainsString('Summarize the claim.', $code);
     }
 
+    /** Final review M-i: a node with no type at all is an agent, as WorkflowGraphAnalyzer::typeOf reads it. */
+    public function testAnUntypedNodeCompilesAsAnAgent(): void
+    {
+        $code = $this->generate(['id' => '2', 'node_type' => '', 'config' => ['name' => 'Claims',
+            'agent_name' => 'Claims', 'instructions' => 'Summarize the claim.', 'provider' => 'claude']])['code'];
+        self::assertStringContainsString('Summarize the claim.', $code);
+    }
+
     public function testUnknownTypeIsRefused(): void
     {
         $this->expectExceptionMessage('Node "Loop" (loop) cannot be compiled: LangGraph runs start, agent, playbook, code and output nodes.');

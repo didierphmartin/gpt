@@ -755,7 +755,9 @@ def is_quiet(node_types: dict, routes: dict, agents: dict, ran: list) -> bool:
 
 
 class RunRecorder:
-    """One run at a time: its events to a JSONL file (when runs_dir is set) and to each listener."""
+    """One run at a time: its events to a JSONL file (when runs_dir is set) and to each listener. The
+    file is best effort: an OSError (a full disk, a read-only runs/) prints one [warn] and the run goes
+    on without its file; the listeners still get every event."""
 
     def __init__(self, runs_dir: str | None, workflow_id: int, workflow_name: str,
                  listeners: list[Callable[[dict], None]] | None = None):
@@ -768,17 +770,26 @@ class RunRecorder:
         """The open run's file, or None (no runs_dir, or the run ended)."""
         return self._path
 
+    def _lost(self, e: OSError) -> None:
+        """The run's file cannot be written: say so once, and go on without it."""
+        self._path = None
+        print(f"[warn] run log not written: {e}", flush=True)
+
     def begin(self) -> str:
         """Start a run: a new id, its file, the pointer, and workflow_start."""
         self.run_id = uuid.uuid4().hex
+        self._path = None
         if self.runs_dir:
-            os.makedirs(self.runs_dir, exist_ok=True)
-            stem = f"{datetime.now():%Y-%m-%d_%H-%M-%S}_{self.run_id}"
-            self._path = os.path.join(self.runs_dir, stem + ".jsonl")
-            tmp = os.path.join(self.runs_dir, ".current.tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(stem)
-            os.replace(tmp, os.path.join(self.runs_dir, "current"))
+            try:
+                os.makedirs(self.runs_dir, exist_ok=True)
+                stem = f"{datetime.now():%Y-%m-%d_%H-%M-%S}_{self.run_id}"
+                self._path = os.path.join(self.runs_dir, stem + ".jsonl")
+                tmp = os.path.join(self.runs_dir, ".current.tmp")
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(stem)
+                os.replace(tmp, os.path.join(self.runs_dir, "current"))
+            except OSError as e:
+                self._lost(e)
         self.emit("workflow_start", run_id=self.run_id, workflow_id=self.workflow_id, workflow_name=self.workflow_name)
         return self.run_id
 
@@ -788,8 +799,11 @@ class RunRecorder:
         if "node_id" in ev:
             ev.setdefault("drawflow_id", None)
         if self._path:
-            with open(self._path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            try:
+                with open(self._path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            except OSError as e:
+                self._lost(e)
         for listen in self.listeners:
             try:
                 listen(ev)
@@ -822,7 +836,7 @@ class RunRecorder:
         if quiet and self._path:
             try:
                 os.remove(self._path)
-            except FileNotFoundError:
+            except OSError:
                 pass
         self._path = None
 
@@ -2907,8 +2921,10 @@ class SkillRuntime:
                 if d in self._installed_deps:
                     continue
                 self._installed_deps.add(d)
+                if self._importable(d):   # requirements.txt (or the runner's venv) already has it
+                    continue
                 try:
-                    node_print(f"  [run_skill_script] ensuring dependency: {d}")
+                    node_print(f"[warn] installing {d} (not in requirements.txt)")
                     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],
                                        capture_output=True, text=True, timeout=600)
                     if r.returncode != 0:
@@ -2916,6 +2932,24 @@ class SkillRuntime:
                                    f"{(r.stderr or '')[-300:]}")
                 except Exception as e:
                     node_print(f"  [run_skill_script] pip install {d} error: {e}")
+
+    @staticmethod
+    def _importable(dep: str) -> bool:
+        """Is a declared dependency (a pip requirement such as 'beautifulsoup4' or 'pypdf>=4') already
+        installed: a distribution of that name, or a module of that name?"""
+        import importlib.metadata, importlib.util, re
+        name = re.split(r"[\s<>=!~;\[]", dep.strip(), maxsplit=1)[0]
+        if not name:
+            return False
+        try:
+            importlib.metadata.distribution(name)
+            return True
+        except Exception:  # noqa: BLE001 -- PackageNotFoundError, or a bad name
+            pass
+        try:
+            return importlib.util.find_spec(name.replace("-", "_")) is not None
+        except Exception:  # noqa: BLE001 -- e.g. a dotted name whose parent is missing
+            return False
 
     def output_dir(self, dir_name: str) -> str:
         """The real /outputs dir of a skill: <outputs root>/<group> for a grouped skill ('GEO/x'), else the root."""

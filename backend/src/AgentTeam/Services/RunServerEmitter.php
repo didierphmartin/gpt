@@ -515,10 +515,14 @@ async def _drive(state: RunState) -> None:
             # skipped ahead of never gets delivered at all.
             loop.call_soon_threadsafe(state.publish, "done", {"run_id": state.id, "status": state.status,
                                    "output": state.output, "seconds": round(time.monotonic() - t0, 1)})
-        except Exception as e:
+        except BaseException as e:
+            # Any ending marks the run failed -- a run left "running" would keep a listener from ever
+            # starting -- and a cancellation (or another BaseException) still propagates once said.
             state.status = "failed"
             state.error = _error_text(e)
             loop.call_soon_threadsafe(state.publish, "error", {"run_id": state.id, "error": state.error})
+            if not isinstance(e, Exception):
+                raise
         finally:
             sys.stdout = _real_stdout
             set_event_sink(prev)

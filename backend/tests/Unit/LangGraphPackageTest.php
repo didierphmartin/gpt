@@ -6,6 +6,7 @@ use AgentTeam\Models\Workflow;
 use AgentTeam\Services\AgentRepository;
 use AgentTeam\Services\LangGraphGenerator;
 use AgentTeam\Services\LangGraphPackage;
+use AgentTeam\Services\LangGraphRuntime;
 use AgentTeam\Services\StartDocumentStore;
 use AgentTeam\Services\StartOptionGraph;
 use AgentTeam\Services\WorkflowGraphRepository;
@@ -404,6 +405,39 @@ final class LangGraphPackageTest extends TestCase
         }
     }
 
+    /**
+     * Final review M-f: a dir_name segment starting with "." is refused (.git, .superpowers are real entries of
+     * the skills root), and dot-directories inside a skill folder (.git/, .pytest_cache/) are not copied;
+     * dot-files other than .env* are copied as before.
+     */
+    public function testDotDirectoriesAreNeitherNamedNorCopied(): void
+    {
+        $root = $this->skillsRoot();
+        foreach (['.git', '.superpowers', 'GEO/.hidden', '.x/pdf-report'] as $bad) {
+            mkdir("$root/$bad", 0777, true);   // present in the root: refused for its name alone
+            file_put_contents("$root/$bad/SKILL.md", "---\nname: x\n---\n");
+            try {
+                $this->generator($this->graph($bad), $root)->generate(44, '3', ['modular' => true]);
+                self::fail('accepted skill dir ' . json_encode($bad));
+            } catch (\RuntimeException $e) {
+                self::assertSame('Skill folder "' . $bad . '" is not available on this server, so it can\'t be packaged.', $e->getMessage());
+            }
+        }
+        mkdir("$root/pdf-report/.git", 0777, true);
+        mkdir("$root/pdf-report/.pytest_cache/v", 0777, true);
+        mkdir("$root/pdf-report/assets/.cache", 0777, true);
+        file_put_contents("$root/pdf-report/.git/config", "[remote]\n");
+        file_put_contents("$root/pdf-report/.pytest_cache/v/x", "1");
+        file_put_contents("$root/pdf-report/assets/.cache/y", "2");
+        file_put_contents("$root/pdf-report/assets/style.css", "p{}");
+        file_put_contents("$root/pdf-report/.gitignore", "*.pyc\n");
+        $paths = array_column($this->generator($this->graph(), $root)->generate(44, '3', ['modular' => true])['files'], 'path');
+        $skill = array_values(array_filter($paths, fn($p) => str_starts_with($p, 'skills/')));
+        sort($skill);
+        self::assertSame(['skills/pdf-report/.gitignore', 'skills/pdf-report/SKILL.md', 'skills/pdf-report/assets/style.css',
+            'skills/pdf-report/logo.png', 'skills/pdf-report/run.py'], $skill);
+    }
+
     public function testAGroupedSkillIsPackagedUnderItsGroup(): void
     {
         $root = $this->skillsRoot();
@@ -455,6 +489,38 @@ final class LangGraphPackageTest extends TestCase
         foreach ($files as $path => $f) {
             self::assertStringNotContainsString('sk-skill-secret', $f['code'], $path);
         }
+    }
+
+    /**
+     * Final review M-k (spec §5 fallback): a declared skill dependency that is already importable is not
+     * pip-installed; one that is missing is installed with a [warn] naming requirements.txt.
+     */
+    public function testEnsureDepsInstallsOnlyWhatIsMissingAndWarns(): void
+    {
+        exec('command -v python3', $o, $rc);
+        if ($rc !== 0) {
+            self::markTestSkipped('python3 missing');
+        }
+        $dir = self::tempDir('lgpkg_deps_');
+        mkdir("$dir/skills/s", 0777, true);
+        file_put_contents("$dir/skills/s/SKILL.md", "---\nname: s\ndependencies: [json, zz-not-installed-pkg>=1.0]\n---\n");
+        $py = "from __future__ import annotations\nimport os, sys, subprocess, threading, json, re, time, asyncio, shutil\nfrom functools import cached_property\n"
+            . "def node_print(line):\n    print(line, flush=True)\n"
+            . "PACKAGE_DIR = " . var_export($dir, true) . "\n"
+            . LangGraphRuntime::skillRuntimeBlock(true) . "\n"
+            . <<<'PY'
+calls = []
+class R:
+    returncode, stderr = 0, ""
+subprocess.run = lambda argv, **kw: calls.append(argv[-1]) or R()
+SKILLS.ensure_deps(os.path.join(SKILLS_DIR, "s"))
+SKILLS.ensure_deps(os.path.join(SKILLS_DIR, "s"))   # once per process
+print("pip", calls)
+PY;
+        file_put_contents("$dir/probe.py", $py);
+        exec('python3 ' . escapeshellarg("$dir/probe.py") . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame(['[warn] installing zz-not-installed-pkg>=1.0 (not in requirements.txt)', "pip ['zz-not-installed-pkg>=1.0']"], $out);
     }
 
     public function testEveryPythonFileOfThePackageCompiles(): void

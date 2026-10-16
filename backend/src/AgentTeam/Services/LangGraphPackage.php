@@ -139,7 +139,7 @@ final class LangGraphPackage
     }
 
     /**
-     * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc), sorted.
+     * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted.
      *
      * @return list<array{dir:string,rel:string,bytes:string,entry:array}>
      */
@@ -149,8 +149,10 @@ final class LangGraphPackage
         $root = realpath($skillsRoot);
         foreach (self::skillDirs($facts) as $d) {
             // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
-            // skill; none empty, "." or "..", no "\"), resolved inside the root.
-            $safe = StartDocumentStore::safeSegments($d) !== null;
+            // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
+            // inside the root.
+            $segments = StartDocumentStore::safeSegments($d);
+            $safe = $segments !== null && array_filter($segments, fn(string $seg) => str_starts_with($seg, '.')) === [];
             $base = $safe && $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
             if ($base === false || !str_starts_with($base, $root . DIRECTORY_SEPARATOR) || !is_dir($base)) {
                 throw new RuntimeException("Skill folder \"{$d}\" is not available on this server, so it can't be packaged.");
@@ -159,7 +161,8 @@ final class LangGraphPackage
             $it = new \RecursiveIteratorIterator(new \RecursiveCallbackFilterIterator(
                 new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
                 fn(\SplFileInfo $f) => !in_array($f->getFilename(), self::SKIP_NAMES, true) && !str_ends_with($f->getFilename(), '.pyc')
-                    && !str_starts_with($f->getFilename(), '.env')));
+                    && !str_starts_with($f->getFilename(), '.env')
+                    && !($f->isDir() && str_starts_with($f->getFilename(), '.'))));   // .git/, .pytest_cache/, ...
             foreach ($it as $f) {
                 // A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
                 $real = $f->isFile() ? realpath($f->getPathname()) : false;

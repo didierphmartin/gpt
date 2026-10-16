@@ -57,13 +57,14 @@ class LangGraphGenerator
             $cfg = [];
         }
         // The DB column can be '' (editor-saved agent-template nodes): treat
-        // empty like missing and fall back to config.type.
+        // empty like missing and fall back to config.type; no type at all is an
+        // agent, as WorkflowGraphAnalyzer::typeOf reads it.
         foreach ([$n['node_type'] ?? null, $n['type'] ?? null, $cfg['type'] ?? null] as $t) {
             if ($t !== null && (string) $t !== '') {
                 return (string) $t;
             }
         }
-        return '';
+        return 'agent';
     }
 
     /** "<server slug>.<tool>" ids the playbook analyzer binds against — twin of LoaderMcpExecutor::slug(). */
