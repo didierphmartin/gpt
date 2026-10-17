@@ -108,14 +108,50 @@ class NOOAGenerator
     }
 
     /**
-     * A2A: one A2A agent server per node plus an orchestrator (LangGraph's A2A design, copied). Not built yet
-     * for this target: compile as a single file or with agents in separate files.
+     * A2A: one A2A agent server per node plus an orchestrator -- LangGraph's A2A design, copied (CompiledA2AEmit).
+     * The package also carries the agents-in-separate-files runtime (common.py, agents/), which each server
+     * imports to run its node. Same scope as LangGraph's A2A: code nodes and Start options are refused.
      */
     public function generateA2A(int $workflowId, ?string $userId = null): array
     {
-        throw new RuntimeException('A2A packaging is not available for this target yet. Compile this workflow as a single file'
-            . ' or with agents in separate files.');
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        CompiledA2AEmit::refuse($analyzed);
+        $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
+        $analyzed['startDocuments'] = $docs['docs'];
+        return self::a2aPackage($analyzed, $docs['files'], $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot());
     }
+
+    /** The A2A package of an analysis (no database): servers/, orchestrator.py, api.py, the runtime, the package files. */
+    public static function a2aPackage(array $analyzed, array $documentFiles = [], ?string $skillsRoot = null): array
+    {
+        CompiledA2AEmit::refuse($analyzed);
+        $analyzed['package'] = true;
+        $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
+        $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
+            array_merge(self::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'NVIDIA NOOA (A2A)');
+        return CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
+            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_nooa_a2a', 'NVIDIA NOOA');
+    }
+
+    /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
+    private const A2A_RUN_NODE = <<<'PY'
+async def run_node(request_text: str, trace) -> dict:
+    """Run this server's node on NOOA: an agent's class on the request (then its skills), a dispatcher's
+    choice (its decision model, else the chooser model), a playbook's interpreter."""
+    nid = NODE["id"]
+    if NODE["kind"] == "playbook":
+        return {"text": await run_playbook_node(PLAYBOOKS[nid], request_text), "route": "", "notes": "", "status": "ok"}
+    if NODE["kind"] == "dispatcher":
+        chosen, text, _not_classified = await W._route_dispatcher(nid, [("Request", request_text)], request_text,
+                                                                  NODE["menu"])
+        return {"text": text, "route": chosen or "", "notes": "", "status": "ok" if chosen else "unrouted"}
+    ad = AGENTS[nid]
+    text = str(await ad["cls"]().respond(request_text) or "")
+    for skill in ad.get("skills", []):
+        text = await run_skill(skill, text, request_text, ad)
+    return {"text": text, "route": "", "notes": "", "status": "ok"}
+PY;
+
 
     /**
      * The compiled package: the same script, plus the run server that makes it

@@ -24,4 +24,9 @@ class MafE2ETest extends AdkCodeNodeE2ETest
     {
         return MAFGenerator::packageFiles($analyzed);
     }
+
+    protected function a2aPackage(array $analyzed): array
+    {
+        return MAFGenerator::a2aPackage($analyzed);
+    }
 }

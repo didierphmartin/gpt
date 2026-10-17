@@ -488,4 +488,61 @@ class AdkCodeNodeE2ETest extends TestCase
         self::assertSame(0, $rc, $text);
         self::assertStringContainsString('filed test 50', $text);
     }
+
+    /** The target's A2A package for an analysis (servers/, orchestrator.py, api.py, the runtime). */
+    protected function a2aPackage(array $analyzed): array
+    {
+        return ADKGenerator::a2aPackage($analyzed);
+    }
+
+    /** Start -> dispatcher D (Jev) -> agent A | agent B -> Output, every model the fake one ("answer from <model>"). */
+    private function a2aAnalyzed(): array
+    {
+        $agent = fn(string $id, string $name, array $extra = []) => ['id' => $id, 'type' => 'agent',
+            'config' => ['type' => 'agent', 'agent_name' => $name, 'provider' => 'deepseek', 'model' => 'fake-' . strtolower($name)] + $extra];
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'my car claim']],
+            $agent('2', 'D', ['agent_type' => 'dispatcher']), $agent('3', 'A'), $agent('4', 'B'),
+            ['id' => '5', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3'], ['from' => '2', 'to' => '4'],
+            ['from' => '3', 'to' => '5'], ['from' => '4', 'to' => '5']]];
+        $ag = fn(string $name, string $prompt) => ['name' => $name, 'systemPrompt' => $prompt, 'provider' => 'deepseek',
+            'model' => 'fake-' . strtolower($name), 'temperature' => null, 'max_tokens' => null, 'tools' => [], 'skills' => [],
+            'skill_content' => '', 'output_schema_id' => null, 'documents' => []];
+        return array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 96, 'name' => 'a2a e2e'], 'usedCatalog' => [], 'usedServers' => [], 'serverSlugs' => [],
+            'startPrompt' => 'my car claim', 'startDocuments' => [], 'playbooks' => [], 'code' => [],
+            'agents' => ['2' => $ag('D', 'Route the request.'), '3' => $ag('A', 'Handle it as A.'), '4' => $ag('B', 'Handle it as B.')],
+            'decisions' => ['2' => ['decision_question' => 'Which agent handles this?', 'routing_mode' => 'jev', 'unclear_branch' => '',
+                'min_confidence' => 0.6, 'decision' => [['provider' => 'jev', 'protocol' => 'typesafe', 'url' => $this->url . '/systemone',
+                    'model' => 'jev-latest', 'key_env' => 'JEV_API_KEY', 'url_env' => 'JEV_BASE_URL']]]],
+        ]);
+    }
+
+    /** A2A: the orchestrator spawns one A2A agent server per node; Jev routes; only the chosen agent runs. */
+    public function testA2ARoutesOverAgentServers(): void
+    {
+        $this->startServer();
+        $pkg = $this->a2aPackage($this->a2aAnalyzed());
+        $dir = sys_get_temp_dir() . '/adk_e2e_a2a_' . bin2hex(random_bytes(4));
+        foreach ($pkg['files'] as $f) {
+            @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
+            file_put_contents("$dir/{$f['path']}", $f['code']);
+        }
+        file_put_contents("$dir/.env", "JEV_API_KEY=jev-test-key\nDEEPSEEK_API_KEY=fake\nDEEPSEEK_BASE_URL={$this->url}/v1\n");
+        $base = random_int(21000, 29000);
+        $proc = proc_open([self::PY, 'orchestrator.py', 'my car claim'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
+            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'A2A_BASE_PORT' => (string) $base]);
+        $text = (string) stream_get_contents($pipes[1]);
+        $rc = proc_close($proc);
+        fwrite(STDERR, "\n--- A2A output ($dir) ---\n$text\n");
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('answer from fake-b', $text);
+        $llm = array_values(array_filter($this->calls(), fn($c) => ($c['method'] ?? '') === 'llm'));
+        self::assertSame(['fake-b'], array_values(array_unique(array_column($llm, 'model'))), json_encode($llm));
+        self::assertStringContainsString('my car claim', implode(' ', $llm[0]['messages']));
+        $jev = array_values(array_filter($this->calls(), fn($c) => ($c['method'] ?? '') === 'jev'));
+        self::assertCount(1, $jev);
+        self::assertStringContainsString('my car claim', $jev[0]['request']);
+    }
 }

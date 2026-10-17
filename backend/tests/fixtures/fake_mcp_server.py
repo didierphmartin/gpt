@@ -15,6 +15,33 @@ if len(sys.argv) > 3 and sys.argv[3] == "claim":
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path.endswith("/chat/completions"):   # a fake OpenAI-compatible model: "answer from <model>"
+            model = str(req.get("model") or "").split("/")[-1]
+            msgs = req.get("messages") or []
+            with open(LOG, "a") as f:
+                f.write(json.dumps({"method": "llm", "model": model, "stream": bool(req.get("stream")),
+                                    "messages": [str(m.get("content"))[:2000] for m in msgs if isinstance(m, dict)]}) + "\n")
+            content = f"answer from {model}"
+            if req.get("stream"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for chunk in ({"choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}]},
+                              {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                               "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}):
+                    chunk.update({"id": "fake", "object": "chat.completion.chunk", "created": 0, "model": model})
+                    self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                return
+            data = json.dumps({"id": "fake", "object": "chat.completion", "created": 0, "model": model,
+                               "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                               "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.endswith("/systemone"):   # a fake TypeSafe Jev: "claim" in the request -> B, else unclear
             with open(LOG, "a") as f:
                 f.write(json.dumps({"method": "jev", "request": req.get("state", {}).get("request"),

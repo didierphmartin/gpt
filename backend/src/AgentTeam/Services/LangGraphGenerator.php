@@ -1818,6 +1818,77 @@ TXT;
     /** Supervisor, remote node runner, gate handler, graph wiring, CLI entry. */
     private static function a2aOrchestratorBlock(): string
     {
+        return self::a2aRemoteBlock() . <<<'PY'
+# ==============================================================
+# MAIN EXECUTION -- the LangGraph state graph over A2A tasks
+# ==============================================================
+NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)
+
+
+def build_graph() -> WorkflowGraph:
+    """The workflow's graph (WorkflowGraph above): agent nodes call their A2A servers."""
+    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents=AGENTS,
+                         run_node=_run_remote_node, start_documents=START_DOCUMENTS)
+
+
+async def run(user_prompt: str, session: str | None = None) -> str:
+    """Build the graph (agent nodes call their A2A servers), run it, return the final output.
+
+    `session` is accepted so this signature matches api.py's run contract
+    (shared with the modular and swarm targets) but is ignored here: an A2A
+    run dispatches independent tasks to remote agents and has no
+    conversation to resume between calls.
+    """
+    return await build_graph().run(user_prompt)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=f"A2A orchestrator for workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
+    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
+    ap.add_argument("--keep-serving", action="store_true", help="leave the agent servers running after the run")
+    ap.add_argument("--no-spawn", action="store_true", help="do not start agents; expect their URLs to be reachable")
+    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
+                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
+    a = ap.parse_args()
+    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
+    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron stops here, before any agent starts
+    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
+
+    def run_once() -> str:
+        """One run over the agent servers: its output printed and saved ('' when it ended without one)."""
+        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
+        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
+        graph = build_graph()
+        output = runs.loop.run_until_complete(graph.run(prompt))
+        if output:
+            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
+            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
+                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
+            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (A2A round trip)")
+        return output
+
+    # The agents start once and serve every run of the loop.
+    sup = AgentSupervisor(spawn=not a.no_spawn)
+    try:
+        sup.start()
+        match cron:
+            case None:
+                if not run_once():
+                    print("[info] The run ended without output (a branch ended).", flush=True)
+            case expr:
+                run_cron(expr, run_once, drains=False, loop=runs)   # A2A packaging has no code nodes
+    finally:
+        if not a.keep_serving:
+            sup.stop()
+PY;
+    }
+
+    /**
+     * The orchestrator's framework-free part: the agent supervisor, the gate handler and the remote node
+     * runner (one A2A task per node). ADK, MAF and NOOA orchestrators copy it (CompiledA2AEmit).
+     */
+    public static function a2aRemoteBlock(): string
+    {
         return <<<'PY'
 # ==============================================================
 # AGENT SUPERVISOR
@@ -2071,67 +2142,6 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
     return out
 
 
-# ==============================================================
-# MAIN EXECUTION -- the LangGraph state graph over A2A tasks
-# ==============================================================
-NODE_DURATIONS = {}   # display name -> seconds of A2A round trip (RUN SUMMARY)
-
-
-def build_graph() -> WorkflowGraph:
-    """The workflow's graph (WorkflowGraph above): agent nodes call their A2A servers."""
-    return WorkflowGraph(edges=EDGES, order=ORDER, node_types=NODE_TYPES, agents=AGENTS,
-                         run_node=_run_remote_node, start_documents=START_DOCUMENTS)
-
-
-async def run(user_prompt: str, session: str | None = None) -> str:
-    """Build the graph (agent nodes call their A2A servers), run it, return the final output.
-
-    `session` is accepted so this signature matches api.py's run contract
-    (shared with the modular and swarm targets) but is ignored here: an A2A
-    run dispatches independent tasks to remote agents and has no
-    conversation to resume between calls.
-    """
-    return await build_graph().run(user_prompt)
-
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=f"A2A orchestrator for workflow {WORKFLOW_NAME!r}", allow_abbrev=False)
-    ap.add_argument("prompt", nargs="*", help="the request (default: the Start node prompt)")
-    ap.add_argument("--keep-serving", action="store_true", help="leave the agent servers running after the run")
-    ap.add_argument("--no-spawn", action="store_true", help="do not start agents; expect their URLs to be reachable")
-    ap.add_argument("--cron", nargs="?", const="", default=None, metavar="EXPR",
-                    help="run on a cron schedule until Ctrl-C (default: the Start node's schedule)")
-    a = ap.parse_args()
-    prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
-    cron = CronExpression.from_cli(ap, a.cron, DEFAULT_CRON)   # a bad --cron stops here, before any agent starts
-    runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
-
-    def run_once() -> str:
-        """One run over the agent servers: its output printed and saved ('' when it ended without one)."""
-        print(f"[info] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}", flush=True)
-        NODE_DURATIONS.clear()   # this run's times only (RUN SUMMARY)
-        graph = build_graph()
-        output = runs.loop.run_until_complete(graph.run(prompt))
-        if output:
-            print("\n" + "=" * 60 + "\nFINAL OUTPUT\n" + "=" * 60 + "\n" + output, flush=True)
-            saved = save_output(output, enabled=OUTPUT_STORAGE_ENABLED, folder=OUTPUT_FOLDER,
-                                workflow_id=WORKFLOW_ID, workflow_name=WORKFLOW_NAME)
-            print_run_summary(output, saved, graph.started, NODE_DURATIONS, "Time per node (A2A round trip)")
-        return output
-
-    # The agents start once and serve every run of the loop.
-    sup = AgentSupervisor(spawn=not a.no_spawn)
-    try:
-        sup.start()
-        match cron:
-            case None:
-                if not run_once():
-                    print("[info] The run ended without output (a branch ended).", flush=True)
-            case expr:
-                run_cron(expr, run_once, drains=False, loop=runs)   # A2A packaging has no code nodes
-    finally:
-        if not a.keep_serving:
-            sup.stop()
 PY;
     }
 
@@ -2341,7 +2351,7 @@ TXT;
     }
 
     /** Agent Card, executor with pause/resume legs, gate bridge, CLI entry. */
-    private static function a2aAgentServerBlock(): string
+    public static function a2aAgentServerBlock(): string
     {
         return <<<'PY'
 # ==============================================================
@@ -4334,7 +4344,7 @@ def inject_datetime(system_prompt: str) -> str:
 PY;
     }
 
-    private static function contextBuilderBlock(): string
+    public static function contextBuilderBlock(): string
     {
         return <<<'PY'
 def build_context(user_prompt: str, parent_ids: list[str], outputs: dict) -> str:

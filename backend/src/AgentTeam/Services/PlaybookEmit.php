@@ -403,6 +403,10 @@ def _playbook_gate(run, kind: str, name: str, args: dict) -> dict:
     the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
     auto (default) approves approvals and acknowledges handoffs, deny denies,
     prompt forces the console. PLAYBOOK_GATE_MODE always wins."""
+    bridge = globals().get("GATE_BRIDGE")
+    if bridge is not None:   # an A2A agent server: the gate travels to the orchestrator as input-required
+        run.emit(type="gate_request", kind=kind, payload=dict(args))
+        return bridge(run, kind, name, args)
     _sink_active = _pb_sink_active()
     mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
         "server" if _sink_active

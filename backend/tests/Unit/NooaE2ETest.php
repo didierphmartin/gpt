@@ -24,4 +24,9 @@ class NooaE2ETest extends AdkCodeNodeE2ETest
     {
         return NOOAGenerator::packageFiles($analyzed);
     }
+
+    protected function a2aPackage(array $analyzed): array
+    {
+        return NOOAGenerator::a2aPackage($analyzed);
+    }
 }
