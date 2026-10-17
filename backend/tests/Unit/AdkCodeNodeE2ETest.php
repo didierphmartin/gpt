@@ -164,7 +164,7 @@ class AdkCodeNodeE2ETest extends TestCase
         $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
         $a['package'] = true;
         $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => ADKGenerator::emitAdk($a)], 'adk e2e', 'adk', 'ADK run server',
-            ADKGenerator::packageCommonBlock(), true);
+            \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), true);
         $dir = sys_get_temp_dir() . '/adk_listen_' . bin2hex(random_bytes(4));
         foreach (array_merge($pkg['files'], \AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir())) as $f) {
             @mkdir(dirname("$dir/{$f['path']}"), 0777, true);

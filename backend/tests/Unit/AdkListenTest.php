@@ -115,7 +115,7 @@ PY;
         $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
         $a['package'] = true;
         $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => ADKGenerator::emitAdk($a)], 'wf64', 'adk', 'ADK run server',
-            ADKGenerator::packageCommonBlock(), true);
+            \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), true);
         $files = array_column($pkg['files'], 'code', 'path');
         foreach (\AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir()) as $f) {
             $files[$f['path']] = $f['code'];
