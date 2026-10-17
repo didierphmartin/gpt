@@ -15,6 +15,56 @@ use RuntimeException;
 final class CompiledRuntimeEmit
 {
     /**
+     * What a compiled program needs beyond WorkflowGraphAnalyzer::analyze() (+ 'playbooks'), read at compile
+     * time only: 'code' (each code node's settings), 'serverSlugs' (url => slug, MCP_HEADERS_<SLUG>),
+     * 'decisions' (each dispatcher's decision-model routing), and the Start's mode, schedule and trigger.
+     */
+    public static function analyzeRuntime(array $analyzed, WorkflowGraphAnalyzer $analyzer, ?\PDO $db,
+        ?AgentRepository $agentRepo, array $graphRaw, int $workflowId, ?string $userId): array
+    {
+        $index = $analyzer->serverIndex($userId);   // slug => {url, name}: the user's MCP servers
+        // Code nodes (spec 2026-10-04): validated settings, exit -> children, the servers they call.
+        $slugToUrl = array_map(fn($s) => $s['url'], $index);
+        $analyzed['code'] = [];
+        foreach ((array) $analyzed['order'] as $nid) {   // analyzeGraph()'s topological order
+            $node = $analyzed['byId'][$nid] ?? null;
+            if ($node !== null && WorkflowGraphAnalyzer::typeOf($node) === 'code') {
+                $analyzed['code'][(string) $nid] = CodeNodeEmit::nodeData($node, $graphRaw['edges'] ?? [], $slugToUrl,
+                    array_keys((array) $analyzed['byId']));
+            }
+        }
+
+        // MCP_SERVER_SLUGS: every URL this script calls -> its server's slug (MCP_HEADERS_<SLUG>).
+        $urlName = [];
+        foreach ((array) ($analyzed['usedServers'] ?? []) as $surl => $meta) {
+            $urlName[(string) $surl][CodeNodeEmit::slug((string) ($meta['name'] ?? ''))] = (string) ($meta['name'] ?? '');
+        }
+        foreach ($analyzed['playbooks'] as $pd) {
+            foreach ($pd['actions'] as $a) {
+                if (($a['kind'] ?? '') === 'mcp') {
+                    $slg = CodeNodeEmit::slug(explode('.', (string) $a['target'], 2)[0]);
+                    $urlName[(string) $a['server_url']][$slg] = $index[$slg]['name'] ?? $slg;
+                }
+            }
+        }
+        foreach ($analyzed['code'] as $cd) {
+            foreach ($cd['mcp_servers'] as $slg) {
+                $urlName[$index[$slg]['url']][$slg] = $index[$slg]['name'];
+            }
+        }
+        $analyzed['serverSlugs'] = CompiledRuntimeEmit::serverSlugs($urlName);
+        // Each dispatcher's decision-model routing (Jev...), baked: the program never reads the database.
+        $analyzed['decisions'] = [];
+        foreach (array_keys(WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus']) as $did) {
+            $analyzed['decisions'][(string) $did] = DispatcherDecisionFacts::of($db, $agentRepo,
+                (array) $analyzed['byId'][$did], (string) $analyzed['workflow']['name']);
+        }
+        $ordered = array_map(fn($id) => ['id' => (string) $id] + (array) $analyzed['byId'][$id], (array) $analyzed['order']);
+        $analyzed += StartTriggerFacts::of($db, $workflowId, $ordered, $analyzed['serverSlugs']);
+        return $analyzed;
+    }
+
+    /**
      * ADK's own MCP client (PythonEmitHelpers::mcpClientBlock() stays for MAF and NOOA): per-server
      * headers from MCP_HEADERS_<SLUG>, a moved server from MCP_URL_<SLUG>, and a raw call for code nodes.
      */

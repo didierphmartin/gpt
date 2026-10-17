@@ -34,7 +34,6 @@ class MAFGenerator
                 . 'Compile it with LangGraph, or switch the workflow to "workflow" orchestration.'
             );
         }
-        CodeNodeEmit::refuseUnsupported($this->graphRepo->getGraph($workflowId), 'MAF');
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
 
@@ -65,6 +64,10 @@ class MAFGenerator
             $analyzed['playbooks'][(string) $pid] =
                 PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
         }
+
+        // Code nodes, MCP server slugs (headers), decision routing, the Start's mode: CompiledRuntimeEmit's rules.
+        $analyzed = CompiledRuntimeEmit::analyzeRuntime($analyzed, $analyzer, $this->db, $this->agentRepo,
+            $this->graphRepo->getGraph($workflowId), $workflowId, $userId);
 
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
         return [
@@ -124,10 +127,17 @@ class MAFGenerator
                 'function per catalog entry, and _reported_mcp_call — the',
                 'progress wrapper that prints [tool] lines attributed to the',
                 'calling agent node (contextvar).');
-            $parts[] = PythonEmitHelpers::mcpClientBlock();
+            $parts[] = CompiledRuntimeEmit::mcpClientBlock($analyzed);
             $parts[] = self::mcpToolBuilderBlock($analyzed);
             $parts[] = 'catalog = build_tools_from_catalog()';
         } else {
+            if (!empty($analyzed['code']) || !empty($analyzed['playbooks'])) {
+                // No agent tools, but code nodes and playbook #Actions call MCP servers too.
+                $parts[] = self::banner('MCP CLIENT',
+                    'HTTP JSON-RPC client for the MCP servers the code nodes and',
+                    'playbook #Actions call, with each server\'s headers (.env).');
+                $parts[] = CompiledRuntimeEmit::mcpClientBlock($analyzed);
+            }
             $parts[] = 'catalog = {}';
         }
         $parts[] = self::banner('DOCUMENT CONVERTER',
@@ -159,7 +169,7 @@ class MAFGenerator
                 'a stub per unbound one. The node output is that transcript.');
             // _call_mcp_tool comes from mcpClientBlock(), emitted above ONLY when
             // the workflow uses MCP tools -- ask for it when it does not.
-            $parts[] = PlaybookEmit::supportBlock(empty($analyzed['usedCatalog']));
+            $parts[] = PlaybookEmit::supportBlock(false);   // _call_mcp_tool: the MCP client above
             $parts[] = PlaybookEmit::runtimeBlock();
             $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
         }
@@ -515,8 +525,13 @@ TXT;
         from agent_framework.anthropic import AnthropicClient
         from agent_framework.openai import OpenAIChatCompletionClient
 
-        # MAF does not auto-load .env; load the runner's .env (one dir up from scripts/).
-        load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+        # MAF does not auto-load .env. Provider keys and MCP headers come from this folder's own .env first, then
+        # the runner's python/.env -- one level up for the single file in scripts/, two for the package in
+        # scripts/<folder>/. load_dotenv never overrides, so the nearest value wins.
+        _HERE = os.path.dirname(os.path.abspath(__file__))
+        for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
+            load_dotenv(os.path.join(_d, ".env"))
+        PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
         PY;
     }
 
@@ -1502,7 +1517,7 @@ PY;
         $wfName  = PythonEmitHelpers::pyStr((string) $analyzed['workflow']['name']);
         $wfId    = (int) $analyzed['workflow']['id'];
         $enabled = !empty($analyzed['outputStorageEnabled']) ? 'True' : 'False';
-        $folder  = $analyzed['outputFolder'] ? PythonEmitHelpers::pyStr((string) $analyzed['outputFolder']) : 'None';
+        $folder  = ($analyzed['outputFolder'] ?? null) ? PythonEmitHelpers::pyStr((string) $analyzed['outputFolder']) : 'None';
         return "DEFAULT_PROMPT = {$sp}\n"
              . "WORKFLOW_NAME = {$wfName}\n"
              . "WORKFLOW_ID = {$wfId}\n"
