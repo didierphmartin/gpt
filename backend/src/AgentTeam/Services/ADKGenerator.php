@@ -284,14 +284,67 @@ class ADKGenerator
     }
 
     /**
-     * A2A: one A2A agent server per node plus an orchestrator (LangGraph's A2A design, copied). Not built yet
-     * for this target: compile as a single file or with agents in separate files.
+     * A2A: one A2A agent server per node plus an orchestrator -- LangGraph's A2A design, copied (CompiledA2AEmit).
+     * The package also carries the agents-in-separate-files runtime (common.py, agents/), which each server
+     * imports to run its node. Same scope as LangGraph's A2A: code nodes and Start options are refused.
      */
     public function generateA2A(int $workflowId, ?string $userId = null): array
     {
-        throw new RuntimeException('A2A packaging is not available for this target yet. Compile this workflow as a single file'
-            . ' or with agents in separate files.');
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        CompiledA2AEmit::refuse($analyzed);
+        $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
+        $analyzed['startDocuments'] = $docs['docs'];
+        return self::a2aPackage($analyzed, $docs['files'], $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot());
     }
+
+    /** The A2A package of an analysis (no database): servers/, orchestrator.py, api.py, the runtime, the package files. */
+    public static function a2aPackage(array $analyzed, array $documentFiles = [], ?string $skillsRoot = null): array
+    {
+        CompiledA2AEmit::refuse($analyzed);
+        $analyzed['package'] = true;
+        $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
+        $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
+            array_merge(ADKPackage::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Google ADK (A2A)');
+        return CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
+            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_adk_a2a', 'Google ADK');
+    }
+
+    /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
+    private const A2A_RUN_NODE = <<<'PY'
+async def _adk_state(agent, text: str) -> dict:
+    """Run one ADK agent on `text` in a session of its own; returns the session state after the run (the
+    node's answer is state["node_<id>"])."""
+    svc = InMemorySessionService()
+    runner = Runner(agent=agent, app_name="node", session_service=svc)
+    sess = await svc.create_session(app_name="node", user_id="a2a", state={"user_prompt": text})
+    async for _ev in runner.run_async(user_id="a2a", session_id=sess.id,
+                                      new_message=types.Content(role="user", parts=[types.Part(text=text)])):
+        pass
+    return dict((await svc.get_session(app_name="node", user_id="a2a", session_id=sess.id)).state)
+
+
+async def run_node(request_text: str, trace) -> dict:
+    """Run this server's node on ADK: its agent (with its skill steps) on the request, a dispatcher's choice
+    (its decision model, else its chooser agent), a playbook's interpreter."""
+    nid = NODE["id"]
+    if NODE["kind"] == "playbook":
+        return {"text": await run_playbook_node(PLAYBOOKS[nid], request_text), "route": "", "notes": "", "status": "ok"}
+    if NODE["kind"] == "dispatcher":
+        disp = getattr(W, f"node_{nid}__dispatch")   # the _DispatcherAgent: its routing settings and adapters
+        key = disp._mode()
+        if key != "llm":
+            chosen, text, _nc = await _a2a_decide(key, disp._router(key), request_text, NODE["menu"],
+                                                  disp.decision_question, disp.min_confidence, disp.unclear_branch,
+                                                  NODE["display"])
+        else:
+            reply = str((await _adk_state(disp.sub_agents[0], request_text)).get(f"node_{nid}", ""))
+            chosen, notes = _a2a_pick(reply, NODE["menu"])
+            text = (request_text + (f"\n\n## Dispatcher notes\n{notes}" if notes else "")) if chosen \
+                else _a2a_unrouted(NODE["display"], NODE["menu"])
+        return {"text": text, "route": chosen or "", "notes": "", "status": "ok" if chosen else "unrouted"}
+    state = await _adk_state(getattr(W, f"node_{nid}"), request_text)
+    return {"text": str(state.get(f"node_{nid}", "")), "route": "", "notes": "", "status": "ok"}
+PY;
 
     /**
      * The compiled package: a folder that runs on its own, like LangGraph's modular package --
