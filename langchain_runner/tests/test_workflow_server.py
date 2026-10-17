@@ -201,3 +201,17 @@ def test_stop_reaps_a_killed_child_no_zombie(tmp_path, monkeypatch):
     assert result["stopped"] is True
     with pytest.raises(ChildProcessError):
         os.waitpid(pid, os.WNOHANG)
+
+
+def test_list_reports_running_servers_only(tmp_path, monkeypatch):
+    """GET /api/workflow-servers: the editor asks it after a page reload to find a
+    workflow's compiled program that is still running (and still listening)."""
+    _pkg(tmp_path, monkeypatch)
+    assert runner._list_workflow_servers() == {"servers": []}
+    try:
+        started = runner._start_workflow_server("demo_modular")
+        listed = runner._list_workflow_servers()["servers"]
+        assert listed == [{"folder": "demo_modular", "url": started["url"], "pid": started["pid"]}]
+    finally:
+        runner._stop_workflow_server("demo_modular")
+    assert runner._list_workflow_servers() == {"servers": []}

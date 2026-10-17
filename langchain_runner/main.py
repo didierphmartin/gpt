@@ -454,6 +454,13 @@ def _terminate_workflow_proc(proc: subprocess.Popen) -> bool:
     return True
 
 
+def _list_workflow_servers() -> dict:
+    """{"servers": [{folder, url, pid}]}: every server still alive, by folder name."""
+    with _SERVERS_LOCK:
+        live = [(f, p) for f, p in _SERVERS.items() if p.poll() is None]
+    return {"servers": [{"folder": f, "url": p._workflow_url, "pid": p.pid} for f, p in sorted(live)]}
+
+
 def _stop_workflow_server(folder: str) -> dict:
     """Stop the run server for a package and forget it."""
     with _SERVERS_LOCK:
@@ -601,6 +608,13 @@ async def workflow_server_start(req: dict):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/workflow-servers")
+async def workflow_servers_list():
+    """The compiled run servers this runner is running: [{folder, url, pid}]. Read-only. The editor asks it
+    after a page reload to find a workflow's compiled program that is still running (still listening, maybe)."""
+    return _list_workflow_servers()
 
 
 @app.post("/api/workflow-server/stop")

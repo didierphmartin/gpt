@@ -3403,11 +3403,7 @@ class WorkflowEditor {
      */
     async _stopCompiledEngine(exceptRoot = null) {
         // This workflow's compiled program, whichever target it was compiled for (LangGraph, ADK, MAF, NOOA).
-        const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-        // LangGraph in either structure (and its swarm), and every other target in both.
-        const roots = [...new Set([this._compiledRootName(null), `${safe}_modular`, `${safe}_a2a`,
-            ...['adk', 'maf', 'nooa'].flatMap((t) => [`${safe}_${t}`, `${safe}_${t}_a2a`])])]
-            .filter((r) => r !== exceptRoot);
+        const roots = this._compiledRoots().filter((r) => r !== exceptRoot);
         await Promise.all(roots.map((folder) => fetch(`${this._langgraphRunnerBase}/api/workflow-server/stop`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ folder }), signal: AbortSignal.timeout(10000),
@@ -3416,6 +3412,48 @@ class WorkflowEditor {
             this._compiledLive = window.StartOptions.compiledLiveState(null);
             this._refreshStartHint();
         }
+    }
+
+    /** This workflow's compiled program folders: LangGraph in either structure (and its swarm), every other target in both. */
+    _compiledRoots() {
+        const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+        return [...new Set([this._compiledRootName(null), `${safe}_modular`, `${safe}_a2a`,
+            ...['adk', 'maf', 'nooa'].flatMap((t) => [`${safe}_${t}`, `${safe}_${t}_a2a`])])];
+    }
+
+    /**
+     * After a page reload (or opening the workflow in another tab): when one of this workflow's compiled programs
+     * is still running on the local runner (GET /api/workflow-servers) and is this workflow (its card), follow
+     * its live stream again -- without opening the overlay -- so Start shows its state and ■ again and the canvas
+     * follows its runs. Only for a Start that listens (schedule or event trigger). Silent when there is no runner.
+     */
+    async _reattachCompiled() {
+        const wfId = this.currentWorkflowId;
+        if (!wfId || this._liveSource?.kind === 'compiled' && this._monitoring === wfId) return;
+        if (this._isIngestionWorkflow() || this._isSwarm() || this._startView().button === 'run') return;
+        let servers;
+        try {
+            const r = await fetch(`${this._langgraphRunnerBase}/api/workflow-servers`, { signal: AbortSignal.timeout(3000) });
+            if (!r.ok) return;   // an older runner without the listing
+            servers = (await r.json()).servers || [];
+        } catch (_) { return; }   // no runner: nothing compiled runs
+        const roots = new Set(this._compiledRoots());
+        const hit = servers.find((sv) => roots.has(sv.folder));
+        if (!hit || this.currentWorkflowId !== wfId) return;
+        const base = hit.url.endsWith('/') ? hit.url : `${hit.url}/`;
+        try {
+            const card = await (await fetch(`${base}.well-known/workflow.json`, { signal: AbortSignal.timeout(3000) })).json();
+            if (Number(card.workflow_id) !== Number(wfId)) return;   // a folder name shared by another workflow
+        } catch (_) { return; }
+        if (this.currentWorkflowId !== wfId) return;
+        this._liveStop?.();
+        this._liveSource = { kind: 'compiled', base };
+        this._compiledLive = null;
+        this._monitoring = wfId;
+        const ctrl = new AbortController();
+        this._liveStop = () => ctrl.abort();
+        this._liveConnect(ctrl.signal, wfId, this._liveSource).catch(() => {});
+        this._refreshMonitoring();
     }
 
     /** This workflow's compiled program, when this tab follows it and it listens: its state, else null. */
@@ -13218,6 +13256,7 @@ class WorkflowEditor {
             // Restore local folder handle for this workflow
             await this.restoreLocalFolderForWorkflow(workflowId);
             this._loadedState = this._saveState();
+            this._reattachCompiled();   // not awaited: a compiled program still running from before a reload
 
             console.log('[WorkflowEditor] Workflow loaded:', this.currentWorkflowName);
 
