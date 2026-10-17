@@ -166,13 +166,15 @@ class AdkCodeNodeE2ETest extends TestCase
     private $api = null;
 
     /** The E2E graph as a listening package (watch on outlook.wait_for_new), written to a folder; returns the folder. */
-    private function writeListeningPackage(): string
+    private function writeListeningPackage(?array $a = null, string $startMode = 'watch'): string
     {
-        // the branch takes 3 s, as a real one (an LLM, a mail move) does: /live sends a run it sees in
-        // progress; one already over at its first look is history (LiveFeed's rule)
-        $a = $this->analyzed("import time\n" . self::FILE . "\n# slow\n");
-        $a['code']['3']['source'] = str_replace("def run(input, call_tool):\n", "def run(input, call_tool):\n    time.sleep(3)\n", $a['code']['3']['source']);
-        $a['startMode'] = 'watch';
+        if ($a === null) {
+            // the branch takes 3 s, as a real one (an LLM, a mail move) does: /live sends a run it sees in
+            // progress; one already over at its first look is history (LiveFeed's rule)
+            $a = $this->analyzed("import time\n" . self::FILE . "\n# slow\n");
+            $a['code']['3']['source'] = str_replace("def run(input, call_tool):\n", "def run(input, call_tool):\n    time.sleep(3)\n", $a['code']['3']['source']);
+        }
+        $a['startMode'] = $startMode;
         $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
         $a['package'] = true;
         $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => $this->emit($a)], 'adk e2e', 'e2e', 'run server',
@@ -182,7 +184,7 @@ class AdkCodeNodeE2ETest extends TestCase
             @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
             file_put_contents("$dir/{$f['path']}", $f['code']);
         }
-        file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\n");
+        file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\nJEV_API_KEY=jev-test-key\n");
         return $dir;
     }
 
@@ -389,5 +391,95 @@ class AdkCodeNodeE2ETest extends TestCase
         self::assertStringContainsString("sent to the unclear branch 'A'", $text);
         $moves = array_values(array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
         self::assertSame('Inbox/A', $moves[0]['args']['folder'] ?? null);
+    }
+
+    /** Waits for a completed, recorded run in the package's runs/; returns its events. */
+    private function completedRun(string $dir): array
+    {
+        for ($i = 0; $i < 150; $i++) {
+            foreach (glob("$dir/runs/*.jsonl") ?: [] as $f) {
+                $ev = array_map(fn($l) => json_decode($l, true), file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
+                if (in_array('workflow_complete', array_column($ev, 'type'), true)) {
+                    return $ev;
+                }
+            }
+            usleep(200000);
+        }
+        self::fail("no recorded run:\n" . @file_get_contents("$dir/api.log"));
+    }
+
+    /** Review I1: a dispatcher that does not route is work, not a quiet poll -- the run is recorded and answers why. */
+    public function testListeningNotClassifiedIsRecorded(): void
+    {
+        $this->startServer();   // "test 50": the fake Jev answers unclear
+        $dir = $this->writeListeningPackage($this->jevAnalyzed());
+        $base = $this->startApi($dir);
+        self::post("$base/listen", []);
+        $ev = $this->completedRun($dir);
+        $done = array_values(array_filter($ev, fn($e) => $e['type'] === 'workflow_complete'))[0];
+        self::assertTrue($done['success']);
+        self::assertStringContainsString('Not classified: dispatcher "D"', (string) $done['output']);
+        $d = array_values(array_filter($ev, fn($e) => $e['type'] === 'node_complete' && (string) $e['node_id'] === '2'));
+        self::assertTrue($d[0]['success']);
+    }
+
+    /** Review I1: a decision model that cannot answer (no usable provider) is an error the canvas shows. */
+    public function testListeningJevErrorIsRecorded(): void
+    {
+        $this->startServer(false, 'claim');
+        $a = $this->jevAnalyzed();
+        $a['decisions']['2']['decision'] = [];   // routing names jev, but no jev provider was compiled in: unavailable
+        $dir = $this->writeListeningPackage($a);
+        $base = $this->startApi($dir);
+        self::post("$base/listen", []);
+        $ev = $this->completedRun($dir);
+        $d = array_values(array_filter($ev, fn($e) => $e['type'] === 'node_complete' && (string) $e['node_id'] === '2'));
+        self::assertFalse($d[0]['success']);
+        self::assertStringContainsString('Error: dispatcher "D" did not route the request (jev: unavailable', (string) $d[0]['error']);
+        $done = array_values(array_filter($ev, fn($e) => $e['type'] === 'workflow_complete'))[0];
+        self::assertStringContainsString('Error: dispatcher "D"', (string) $done['output']);
+    }
+
+    /** Review I2: a node runs when one parent reached it, even if another parent's exit went elsewhere. */
+    public function testOtherParentStillReachesTheNode(): void
+    {
+        $this->startServer();
+        $code = fn(string $id, string $name, string $src, array $exits) => ['id' => $id, 'type' => 'code',
+            'config' => ['type' => 'code', 'name' => $name, 'code' => $src, 'exits' => $exits, 'mcp_servers' => [], 'timeout_s' => 30]];
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
+            $code('10', 'T', "def run(input, call_tool):\n    return {'route': 'a', 'output': 'from T'}\n", ['a', 'b']),
+            $code('11', 'U', "def run(input, call_tool):\n    return 'from U'\n", ['next']),
+            $code('12', 'X', "def run(input, call_tool):\n    return 'X ran'\n", ['next']),
+            ['id' => '5', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [
+            ['from' => '1', 'to' => '10', 'from_port' => 'output_1'], ['from' => '1', 'to' => '11', 'from_port' => 'output_1'],
+            ['from' => '10', 'to' => '12', 'from_port' => 'output_2'], ['from' => '11', 'to' => '12', 'from_port' => 'output_1'],
+            ['from' => '12', 'to' => '5', 'from_port' => 'output_1'],
+        ]];
+        $a = array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 97, 'name' => 'two parents'], 'usedCatalog' => [], 'usedServers' => [], 'serverSlugs' => [],
+            'startPrompt' => 'go', 'startDocuments' => [], 'agents' => [], 'playbooks' => [],
+        ]);
+        $byId = array_column($graph['nodes'], null, 'id');
+        foreach (['10', '11', '12'] as $cid) {
+            $a['code'][$cid] = CodeNodeEmit::nodeData($byId[$cid], $graph['edges'], [], array_keys($byId));
+        }
+        [$rc, $text] = $this->run_($a);
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('X ran', $text);
+    }
+
+    /** Review I3: the package's CLI prints the answer of a one-off run. */
+    public function testPackageCliPrintsTheAnswer(): void
+    {
+        $this->startServer();
+        $dir = $this->writeListeningPackage($this->analyzed(self::FILE), 'prompt');
+        $proc = proc_open([self::PY, 'workflow.py', 'go'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
+            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')]);
+        $text = (string) stream_get_contents($pipes[1]);
+        $rc = proc_close($proc);
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('filed test 50', $text);
     }
 }

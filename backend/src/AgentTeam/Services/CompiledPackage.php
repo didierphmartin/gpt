@@ -82,6 +82,12 @@ final class CompiledPackage
     private static function requirements(array $analyzed, array $skillFiles, array $framework): string
     {
         $req = array_merge($framework, self::BASE_REQUIREMENTS);
+        // A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
+        foreach (PlaybookEmit::extraDeps($analyzed) as $line) {
+            if (str_starts_with($line, 'pip install ')) {
+                array_push($req, ...preg_split('/\s+/', trim(substr($line, strlen('pip install ')))));
+            }
+        }
         foreach ($skillFiles as $f) {
             if ($f['rel'] === 'SKILL.md') {
                 array_push($req, ...LangGraphPackage::skillDependencies($f['bytes']));

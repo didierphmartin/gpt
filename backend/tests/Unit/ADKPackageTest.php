@@ -120,4 +120,15 @@ final class ADKPackageTest extends TestCase
         exec('cd ' . escapeshellarg($dir) . ' && python3 -c "import code_harness, ast; ast.parse(open(\'workflow.py\').read()); print(code_harness.check_code(open(\'code/2_c.py\').read()))" 2>&1', $out, $rc);
         $this->assertSame(0, $rc, implode("\n", $out));
     }
+
+    /** Review I4: a playbook node runs the shared interpreter (langchain + langgraph): the package installs it. */
+    public function testPlaybookPackageRequiresTheInterpreter(): void
+    {
+        $a = \Quantis\AIPortfolioAssistant\Tests\Unit\AdkCodeNodeTest::codeAnalyzed();
+        $a['playbooks'] = ['7' => ['provider' => 'claude', 'display' => 'P', 'actions' => []]];
+        $req = array_column(\AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir()), 'code', 'path')['requirements.txt'];
+        foreach (['langchain-core', 'langgraph', 'langchain-anthropic'] as $pkg) {
+            $this->assertContains($pkg, explode("\n", trim($req)));
+        }
+    }
 }

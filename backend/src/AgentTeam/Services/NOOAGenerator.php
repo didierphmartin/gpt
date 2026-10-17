@@ -257,7 +257,18 @@ class NOOAGenerator
             'dispatcher, a code node with several exits), its choice leads here.',
             'The Output node merges what reached it verbatim (no model pass).');
         $parts[] = self::mainBlock($analyzed, $hasDocs);
-        $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock() : self::entryBlock();
+        $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock(<<<'PY'
+def _cli_begin(prompt: str) -> None:
+    """Before a one-off CLI run (not --quiet): the banner and the liveness heartbeat."""
+    Progress.begin(len(AGENTS), prompt)
+
+
+def _cli_end(output: str) -> None:
+    """After a one-off CLI run (not --quiet): the answer and the RUN SUMMARY (it stops the heartbeat)."""
+    print("\n=== FINAL OUTPUT ===\n" + output, flush=True)
+    Progress.summary(len(output), None)
+
+PY) : self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
 
@@ -1117,6 +1128,8 @@ async def _run_graph(prompt: str) -> str:
                 _rec_node_start(nid, name, "agent")
                 chosen, text, not_classified = await _route_dispatcher(nid, parent_texts, prompt, node["menu"])
                 routes[nid] = {chosen} if chosen else set()
+                if not chosen:
+                    _RUN["unrouted"] = text
                 if chosen:
                     _rec_node_complete(nid, name, "agent", output=text, route={"id": chosen, "name": dict(node["menu"])[chosen]})
                 else:
@@ -1177,7 +1190,7 @@ async def _run_graph(prompt: str) -> str:
     if GRAPH["output"] and merge:   # a branch reached the Output: it ran
         _rec_start(GRAPH["output"])
         _rec_done(GRAPH["output"], merged)
-    return merged
+    return merged or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route
 PY;
         // A workflow without dispatchers or code nodes gets no branch for them (and so no reference to
         // run_dispatcher, DECISIONS, CODE_HARNESS or CODE_NODES, which it does not define).

@@ -563,13 +563,15 @@ NODE_META = {
     ]
 }   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded
 START_NODE = ["1", "Start"]   # [id, name] of the Start node
+DISPATCHER_IDS = []   # dispatchers record themselves; their choice is work (not a quiet poll)
 OUTPUT_NODE_KEYS = ["node_4"]   # the Output nodes: their answers are the workflow's answer
 GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
-_RUN = {"ran": [], "routes": {}, "open": {}}   # this run: nodes that ran, code exits, nodes started not completed
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
+#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
 
 
 def _run_reset() -> None:
-    _RUN["ran"], _RUN["routes"], _RUN["open"] = [], {}, {}
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
 
 
 def _rec_node_start(nid: str, name: str, ntype: str) -> None:
@@ -718,6 +720,7 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
                     outputs[author] = event.content.parts[0].text or ""
         if OUTPUT_NODE_KEYS:   # the answer is what the Output nodes gave: none ran (nothing to do) = ""
             final = "\n\n---\n\n".join(v for v in outputs.values() if v)
+        final = final or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route
         print(f"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars", flush=True)
     except Exception as e:
         for _nid, (_name, _type) in list(_RUN["open"].items()):   # a node that failed mid-run ends as failed

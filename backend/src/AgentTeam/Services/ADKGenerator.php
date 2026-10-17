@@ -1293,6 +1293,7 @@ class _DispatcherAgent(BaseAgent):
             msg = (f"Error: dispatcher {self.name!r} did not route the request. "
                    f"Expected one of: {', '.join(names)}.")
             print(f"[node] [{self.name}] \u26a0 {msg}", flush=True)
+            _RUN["unrouted"] = msg
             _rec_node_complete(self.node_id, self.display, "agent", success=False, output=msg, error=msg)
             yield Event(
                 author=self.name,
@@ -1351,6 +1352,7 @@ class _DispatcherAgent(BaseAgent):
             msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{self.display}" did not route the '
                    f"request ({key}: {res.outcome}: {res.reason}).")
             print(f"[node] [{self.name}] \u26a0 {msg}", flush=True)
+            _RUN["unrouted"] = msg
             _rec_node_complete(self.node_id, self.display, "agent", success=not_classified, output=msg,
                                **({} if not_classified else {"error": msg}))
             yield Event(
@@ -1661,6 +1663,7 @@ PY;
             "                    outputs[author] = event.content.parts[0].text or \"\"\n" .
             "        if OUTPUT_NODE_KEYS:   # the answer is what the Output nodes gave: none ran (nothing to do) = \"\"\n" .
             "            final = \"\\n\\n---\\n\\n\".join(v for v in outputs.values() if v)\n" .
+            "        final = final or _RUN[\"unrouted\"]   # nothing reached the Output: why the dispatcher did not route\n" .
             "        print(f\"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars\", flush=True)\n" .
             "    except Exception as e:\n" .
             "        for _nid, (_name, _type) in list(_RUN[\"open\"].items()):   # a node that failed mid-run ends as failed\n" .

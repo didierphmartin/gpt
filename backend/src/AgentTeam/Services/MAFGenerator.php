@@ -239,7 +239,17 @@ class MAFGenerator
             'caller inside this file; api.py (the compiled package) is the',
             'other.');
         $parts[] = self::runWorkflowBlock();
-        $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock() : self::entryBlock();
+        $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock(<<<'PY'
+def _cli_begin(prompt: str) -> None:
+    """Before a one-off CLI run (not --quiet): run_workflow prints the banner (ProgressReporter.begin)."""
+
+
+def _cli_end(output: str) -> None:
+    """After a one-off CLI run (not --quiet): the answer and the RUN SUMMARY."""
+    print("\n=== FINAL OUTPUT ===\n" + output, flush=True)
+    ProgressReporter.summary(None)
+
+PY) : self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
 
@@ -1271,13 +1281,20 @@ PY;
         RUN_STATE = {"user_prompt": ""}
 
 
+        def _delivers(m: "NodeMessage", node_id: str) -> bool:
+            """A parent's message reaches this node: the parent ran, and it does not route (a dispatcher's
+            choice, a code node's exit) or it routed here."""
+            if m.skipped:
+                return False
+            if m.route_to:
+                return m.route_to == node_id
+            return m.routes is None or node_id in m.routes
+
+
         def _skip_node(msgs: list, node_id: str) -> bool:
-            """Not on a taken branch: every parent skipped, or every parent that routes (a dispatcher's
-            choice, a code node's exit) routed elsewhere. A skipped node still reports downstream."""
-            if msgs and all(m.skipped for m in msgs):
-                return True
-            routing = [m for m in msgs if m.route_to or m.routes is not None]
-            return bool(routing) and all(m.route_to != node_id and node_id not in (m.routes or ()) for m in routing)
+            """Not on a taken branch: no parent's message reaches this node. A skipped node still reports
+            downstream, so every fan-in barrier below it completes."""
+            return bool(msgs) and not any(_delivers(m, node_id) for m in msgs)
 
 
         class StartExecutor(Executor):
@@ -1521,6 +1538,7 @@ PY;
                     msg_txt = (f"Error: dispatcher {name!r} did not route the request. "
                                f"Expected one of: {', '.join(names)}.")
                     ProgressReporter.note(msg_txt)
+                    _RUN["unrouted"] = msg_txt
                     _rec_node_complete(self.node_id, name, "agent", success=False, output=msg_txt, error=msg_txt)
                     # Nothing routed: every child skips and the error travels on as
                     # this node's output, so the run ends with a readable reason.
@@ -1569,6 +1587,7 @@ PY;
                     msg_txt = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{name}" did not route the '
                                f"request ({key}: {res.outcome}: {res.reason}).")
                     ProgressReporter.note(msg_txt)
+                    _RUN["unrouted"] = msg_txt
                     _rec_node_complete(self.node_id, name, "agent", success=not_classified, output=msg_txt,
                                        **({} if not_classified else {"error": msg_txt}))
                     # Nothing routed: every child skips and the reason travels on as this node's output.
@@ -1655,10 +1674,11 @@ PY;
                 self._inbox[msg.source_id] = msg
                 if len(self._inbox) < max(1, len(self.parents)):
                     return                                  # fan-in barrier still waiting
+                # Only what reached the Output: a parent that ran and did not route elsewhere.
                 parts = [self._inbox[p].text for p in self.parents
-                         if p in self._inbox and self._inbox[p].text]
+                         if p in self._inbox and self._inbox[p].text and _delivers(self._inbox[p], self.node_id)]
                 merged = parts[0] if len(parts) == 1 else "\n\n---\n\n".join(parts)
-                if any(not m.skipped for m in self._inbox.values()):   # a branch reached the Output: it ran
+                if any(_delivers(m, self.node_id) for m in self._inbox.values()):   # a branch reached the Output: it ran
                     _rec_start(self.node_id)
                     _rec_done(self.node_id, merged)
                 ProgressReporter.end(len(merged))
@@ -1881,6 +1901,7 @@ PY;
             # get_outputs() (a list), NOT a .text attribute.
             _outputs = _result.get_outputs()
             _text = str(_outputs[0]) if _outputs else ""
+            _text = _text or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route
             return _text
         PY;
     }

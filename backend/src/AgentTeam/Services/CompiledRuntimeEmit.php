@@ -268,14 +268,17 @@ PY;
         $outPy = '[' . implode(', ', array_map([PythonEmitHelpers::class, 'pyStr'], $outputs)) . ']';
         return "NODE_META = {$metaPy}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded\n"
             . "START_NODE = {$startPy}   # [id, name] of the Start node\n"
+            . 'DISPATCHER_IDS = [' . implode(', ', array_map([PythonEmitHelpers::class, 'pyStr'], array_map('strval', array_keys($routed))))
+                . "]   # dispatchers record themselves; their choice is work (not a quiet poll)\n"
             . "OUTPUT_NODE_KEYS = {$outPy}   # the Output nodes: their answers are the workflow's answer\n"
             . <<<'PY'
 GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
-_RUN = {"ran": [], "routes": {}, "open": {}}   # this run: nodes that ran, code exits, nodes started not completed
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
+#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
 
 
 def _run_reset() -> None:
-    _RUN["ran"], _RUN["routes"], _RUN["open"] = [], {}, {}
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
 
 
 def _rec_node_start(nid: str, name: str, ntype: str) -> None:
@@ -326,7 +329,18 @@ PY
      * RUNS_DIR for GET /live, make_listener() for api.py (POST /listen), and the CLI's modes
      * (prompt: one run; --cron; --watch; --once). The single file keeps its one-prompt __main__.
      */
-    public static function packageListenBlock(): string
+    /** The CLI hooks of a target whose run_workflow prints the answer and its summary itself (ADK). */
+    public const CLI_HOOKS_SILENT = <<<'PY'
+def _cli_begin(prompt: str) -> None:
+    """Before a one-off CLI run (not --quiet): run_workflow prints its own banner."""
+
+
+def _cli_end(output: str) -> None:
+    """After a one-off CLI run (not --quiet): run_workflow printed the answer and the RUN SUMMARY."""
+
+PY;
+
+    public static function packageListenBlock(string $cliHooks = self::CLI_HOOKS_SILENT): string
     {
         $head = <<<'PY'
 # ==============================================================
@@ -349,10 +363,13 @@ class _McpShim:
 
 MCP = _McpShim()
 
+{CLI_HOOKS}
 PY;
         $tail = <<<'PY'
 RUNS_DIR = os.environ.get("RUNS_DIR") or os.path.join(PACKAGE_DIR, "runs")
 NODE_TYPES = {meta[0]: meta[1] for meta in NODE_META.values()}   # node id -> type (the quiet rule)
+for _did in DISPATCHER_IDS:
+    NODE_TYPES[_did] = "agent"   # a dispatcher's choice, routed or not, is work
 if START_NODE:
     NODE_TYPES[START_NODE[0]] = "start"
 
@@ -472,16 +489,20 @@ if __name__ == "__main__":
     cron = CronExpression.from_cli(ap, a.cron if a.cron is not None else ("" if mode == "cron" else None), DEFAULT_CRON)
     watch = WatchTrigger.from_cli(ap, a.watch if a.watch is not None else ("" if mode == "watch" else None), DEFAULT_WATCH)
     if mode == "once":
+        if not a.quiet:
+            _cli_begin(prompt)
         try:
-            run_once()
+            output = run_once()
         except ErrorExitTaken as e:
             sys.exit(1 if a.quiet else f"[error] {e}")
+        if not a.quiet:
+            _cli_end(output)
     else:
         Listener(mode, run_once, drains="code" in NODE_TYPES.values(), loop=runs, cron_expr=cron, trigger=watch,
                  state=LoopState(), lock_path=os.path.join(PACKAGE_DIR, ".run.lock"),
                  verbosity=view.verbosity).run_blocking()
 PY;
-        return $head . LangGraphRuntime::cronBlock() . "\n\n" . LangGraphRuntime::watchBlock() . "\n\n"
+        return str_replace('{CLI_HOOKS}', $cliHooks, $head) . LangGraphRuntime::cronBlock() . "\n\n" . LangGraphRuntime::watchBlock() . "\n\n"
             . LangGraphRuntime::listenerBlock() . "\n\n" . $tail;
     }
 
