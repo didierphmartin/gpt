@@ -110,20 +110,28 @@ class MAFGenerator
         $analyzed['package'] = true;
         $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
         $analyzed['startDocuments'] = $docs['docs'];
+        [$workflowPy, $commonPy, $nodeFiles] = self::packageFiles($analyzed);
         $pkg = RunServerEmitter::package(
-            ['code' => self::emitMaf($analyzed)],
+            ['code' => $workflowPy],
             $name,
             'maf',
             'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            CompiledRuntimeEmit::packageCommonBlock(),
+            $commonPy,
             true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
-        $pkg['files'] = array_merge($pkg['files'], CompiledPackage::files($analyzed,
+        $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
             $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'Microsoft Agent Framework'));
         return $pkg;
     }
 
     public static function emitMaf(array $analyzed): string
+    {
+        [$common, $workflow] = self::mafParts($analyzed);
+        return implode("\n\n", array_merge($common, $workflow)) . "\n";
+    }
+
+    /** The script as [runtime parts, assembly parts]: the package's common.py and workflow.py, in the single file's order. */
+    private static function mafParts(array $analyzed): array
     {
         // The web SAPI's php.ini sets serialize_precision=100, which makes json_encode emit
         // temperatures like 0.59999999999999997779… instead of 0.6. Models that validate the
@@ -200,7 +208,9 @@ class MAFGenerator
             // the workflow uses MCP tools -- ask for it when it does not.
             $parts[] = PlaybookEmit::supportBlock(false);   // _call_mcp_tool: the MCP client above
             $parts[] = PlaybookEmit::runtimeBlock();
-            $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
+            $parts[] = !empty($analyzed['split'])
+                ? 'PLAYBOOKS = {}   # node id -> playbook, filled by workflow.py from agents/'
+                : PlaybookEmit::metadataBlock($analyzed['playbooks']);
         }
         if (!empty($analyzed['code'])) {
             $parts[] = self::banner('CODE NODES',
@@ -238,6 +248,8 @@ class MAFGenerator
             'Identity + the Start node prompt baked as DEFAULT_PROMPT',
             '(CLI args override it) + output storage settings.');
         $parts[] = self::globalsBlock($analyzed);
+        $workflowFrom = count($parts);   // from here on: the assembly (workflow.py in the package); the globals above
+                                         // stay in common.py, whose ProgressReporter reads WORKFLOW_NAME
         $parts[] = self::banner('GRAPH ASSEMBLY',
             'create_workflow() reconstructs the editor canvas 1:1 on the MAF',
             'graph API: one executor per node, one add_edge per drawn',
@@ -260,7 +272,59 @@ def _cli_end(output: str) -> None:
     ProgressReporter.summary(None)
 
 PY) : self::entryBlock();
-        return implode("\n\n", $parts) . "\n";
+        return [array_slice($parts, 0, $workflowFrom), array_slice($parts, $workflowFrom)];
+    }
+
+    /**
+     * Agents in separate files: [workflow.py, common.py, agents/ files]. common.py is the runtime (clients,
+     * MCP, skills, the executor classes, run events) with empty node tables plus the run server's shared
+     * pieces; agents/<name>.py holds one node's entries (NODE: its AGENTS entry; CODE_NODE, DECISION,
+     * PLAYBOOK for those kinds); workflow.py fills the tables from them, then builds and runs the graph.
+     */
+    public static function packageFiles(array $analyzed): array
+    {
+        $analyzed['split'] = true;
+        [$common, $assembly] = self::mafParts($analyzed);
+        $layout = CompiledRuntimeEmit::moduleLayout($analyzed);
+        $tables = ['NODE' => ['AGENTS', self::agentLiterals($analyzed)],
+            'CODE_NODE' => ['CODE_NODES', CompiledRuntimeEmit::codeNodeLiterals($analyzed)],
+            'DECISION' => ['DECISIONS', array_map(fn($d) => PythonEmitHelpers::jsonToPython($d), (array) ($analyzed['decisions'] ?? []))],
+            'PLAYBOOK' => ['PLAYBOOKS', array_map(fn($pd) => PythonEmitHelpers::jsonToPython($pd, true), (array) ($analyzed['playbooks'] ?? []))]];
+        $wfName = json_encode((string) $analyzed['workflow']['name'], JSON_UNESCAPED_UNICODE);
+        $q = '"""';
+        $files = [['path' => 'agents/__init__.py', 'code' => "{$q}The workflow's nodes, one module each (imported by workflow.py).{$q}\n"]];
+        $imports = [];
+        $fills = [];
+        foreach ($layout as $nid => $m) {
+            $body = [];
+            foreach ($tables as $var => [$table, $literals]) {
+                if (isset($literals[$nid])) {
+                    $body[] = "{$var} = " . $literals[$nid] . "   # {$table}[\"{$nid}\"]";
+                    $fills[$table][] = '    ' . PythonEmitHelpers::pyStr((string) $nid) . ": {$m['name']}.{$var},";
+                }
+            }
+            if ($body === []) {
+                continue;
+            }
+            $display = str_replace([$q, "\n"], ["'''", ' '], $m['display']);
+            $files[] = ['path' => $m['file'], 'code' => "{$q}Node {$nid} ({$display}) of the workflow {$wfName}: its settings for the MAF executors.\n\n"
+                . "Imported by workflow.py. To change the node, edit the workflow in the editor and re-generate.{$q}\n"
+                . "from common import *  # noqa: F401,F403 -- the runtime (catalog for the tools)\n\n\n"
+                . implode("\n\n", $body) . "\n"];
+            $imports[] = "from agents import {$m['name']}  # {$display}";
+        }
+        $fill = '';
+        foreach ($fills as $table => $lines) {
+            $fill .= "{$table}.update({\n" . implode("\n", $lines) . "\n})\n";
+        }
+        $workflow = "{$q}Workflow {$wfName} -- Microsoft Agent Framework, agents in separate files.\n\n"
+            . "common.py holds the runtime (the executor classes), agents/ one module per node's settings; this file\n"
+            . "fills the node tables, builds the graph (create_workflow) and runs it: run_workflow(), the listener, the CLI.\n{$q}\n"
+            . "from common import *  # noqa: F401,F403 -- the runtime\n"
+            . implode("\n", $imports) . "\n\n"
+            . $fill . "\n\n"
+            . implode("\n\n", $assembly) . "\n";
+        return [$workflow, CompiledRuntimeEmit::packageCommonWithRuntime($common), $files];
     }
 
     /** Expose skillRunnerBlock for test/inspection (test seam). */
@@ -1100,9 +1164,16 @@ PY;
     }
 
     /** Bake AGENTS metadata dict + the per-node async runner + fan-in helper. */
-    private static function agentsBlock(array $analyzed): string
+    /** Each agent node's AGENTS entry as a Python dict literal, by node id (agents in separate files). */
+    public static function agentLiterals(array $analyzed): array
+    {
+        return self::agentsBlock($analyzed + ['literalsOut' => true]);
+    }
+
+    private static function agentsBlock(array $analyzed): string|array
     {
         $entries = [];
+        $literals = [];
         $defaultModels = (array) ($analyzed['providerDefaultModels'] ?? []);
         $docById = [];
         foreach (PlaybookEmit::docNodes($analyzed) as $dn) {
@@ -1134,7 +1205,7 @@ PY;
             if ($model === '') {
                 $model = (string) ($defaultModels[$canon] ?? $defaultModels[$prov] ?? '');
             }
-            $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $id) . ': {'
+            $literals[(string) $id] = '{'
                 . '"name": ' . PythonEmitHelpers::pyStr((string) ($ag['name'] ?? ('node ' . $id))) . ', '
                 . '"provider": ' . PythonEmitHelpers::pyStr((string) ($ag['provider'] ?? 'claude')) . ', '
                 . '"model": ' . PythonEmitHelpers::pyStr($model) . ', '
@@ -1146,9 +1217,15 @@ PY;
                 . '"max_tokens": ' . (int) ($ag['max_tokens'] ?? 4096) . ', '
                 . '"temperature": ' . json_encode((float) ($ag['temperature'] ?? 0.7)) . ', '
                 . '"thinking": ' . (in_array($ag['thinking'] ?? null, ['on', 'off'], true)
-                                    ? PythonEmitHelpers::pyStr($ag['thinking']) : 'None') . '},';
+                                    ? PythonEmitHelpers::pyStr($ag['thinking']) : 'None') . '}';
+            $entries[] = '    ' . PythonEmitHelpers::pyStr((string) $id) . ': ' . $literals[(string) $id] . ',';
         }
-        $agents = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
+        // Agents in separate files: each agents/<name>.py holds its own entry; workflow.py fills AGENTS.
+        $agents = !empty($analyzed['split']) ? "AGENTS = {}   # node id -> settings, filled by workflow.py from agents/"
+            : "AGENTS = {\n" . implode("\n", $entries) . "\n}";
+        if (!empty($analyzed['literalsOut'])) {
+            return $literals;
+        }
 
         $runner = <<<'PY'
         class ProgressReporter:

@@ -22,6 +22,6 @@ class MafE2ETest extends AdkCodeNodeE2ETest
 
     protected function packageSources(array $analyzed): array
     {
-        return [$this->emit($analyzed), \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), []];
+        return MAFGenerator::packageFiles($analyzed);
     }
 }

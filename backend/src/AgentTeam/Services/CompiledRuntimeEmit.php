@@ -616,20 +616,38 @@ PY;
     }
 
     /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, source | source_file}}. */
+    /** Each code node's CODE_NODES entry as a Python dict literal, by node id (agents in separate files). */
+    public static function codeNodeLiterals(array $analyzed): array
+    {
+        $out = [];
+        foreach ((array) ($analyzed['code'] ?? []) as $id => $cd) {
+            $out[(string) $id] = PythonEmitHelpers::jsonToPython(self::codeNodeEntry($analyzed, (string) $id, $cd));
+        }
+        return $out;
+    }
+
+    /** One CODE_NODES entry: display, exits, MCP servers, timeout, exit targets, the code or its file. */
+    private static function codeNodeEntry(array $analyzed, string $id, array $cd): array
+    {
+        $entry = ['display' => $cd['display'], 'exits' => $cd['exits'], 'mcp_servers' => $cd['mcp_servers'],
+            'timeout_s' => $cd['timeout_s'],
+            'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets'])];
+        if (!empty($analyzed['package'])) {
+            $entry['source_file'] = CompiledPackage::codePath($analyzed, $id);   // code/<file>, read at each run
+        } else {
+            $entry['source'] = $cd['source'];
+        }
+        return $entry;
+    }
+
     public static function codeNodesLiteral(array $analyzed): string
     {
         $out = [];
         foreach ((array) $analyzed['code'] as $id => $cd) {
-            $id = (string) $id;
-            $entry = ['display' => $cd['display'], 'exits' => $cd['exits'], 'mcp_servers' => $cd['mcp_servers'],
-                'timeout_s' => $cd['timeout_s'],
-                'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets'])];
-            if (!empty($analyzed['package'])) {
-                $entry['source_file'] = CompiledPackage::codePath($analyzed, $id);   // code/<file>, read at each run
-            } else {
-                $entry['source'] = $cd['source'];
-            }
-            $out[$id] = $entry;
+            $out[(string) $id] = self::codeNodeEntry($analyzed, (string) $id, $cd);
+        }
+        if (!empty($analyzed['split'])) {
+            return "CODE_NODES = {}   # node id -> settings and code, filled by workflow.py from agents/";
         }
         return 'CODE_NODES = ' . PythonEmitHelpers::jsonToPython($out);
     }
@@ -648,7 +666,8 @@ PY;
         $known = array_values(array_intersect(array_keys($protocols), array_keys(LangGraphRuntime::ADAPTER_CLASSES)));
         return "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
             . LangGraphRuntime::decisionAdaptersBlock($known) . "\n\n"
-            . 'DECISIONS = ' . ($decisions === [] ? '{}' : PythonEmitHelpers::jsonToPython($decisions)) . "\n\n\n"
+            . 'DECISIONS = ' . (!empty($analyzed['split']) ? '{}   # dispatcher id -> decision routing, filled by workflow.py from agents/'
+                : ($decisions === [] ? '{}' : PythonEmitHelpers::jsonToPython($decisions))) . "\n\n\n"
             . <<<'PY'
 def _decision_router(dec: dict, provider: str):
     """The decision adapter for one compiled provider, None when it was not compiled in or has no adapter."""
