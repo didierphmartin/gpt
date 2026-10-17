@@ -547,6 +547,53 @@ PY;
     }
 
     /**
+     * Agents in separate files, for a target whose runtime reads node tables (MAF, NOOA): [workflow.py,
+     * common.py, agents/ files]. common.py is the runtime with empty tables plus the run server's shared pieces;
+     * agents/<name>.py holds one node's entries ($tables: VAR => [TABLE, literals by id]), after its $preludes
+     * source when it has one (NOOA's Agent class); workflow.py fills the tables from them, then the $assembly.
+     */
+    public static function tablePackage(array $analyzed, array $common, array $assembly, array $tables, array $preludes,
+        string $title, string $nodeRole, string $runtimeRole): array
+    {
+        $layout = self::moduleLayout($analyzed);
+        $wfName = json_encode((string) $analyzed['workflow']['name'], JSON_UNESCAPED_UNICODE);
+        $q = '"""';
+        $files = [['path' => 'agents/__init__.py', 'code' => "{$q}The workflow's nodes, one module each (imported by workflow.py).{$q}\n"]];
+        $imports = [];
+        $fills = [];
+        foreach ($layout as $nid => $m) {
+            $body = isset($preludes[$nid]) ? [$preludes[$nid]] : [];
+            foreach ($tables as $var => [$table, $literals]) {
+                if (isset($literals[$nid])) {
+                    $body[] = "{$var} = " . $literals[$nid] . "   # {$table}[\"{$nid}\"]";
+                    $fills[$table][] = '    ' . PythonEmitHelpers::pyStr((string) $nid) . ": {$m['name']}.{$var},";
+                }
+            }
+            if ($body === []) {
+                continue;
+            }
+            $display = str_replace([$q, "\n"], ["'''", ' '], $m['display']);
+            $files[] = ['path' => $m['file'], 'code' => "{$q}Node {$nid} ({$display}) of the workflow {$wfName}: {$nodeRole}.\n\n"
+                . "Imported by workflow.py. To change the node, edit the workflow in the editor and re-generate.{$q}\n"
+                . "from common import *  # noqa: F401,F403 -- the runtime\n\n\n"
+                . implode("\n\n\n", $body) . "\n"];
+            $imports[] = "from agents import {$m['name']}  # {$display}";
+        }
+        $fill = '';
+        foreach ($fills as $table => $lines) {
+            $fill .= "{$table}.update({\n" . implode("\n", $lines) . "\n})\n";
+        }
+        $workflow = "{$q}Workflow {$wfName} -- {$title}, agents in separate files.\n\n"
+            . "common.py holds the runtime ({$runtimeRole}), agents/ one module per node; this file fills the node\n"
+            . "tables, then builds and runs the workflow: run_workflow(), the Start's listener and the CLI.\n{$q}\n"
+            . "from common import *  # noqa: F401,F403 -- the runtime\n"
+            . implode("\n", $imports) . "\n\n"
+            . $fill . "\n\n"
+            . implode("\n\n", $assembly) . "\n";
+        return [$workflow, self::packageCommonWithRuntime($common), $files];
+    }
+
+    /**
      * The package's common.py when the target's runtime lives there too (agents in separate files): the
      * runtime's first part (its docstring and imports) first, then the run server's shared pieces
      * (packageCommonBlock), then the rest of the runtime, then __all__ so `from common import *` brings every

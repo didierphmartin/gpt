@@ -131,20 +131,28 @@ class NOOAGenerator
         $analyzed['package'] = true;
         $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
         $analyzed['startDocuments'] = $docs['docs'];
+        [$workflowPy, $commonPy, $nodeFiles] = self::packageFiles($analyzed);
         $pkg = RunServerEmitter::package(
-            ['code' => self::emitNooa($analyzed)],
+            ['code' => $workflowPy],
             $name,
             'nooa',
             'NOOA run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            CompiledRuntimeEmit::packageCommonBlock(),
+            $commonPy,
             true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
-        $pkg['files'] = array_merge($pkg['files'], CompiledPackage::files($analyzed,
+        $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
             $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'NVIDIA NOOA'));
         return $pkg;
     }
 
     public static function emitNooa(array $analyzed): string
+    {
+        [$common, $workflow] = self::nooaParts($analyzed);
+        return implode("\n\n", array_merge($common, $workflow)) . "\n";
+    }
+
+    /** The script as [runtime parts, assembly parts]: the package's common.py and workflow.py, in the single file's order. */
+    private static function nooaParts(array $analyzed): array
     {
         // Web SAPI serialize_precision quirk — same guard as the other targets:
         // without it temperatures emit as 0.59999999999999997779…
@@ -233,7 +241,9 @@ class NOOAGenerator
             // _call_mcp_tool the interpreter's bound actions call -- so ask for it.
             $parts[] = PlaybookEmit::supportBlock(false);   // _call_mcp_tool: the MCP client above
             $parts[] = PlaybookEmit::runtimeBlock();
-            $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
+            $parts[] = !empty($analyzed['split'])
+                ? 'PLAYBOOKS = {}   # node id -> playbook, filled by workflow.py from agents/'
+                : PlaybookEmit::metadataBlock($analyzed['playbooks']);
         }
         if (!empty($analyzed['code'])) {
             $parts[] = self::banner('CODE NODES',
@@ -259,6 +269,7 @@ class NOOAGenerator
             'Identity + the Start node prompt baked as DEFAULT_PROMPT',
             '(CLI args override it) + output storage settings.');
         $parts[] = self::globalsBlock($analyzed);
+        $workflowFrom = count($parts);   // from here on: the assembly (workflow.py in the package)
         $parts[] = self::banner('DRIVER',
             'GRAPH is the editor canvas as data: each node\'s kind and parents,',
             'and the topological layers. run_workflow() walks the layers; the',
@@ -279,7 +290,25 @@ def _cli_end(output: str) -> None:
     Progress.summary(len(output), None)
 
 PY) : self::entryBlock();
-        return implode("\n\n", $parts) . "\n";
+        return [array_slice($parts, 0, $workflowFrom), array_slice($parts, $workflowFrom)];
+    }
+
+    /**
+     * Agents in separate files: [workflow.py, common.py, agents/ files]. agents/<name>.py holds one node's
+     * NOOA Agent class (its prompt is the docstring) and its AGENTS entry, or its code / decision / playbook
+     * entry; common.py the runtime with empty tables; workflow.py fills them, then GRAPH and the driver.
+     */
+    public static function packageFiles(array $analyzed): array
+    {
+        $analyzed['split'] = true;
+        [$common, $assembly] = self::nooaParts($analyzed);
+        $agents = self::agentParts($analyzed);
+        return CompiledRuntimeEmit::tablePackage($analyzed, $common, $assembly, [
+            'NODE' => ['AGENTS', array_map(fn($p) => $p[1], $agents)],
+            'CODE_NODE' => ['CODE_NODES', CompiledRuntimeEmit::codeNodeLiterals($analyzed)],
+            'DECISION' => ['DECISIONS', array_map(fn($d) => PythonEmitHelpers::jsonToPython($d), (array) ($analyzed['decisions'] ?? []))],
+            'PLAYBOOK' => ['PLAYBOOKS', array_map(fn($pd) => PythonEmitHelpers::jsonToPython($pd, true), (array) ($analyzed['playbooks'] ?? []))],
+        ], array_map(fn($p) => $p[0], $agents), 'NVIDIA NOOA', 'its NOOA Agent class and settings', 'LLM factory, MCP, run_agent, the driver helpers');
     }
 
     /** Expose skillBlock for test/inspection (test seam, mirrors MAFGenerator). */
@@ -721,8 +750,15 @@ PY;
         return $names;
     }
 
-    private static function agentsBlock(array $analyzed, bool $hasMcp): string
+    /** Each agent node's class and AGENTS entry, by node id: [class source, dict literal] (agents in separate files). */
+    public static function agentParts(array $analyzed): array
     {
+        return self::agentsBlock($analyzed + ['literalsOut' => true], !empty($analyzed['usedCatalog']));
+    }
+
+    private static function agentsBlock(array $analyzed, bool $hasMcp): string|array
+    {
+        $byId = [];
         $classNames = self::classNames($analyzed);
         $catalog    = (array) ($analyzed['usedCatalog'] ?? []);
         $out        = [];
@@ -791,6 +827,7 @@ PY;
             $lines[] = '        ' . PythonEmitHelpers::pyStr($doc);
             $lines[] = '        ...';
             $out[]   = implode("\n", $lines);
+            $byId[$id] = [implode("\n", $lines)];
         }
 
         // Frozen per-node metadata consumed by run_agent / run_skill.
@@ -801,7 +838,7 @@ PY;
             $temp = $ag['temperature'] !== null ? json_encode((float) $ag['temperature']) : json_encode(0.7);
             $think = in_array($ag['thinking'] ?? null, ['on', 'off'], true)
                         ? PythonEmitHelpers::pyStr((string) $ag['thinking']) : 'None';
-            $entries[] = '    ' . PythonEmitHelpers::pyStr($id) . ': {'
+            $literal = '{'
                 . '"name": ' . PythonEmitHelpers::pyStr((string) ($ag['name'] ?? ('node ' . $id))) . ', '
                 . '"cls": ' . $classNames[$id] . ', '
                 . '"provider": ' . PythonEmitHelpers::pyStr((string) ($ag['provider'] ?? 'claude')) . ', '
@@ -809,7 +846,16 @@ PY;
                 . '"max_tokens": ' . $maxT . ', '
                 . '"temperature": ' . $temp . ', '
                 . '"thinking": ' . $think . ', '
-                . '"skills": ' . PythonEmitHelpers::jsonToPython($ag['skills'] ?? []) . '},';
+                . '"skills": ' . PythonEmitHelpers::jsonToPython($ag['skills'] ?? []) . '}';
+            $entries[] = '    ' . PythonEmitHelpers::pyStr($id) . ': ' . $literal . ',';
+            $byId[$id][] = $literal;
+        }
+        if (!empty($analyzed['literalsOut'])) {
+            return $byId;
+        }
+        if (!empty($analyzed['split'])) {
+            // Agents in separate files: each agents/<name>.py holds its class and entry; workflow.py fills AGENTS.
+            return "AGENTS = {}   # node id -> class and settings, filled by workflow.py from agents/";
         }
         $out[] = "AGENTS = {\n" . implode("\n", $entries) . "\n}";
 
