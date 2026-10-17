@@ -34,7 +34,8 @@ final class MafGeneratorEmitTest extends TestCase
     public function testHeaderAndImports(): void
     {
         $code = MAFGenerator::emitMaf($this->analyzed());
-        $this->assertStringContainsString('from agent_framework import Agent, workflow', $code);
+        $this->assertStringContainsString("from agent_framework import (\n    Agent,", $code);
+        $this->assertStringContainsString("    WorkflowBuilder,\n", $code);
         $this->assertStringContainsString('from agent_framework.anthropic import AnthropicClient', $code);
         $this->assertStringContainsString('from agent_framework.openai import OpenAIChatCompletionClient', $code);
         $this->assertStringContainsString('load_dotenv(', $code);
@@ -69,10 +70,11 @@ final class MafGeneratorEmitTest extends TestCase
     public function testClientFactoryUsesChatCompletionAndBaseUrls(): void
     {
         $code = MAFGenerator::emitMaf($this->analyzed());
-        $this->assertStringContainsString('def _make_client(provider', $code);
+        $this->assertStringContainsString('def make(cls, provider: str, model: str)', $code);   // ProviderClients
         $this->assertStringContainsString('AnthropicClient(model=model', $code);
-        // OpenAI-compatible providers MUST use ChatCompletion, never OpenAIChatClient
-        $this->assertStringContainsString('OpenAIChatCompletionClient(model=model', $code);
+        // OpenAI-compatible providers MUST use ChatCompletion (the reasoning round-trip subclass), never OpenAIChatClient
+        $this->assertStringContainsString('class ReasoningRoundTripClient(OpenAIChatCompletionClient)', $code);
+        $this->assertStringContainsString('kwargs = {"model": model', $code);
         $this->assertStringNotContainsString('OpenAIChatClient(', $code);
         $this->assertStringContainsString('https://api.x.ai/v1', $code);
         $this->assertStringContainsString('https://generativelanguage.googleapis.com/v1beta/openai/', $code);
@@ -83,19 +85,19 @@ final class MafGeneratorEmitTest extends TestCase
         $code = MAFGenerator::emitMaf($this->analyzed());
         $this->assertStringContainsString('AGENTS = {', $code);
         $this->assertStringContainsString('"2": {', $code);            // agent node baked
-        $this->assertStringContainsString('async def _run_node(', $code);
+        // one executor per canvas node, assembled by create_workflow() on WorkflowBuilder
+        $this->assertStringContainsString('class AgentNodeExecutor(Executor):', $code);
         $this->assertStringContainsString('Agent(client, instructions=', $code);
         $this->assertStringContainsString('.run(', $code);
-        $this->assertStringContainsString('@workflow', $code);
-        $this->assertStringContainsString('async def main(user_prompt', $code);
-        $this->assertStringContainsString('asyncio.gather(', $code);
-        $this->assertStringContainsString('OUTPUT_NODE_ID = "3"', $code);
-        $this->assertStringContainsString('asyncio.run(main.run(', $code);
+        $this->assertStringContainsString('def create_workflow():', $code);
+        $this->assertStringContainsString('builder = WorkflowBuilder(start_executor=start_node, output_from=[output_node])', $code);
+        $this->assertStringContainsString('async def run_workflow(prompt: str', $code);
+        $this->assertStringContainsString('asyncio.run(run_workflow(', $code);
         // Parity with LangGraph build_context: every agent node sees the original prompt
         // (framed input), while the output node gets the raw merged deliverable.
-        $this->assertStringContainsString('def _agent_input(', $code);
+        $this->assertStringContainsString('def _framed_input(self)', $code);
         $this->assertStringContainsString('Original user request:', $code);
-        $this->assertStringContainsString('def _merge_parents(', $code);
+        $this->assertStringContainsString('class OutputNodeExecutor(Executor):', $code);
         // Result API: agent-framework's WorkflowRunResult has NO .text — use get_outputs().
         $this->assertStringContainsString('_result.get_outputs()', $code);
         $this->assertStringNotContainsString('_result.text', $code);
@@ -119,8 +121,8 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('_LAST_SKILL_OUTPUTS', $code);
         $this->assertStringContainsString('def _run_skill_script(', $code);
         $this->assertStringContainsString('SYNERGYAI_OUTPUT_DIR', $code);
-        $this->assertStringContainsString('async def _run_skill_step(', $code);
-        $this->assertStringContainsString('_make_skill_tool', $code);
+        $this->assertStringContainsString('async def run_step(cls, skill', $code);   // SkillRuntime
+        $this->assertStringContainsString('def make_tool(cls, dir_name: str)', $code);   // SkillRuntime's dir-scoped skill tool
         // baked into AGENTS — jsonToPython pretty-prints, so match the dir key
         $this->assertStringContainsString('"dir": "html"', $code);
         // Regression guard: MAF must NEVER pull in LangChain (the skill runtime uses
@@ -138,7 +140,7 @@ final class MafGeneratorEmitTest extends TestCase
         $this->assertStringNotContainsString('def _run_skill_script(', $code);
         // Tool-free workflow: the catalog placeholder fallback is emitted (no MCP block).
         $this->assertStringContainsString('catalog = {}', $code);
-        $this->assertStringNotContainsString('build_tools_from_catalog()', $code);
+        $this->assertStringNotContainsString('catalog = build_tools_from_catalog()', $code);
     }
 
     public function testMcpToolsEmitted(): void
