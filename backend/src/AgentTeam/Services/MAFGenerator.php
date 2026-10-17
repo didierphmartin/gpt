@@ -87,6 +87,16 @@ class MAFGenerator
     }
 
     /**
+     * A2A: one A2A agent server per node plus an orchestrator (LangGraph's A2A design, copied). Not built yet
+     * for this target: compile as a single file or with agents in separate files.
+     */
+    public function generateA2A(int $workflowId, ?string $userId = null): array
+    {
+        throw new RuntimeException('A2A packaging is not available for this target yet. Compile this workflow as a single file'
+            . ' or with agents in separate files.');
+    }
+
+    /**
      * The compiled package: the same script, plus the run server that makes it
      * conversational. The single-file generate() is unchanged and still the
      * only way to run this outside the editor.

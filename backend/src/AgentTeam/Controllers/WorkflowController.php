@@ -343,7 +343,7 @@ class WorkflowController
             }
         }
         // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
-        $slug = preg_replace('/_(langgraph|modular|a2a)(_swarm)?$/', '', $folder);
+        $slug = preg_replace('/_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$/', '', $folder);
         $tmp = tempnam(sys_get_temp_dir(), 'lgzip');
         try {
             $zip = new \ZipArchive();
@@ -372,38 +372,56 @@ class WorkflowController
     }
 
     /**
-     * GET /api/v1/workflows/{id}/generate-adk
-     * Generate a standalone Google ADK Python script from the workflow.
-     *
-     * Returns either:
-     *   - Content-Type: text/x-python  (raw source) when ?download=1
-     *   - application/json {filename, code} otherwise (default)
+     * GET /api/v1/workflows/{id}/generate-adk | generate-maf | generate-nooa
+     * The workflow compiled for Google ADK, Microsoft Agent Framework or NVIDIA NOOA, in the code structure the
+     * query names (as generate-python): ?modular=1 (or ?package=1) agents in separate files -- a package
+     * {root, files}; ?a2a=1 one A2A agent server per node + an orchestrator {root, files}; else a single file
+     * {filename, code}, raw with ?download=1. ?format=zip returns the structure as one zip.
      */
     public function generateAdk(array $request): array
     {
+        return $this->compiledTargetResponse($request, \AgentTeam\Services\ADKGenerator::class, 'adk');
+    }
+
+    public function generateMaf(array $request): array
+    {
+        return $this->compiledTargetResponse($request, \AgentTeam\Services\MAFGenerator::class, 'maf');
+    }
+
+    public function generateNooa(array $request): array
+    {
+        return $this->compiledTargetResponse($request, \AgentTeam\Services\NOOAGenerator::class, 'nooa');
+    }
+
+    /** The shared body of generate-adk / -maf / -nooa: the generator class differs, nothing else. */
+    private function compiledTargetResponse(array $request, string $generatorClass, string $target): array
+    {
         $userId = $request['user_id'] ?? 0;
         $workflowId = (int) ($request['params']['id'] ?? 0);
-        $download = ($request['query']['download'] ?? '0') === '1';
-
+        $q = $request['query'] ?? [];
         if (!$userId) {
             return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
         }
         if (!$workflowId) {
             return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
         }
-
+        $mode = ($q['a2a'] ?? '0') === '1' ? 'a2a'
+            : ((($q['modular'] ?? '0') === '1' || !empty($q['package'])) ? 'modular' : 'single');
+        $zip = ($q['format'] ?? '') === 'zip';
         try {
             if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
                 return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
             }
-
-            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
+            if ($zip && !class_exists(\ZipArchive::class)) {
+                return ['success' => false, 'error' => 'Export needs the PHP zip extension (ZipArchive), which this server does not have.',
+                    'status_code' => 500];
+            }
             // A packaged Start document is copied only from this user's own document storage.
-            $gen = new \AgentTeam\Services\ADKGenerator(
+            $gen = new $generatorClass(
                 $this->db,
                 $this->workflowRepository,
                 $this->graphRepository,
-                $agentRepo,
+                new \AgentTeam\Services\AgentRepository($this->db),
                 null,
                 new \AgentTeam\Services\StartDocumentStore(
                     $this->getUserStorageFolder((int) $userId),
@@ -411,15 +429,15 @@ class WorkflowController
                     $this->config['storage_path'] ?? __DIR__ . '/../../../../storage'
                 )
             );
-
-            if (!empty($request['query']['package'])) {
-                $pkg = $gen->generatePackage($workflowId, (string) $userId);
-                return ['success' => true, 'data' => $pkg, 'status_code' => 200];
+            $result = match ($mode) {
+                'a2a' => $gen->generateA2A($workflowId, (string) $userId),
+                'modular' => $gen->generatePackage($workflowId, (string) $userId),
+                default => $gen->generate($workflowId, (string) $userId),
+            };
+            if ($zip) {
+                return self::langGraphZipResponse($result, "{$target}_{$mode}");
             }
-
-            $result = $gen->generate($workflowId, (string) $userId);
-
-            if ($download) {
+            if ($mode === 'single' && ($q['download'] ?? '0') === '1') {
                 return [
                     'success' => true,
                     'raw_body' => $result['code'],
@@ -430,142 +448,9 @@ class WorkflowController
                     'status_code' => 200,
                 ];
             }
-
-            return [
-                'success' => true,
-                'data' => $result,
-                'status_code' => 200,
-            ];
+            return ['success' => true, 'data' => $result, 'status_code' => 200];
         } catch (\Throwable $e) {
-            error_log('[WorkflowController] generateAdk failed: ' . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
-        }
-    }
-
-    /**
-     * GET /api/v1/workflows/{id}/generate-maf
-     * Generate a standalone MAF Python script from the workflow.
-     *
-     * Returns either:
-     *   - Content-Type: text/x-python  (raw source) when ?download=1
-     *   - application/json {filename, code} otherwise (default)
-     */
-    public function generateMaf(array $request): array
-    {
-        $userId = $request['user_id'] ?? 0;
-        $workflowId = (int) ($request['params']['id'] ?? 0);
-        $download = ($request['query']['download'] ?? '0') === '1';
-
-        if (!$userId) {
-            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
-        }
-        if (!$workflowId) {
-            return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
-        }
-
-        try {
-            if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
-                return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
-            }
-
-            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
-            $gen = new \AgentTeam\Services\MAFGenerator(
-                $this->db,
-                $this->workflowRepository,
-                $this->graphRepository,
-                $agentRepo
-            );
-
-            if (!empty($request['query']['package'])) {
-                $pkg = $gen->generatePackage($workflowId, (string) $userId);
-                return ['success' => true, 'data' => $pkg, 'status_code' => 200];
-            }
-
-            $result = $gen->generate($workflowId, (string) $userId);
-
-            if ($download) {
-                return [
-                    'success' => true,
-                    'raw_body' => $result['code'],
-                    'headers' => [
-                        'Content-Type' => 'text/x-python; charset=utf-8',
-                        'Content-Disposition' => 'attachment; filename="' . $result['filename'] . '"',
-                    ],
-                    'status_code' => 200,
-                ];
-            }
-
-            return [
-                'success' => true,
-                'data' => $result,
-                'status_code' => 200,
-            ];
-        } catch (\Throwable $e) {
-            error_log('[WorkflowController] generateMaf failed: ' . $e->getMessage());
-            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
-        }
-    }
-
-    /**
-     * GET /api/v1/workflows/{id}/generate-nooa
-     * Generate a standalone NVIDIA OO Agents (NOOA) Python script from the workflow.
-     *
-     * Returns either:
-     *   - Content-Type: text/x-python  (raw source) when ?download=1
-     *   - application/json {filename, code} otherwise (default)
-     */
-    public function generateNooa(array $request): array
-    {
-        $userId = $request['user_id'] ?? 0;
-        $workflowId = (int) ($request['params']['id'] ?? 0);
-        $download = ($request['query']['download'] ?? '0') === '1';
-
-        if (!$userId) {
-            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
-        }
-        if (!$workflowId) {
-            return ['success' => false, 'error' => 'Workflow ID is required', 'status_code' => 400];
-        }
-
-        try {
-            if (!$this->workflowRepository->canUserAccess($userId, $workflowId)) {
-                return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
-            }
-
-            $agentRepo = new \AgentTeam\Services\AgentRepository($this->db);
-            $gen = new \AgentTeam\Services\NOOAGenerator(
-                $this->db,
-                $this->workflowRepository,
-                $this->graphRepository,
-                $agentRepo
-            );
-
-            if (!empty($request['query']['package'])) {
-                $pkg = $gen->generatePackage($workflowId, (string) $userId);
-                return ['success' => true, 'data' => $pkg, 'status_code' => 200];
-            }
-
-            $result = $gen->generate($workflowId, (string) $userId);
-
-            if ($download) {
-                return [
-                    'success' => true,
-                    'raw_body' => $result['code'],
-                    'headers' => [
-                        'Content-Type' => 'text/x-python; charset=utf-8',
-                        'Content-Disposition' => 'attachment; filename="' . $result['filename'] . '"',
-                    ],
-                    'status_code' => 200,
-                ];
-            }
-
-            return [
-                'success' => true,
-                'data' => $result,
-                'status_code' => 200,
-            ];
-        } catch (\Throwable $e) {
-            error_log('[WorkflowController] generateNooa failed: ' . $e->getMessage());
+            error_log("[WorkflowController] generate-{$target} ({$mode}) failed: " . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 500];
         }
     }

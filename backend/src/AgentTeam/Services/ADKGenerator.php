@@ -257,6 +257,16 @@ class ADKGenerator
     }
 
     /**
+     * A2A: one A2A agent server per node plus an orchestrator (LangGraph's A2A design, copied). Not built yet
+     * for this target: compile as a single file or with agents in separate files.
+     */
+    public function generateA2A(int $workflowId, ?string $userId = null): array
+    {
+        throw new RuntimeException('A2A packaging is not available for this target yet. Compile this workflow as a single file'
+            . ' or with agents in separate files.');
+    }
+
+    /**
      * The compiled package: a folder that runs on its own, like LangGraph's modular package --
      * workflow.py (the script, reading its code nodes from code/ and its skills from skills/),
      * the run server (api.py, common.py), and ADKPackage's files.
