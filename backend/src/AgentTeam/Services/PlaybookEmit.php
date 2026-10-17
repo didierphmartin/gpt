@@ -225,6 +225,8 @@ try:
     import common as _pb_host
     if not hasattr(_pb_host, "set_event_sink"):
         _pb_host = None          # some unrelated module named common
+    elif _pb_host is sys.modules.get(__name__):
+        _pb_host = None          # this runtime IS common.py (agents in separate files): its own sink, no delegation
 except Exception:
     _pb_host = None              # single-file target: console / policy gates
 

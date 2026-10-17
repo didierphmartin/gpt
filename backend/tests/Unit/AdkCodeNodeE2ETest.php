@@ -511,7 +511,10 @@ class AdkCodeNodeE2ETest extends TestCase
             'skill_content' => '', 'output_schema_id' => null, 'documents' => []];
         return array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
             'workflow' => ['id' => 96, 'name' => 'a2a e2e'], 'usedCatalog' => [], 'usedServers' => [], 'serverSlugs' => [],
-            'startPrompt' => 'my car claim', 'startDocuments' => [], 'playbooks' => [], 'code' => [],
+            'startPrompt' => 'my car claim', 'playbooks' => [], 'code' => [],
+            // a Start document (copied into the package) and output storage ON: the A2A orchestrator honours both
+            'startDocuments' => [['name' => 'note.txt', 'path' => 'start_documents/note.txt']],
+            'outputStorageEnabled' => true, 'outputFolder' => null,
             'agents' => ['2' => $ag('D', 'Route the request.'), '3' => $ag('A', 'Handle it as A.'), '4' => $ag('B', 'Handle it as B.')],
             'decisions' => ['2' => ['decision_question' => 'Which agent handles this?', 'routing_mode' => 'jev', 'unclear_branch' => '',
                 'min_confidence' => 0.6, 'decision' => [['provider' => 'jev', 'protocol' => 'typesafe', 'url' => $this->url . '/systemone',
@@ -530,9 +533,11 @@ class AdkCodeNodeE2ETest extends TestCase
             file_put_contents("$dir/{$f['path']}", $f['code']);
         }
         file_put_contents("$dir/.env", "JEV_API_KEY=jev-test-key\nDEEPSEEK_API_KEY=fake\nDEEPSEEK_BASE_URL={$this->url}/v1\n");
+        @mkdir("$dir/start_documents");
+        file_put_contents("$dir/start_documents/note.txt", "The policy number is PN-4242.");
         $base = random_int(21000, 29000);
         $proc = proc_open([self::PY, 'orchestrator.py', 'my car claim'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
-            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'A2A_BASE_PORT' => (string) $base]);
+            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME'), 'A2A_BASE_PORT' => (string) $base, 'SYNERGYAI_OUTPUT_ROOT' => "$dir/out"]);
         $text = (string) stream_get_contents($pipes[1]);
         $rc = proc_close($proc);
         fwrite(STDERR, "\n--- A2A output ($dir) ---\n$text\n");
@@ -541,8 +546,87 @@ class AdkCodeNodeE2ETest extends TestCase
         $llm = array_values(array_filter($this->calls(), fn($c) => ($c['method'] ?? '') === 'llm'));
         self::assertSame(['fake-b'], array_values(array_unique(array_column($llm, 'model'))), json_encode($llm));
         self::assertStringContainsString('my car claim', implode(' ', $llm[0]['messages']));
+        // Review I3: the Start's document reaches the nodes, and the answer is saved (output storage ON)
+        self::assertStringContainsString('PN-4242', implode(' ', $llm[0]['messages']));
+        $saved = glob("$dir/out/workflow/*") ?: [];
+        self::assertCount(1, $saved, 'the answer is saved under SYNERGYAI_OUTPUT_ROOT');
+        self::assertStringStartsWith('answer from fake-b', trim((string) file_get_contents($saved[0])));
         $jev = array_values(array_filter($this->calls(), fn($c) => ($c['method'] ?? '') === 'jev'));
         self::assertCount(1, $jev);
         self::assertStringContainsString('my car claim', $jev[0]['request']);
+    }
+
+    /** The target's generator class (the playbook E2E compiles through it, from an in-memory database). */
+    protected function generatorClass(): string
+    {
+        return ADKGenerator::class;
+    }
+
+    /** Start -> playbook PB (deepseek "fake-pb", one #Request Approval) -> Output, in an in-memory workflow database. */
+    private function playbookGenerator(): object
+    {
+        $pb = "Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. Say hello.\n2. #Request Approval from the manager then finish.\n\nActions used: #Request Approval\n";
+        $db = new \PDO('sqlite::memory:');
+        $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $db->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        $db->exec("CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, user_id INTEGER, workspace_id INTEGER, name TEXT, description TEXT, steps TEXT, triggers TEXT, variables TEXT, enabled INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT, output_storage_enabled INTEGER DEFAULT 0, output_folder TEXT, orchestration TEXT DEFAULT 'workflow')");
+        $db->exec('CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY, workflow_id INTEGER, node_type TEXT, agent_id INTEGER, config TEXT, pos_x INTEGER DEFAULT 0, pos_y INTEGER DEFAULT 0, drawflow_node_id TEXT, created_at TEXT)');
+        $db->exec("CREATE TABLE workflow_edges (id INTEGER PRIMARY KEY, workflow_id INTEGER, from_node_id INTEGER, to_node_id INTEGER, from_port TEXT DEFAULT 'output_1', to_port TEXT DEFAULT 'input_1', condition_expr TEXT, created_at TEXT)");
+        $db->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, enabled INTEGER)');
+        $db->exec('CREATE TABLE mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT, description TEXT, input_schema TEXT)');
+        $db->exec('CREATE TABLE system_llm_settings (provider_key TEXT, model TEXT, enabled INTEGER)');
+        $db->exec("INSERT INTO agent_workflows (id, user_id, name, description, steps, orchestration) VALUES (74, 3, 'Playbook e2e', 'x', '[]', 'workflow')");
+        $ins = $db->prepare('INSERT INTO workflow_nodes (id, workflow_id, node_type, agent_id, config, drawflow_node_id) VALUES (?, 74, ?, NULL, ?, ?)');
+        $ins->execute([1, 'start', json_encode(['type' => 'start', 'prompt' => 'go']), '1']);
+        $ins->execute([2, 'playbook', json_encode(['type' => 'playbook', 'name' => 'PB', 'playbook' => $pb, 'agent_provider' => 'deepseek',
+            'model' => 'fake-pb', 'writes_enabled' => true]), '2']);
+        $ins->execute([3, 'output', json_encode(['type' => 'output']), '3']);
+        $db->exec('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id) VALUES (74, 1, 2), (74, 2, 3)');
+        $cls = $this->generatorClass();
+        return new $cls($db, new \AgentTeam\Services\WorkflowRepository($db), new \AgentTeam\Services\WorkflowGraphRepository($db),
+            new \AgentTeam\Services\AgentRepository($db));
+    }
+
+    private function writeTo(array $files, string $prefix): string
+    {
+        $dir = sys_get_temp_dir() . "/adk_e2e_{$prefix}_" . bin2hex(random_bytes(4));
+        foreach ($files as $f) {
+            @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
+            file_put_contents("$dir/{$f['path']}", $f['code']);
+        }
+        file_put_contents("$dir/.env", "DEEPSEEK_API_KEY=fake\nDEEPSEEK_BASE_URL={$this->url}/v1\nPLAYBOOK_GATE_MODE=auto\n");
+        return $dir;
+    }
+
+    private function runIn(string $dir, array $argv, array $env = []): array
+    {
+        $proc = proc_open(array_merge([self::PY], $argv), [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
+            ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')] + $env);
+        $text = (string) stream_get_contents($pipes[1]);
+        $rc = proc_close($proc);
+        fwrite(STDERR, "\n--- output ($dir) ---\n$text\n");
+        return [$rc, $text];
+    }
+
+    /** Review C1: a playbook's tool calls (its approval gate) run in a package -- the runtime lives in common.py there. */
+    public function testPlaybookToolCallRunsInThePackage(): void
+    {
+        $this->startServer();
+        $dir = $this->writeTo($this->playbookGenerator()->generatePackage(74)['files'], 'pbmod');
+        [$rc, $text] = $this->runIn($dir, ['workflow.py', 'go']);
+        self::assertSame(0, $rc, $text);
+        self::assertStringNotContainsString('RecursionError', $text);
+        self::assertStringContainsString('answer from fake-pb after tool', $text);
+    }
+
+    /** Review C1: the same over A2A (the gate goes to the orchestrator, answered by PLAYBOOK_GATE_MODE=auto). */
+    public function testPlaybookToolCallRunsOverA2A(): void
+    {
+        $this->startServer();
+        $dir = $this->writeTo($this->playbookGenerator()->generateA2A(74)['files'], 'pba2a');
+        [$rc, $text] = $this->runIn($dir, ['orchestrator.py', 'go'], ['A2A_BASE_PORT' => (string) random_int(21000, 29000), 'PLAYBOOK_GATE_MODE' => 'auto']);
+        self::assertSame(0, $rc, $text);
+        self::assertStringNotContainsString('RecursionError', $text);
+        self::assertStringContainsString('answer from fake-pb after tool', $text);
     }
 }

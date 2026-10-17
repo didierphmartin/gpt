@@ -29,4 +29,9 @@ class MafE2ETest extends AdkCodeNodeE2ETest
     {
         return MAFGenerator::a2aPackage($analyzed);
     }
+
+    protected function generatorClass(): string
+    {
+        return MAFGenerator::class;
+    }
 }

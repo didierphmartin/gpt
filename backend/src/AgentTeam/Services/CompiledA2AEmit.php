@@ -155,6 +155,10 @@ final class CompiledA2AEmit
         $L[] = 'WORKFLOW_VERSION = ' . PythonEmitHelpers::pyStr(self::version($analyzed)) . '   # every agent card must carry it';
         $L[] = 'DEFAULT_PROMPT = ' . PythonEmitHelpers::pyStr((string) ($analyzed['startPrompt'] ?? ''));
         $L[] = 'A2A_BASE_PORT = int(os.environ.get("A2A_BASE_PORT", "' . self::BASE_PORT . '"))';
+        $L[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments'] ?? []) . '   # the Start\'s documents (start_documents/ in this folder)';
+        $L[] = 'OUTPUT_STORAGE_ENABLED = ' . (!empty($analyzed['outputStorageEnabled']) ? 'True' : 'False');
+        $folder = $analyzed['outputFolder'] ?? null;
+        $L[] = 'OUTPUT_FOLDER = ' . (($folder !== null && $folder !== '') ? PythonEmitHelpers::pyStr((string) $folder) : 'None');
         $L[] = '';
         $L[] = 'AGENTS = ' . PythonEmitHelpers::jsonToPython($agents) . '   # node id -> server file, port, kind';
         $L[] = 'ORDER = ' . PythonEmitHelpers::jsonToPython(array_map('strval', array_keys($layout)));
@@ -163,6 +167,7 @@ final class CompiledA2AEmit
         $L[] = '';
         $L[] = LangGraphRuntime::runEventsBlock();
         $L[] = LangGraphGenerator::contextBuilderBlock();
+        $L[] = PythonEmitHelpers::documentConverterBlock();
         $L[] = 'NODE_DURATIONS = {}   # display name -> seconds of A2A round trip';
         $L[] = '';
         $L[] = '';
@@ -171,10 +176,45 @@ final class CompiledA2AEmit
 # ==============================================================
 # THE GRAPH WALK -- each layer's reached nodes run together over A2A
 # ==============================================================
+def _with_documents(prompt: str) -> str:
+    """The prompt with the Start's documents, converted to Markdown, placed before it (as every target does)."""
+    parts = []
+    for doc in START_DOCUMENTS:
+        name, path = doc.get("name", "Document"), doc.get("path", "")
+        if path and not os.path.isabs(path):
+            path = os.path.join(_HERE, path)   # start_documents/ in this folder
+        try:
+            parts.append(f"### {name}\n\n{_convert_doc_to_markdown(path)}" if path else f"### {name}\n\n_(no path)_")
+        except Exception as e:
+            parts.append(f"### {name}\n\n_(conversion failed: {e})_")
+    if not parts:
+        return prompt
+    return "## Attached Documents\n\n" + "\n\n---\n\n".join(parts) + "\n\n---\n\n" + prompt
+
+
+def _save_output(text: str) -> str | None:
+    """The Output node's storage rule: when ON, the answer goes to outputs/ in this folder (SYNERGYAI_OUTPUT_ROOT
+    overrides) or the workflow's custom folder; returns the file's path, or None when OFF."""
+    if not OUTPUT_STORAGE_ENABLED or not text:
+        return None
+    import re
+    m = re.search(r"(?is)<!doctype html.*?</html\s*>", text) or re.search(r"(?is)<html[\s>].*?</html\s*>", text)
+    text, ext = (m.group(0), "html") if m else (text, "md")
+    slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
+    root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.join(_HERE, "outputs")
+    folder = os.path.expanduser(OUTPUT_FOLDER) if OUTPUT_FOLDER else os.path.join(root, "workflow")
+    folder = folder if os.path.isabs(folder) else os.path.join(root, folder)
+    os.makedirs(folder, exist_ok=True)
+    out = os.path.join(folder, f"{WORKFLOW_ID}-{slug}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(text)
+    return os.path.abspath(out)
+
+
 async def run(user_prompt: str, session: str | None = None) -> str:
     """Run the workflow once on `user_prompt` over the agent servers (already serving). Returns the Output's
     merge, or why a dispatcher did not route when nothing reached the Output."""
-    prompt = str(user_prompt or DEFAULT_PROMPT or "Hello")
+    prompt = _with_documents(str(user_prompt or DEFAULT_PROMPT or "Hello"))
     nodes = GRAPH["nodes"]
     out = {}        # node id -> {"source", "text"}: the nodes that ran
     routes = {}     # dispatcher id -> the child ids its route lets run
@@ -220,6 +260,9 @@ def main() -> None:
         sup.start()
         answer = asyncio.run(run(" ".join(a.prompt) or DEFAULT_PROMPT or "Hello"))
         print("\n=== FINAL OUTPUT ===\n" + answer, flush=True)
+        saved = _save_output(answer)   # the CLI saves; a served run (api.py) answers without writing a file
+        if saved:
+            print(f"  Document saved to: {saved}", flush=True)
     finally:
         if not a.keep_serving:
             sup.stop()

@@ -1723,7 +1723,11 @@ PY;
         foreach (($analyzed['code'] ?? []) as $nid => $cd) {
             $nodeNames[(string) $nid] = (string) $cd['display'];
         }
-        $nodeNamesPy = PythonEmitHelpers::jsonToPython($nodeNames);
+        foreach (($analyzed['playbooks'] ?? []) as $nid => $pd) {
+            $nodeNames[(string) $nid] = (string) $pd['display'];
+        }
+        // A dict even when empty (a workflow with no agent node): jsonToPython([]) would be a list.
+        $nodeNamesPy = $nodeNames === [] ? '{}' : PythonEmitHelpers::jsonToPython($nodeNames);
         return
             "WORKFLOW_NAME = {$name}\n" .
             "WORKFLOW_ID = {$wfId}\n" .

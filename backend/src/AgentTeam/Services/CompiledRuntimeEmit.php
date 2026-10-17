@@ -566,7 +566,7 @@ PY;
             foreach ($tables as $var => [$table, $literals]) {
                 if (isset($literals[$nid])) {
                     $body[] = "{$var} = " . $literals[$nid] . "   # {$table}[\"{$nid}\"]";
-                    $fills[$table][] = '    ' . PythonEmitHelpers::pyStr((string) $nid) . ": {$m['name']}.{$var},";
+                    $fills[$table][] = '    ' . PythonEmitHelpers::pyStr((string) $nid) . ": _node_{$nid}.{$var},";
                 }
             }
             if ($body === []) {
@@ -577,7 +577,8 @@ PY;
                 . "Imported by workflow.py. To change the node, edit the workflow in the editor and re-generate.{$q}\n"
                 . "from common import *  # noqa: F401,F403 -- the runtime\n\n\n"
                 . implode("\n\n\n", $body) . "\n"];
-            $imports[] = "from agents import {$m['name']}  # {$display}";
+            // Under a private alias: a node named like a module (time, json, re...) must not shadow it here.
+            $imports[] = "from agents import {$m['name']} as _node_{$nid}  # {$display}";
         }
         $fill = '';
         foreach ($fills as $table => $lines) {

@@ -1818,7 +1818,7 @@ TXT;
     /** Supervisor, remote node runner, gate handler, graph wiring, CLI entry. */
     private static function a2aOrchestratorBlock(): string
     {
-        return self::a2aRemoteBlock() . <<<'PY'
+        return self::a2aRemoteBlock() . "\n" . <<<'PY'
 # ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over A2A tasks
 # ==============================================================

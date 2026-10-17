@@ -22,6 +22,33 @@ class H(BaseHTTPRequestHandler):
                 f.write(json.dumps({"method": "llm", "model": model, "stream": bool(req.get("stream")),
                                     "messages": [str(m.get("content"))[:2000] for m in msgs if isinstance(m, dict)]}) + "\n")
             content = f"answer from {model}"
+            tools = [t.get("function", {}).get("name") for t in (req.get("tools") or []) if isinstance(t, dict)]
+            if any(isinstance(m, dict) and m.get("role") == "tool" for m in msgs):
+                content = f"answer from {model} after tool"
+            elif "request_approval" in tools:   # a playbook: call its approval gate once, then answer
+                call = {"id": "c1", "type": "function", "function": {"name": "request_approval",
+                        "arguments": json.dumps({"approver": "boss", "question": "ok to proceed?"})}}
+                if req.get("stream"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    for chunk in ({"choices": [{"index": 0, "delta": {"role": "assistant", "content": None, "tool_calls": [dict(call, index=0)]}, "finish_reason": None}]},
+                                  {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}):
+                        chunk.update({"id": "fake", "object": "chat.completion.chunk", "created": 0, "model": model})
+                        self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    return
+                data = json.dumps({"id": "fake", "object": "chat.completion", "created": 0, "model": model,
+                                   "choices": [{"index": 0, "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                                                "finish_reason": "tool_calls"}],
+                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if req.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
