@@ -277,6 +277,17 @@ _RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes
 #   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
 
 
+def _set_recorder(recorder) -> None:
+    """The run's recorder: the listener's run_once sets it for a run and resets it after. A setter, not an
+    assignment from outside, so a package that keeps this in common.py still records."""
+    global GRAPH_RECORDER
+    GRAPH_RECORDER = recorder
+
+
+def _current_recorder():
+    return GRAPH_RECORDER
+
+
 def _run_reset() -> None:
     _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
 
@@ -405,10 +416,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
     ('' when no Output node ran). A quiet run (a code node's non-error exit, no agent, playbook or output
     node ran) leaves no run file. Raises ErrorExitTaken when a code node took its error exit."""
     def run_once() -> str:
-        global GRAPH_RECORDER
         ev_loop = runs.loop   # this run's event loop, read once: drain() may give later runs a fresh one
         this_run = recorder.begin()
-        GRAPH_RECORDER = recorder
+        _set_recorder(recorder)
         RUN_OUT.begin("hold" if loop_mode else "drop" if view.verbosity == "quiet" else "print")
         try:
             output = ev_loop.run_until_complete(run_workflow(prompt))
@@ -434,9 +444,9 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         finally:
             # Back to no recorder -- only while this run still owns it: a run abandoned at the cap that
             # ends late must not reset the run that replaced it.
-            if GRAPH_RECORDER is recorder and recorder.run_id == this_run:
+            if _current_recorder() is recorder and recorder.run_id == this_run:
                 RUN_OUT.begin("print")
-                GRAPH_RECORDER = NULL_RECORDER
+                _set_recorder(NULL_RECORDER)
         recorder.complete(success=True, output=output)
         recorder.end(quiet=False)
         return output

@@ -570,6 +570,17 @@ _RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes
 #   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
 
 
+def _set_recorder(recorder) -> None:
+    """The run's recorder: the listener's run_once sets it for a run and resets it after. A setter, not an
+    assignment from outside, so a package that keeps this in common.py still records."""
+    global GRAPH_RECORDER
+    GRAPH_RECORDER = recorder
+
+
+def _current_recorder():
+    return GRAPH_RECORDER
+
+
 def _run_reset() -> None:
     _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
 
