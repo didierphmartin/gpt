@@ -316,16 +316,11 @@
     opacity: 0.8;
 }
 
-/* Worker agent card */
-.workflow-agent-card.worker .agent-icon {
+/* Agent cards: green like the agent nodes, whatever the kind */
+.workflow-agent-card.worker .agent-icon,
+.workflow-agent-card.standard .agent-icon {
     background: #dcfce7;
     color: #16a34a;
-}
-
-/* Standard agent card */
-.workflow-agent-card.standard .agent-icon {
-    background: #dbeafe;
-    color: #2563eb;
 }
 
 /* Template cards (new unconfigured templates) */
@@ -392,8 +387,8 @@
 }
 
 .workflow-agent-card.special.output-node .agent-icon {
-    background: #fef3c7;
-    color: #d97706;
+    background: #dbeafe;
+    color: #2563eb;
 }
 
 .workflow-agent-card.ingestion-node .agent-icon {
@@ -1133,7 +1128,7 @@ svg.connection.wf-edge-chosen .main-path {
 }
 
 .workflow-node.output-node:hover {
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
 /* Body ("Response to user") — flat white + dark text for coherence across all
@@ -1179,18 +1174,19 @@ svg.connection.wf-edge-chosen .main-path {
     transform: translateY(-50%) translateX(0);
 }
 
+/* Same light-blue header as the Start node: the workflow's two endpoints look alike. */
 .workflow-node.output-node .node-header {
-    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
 }
 
 .workflow-node.output-node .node-icon {
-    color: #d97706;
-    background: rgba(245, 158, 11, 0.15);
+    color: #2563eb;
+    background: rgba(59, 130, 246, 0.15);
 }
 
 /* Ingestion (vector store) end node keeps the SAME header colour as the normal
-   agent Output node (amber) so Start/End read as the usual workflow endpoints;
-   only the body content (Compile to Python) differs. */
+   agent Output node (light blue, like Start) so Start/End read as the usual workflow
+   endpoints; only the body content (Compile to Python) differs. */
 
 /* Ingestion output node: same light-blue header as the other ingestion nodes
    (.ingestion-output .node-header above), with "Compile to Python" as its single
@@ -1454,12 +1450,14 @@ svg.connection.wf-edge-chosen .main-path {
 }
 
 
-/* Agent node (worker) */
-.workflow-node.agent-node .node-header {
+/* Agent node: every kind (worker, dispatcher, standard, playbook) has this light-green header. */
+.workflow-node.agent-node .node-header,
+.workflow-node.playbook-node .node-header {
     background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
 }
 
-.workflow-node.agent-node .node-icon {
+.workflow-node.agent-node .node-icon,
+.workflow-node.playbook-node .node-icon {
     color: #16a34a;
     background: rgba(34, 197, 94, 0.15);
 }
@@ -1469,24 +1467,14 @@ svg.connection.wf-edge-chosen .main-path {
     /* No left border for symmetric design */
 }
 
-.workflow-node.agent-node.standard .node-header {
-    background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
+/* Code node: the same light-yellow header as its form's banner (.storage-config-header). */
+.workflow-node.code-node .node-header {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
 }
 
-.workflow-node.agent-node.standard .node-icon {
-    color: #7c3aed;
-    background: rgba(139, 92, 246, 0.15);
-}
-
-/* Playbook node: yellow is the playbook color code (matches the amber
-   gate cards in the run overlay). */
-.workflow-node.playbook-node .node-header {
-    background: linear-gradient(135deg, #fef9c3 0%, #fde68a 100%);
-}
-
-.workflow-node.playbook-node .node-icon {
+.workflow-node.code-node .node-icon {
     color: #d97706;
-    background: rgba(245, 158, 11, 0.18);
+    background: rgba(245, 158, 11, 0.15);
 }
 
 /* Ingestion component node (loader / splitter / vectorstore) */

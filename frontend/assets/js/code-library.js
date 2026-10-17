@@ -53,7 +53,7 @@ class CodeLibrary {
         }
         this.tree.innerHTML = visible.map(r => `
             <div class="mcp-lib-item" draggable="true" data-cc-id="${r.id}" title="${this.esc(r.description || window.CodeNode.exitsLabel(r.exits))}">
-                <span>🐍</span>
+                <span>⚙️</span>
                 <span class="mcp-lib-name font-semibold">${this.esc(r.name)}</span>
                 ${r.used_by ? `<span class="mcp-lib-count">${this.esc(this.t('codeLibrary.usedBy', { count: r.used_by }))}</span>` : ''}
                 <button class="mcp-lib-menu" data-cc-id="${r.id}" title="More">⋮</button>

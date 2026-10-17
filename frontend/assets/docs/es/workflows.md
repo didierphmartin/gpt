@@ -38,17 +38,17 @@ En lugar de una hora, una programación puede esperar un **evento**: pon *Repeti
 
 ### Opciones de inicio
 
-El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt**, **Programar** y cada **opción de evento** que hayas añadido. Solo una está marcada a la vez; marcar otra cambia a ella.
+El nodo Inicio enumera cómo comienza el flujo: **Escribir el prompt**, **Programar** y cada **opción de evento** que hayas añadido. Son botones de opción: solo una está elegida a la vez; elegir otra cambia a ella.
 
-- **Escribir el prompt / Programar:** haz clic en el texto para cambiar a esa opción y abrir el cuadro del prompt o los campos de programación (ejecutar a, repetir, cron). Programar queda marcada cuando guardas la programación. Desmarcarla vuelve a Escribir el prompt y elimina la programación.
+- **Escribir el prompt / Programar:** haz clic en el texto para cambiar a esa opción y abrir el cuadro del prompt o los campos de programación (ejecutar a, repetir, cron). Programar queda elegida cuando guardas la programación. Elegir en su lugar Escribir el prompt (o una opción de evento) elimina la programación.
 - **Añadir una opción:** arrastra un componente de la Biblioteca de componentes de código sobre cualquier nodo Inicio. Elige la herramienta de espera (para Outlook, `wait_for_new`), sus argumentos y la salida que lleva el trabajo. El Inicio de cada flujo la mostrará.
-- **Usarla:** marca la opción en Inicio. Inicio se convierte en el componente: muestra un conector por salida (para Outlook, `new_mail`, `no_mail`, `error`) y enlazas cada uno con lo que debe ocurrir después. El flujo se ejecuta cuando llega el evento; lo que sale por un conector (el correo en `new_mail`) es la entrada del nodo siguiente. Los enlaces que ya tenía Inicio pasan a la salida que lleva el trabajo.
-- **Volver atrás:** marca Escribir el prompt o Programar. Inicio vuelve a tener un solo conector: los enlaces de la salida que lleva el trabajo se quedan, los demás se eliminan. Una advertencia los enumera antes; Cancelar no cambia nada.
+- **Usarla:** elige la opción en Inicio. Inicio se convierte en el componente: muestra un conector por salida (para Outlook, `new_mail`, `no_mail`, `error`) y enlazas cada uno con lo que debe ocurrir después. El flujo se ejecuta cuando llega el evento; lo que sale por un conector (el correo en `new_mail`) es la entrada del nodo siguiente. Los enlaces que ya tenía Inicio pasan a la salida que lleva el trabajo.
+- **Volver atrás:** elige Escribir el prompt o Programar. Inicio vuelve a tener un solo conector: los enlaces de la salida que lleva el trabajo se quedan, los demás se eliminan. Una advertencia los enumera antes; Cancelar no cambia nada.
 - **Editarla o quitarla:** el componente solo se edita en la Biblioteca de componentes de código, y cada Inicio que lo usa se actualiza. Si al guardar se quitan salidas que tienen enlaces en algún flujo, una advertencia enumera esos flujos y enlaces antes. ⋮ en el componente → Editar la opción de inicio o Quitar la opción de inicio; al quitarla, esos Inicio vuelven a ser un Inicio normal.
 
 #### Activar un workflow
 
-Marcar un modo de entrada solo lo selecciona. Para que un workflow se ejecute solo, haz clic en ▶ en Start:
+Elegir un modo de entrada solo lo selecciona. Para que un workflow se ejecute solo, haz clic en ▶ en Start:
 
 - **Enter Prompt:** ▶ abre la conversación, como antes.
 - **Set Schedule** o una **opción de código** (por ejemplo «Outlook: Get New Email»): ▶ activa el workflow. El
@@ -99,6 +99,7 @@ Abre el dispatcher con su lápiz ✏️:
 - No llames a una rama *unclear*: esa palabra está reservada a la respuesta "no lo sé" del modelo de decisión.
 - Conecta cada rama a **Output**; si no, su respuesta nunca llega a la conversación.
 - Una rama puede ser un agente o un nodo **Code**. Un agente recibe la solicitud con las notas del dispatcher; un nodo Code recibe exactamente lo que recibió el dispatcher (por ejemplo el correo de un sondeo), para que su código pueda usar los campos del correo como `id`.
+- El código de un nodo Code puede leer `NODE_NAME`, su nombre en el lienzo. Un solo componente de la Code Library puede servir a todas las ramas: por ejemplo archiva el correo en `"Inbox/" + NODE_NAME`, así la rama *claims* lo archiva en Inbox/Claims (los nombres de carpeta no distinguen mayúsculas).
 
 ### En el lienzo
 

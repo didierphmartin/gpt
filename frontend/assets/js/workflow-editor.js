@@ -414,7 +414,7 @@ class WorkflowEditor {
                     </div>
                     <div class="workflow-section-content ${collapsedSections.logic ? 'collapsed' : ''}" data-section="logic">
                         <div class="workflow-agent-card special ingestion-node" draggable="true" data-node-type="code">
-                            <div class="agent-icon">🐍</div><div class="agent-info"><div class="agent-name">Code</div><div class="agent-type">Python run(input, call_tool)</div></div></div>
+                            <div class="agent-icon">⚙️</div><div class="agent-info"><div class="agent-name">Code</div><div class="agent-type">Python run(input, call_tool)</div></div></div>
                     </div>
                 </div>
             </div>
@@ -2754,6 +2754,9 @@ class WorkflowEditor {
                 e.stopPropagation();
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
+                } else if (this._compiledListening()) {
+                    // A compiled program of this workflow listens: ■ reopens its live view (Stop is in its footer).
+                    this._openCompiledLive(this._compiledListening().base);
                 } else if (!this._isIngestionWorkflow() && !this._isSwarm() && this._startView().button !== 'run') {
                     // Schedule or option mode (spec 2026-10-15 live-overlay §2): ▶ activates when needed, then opens
                     // the live overlay on the server runs; ■ in its header deactivates.
@@ -3142,6 +3145,7 @@ class WorkflowEditor {
             const j = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
             if (j.state) this._compiledLive = { text: j.state.line || '', tone: j.state.tone || 'off', listening: !!j.listening };
+            this._refreshStartHint();
             return true;
         } catch (err) {
             this.showNotification(err?.message || String(err), 'error');
@@ -3237,6 +3241,7 @@ class WorkflowEditor {
                         } else if (eventType === 'state' && compiled) {
                             this._compiledLive = window.StartOptions.compiledLiveState(data);
                             this._liveHeader();
+                            this._refreshStartHint();
                         } else if (eventType === 'state') {
                             this.activeWorkflow = data.active || null;
                             this._refreshStartHint();
@@ -3261,6 +3266,7 @@ class WorkflowEditor {
             if (compiled) {   // a dead server must not keep showing "Listening" with Stop
                 this._compiledLive = window.StartOptions.compiledLiveState(null);
                 this._liveHeader();
+                this._refreshStartHint();
             }
             await new Promise(r => setTimeout(r, delay));
             delay = Math.min(delay * 2, 10000);
@@ -3361,6 +3367,7 @@ class WorkflowEditor {
             if (!ok) return false;
         }
         await this._persistIfDirty();   // the worker reads Start's links and option from the database
+        await this._stopCompiledEngine();   // one engine reads the events: the worker, from now on
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
         const body = await r.json().catch(() => ({}));
         const activated = r.ok && body.success !== false;
@@ -3384,7 +3391,38 @@ class WorkflowEditor {
         const body = await r.json().catch(() => ({}));
         if (!r.ok || body.success === false) this.showNotification(this._activeError(r, body), 'error');
         else this.showNotification(this.t('workflow.active.deactivated'), 'info');
+        await this._stopCompiledEngine();   // Stop leaves the workflow at rest: no compiled program listens either
         await this._loadActive();
+    }
+
+    /**
+     * One engine reads a workflow's events at a time: the event worker (Start's ▶ / Stop) or the compiled
+     * program a LangGraph Run started on the local runner. This ends the compiled one by stopping its run
+     * server; the runner knows it by folder, whichever tab started it. Quiet when the runner is down or
+     * nothing runs.
+     */
+    async _stopCompiledEngine(exceptRoot = null) {
+        // This workflow's compiled program, whichever target it was compiled for (LangGraph, ADK, MAF, NOOA).
+        const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+        // LangGraph in either structure (and its swarm), and every other target in both.
+        const roots = [...new Set([this._compiledRootName(null), `${safe}_modular`, `${safe}_a2a`,
+            ...['adk', 'maf', 'nooa'].flatMap((t) => [`${safe}_${t}`, `${safe}_${t}_a2a`])])]
+            .filter((r) => r !== exceptRoot);
+        await Promise.all(roots.map((folder) => fetch(`${this._langgraphRunnerBase}/api/workflow-server/stop`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder }), signal: AbortSignal.timeout(10000),
+        }).catch(() => { /* no runner, or nothing running there */ })));
+        if (this._liveSource?.kind === 'compiled') {
+            this._compiledLive = window.StartOptions.compiledLiveState(null);
+            this._refreshStartHint();
+        }
+    }
+
+    /** This workflow's compiled program, when this tab follows it and it listens: its state, else null. */
+    _compiledListening() {
+        const src = this._liveSource;
+        return src?.kind === 'compiled' && this._monitoring === this.currentWorkflowId && this._compiledLive?.listening
+            ? { base: src.base, ...this._compiledLive } : null;
     }
 
     /** Start's hint, ▶ and state line: "Runs on <option>"; ▶ runs in prompt mode, else activates / deactivates. */
@@ -3402,6 +3440,24 @@ class WorkflowEditor {
         card.classList.toggle('start-on-option', !!label);
         // ▶ runs in prompt mode; in schedule / option mode it activates or deactivates (spec 2026-10-14 event-worker §5).
         const view = this.currentWorkflowId ? this._startView() : { button: 'run', hint: null };
+        // A compiled program of this workflow listens (LangGraph, ADK...): Start shows its state and ■ like an
+        // active workflow; ■ opens its live view, where Stop is.
+        const compiled = this.currentWorkflowId ? this._compiledListening() : null;
+        if (compiled) {
+            if (playBtn) {
+                playBtn.style.display = 'flex';
+                playBtn.textContent = '■';
+                playBtn.title = this.t('workflow.live.open');
+            }
+            card.classList.add('start-active');
+            if (small) {
+                small.classList.remove('start-state', 'state-off', 'state-ok', 'state-warn', 'state-err');
+                small.textContent = compiled.text;
+                small.style.color = '';
+                small.classList.add('start-state', `state-${compiled.tone || 'ok'}`);
+            }
+            return;
+        }
         if (playBtn) {
             playBtn.style.display = 'flex';
             // ■ while the workflow is active (it opens the live view; Stop is in its footer), else ▶.
@@ -3629,6 +3685,16 @@ class WorkflowEditor {
                 if (env && ak) keys[env] = ak;
             }
             Object.assign(keys, plan.set);
+            // The headers of the user's own MCP servers (a mailbox's connection key...), as the interpreter
+            // sends them: a compiled program reads them from MCP_HEADERS_<slug> (LangGraphRuntime McpClient._headers).
+            // Global servers' headers are never sent to the browser, so they are not written.
+            const mcp = await window.mcpClient?.request?.(`/mcp/servers?user_id=${encodeURIComponent(window.mcpClient.getUserId())}`).catch(() => null);
+            for (const sv of mcp?.servers || []) {
+                const h = sv?.headers;
+                if (!h || typeof h !== 'object' || Array.isArray(h) || !Object.keys(h).length) continue;
+                const env = `MCP_HEADERS_${window.CodeNode.slug(String(sv.name || '')).toUpperCase()}`;
+                if (!(env in keys)) keys[env] = JSON.stringify(h);
+            }
             if (!Object.keys(keys).length && !plan.drop.length) return;
 
             // Seed from existing .env (else .env.example) to preserve non-key lines.
@@ -3644,7 +3710,7 @@ class WorkflowEditor {
             if (plan.drop.length) lines = lines.filter((ln) => !dropRe.test(ln));
             const seen = {};
             lines = lines.map((ln) => {
-                const m = ln.match(/^([A-Z0-9_]+_(?:API_KEY|BASE_URL))=/);
+                const m = ln.match(/^([A-Z0-9_]+_(?:API_KEY|BASE_URL)|MCP_HEADERS_[A-Z0-9_]+)=/);
                 if (m && keys[m[1]] != null) { seen[m[1]] = true; return `${m[1]}=${keys[m[1]]}`; }
                 return ln;
             });
@@ -3654,7 +3720,7 @@ class WorkflowEditor {
             const w = await outFh.createWritable();
             await w.write(lines.join('\n').replace(/\n*$/, '\n'));
             await w.close();
-            console.log(`[WorkflowEditor] Synced ${Object.keys(keys).length} provider keys to python/.env`);
+            console.log(`[WorkflowEditor] Synced ${Object.keys(keys).length} provider keys and MCP headers to python/.env`);
         } catch (e) {
             console.warn('[WorkflowEditor] runner .env sync skipped:', e);
         }
@@ -4069,6 +4135,12 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="adk-display-code">
                 ${this.escapeHtml(this.t('workflow.output.adkDisplayCode') || 'Display Code')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-export">
+                ${this.escapeHtml(this.t('workflow.output.langgraphExport') || 'Export')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="adk-architecture">
+                ${this.escapeHtml(this.t('workflow.output.langgraphArchitecture') || 'Architecture')}
+            </button>
         `;
         document.body.appendChild(menu);
 
@@ -4083,7 +4155,8 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="adk-generate"]')?.addEventListener('click', () => {
             menu.remove();
-            this.generateAdkScript();
+            if (isIngestion) { this.generateAdkScript(); return; }
+            this._generateTarget('adk');
         });
         menu.querySelector('[data-action="adk-info"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4096,7 +4169,16 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'adk');
         menu.querySelector('[data-action="adk-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            this._showAdkCodeModal();
+            if (isIngestion) { this._showAdkCodeModal(); return; }
+            this._displayTargetCode('adk');
+        });
+        menu.querySelector('[data-action="adk-architecture"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showLangGraphArchitectureModal('adk');
+        });
+        menu.querySelector('[data-action="adk-export"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._exportLangGraphZip('adk');
         });
 
         setTimeout(() => {
@@ -4324,21 +4406,7 @@ class WorkflowEditor {
      * — _runCompiled owns the whole run, and the scrim reports its phases.
      */
     async _runAdkScript() {
-        // Up SYNCHRONOUSLY, in the same tick as the click — see
-        // _runLangGraphScript. ADK now runs as a compiled package (server +
-        // conversation overlay), same as LangGraph's multi-file modes.
-        this._showCompiledScrim(this.t('workflow.toolbar.compileAdk'), 'preparing');
-        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
-        await this._persistIfDirty();  // flush deferred node edits to the DB before running
-        if (!this.currentWorkflowId) {
-            this._hideCompiledScrim();
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let data;
-        try { data = await this._writeManifest('modular', 'adk'); }
-        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
-        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileAdk'));
+        return this._runCompiledTarget('adk');
     }
 
     // -------------------------------------------------------------------------
@@ -4389,6 +4457,12 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="maf-display-code">
                 ${this.escapeHtml(this.t('workflow.output.mafDisplayCode') || 'Display Code')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-export">
+                ${this.escapeHtml(this.t('workflow.output.langgraphExport') || 'Export')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="maf-architecture">
+                ${this.escapeHtml(this.t('workflow.output.langgraphArchitecture') || 'Architecture')}
+            </button>
         `;
         document.body.appendChild(menu);
 
@@ -4403,7 +4477,8 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="maf-generate"]')?.addEventListener('click', () => {
             menu.remove();
-            this.generateMafScript();
+            if (isIngestion) { this.generateMafScript(); return; }
+            this._generateTarget('maf');
         });
         menu.querySelector('[data-action="maf-info"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4416,7 +4491,16 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'maf');
         menu.querySelector('[data-action="maf-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            this._showMafCodeModal();
+            if (isIngestion) { this._showMafCodeModal(); return; }
+            this._displayTargetCode('maf');
+        });
+        menu.querySelector('[data-action="maf-architecture"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showLangGraphArchitectureModal('maf');
+        });
+        menu.querySelector('[data-action="maf-export"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._exportLangGraphZip('maf');
         });
 
         setTimeout(() => {
@@ -4679,21 +4763,7 @@ class WorkflowEditor {
      * Content-Disposition filename, no output modal.
      */
     async _runMafScript() {
-        // Up SYNCHRONOUSLY, in the same tick as the click — see
-        // _runLangGraphScript. MAF now runs as a compiled package (server +
-        // conversation overlay), same as LangGraph's multi-file modes.
-        this._showCompiledScrim(this.t('workflow.toolbar.compileMaf'), 'preparing');
-        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
-        await this._persistIfDirty();  // flush deferred node edits to the DB before running
-        if (!this.currentWorkflowId) {
-            this._hideCompiledScrim();
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let data;
-        try { data = await this._writeManifest('modular', 'maf'); }
-        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
-        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileMaf'));
+        return this._runCompiledTarget('maf');
     }
 
     // -------------------------------------------------------------------------
@@ -4744,6 +4814,12 @@ class WorkflowEditor {
             <button type="button" class="langgraph-menu-item" data-action="nooa-display-code">
                 ${this.escapeHtml(this.t('workflow.output.nooaDisplayCode') || 'Display Code')}
             </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-export">
+                ${this.escapeHtml(this.t('workflow.output.langgraphExport') || 'Export')}
+            </button>
+            <button type="button" class="langgraph-menu-item" data-action="nooa-architecture">
+                ${this.escapeHtml(this.t('workflow.output.langgraphArchitecture') || 'Architecture')}
+            </button>
         `;
         document.body.appendChild(menu);
 
@@ -4758,7 +4834,8 @@ class WorkflowEditor {
         });
         menu.querySelector('[data-action="nooa-generate"]')?.addEventListener('click', () => {
             menu.remove();
-            this.generateNooaScript();
+            if (isIngestion) { this.generateNooaScript(); return; }
+            this._generateTarget('nooa');
         });
         menu.querySelector('[data-action="nooa-info"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4771,7 +4848,16 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'nooa');
         menu.querySelector('[data-action="nooa-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            this._showNooaCodeModal();
+            if (isIngestion) { this._showNooaCodeModal(); return; }
+            this._displayTargetCode('nooa');
+        });
+        menu.querySelector('[data-action="nooa-architecture"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._showLangGraphArchitectureModal('nooa');
+        });
+        menu.querySelector('[data-action="nooa-export"]')?.addEventListener('click', () => {
+            menu.remove();
+            this._exportLangGraphZip('nooa');
         });
 
         setTimeout(() => {
@@ -5038,21 +5124,7 @@ class WorkflowEditor {
      * Content-Disposition filename, no output modal.
      */
     async _runNooaScript() {
-        // Up SYNCHRONOUSLY, in the same tick as the click — see
-        // _runLangGraphScript. NOOA now runs as a compiled package (server +
-        // conversation overlay), same as LangGraph's multi-file modes.
-        this._showCompiledScrim(this.t('workflow.toolbar.compileNooa'), 'preparing');
-        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
-        await this._persistIfDirty();  // flush deferred node edits to the DB before running
-        if (!this.currentWorkflowId) {
-            this._hideCompiledScrim();
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let data;
-        try { data = await this._writeManifest('modular', 'nooa'); }
-        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
-        return this._runCompiled(data.root, null, this.t('workflow.toolbar.compileNooa'));
+        return this._runCompiledTarget('nooa');
     }
 
     /**
@@ -5438,8 +5510,9 @@ class WorkflowEditor {
      */
     _compiledRootName(target = null) {
         const safe = (this.currentWorkflowName || 'workflow').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-        if (target) return `${safe}_${target}`;
         const mode = this._codegenOptions().mode === 'a2a' ? 'a2a' : 'modular';
+        // ADK / MAF / NOOA: <safe>_<target> (agents in separate files) or <safe>_<target>_a2a.
+        if (target) return mode === 'a2a' ? `${safe}_${target}_a2a` : `${safe}_${target}`;
         // generateSwarm() returns modularLayout()'s root with '_swarm' appended,
         // so a swarm's folder is <safe>_modular_swarm. Without this suffix the
         // "Stop the run server" menu item posted <safe>_modular, the runner found
@@ -5753,7 +5826,7 @@ class WorkflowEditor {
         // why _writeManifest below needs no knowledge of any of this.
         const url = target === 'langgraph'
             ? `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?${mode === 'modular' ? 'modular=1' : 'a2a=1'}`
-            : `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target}?package=1`;
+            : `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target}?${mode === 'a2a' ? 'a2a=1' : 'modular=1'}`;
         const resp = await fetch(url, { headers: this.getAuthHeaders() });
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const j = await resp.json();
@@ -5817,7 +5890,7 @@ class WorkflowEditor {
      * showSaveFilePicker (or whose picker fails for another reason than a
      * cancel) gets a plain download instead.
      */
-    async _exportLangGraphZip() {
+    async _exportLangGraphZip(target = null) {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -5828,7 +5901,7 @@ class WorkflowEditor {
         // computed here because the picker must open before the response exists.
         const slug = String(this.currentWorkflowName || '').replace(/[^A-Za-z0-9]+/g, '_')
             .replace(/^_+|_+$/g, '').toLowerCase() || `workflow_${this.currentWorkflowId}`;
-        let suggestedName = `${slug}_${mode}.zip`;
+        let suggestedName = target ? `${slug}_${target}_${mode}.zip` : `${slug}_${mode}.zip`;
         let handle = null;
         if (typeof window.showSaveFilePicker === 'function') {
             try {
@@ -5844,7 +5917,7 @@ class WorkflowEditor {
         let blob;
         try {
             const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?format=zip${flag}`,
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target || 'python'}?format=zip${flag}`,
                 { headers: this.getAuthHeaders() }
             );
             if (!resp.ok) {
@@ -5894,12 +5967,12 @@ class WorkflowEditor {
      * codegen mode, rendered with the app's Markdown renderer and its Mermaid
      * hook (class diagram + workflow diagram), in the code modal's frame.
      */
-    async _showLangGraphArchitectureModal() {
+    async _showLangGraphArchitectureModal(target = null) {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
         }
-        if (this._isSwarm()) {
+        if (!target && this._isSwarm()) {
             // Not a failure: the compiler writes no ARCHITECTURE.md for a swarm.
             const msg = this.t('workflow.output.langgraphArchitectureSwarm');
             if (typeof window.showToast === 'function') window.showToast(msg, 'info');
@@ -5911,7 +5984,7 @@ class WorkflowEditor {
         try {
             if (mode === 'single') {
                 const resp = await fetch(
-                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python`,
+                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target || 'python'}`,
                     { headers: this.getAuthHeaders() }
                 );
                 if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
@@ -5919,7 +5992,7 @@ class WorkflowEditor {
                 if (j?.success === false) throw new Error(j.error || 'Generation failed');
                 data = j?.data ?? j;
             } else {
-                data = await this._fetchManifest(mode);
+                data = await this._fetchManifest(mode, target || 'langgraph');
             }
             // No key at all: a backend without the feature.
             if (!data || !('architecture' in data)) throw new Error(this.t('workflow.output.langgraphArchitectureUnsupported'));
@@ -6114,16 +6187,22 @@ class WorkflowEditor {
     }
 
     /** Start a listening compiled workflow's server, POST /listen, and open its live overlay. */
-    async _runListening(root) {
+    async _runListening(root, label = this.t('workflow.toolbar.compileLangGraph')) {
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
             if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
         } catch (_) {
             this._hideCompiledScrim();
-            this._showCompiledRunnerNotRunningModal(root, this.t('workflow.toolbar.compileLangGraph'));
+            this._showCompiledRunnerNotRunningModal(root, label);
             return;
         }
         try {
+            // One engine reads the events: an active workflow's event worker stops while the compiled program listens,
+            // and so does this workflow's program compiled for another target.
+            if (this.activeWorkflow && Number(this.activeWorkflow.workflow_id) === Number(this.currentWorkflowId)) {
+                await this._deactivate();
+            }
+            await this._stopCompiledEngine(root);
             // Start (or reuse) the server and confirm it is THIS workflow's current compile (run/1); no _runTarget.
             const { base: verified } = await this._acquireRunTarget(root);
             const base = `${verified}/`;
@@ -6177,6 +6256,74 @@ class WorkflowEditor {
         } else {
             filename = await this._generateAndWriteScript('generate-python', 'workflow.py');
         }
+        return this._runSingleFile(filename);
+    }
+
+    /** ADK / MAF / NOOA: the menu label and the single-file Generate / Display Code of each target. */
+    _targetUi(target) {
+        return {
+            adk: { label: 'workflow.toolbar.compileAdk', generate: () => this.generateAdkScript(), code: () => this._showAdkCodeModal() },
+            maf: { label: 'workflow.toolbar.compileMaf', generate: () => this.generateMafScript(), code: () => this._showMafCodeModal() },
+            nooa: { label: 'workflow.toolbar.compileNooa', generate: () => this.generateNooaScript(), code: () => this._showNooaCodeModal() },
+        }[target];
+    }
+
+    /**
+     * Run (ADK / MAF / NOOA) in the workflow's code structure: a single file runs once through the runner;
+     * agents in separate files run as a package (listening when the Start listens); A2A runs as a package.
+     */
+    async _runCompiledTarget(target) {
+        const ui = this._targetUi(target);
+        // Up SYNCHRONOUSLY, in the same tick as the click -- see _runLangGraphScript.
+        this._showCompiledScrim(this.t(ui.label), 'preparing');
+        await this._ensureLocalFsPermission();  // Chrome drops the folder grant between sessions; re-ask while the click still counts
+        await this._persistIfDirty();  // flush deferred node edits to the DB before running
+        if (!this.currentWorkflowId) {
+            this._hideCompiledScrim();
+            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
+            return;
+        }
+        const mode = this._codegenOptions().mode;
+        if (mode === 'single') {
+            return this._runSingleFile(await this._generateAndWriteScript(`generate-${target}`, `workflow_${target}.py`));
+        }
+        let data;
+        try { data = await this._writeManifest(mode, target); }
+        catch (e) { this._hideCompiledScrim(); alert(`Could not generate the workflow package: ${e?.message || e}`); return; }
+        if (mode === 'modular' && this._startView().button !== 'run') {
+            // Cron / option Start: the program listens by itself; follow it in the live overlay.
+            return this._runListening(data.root, this.t(ui.label));
+        }
+        return this._runCompiled(data.root, null, this.t(ui.label));
+    }
+
+    /** Generate (ADK / MAF / NOOA): the code structure form, then the single file or the package written to python/scripts/. */
+    async _generateTarget(target) {
+        const opts = await this._showCodegenOptionsModal();
+        if (!opts) return;
+        if (opts.mode === 'single') return this._targetUi(target).generate();
+        try {
+            await this._persistIfDirty();
+            const data = await this._writeManifest(opts.mode, target);
+            this._showLangGraphCodeModal('', data.files, '');
+        } catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); }
+    }
+
+    /** Display Code (ADK / MAF / NOOA) in the workflow's code structure. */
+    async _displayTargetCode(target) {
+        const mode = this._codegenOptions().mode;
+        if (mode === 'single') return this._targetUi(target).code();
+        try {
+            const data = await this._fetchManifest(mode, target);
+            this._showLangGraphCodeModal('', data.files, '');
+        } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
+    }
+
+    /**
+     * Run a generated single-file script once through the runner (POST /api/run-file), streaming its
+     * output into the run modal: the single-file code structure of every target (LangGraph, ADK, MAF, NOOA).
+     */
+    async _runSingleFile(filename) {
         if (!filename) { this._hideCompiledScrim(); return; }
         try {
             const ping = await fetch(`${this._langgraphRunnerBase}/health`, { method: 'GET' });
@@ -9441,7 +9588,7 @@ class WorkflowEditor {
         const html = `
             <div class="workflow-node code-node configurable ${cfg.disabled ? 'node-disabled' : ''}">
                 <div class="node-header">
-                    <span class="node-icon">🐍</span>
+                    <span class="node-icon">⚙️</span>
                     <span class="node-title">${this.escapeHtml(cfg.name || 'Code')}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
@@ -9482,7 +9629,7 @@ class WorkflowEditor {
 
     /**
      * The code node's window, tabbed like the agent form: Settings (name, exits, timeout),
-     * Code (the code, a test input and Test, which runs the node in Pyodide), MCP Servers (the
+     * Code (the code; to try it, run the workflow from Start with a prompt), MCP Servers (the
      * user's servers as checkboxes; call_tool may reach any tool on a checked one), and the last
      * run's Input, Output and Logs -- the agent tabs' own renderers over nodeExecutionData.
      */
@@ -9509,7 +9656,7 @@ class WorkflowEditor {
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
             <div class="storage-config-modal" style="width:min(900px,95vw);height:min(720px,92vh);display:flex;flex-direction:column;">
-                <div class="storage-config-header"><h3>🐍 ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
                     ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
@@ -9526,7 +9673,6 @@ class WorkflowEditor {
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
                             <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
-                        <div class="storage-config-folder full"><label>Test input (text or JSON; empty = the workflow prompt)</label><textarea data-f="sample" rows="3" style="width:100%;box-sizing:border-box;"></textarea></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
@@ -9538,7 +9684,6 @@ class WorkflowEditor {
                 <!-- Outside the scrolling body: a Save refused by validation must show why, whatever the tab. -->
                 <pre data-f="result" style="white-space:pre-wrap;font-size:12px;max-height:160px;overflow:auto;margin:0;padding:0 16px;"></pre>
                 <div class="storage-config-footer">
-                    <button class="storage-config-btn" data-act="test">Test</button>
                     <button class="storage-config-btn" data-act="tolib" style="display:none;">${this.escapeHtml(this.t('codeLibrary.saveToLibrary'))}</button>
                     <button class="storage-config-btn cancel" data-act="close">Cancel</button>
                     <button class="storage-config-btn save" data-act="save">Save</button>
@@ -9684,27 +9829,10 @@ class WorkflowEditor {
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
-            if (!['test', 'save', 'tolib'].includes(act)) return;
-            if (act !== 'test' && libraryUnavailable) { show(this.t('codeLibrary.loadFailed'), true); return; }
+            if (!['save', 'tolib'].includes(act)) return;
+            if (libraryUnavailable) { show(this.t('codeLibrary.loadFailed'), true); return; }
             const cfg = read();
             const errs = CN.validateConfig(cfg);
-            if (act === 'test') {
-                if (errs.length) { show(errs.join('\n'), true); return; }
-                show('Running…');
-                const sample = f('sample').value;
-                const prompt = this.lastUserPrompt || '';
-                const parents = sample ? [{ name: 'test input', text: sample, start: false }] : [];
-                try {
-                    const r = await this._codeNodeExecute({ code: cfg.code, exits: cfg.exits, servers: cfg.mcp_servers.map(CN.slug),
-                        timeout_s: cfg.timeout_s, parents, user_prompt: prompt });
-                    show(r.ok
-                        ? `exit: ${r.route}\noutput: ${r.output_text}`
-                          + (r.tool_calls.length ? `\n\ntool calls:\n${r.tool_calls.map((c) => `  ${c.server}.${c.tool} ${c.ok ? 'ok' : 'FAILED'} (${c.ms} ms)`).join('\n')}` : '')
-                          + (r.stdout ? `\n\nprinted:\n${r.stdout}` : '')
-                        : `error: ${r.error}` + (r.stdout ? `\n\nprinted:\n${r.stdout}` : ''));
-                } catch (e) { show('error: ' + (e.message || e)); }
-                return;
-            }
             if (act === 'tolib') {
                 if (errs.length) { show(errs.join('\n'), true); return; }
                 const name = cfg.name;
@@ -9995,20 +10123,21 @@ class WorkflowEditor {
         const on = window.StartOptions.active(this.currentSchedule);
         const options = (CC?.cache.all() || []).filter((c) => c.start_trigger);
         const html = `
-            <div class="start-opt-row"><input type="checkbox" data-start="prompt" ${on === 'prompt' ? 'checked' : ''}>
+            <div class="start-opt-row"><input type="radio" name="start-option" data-start="prompt" ${on === 'prompt' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="prompt">${esc(t('enterPrompt'))}</span></div>
-            <div class="start-opt-row"><input type="checkbox" data-start="schedule" ${on === 'schedule' ? 'checked' : ''}>
+            <div class="start-opt-row"><input type="radio" name="start-option" data-start="schedule" ${on === 'schedule' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="schedule">${esc(t('setSchedule'))}</span></div>
             ${options.map((c) => `<label class="start-opt-row" title="${esc(c.name)}">
-                <input type="checkbox" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
+                <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
                 <span>${esc(c.start_trigger.label)}</span></label>`).join('')}`;
         boxes.forEach((box) => { box.innerHTML = html; box.title = options.length ? '' : t('none'); });
     }
 
-    /** A box ticked or unticked on the Start node: ticking switches to that row; unticking goes back to Enter Prompt. */
+    /** A radio chosen on the Start node (one way to start at a time): switch to that row. */
     _onStartTick(cb) {
+        if (!cb.checked) return;
         const key = ['prompt', 'schedule'].includes(cb.dataset.start) ? cb.dataset.start : Number(cb.dataset.start);
-        return this._switchStart(cb.checked ? key : 'prompt', { open: cb.checked && key === 'schedule' });
+        return this._switchStart(key, { open: key === 'schedule' });
     }
 
     /**
@@ -12649,6 +12778,7 @@ class WorkflowEditor {
             );
             return;
         }
+        if (this._unchangedSinceLoad()) return;
         this.saveWorkflow()
             .then(() => {
                 this.showToast(
@@ -12677,6 +12807,7 @@ class WorkflowEditor {
         if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
         if (!this._workflowDirty) return;
         if (!this.currentWorkflowId) { this._workflowDirty = false; return; }
+        if (this._unchangedSinceLoad()) { this._workflowDirty = false; return; }
         try {
             await this.saveWorkflow();
             this._workflowDirty = false;
@@ -12684,6 +12815,22 @@ class WorkflowEditor {
             console.error('[WorkflowEditor] _persistIfDirty failed:', err);
             // keep dirty so a later action retries
         }
+    }
+
+    /** What a save writes, as text: equal to the last load's means a save would change nothing. */
+    _saveState() {
+        const { nodes, edges } = this.exportWorkflow();   // not raw: Drawflow reorders its links on a redraw
+        return JSON.stringify([nodes, edges, this.currentWorkflowDescription, this.runtimeMode, this.audioLlmProvider,
+            this.scheduleEnabled, this.outputStorageEnabled, this.orchestration, this.outputFolder]);
+    }
+
+    /**
+     * True when the canvas still holds what was loaded (a Save reloads, so: or last saved). The
+     * automatic saves skip then: a form closed without a change must not write this tab's copy
+     * over a newer one saved from another tab. Save Workflow itself always writes.
+     */
+    _unchangedSinceLoad() {
+        return !!this._loadedState && this._saveState() === this._loadedState;
     }
 
     /**
@@ -13070,6 +13217,7 @@ class WorkflowEditor {
 
             // Restore local folder handle for this workflow
             await this.restoreLocalFolderForWorkflow(workflowId);
+            this._loadedState = this._saveState();
 
             console.log('[WorkflowEditor] Workflow loaded:', this.currentWorkflowName);
 
@@ -14604,7 +14752,8 @@ class WorkflowEditor {
             (u) => nodes[u]?.data?.agent_type === 'dispatcher');
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
         const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'],
-            servers: (d.mcp_servers || []).map(window.CodeNode.slug), timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt });
+            servers: (d.mcp_servers || []).map(window.CodeNode.slug), timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt,
+            name: d.name || 'Code' });
         // The agent nodes' record shape: the modal's Input, Output and Logs tabs read it.
         this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents, user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
         this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');
@@ -14637,7 +14786,7 @@ class WorkflowEditor {
         // timer starts when the job starts, not while it waits in the queue.
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261005-no-exit-2');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261016-node-name');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
@@ -20277,13 +20426,18 @@ Based on the analysis...
      * to one node, otherwise every node on the canvas is repainted.
      */
     async _refreshDecisionBadges(nodeId = null) {
-        const nodes = this.editor?.drawflow?.drawflow?.Home?.data || {};
-        const ids = nodeId != null ? [String(nodeId)] : Object.keys(nodes);
-        if (!Object.values(nodes).some((n) => n?.data?.agent_type === 'dispatcher')) {
+        const graph = () => this.editor?.drawflow?.drawflow?.Home?.data || {};
+        const hasDispatcher = (g) => Object.values(g).some((n) => n?.data?.agent_type === 'dispatcher');
+        if (!hasDispatcher(graph())) {
             this.container?.querySelectorAll('.wf-catchall-tag, .wf-catchall-warn').forEach((el) => el.remove());
             return;
         }
         const list = await this._decisionList();
+        // Read the graph after the wait: a Save reloads the canvas meanwhile, and the table read
+        // before it holds the old node ids, which would wipe the new canvas's catch-all tag.
+        const nodes = graph();
+        if (!hasDispatcher(nodes)) return;
+        const ids = nodeId != null ? [String(nodeId)] : Object.keys(nodes);
         for (const id of ids) {
             const data = nodes[id]?.data;
             const body = document.querySelector(`#node-${id} .node-body`);

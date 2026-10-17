@@ -38,17 +38,17 @@ Au lieu d'une heure, une planification peut attendre un **événement** : régle
 
 ### Options de démarrage
 
-Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt**, **Planifier**, et chaque **option d'événement** que vous avez ajoutée. Une seule est cochée à la fois ; en cocher une autre bascule dessus.
+Le nœud Démarrer liste comment le workflow démarre : **Saisir le prompt**, **Planifier**, et chaque **option d'événement** que vous avez ajoutée. Ce sont des boutons radio : une seule est choisie à la fois ; en choisir une autre bascule dessus.
 
-- **Saisir le prompt / Planifier :** cliquez sur le texte pour basculer dessus et ouvrir la zone du prompt ou les champs de planification (exécuter à, répéter, cron). Planifier reste cochée une fois la planification enregistrée. La décocher revient à Saisir le prompt et supprime la planification.
+- **Saisir le prompt / Planifier :** cliquez sur le texte pour basculer dessus et ouvrir la zone du prompt ou les champs de planification (exécuter à, répéter, cron). Planifier reste choisie une fois la planification enregistrée. Choisir à la place Saisir le prompt (ou une option d'événement) supprime la planification.
 - **Ajouter une option :** faites glisser un composant de la Bibliothèque de composants de code sur n'importe quel nœud Démarrer. Choisissez l'outil d'attente (pour Outlook, `wait_for_new`), ses arguments et la sortie qui transporte le travail. Le nœud Démarrer de chaque workflow la proposera ensuite.
-- **L'utiliser :** cochez l'option sur Démarrer. Démarrer devient le composant : il affiche un connecteur par sortie (pour Outlook, `new_mail`, `no_mail`, `error`), et vous reliez chacun à ce qui doit suivre. Le workflow s'exécute à l'arrivée de l'événement ; ce qui sort d'un connecteur (le courriel sur `new_mail`) est l'entrée du nœud suivant. Les liens existants de Démarrer passent sur la sortie qui transporte le travail.
-- **Revenir en arrière :** cochez Saisir le prompt ou Planifier. Démarrer revient à un seul connecteur : les liens de la sortie qui transporte le travail restent, les autres sont supprimés. Un avertissement les liste d'abord ; Annuler ne change rien.
+- **L'utiliser :** choisissez l'option sur Démarrer. Démarrer devient le composant : il affiche un connecteur par sortie (pour Outlook, `new_mail`, `no_mail`, `error`), et vous reliez chacun à ce qui doit suivre. Le workflow s'exécute à l'arrivée de l'événement ; ce qui sort d'un connecteur (le courriel sur `new_mail`) est l'entrée du nœud suivant. Les liens existants de Démarrer passent sur la sortie qui transporte le travail.
+- **Revenir en arrière :** choisissez Saisir le prompt ou Planifier. Démarrer revient à un seul connecteur : les liens de la sortie qui transporte le travail restent, les autres sont supprimés. Un avertissement les liste d'abord ; Annuler ne change rien.
 - **La modifier ou la retirer :** le composant se modifie uniquement dans la Bibliothèque de composants de code, et chaque Démarrer qui l'utilise suit. Si un enregistrement retire des sorties reliées dans des workflows, un avertissement liste d'abord ces workflows et liens. ⋮ sur le composant → Modifier l'option de démarrage ou Retirer l'option de démarrage ; la retirer rend à ces Démarrer leur forme ordinaire.
 
 #### Activer un workflow
 
-Cocher un mode d'entrée ne fait que le sélectionner. Pour qu'un workflow s'exécute seul, cliquez sur ▶ sur Start :
+Choisir un mode d'entrée ne fait que le sélectionner. Pour qu'un workflow s'exécute seul, cliquez sur ▶ sur Start :
 
 - **Enter Prompt :** ▶ ouvre la conversation, comme avant.
 - **Set Schedule** ou une **option de code** (par exemple « Outlook : Get New Email ») : ▶ active le workflow. Le
@@ -99,6 +99,7 @@ Ouvrez le dispatcher avec son crayon ✏️ :
 - N'appelez pas une branche *unclear* : ce mot est réservé à la réponse « je ne sais pas » du modèle de décision.
 - Connectez chaque branche à **Output**, sinon sa réponse n'atteint jamais la conversation.
 - Une branche peut être un agent ou un nœud **Code**. Un agent reçoit la demande avec les notes du dispatcher ; un nœud Code reçoit exactement ce que le dispatcher a reçu (par exemple l'e-mail d'un sondage), pour que son code puisse utiliser les champs de l'e-mail comme `id`.
+- Le code d'un nœud Code peut lire `NODE_NAME`, son nom sur le canevas. Un seul composant de la Code Library peut alors servir toutes les branches : par exemple il range l'e-mail dans `"Inbox/" + NODE_NAME`, et la branche *claims* le range dans Inbox/Claims (les noms de dossier ignorent la casse).
 
 ### Sur le canevas
 

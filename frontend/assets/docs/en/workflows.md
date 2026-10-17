@@ -38,17 +38,17 @@ Instead of a time, a schedule can wait for an **event**: set *Repeat* to **On ev
 
 ### Start options
 
-The Start node lists how the workflow starts: **Enter Prompt**, **Set Schedule**, and every **event option** you added. One is ticked at a time; ticking another switches to it.
+The Start node lists how the workflow starts: **Enter Prompt**, **Set Schedule**, and every **event option** you added. They are radio buttons: one is chosen at a time; choosing another switches to it.
 
-- **Enter Prompt / Set Schedule:** click the text to switch to it and open the prompt box or the schedule fields (run at, repeat, cron). Set Schedule stays ticked once the schedule is saved. Unticking it goes back to Enter Prompt and deletes the schedule.
+- **Enter Prompt / Set Schedule:** click the text to switch to it and open the prompt box or the schedule fields (run at, repeat, cron). Set Schedule stays chosen once the schedule is saved. Choosing Enter Prompt (or an event option) instead deletes the schedule.
 - **Add an option:** drag a component from the Code Library onto any Start node. Choose the wait tool (for Outlook, `wait_for_new`), its arguments and the exit that carries work. Every workflow's Start then lists it.
-- **Use it:** tick the option on Start. Start becomes the component: it shows one connector per exit (for Outlook, `new_mail`, `no_mail`, `error`), and you link each one to what should happen next. The workflow runs when the event arrives; what leaves a connector (the email on `new_mail`) is the next node's input. Start's existing links move to the exit that carries work.
-- **Switch back:** tick Enter Prompt or Set Schedule. Start goes back to one connector: the links on the exit that carries work stay, the others are removed. A warning lists them first; Cancel changes nothing.
+- **Use it:** choose the option on Start. Start becomes the component: it shows one connector per exit (for Outlook, `new_mail`, `no_mail`, `error`), and you link each one to what should happen next. The workflow runs when the event arrives; what leaves a connector (the email on `new_mail`) is the next node's input. Start's existing links move to the exit that carries work.
+- **Switch back:** choose Enter Prompt or Set Schedule. Start goes back to one connector: the links on the exit that carries work stay, the others are removed. A warning lists them first; Cancel changes nothing.
 - **Edit or remove it:** the component is edited only in the Code Library, and every Start using it follows. If a save removes exits that workflows link from, a warning lists those workflows and links first. ⋮ on the component → Edit Start option or Remove Start option; removing it turns those Starts back into a plain Start.
 
 #### Activating a workflow
 
-Ticking an input mode only selects it. To make a workflow run on its own, click ▶ on Start:
+Choosing an input mode only selects it. To make a workflow run on its own, click ▶ on Start:
 
 - **Enter Prompt:** ▶ opens the conversation, as before.
 - **Set Schedule** or a **code option** (for example "Outlook: Get New Email"): ▶ activates the workflow. The event
@@ -99,6 +99,7 @@ Open the dispatcher with its ✏️ pencil:
 - Do not name a branch *unclear*: that word is reserved for the decision model's "I can't tell" answer.
 - Connect every branch to **Output**, otherwise its answer never reaches the conversation.
 - A branch can be an agent or a **Code** node. An agent receives the request with the dispatcher's notes; a Code node receives exactly what the dispatcher received (for example the email from a poll), so its code can use the email's fields such as `id`.
+- A Code node's code can read `NODE_NAME`, its name on the canvas. One Code Library component can then serve every branch: for example it files the email into `"Inbox/" + NODE_NAME`, so the *claims* branch files into Inbox/Claims (folder names are matched without regard to case).
 
 ### On the canvas
 
