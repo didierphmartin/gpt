@@ -165,10 +165,10 @@ class GeneratedDocParityTest extends TestCase
         $maf = $all['MAF'];
         $this->assertStringContainsString('DispatcherNodeExecutor(', $maf);
         $this->assertStringContainsString('route_to', $maf);
-        // NOOA: one explicit branch per menu entry, and no gather over them.
+        // NOOA: the dispatcher's choice is the only child its routes let run (GRAPH driver).
         $nooa = $all['NOOA'];
         $this->assertStringContainsString('run_dispatcher(', $nooa);
-        $this->assertStringContainsString('routes to EXACTLY ONE of', $nooa);
+        $this->assertStringContainsString('routes[nid] = {chosen} if chosen else set()', $nooa);
     }
 
     /**

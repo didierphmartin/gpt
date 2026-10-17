@@ -94,8 +94,8 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('WORKFLOW_ID = 7', $code);
         $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = False', $code);
         $this->assertStringContainsString('asyncio.run(run_workflow(', $code);
-        // Linear graph: no parallel layer, no gather.
-        $this->assertStringNotContainsString('asyncio.gather(', $code);
+        // Linear graph: one node per layer (GRAPH is the canvas as data; the driver runs each layer).
+        $this->assertMatchesRegularExpression('/"layers": \[\s*\[\s*"2"\s*\]\s*\]/', $code);
         // No MCP, no skills in this fixture.
         $this->assertStringNotContainsString('MCPManager', $code);
         $this->assertStringNotContainsString('_run_skill_script', $code);
@@ -130,8 +130,10 @@ final class NooaGeneratorEmitTest extends TestCase
         ]];
         $a['agents']['2']['tools'] = ['find'];
         $code = NOOAGenerator::emitNooa($a);
-        // MCPManager does no URL normalization — the /mcp suffix is baked here.
-        $this->assertStringContainsString('url="https://vector.example.com/mcp"', $code);
+        // MCPManager does no URL normalization: the /mcp suffix is added at run time, after MCP_URL_<SLUG>
+        // (a moved server) is applied, and the server's headers come from MCP_HEADERS_<SLUG>.
+        $this->assertStringContainsString('url=_normalize_mcp_url(_mcp_live_url("https://vector.example.com")),', $code);
+        $this->assertStringContainsString('headers=_mcp_headers("https://vector.example.com"),', $code);
         // The dict key stays the raw catalog URL (agent attrs look it up verbatim).
         $this->assertStringContainsString('MCP["https://vector.example.com"]', $code);
     }
@@ -166,9 +168,10 @@ final class NooaGeneratorEmitTest extends TestCase
     public function testDiamondParallelLayer(): void
     {
         $code = NOOAGenerator::emitNooa($this->diamond());
-        $this->assertStringContainsString('asyncio.gather(', $code);
-        $this->assertStringContainsString('run_agent("2"', $code);
-        $this->assertStringContainsString('run_agent("3"', $code);
+        // B and C share a layer: the driver gathers the reached nodes of a layer.
+        $this->assertMatchesRegularExpression('/"layers": \[\s*\[\s*"2",\s*"3"\s*\]/', $code);
+        $this->assertStringContainsString('await asyncio.gather(*(run_node(nid) for nid in ready))', $code);
+        $this->assertStringContainsString('text = await run_agent(nid, parent_texts, prompt)', $code);
         $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $code);
         $this->assertStringContainsString('WORKFLOW_ID = 9', $code);
     }

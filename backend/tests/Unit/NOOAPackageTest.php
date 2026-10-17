@@ -34,7 +34,8 @@ final class NOOAPackageTest extends TestCase
     {
         $paths = array_keys($this->files());
         sort($paths);
-        $this->assertSame(['__init__.py', 'api.py', 'common.py', 'workflow.py'], $paths);
+        // the run server and script, plus the folder's own files (CompiledPackage)
+        $this->assertSame(['.env.example', 'README.md', '__init__.py', 'api.py', 'common.py', 'requirements.txt', 'workflow.py'], $paths);
     }
 
     /**

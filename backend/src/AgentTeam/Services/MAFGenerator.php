@@ -198,33 +198,20 @@ class MAFGenerator
                 'harness the workflow editor runs (CODE_HARNESS, a copy): no model.',
                 'CODE_NODES: each node\'s exits, MCP servers, timeout and code.');
             $parts[] = CompiledRuntimeEmit::codeHarnessBlock(!empty($analyzed['package']));
-            $parts[] = self::codeNodesLiteral($analyzed);
+            $parts[] = CompiledRuntimeEmit::codeNodesLiteral($analyzed);
         }
         if (WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'] !== []) {
             $parts[] = self::banner('DECISION-MODEL ROUTING',
                 'A dispatcher whose routing names a decision model (Jev...) asks it',
                 'and runs the child it names: no LLM turn. The adapters are the',
                 'LangGraph target\'s, copied. DECISIONS: each dispatcher\'s settings.');
-            $parts[] = self::decisionBlock($analyzed);
+            $parts[] = CompiledRuntimeEmit::decisionBlock($analyzed);
         }
         $parts[] = self::banner('RUN EVENTS',
             'Each node\'s start and completion (a code node\'s exit, a',
             'dispatcher\'s route) go to GRAPH_RECORDER when the package\'s',
             'listener set one: runs/ and GET /live, the editor\'s live canvas.');
-        $parts[] = CompiledRuntimeEmit::recordingBlock($analyzed) . "\n\n\n" . <<<'PY'
-def _rec_start(nid: str) -> None:
-    """node_start for a node NODE_META knows (an agent, code, playbook or output node)."""
-    meta = NODE_META.get("node_" + str(nid))
-    if meta:
-        _rec_node_start(meta[0], meta[2], meta[1])
-
-
-def _rec_done(nid: str, output: str, **extra) -> None:
-    """node_complete for a node NODE_META knows."""
-    meta = NODE_META.get("node_" + str(nid))
-    if meta:
-        _rec_node_complete(meta[0], meta[2], meta[1], output=output, **extra)
-PY;
+        $parts[] = CompiledRuntimeEmit::recordingBlock($analyzed) . "\n\n\n" . CompiledRuntimeEmit::idRecordingHelpers();
         $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
             'AGENTS: per-node settings verbatim from the editor forms.',
             'ProgressReporter: console liveness (banner, node lines, heartbeat,',
@@ -254,61 +241,6 @@ PY;
         $parts[] = self::runWorkflowBlock();
         $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock() : self::entryBlock();
         return implode("\n\n", $parts) . "\n";
-    }
-
-    /** DecisionResult, the decision adapters (copied), DECISIONS and the routing-mode rule. */
-    private static function decisionBlock(array $analyzed): string
-    {
-        $protocols = [];
-        $decisions = [];
-        foreach ((array) ($analyzed['decisions'] ?? []) as $did => $d) {
-            foreach ($d['decision'] as $c) {
-                $protocols[$c['protocol']] = true;
-            }
-            $decisions[(string) $did] = $d;
-        }
-        $known = array_values(array_intersect(array_keys($protocols), array_keys(LangGraphRuntime::ADAPTER_CLASSES)));
-        return "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
-            . LangGraphRuntime::decisionAdaptersBlock($known) . "\n\n"
-            . 'DECISIONS = ' . ($decisions === [] ? '{}' : PythonEmitHelpers::jsonToPython($decisions)) . "\n\n\n"
-            . <<<'PY'
-def _decision_router(dec: dict, provider: str):
-    """The decision adapter for one compiled provider, None when it was not compiled in or has no adapter."""
-    c = next((c for c in dec.get("decision", []) if c["provider"] == provider), None)
-    cls = DECISION_ADAPTERS.get(c["protocol"]) if c else None
-    return cls(key_env=c["key_env"], url_env=c["url_env"], url=c["url"], model=c["model"]) if cls else None
-
-
-def _decision_mode(dec: dict) -> str:
-    """"llm", or the decision provider this run routes with (GraphWorkflowRunner's rule): a key routes with that
-    provider only (no model fallback); unset takes the first compiled provider whose key is set."""
-    if dec.get("routing_mode"):
-        return dec["routing_mode"]
-    for c in dec.get("decision", []):
-        r = _decision_router(dec, c["provider"])
-        if r is not None and r.available():
-            return c["provider"]
-    return "llm"
-PY;
-    }
-
-    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, source | source_file}}. */
-    private static function codeNodesLiteral(array $analyzed): string
-    {
-        $out = [];
-        foreach ((array) $analyzed['code'] as $id => $cd) {
-            $id = (string) $id;
-            $entry = ['display' => $cd['display'], 'exits' => $cd['exits'], 'mcp_servers' => $cd['mcp_servers'],
-                'timeout_s' => $cd['timeout_s'],
-                'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets'])];
-            if (!empty($analyzed['package'])) {
-                $entry['source_file'] = CompiledPackage::codePath($analyzed, $id);   // code/<file>, read at each run
-            } else {
-                $entry['source'] = $cd['source'];
-            }
-            $out[$id] = $entry;
-        }
-        return 'CODE_NODES = ' . PythonEmitHelpers::jsonToPython($out);
     }
 
     /** Expose skillRunnerBlock for test/inspection (test seam). */
@@ -1732,6 +1664,11 @@ PY;
                 ProgressReporter.end(len(merged))
                 await ctx.yield_output(merged)   # nothing reached the Output (no work to do): the answer is empty
         PY;
+        if (empty($analyzed['code'])) {
+            // No code node: no CodeNodeExecutor (it reads CODE_NODES and CODE_HARNESS, emitted with code nodes only).
+            $from = strpos($runner, 'class CodeNodeExecutor(Executor):');
+            $runner = substr($runner, 0, $from) . substr($runner, strpos($runner, 'class OutputNodeExecutor(Executor):'));
+        }
         // The AGENTS dict feeds AgentNodeExecutor: document it inline at emission.
         $agentsDoc = "# Frozen per-node metadata from the visual editor (one entry per agent\n"
             . "# node): display name, provider/model, system instructions, MCP tool\n"
