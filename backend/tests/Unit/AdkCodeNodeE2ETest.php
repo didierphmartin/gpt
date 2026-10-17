@@ -10,6 +10,19 @@ use AgentTeam\Services\WorkflowGraphAnalyzer;
 /** Opt-in (ADK_E2E=1): a compiled ADK script with code nodes RUNS (runner venv) against a fake MCP server. */
 class AdkCodeNodeE2ETest extends TestCase
 {
+    /** The target under test: MafE2ETest overrides these three, the scenarios are the same. */
+    protected const ENV_FLAG = 'ADK_E2E';
+
+    protected function emit(array $analyzed): string
+    {
+        return ADKGenerator::emitAdk($analyzed);
+    }
+
+    protected function packageFiles(array $analyzed): array
+    {
+        return \AgentTeam\Services\ADKPackage::files($analyzed, sys_get_temp_dir());
+    }
+
     private const PY = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
 
     private $server = null;
@@ -18,8 +31,8 @@ class AdkCodeNodeE2ETest extends TestCase
 
     protected function setUp(): void
     {
-        if (getenv('ADK_E2E') !== '1') {
-            self::markTestSkipped('Set ADK_E2E=1 to run.');
+        if (getenv(static::ENV_FLAG) !== '1') {
+            self::markTestSkipped('Set ' . static::ENV_FLAG . '=1 to run.');
         }
         if (!is_file(self::PY)) {
             self::markTestSkipped('venv python missing');
@@ -95,7 +108,7 @@ class AdkCodeNodeE2ETest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/adk_e2e_' . bin2hex(random_bytes(4));
         mkdir($dir);
-        file_put_contents("$dir/workflow.py", ADKGenerator::emitAdk($analyzed));
+        file_put_contents("$dir/workflow.py", $this->emit($analyzed));
         file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\n");
         $proc = proc_open([self::PY, 'workflow.py', 'go'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
             ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')]);
@@ -138,8 +151,7 @@ class AdkCodeNodeE2ETest extends TestCase
         self::assertSame(0, $rc, $text);
         self::assertStringContainsString('skipped (its branch was not taken)', $text);
         // nothing to do: the answer is the Output's, empty -- not the trigger's text (review I1)
-        self::assertStringContainsString('[workflow] done in', $text);
-        self::assertMatchesRegularExpression('/\[workflow\] done in [0-9.]+s, 0 chars/', $text);
+        self::assertMatchesRegularExpression('/\[workflow\] done in [0-9.]+s, 0 chars|Final output: 0 chars/', $text);
         self::assertSame([], array_filter($this->calls(), fn($c) => ($c['tool'] ?? '') === 'move_mail'));
     }
 
@@ -163,10 +175,10 @@ class AdkCodeNodeE2ETest extends TestCase
         $a['startMode'] = 'watch';
         $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
         $a['package'] = true;
-        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => ADKGenerator::emitAdk($a)], 'adk e2e', 'adk', 'ADK run server',
+        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => $this->emit($a)], 'adk e2e', 'e2e', 'run server',
             \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), true);
         $dir = sys_get_temp_dir() . '/adk_listen_' . bin2hex(random_bytes(4));
-        foreach (array_merge($pkg['files'], \AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir())) as $f) {
+        foreach (array_merge($pkg['files'], $this->packageFiles($a)) as $f) {
             @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
             file_put_contents("$dir/{$f['path']}", $f['code']);
         }
@@ -329,7 +341,7 @@ class AdkCodeNodeE2ETest extends TestCase
     {
         $dir = sys_get_temp_dir() . '/adk_jev_' . bin2hex(random_bytes(4));
         mkdir($dir);
-        file_put_contents("$dir/workflow.py", ADKGenerator::emitAdk($analyzed));
+        file_put_contents("$dir/workflow.py", $this->emit($analyzed));
         file_put_contents("$dir/.env", "MCP_HEADERS_OUTLOOK={\"X-Outlook-Account\":\"acc-1\"}\nJEV_API_KEY=jev-test-key\n");
         $proc = proc_open([self::PY, 'workflow.py', 'go'], [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, $dir,
             ['PATH' => getenv('PATH'), 'HOME' => getenv('HOME')]);

@@ -13,6 +13,9 @@ use PDO;
  */
 class MAFGenerator
 {
+    /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
+    public const FRAMEWORK = ['agent-framework'];
+
     public function __construct(
         private PDO $db,
         private WorkflowRepository $workflowRepo,
@@ -173,6 +176,14 @@ class MAFGenerator
             $parts[] = PlaybookEmit::runtimeBlock();
             $parts[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
         }
+        if (!empty($analyzed['code'])) {
+            $parts[] = self::banner('CODE NODES',
+                'A code node runs its own Python run(input, call_tool) through the',
+                'harness the workflow editor runs (CODE_HARNESS, a copy): no model.',
+                'CODE_NODES: each node\'s exits, MCP servers, timeout and code.');
+            $parts[] = CompiledRuntimeEmit::codeHarnessBlock(!empty($analyzed['package']));
+            $parts[] = self::codeNodesLiteral($analyzed);
+        }
         $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
             'AGENTS: per-node settings verbatim from the editor forms.',
             'ProgressReporter: console liveness (banner, node lines, heartbeat,',
@@ -202,6 +213,25 @@ class MAFGenerator
         $parts[] = self::runWorkflowBlock();
         $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
+    }
+
+    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, source | source_file}}. */
+    private static function codeNodesLiteral(array $analyzed): string
+    {
+        $out = [];
+        foreach ((array) $analyzed['code'] as $id => $cd) {
+            $id = (string) $id;
+            $entry = ['display' => $cd['display'], 'exits' => $cd['exits'], 'mcp_servers' => $cd['mcp_servers'],
+                'timeout_s' => $cd['timeout_s'],
+                'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets'])];
+            if (!empty($analyzed['package'])) {
+                $entry['source_file'] = CompiledPackage::codePath($analyzed, $id);   // code/<file>, read at each run
+            } else {
+                $entry['source'] = $cd['source'];
+            }
+            $out[$id] = $entry;
+        }
+        return 'CODE_NODES = ' . PythonEmitHelpers::jsonToPython($out);
     }
 
     /** Expose skillRunnerBlock for test/inspection (test seam). */
@@ -1220,12 +1250,25 @@ PY;
             # nodes below them from waiting forever on a branch that never ran.
             route_to: str = ""  # node id the dispatcher chose ("" = not a routed edge)
             skipped: bool = False   # this branch was not chosen; text is empty
+            # CODE NODE exits: a code node with several exits names the children of the exit it took
+            # (None = not a routing node; () = an exit that leads nowhere, so nothing downstream runs).
+            routes: tuple | None = None
+            task: str = ""      # a dispatcher's own input (the email): what a code branch below it receives
 
 
         # Run-scoped state shared by all executors. The Start executor records the
         # original user prompt here so every agent node can include it in its input
         # framing (the graph edges only carry parent outputs, not the prompt).
         RUN_STATE = {"user_prompt": ""}
+
+
+        def _skip_node(msgs: list, node_id: str) -> bool:
+            """Not on a taken branch: every parent skipped, or every parent that routes (a dispatcher's
+            choice, a code node's exit) routed elsewhere. A skipped node still reports downstream."""
+            if msgs and all(m.skipped for m in msgs):
+                return True
+            routing = [m for m in msgs if m.route_to or m.routes is not None]
+            return bool(routing) and all(m.route_to != node_id and node_id not in (m.routes or ()) for m in routing)
 
 
         class StartExecutor(Executor):
@@ -1282,9 +1325,7 @@ PY;
                 # Not on the chosen branch: do not run the model, but DO report,
                 # so every fan-in barrier downstream still completes.
                 _msgs = list(self._inbox.values())
-                _routed = [m for m in _msgs if m.route_to]
-                _skip = (all(m.skipped for m in _msgs) and _msgs) or \
-                        (_routed and all(m.route_to != self.node_id for m in _routed))
+                _skip = _skip_node(_msgs, self.node_id)
                 if _skip:
                     ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
@@ -1374,9 +1415,7 @@ PY;
                     ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
                     return
                 _msgs = list(self._inbox.values())
-                _routed = [m for m in _msgs if m.route_to]
-                if (all(m.skipped for m in _msgs) and _msgs) or \
-                   (_routed and all(m.route_to != self.node_id for m in _routed)):
+                if _skip_node(_msgs, self.node_id):
                     ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
@@ -1418,6 +1457,10 @@ PY;
                 self._inbox[msg.source_id] = msg
                 if len(self._inbox) < max(1, len(self.parents)):
                     ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
+                    return
+                if _skip_node(list(self._inbox.values()), self.node_id):
+                    ProgressReporter.note(f"{name}: skipped (its branch was not taken)")
+                    await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
                 names = [n for _, n in self.menu]
                 client = ProviderClients.make(ad["provider"], ad["model"])
@@ -1469,7 +1512,57 @@ PY;
                 ProgressReporter.node_done(name, len(reply))
                 ProgressReporter.note(f"{name}: routed to {chosen[1]!r}"
                                       + (f" — notes: {notes[:120]!r}" if notes else ""))
-                await ctx.send_message(NodeMessage(self.node_id, name, text, route_to=chosen[0]))
+                await ctx.send_message(NodeMessage(self.node_id, name, text, route_to=chosen[0], task=task))
+
+
+        class CodeNodeExecutor(Executor):
+            """A CODE node: the node's own Python run(input, call_tool) -- deterministic, no model.
+
+            INTENT: the contract (input, exits, declared MCP servers, error exit, timeout, NODE_NAME) is
+            CODE_HARNESS's, a copy of the file the workflow editor runs, so the compiled node behaves like
+            the debugged one. Same fan-in barrier and skip rule as AgentNodeExecutor. With several exits
+            the node is a choice: its message names the children of the exit it took (routes).
+            """
+
+            def __init__(self, node_id: str, parents: list, id: str):
+                super().__init__(id=id)
+                self.node_id = node_id
+                self.parents = [str(p) for p in parents]
+                self._inbox = {}
+
+            @handler
+            async def on_parent_output(self, msg: NodeMessage, ctx: WorkflowContext[NodeMessage]) -> None:
+                cfg = CODE_NODES[self.node_id]
+                name = str(cfg["display"])
+                self._inbox[msg.source_id] = msg
+                if len(self._inbox) < max(1, len(self.parents)):
+                    ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
+                    return
+                if _skip_node(list(self._inbox.values()), self.node_id):
+                    ProgressReporter.note(f"{name}: skipped (its branch was not taken)")
+                    await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
+                    return
+                # Its parents one by one (the harness decodes them); a dispatcher parent hands on its own input.
+                parents = [{"name": m.source_name, "text": m.task or m.text, "start": m.source_name == "Start"}
+                           for p in self.parents for m in [self._inbox.get(p)] if m is not None and not m.skipped]
+                value = CODE_HARNESS.decode_input(parents, RUN_STATE["user_prompt"])
+                source = cfg.get("source", "")
+                if cfg.get("source_file"):   # read at each run, so an edit of code/<file> takes effect on the next one
+                    with open(os.path.join(PACKAGE_DIR, cfg["source_file"]), encoding="utf-8") as fh:
+                        source = fh.read()
+                ProgressReporter.node_start(name, f"code -- exits={cfg['exits']}, mcp_servers={cfg['mcp_servers']}")
+                res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, cfg["exits"], cfg["mcp_servers"],
+                                              _code_transport, cfg["timeout_s"], node_name=name)
+                for call in res["tool_calls"]:
+                    ProgressReporter.note(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
+                if res["stdout"]:
+                    ProgressReporter.note(f"{name} stdout: {res['stdout'][:2000]}")
+                if not res["ok"]:
+                    raise RuntimeError(f"code node {name!r} failed: {res['error']}")
+                ProgressReporter.note(f"{name}: exit {res['route']!r}")
+                routes = tuple(cfg["exit_targets"].get(res["route"], [])) if len(cfg["exits"]) > 1 else None
+                ProgressReporter.node_done(name, len(res["output_text"]))
+                await ctx.send_message(NodeMessage(self.node_id, name, res["output_text"], routes=routes))
 
 
         class OutputNodeExecutor(Executor):
@@ -1498,7 +1591,7 @@ PY;
                          if p in self._inbox and self._inbox[p].text]
                 merged = parts[0] if len(parts) == 1 else "\n\n---\n\n".join(parts)
                 ProgressReporter.end(len(merged))
-                await ctx.yield_output(merged if merged else RUN_STATE["user_prompt"])
+                await ctx.yield_output(merged)   # nothing reached the Output (no work to do): the answer is empty
         PY;
         // The AGENTS dict feeds AgentNodeExecutor: document it inline at emission.
         $agentsDoc = "# Frozen per-node metadata from the visual editor (one entry per agent\n"
@@ -1554,6 +1647,9 @@ PY;
         foreach ((array) ($analyzed['playbooks'] ?? []) as $pid => $pd) {
             $pbLabels[(string) $pid] = ['name' => (string) ($pd['display'] ?? ('playbook ' . $pid))];
         }
+        foreach ((array) ($analyzed['code'] ?? []) as $cid => $cd) {
+            $pbLabels[(string) $cid] = ['name' => (string) $cd['display']];
+        }
         foreach ($analyzed['agents'] + $pbLabels as $id => $ag) {
             $label = (string) ($ag['name'] ?? ('node ' . $id));
             $displayName[(string) $id] = $label;
@@ -1595,7 +1691,11 @@ PY;
                     // other agent node stays an ordinary AgentNodeExecutor. The
                     // edges are unchanged either way -- the choice travels in the
                     // message, not in the topology (see DispatcherNodeExecutor).
-                    if (isset($analyzed['playbooks'][$key])) {
+                    if (isset($analyzed['code'][$key])) {
+                        $inst[] = '    ' . $vars[$key] . ' = CodeNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
+                            . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
+                            . '  # "' . str_replace('"', "'", $displayName[$key]) . '" -- CODE';
+                    } elseif (isset($analyzed['playbooks'][$key])) {
                         $inst[] = '    ' . $vars[$key] . ' = PlaybookNodeExecutor(node_id=' . PythonEmitHelpers::pyStr($key)
                             . ', parents=' . $pPy . ', id=' . PythonEmitHelpers::pyStr($vars[$key]) . ')'
                             . '  # "' . str_replace('"', "'", $displayName[$key]) . '" -- PLAYBOOK';
