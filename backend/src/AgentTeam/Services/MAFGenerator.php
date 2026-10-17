@@ -184,6 +184,13 @@ class MAFGenerator
             $parts[] = CompiledRuntimeEmit::codeHarnessBlock(!empty($analyzed['package']));
             $parts[] = self::codeNodesLiteral($analyzed);
         }
+        if (WorkflowGraphAnalyzer::dispatchMenus($analyzed)['menus'] !== []) {
+            $parts[] = self::banner('DECISION-MODEL ROUTING',
+                'A dispatcher whose routing names a decision model (Jev...) asks it',
+                'and runs the child it names: no LLM turn. The adapters are the',
+                'LangGraph target\'s, copied. DECISIONS: each dispatcher\'s settings.');
+            $parts[] = self::decisionBlock($analyzed);
+        }
         $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
             'AGENTS: per-node settings verbatim from the editor forms.',
             'ProgressReporter: console liveness (banner, node lines, heartbeat,',
@@ -213,6 +220,42 @@ class MAFGenerator
         $parts[] = self::runWorkflowBlock();
         $parts[] = self::entryBlock();
         return implode("\n\n", $parts) . "\n";
+    }
+
+    /** DecisionResult, the decision adapters (copied), DECISIONS and the routing-mode rule. */
+    private static function decisionBlock(array $analyzed): string
+    {
+        $protocols = [];
+        $decisions = [];
+        foreach ((array) ($analyzed['decisions'] ?? []) as $did => $d) {
+            foreach ($d['decision'] as $c) {
+                $protocols[$c['protocol']] = true;
+            }
+            $decisions[(string) $did] = $d;
+        }
+        $known = array_values(array_intersect(array_keys($protocols), array_keys(LangGraphRuntime::ADAPTER_CLASSES)));
+        return "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
+            . LangGraphRuntime::decisionAdaptersBlock($known) . "\n\n"
+            . 'DECISIONS = ' . ($decisions === [] ? '{}' : PythonEmitHelpers::jsonToPython($decisions)) . "\n\n\n"
+            . <<<'PY'
+def _decision_router(dec: dict, provider: str):
+    """The decision adapter for one compiled provider, None when it was not compiled in or has no adapter."""
+    c = next((c for c in dec.get("decision", []) if c["provider"] == provider), None)
+    cls = DECISION_ADAPTERS.get(c["protocol"]) if c else None
+    return cls(key_env=c["key_env"], url_env=c["url_env"], url=c["url"], model=c["model"]) if cls else None
+
+
+def _decision_mode(dec: dict) -> str:
+    """"llm", or the decision provider this run routes with (GraphWorkflowRunner's rule): a key routes with that
+    provider only (no model fallback); unset takes the first compiled provider whose key is set."""
+    if dec.get("routing_mode"):
+        return dec["routing_mode"]
+    for c in dec.get("decision", []):
+        r = _decision_router(dec, c["provider"])
+        if r is not None and r.available():
+            return c["provider"]
+    return "llm"
+PY;
     }
 
     /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, source | source_file}}. */
@@ -1462,6 +1505,11 @@ PY;
                     ProgressReporter.note(f"{name}: skipped (its branch was not taken)")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
+                dec = DECISIONS.get(self.node_id, {})
+                mode = _decision_mode(dec)
+                if mode != "llm":   # a decision model (Jev...) routes: no LLM turn
+                    await self._route_by_decision(dec, mode, name, ctx)
+                    return
                 names = [n for _, n in self.menu]
                 client = ProviderClients.make(ad["provider"], ad["model"])
                 _opts = ProviderClients.chat_options(ad["provider"], ad["model"],
@@ -1513,6 +1561,46 @@ PY;
                 ProgressReporter.note(f"{name}: routed to {chosen[1]!r}"
                                       + (f" — notes: {notes[:120]!r}" if notes else ""))
                 await ctx.send_message(NodeMessage(self.node_id, name, text, route_to=chosen[0], task=task))
+
+
+            async def _route_by_decision(self, dec: dict, key: str, name: str, ctx) -> None:
+                """Decision model `key` only: routed -> that child; unclear / low confidence -> the unclear branch when
+                set, else the run stops here ("Not classified"); anything else stops it (Error). No model fallback."""
+                task = "\n\n".join(m.text for m in self._inbox.values()
+                                    if m.text and m.source_name != "Start") or RUN_STATE["user_prompt"]
+                targets = [{"id": c, "name": n, "description": ""} for c, n in self.menu]
+                router = _decision_router(dec, key)
+                ProgressReporter.node_start(name, f"dispatcher — {key} chooses one of: " + " | ".join(n for _, n in self.menu))
+                if router is None:
+                    res = DecisionResult("unavailable", reason=f"'{key}' is not an available decision provider")
+                else:
+                    try:
+                        res = await asyncio.wait_for(asyncio.to_thread(router.route, task, targets, dec.get("decision_question", ""),
+                                                                       dec.get("min_confidence", 0.6)), router.TIMEOUT_S + 1)
+                    except Exception as e:   # a timeout included: an 'error' outcome (did not route)
+                        res = DecisionResult("error", reason=f"{type(e).__name__}: no answer within {router.TIMEOUT_S + 1}s"
+                                             if isinstance(e, asyncio.TimeoutError) else str(e))
+                conf = f"{res.confidence:.2f}" if res.confidence is not None else "?"
+                not_classified = res.outcome in ("unclear", "low_confidence")
+                chosen = None
+                if res.outcome == "routed":
+                    chosen = next(((c, n) for c, n in self.menu if c == str(res.target["id"])), None)
+                    ProgressReporter.note(f"{name}: {key} routed to {res.target['name']!r} (confidence {conf}, {res.ms}ms, no LLM turn)")
+                elif not_classified and dec.get("unclear_branch"):
+                    chosen = next(((c, n) for c, n in self.menu if n == dec["unclear_branch"]), None)
+                    if chosen is not None:
+                        ProgressReporter.note(f"{name}: {key} did not classify ({res.outcome}: {res.reason}, confidence {conf})"
+                                              f" -- sent to the unclear branch {chosen[1]!r}")
+                if chosen is None:
+                    msg_txt = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{name}" did not route the '
+                               f"request ({key}: {res.outcome}: {res.reason}).")
+                    ProgressReporter.note(msg_txt)
+                    # Nothing routed: every child skips and the reason travels on as this node's output.
+                    await ctx.send_message(NodeMessage(self.node_id, name, msg_txt, route_to="\u0000"))
+                    return
+                ProgressReporter.node_done(name, len(task))
+                await ctx.send_message(NodeMessage(self.node_id, name, task, route_to=chosen[0], task=task))
+
 
 
         class CodeNodeExecutor(Executor):
