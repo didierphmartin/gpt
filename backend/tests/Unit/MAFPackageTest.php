@@ -32,29 +32,26 @@ final class MAFPackageTest extends TestCase
         $this->assertStringContainsString('return _text', $wf);
     }
 
-    public function testSavingStaysInTheCliEntry(): void
+    /** run_workflow()'s own body: from its def to the next top-level statement. */
+    private static function runWorkflowBody(string $wf): string
     {
-        // A conversational turn must not write a file per prompt. The save
-        // block belongs to __main__, after the call, not inside run_workflow.
-        // (OUTPUT_STORAGE_ENABLED itself is also a module-level global baked by
-        // globalsBlock() ahead of __main__ -- its *definition* naturally comes
-        // first, so the needle here is the `if OUTPUT_STORAGE_ENABLED:` usage
-        // that guards the save block, not the bare name.)
-        $wf = $this->files()['workflow.py'];
-        $mainAt = strpos($wf, 'if __name__ == "__main__":');
-        $saveAt = strpos($wf, 'if OUTPUT_STORAGE_ENABLED:');
-        $this->assertNotFalse($mainAt);
-        $this->assertNotFalse($saveAt);
-        $this->assertGreaterThan($mainAt, $saveAt, 'saving leaked into run_workflow');
+        $at = strpos($wf, 'async def run_workflow(');
+        preg_match('/\n(?=\S)/', $wf, $m, PREG_OFFSET_CAPTURE, $at + 1);
+        return substr($wf, $at, $m[0][1] - $at);
+    }
+
+    public function testSavingStaysOutOfRunWorkflow(): void
+    {
+        // A conversational turn (POST /runs -> run_workflow) must not write a file per prompt: saving belongs
+        // to the CLI and the listener's runs (run_once), never to run_workflow itself.
+        $wf = DispatcherDemoFixture::packageFiles(\AgentTeam\Services\MAFGenerator::class)['workflow.py'];
+        $this->assertStringNotContainsString('OUTPUT_STORAGE_ENABLED', self::runWorkflowBody($wf), 'saving leaked into run_workflow');
+        $this->assertStringContainsString('saved = _save_output(output)', $wf);
     }
 
     public function testRunWorkflowDoesNotPreStripTheDocument(): void
     {
-        // The editor extracts the document from the answer itself; stripping
-        // here would lose any narration around it and make the two disagree.
-        $wf = $this->files()['workflow.py'];
-        $mainAt = strpos($wf, 'if __name__ == "__main__":');
-        $reAt = strpos($wf, '<!doctype html');
-        $this->assertGreaterThan($mainAt, $reAt, 'document extraction leaked into run_workflow');
+        $wf = DispatcherDemoFixture::packageFiles(\AgentTeam\Services\MAFGenerator::class)['workflow.py'];
+        $this->assertStringNotContainsString('<!doctype html', self::runWorkflowBody($wf), 'document extraction leaked into run_workflow');
     }
 }

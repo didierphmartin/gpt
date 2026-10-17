@@ -20,10 +20,23 @@ class MAFGenerator
         private PDO $db,
         private WorkflowRepository $workflowRepo,
         private WorkflowGraphRepository $graphRepo,
-        private AgentRepository $agentRepo
+        private AgentRepository $agentRepo,
+        private ?string $skillsRoot = null,                     // the package copies the used skills from here
+        private ?StartDocumentStore $startDocuments = null      // the package copies the Start's documents from here
     ) {}
 
     public function generate(int $workflowId, ?string $userId = null): array
+    {
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        return [
+            'filename' => strtolower($name) . '_maf.py',
+            'code'     => self::emitMaf($analyzed),
+        ];
+    }
+
+    /** Everything emitMaf() needs, read from the database at compile time (the program itself never reads it). */
+    private function analyzeWorkflow(int $workflowId, ?string $userId): array
     {
         // A swarm is a different architecture, not a packaging choice: one active
         // agent at a time with control moving by hand-off, against this target's
@@ -69,14 +82,8 @@ class MAFGenerator
         }
 
         // Code nodes, MCP server slugs (headers), decision routing, the Start's mode: CompiledRuntimeEmit's rules.
-        $analyzed = CompiledRuntimeEmit::analyzeRuntime($analyzed, $analyzer, $this->db, $this->agentRepo,
+        return CompiledRuntimeEmit::analyzeRuntime($analyzed, $analyzer, $this->db, $this->agentRepo,
             $this->graphRepo->getGraph($workflowId), $workflowId, $userId);
-
-        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
-        return [
-            'filename' => strtolower($name) . '_maf.py',
-            'code'     => self::emitMaf($analyzed),
-        ];
     }
 
     /**
@@ -89,12 +96,21 @@ class MAFGenerator
         $wf = $this->workflowRepo->findById($workflowId);
         $name = $wf ? $wf->getName() : 'workflow';
 
-        return RunServerEmitter::package(
-            $this->generate($workflowId, $userId),
+        $analyzed = $this->analyzeWorkflow($workflowId, $userId);
+        $analyzed['package'] = true;
+        $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
+        $analyzed['startDocuments'] = $docs['docs'];
+        $pkg = RunServerEmitter::package(
+            ['code' => self::emitMaf($analyzed)],
             $name,
             'maf',
-            'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks'
+            'MAF run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
+            CompiledRuntimeEmit::packageCommonBlock(),
+            true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
+        $pkg['files'] = array_merge($pkg['files'], CompiledPackage::files($analyzed,
+            $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'Microsoft Agent Framework'));
+        return $pkg;
     }
 
     public static function emitMaf(array $analyzed): string
@@ -134,7 +150,7 @@ class MAFGenerator
             $parts[] = self::mcpToolBuilderBlock($analyzed);
             $parts[] = 'catalog = build_tools_from_catalog()';
         } else {
-            if (!empty($analyzed['code']) || !empty($analyzed['playbooks'])) {
+            if (!empty($analyzed['code']) || !empty($analyzed['playbooks']) || !empty($analyzed['package'])) {
                 // No agent tools, but code nodes and playbook #Actions call MCP servers too.
                 $parts[] = self::banner('MCP CLIENT',
                     'HTTP JSON-RPC client for the MCP servers the code nodes and',
@@ -191,6 +207,24 @@ class MAFGenerator
                 'LangGraph target\'s, copied. DECISIONS: each dispatcher\'s settings.');
             $parts[] = self::decisionBlock($analyzed);
         }
+        $parts[] = self::banner('RUN EVENTS',
+            'Each node\'s start and completion (a code node\'s exit, a',
+            'dispatcher\'s route) go to GRAPH_RECORDER when the package\'s',
+            'listener set one: runs/ and GET /live, the editor\'s live canvas.');
+        $parts[] = CompiledRuntimeEmit::recordingBlock($analyzed) . "\n\n\n" . <<<'PY'
+def _rec_start(nid: str) -> None:
+    """node_start for a node NODE_META knows (an agent, code, playbook or output node)."""
+    meta = NODE_META.get("node_" + str(nid))
+    if meta:
+        _rec_node_start(meta[0], meta[2], meta[1])
+
+
+def _rec_done(nid: str, output: str, **extra) -> None:
+    """node_complete for a node NODE_META knows."""
+    meta = NODE_META.get("node_" + str(nid))
+    if meta:
+        _rec_node_complete(meta[0], meta[2], meta[1], output=output, **extra)
+PY;
         $parts[] = self::banner('FROZEN NODE METADATA + EXECUTORS',
             'AGENTS: per-node settings verbatim from the editor forms.',
             'ProgressReporter: console liveness (banner, node lines, heartbeat,',
@@ -218,7 +252,7 @@ class MAFGenerator
             'caller inside this file; api.py (the compiled package) is the',
             'other.');
         $parts[] = self::runWorkflowBlock();
-        $parts[] = self::entryBlock();
+        $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock() : self::entryBlock();
         return implode("\n\n", $parts) . "\n";
     }
 
@@ -1373,6 +1407,7 @@ PY;
                     ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
+                _rec_start(self.node_id)
                 client = ProviderClients.make(ad["provider"], ad["model"])
                 # Drop any None (a tool name absent from the catalog) so Agent never sees tools=[None].
                 _tools = [t for t in ad["tools"] if t is not None]
@@ -1407,6 +1442,7 @@ PY;
                     ProgressReporter.note(f"{name}: skill {_sd!r} done — {len(text)} chars "
                                           f"in {time.monotonic() - _ts0:.1f}s")
                 ProgressReporter.node_done(name, len(text))
+                _rec_done(self.node_id, text)
                 await ctx.send_message(NodeMessage(self.node_id, name, text))
 
             def _framed_input(self) -> str:
@@ -1464,11 +1500,13 @@ PY;
                     return
                 if "_CURRENT_NODE" in globals():
                     _CURRENT_NODE.set(name)
+                _rec_start(self.node_id)
                 ProgressReporter.node_start(name, "playbook — interpreting…")
                 request = _pb_request_text([(m.source_name, m.text) for m in _msgs],
                                            RUN_STATE["user_prompt"])
                 text = await run_playbook_node(pb, request)
                 ProgressReporter.node_done(name, len(text))
+                _rec_done(self.node_id, text)
                 await ctx.send_message(NodeMessage(self.node_id, name, text))
 
 
@@ -1525,6 +1563,7 @@ PY;
                             "lines. Do not answer the request yourself.")
                 # No tools: this turn decides a route, it does not do the work.
                 agent = Agent(client, instructions=_instr, name=self.id, tools=[], default_options=_opts)
+                _rec_node_start(self.node_id, name, "agent")
                 ProgressReporter.node_start(name, "dispatcher — choosing one of: " + " | ".join(names))
                 if "_CURRENT_NODE" in globals():
                     _CURRENT_NODE.set(name)
@@ -1550,6 +1589,7 @@ PY;
                     msg_txt = (f"Error: dispatcher {name!r} did not route the request. "
                                f"Expected one of: {', '.join(names)}.")
                     ProgressReporter.note(msg_txt)
+                    _rec_node_complete(self.node_id, name, "agent", success=False, output=msg_txt, error=msg_txt)
                     # Nothing routed: every child skips and the error travels on as
                     # this node's output, so the run ends with a readable reason.
                     await ctx.send_message(NodeMessage(self.node_id, name, msg_txt, route_to="\u0000"))
@@ -1560,6 +1600,7 @@ PY;
                 ProgressReporter.node_done(name, len(reply))
                 ProgressReporter.note(f"{name}: routed to {chosen[1]!r}"
                                       + (f" — notes: {notes[:120]!r}" if notes else ""))
+                _rec_node_complete(self.node_id, name, "agent", output=text, route={"id": chosen[0], "name": chosen[1]})
                 await ctx.send_message(NodeMessage(self.node_id, name, text, route_to=chosen[0], task=task))
 
 
@@ -1570,6 +1611,7 @@ PY;
                                     if m.text and m.source_name != "Start") or RUN_STATE["user_prompt"]
                 targets = [{"id": c, "name": n, "description": ""} for c, n in self.menu]
                 router = _decision_router(dec, key)
+                _rec_node_start(self.node_id, name, "agent")
                 ProgressReporter.node_start(name, f"dispatcher — {key} chooses one of: " + " | ".join(n for _, n in self.menu))
                 if router is None:
                     res = DecisionResult("unavailable", reason=f"'{key}' is not an available decision provider")
@@ -1595,10 +1637,13 @@ PY;
                     msg_txt = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{name}" did not route the '
                                f"request ({key}: {res.outcome}: {res.reason}).")
                     ProgressReporter.note(msg_txt)
+                    _rec_node_complete(self.node_id, name, "agent", success=not_classified, output=msg_txt,
+                                       **({} if not_classified else {"error": msg_txt}))
                     # Nothing routed: every child skips and the reason travels on as this node's output.
                     await ctx.send_message(NodeMessage(self.node_id, name, msg_txt, route_to="\u0000"))
                     return
                 ProgressReporter.node_done(name, len(task))
+                _rec_node_complete(self.node_id, name, "agent", output=task, route={"id": chosen[0], "name": chosen[1]})
                 await ctx.send_message(NodeMessage(self.node_id, name, task, route_to=chosen[0], task=task))
 
 
@@ -1638,6 +1683,7 @@ PY;
                 if cfg.get("source_file"):   # read at each run, so an edit of code/<file> takes effect on the next one
                     with open(os.path.join(PACKAGE_DIR, cfg["source_file"]), encoding="utf-8") as fh:
                         source = fh.read()
+                _rec_start(self.node_id)
                 ProgressReporter.node_start(name, f"code -- exits={cfg['exits']}, mcp_servers={cfg['mcp_servers']}")
                 res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, cfg["exits"], cfg["mcp_servers"],
                                               _code_transport, cfg["timeout_s"], node_name=name)
@@ -1650,6 +1696,7 @@ PY;
                 ProgressReporter.note(f"{name}: exit {res['route']!r}")
                 routes = tuple(cfg["exit_targets"].get(res["route"], [])) if len(cfg["exits"]) > 1 else None
                 ProgressReporter.node_done(name, len(res["output_text"]))
+                _rec_done(self.node_id, res["output_text"], exit=res["route"])
                 await ctx.send_message(NodeMessage(self.node_id, name, res["output_text"], routes=routes))
 
 
@@ -1664,8 +1711,9 @@ PY;
             reads via WorkflowRunResult.get_outputs().
             """
 
-            def __init__(self, parents: list, id: str = "output"):
+            def __init__(self, parents: list, id: str = "output", node_id: str = ""):
                 super().__init__(id=id)
+                self.node_id = node_id
                 self.parents = [str(p) for p in parents]
                 self._inbox = {}
 
@@ -1678,6 +1726,9 @@ PY;
                 parts = [self._inbox[p].text for p in self.parents
                          if p in self._inbox and self._inbox[p].text]
                 merged = parts[0] if len(parts) == 1 else "\n\n---\n\n".join(parts)
+                if any(not m.skipped for m in self._inbox.values()):   # a branch reached the Output: it ran
+                    _rec_start(self.node_id)
+                    _rec_done(self.node_id, merged)
                 ProgressReporter.end(len(merged))
                 await ctx.yield_output(merged)   # nothing reached the Output (no work to do): the answer is empty
         PY;
@@ -1703,7 +1754,13 @@ PY;
              . "WORKFLOW_NAME = {$wfName}\n"
              . "WORKFLOW_ID = {$wfId}\n"
              . "OUTPUT_STORAGE_ENABLED = {$enabled}\n"
-             . "OUTPUT_FOLDER = {$folder}";
+             . "OUTPUT_FOLDER = {$folder}\n"
+             // The Start's mode (prompt | cron | watch), its schedule and its event trigger: the package's listener reads them.
+             . "START_MODE = " . PythonEmitHelpers::pyStr((string) ($analyzed['startMode'] ?? 'prompt')) . "\n"
+             . "DEFAULT_CRON = " . (($analyzed['defaultCron'] ?? null) === null ? 'None' : PythonEmitHelpers::pyStr((string) $analyzed['defaultCron'])) . "\n"
+             . "DEFAULT_WATCH = " . (($analyzed['defaultWatch'] ?? null) === null ? 'None'
+                 : PythonEmitHelpers::jsonToPython(['server' => $analyzed['defaultWatch']['server'], 'tool' => $analyzed['defaultWatch']['tool'],
+                     'args' => (object) $analyzed['defaultWatch']['args']]));
     }
 
     /**
@@ -1773,7 +1830,7 @@ PY;
                 $pList = array_map(fn($p) => PythonEmitHelpers::pyStr((string) $p), $pKept);
                 $pPy = '[' . implode(', ', $pList) . ']';
                 if ($key === $outId) {
-                    $inst[] = '    output_node = OutputNodeExecutor(parents=' . $pPy . ')';
+                    $inst[] = '    output_node = OutputNodeExecutor(parents=' . $pPy . ', node_id=' . PythonEmitHelpers::pyStr($key) . ')';
                 } else {
                     // A dispatcher gets the routing executor and its menu; every
                     // other agent node stays an ordinary AgentNodeExecutor. The
@@ -1869,11 +1926,20 @@ PY;
             # Banner + liveness heartbeat first, so the console shows signs of
             # life even while the first LLM calls are still connecting.
             ProgressReporter.begin(len(AGENTS), prompt)
+            _run_reset()
+            if START_NODE:
+                _rec_node_start(START_NODE[0], START_NODE[1], "start")
+                _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
             # Build the graph, then hand the prompt to MAF: it enters at the
             # Start executor and flows along the edges declared in
             # create_workflow() until the Output executor yields.
             _workflow = create_workflow()
-            _result = await _workflow.run(prompt)
+            try:
+                _result = await _workflow.run(prompt)
+            except Exception as e:
+                for _nid, (_name, _type) in list(_RUN["open"].items()):   # a node that failed mid-run ends as failed
+                    _rec_node_complete(_nid, _name, _type, success=False, error=f"{type(e).__name__}: {e}")
+                raise
             # agent-framework's WorkflowRunResult exposes terminal outputs via
             # get_outputs() (a list), NOT a .text attribute.
             _outputs = _result.get_outputs()

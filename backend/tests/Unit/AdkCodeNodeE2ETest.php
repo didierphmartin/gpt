@@ -252,6 +252,11 @@ class AdkCodeNodeE2ETest extends TestCase
         $done = array_values(array_filter($events, fn($e) => $e['type'] === 'workflow_complete'));
         self::assertNotEmpty($done, "no completed run:\n" . file_get_contents("$dir/api.log"));
         self::assertTrue($done[0]['success'], json_encode($done[0]));
+        // the drain runs again at once; that quiet run's file exists while it runs, then goes
+        for ($i = 0; $i < 50 && count(glob("$dir/runs/*.jsonl")) !== 1; $i++) {
+            usleep(200000);
+        }
+        $events = $this->runEvents($dir);   // the real run's events only
         $completed = [];
         foreach ($events as $e) {
             if ($e['type'] === 'node_complete') {
