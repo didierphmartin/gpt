@@ -41,10 +41,10 @@ class NOOAGenerator
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
-        return [
+        return CompiledArchitectureDoc::attach([
             'filename' => strtolower($name) . '_nooa.py',
             'code'     => self::emitNooa($analyzed),
-        ];
+        ], $analyzed, 'nooa', 'single');
     }
 
     /** Everything emitNooa() needs, read from the database at compile time (the program itself never reads it). */
@@ -129,8 +129,8 @@ class NOOAGenerator
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
         $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
             array_merge(self::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'NVIDIA NOOA (A2A)');
-        return CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
-            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_nooa_a2a', 'NVIDIA NOOA');
+        return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
+            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_nooa_a2a', 'NVIDIA NOOA'), $analyzed, 'nooa', 'a2a');
     }
 
     /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
@@ -178,7 +178,7 @@ PY;
         );
         $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
             $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'NVIDIA NOOA'));
-        return $pkg;
+        return CompiledArchitectureDoc::attach($pkg, $analyzed, 'nooa', 'modular');
     }
 
     public static function emitNooa(array $analyzed): string

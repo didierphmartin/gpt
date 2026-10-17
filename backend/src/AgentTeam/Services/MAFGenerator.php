@@ -29,10 +29,10 @@ class MAFGenerator
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
-        return [
+        return CompiledArchitectureDoc::attach([
             'filename' => strtolower($name) . '_maf.py',
             'code'     => self::emitMaf($analyzed),
-        ];
+        ], $analyzed, 'maf', 'single');
     }
 
     /** Everything emitMaf() needs, read from the database at compile time (the program itself never reads it). */
@@ -108,8 +108,8 @@ class MAFGenerator
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
         $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
             array_merge(self::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Microsoft Agent Framework (A2A)');
-        return CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
-            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_maf_a2a', 'Microsoft Agent Framework');
+        return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
+            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_maf_a2a', 'Microsoft Agent Framework'), $analyzed, 'maf', 'a2a');
     }
 
     /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
@@ -182,7 +182,7 @@ PY;
         );
         $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
             $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'Microsoft Agent Framework'));
-        return $pkg;
+        return CompiledArchitectureDoc::attach($pkg, $analyzed, 'maf', 'modular');
     }
 
     public static function emitMaf(array $analyzed): string

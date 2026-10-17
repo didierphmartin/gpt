@@ -35,7 +35,9 @@ final class CompiledTargetZipExportTest extends TestCase
         $gen = DispatcherDemoFixture::generator("AgentTeam\\Services\\{$class}", DispatcherDemoFixture::pdo());
         $r = WorkflowController::langGraphZipResponse($gen->generate(DispatcherDemoFixture::WORKFLOW_ID), "{$target}_single");
         $this->assertSame("attachment; filename=\"dispatcher_demo_{$target}_single.zip\"", $r['headers']['Content-Disposition']);
-        $this->assertSame(["dispatcher_demo_{$target}/dispatcher_demo_{$target}.py"], self::entries($r['raw_body']));
+        // the script and its ARCHITECTURE.md, as LangGraph's single-file zip
+        $this->assertSame(["dispatcher_demo_{$target}/dispatcher_demo_{$target}.py", "dispatcher_demo_{$target}/ARCHITECTURE.md"],
+            self::entries($r['raw_body']));
     }
 
     /** @dataProvider targets */

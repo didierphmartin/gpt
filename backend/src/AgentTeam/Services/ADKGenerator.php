@@ -39,10 +39,10 @@ class ADKGenerator
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
         $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
-        return [
+        return CompiledArchitectureDoc::attach([
             'filename' => strtolower($name) . '_adk.py',
             'code'     => self::emitAdk($analyzed),
-        ];
+        ], $analyzed, 'adk', 'single');
     }
 
     /** Everything emitAdk() needs, read from the database at compile time (the program itself never reads it). */
@@ -305,8 +305,8 @@ class ADKGenerator
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
         $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
             array_merge(ADKPackage::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Google ADK (A2A)');
-        return CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
-            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_adk_a2a', 'Google ADK');
+        return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
+            preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_adk_a2a', 'Google ADK'), $analyzed, 'adk', 'a2a');
     }
 
     /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
@@ -371,7 +371,7 @@ PY;
         );
         $pkg['files'] = array_merge($pkg['files'], $agentFiles,
             ADKPackage::files($analyzed, $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files']));
-        return $pkg;
+        return CompiledArchitectureDoc::attach($pkg, $analyzed, 'adk', 'modular');
     }
 
     /**
