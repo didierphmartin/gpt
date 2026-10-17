@@ -105,42 +105,57 @@ class ADKGenerator
      */
     public static function emitAdk(array $analyzed): string
     {
+        return implode("\n", array_column(self::parts($analyzed), 1)) . "\n";
+    }
+
+    /**
+     * The script as [section, text] parts, in the single file's order: 'common' (the runtime), 'node:<id>'
+     * (one node's agent), 'workflow' (assembly, run, CLI), 'single' (only in the single file: a banner over
+     * nodes the package puts in agents/). emitAdk() joins them all; emitAdkPackage() groups them by file.
+     */
+    private static function parts(array $analyzed): array
+    {
         // Force shortest round-tripping floats: the web SAPI's serialize_precision=100 makes
         // json_encode emit temperatures like 0.5999999999999999… which strict models reject
         // ("only 0.6 is allowed"). See MAFGenerator::emitMaf for the full note.
         ini_set('serialize_precision', '-1');
         $lines = [];
-        $lines[] = self::headerBlock($analyzed);
+        $at = [];   // section of each $lines entry
+        $add = function (string $section, string $text) use (&$lines, &$at): void {
+            $lines[] = $text;
+            $at[] = $section;
+        };
+        $add('common', self::headerBlock($analyzed));
 
-        $lines[] = self::banner('MODEL FACTORY',
+        $add('common', self::banner('MODEL FACTORY',
             'Maps a node provider+model to an ADK model. Gemini is native;',
             'every other provider routes through LiteLLM (OpenAI-compatible',
             'endpoints for Grok/Kimi/DeepSeek/GLM). The node form Thinking',
             'attribute governs reasoning mode; hard API constraints only',
             '(kimi sampling, deepseek-v4 thinking rules) are applied here.',
-            'To support a new provider: add a branch in _make_model.');
-        $lines[] = self::modelFactoryBlock();
+            'To support a new provider: add a branch in _make_model.'));
+        $add('common', self::modelFactoryBlock());
 
-        $lines[] = self::banner('MCP SERVER REGISTRY',
+        $add('common', self::banner('MCP SERVER REGISTRY',
             'Baked at generation time from the workflow editor config.',
-            'Maps server URL -> metadata. If a server moves, update the URL here.');
-        $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true);
-        $lines[] = self::banner('TOOL CATALOG',
+            'Maps server URL -> metadata. If a server moves, update the URL here.'));
+        $add('common', 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($analyzed['usedServers'], true));
+        $add('common', self::banner('TOOL CATALOG',
             'Each entry maps a tool name to its MCP server URL and JSON Schema.',
             'Only tools actually used by agents in this workflow are included.',
             'To add a tool: add an entry here AND reference it in the agent',
-            'definitions below (catalog["<tool>"]).');
-        $lines[] = 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true);
-        $lines[] = self::banner('MCP CLIENT',
-            'HTTP JSON-RPC client used by every generated _tool_* function.');
-        $lines[] = CompiledRuntimeEmit::mcpClientBlock($analyzed);
-        $lines[] = self::banner('DOCUMENT CONVERTER',
-            'Turns a start-node attachment into markdown for the prompt.');
-        $lines[] = PythonEmitHelpers::documentConverterBlock();
-        $lines[] = self::banner('TOOL WRAPPERS',
+            'definitions below (catalog["<tool>"]).'));
+        $add('common', 'TOOL_CATALOG = ' . PythonEmitHelpers::jsonToPython($analyzed['usedCatalog'], true));
+        $add('common', self::banner('MCP CLIENT',
+            'HTTP JSON-RPC client used by every generated _tool_* function.'));
+        $add('common', CompiledRuntimeEmit::mcpClientBlock($analyzed));
+        $add('common', self::banner('DOCUMENT CONVERTER',
+            'Turns a start-node attachment into markdown for the prompt.'));
+        $add('common', PythonEmitHelpers::documentConverterBlock());
+        $add('common', self::banner('TOOL WRAPPERS',
             'One typed FunctionTool per catalog entry; ADK introspects each',
-            'function signature to build the tool schema the model sees.');
-        $lines[] = self::adkToolBuilderBlock($analyzed);
+            'function signature to build the tool schema the model sees.'));
+        $add('common', self::adkToolBuilderBlock($analyzed));
 
         // Emit skill runner only when the workflow actually uses skills.
         // Gated on the analyzer's 'skills' list (set by WorkflowGraphAnalyzer::skillsFromConfig)
@@ -151,109 +166,121 @@ class ADKGenerator
             if (!empty($agent['skills'])) { $needsSkills = true; break; }
         }
         if ($needsSkills) {
-            $lines[] = self::banner('SKILL RUNTIME',
+            $add('common', self::banner('SKILL RUNTIME',
                 'Runs folder-backed skills (SKILL.md + scripts) as mandatory',
                 'post-agent SequentialAgent steps: an LLM turn instructed by',
                 'SKILL.md, then a capture agent that makes the node output the',
                 'file the script PRODUCED (else the LLM text). Staged',
                 'input_files are repaired if a model delivers them',
-                'JSON-over-escaped. Scripts run as async subprocesses here.');
-            $lines[] = PythonEmitHelpers::skillDepsBlock();
+                'JSON-over-escaped. Scripts run as async subprocesses here.'));
+            $add('common', PythonEmitHelpers::skillDepsBlock());
             if (!empty($analyzed['package'])) {
-                $lines[] = 'SKILLS_DIR = os.environ.get("SYNERGYAI_SKILLS_DIR") or os.path.join(PACKAGE_DIR, "skills")   # the package\'s own skills/';
+                $add('common', 'SKILLS_DIR = os.environ.get("SYNERGYAI_SKILLS_DIR") or os.path.join(PACKAGE_DIR, "skills")   # the package\'s own skills/');
             }
-            $lines[] = self::skillRunnerBlock();
+            $add('common', self::skillRunnerBlock());
         }
 
         // catalog must be defined after build_tools_from_catalog() (from adkToolBuilderBlock).
-        $lines[] = '# The tool objects agents reference by name as catalog["<tool>"].';
-        $lines[] = 'catalog = build_tools_from_catalog()';
+        $add('common', '# The tool objects agents reference by name as catalog["<tool>"].');
+        $add('common', 'catalog = build_tools_from_catalog()');
         // START_DOCUMENTS baked from the analyzed workflow; always present (empty list when none).
-        $lines[] = 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments']);
-        $lines[] = self::banner('AGENTS — ONE LlmAgent PER WORKFLOW NODE',
+        $add('common', 'START_DOCUMENTS = ' . PythonEmitHelpers::jsonToPython($analyzed['startDocuments']));
+        $add('single', self::banner('AGENTS — ONE LlmAgent PER WORKFLOW NODE',
             'Each agent writes its result to session.state["node_<id>"]; a',
             'child reads a parent through the literal {node_<id>} placeholder',
             'in its instruction (ADK state templating). Provider/model/tools/',
             'sampling come verbatim from the editor forms (constraint clamps',
             'are documented as comments on the affected node). To change a',
-            'node: edit the workflow in the editor and re-generate.');
-        $lines[] = self::agentsBlock($analyzed);
+            'node: edit the workflow in the editor and re-generate.'));
+        $entries = self::agentEntries($analyzed);
+        $last = array_key_last($entries);
+        foreach ($entries as $id => $text) {   // a blank line between nodes, as one joined block had
+            $add("node:{$id}", $id === $last ? $text : $text . "\n");
+        }
 
         $consolidators = self::outputConsolidatorsBlock($analyzed);
         if ($consolidators !== '') {
-            $lines[] = self::banner('OUTPUT (FAN-IN) NODES',
+            $add('common', self::banner('OUTPUT (FAN-IN) NODES',
                 'Non-LLM pass-throughs: forward parent result(s) VERBATIM so',
-                'formatting such as HTML is never reworded by another model.');
-            $lines[] = self::passThroughAgentBlock();
-            $lines[] = $consolidators;
+                'formatting such as HTML is never reworded by another model.'));
+            $add('common', self::passThroughAgentBlock());
+            $add('workflow', $consolidators);
         }
         if (!empty($analyzed['playbooks'])) {
-            $lines[] = self::banner('PLAYBOOK NODES',
+            $add('common', self::banner('PLAYBOOK NODES',
                 'A playbook node is an interpreter, not an agent: the model',
                 're-decides each round from the running transcript, with the',
                 'native verbs, the human gates, one tool per bound #Action and',
-                'a stub per unbound one. The node output is that transcript.');
+                'a stub per unbound one. The node output is that transcript.'));
             // ADK already emits its own mcpClientBlock() above, so the
             // interpreter's _call_mcp_tool is already defined -- do not re-emit it.
-            $lines[] = PlaybookEmit::supportBlock(false);
-            $lines[] = PlaybookEmit::runtimeBlock();
-            $lines[] = PlaybookEmit::metadataBlock($analyzed['playbooks']);
-            $lines[] = self::playbookAgentBlock();
-            $lines[] = self::playbookInstancesBlock($analyzed);
+            $add('common', PlaybookEmit::supportBlock(false));
+            $add('common', PlaybookEmit::runtimeBlock());
+            $add('common', PlaybookEmit::metadataBlock($analyzed['playbooks']));
+            $add('common', self::playbookAgentBlock());
+            $entries = self::playbookInstancesEntries($analyzed);
+            $last = array_key_last($entries);
+            foreach ($entries as $id => $text) {   // a blank line between nodes, as one joined block had
+                $add("node:{$id}", $id === $last ? $text : $text . "\n");
+            }
         }
         if (!empty($analyzed['code'])) {
-            $lines[] = self::banner('CODE NODES',
+            $add('common', self::banner('CODE NODES',
                 'A code node runs its own Python run(input, call_tool) through the',
                 'harness the workflow editor runs (CODE_HARNESS): no model. Its',
-                'output is state["node_<id>"], the exit it took state["route_<id>"].');
-            $lines[] = CompiledRuntimeEmit::codeHarnessBlock(!empty($analyzed['package']));
-            $lines[] = self::codeAgentBlock();
-            $lines[] = self::codeInstancesBlock($analyzed);
+                'output is state["node_<id>"], the exit it took state["route_<id>"].'));
+            $add('common', CompiledRuntimeEmit::codeHarnessBlock(!empty($analyzed['package'])));
+            $add('common', self::codeAgentBlock());
+            $entries = self::codeInstancesEntries($analyzed);
+            $last = array_key_last($entries);
+            foreach ($entries as $id => $text) {   // a blank line between nodes, as one joined block had
+                $add("node:{$id}", $id === $last ? $text : $text . "\n");
+            }
         }
         $dispatchers = self::dispatcherInstancesBlock($analyzed);
         if ($dispatchers !== '') {
-            $lines[] = self::banner('DISPATCHER NODES',
+            $add('common', self::banner('DISPATCHER NODES',
                 'A dispatcher\'s outgoing edges are a MENU, not a fan-out: the',
                 'node names ONE child and only that child runs. Its menu is',
                 'nested here, which is why those children are absent from the',
-                'topological layers below.');
+                'topological layers below.'));
             $protocols = [];
             foreach ((array) ($analyzed['decisions'] ?? []) as $d) {
                 foreach ($d['decision'] as $c) {
                     $protocols[$c['protocol']] = true;
                 }
             }
-            $lines[] = "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
+            $add('common', "from dataclasses import dataclass, field\nfrom functools import cached_property\n\n"
                 . LangGraphRuntime::decisionAdaptersBlock(array_values(array_intersect(array_keys($protocols),
-                    array_keys(LangGraphRuntime::ADAPTER_CLASSES))));
-            $lines[] = self::dispatcherAgentBlock();
-            $lines[] = $dispatchers;
+                    array_keys(LangGraphRuntime::ADAPTER_CLASSES)))));
+            $add('common', self::dispatcherAgentBlock());
+            $add('workflow', $dispatchers);
         }
         if (self::needsGates($analyzed)) {
-            $lines[] = self::banner('ROUTING',
+            $add('common', self::banner('ROUTING',
                 'A node after a choice (a code node with several exits, a',
                 'dispatcher) runs inside a _Gate: only when a parent ran and',
-                'the exit it took leads here. Untaken branches are skipped.');
-            $lines[] = self::gateAgentBlock();
+                'the exit it took leads here. Untaken branches are skipped.'));
+            $add('common', self::gateAgentBlock());
         }
-        $lines[] = self::banner('RUN EVENTS',
+        $add('common', self::banner('RUN EVENTS',
             'Each node\'s start and completion (a code node\'s exit, a',
             'dispatcher\'s route) go to GRAPH_RECORDER when the package\'s',
-            'listener set one: runs/ and GET /live, the editor\'s live canvas.');
-        $lines[] = CompiledRuntimeEmit::recordingBlock($analyzed, true);
-        $lines[] = self::banner('ORCHESTRATION',
+            'listener set one: runs/ and GET /live, the editor\'s live canvas.'));
+        $add('common', CompiledRuntimeEmit::recordingBlock($analyzed, true));
+        $add('workflow', self::banner('ORCHESTRATION',
             'The workflow graph as TOPOLOGICAL LAYERS: independent nodes at',
             'the same depth run together in a ParallelAgent; the layers run',
-            'in order inside a SequentialAgent. This mirrors the canvas.');
-        $lines[] = self::rootBlock($analyzed);
-        $lines[] = self::banner('CLI ENTRY',
+            'in order inside a SequentialAgent. This mirrors the canvas.'));
+        $add('workflow', self::rootBlock($analyzed));
+        $add('workflow', self::banner('CLI ENTRY',
             'Seeds the prompt (+ attached documents), runs the graph via',
             'Runner, streams a [node]/[tool] trace, saves the result per the',
             'Output node storage setting, and closes with a RUN SUMMARY',
-            '(time per node, total wall-clock, document location).');
-        $lines[] = self::mainBlock($analyzed);
+            '(time per node, total wall-clock, document location).'));
+        $add('workflow', self::mainBlock($analyzed));
 
-        return implode("\n", $lines) . "\n";
+        return array_map(null, $at, $lines);
     }
 
     /**
@@ -280,17 +307,61 @@ class ADKGenerator
         $docs = LangGraphPackage::startDocuments($analyzed['startDocuments'] ?? [], $this->startDocuments);
         $analyzed['startDocuments'] = $docs['docs'];
 
+        [$workflowPy, $commonPy, $agentFiles] = self::packageFiles($analyzed);
         $pkg = RunServerEmitter::package(
-            ['code' => self::emitAdk($analyzed)],
+            ['code' => $workflowPy],
             $name,
             'adk',
             'ADK run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            CompiledRuntimeEmit::packageCommonBlock(),
+            $commonPy,
             true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
-        $pkg['files'] = array_merge($pkg['files'],
+        $pkg['files'] = array_merge($pkg['files'], $agentFiles,
             ADKPackage::files($analyzed, $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files']));
         return $pkg;
+    }
+
+    /**
+     * Agents in separate files: [workflow.py, common.py, agents/ files]. common.py is the runtime (model
+     * factory, MCP client, tools, skills, the agent classes, run events) plus the run server's shared pieces;
+     * agents/<name>.py defines one node's agent (node_<id>) from it; workflow.py imports the nodes and
+     * assembles them (dispatchers, gates, root_agent), with run_workflow, the listener and the CLI.
+     */
+    public static function packageFiles(array $analyzed): array
+    {
+        $layout = CompiledRuntimeEmit::moduleLayout($analyzed);
+        $common = [];
+        $nodes = [];
+        $assembly = [];
+        foreach (self::parts($analyzed) as [$section, $text]) {
+            if ($section === 'common') {
+                $common[] = $text;
+            } elseif (str_starts_with($section, 'node:')) {
+                $nodes[substr($section, 5)] = rtrim($text, "\n");
+            } elseif ($section === 'workflow') {
+                $assembly[] = $text;
+            }
+        }
+        $wfName = json_encode((string) $analyzed['workflow']['name'], JSON_UNESCAPED_UNICODE);
+        $q = '"""';
+        $files = [['path' => 'agents/__init__.py', 'code' => "{$q}The workflow's nodes, one module each (imported by workflow.py).{$q}\n"]];
+        $imports = [];
+        foreach ($nodes as $nid => $text) {
+            $m = $layout[$nid] ?? ['file' => "agents/node_{$nid}.py", 'module' => "agents.node_{$nid}", 'display' => (string) $nid];
+            $display = str_replace([$q, "\n"], ["'''", ' '], $m['display']);
+            $files[] = ['path' => $m['file'], 'code' => "{$q}Node {$nid} ({$display}) of the workflow {$wfName}: its ADK agent, node_{$nid}.\n\n"
+                . "Imported by workflow.py. To change the node, edit the workflow in the editor and re-generate.{$q}\n"
+                . "from common import *  # noqa: F401,F403 -- the runtime: model factory, tools, agent classes\n\n\n"
+                . $text . "\n"];
+            $imports[] = "from {$m['module']} import node_{$nid}  # {$display}";
+        }
+        $workflow = "{$q}Workflow {$wfName} -- Google ADK, agents in separate files.\n\n"
+            . "common.py holds the runtime, agents/ one module per node; this file assembles the nodes (dispatchers,\n"
+            . "gates, root_agent) and runs them: run_workflow(), the Start's listener and the CLI.\n{$q}\n"
+            . "from common import *  # noqa: F401,F403 -- the runtime\n"
+            . implode("\n", $imports) . "\n\n\n"
+            . implode("\n", $assembly) . "\n";
+        return [$workflow, CompiledRuntimeEmit::packageCommonWithRuntime($common), $files];
     }
 
     // -------------------------------------------------------------------------
@@ -451,14 +522,15 @@ PY;
     PY;
     }
 
-    private static function codeInstancesBlock(array $analyzed): string
+    /** One entry per node id (the package puts each in its own file); codeInstancesBlock() joins them. */
+    public static function codeInstancesEntries(array $analyzed): array
     {
         $out = [];
         foreach ((array) ($analyzed['code'] ?? []) as $id => $cd) {
             $id = (string) $id;
             $parents = array_map(fn($p) => '[' . PythonEmitHelpers::pyStr($p[0]) . ', ' . PythonEmitHelpers::pyStr($p[1]) . ', '
                 . ($p[2] ? 'True' : 'False') . ']', self::codeParents($analyzed, $id));
-            $out[] = "# Code node {$id} -- " . str_replace(["\n", '"'], [' ', "'"], $cd['display']) . "\n"
+            $out[(string) $id] = "# Code node {$id} -- " . str_replace(["\n", '"'], [' ', "'"], $cd['display']) . "\n"
                 . "node_{$id} = _CodeAgent(\n"
                 . "    name=\"node_{$id}\",\n"
                 . "    node_id=\"{$id}\",\n"
@@ -472,7 +544,12 @@ PY;
                 . '    parents=[' . implode(', ', $parents) . "],\n"
                 . ")";
         }
-        return implode("\n\n", $out);
+        return $out;
+    }
+
+    private static function codeInstancesBlock(array $analyzed): string
+    {
+        return implode("\n\n", self::codeInstancesEntries($analyzed));
     }
 
 
@@ -938,7 +1015,8 @@ node output, published to session.state like any other node's result.
 TXT;
     }
 
-    private static function agentsBlock(array $analyzed): string
+    /** One entry per node id (the package puts each in its own file); agentsBlock() joins them. */
+    public static function agentEntries(array $analyzed): array
     {
         $out = [];
         $docById = [];
@@ -1127,9 +1205,14 @@ TXT;
                 $entry .= "node_{$id} = SequentialAgent(\n    name=\"node_{$id}\",\n    sub_agents=[{$subList}],\n)";
             }
 
-            $out[] = $entry;
+            $out[(string) $id] = $entry;
         }
-        return implode("\n\n", $out);
+        return $out;
+    }
+
+    private static function agentsBlock(array $analyzed): string
+    {
+        return implode("\n\n", self::agentEntries($analyzed));
     }
 
     /**
@@ -1195,7 +1278,8 @@ PY;
     }
 
     /** One `node_<id> = _PlaybookAgent(...)` per playbook node. */
-    private static function playbookInstancesBlock(array $analyzed): string
+    /** One entry per node id (the package puts each in its own file); playbookInstancesBlock() joins them. */
+    public static function playbookInstancesEntries(array $analyzed): array
     {
         $out = [];
         foreach ((array) ($analyzed['playbooks'] ?? []) as $pid => $pd) {
@@ -1214,9 +1298,14 @@ PY;
             $entry .= "    node_id=\"{$pid}\",\n";
             $entry .= '    source_keys=[' . implode(', ', $keys) . "],\n";
             $entry .= ")";
-            $out[] = $entry;
+            $out[(string) $pid] = $entry;
         }
-        return implode("\n\n", $out);
+        return $out;
+    }
+
+    private static function playbookInstancesBlock(array $analyzed): string
+    {
+        return implode("\n\n", self::playbookInstancesEntries($analyzed));
     }
 
     /**
@@ -1391,7 +1480,8 @@ PY;
      * multiple = joined), preserving formatting like HTML. Returns '' when the
      * workflow has no output nodes.
      */
-    private static function outputConsolidatorsBlock(array $analyzed): string
+    /** One entry per node id (the package puts each in its own file); outputConsolidatorsBlock() joins them. */
+    public static function outputConsolidatorsEntries(array $analyzed): array
     {
         $out = [];
         foreach ($analyzed['byId'] as $id => $node) {
@@ -1409,9 +1499,14 @@ PY;
             $entry  = "# Output (fan-in) node {$id} -- forwards its parent(s) result verbatim (no LLM),\n";
             $entry .= "# so formatting such as HTML is preserved. Single parent = pass-through.\n";
             $entry .= "node_{$id} = _PassThroughAgent(name=\"node_{$id}\", source_keys={$keysPy})";
-            $out[] = $entry;
+            $out[(string) $id] = $entry;
         }
-        return implode("\n\n", $out);
+        return $out;
+    }
+
+    private static function outputConsolidatorsBlock(array $analyzed): string
+    {
+        return implode("\n\n", self::outputConsolidatorsEntries($analyzed));
     }
 
     /**

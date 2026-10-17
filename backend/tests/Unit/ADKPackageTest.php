@@ -23,7 +23,8 @@ final class ADKPackageTest extends TestCase
         $paths = array_column($this->pkg()['files'], 'path');
         sort($paths);
         // the run server and script, plus the folder's own files (ADKPackage)
-        $this->assertSame(['.env.example', 'README.md', '__init__.py', 'api.py', 'common.py', 'requirements.txt', 'workflow.py'], $paths);
+        $this->assertSame(['.env.example', 'README.md', '__init__.py', 'agents/__init__.py', 'agents/human_resources.py', 'agents/it_claims.py',
+            'agents/techbuddy.py', 'api.py', 'common.py', 'requirements.txt', 'workflow.py'], $paths);   // agents in separate files
     }
 
     public function testWorkflowExposesTheContract(): void

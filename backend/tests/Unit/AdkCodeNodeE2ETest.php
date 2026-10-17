@@ -23,6 +23,12 @@ class AdkCodeNodeE2ETest extends TestCase
         return \AgentTeam\Services\ADKPackage::files($analyzed, sys_get_temp_dir());
     }
 
+    /** [workflow.py, common.py, agents/ files] of the package ("agents in separate files"). */
+    protected function packageSources(array $analyzed): array
+    {
+        return ADKGenerator::packageFiles($analyzed);
+    }
+
     private const PY = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
 
     private $server = null;
@@ -177,10 +183,10 @@ class AdkCodeNodeE2ETest extends TestCase
         $a['startMode'] = $startMode;
         $a['defaultWatch'] = ['server' => 'outlook', 'tool' => 'wait_for_new', 'args' => []];
         $a['package'] = true;
-        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => $this->emit($a)], 'adk e2e', 'e2e', 'run server',
-            \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), true);
+        [$workflowPy, $commonPy, $nodeFiles] = $this->packageSources($a);
+        $pkg = \AgentTeam\Services\RunServerEmitter::package(['code' => $workflowPy], 'adk e2e', 'e2e', 'run server', $commonPy, true);
         $dir = sys_get_temp_dir() . '/adk_listen_' . bin2hex(random_bytes(4));
-        foreach (array_merge($pkg['files'], $this->packageFiles($a)) as $f) {
+        foreach (array_merge($pkg['files'], $nodeFiles, $this->packageFiles($a)) as $f) {
             @mkdir(dirname("$dir/{$f['path']}"), 0777, true);
             file_put_contents("$dir/{$f['path']}", $f['code']);
         }

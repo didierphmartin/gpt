@@ -516,6 +516,50 @@ PY;
             . LangGraphRuntime::listenerBlock() . "\n\n" . $tail;
     }
 
+    /**
+     * "Agents in separate files": one module per node a target defines on its own (agent, dispatcher, playbook,
+     * code), named as LangGraph's modularLayout() names them -- the display name slugged to an identifier, else
+     * node_<id>_<slug> (also on a clash, or with common / workflow / agents).
+     *
+     * @return array<string, array{name:string, file:string, module:string, display:string}> node id => module
+     */
+    public static function moduleLayout(array $analyzed): array
+    {
+        $used = ['common' => true, 'workflow' => true, 'agents' => true];
+        $out = [];
+        foreach ((array) ($analyzed['order'] ?? []) as $nid) {
+            $nid = (string) $nid;
+            $display = $analyzed['code'][$nid]['display'] ?? $analyzed['playbooks'][$nid]['display']
+                ?? $analyzed['agents'][$nid]['name'] ?? null;
+            if ($display === null) {
+                continue;
+            }
+            $ascii = str_replace(["'", '"', '`', '^', '~'], '', iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', (string) $display) ?: (string) $display);
+            $slug = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', $ascii), '-'));
+            $name = str_replace('-', '_', substr($slug !== '' ? $slug : 'node', 0, 40));
+            if (!preg_match('/^[a-z_][a-z0-9_]*$/', $name) || isset($used[$name])) {
+                $name = "node_{$nid}_{$name}";
+            }
+            $used[$name] = true;
+            $out[$nid] = ['name' => $name, 'file' => "agents/{$name}.py", 'module' => "agents.{$name}", 'display' => (string) $display];
+        }
+        return $out;
+    }
+
+    /**
+     * The package's common.py when the target's runtime lives there too (agents in separate files): the
+     * runtime's first part (its docstring and imports) first, then the run server's shared pieces
+     * (packageCommonBlock), then the rest of the runtime, then __all__ so `from common import *` brings every
+     * name, the _-prefixed ones included.
+     */
+    public static function packageCommonWithRuntime(array $runtimeParts): string
+    {
+        $head = array_shift($runtimeParts);
+        $server = preg_replace('/\\A"""[^\\n]*"""\\n/', '', self::packageCommonBlock());   // its docstring: the runtime's comes first
+        return $head . "\n" . $server . "\n" . implode("\n", $runtimeParts) . "\n\n"
+            . "__all__ = [n for n in dir() if not n.startswith(\"__\")]   # agents/ and workflow.py import it all (_ names too)\n";
+    }
+
     /** The package's common.py: the run server's event sink, and the run records, live feed and console view (LangGraph's, copied). */
     public static function packageCommonBlock(): string
     {

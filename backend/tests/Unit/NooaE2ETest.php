@@ -19,4 +19,9 @@ class NooaE2ETest extends AdkCodeNodeE2ETest
     {
         return CompiledPackage::files($analyzed, sys_get_temp_dir(), [], NOOAGenerator::FRAMEWORK, 'NVIDIA NOOA');
     }
+
+    protected function packageSources(array $analyzed): array
+    {
+        return [$this->emit($analyzed), \AgentTeam\Services\CompiledRuntimeEmit::packageCommonBlock(), []];
+    }
 }
