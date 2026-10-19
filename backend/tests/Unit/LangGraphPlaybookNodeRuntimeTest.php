@@ -294,6 +294,41 @@ PY;
         self::assertNull($r['after'], 'the job text is reset after the node');
     }
 
+    /** @return array the routes, the node text and the request, for the playbook '2' fed by $outs over $edges */
+    private function firstParentRun(string $edges, string $order, string $types, string $agentsExtra, string $outs): array
+    {
+        return $this->py("async def run_node(nid, request):\n    return await node(**FROM_INPUT).run(request, _trace)\n"
+            . "SCRIPT[:] = [RESOLVE]\n"
+            . "g = WorkflowGraph(edges={$edges}, order={$order},\n"
+            . "    node_types={$types},\n"
+            . "    agents={'2': {'kind':'playbook','display':'PB','exits':['done','failed'],'exit_targets':{'done':['3'],'failed':[]}}{$agentsExtra}},\n"
+            . "    run_node=run_node, start_documents=[])\n"
+            . "outs = {$outs}\n"
+            . "res = asyncio.run(g._module_node('2')({'user_prompt': 'x', 'node_outputs': outs}))\n"
+            . "print(json.dumps({'routes': res['routes'], 'text': res['node_outputs']['2']['text']}))\n");
+    }
+
+    public function testFromInputFirstParentLooksThroughADispatcher(): void
+    {
+        // Claim (code) -> Dispatcher (agent, routes) -> PB: the job is the dispatcher's input (PHP parents[0]),
+        // not the dispatcher's own text.
+        $r = $this->firstParentRun("[['1','6'],['6','2'],['2','3']]", "['1','6','2','3']",
+            "{'1':'code','6':'agent','2':'playbook','3':'output'}",
+            ", '6': {'kind':'agent','display':'Disp','dispatch':[{'id':'pb','targets':['2']}]}",
+            "{'1': {'source': 'Claim', 'text': '## Claim\\n{\"playbook\": \"test\", \"task\": \"T1\"}'}, '6': {'source': 'Disp', 'text': 'routing to the playbook'}}");
+        self::assertSame(['2' => 'done'], $r['routes']);
+        self::assertStringEndsWith("\n\nJob: {\"playbook\":\"test\",\"task\":\"T1\"}", $r['text']);
+    }
+
+    public function testFromInputSkipsAnEmptyFirstParent(): void
+    {
+        $r = $this->firstParentRun("[['5','2'],['1','2'],['2','3']]", "['5','1','2','3']",
+            "{'5':'code','1':'code','2':'playbook','3':'output'}", '',
+            "{'5': {'source': 'Empty', 'text': ''}, '1': {'source': 'Claim', 'text': '{\"playbook\": \"test\"}'}}");
+        self::assertSame(['2' => 'done'], $r['routes']);
+        self::assertStringEndsWith("\n\nJob: {\"playbook\":\"test\"}", $r['text']);
+    }
+
     public function testWorkflowGraphRoutesPlaybookExits(): void
     {
         $file = tempnam(sys_get_temp_dir(), 'pbg') . '.py';

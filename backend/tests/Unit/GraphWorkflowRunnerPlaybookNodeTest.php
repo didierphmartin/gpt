@@ -248,4 +248,13 @@ final class GraphWorkflowRunnerPlaybookNodeTest extends TestCase
         self::assertStringStartsWith('Playbook failed: error:', $first);
         self::assertStringContainsString('Instructions', $first);
     }
+
+    public function testFromInputNodeWithoutExitsFailsTheRunOnFailure(): void
+    {
+        [$out, $o] = $this->go(['playbook_source' => 'input'], '{"playbook":"nope","task":"INC0001"}', false);
+        self::assertFalse($out['success'], 'a legacy one-output node has no failed exit: the run fails');
+        self::assertStringContainsString('playbook_not_found:nope', (string)($out['error'] ?? ''));
+        self::assertArrayNotHasKey(4, $o);
+        self::assertArrayNotHasKey(5, $o);
+    }
 }

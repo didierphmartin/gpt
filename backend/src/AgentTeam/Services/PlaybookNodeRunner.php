@@ -98,7 +98,8 @@ final class PlaybookNodeRunner
         $unattendedGate = null;
         $emit = function (array $ev) use (&$events, $emitInner, &$unattendedGate): void {
             $events[] = $ev;
-            if (($ev['type'] ?? null) === 'tool_result' && !empty($ev['result']['unattended'])) {
+            // The first unattended gate wins (the run ends there).
+            if ($unattendedGate === null && ($ev['type'] ?? null) === 'tool_result' && !empty($ev['result']['unattended'])) {
                 $unattendedGate = (string)($ev['result']['kind'] ?? '');
             }
             $emitInner($ev);
@@ -132,9 +133,17 @@ final class PlaybookNodeRunner
 
         $result = $interpreter->runLeg($runId, 0, $doc, [], $requester, $requestText);
 
-        $output = self::renderTranscript($doc->title, $events, (string)($result['output'] ?? ''), $runId, (string)$result['status']);
+        $status = (string)$result['status'];
+        if ($unattendedGate !== null && $status !== 'handed_off') {
+            // Defence in depth: an unattended gate hands the run off, whatever
+            // happened after it. Nothing may turn a hand-off into a resolve.
+            $status = 'handed_off';
+            $state->setStatus($runId, 'handed_off');
+        }
 
-        return ['output' => $output, 'run_id' => $runId, 'status' => (string)$result['status'], 'gate' => $unattendedGate];
+        $output = self::renderTranscript($doc->title, $events, (string)($result['output'] ?? ''), $runId, $status);
+
+        return ['output' => $output, 'run_id' => $runId, 'status' => $status, 'gate' => $unattendedGate];
     }
 
     /**

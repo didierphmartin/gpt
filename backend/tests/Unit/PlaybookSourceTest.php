@@ -102,5 +102,8 @@ final class PlaybookSourceTest extends TestCase
         $this->assertNull(PlaybookSource::jobLine('[1,2]'));
         $this->assertNull(PlaybookSource::jobLine('"text"'));
         $this->assertNull(PlaybookSource::jobLine("## Get job\n"));
+        $this->assertSame('Job: {}', PlaybookSource::jobLine('{}'));
+        $this->assertSame('Job: {"a":{}}', PlaybookSource::jobLine('{"a":{}}'));
+        $this->assertSame('Job: {"a":{"b":[]},"c":null}', PlaybookSource::jobLine('{"a":{"b":[]},"c":null}'));
     }
 }

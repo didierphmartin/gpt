@@ -1330,7 +1330,9 @@ class WorkflowGraph:
             ad = self.agents[nid]
             self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""))
             outs = state.get("node_outputs", {})
-            first = next((outs[p]["text"] for p in self.parents(nid) if p in outs), None)
+            # The job text is the FIRST parent's (PHP CodeNodeStep::parents[0]): a dispatcher stands
+            # for its own parents, and a parent with an empty text is skipped.
+            first = next((outs[p]["text"] for p in self._code_parents(nid) if p in outs and outs[p].get("text")), None)
             token = PLAYBOOK_JOB_TEXT.set(first if ad.get("kind") == "playbook" else None)
             try:
                 out = await self.run_node(nid, self._request_for(nid, state))
