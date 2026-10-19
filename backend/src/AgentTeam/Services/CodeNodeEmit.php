@@ -79,6 +79,20 @@ final class CodeNodeEmit
         if (!is_int($timeout) || $timeout < 1 || $timeout > 300) {
             $fail('timeout_s must be 1 to 300 seconds');
         }
+        $targets = self::exitTargets($nid, array_values($exits), $rawEdges, $nodeIds);
+        return ['display' => $display, 'kind' => 'code', 'source' => (string) ($cfg['code'] ?? ''),
+            'exits' => array_values($exits), 'mcp_servers' => array_keys($slugs), 'timeout_s' => $timeout,
+            'exit_targets' => $targets, 'servers' => array_keys($servers)];
+    }
+
+    /**
+     * The port -> exit rule shared by code and playbook nodes: an edge leaving port output_k goes to the
+     * k-th exit's targets (ports outside the exit list, and dangling edges when $nodeIds is given, are ignored).
+     *
+     * @return array<string,string[]> exit name -> target node ids
+     */
+    public static function exitTargets(string $nid, array $exits, array $rawEdges, ?array $nodeIds = null): array
+    {
         $targets = array_fill_keys($exits, []);
         $known = $nodeIds === null ? null : array_fill_keys(array_map('strval', $nodeIds), true);
         foreach ($rawEdges as $e) {
@@ -92,9 +106,7 @@ final class CodeNodeEmit
                 $targets[$exits[$k - 1]][] = $to;
             }
         }
-        return ['display' => $display, 'kind' => 'code', 'source' => (string) ($cfg['code'] ?? ''),
-            'exits' => array_values($exits), 'mcp_servers' => array_keys($slugs), 'timeout_s' => $timeout,
-            'exit_targets' => $targets, 'servers' => array_keys($servers)];
+        return $targets;
     }
 
     private static function typeOf(array $n): string

@@ -86,7 +86,9 @@ class GraphWorkflowRunner
         AgentRepository $agentRepository,
         AgentRunner $agentRunner,
         WorkflowGraphRepository $graphRepository,
-        array $config = []
+        array $config = [],
+        /** @var (\Closure():PlaybookNodeRunner)|null fn(): PlaybookNodeRunner — tests build one with fakes */
+        private readonly ?\Closure $playbookRunnerFactory = null
     ) {
         $this->db = $db;
         $this->traceStore = new ExecutionTraceStore($db);
@@ -792,7 +794,6 @@ class GraphWorkflowRunner
     public static function unsupportedNodeMessage(string $nodeType, array $config = []): ?string
     {
         return match ($nodeType) {
-            'playbook' => "Playbook nodes run only from the workflow editor's browser run path (server-side durable runs arrive in slice 1c).",
             'code' => CodeNodeExecutor::enabled($config) ? null
                 : 'Code nodes are switched off on this server (CODE_NODES_SERVER_SIDE=0); run from the editor or a compiled workflow.',
             default => null,
@@ -817,7 +818,7 @@ class GraphWorkflowRunner
         return match ($nodeType) {
             'agent' => $this->executeAgentNode($node, $userId, $userPrompt, $edges, $executedNodes),
             'agent-template' => throw new \RuntimeException("Unconfigured agent template node found. Please configure all agent nodes before running the workflow."),
-            'playbook' => throw new \RuntimeException(self::unsupportedNodeMessage('playbook')),
+            'playbook' => $this->executePlaybookNode($node, $userId, $userPrompt, $edges),
             'code' => $this->executeCodeNode($node, $userId, $userPrompt, $edges),
             'output' => $this->executeOutputNode($node, $edges, $executedNodes),
             default => ['type' => $nodeType, 'output' => null],
@@ -1673,6 +1674,62 @@ class GraphWorkflowRunner
         }
         return ['type' => 'code', 'output' => $route['output'], 'exit' => $route['exit'], 'success' => true,
             'code_route' => $route];
+    }
+
+    /**
+     * A playbook node, server-side and unattended (nobody can approve): resolved -> exit 'done', anything else
+     * -> exit 'failed' (PlaybookOutcome). With config.exits the node routes like a code node (port output_k ->
+     * k-th exit, CodeNodeEmit::exitTargets); without exits it behaves as before: all children run, a failure
+     * fails the run. A from-input node ends its output with "Job: <first parent's JSON>" for the hand-back nodes.
+     */
+    private function executePlaybookNode(array $node, int $userId, string $userPrompt, array $edges): array
+    {
+        $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        $parents = CodeNodeStep::parents((int) $node['id'], $edges, $this->graphNodes, $this->nodeOutputs);
+        $request = $parents ? implode("\n\n", array_column($parents, 'text')) : $userPrompt;
+        $fromInput = PlaybookSource::isFromInput($cfg);
+        $parentText = (string) ($parents[0]['text'] ?? '');
+        $transcript = '';
+        $reason = null;
+        if ($fromInput) {
+            $src = PlaybookSource::fromInput($this->db, $userId, $cfg, $parentText);
+            if ($src['ok']) {
+                $cfg['playbook'] = $src['text'];
+            } else {
+                $reason = $src['reason'];
+            }
+        }
+        if ($reason === null) {
+            try {
+                $runner = $this->playbookRunnerFactory !== null ? ($this->playbookRunnerFactory)() : new PlaybookNodeRunner($this->config);
+                $res = $runner->run($userId, $cfg, $request, fn(array $ev) => null, true);
+                $transcript = (string) $res['output'];
+                $reason = PlaybookOutcome::reason((string) $res['status'], $res['gate'] ?? null);
+            } catch (\Throwable $e) {
+                $reason = 'error:' . $e->getMessage();
+            }
+        }
+        $exit = $reason === null ? 'done' : 'failed';
+        $text = $reason === null ? $transcript : PlaybookOutcome::failureText($reason, $transcript);
+        if ($fromInput) {
+            $json = json_decode(trim((string) preg_replace('/\A## [^\n]*\n/', '', ltrim($parentText))), true);
+            if ($json !== null) {
+                $text .= "\n\nJob: " . json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            }
+        }
+        $hasExits = is_array($cfg['exits'] ?? null) && $cfg['exits'] !== [];
+        if (!$hasExits) {
+            if ($reason !== null) {
+                throw new \RuntimeException("playbook node failed: {$reason}");
+            }
+            return ['type' => 'playbook', 'output' => $text, 'success' => true];
+        }
+        $this->nodeLog($node, $reason === null ? 'info' : 'error', 'done', 'playbook took exit ' . $exit . ($reason !== null ? ": {$reason}" : ''));
+        $targets = CodeNodeEmit::exitTargets((string) $node['id'], array_values($cfg['exits']), $edges, array_keys($this->graphNodes));
+        $chosen = array_map('intval', $targets[$exit] ?? []);
+        $children = array_map('intval', $this->getNextNodeIds((int) $node['id'], $edges));
+        return ['type' => 'playbook', 'output' => $text, 'exit' => $exit, 'success' => true,
+            'code_route' => ['chosen' => $chosen, 'skip' => array_values(array_diff($children, $chosen))]];
     }
 
     /**
