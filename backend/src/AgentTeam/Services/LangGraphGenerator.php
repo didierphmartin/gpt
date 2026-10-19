@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Playbook\PlaybookStore;
 use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use RuntimeException;
 
 /**
@@ -286,6 +288,11 @@ class LangGraphGenerator
         }
         if ($facts['codeData'] !== [] && !empty($options['a2a'])) {
             throw new RuntimeException('Code nodes are not supported by the A2A packaging yet. '
+                . 'Compile this workflow as a single file or with agents in separate files.');
+        }
+        if (!empty($options['a2a']) && array_filter($facts['playbookData'],
+                fn(array $pd) => ($pd['source'] ?? 'fixed') === 'input' || !empty($pd['exits'])) !== []) {
+            throw new RuntimeException('Playbook nodes with exits or "from input" are not supported by the A2A packaging yet. '
                 . 'Compile this workflow as a single file or with agents in separate files.');
         }
         if (!empty($options['a2a'])) {
@@ -623,6 +630,10 @@ class LangGraphGenerator
         $lines[] = '#   writes_enabled: node toggle; write tools are blocked when False';
         $lines[] = $sep;
         $lines[] = '';
+        if (self::hasFromInput($playbookData)) {
+            array_push($lines, ...self::publishedPlaybooksLines($facts['publishedPlaybooks'], $facts['publishedSkipped']));
+            $lines[] = '';
+        }
         if ($playbookData === []) {
             $lines[] = 'PLAYBOOKS = {}';
         } else {
@@ -1148,8 +1159,25 @@ class LangGraphGenerator
             if (self::nodeType($node) !== 'playbook') {
                 continue;
             }
-            $pd = $this->playbookData($node, $availableById, $providerDefaults, $userId);
+            $pd = PlaybookSource::isFromInput(is_array($node['config'] ?? null) ? $node['config'] : [])
+                ? PlaybookEmit::inputNodeData($node, $providerDefaults, $userId)
+                : $this->playbookData($node, $availableById, $providerDefaults, $userId);
+            // Exits (["done", "failed"]): port output_k is exit k, wired like a code node's.
+            $exits = $node['config']['exits'] ?? null;
+            if (is_array($exits) && $exits !== []) {
+                $pd['exits'] = array_values(array_map('strval', $exits));
+                $pd['exit_targets'] = CodeNodeEmit::exitTargets((string) $nid, $pd['exits'], $graph['edges'] ?? [], array_keys($byId));
+            }
             $playbookData[$nid] = $pd;
+        }
+        // "From input" nodes run whichever published playbook the job names: bake every robot
+        // copy (the compiled program never reads the database).
+        $publishedPlaybooks = [];
+        $publishedSkipped = [];
+        if (array_filter($playbookData, fn(array $pd) => ($pd['source'] ?? 'fixed') === 'input') !== []) {
+            [$publishedPlaybooks, $publishedSkipped] = $this->publishedPlaybooks($availableById, $providerDefaults, $userId);
+        }
+        foreach ([...array_values($playbookData), ...array_values($publishedPlaybooks)] as $pd) {
             foreach ($pd['actions'] as $a) {
                 if (($a['kind'] ?? '') === 'mcp') {
                     $playbookServerUrls[$a['server_url']] = true;
@@ -1229,7 +1257,7 @@ class LangGraphGenerator
                 $usedNamesByUrl[$slugToUrl[$slg]][$slg] = $slugName[$slg] ?? $slg;
             }
         }
-        foreach ($playbookData as $pd) {
+        foreach ([...array_values($playbookData), ...array_values($publishedPlaybooks)] as $pd) {
             foreach ($pd['actions'] as $a) {
                 if (($a['kind'] ?? '') === 'mcp') {
                     $slg = self::serverSlug(explode('.', (string) $a['target'], 2)[0]);
@@ -1311,7 +1339,7 @@ class LangGraphGenerator
         $startOptionLabel = $startTrigger !== null ? (string) ($startTrigger['label'] ?? 'Start option') : null;
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
-            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
+            'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'publishedPlaybooks', 'publishedSkipped', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
             'orchestration', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
     }
 
@@ -3690,6 +3718,10 @@ TXT;
                 }
             }
         }
+        if ($isPlaybook && ($def['source'] ?? 'fixed') === 'input') {
+            array_push($L, ...self::publishedPlaybooksLines($facts['publishedPlaybooks'], $facts['publishedSkipped']));
+            $L[] = '';
+        }
         $defLines = $kind === 'code'
             ? self::codeNodeDefinitionLines($nid, $def)
             : $this->nodeDefinitionLines($facts, $nid, $kind, $entry['display'], $def, $isPlaybook);
@@ -3760,6 +3792,17 @@ TXT;
             array_push($L, ...$verbatim($def['instructions']));
             $L[] = '""",';
             $L[] = $indent . '    "actions": ' . PythonEmitHelpers::jsonToPython($def['actions'], false) . ',';
+            if (!empty($def['exits'])) {
+                // done / failed: the exit the run took picks the children (WorkflowGraph._code_router).
+                $L[] = $indent . '    "exits": ' . $j($def['exits']) . ',';
+                $L[] = $indent . '    "exit_targets": ' . $j((object) $def['exit_targets']) . ',';
+            }
+            if (($def['source'] ?? 'fixed') === 'input') {
+                // The parent's JSON names the playbook (its input_field); it runs from the robot's published copies.
+                $L[] = $indent . '    "source": "input",';
+                $L[] = $indent . '    "input_field": ' . $j($def['input_field']) . ',';
+                $L[] = $indent . '    "published": PUBLISHED_PLAYBOOKS,';
+            }
         } else {
             $L[] = $indent . '    "system_prompt": """';
             array_push($L, ...$verbatim($def['system_prompt']));
@@ -4027,6 +4070,8 @@ def make_listener(state: LoopState) -> Listener | None:
     trigger is missing or bad."""
     if START_MODE not in ("cron", "watch"):
         return None
+    if not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
+        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --listen run's gates: a gate hands the job back
     ap = argparse.ArgumentParser()
     ap.error = _refuse
     cron = CronExpression.from_cli(ap, "" if START_MODE == "cron" else None, DEFAULT_CRON)
@@ -4056,6 +4101,8 @@ if __name__ == "__main__":
     talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
     mode = choose_mode(a, START_MODE)
+    if mode == "watch" and not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
+        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --watch run's gates: a gate hands the job back
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
@@ -4095,6 +4142,66 @@ PY;
      * the playbook text is missing or has hard binding errors, like the
      * browser runner (PlaybookNodeRunner) does.
      */
+    private static function hasFromInput(array $playbookData): bool
+    {
+        return array_filter($playbookData, fn(array $pd) => ($pd['source'] ?? 'fixed') === 'input') !== [];
+    }
+
+    /**
+     * The robot's published playbooks, bound like a fixed playbook node (PlaybookEmit::nodeData) and
+     * keyed by playbook key: [baked documents, [key => why it was left out]]. No robot account: none.
+     * A copy whose #Actions do not bind is left out (a job naming it fails as playbook_not_found)
+     * rather than failing the whole compile.
+     */
+    private function publishedPlaybooks(array $availableById, array $providerDefaults, ?string $userId): array
+    {
+        $robotId = RobotAccount::id($this->db);
+        if ($robotId === null) {
+            return [[], []];
+        }
+        $baked = [];
+        $skipped = [];
+        foreach ((new PlaybookStore($this->db))->robotList($robotId) as $row) {
+            $key = (string) $row['pkey'];
+            try {
+                $d = PlaybookEmit::nodeData(['id' => $key, 'config' => ['playbook' => (string) $row['text'], 'name' => (string) $row['title']]],
+                    $availableById, $providerDefaults, $userId);
+            } catch (RuntimeException $e) {
+                $skipped[$key] = $e->getMessage();
+                continue;
+            }
+            $baked[$key] = array_intersect_key($d, array_flip(['title', 'domain', 'instructions', 'policy', 'approvers', 'actions']));
+        }
+        return [$baked, $skipped];
+    }
+
+    /** `PUBLISHED_PLAYBOOKS = {key: {title, domain, instructions, policy, approvers, actions}}` (single file, modular module). */
+    private static function publishedPlaybooksLines(array $published, array $skipped): array
+    {
+        $L = ['# PUBLISHED PLAYBOOKS -- the robot\'s published copies, baked at compile time: a "from input"',
+              '# playbook node runs the one its parent\'s JSON names (an unknown key takes the failed exit).'];
+        foreach ($skipped as $key => $why) {
+            $L[] = '# not baked: ' . $key . ' -- ' . str_replace("\n", ' ', $why);
+        }
+        if ($published === []) {
+            $L[] = 'PUBLISHED_PLAYBOOKS = {}';
+            return $L;
+        }
+        $L[] = 'PUBLISHED_PLAYBOOKS = {';
+        foreach ($published as $key => $d) {
+            $L[] = '    ' . PythonEmitHelpers::pyStr((string) $key) . ': {';
+            $L[] = '        "title": ' . PythonEmitHelpers::pyStr((string) $d['title']) . ',';
+            $L[] = '        "domain": ' . PythonEmitHelpers::pyStr((string) ($d['domain'] ?? '')) . ',';
+            $L[] = '        "instructions": ' . PythonEmitHelpers::pyStr((string) $d['instructions']) . ',';
+            $L[] = '        "policy": ' . PythonEmitHelpers::jsonToPython($d['policy'], true) . ',';
+            $L[] = '        "approvers": ' . PythonEmitHelpers::jsonToPython($d['approvers'], true) . ',';
+            $L[] = '        "actions": ' . PythonEmitHelpers::jsonToPython($d['actions'], false) . ',';
+            $L[] = '    },';
+        }
+        $L[] = '}';
+        return $L;
+    }
+
     /** @see PlaybookEmit::nodeData() -- shared with every other compile target. */
     private function playbookData(array $node, array $availableById, array $providerDefaults, ?string $userId): array
     {
@@ -4502,6 +4609,8 @@ if __name__ == "__main__":
     talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
     mode = choose_mode(a, START_MODE)
+    if mode == "watch" and not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
+        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --watch run's gates: a gate hands the job back
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")

@@ -79,6 +79,23 @@ final class PlaybookEmit
             $slug = trim(strtolower((string) preg_replace('/[^a-z0-9]+/i', '_', $name)), '_');
             $actions[] = ['llm_name' => 'unbound__' . $slug, 'kind' => 'unbound', 'action_name' => $name, 'target' => $target];
         }
+        return [
+            'display' => (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $doc->title),
+            'title' => $doc->title,
+            'domain' => $doc->domain,
+            'instructions' => $doc->instructions,
+            'policy' => $policy,
+            'approvers' => $doc->approvers,
+            'requester' => ['id' => (string) ($userId ?? '')],
+        ] + self::modelSettings($cfg, $providerDefaults) + [
+            'writes_enabled' => $writesEnabled,
+            'actions' => $actions,
+        ];
+    }
+
+    /** The node's model settings: provider (default claude), model (default: the provider's platform default), sampling, thinking. */
+    private static function modelSettings(array $cfg, array $providerDefaults): array
+    {
         $provider = strtolower((string) ($cfg['agent_provider'] ?? $cfg['provider'] ?? $cfg['llm_provider'] ?? ''));
         if ($provider === '') {
             $provider = 'claude';
@@ -89,21 +106,49 @@ final class PlaybookEmit
         }
         $settings = is_array($cfg['settings'] ?? null) ? $cfg['settings'] : [];
         return [
-            'display' => (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $doc->title),
-            'title' => $doc->title,
-            'domain' => $doc->domain,
-            'instructions' => $doc->instructions,
-            'policy' => $policy,
-            'approvers' => $doc->approvers,
-            'requester' => ['id' => (string) ($userId ?? '')],
             'provider' => $provider,
             'model' => $model,
             'temperature' => (float) ($settings['temperature'] ?? 0.7),
             'max_tokens' => (int) ($settings['max_tokens'] ?? 4096),
             'thinking' => in_array($settings['thinking'] ?? null, ['on', 'off'], true) ? $settings['thinking'] : null,
-            'writes_enabled' => $writesEnabled,
-            'actions' => $actions,
         ];
+    }
+
+    /**
+     * A "from input" playbook node (PlaybookSource::isFromInput): the node's own settings, no
+     * document -- the playbook its parent's JSON names comes from the baked PUBLISHED_PLAYBOOKS
+     * at run time. Only the LangGraph target compiles one (see refuseFromInput()).
+     */
+    public static function inputNodeData(array $node, array $providerDefaults, ?string $userId): array
+    {
+        $nid = (string) ($node['id'] ?? $node['drawflow_node_id'] ?? ($node['_id'] ?? ''));
+        $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        $field = $cfg['playbook_input_field'] ?? 'playbook';
+        $writesEnabled = !empty($cfg['writes_enabled']);
+        return [
+            'display' => (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $nid),
+            'title' => 'Playbook from input',
+            'domain' => '',
+            'instructions' => '',
+            'policy' => $writesEnabled ? ['writes_enabled' => true] : [],
+            'approvers' => [],
+            'requester' => ['id' => (string) ($userId ?? '')],
+        ] + self::modelSettings($cfg, $providerDefaults) + [
+            'writes_enabled' => $writesEnabled,
+            'actions' => [],
+            'source' => 'input',
+            'input_field' => is_string($field) && $field !== '' ? $field : 'playbook',
+        ];
+    }
+
+    /** ADK, MAF and NOOA bake fixed playbooks only: a "from input" node is refused at compile time. */
+    public static function refuseFromInput(array $node): void
+    {
+        $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        if (PlaybookSource::isFromInput($cfg)) {
+            $name = (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $node['id'] ?? '');
+            throw new RuntimeException("Playbook node \"{$name}\": \"from input\" is supported by the LangGraph target only.");
+        }
     }
 
     /**

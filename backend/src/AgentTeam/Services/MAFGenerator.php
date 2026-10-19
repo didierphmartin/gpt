@@ -77,6 +77,7 @@ class MAFGenerator
             if (WorkflowGraphAnalyzer::typeOf($pnode) !== 'playbook') {
                 continue;
             }
+            PlaybookEmit::refuseFromInput($pnode);
             $analyzed['playbooks'][(string) $pid] =
                 PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
         }
