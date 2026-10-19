@@ -130,4 +130,29 @@ final class PlaybookNodeRunnerTest extends TestCase
         $this->assertSame('approval', $gateEvents[0]['kind']);
         $this->assertSame($result['run_id'], $gateEvents[0]['run_id']);
     }
+
+    public function testUnattendedRunStopsAtFirstGate(): void
+    {
+        $pdo = $this->makeSqlitePdo();
+        $calls = 0;
+        $inner = $this->scriptedLlm([
+            [['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK to proceed?']]],
+            [['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]],
+        ]);
+        $llm = function (array $m, array $t) use ($inner, &$calls) { $calls++; return $inner($m, $t); };
+
+        $runner = new PlaybookNodeRunner(
+            config: [],
+            llmFactory: fn(array $nodeConfig) => $llm,
+            mcpFactory: fn(PDO $pdo, int $userId) => new FakeMcpExecutor(),
+            bridgeFactory: fn(\Closure $emit) => new FakeNodeRunnerBridge($emit),
+            pdoFactory: fn() => $pdo,
+        );
+
+        $result = $runner->run(1, ['playbook' => $this->simplePlaybook()], 'Please help me.', function (array $e) {}, unattended: true);
+
+        $this->assertSame('handed_off', $result['status']);
+        $this->assertSame('approval', $result['gate']);
+        $this->assertSame(1, $calls);
+    }
 }
