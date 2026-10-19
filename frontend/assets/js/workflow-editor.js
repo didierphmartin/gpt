@@ -9385,6 +9385,7 @@ class WorkflowEditor {
                         agent_provider: agentProvider || pa.provider || '',
                         model: pa.model || '',
                         agent_id: agentId ? parseInt(agentId, 10) : null,
+                        exits: [...this.PLAYBOOK_EXITS],
                     });
                     break;
                 }
@@ -9404,7 +9405,7 @@ class WorkflowEditor {
                 // A Playbooks Library row carries its id; the palette node does not (first save creates one).
                 const pbId = e.dataTransfer.getData('playbook-id');
                 const row = pbId ? window.PlaybookCollection?.cache.get(pbId) : null;
-                this.addPlaybookNode(x, y, pbId ? { name: row?.title || 'Playbook', playbook_id: parseInt(pbId, 10) } : null);
+                this.addPlaybookNode(x, y, { exits: [...this.PLAYBOOK_EXITS], ...(pbId ? { name: row?.title || 'Playbook', playbook_id: parseInt(pbId, 10) } : {}) });
                 break;
             }
             case 'code': {
@@ -9572,6 +9573,9 @@ class WorkflowEditor {
      * affordance) but is a free-standing node like an agent — no fixed
      * pipeline position, connects like any other agent-workflow node.
      */
+    /** A new Playbook node's exits: output_1 = done (resolved), output_2 = failed (anything else). */
+    get PLAYBOOK_EXITS() { return ['done', 'failed']; }
+
     addPlaybookNode(x, y, config = null) {
         // The node links to the collection by playbook_id (no copy of the text;
         // PlaybookCollection.nodeData). writes_enabled defaults ON for new nodes
@@ -9597,7 +9601,8 @@ class WorkflowEditor {
         const drawflowId = this.editor.addNode(
             'playbook',
             1, // inputs
-            1, // outputs
+            // A node with exits (new ones: done / failed) has one port per exit; an old node keeps its one.
+            Array.isArray(nodeConfig.exits) && nodeConfig.exits.length ? nodeConfig.exits.length : 1, // outputs
             x, y,
             'playbook',
             nodeConfig,
@@ -14729,10 +14734,10 @@ class WorkflowEditor {
             // this on the server path, the browser path assembles it from the
             // SSE events it rendered.
             const rawOutput = (finalResult && finalResult.output) || '';
-            const output = /^# Playbook: /.test(rawOutput)
+            const nd = this.nodeExecutionData[dfId];
+            const output = /^(# Playbook: |Playbook failed: )/.test(rawOutput)
                 ? rawOutput
                 : this._pbTranscriptText(this._playbookNodeSummary(data), nd.pbEvents || [], rawOutput, finalResult?.run_id ?? null, finalResult?.status || 'finished');
-            const nd = this.nodeExecutionData[dfId];
             nd.output = output;
             nd.success = true;
             nd.runId = finalResult?.run_id;
@@ -14748,7 +14753,8 @@ class WorkflowEditor {
             }
             this.highlightNode(dfId, 'completed', dfId, 'agent');
             this.updateModalInputOutput(dfId);
-            return { success: true, output };
+            // The exit the server chose (done when resolved, failed otherwise); absent for an older server.
+            return { success: true, output, exit: finalResult?.exit || null };
         } catch (e) {
             const msg = String(e?.message || e);
             const nd = this.nodeExecutionData[dfId] || (this.nodeExecutionData[dfId] = {});
@@ -14763,7 +14769,7 @@ class WorkflowEditor {
             if (!inConversation) this._pbOverlayFinish(false, msg);
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
-            return { success: false, output: 'Error: ' + msg };
+            return { success: false, output: 'Error: ' + msg, exit: 'failed' };
         }
     }
 
@@ -16054,16 +16060,17 @@ class WorkflowEditor {
         const live = new Set();
         for (const id of Object.keys(nodes)) {
             const kind = this._wfNodeKind(id, nodes);
-            if (kind !== 'code' && kind !== 'start') continue;
+            const pbExits = kind === 'playbook' && Array.isArray(nodes[id].data?.exits) && nodes[id].data.exits.length;
+            if (kind !== 'code' && kind !== 'start' && !pbExits) continue;
             // Each output port names its exit on hover (none on a plain Start or a no-exit code node): a CSS label, not a
             // title, whose browser tooltip the port's hover scaling and the animated links keep from showing.
-            const exits = kind === 'code' || nodes[id].data?.start_option ? nodes[id].data?.exits : null;
+            const exits = kind === 'code' || pbExits || nodes[id].data?.start_option ? nodes[id].data?.exits : null;
             this.container.querySelectorAll(`#node-${id} .outputs .output`).forEach((port) => {
                 const n = Number((port.className.match(/\boutput_(\d+)\b/) || [])[1]);
                 const exit = exits && !window.CodeNode.isPlain(exits) ? exits[n - 1] : null;
                 if (exit) port.dataset.exit = exit; else delete port.dataset.exit;   // shown by CSS on hover
             });
-            if (kind !== 'code' && !(kind === 'start' && nodes[id].data?.start_option)) continue;
+            if (kind !== 'code' && !pbExits && !(kind === 'start' && nodes[id].data?.start_option)) continue;
             for (const t of window.CodeNode.exitTags(id, nodes)) {
                 const svg = this.container.querySelector(`svg.connection.node_out_node-${id}.node_in_node-${t.to}.${t.port}`);
                 const path = svg?.querySelector('path.main-path');
@@ -16979,6 +16986,26 @@ class WorkflowEditor {
                         const res = this._wfNodeKind(id, nodes) === 'playbook'
                             ? await this._runNodeAsPlaybookUnit(node, ctx)
                             : await this._runNodeAsChatUnit(node, ctx, { dispatchTargets, routedBy: this._wfRoutedBy[String(id)] || null });
+                        const pbExits = this._wfNodeKind(id, nodes) === 'playbook' && Array.isArray(node.data.exits) && node.data.exits.length
+                            ? node.data.exits : null;
+                        if (pbExits) {
+                            // done / failed like a code node's exits: only the children on the exit taken run. A node
+                            // without exits (saved before) skips this and behaves as it always did.
+                            const r = window.CodeNode.routeAfter(id, nodes, { ok: true, route: res.exit || (res.success ? 'done' : 'failed'), output_text: res.output }, pbExits);
+                            this._wfOutputs[id] = r.output;
+                            this._markDispatchCandidates(id);
+                            for (const to of r.chosen) this._markDispatchChosen(id, to);
+                            for (const s of this._wfSkipSet(r.skip, nodes)) {
+                                if (done.has(s) || String(s) === String(id)) continue;
+                                this._wfOutputs[s] = '';
+                                done.add(s); remaining.delete(s);
+                                this.highlightNode(s, 'skipped', s, 'agent');
+                                // An Output cut off by the exit taken: that branch ended (not a failure).
+                                if (this._wfNodeKind(s, nodes) === 'output') _wfEndedByRoute.add(String(s));
+                            }
+                            try { onProgress?.({ type: 'route', node_id: r.chosen[0] || '', to: `exit ${r.exit}`, from: agentName, notes: '' }); } catch (_) {}
+                            try { onProgress?.({ type: 'node_complete', node_id: id, agent_name: agentName, success: true }); } catch (_) {}
+                        } else {
                         this._wfOutputs[id] = res.output;
                         // Dispatcher routed: only the chosen branch runs. Mark the
                         // rest (and what is reachable only through them) as done
@@ -17026,6 +17053,7 @@ class WorkflowEditor {
                         // _runNodeAsChatUnit already highlighted the node red on a
                         // soft failure (error/refusal text); reflect it in the run.
                         if (res && res.success === false) _wfHadError = true;
+                        }
                         }
                     }
                 } catch (e) {
@@ -18907,6 +18935,10 @@ class WorkflowEditor {
         // or the playbook is gone (typing a new one and saving creates a new entry).
         const pbUnloaded = !!agent.playbook_id && !pbRow && window.PlaybookCollection.cache.loadFailed();
         const pbMissing = !!agent.playbook_id && !pbRow && !pbUnloaded;
+        // A Playbook NODE (not a library card) chooses where its playbook comes from: its own (Fixed) or the one the job names.
+        const pbNodeData = this.editingNodeId ? this.editor.getNodeFromId(this.editingNodeId)?.data : null;
+        const pbIsNode = !!pbNodeData && (pbNodeData.type === 'playbook' || pbNodeData.node_type === 'playbook');
+        const pbFromInput = pbIsNode && pbNodeData.playbook_source === 'input';
         const modalHTML = `
             <div id="agent-edit-modal" class="fixed inset-0 z-[200] flex items-center justify-center" style="background-color: rgba(0, 0, 0, 0.5);">
                 <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
@@ -19100,6 +19132,22 @@ class WorkflowEditor {
                                         </label>
                                     </div>
                                 </div>
+
+                                ${pbIsNode ? `
+                                <div id="agent-pb-source-block" class="border-t border-gray-200 pt-4 mt-2">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1" for="agent-pb-source">${tf('pbSource')}</label>
+                                    <select id="agent-pb-source" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+                                        <option value="fixed" ${pbFromInput ? '' : 'selected'}>${tf('pbSourceFixed')}</option>
+                                        <option value="input" ${pbFromInput ? 'selected' : ''}>${tf('pbSourceInput')}</option>
+                                    </select>
+                                    <div id="agent-pb-input-field-block" class="${pbFromInput ? '' : 'hidden'} mt-2">
+                                        <label class="block text-xs text-gray-600 mb-1" for="agent-pb-input-field">${tf('pbInputField')}</label>
+                                        <input type="text" id="agent-pb-input-field" class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono"
+                                               value="${this.escapeHtml(pbNodeData.playbook_input_field || 'playbook')}">
+                                        <p class="text-xs text-gray-500 mt-1">${tf('pbSourceInputHint')}</p>
+                                    </div>
+                                </div>
+                                ` : ''}
 
                                 <!-- Save as Template (shown when editing workflow node) -->
                                 ${this.editingNodeId || this.pendingTemplateNodeId ? `
@@ -20587,9 +20635,20 @@ Based on the analysis...
             // Identical Settings on both facets: no "Save as template" for playbooks
             // (the agent row IS the template; a linked node syncs to it on save).
             document.getElementById('save-as-template-checkbox')?.closest('.border-t')?.classList.toggle('hidden', pb);
+            // "From the job": the job names the playbook, so the node has no playbook of its own to pick or edit.
+            const fromJob = document.getElementById('agent-pb-source')?.value === 'input';
+            document.getElementById('agent-pb-input-field-block')?.classList.toggle('hidden', !fromJob);
+            if (fromJob) {
+                for (const id of ['agent-pb-toolbar', 'agent-pb-key-block', 'agent-pb-pretty', 'agent-instructions-input']) {
+                    document.getElementById(id)?.classList.add('hidden');
+                }
+            } else if (pb) {
+                document.getElementById('agent-instructions-input')?.classList.remove('hidden');
+            }
         };
         applyVisibility();
         document.getElementById('agent-type-select')?.addEventListener('change', applyVisibility);
+        document.getElementById('agent-pb-source')?.addEventListener('change', applyVisibility);
 
         const ta = document.getElementById('agent-instructions-input');
         const pretty = document.getElementById('agent-pb-pretty');
@@ -21403,7 +21462,10 @@ Based on the analysis...
                     // New text for a missing playbook creates a new entry and relinks.
                     const isPlaybookNode = (nodeData.data.type === 'playbook' || nodeData.data.node_type === 'playbook' || agentData.agent_type === 'playbook');
                     let pbRow = null;
-                    const pbAct = isPlaybookNode ? window.PlaybookCollection.saveAction(nodeData.data.playbook_id || null, agentData.instructions) : 'skip';
+                    // "From the job": the node has no playbook of its own, so nothing is written to the collection.
+                    const pbSrcSel = document.getElementById('agent-pb-source');
+                    const pbFromJob = isPlaybookNode && pbSrcSel?.value === 'input';
+                    const pbAct = isPlaybookNode && !pbFromJob ? window.PlaybookCollection.saveAction(nodeData.data.playbook_id || null, agentData.instructions) : 'skip';
                     if (pbAct === 'update' || pbAct === 'create') {
                         try {
                             pbRow = await this._savePlaybookFromForm(pbAct === 'update' ? nodeData.data.playbook_id : null);
@@ -21454,6 +21516,11 @@ Based on the analysis...
                             writes_enabled: agentData.settings?.writes_enabled !== false,
                         });
                         delete newNodeData.playbook;
+                        if (pbSrcSel) {
+                            newNodeData.playbook_source = pbSrcSel.value === 'input' ? 'input' : 'fixed';
+                            if (pbFromJob) newNodeData.playbook_input_field = (document.getElementById('agent-pb-input-field')?.value || '').trim() || 'playbook';
+                            else delete newNodeData.playbook_input_field;
+                        }
                     }
 
                     // Update node locally in Drawflow

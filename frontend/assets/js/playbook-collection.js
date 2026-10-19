@@ -110,6 +110,10 @@
             writes_enabled: c.writes_enabled !== false, disabled: !!c.disabled,
         };
         if (!d.playbook_id && c.playbook && (typeof c.playbook === 'string' || typeof c.playbook === 'object')) d.playbook = c.playbook;
+        // Where the playbook comes from ('fixed' = this node's own; 'input' = the job names it) and the exits (done/failed).
+        if (c.playbook_source === 'fixed' || c.playbook_source === 'input') d.playbook_source = c.playbook_source;
+        if (d.playbook_source === 'input') d.playbook_input_field = String(c.playbook_input_field || '').trim() || 'playbook';
+        if (Array.isArray(c.exits) && c.exits.length) d.exits = [...c.exits];
         if (c.policy !== undefined) d.policy = c.policy;       // run settings carried by the migration
         if (c.approvers !== undefined) d.approvers = c.approvers;
         return d;
@@ -137,6 +141,7 @@
     // One line for the node body: the Title, else the first non-blank line; a missing playbook says so,
     // and a failed collection load says that instead (loadFailed: the caller shows its own message).
     function nodeSummary(data) {
+        if (data && data.playbook_source === 'input') return { text: `From the job (${data.playbook_input_field || 'playbook'})`, missing: false };
         const text = nodeText(data);
         if (text === null && loadFailed) return { text: 'Could not load playbooks', missing: true, loadFailed: true };
         if (text === null) return { text: `Playbook #${data.playbook_id} not found`, missing: true };
@@ -158,6 +163,9 @@
             agent_provider: d.agent_provider || '', model: d.model || '', name: d.name || '',
             writes_enabled: !!d.writes_enabled,
         };
+        if (d.playbook_source) cfg.playbook_source = d.playbook_source;
+        if (d.playbook_source === 'input') cfg.playbook_input_field = d.playbook_input_field || 'playbook';
+        if (Array.isArray(d.exits) && d.exits.length) cfg.exits = [...d.exits];
         if (!cfg.playbook_id && d.playbook) cfg.playbook = d.playbook; // unlinked: the server runs the text itself
         return cfg;
     }
