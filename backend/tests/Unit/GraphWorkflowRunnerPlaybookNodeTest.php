@@ -153,11 +153,6 @@ final class GraphWorkflowRunnerPlaybookNodeTest extends TestCase
 
     public function testFromInputNodeEndsWithTheJobLine(): void
     {
-        // An approval gate with nobody present: the run ends handed_off (proves unattended: true), never auto-approved.
-        $this->rounds = [
-            [['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK?']]],
-            [['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]],
-        ];
         $job = '{"playbook": "nope", "task": "INC0001", "u": "é/x"}';
         [$out, $o] = $this->go(['playbook_source' => 'input'], $job);
         self::assertTrue($out['success'], $out['error'] ?? '');
@@ -208,5 +203,49 @@ final class GraphWorkflowRunnerPlaybookNodeTest extends TestCase
         self::assertArrayHasKey(4, $o);
         self::assertArrayHasKey(5, $o);
         self::assertArrayNotHasKey('exit', $o[3]);
+    }
+
+    public function testFromInputResolvedKeyRunsThePublishedCopyAndEndsWithTheJobLine(): void
+    {
+        $this->pdo->exec("INSERT INTO playbooks (user_id, pkey, title, text) VALUES (1, 'pubpb', 'Pub', "
+            . $this->pdo->quote("Title: Published Copy\nTrigger: a job\nInstructions: #Resolve Request.\nActions used: #Resolve Request") . ')');
+        $this->rounds = [[['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]]];
+        [$out, $o] = $this->go(['playbook_source' => 'input', 'writes_enabled' => true], '{"playbook":"pubpb","task":"INC0002"}');
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertSame('done', $o[3]['exit']);
+        self::assertArrayHasKey(4, $o);
+        self::assertArrayNotHasKey(5, $o);
+        self::assertSame(1, $this->factoryCalls);
+        self::assertStringContainsString('# Playbook: Published Copy', $o[3]['output'], 'the published text ran');
+        $lines = explode("\n", rtrim($o[3]['output']));
+        self::assertSame('Job: {"playbook":"pubpb","task":"INC0002"}', end($lines));
+    }
+
+    public function testFromInputMissingFieldIsBadInputButKeepsTheJobLine(): void
+    {
+        [$out, $o] = $this->go(['playbook_source' => 'input'], '{"task":"INC0001"}');
+        self::assertSame('failed', $o[3]['exit']);
+        self::assertStringStartsWith('Playbook failed: bad_input', $o[3]['output']);
+        $lines = explode("\n", rtrim($o[3]['output']));
+        self::assertSame('Job: {"task":"INC0001"}', end($lines));
+        self::assertSame(0, $this->factoryCalls);
+    }
+
+    public function testFromInputJsonListHasNoJobLine(): void
+    {
+        [$out, $o] = $this->go(['playbook_source' => 'input'], '[1,2]');
+        self::assertStringStartsWith('Playbook failed: bad_input', $o[3]['output']);
+        self::assertStringNotContainsString('Job: ', $o[3]['output']);
+    }
+
+    public function testAnErrorReasonStaysOnOneLine(): void
+    {
+        // An unparsable stored playbook makes the run throw a multi-line message (it names the missing section).
+        $this->pdo->exec("INSERT INTO playbooks (user_id, pkey, title, text) VALUES (1, 'badpb', 'Bad', 'Title: only a title')");
+        [$out, $o] = $this->go(['playbook_source' => 'input'], '{"playbook":"badpb"}');
+        self::assertSame('failed', $o[3]['exit']);
+        $first = explode("\n", $o[3]['output'])[0];
+        self::assertStringStartsWith('Playbook failed: error:', $first);
+        self::assertStringContainsString('Instructions', $first);
     }
 }

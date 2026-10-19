@@ -93,4 +93,14 @@ final class PlaybookSourceTest extends TestCase
         $this->assertFalse(PlaybookSource::isFromInput(['playbook_source' => 'fixed']));
         $this->assertFalse(PlaybookSource::isFromInput([]));
     }
+
+    public function testJobLine(): void
+    {
+        $this->assertSame('Job: {"playbook":"a/b","task":"é"}', PlaybookSource::jobLine("## Get job\n{ \"playbook\": \"a/b\",\n \"task\": \"é\" }"));
+        $this->assertSame('Job: {"task":"x"}', PlaybookSource::jobLine('{"task":"x"}'));
+        $this->assertNull(PlaybookSource::jobLine('not json'));
+        $this->assertNull(PlaybookSource::jobLine('[1,2]'));
+        $this->assertNull(PlaybookSource::jobLine('"text"'));
+        $this->assertNull(PlaybookSource::jobLine("## Get job\n"));
+    }
 }

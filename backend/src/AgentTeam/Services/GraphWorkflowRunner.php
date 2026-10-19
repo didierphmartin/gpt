@@ -1706,15 +1706,14 @@ class GraphWorkflowRunner
                 $transcript = (string) $res['output'];
                 $reason = PlaybookOutcome::reason((string) $res['status'], $res['gate'] ?? null);
             } catch (\Throwable $e) {
-                $reason = 'error:' . $e->getMessage();
+                $reason = 'error:' . trim((string) preg_replace('/\s+/u', ' ', $e->getMessage()));
             }
         }
         $exit = $reason === null ? 'done' : 'failed';
         $text = $reason === null ? $transcript : PlaybookOutcome::failureText($reason, $transcript);
         if ($fromInput) {
-            $json = json_decode(trim((string) preg_replace('/\A## [^\n]*\n/', '', ltrim($parentText))), true);
-            if ($json !== null) {
-                $text .= "\n\nJob: " . json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($job = PlaybookSource::jobLine($parentText)) {
+                $text .= "\n\n" . $job;
             }
         }
         $hasExits = is_array($cfg['exits'] ?? null) && $cfg['exits'] !== [];
