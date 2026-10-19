@@ -352,7 +352,7 @@ PY;
     }
 
     /** Python adapter class per decision protocol: the runtime twin of DecisionProtocols' 'adapter'. */
-    public const ADAPTER_CLASSES = ['typesafe' => 'JevRouter'];
+    public const ADAPTER_CLASSES = ['typesafe' => 'JevRouter', 'openai' => 'OpenAIDecisionRouter'];
 
     /** The routing banner and DecisionResult, the record every adapter returns. */
     private static function decisionHead(): string
@@ -504,6 +504,126 @@ class JevRouter:
             return DecisionResult("unclear", reason="the request names no branch", **common)
         if choice not in named:
             # Unreachable by contract; treated as an error rather than trusted.
+            return DecisionResult("error", reason=f"answer '{choice}' is not on the menu", **common)
+        if conf is not None and conf < floor:
+            return DecisionResult("low_confidence", target=named[choice],
+                                  reason=f"confidence {conf:.2f} below floor {floor:.2f}", **common)
+        return DecisionResult("routed", target=named[choice], **common)
+
+
+
+PY,
+            'openai' => <<<'PY'
+# OpenAI Decisions API, GPT-6 Luna (twin of OpenAIDecisionRouter.php). Answers a
+# closed question with one of the values supplied -- never a value outside them.
+
+
+class OpenAIDecisionRouter:
+    """Asks OpenAI's Decisions API (the "openai" decision protocol) a closed routing question:
+    the Python twin of OpenAIDecisionRouter.php, one instance per provider row compiled in.
+
+    Same 'unclear' option, floor and outcomes as JevRouter; only the wire format differs
+    (input, questions/answers as arrays matched by name, choices as {value, description}).
+    route() never raises.
+    """
+    URL = "https://api.openai.com/v1/decisions"   # protocol default; the row's URL, then its <NAME>_BASE_URL, override it
+    MODEL = "gpt-6-luna"
+    UNCLEAR = "unclear"   # synthetic option that makes "I cannot tell" sayable; never a real branch
+    UNCLEAR_DESC = ("The request does not say enough to choose, or it genuinely spans "
+                    "several of the options. Pick this rather than guessing.")
+    MAX_CHOICES = 255   # the API's limit per question, the unclear option included
+    CONFIDENCE_FLOOR = 0.6   # default minimum confidence (a dispatcher's min_confidence overrides it)
+    TIMEOUT_S = 10
+
+    def __init__(self, key_env: str, url_env: str, url: str = URL, model: str = MODEL):
+        """key_env/url_env are this provider row's variables (compiled in); url/model its defaults."""
+        self.key_env, self.url_env, self.url, self.model = key_env, url_env, url or self.URL, model or self.MODEL
+
+    def _creds(self) -> tuple[str, str]:
+        """(key, url): the row's own variables; url defaults to the compiled one. No legacy
+        fallback: OPENAI_API_KEY belongs to the chat models."""
+        return os.environ.get(self.key_env) or "", os.environ.get(self.url_env) or self.url
+
+    def available(self) -> bool:
+        """Configured = the row's key variable is set."""
+        return bool(self._creds()[0])
+
+    @cached_property
+    def ssl_context(self):
+        """The system trust store PLUS certifi's bundle when present (as JevRouter.ssl_context)."""
+        import ssl
+        ctx = ssl.create_default_context()
+        try:
+            import certifi
+            ctx.load_verify_locations(certifi.where())
+        except Exception:
+            pass
+        return ctx
+
+    def route(self, request: str, targets: list[dict], question: str, floor: float = CONFIDENCE_FLOOR) -> DecisionResult:
+        """Choose one target for `request`, or say why not (same outcomes as JevRouter.route). Never raises."""
+        try:
+            return self._route(request, targets, question, floor)
+        except Exception as e:   # anything at all -> an 'error' outcome, never a raise
+            return DecisionResult("error", reason=f"{type(e).__name__}: {e}")
+
+    def _route(self, request, targets, question, floor) -> DecisionResult:
+        """route() without its safety net: check the menu, ask the Decisions API, read its answer."""
+        import urllib.request
+        key, url = self._creds()
+        if not key:
+            return DecisionResult("unavailable", reason=f"no {self.key_env}")
+        named = {}
+        for t in targets:
+            name = str(t.get("name") or "").strip()
+            if name == "" or name.lower() == self.UNCLEAR:
+                return DecisionResult("error", reason=f"unusable target name: '{name}'")
+            named[name] = t
+        if len(named) < 2:
+            return DecisionResult("error", reason="a menu needs at least two targets")
+        if len(named) + 1 > self.MAX_CHOICES:
+            return DecisionResult("error", reason=f"a menu allows at most {self.MAX_CHOICES - 1} targets")
+        choices = []
+        for name, t in named.items():
+            desc = str(t.get("description") or "").strip()
+            choices.append({"value": name, "description": desc[:400] if desc else name})
+        choices.append({"value": self.UNCLEAR, "description": self.UNCLEAR_DESC})
+        body = {
+            "model": self.model,
+            "input": request,
+            "questions": [{"type": "choice", "name": "route", "instructions": question, "choices": choices}],
+        }
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Authorization": "Bearer " + key, "Accept": "application/json",
+                     "Content-Type": "application/json"})
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen(req, timeout=self.TIMEOUT_S, context=self.ssl_context) as resp:   # HTTP 4xx/5xx raise here
+                raw = resp.read()
+        except Exception as e:
+            return DecisionResult("error", reason=str(e))
+        ms = int(round((time.monotonic() - t0) * 1000))
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            decoded = None
+        if not isinstance(decoded, dict):
+            return DecisionResult("error", ms=ms, reason="no choice in the response")
+        answers = decoded.get("answers") if isinstance(decoded.get("answers"), list) else []
+        answer = next((a for a in answers if isinstance(a, dict) and a.get("name") == "route"), None)
+        usage = decoded.get("usage") if isinstance(decoded.get("usage"), dict) else {}
+        if isinstance(answer, dict) and answer.get("type") == "refusal":
+            return DecisionResult("error", ms=ms, usage=usage, reason="the model refused to answer")
+        if not isinstance(answer, dict) or answer.get("choice") is None:
+            return DecisionResult("error", ms=ms, usage=usage, reason="no choice in the response")
+        choice = str(answer["choice"])
+        conf = float(answer["confidence"]) if answer.get("confidence") is not None else None
+        probs = answer.get("probabilities") if isinstance(answer.get("probabilities"), (dict, list)) else {}
+        common = {"confidence": conf, "probabilities": probs, "ms": ms, "usage": usage}
+        if choice == self.UNCLEAR:
+            return DecisionResult("unclear", reason="the request names no branch", **common)
+        if choice not in named:
             return DecisionResult("error", reason=f"answer '{choice}' is not on the menu", **common)
         if conf is not None and conf < floor:
             return DecisionResult("low_confidence", target=named[choice],
@@ -1882,9 +2002,11 @@ class WatchTrigger:
             except ValueError:
                 result = None
         if isinstance(result, dict) and result.get("error"):   # e.g. {"error": "reconnect_needed", "message": ...}
-            code = str(result["error"])
+            err = result["error"]   # a string, or {code, message} (the ServiceNow connector)
+            code = str(err.get("code", "tool_error")) if isinstance(err, dict) else str(err)
             kind = code if code in ("reconnect_needed", "not_connected") else "tool_error"
-            raise WatchError(kind, str(result.get("message") or code))
+            message = err.get("message") if isinstance(err, dict) else result.get("message")
+            raise WatchError(kind, str(message or code))
         if raw.get("isError"):
             raise WatchError("tool_error", text or "tool error")
         if not isinstance(result, dict) or result.get("status") not in ("ready", "timeout"):
