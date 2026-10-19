@@ -23,6 +23,26 @@ final class PlaybookOutcome
         return $gate !== null ? 'gate:' . $gate : 'status:' . $status;
     }
 
+    /** 'error:<message>' with whitespace runs collapsed to one space (a reason is one line). */
+    public static function errorReason(\Throwable $e): string
+    {
+        return 'error:' . trim((string) preg_replace('/\s+/u', ' ', $e->getMessage()));
+    }
+
+    /**
+     * The node's exit and output text: done iff $reason is null; failed text starts with the reason line.
+     * The job line (from-input nodes), when given, ends the text on both outcomes.
+     * @return array{exit:string,text:string}
+     */
+    public static function nodeResult(?string $reason, string $transcript, ?string $jobLine): array
+    {
+        $text = $reason === null ? $transcript : self::failureText($reason, $transcript);
+        if ($jobLine !== null) {
+            $text .= "\n\n" . $jobLine;
+        }
+        return ['exit' => $reason === null ? 'done' : 'failed', 'text' => $text];
+    }
+
     /** Node output on the 'failed' exit: one reason line, a blank line, then the transcript. */
     public static function failureText(string $reason, string $transcript): string
     {

@@ -1061,6 +1061,8 @@ class WorkflowController
 
         $nodeConfig = is_array($body['node_config'] ?? null) ? $body['node_config'] : [];
         $prompt = (string) ($body['prompt'] ?? '');
+        // The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
+        $parentText = isset($body['parent_text']) && is_string($body['parent_text']) ? $body['parent_text'] : $prompt;
 
         try {
             $fromInput = \AgentTeam\Services\PlaybookSource::isFromInput($nodeConfig);
@@ -1068,7 +1070,7 @@ class WorkflowController
             $result = [];
             if ($fromInput) {
                 // The playbook is named by the job in the request text (the robot's published copy).
-                $src = \AgentTeam\Services\PlaybookSource::fromInput($this->db, $userId, $nodeConfig, $prompt);
+                $src = \AgentTeam\Services\PlaybookSource::fromInput($this->db, $userId, $nodeConfig, $parentText);
                 if ($src['ok']) {
                     $nodeConfig['playbook'] = $src['text'];
                     unset($nodeConfig['playbook_id']);
@@ -1083,18 +1085,28 @@ class WorkflowController
                 }
                 $nodeConfig['playbook'] = $pb['text'];
             }
+            $hasExits = is_array($nodeConfig['exits'] ?? null) && $nodeConfig['exits'] !== [];
+            $transcript = '';
             if ($reason === null) {
-                $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
-                // Attended: gates go to the person at the editor.
-                $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
-                $reason = \AgentTeam\Services\PlaybookOutcome::reason((string) ($result['status'] ?? ''), $result['gate'] ?? null);
+                try {
+                    $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
+                    // Attended: gates go to the person at the editor.
+                    $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
+                    $transcript = (string) ($result['output'] ?? '');
+                    $reason = \AgentTeam\Services\PlaybookOutcome::reason((string) ($result['status'] ?? ''), $result['gate'] ?? null);
+                } catch (\Throwable $e) {
+                    if (!$hasExits) {
+                        throw $e;
+                    }
+                    $reason = \AgentTeam\Services\PlaybookOutcome::errorReason($e);
+                }
             }
-            $result['exit'] = $reason === null ? 'done' : 'failed';
-            if ($reason !== null) {
-                $result['output'] = \AgentTeam\Services\PlaybookOutcome::failureText($reason, (string) ($result['output'] ?? ''));
-            }
-            if ($fromInput && ($job = \AgentTeam\Services\PlaybookSource::jobLine($prompt))) {
-                $result['output'] = (string) ($result['output'] ?? '') . "\n\n" . $job;
+            $res = \AgentTeam\Services\PlaybookOutcome::nodeResult($reason, $transcript,
+                $fromInput ? \AgentTeam\Services\PlaybookSource::jobLine($parentText) : null);
+            $result['exit'] = $res['exit'];
+            // An old one-output node keeps its transcript as it was (no failure line, no exit routing).
+            if ($hasExits || $fromInput) {
+                $result['output'] = $res['text'];
             }
 
             echo "event: done\n";

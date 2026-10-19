@@ -14645,7 +14645,7 @@ class WorkflowEditor {
      * _runNodeAsChatUnit's contract (returns {success, output}) but the
      * multi-round tool loop, gates and ledgering happen server-side.
      */
-    async _runNodeAsPlaybookUnit(node, inputText) {
+    async _runNodeAsPlaybookUnit(node, inputText, parentText = null) {
         const dfId = String(node.id);
         const data = node.data || {};
 
@@ -14691,7 +14691,7 @@ class WorkflowEditor {
                 method: 'POST',
                 headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
                 credentials: 'include',
-                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText }),
+                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText, ...(parentText != null ? { parent_text: parentText } : {}) }),
             });
             if (!resp.ok || !resp.body) throw new Error(`playbook run HTTP ${resp.status}`);
 
@@ -14749,16 +14749,19 @@ class WorkflowEditor {
             // anything: stamping "finished" on the window and renaming Hide to
             // Close would announce a run that is still walking the graph.
             if (!inConversation) {
-                this._pbOverlayFinish(true, `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
+                this._pbOverlayFinish(finalResult?.exit !== 'failed', `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
             }
-            this.highlightNode(dfId, 'completed', dfId, 'agent');
+            this.highlightNode(dfId, finalResult?.exit === 'failed' ? 'error' : 'completed', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             // The exit the server chose (done when resolved, failed otherwise); absent for an older server.
             return { success: true, output, exit: finalResult?.exit || null };
         } catch (e) {
             const msg = String(e?.message || e);
             const nd = this.nodeExecutionData[dfId] || (this.nodeExecutionData[dfId] = {});
-            nd.output = 'Error: ' + msg;
+            const hasExits = Array.isArray(data.exits) && data.exits.length > 0;
+            // A node with exits reports a transport failure in the outcome-rule shape; an old node keeps 'Error: ...'.
+            const failedText = hasExits ? `Playbook failed: error:${msg.replace(/\s+/g, ' ').trim()}` : 'Error: ' + msg;
+            nd.output = failedText;
             nd.success = false;
             nd.executionTime = Date.now() - _startedAt;
             try { this.stopNodeTimer(dfId); } catch (_) {}
@@ -14769,7 +14772,7 @@ class WorkflowEditor {
             if (!inConversation) this._pbOverlayFinish(false, msg);
             this.highlightNode(dfId, 'error', dfId, 'agent');
             this.updateModalInputOutput(dfId);
-            return { success: false, output: 'Error: ' + msg, exit: 'failed' };
+            return { success: false, output: failedText, exit: 'failed' };
         }
     }
 
@@ -16284,6 +16287,17 @@ class WorkflowEditor {
         }).join('\n\n---\n\n');
     }
 
+    /** The first upstream output that ran, framed as _wfBuildContext frames it (the server engine reads the first parent only). */
+    _wfFirstParentText(nodeId, nodes) {
+        for (const u of this._wfUpstreamIds(nodeId, nodes)) {
+            const out = this._wfOutputs?.[u];
+            if (out == null || out === '') continue;
+            if (this._wfNodeKind(u, nodes) === 'start') return out;
+            return `## ${nodes[u]?.data?.agent_name || nodes[u]?.data?.name || `node ${u}`}\n${out}`;
+        }
+        return null;
+    }
+
     _wfBuildContext(nodeId, nodes) {
         const ups = this._wfUpstreamIds(nodeId, nodes);
         const parts = [];
@@ -16984,7 +16998,7 @@ class WorkflowEditor {
                         // Its branches are candidates from here until it answers.
                         if (dispatchTargets?.length) this._markDispatchCandidates(id);
                         const res = this._wfNodeKind(id, nodes) === 'playbook'
-                            ? await this._runNodeAsPlaybookUnit(node, ctx)
+                            ? await this._runNodeAsPlaybookUnit(node, ctx, this._wfFirstParentText(id, nodes))
                             : await this._runNodeAsChatUnit(node, ctx, { dispatchTargets, routedBy: this._wfRoutedBy[String(id)] || null });
                         const pbExits = this._wfNodeKind(id, nodes) === 'playbook' && Array.isArray(node.data.exits) && node.data.exits.length
                             ? node.data.exits : null;

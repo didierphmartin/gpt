@@ -18,4 +18,17 @@ final class PlaybookOutcomeTest extends TestCase
         self::assertNull(PlaybookOutcome::reason('resolved', null));
         self::assertStringStartsWith("Playbook failed: bad_input\n\nT", PlaybookOutcome::failureText('bad_input', 'T'));
     }
+
+    public function testNodeResult(): void
+    {
+        self::assertSame(['exit' => 'done', 'text' => "T\n\nJob: x"], PlaybookOutcome::nodeResult(null, 'T', 'Job: x'));
+        self::assertSame(['exit' => 'failed', 'text' => "Playbook failed: bad_input\n\nT\n\nJob: x"], PlaybookOutcome::nodeResult('bad_input', 'T', 'Job: x'));
+        self::assertSame(['exit' => 'done', 'text' => 'T'], PlaybookOutcome::nodeResult(null, 'T', null));
+        self::assertSame(['exit' => 'failed', 'text' => "Playbook failed: status:running\n\nT"], PlaybookOutcome::nodeResult('status:running', 'T', null));
+    }
+
+    public function testErrorReason(): void
+    {
+        self::assertSame('error:boom and more', PlaybookOutcome::errorReason(new \RuntimeException("  boom\n  and\tmore \n")));
+    }
 }
