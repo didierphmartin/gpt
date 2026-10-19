@@ -87,4 +87,15 @@ final class WatchCallTest extends TestCase
         $this->assertSame(['status' => 'error', 'message' => 'bad_answer'], WatchCall::answer(self::rpc(['status' => 'maybe']), 200, ''));
         $this->assertSame(['status' => 'error', 'message' => 'bad_answer'], WatchCall::answer('not json', 200, ''));
     }
+
+    public function testErrorObjectFromTheServiceNowConnector(): void
+    {
+        set_error_handler(static function (int $no, string $str): never { throw new \ErrorException($str, 0, $no); });
+        try {
+            $this->assertSame(['status' => 'error', 'message' => 'servicenow_error'],
+                WatchCall::answer(self::rpc(['error' => ['code' => 'servicenow_error', 'message' => 'down']]), 200, ''));
+        } finally {
+            restore_error_handler();
+        }
+    }
 }

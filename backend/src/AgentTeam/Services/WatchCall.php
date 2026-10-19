@@ -67,7 +67,8 @@ final class WatchCall
             return $error('bad_answer');
         }
         if (isset($payload['error'])) {
-            return $error((string) $payload['error']);
+            $e = $payload['error'];   // a string, or {code, message} (the ServiceNow connector)
+            return $error(is_array($e) ? (string) ($e['code'] ?? 'tool_error') : (string) $e);
         }
         $status = $payload['status'] ?? null;
         if ($status !== 'ready' && $status !== 'timeout') {

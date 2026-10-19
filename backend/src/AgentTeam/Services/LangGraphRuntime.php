@@ -1882,9 +1882,11 @@ class WatchTrigger:
             except ValueError:
                 result = None
         if isinstance(result, dict) and result.get("error"):   # e.g. {"error": "reconnect_needed", "message": ...}
-            code = str(result["error"])
+            err = result["error"]   # a string, or {code, message} (the ServiceNow connector)
+            code = str(err.get("code", "tool_error")) if isinstance(err, dict) else str(err)
             kind = code if code in ("reconnect_needed", "not_connected") else "tool_error"
-            raise WatchError(kind, str(result.get("message") or code))
+            message = err.get("message") if isinstance(err, dict) else result.get("message")
+            raise WatchError(kind, str(message or code))
         if raw.get("isError"):
             raise WatchError("tool_error", text or "tool error")
         if not isinstance(result, dict) or result.get("status") not in ("ready", "timeout"):
