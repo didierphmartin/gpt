@@ -2275,6 +2275,7 @@ PY;
         $L[] = LangGraphRuntime::dispatcherBlock(self::decisionProtocolsUsed($facts['agentData'] ?? []));
         $L[] = self::datetimeInjectorBlock();
         if ($isPlaybook) {
+            $L[] = LangGraphRuntime::runContextBlock();
             $L[] = LangGraphRuntime::playbookBlock();
         }
         $L[] = LangGraphRuntime::nodeClassesBlock($isPlaybook);
@@ -4003,7 +4004,7 @@ async def run(user_prompt: str, session: str | None = None) -> str:
 
 
 def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder, *,
-                  loop_mode: bool = False) -> Callable[[], str]:
+                  loop_mode: bool = False, unattended: bool = False) -> Callable[[], str]:
     """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
     log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
     run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
@@ -4012,7 +4013,10 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
 
     Console: under --cron / --watch (`loop_mode`) the view's block is the run's only output -- the
     progress lines (RUN_OUT) show only under --verbose, no FINAL OUTPUT or RUN SUMMARY; a --once
-    run prints as it goes, except under --quiet (the done / failed line only)."""
+    run prints as it goes, except under --quiet (the done / failed line only).
+
+    `unattended` (--watch, --listen): nobody answers the run's playbook gates -- a gate ends the
+    playbook as handed_off (WorkflowGraph.unattended; PLAYBOOK_GATE_MODE, when set, still wins)."""
     def run_once() -> str:
         """One run (see make_run_once)."""
         global GRAPH_RECORDER
@@ -4025,6 +4029,7 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         chatty = not loop_mode and view.verbosity != "quiet"   # FINAL OUTPUT and RUN SUMMARY
         try:
             graph = build_graph(recorder)
+            graph.unattended = unattended
             output = ev_loop.run_until_complete(graph.run(prompt))
             if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
                 view.discard()
@@ -4070,8 +4075,6 @@ def make_listener(state: LoopState) -> Listener | None:
     trigger is missing or bad."""
     if START_MODE not in ("cron", "watch"):
         return None
-    if not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
-        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --listen run's gates: a gate hands the job back
     ap = argparse.ArgumentParser()
     ap.error = _refuse
     cron = CronExpression.from_cli(ap, "" if START_MODE == "cron" else None, DEFAULT_CRON)
@@ -4079,7 +4082,7 @@ def make_listener(state: LoopState) -> Listener | None:
     runs = RunLoop()
     view = ConsoleView("quiet")
     recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
-    run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True)
+    run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True, unattended=True)
     drains = any(ad["kind"] == "code" for ad in AGENTS.values())
     return Listener(START_MODE, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=state,
                     lock_path=os.path.join(PACKAGE_DIR, ".run.lock"))
@@ -4101,14 +4104,12 @@ if __name__ == "__main__":
     talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
     mode = choose_mode(a, START_MODE)
-    if mode == "watch" and not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
-        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --watch run's gates: a gate hands the job back
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
     recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
     RUN_OUT.chatty = a.verbose if mode != "once" else not a.quiet   # startup lines (tools ready)
-    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once")
+    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once", unattended=mode == "watch")
     drains = any(ad["kind"] == "code" for ad in AGENTS.values())
     # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
     # stops here (exit 2), before any agent starts.
@@ -4136,12 +4137,7 @@ PY;
     // toolBuilderBlock() → LangGraphRuntime::toolCatalogBlock() + skillRuntimeBlock()
     //                      (LangGraph's own copies; the shared skill blocks stay for ADK/MAF/NOOA)
 
-    /**
-     * Bake one playbook node: parse + analyze the playbook against the
-     * registry ids and describe what the emitted runtime needs. Throws when
-     * the playbook text is missing or has hard binding errors, like the
-     * browser runner (PlaybookNodeRunner) does.
-     */
+    /** True when some playbook node runs "from input" (PUBLISHED_PLAYBOOKS is then emitted). */
     private static function hasFromInput(array $playbookData): bool
     {
         return array_filter($playbookData, fn(array $pd) => ($pd['source'] ?? 'fixed') === 'input') !== [];
@@ -4168,6 +4164,7 @@ PY;
                     $availableById, $providerDefaults, $userId);
             } catch (RuntimeException $e) {
                 $skipped[$key] = $e->getMessage();
+                error_log("[LangGraphGenerator] published playbook \"{$key}\" not baked: " . $e->getMessage());
                 continue;
             }
             $baked[$key] = array_intersect_key($d, array_flip(['title', 'domain', 'instructions', 'policy', 'approvers', 'actions']));
@@ -4181,7 +4178,7 @@ PY;
         $L = ['# PUBLISHED PLAYBOOKS -- the robot\'s published copies, baked at compile time: a "from input"',
               '# playbook node runs the one its parent\'s JSON names (an unknown key takes the failed exit).'];
         foreach ($skipped as $key => $why) {
-            $L[] = '# not baked: ' . $key . ' -- ' . str_replace("\n", ' ', $why);
+            $L[] = '# WARNING: published playbook "' . $key . '" not baked: ' . str_replace(["\r\n", "\r", "\n"], ' ', $why);
         }
         if ($published === []) {
             $L[] = 'PUBLISHED_PLAYBOOKS = {}';
@@ -4202,7 +4199,14 @@ PY;
         return $L;
     }
 
-    /** @see PlaybookEmit::nodeData() -- shared with every other compile target. */
+    /**
+     * Bake one playbook node: parse + analyze the playbook against the
+     * registry ids and describe what the emitted runtime needs. Throws when
+     * the playbook text is missing or has hard binding errors, like the
+     * browser runner (PlaybookNodeRunner) does.
+     *
+     * @see PlaybookEmit::nodeData() -- shared with every other compile target.
+     */
     private function playbookData(array $node, array $availableById, array $providerDefaults, ?string $userId): array
     {
         return PlaybookEmit::nodeData($node, $availableById, $providerDefaults, $userId);
@@ -4540,7 +4544,7 @@ PY . $missingWarning . <<<'PY'
 
 
 def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRecorder, *,
-                  loop_mode: bool = False) -> Callable[[], str]:
+                  loop_mode: bool = False, unattended: bool = False) -> Callable[[], str]:
     """The program's run_once(): one run of the workflow on `prompt`, recorded by `recorder` (its run
     log, and `view` on the console). Returns the output ('' when the run ended without one). A quiet
     run (the server's rule: a code node's non-error exit and no agent, playbook or output node)
@@ -4549,7 +4553,10 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
 
     Console: under --cron / --watch (`loop_mode`) the view's block is the run's only output -- the
     progress lines (RUN_OUT) show only under --verbose, no FINAL OUTPUT or RUN SUMMARY; a --once
-    run prints as it goes, except under --quiet (the done / failed line only)."""
+    run prints as it goes, except under --quiet (the done / failed line only).
+
+    `unattended` (--watch, --listen): nobody answers the run's playbook gates -- a gate ends the
+    playbook as handed_off (WorkflowGraph.unattended; PLAYBOOK_GATE_MODE, when set, still wins)."""
     def run_once() -> str:
         """One run (see make_run_once)."""
         global GRAPH_RECORDER
@@ -4562,6 +4569,7 @@ def make_run_once(prompt: str, runs: RunLoop, view: ConsoleView, recorder: RunRe
         chatty = not loop_mode and view.verbosity != "quiet"   # FINAL OUTPUT and RUN SUMMARY
         try:
             graph = build_graph(recorder)
+            graph.unattended = unattended
             output = ev_loop.run_until_complete(run(prompt, graph))
             if is_quiet(NODE_TYPES, graph.routes, graph.agents, graph.ran):
                 view.discard()
@@ -4609,14 +4617,12 @@ if __name__ == "__main__":
     talk.add_argument("--verbose", action="store_true", help="also print each node's output")
     a = ap.parse_args()
     mode = choose_mode(a, START_MODE)
-    if mode == "watch" and not os.environ.get("PLAYBOOK_GATE_MODE", "").strip():
-        os.environ["PLAYBOOK_GATE_MODE"] = "unattended"   # nobody answers a --watch run's gates: a gate hands the job back
     prompt = " ".join(a.prompt) or DEFAULT_PROMPT or "Hello"
     runs = RunLoop()   # one event loop for every run, read per run (drain() swaps in a fresh one past the 30 min cap)
     view = ConsoleView("quiet" if a.quiet else "verbose" if a.verbose else "normal")
     recorder = RunRecorder(RUNS_DIR, WORKFLOW_ID, WORKFLOW_NAME, listeners=[view])
     RUN_OUT.chatty = a.verbose if mode != "once" else not a.quiet   # startup lines (tools ready)
-    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once")
+    run_once = make_run_once(prompt, runs, view, recorder, loop_mode=mode != "once", unattended=mode == "watch")
     drains = bool(CODE_NODES)
     # The mode's flag, or the Start's mode with its baked default; a bad or missing --cron / --watch
     # stops here (exit 2), before any agent starts.

@@ -57,12 +57,18 @@ def create_react_agent(llm, tools):
         async def ainvoke(self, inp, config=None):
             SEEN["system"] = inp["messages"][0].content
             SEEN["request"] = inp["messages"][-1].content
-            SEEN["called"] = []
-            for name, args in SCRIPT:
-                SEEN["called"].append(name)
-                out = by[name].func(**args)
-                if by[name].return_direct:
-                    return {"messages": [ToolMessage(out)]}
+            SEEN["called"], SEEN["llm_calls"] = [], 0
+            # A SCRIPT entry is one model turn: a (name, args) call, or a list of calls made in parallel.
+            for turn in SCRIPT:
+                SEEN["llm_calls"] += 1
+                direct = None
+                for name, args in (turn if isinstance(turn, list) else [turn]):
+                    SEEN["called"].append(name)
+                    out = by[name].func(**args)   # an exception ends ainvoke, as in langchain 1.x / langgraph 1.x
+                    direct = out if by[name].return_direct else direct
+                if direct is not None:
+                    return {"messages": [ToolMessage(direct)]}
+            SEEN["llm_calls"] += 1
             return {"messages": [AIMessage("final answer")]}
     return _Agent()
 
@@ -97,6 +103,7 @@ def run(n, request, script=()):
 FROM_INPUT = {"source": "input", "input_field": "playbook", "published": PUBLISHED_PLAYBOOKS, "exits": ["done", "failed"],
               "exit_targets": {"done": ["3"], "failed": ["4"]}}
 RESOLVE = ("resolve_request", {"outcome": "done", "summary": "all good"})
+NOTE = ("leave_internal_note", {"text": "after the gate"})
 APPROVAL = ("request_approval", {"approver": "boss", "question": "ok?"})
 
 PY;
@@ -115,13 +122,14 @@ PY;
     private function py(string $tail, array $env = []): mixed
     {
         $file = tempnam(sys_get_temp_dir(), 'pbn') . '.py';
-        file_put_contents($file, "from __future__ import annotations\nimport asyncio, json, os, re, sys, time, uuid\n"
-            . "from abc import ABC, abstractmethod\nfrom dataclasses import asdict\nfrom enum import Enum\n"
-            . "from functools import cached_property\nfrom typing import Callable\n"
+        file_put_contents($file, "from __future__ import annotations\nimport asyncio, json, os, re, sys, threading, time, uuid\n"
+            . "from abc import ABC, abstractmethod\nfrom dataclasses import asdict\nfrom datetime import datetime\nfrom enum import Enum\n"
+            . "from functools import cached_property\nfrom typing import Awaitable, Callable\n"
             . "os.environ.pop('PLAYBOOK_GATE_MODE', None)\n"
             . implode('', array_map(fn($k, $v) => 'os.environ[' . json_encode($k) . '] = ' . json_encode($v) . "\n", array_keys($env), $env))
             . self::HARNESS . "\n"
-            . LangGraphRuntime::playbookBlock() . "\n" . LangGraphRuntime::nodeClassesBlock(true) . "\n" . $tail);
+            . LangGraphRuntime::playbookBlock() . "\n" . LangGraphRuntime::nodeClassesBlock(true) . "\n"
+            . LangGraphRuntime::runRecordBlock() . "\n" . LangGraphRuntime::workflowGraphBlock() . "\n" . $tail);
         exec($this->python() . ' ' . escapeshellarg($file) . ' </dev/null 2>&1', $out, $rc);
         unlink($file);
         self::assertSame(0, $rc, implode("\n", $out));
@@ -217,6 +225,73 @@ PY;
         self::assertSame('', $r['route']);
         self::assertSame('running', $r['status']);
         self::assertStringStartsWith('# Playbook: Fixed PB (running)', $r['text']);
+    }
+
+    public function testUnattendedGateInParallelWithAnotherToolEndsTheLeg(): void
+    {
+        // The model calls a gate and another tool in the same turn: nothing runs after the gate,
+        // and the model is not called again.
+        $r = $this->py("r = run(node(exits=['done', 'failed']), 'x', [[APPROVAL, NOTE], RESOLVE])\n"
+            . "print(json.dumps({**r, 'called': SEEN['called'], 'llm_calls': SEEN['llm_calls']}))\n",
+            ['PLAYBOOK_GATE_MODE' => 'unattended']);
+        self::assertSame('failed', $r['route']);
+        self::assertSame('handed_off', $r['status']);
+        self::assertSame(['request_approval'], $r['called']);
+        self::assertSame(1, $r['llm_calls']);
+        self::assertStringStartsWith("Playbook failed: gate:approval\n\n", $r['text']);
+        self::assertStringNotContainsString('after the gate', $r['text']);
+    }
+
+    public function testAfterAnUnattendedGateToolsRefuseAndTheFirstGateWins(): void
+    {
+        $r = $this->py("pr = PlaybookRun(True, {})\ntools = {t.name: t for t in PlaybookToolset({'actions': []}, pr).build()}\n"
+            . "out = []\nfor name, args in [APPROVAL, ('trigger_form', {'prompt': 'p', 'fields': []}), NOTE]:\n"
+            . "    try:\n        tools[name].func(**args)\n        out.append('ran')\n"
+            . "    except PlaybookHandedOff:\n        out.append('stopped')\n"
+            . "second = pr.gate('form', 'trigger_form', {'prompt': 'p'})\n"
+            . "print(json.dumps({'out': out, 'stop': pr.gate_stop, 'status': pr.status, 'second': second,\n"
+            . "    'gates': [e['kind'] for e in pr.events if e['type'] == 'gate_request'], 'direct': tools['request_approval'].return_direct}))\n",
+            ['PLAYBOOK_GATE_MODE' => 'unattended']);
+        self::assertSame(['stopped', 'stopped', 'stopped'], $r['out']);
+        self::assertSame('approval', $r['stop']);
+        self::assertSame('handed_off', $r['status']);
+        self::assertSame(['approval'], $r['gates'], 'one gate_request: later gates neither run nor overwrite');
+        self::assertFalse($r['second']['ok']);
+        self::assertTrue($r['direct']);
+    }
+
+    public function testGateModeIsPerRun(): void
+    {
+        // A listener's run (RUN_GATE_MODE, set by WorkflowGraph.run for graph.unattended) is unattended;
+        // a run outside it is attended again; an explicit PLAYBOOK_GATE_MODE always wins.
+        $r = $this->py("async def in_run(mode):\n    t = RUN_GATE_MODE.set(mode)\n"
+            . "    try:\n        return await asyncio.to_thread(PlaybookRun.gate_mode)\n    finally:\n        RUN_GATE_MODE.reset(t)\n"
+            . "a = asyncio.run(in_run('unattended'))\nb = asyncio.run(in_run(''))\nc = PlaybookRun.gate_mode()\n"
+            . "os.environ['PLAYBOOK_GATE_MODE'] = 'deny'\nd = asyncio.run(in_run('unattended'))\n"
+            . "print(json.dumps([a, b, c, d, 'PLAYBOOK_GATE_MODE' in os.environ and os.environ['PLAYBOOK_GATE_MODE']]))\n");
+        self::assertSame(['unattended', 'auto', 'auto', 'deny', 'deny'], $r);
+        $g = LangGraphRuntime::workflowGraphBlock();
+        self::assertStringContainsString('token = RUN_GATE_MODE.set("unattended" if self.unattended else "")', $g);
+    }
+
+    public function testFromInputReadsTheFirstParentOnly(): void
+    {
+        // Two parents: the first is the job JSON, the second anything. The key and the Job line come
+        // from the first (PHP's parents[0]); the playbook's request is still both texts joined.
+        $r = $this->py("async def run_node(nid, request):\n    return await node(**FROM_INPUT).run(request, _trace)\n"
+            . "SCRIPT[:] = [RESOLVE]\n"
+            . "g = WorkflowGraph(edges=[['1','2'],['5','2'],['2','3']], order=['1','5','2','3'],\n"
+            . "    node_types={'1':'code','5':'code','2':'playbook','3':'output'},\n"
+            . "    agents={'2': {'kind':'playbook','display':'PB','exits':['done','failed'],'exit_targets':{'done':['3'],'failed':[]}}},\n"
+            . "    run_node=run_node, start_documents=[])\n"
+            . "outs = {'1': {'source': 'Claim', 'text': '## Claim\\n{\"playbook\": \"test\"}'}, '5': {'source': 'Other', 'text': 'more context'}}\n"
+            . "res = asyncio.run(g._module_node('2')({'user_prompt': 'x', 'node_outputs': outs}))\n"
+            . "print(json.dumps({'routes': res['routes'], 'text': res['node_outputs']['2']['text'], 'request': SEEN['request'],\n"
+            . "    'after': PLAYBOOK_JOB_TEXT.get()}))\n");
+        self::assertSame(['2' => 'done'], $r['routes']);
+        self::assertStringEndsWith("\n\nJob: {\"playbook\":\"test\"}", $r['text']);
+        self::assertStringContainsString('more context', $r['request']);
+        self::assertNull($r['after'], 'the job text is reset after the node');
     }
 
     public function testWorkflowGraphRoutesPlaybookExits(): void

@@ -141,13 +141,23 @@ final class PlaybookEmit
         ];
     }
 
-    /** ADK, MAF and NOOA bake fixed playbooks only: a "from input" node is refused at compile time. */
-    public static function refuseFromInput(array $node): void
+    /**
+     * ADK, MAF and NOOA bake fixed playbooks and run every child: a "from input" node, or a node
+     * whose "failed" exit is wired (both branches would run), is refused at compile time. A node
+     * with exits whose only wired port is "done" compiles as before.
+     */
+    public static function refuseLangGraphOnly(array $node, array $edges): void
     {
         $cfg = is_array($node['config'] ?? null) ? $node['config'] : [];
+        $nid = (string) ($node['id'] ?? $node['drawflow_node_id'] ?? ($node['_id'] ?? ''));
+        $name = (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $nid);
         if (PlaybookSource::isFromInput($cfg)) {
-            $name = (string) ($cfg['name'] ?? $cfg['agent_name'] ?? $node['id'] ?? '');
             throw new RuntimeException("Playbook node \"{$name}\": \"from input\" is supported by the LangGraph target only.");
+        }
+        $exits = $cfg['exits'] ?? null;
+        if (is_array($exits) && in_array('failed', $exits, true)
+            && (CodeNodeEmit::exitTargets($nid, array_values(array_map('strval', $exits)), $edges)['failed'] ?? []) !== []) {
+            throw new RuntimeException("Playbook node \"{$name}\": the \"failed\" exit is supported by the LangGraph target only.");
         }
     }
 

@@ -133,10 +133,62 @@ TXT;
         $this->assertStringContainsString('"exits": ["done","failed"],', $code);
         $this->assertStringContainsString('"exit_targets": {"done":["3"],"failed":["4"]},', $code);
         $this->assertLessThan(strpos($code, 'PLAYBOOKS = {' . "\n" . '    # '), strpos($code, 'PUBLISHED_PLAYBOOKS = {'));
-        // A --watch run is unattended unless PLAYBOOK_GATE_MODE says otherwise.
-        $this->assertStringContainsString('os.environ["PLAYBOOK_GATE_MODE"] = "unattended"', $code);
+        // A --watch run is unattended (per run, not process-wide) unless PLAYBOOK_GATE_MODE says otherwise.
+        $this->assertStringContainsString('loop_mode=mode != "once", unattended=mode == "watch")', $code);
+        $this->assertStringContainsString('            graph.unattended = unattended', $code);
+        $this->assertStringNotContainsString('os.environ["PLAYBOOK_GATE_MODE"] =', $code);
         [$rc, $out] = self::pyCompiles($code);
         $this->assertSame(0, $rc, $out);
+    }
+
+    public function testUnbakeablePublishedPlaybookIsAWarning(): void
+    {
+        $pdo = $this->robotPdo();
+        $pdo->prepare('INSERT INTO playbooks (user_id, pkey, title, text) VALUES (?, ?, ?, ?)')
+            ->execute([7, 'broken', 'Broken', '']);
+        $code = $this->generate($this->fromInputGraph(), '3', $pdo);
+        $this->assertMatchesRegularExpression('~^# WARNING: published playbook "broken" not baked: [^\n]+$~m', $code);
+        $this->assertStringContainsString('    "test": {', $code);
+        [$rc, $out] = self::pyCompiles($code);
+        $this->assertSame(0, $rc, $out);
+    }
+
+    public function testModularListenRunsAreUnattendedPerRun(): void
+    {
+        $code = $this->generate($this->fromInputGraph(), '3', $this->robotPdo(), 'langgraph', ['modular' => true]);
+        $this->assertStringContainsString('run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True, unattended=True)', $code);
+        $this->assertStringContainsString('loop_mode=mode != "once", unattended=mode == "watch")', $code);
+        $this->assertStringNotContainsString('os.environ["PLAYBOOK_GATE_MODE"] =', $code);
+    }
+
+    /** A fixed playbook with exits; $failedWired adds an edge leaving its failed port (output_2). */
+    private function fixedExitsGraph(bool $failedWired): array
+    {
+        $g = $this->playbookGraph();
+        $g['nodes'][1]['config']['exits'] = ['done', 'failed'];
+        $g['edges'][1]['from_port'] = 'output_1';
+        if ($failedWired) {
+            $g['nodes'][] = ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']];
+            $g['edges'][] = ['from' => '2', 'to' => '4', 'from_port' => 'output_2'];
+        }
+        return $g;
+    }
+
+    public function testWiredFailedExitRefusedOnOtherTargets(): void
+    {
+        foreach (['adk', 'maf', 'nooa'] as $target) {
+            try {
+                $this->generate($this->fixedExitsGraph(true), '3', null, $target);
+                $this->fail("{$target} compiled a wired failed exit");
+            } catch (\RuntimeException $e) {
+                $this->assertSame('Playbook node "Playbook HR": the "failed" exit is supported by the LangGraph target only.',
+                    $e->getMessage(), $target);
+            }
+            // Only "done" wired: compiles as before.
+            $this->assertNotSame('', $this->generate($this->fixedExitsGraph(false), '3', null, $target), $target);
+        }
+        // LangGraph routes it.
+        $this->assertStringContainsString('"exit_targets": {"done":["3"],"failed":["4"]},', $this->generate($this->fixedExitsGraph(true)));
     }
 
     public function testFromInputWithoutRobotBakesAnEmptyDict(): void

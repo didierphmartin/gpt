@@ -88,7 +88,7 @@ class ADKGenerator
             if (WorkflowGraphAnalyzer::typeOf($pnode) !== 'playbook') {
                 continue;
             }
-            PlaybookEmit::refuseFromInput($pnode);
+            PlaybookEmit::refuseLangGraphOnly($pnode, $this->graphRepo->getGraph($workflowId)['edges'] ?? []);
             $analyzed['playbooks'][(string) $pid] =
                 PlaybookEmit::nodeData($pnode, $analyzer->availableToolsById($userId), $defaults, $userId);
         }
