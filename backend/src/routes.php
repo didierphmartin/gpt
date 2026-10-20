@@ -417,6 +417,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/playbooks/{id:\d+}/publish', ['PlaybooksController', 'publish']);
 
         // The code components collection (CodeComponentsController, over CodeComponentStore).
+        // The automation record (SQL: schema/migrations/2026-10-20_automations.sql) and its drift check / dev-test install.
+        $r->get('/api/v1/automations', ['AutomationsController', 'index']);
+        $r->post('/api/v1/automations', ['AutomationsController', 'create']);
+        $r->put('/api/v1/automations/{id:\d+}', ['AutomationsController', 'update']);
+        $r->post('/api/v1/automations/{id:\d+}/check', ['AutomationsController', 'check']);
+        $r->post('/api/v1/automations/{id:\d+}/install', ['AutomationsController', 'install']);
         $r->get('/api/v1/code-components', ['CodeComponentsController', 'index']);
         $r->post('/api/v1/code-components', ['CodeComponentsController', 'create']);
         $r->get('/api/v1/code-components/{id:\d+}', ['CodeComponentsController', 'show']);

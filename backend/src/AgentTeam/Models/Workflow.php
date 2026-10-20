@@ -33,6 +33,9 @@ class Workflow
     // handing control to one another ("swarm").
     private string $orchestration = 'workflow';
 
+    // The automation that generated this workflow (null when hand-made); set by the automations API only.
+    private ?int $automationId = null;
+
     // Graph structure (normalized nodes/edges from database)
     private ?array $graph = null;
 
@@ -73,6 +76,8 @@ class Workflow
         $o = (string) ($data['orchestration'] ?? 'workflow');
         $this->orchestration = in_array($o, ['workflow', 'swarm'], true) ? $o : 'workflow';
 
+        $this->automationId = isset($data['automation_id']) ? (int) $data['automation_id'] : null;
+
         return $this;
     }
 
@@ -108,6 +113,7 @@ class Workflow
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
             'orchestration' => $this->orchestration,
+            'automation_id' => $this->automationId,
         ];
 
         // Include graph if available
@@ -135,6 +141,7 @@ class Workflow
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
             'orchestration' => $this->orchestration,
+            'automation_id' => $this->automationId,
             'schedule_enabled' => $this->isScheduleEnabled(), // Computed from triggers
             'runtime_mode' => $this->detectRuntimeMode(),
         ];
