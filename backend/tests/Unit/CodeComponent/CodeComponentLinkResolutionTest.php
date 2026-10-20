@@ -77,6 +77,22 @@ final class CodeComponentLinkResolutionTest extends TestCase
         $this->assertSame('y', json_decode((string) $this->db->query("SELECT config FROM workflow_nodes WHERE id = $inline")->fetchColumn(), true)['code']);
     }
 
+    public function testArgsAndStartArgsSurviveSaveAndUpdate(): void
+    {
+        $repo = new WorkflowGraphRepository($this->db);
+        $code = ['name' => 'Poll', 'code_component_id' => 7, 'args' => ['q' => ['a', 1]]];
+        $start = ['start_option' => 7, 'start_args' => ['mailbox' => 'x']];
+        $c = $repo->createNode(1, ['node_type' => 'code', 'config' => $code]);
+        $s = $repo->createNode(1, ['node_type' => 'start', 'config' => $start]);
+        $stored = fn(int $id) => json_decode((string) $this->db->query("SELECT config FROM workflow_nodes WHERE id = $id")->fetchColumn(), true);
+        $this->assertSame(['q' => ['a', 1]], $stored($c)['args']);
+        $this->assertSame(['mailbox' => 'x'], $stored($s)['start_args']);
+        $repo->updateNode($c, ['node_type' => 'code', 'config' => $code]);
+        $repo->updateNode($s, ['node_type' => 'start', 'config' => $start]);
+        $this->assertSame(['q' => ['a', 1]], $stored($c)['args']);
+        $this->assertSame(['mailbox' => 'x'], $stored($s)['start_args']);
+    }
+
     public function testCompileRefusesAMissingComponentNamingTheNode(): void
     {
         $this->expectExceptionMessage('Code component #99 not found (node Gone).');

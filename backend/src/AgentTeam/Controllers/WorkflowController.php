@@ -203,7 +203,8 @@ class WorkflowController
                 error_log("[WorkflowController] Saving graph with " . count($nodes) . " nodes and " . count($edges) . " edges");
 
                 try {
-                    $this->graphRepository->saveGraph($created->getId(), $nodes, $edges);
+                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges);
+                    $this->graphRepository->saveGraph($created->getId(), $resolved['nodes'], $resolved['edges']);
                     error_log("[WorkflowController] Graph saved successfully");
                 } catch (\Exception $e) {
                     error_log("[WorkflowController] Error saving graph: " . $e->getMessage());
@@ -220,6 +221,8 @@ class WorkflowController
                 'message' => 'Workflow created successfully',
                 'status_code' => 201
             ];
+        } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
+            return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
         } catch (\Exception $e) {
             return [
                 'success' => false,
@@ -627,7 +630,8 @@ class WorkflowController
                 // Validate the graph
                 // First clear and save, then validate
                 try {
-                    $this->graphRepository->saveGraph($workflowId, $nodes, $edges);
+                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges);
+                    $this->graphRepository->saveGraph($workflowId, $resolved['nodes'], $resolved['edges']);
                     error_log("[WorkflowController] Graph updated successfully");
                 } catch (\Exception $e) {
                     error_log("[WorkflowController] Error updating graph: " . $e->getMessage());
@@ -647,6 +651,8 @@ class WorkflowController
                 'message' => 'Workflow updated successfully',
                 'status_code' => 200
             ];
+        } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
+            return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
         } catch (\Exception $e) {
             return [
                 'success' => false,
