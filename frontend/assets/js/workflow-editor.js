@@ -14748,10 +14748,13 @@ class WorkflowEditor {
             // conversation this node is one step of a turn, not the end of
             // anything: stamping "finished" on the window and renaming Hide to
             // Close would announce a run that is still walking the graph.
+            // The failed cue is for a node with exits (it routes on failed); an old one-output node runs its
+            // children either way, so it shows as completed, as it always did.
+            const tookFailed = Array.isArray(data.exits) && data.exits.length > 0 && finalResult?.exit === 'failed';
             if (!inConversation) {
-                this._pbOverlayFinish(finalResult?.exit !== 'failed', `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
+                this._pbOverlayFinish(!tookFailed, `run ${finalResult?.run_id ?? ''} ${finalResult?.status ?? 'finished'} — ${String(output).slice(0, 300)}`);
             }
-            this.highlightNode(dfId, finalResult?.exit === 'failed' ? 'error' : 'completed', dfId, 'agent');
+            this.highlightNode(dfId, tookFailed ? 'error' : 'completed', dfId, 'agent');
             this.updateModalInputOutput(dfId);
             // The exit the server chose (done when resolved, failed otherwise); absent for an older server.
             return { success: true, output, exit: finalResult?.exit || null };
@@ -14760,7 +14763,12 @@ class WorkflowEditor {
             const nd = this.nodeExecutionData[dfId] || (this.nodeExecutionData[dfId] = {});
             const hasExits = Array.isArray(data.exits) && data.exits.length > 0;
             // A node with exits reports a transport failure in the outcome-rule shape; an old node keeps 'Error: ...'.
-            const failedText = hasExits ? `Playbook failed: error:${msg.replace(/\s+/g, ' ').trim()}` : 'Error: ' + msg;
+            let failedText = hasExits ? `Playbook failed: error:${msg.replace(/\s+/g, ' ').trim()}` : 'Error: ' + msg;
+            // A from-input node keeps the job on both outcomes: the downstream code node hands it back.
+            if (data.playbook_source === 'input') {
+                const job = window.PlaybookCollection.jobLine(parentText);
+                if (job) failedText += '\n\n' + job;
+            }
             nd.output = failedText;
             nd.success = false;
             nd.executionTime = Date.now() - _startedAt;
@@ -19158,7 +19166,7 @@ class WorkflowEditor {
                                         <label class="block text-xs text-gray-600 mb-1" for="agent-pb-input-field">${tf('pbInputField')}</label>
                                         <input type="text" id="agent-pb-input-field" class="w-full px-2 py-1 border border-gray-300 rounded text-sm font-mono"
                                                value="${this.escapeHtml(pbNodeData.playbook_input_field || 'playbook')}">
-                                        <p class="text-xs text-gray-500 mt-1">${tf('pbSourceInputHint')}</p>
+                                        <p class="text-xs text-gray-500 mt-1">${tf('pbSourceInputHint')} ${(Array.isArray(pbNodeData.exits) && pbNodeData.exits.length) ? tf('pbSourceInputExits') : tf('pbSourceInputNoExits')}</p>
                                     </div>
                                 </div>
                                 ` : ''}

@@ -125,6 +125,18 @@ assert.deepStrictEqual(arm, { fire: false, armed: 'robot:5' });
 assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:6'), { fire: false, armed: 'robot:6' });
 assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:5'), { fire: true, armed: null });
 
+// The Job line a from-input node keeps on a transport error (twin of PlaybookSource::jobLine).
+assert.strictEqual(PC.jobLine('## Get job\n{ "playbook": "a/b",\n "task": "é" }'), 'Job: {"playbook":"a/b","task":"é"}');
+assert.strictEqual(PC.jobLine('{"task":"x"}'), 'Job: {"task":"x"}');
+assert.strictEqual(PC.jobLine('{}'), 'Job: {}');
+assert.strictEqual(PC.jobLine('{"a":{}}'), 'Job: {"a":{}}');
+assert.strictEqual(PC.jobLine('not json'), null);
+assert.strictEqual(PC.jobLine('[1,2]'), null);
+assert.strictEqual(PC.jobLine('null'), null);
+assert.strictEqual(PC.jobLine('"text"'), null);
+assert.strictEqual(PC.jobLine('## Get job\n'), null);
+assert.strictEqual(PC.jobLine(null), null);
+
 (async () => {
     // A failed load is remembered: a linked id that is not cached is "unloaded", not "not found".
     await assert.rejects(PC.cache.load({ list: async () => { throw new Error('HTTP 500'); } }));

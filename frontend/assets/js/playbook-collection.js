@@ -192,6 +192,16 @@
         return armed === target ? { fire: true, armed: null } : { fire: false, armed: target };
     }
 
+    // "Job: <compact JSON>" when the parent's text (a leading "## name" line stripped) is a plain JSON
+    // object, else null (twin of PlaybookSource::jobLine). Arrays, null and scalars have no Job line.
+    function jobLine(parentText) {
+        if (typeof parentText !== 'string') return null;
+        const body = parentText.replace(/^\s+/, '').replace(/^## [^\n]*\n/, '').trim();
+        let data;
+        try { data = JSON.parse(body); } catch (_) { return null; }
+        return data !== null && typeof data === 'object' && !Array.isArray(data) ? 'Job: ' + JSON.stringify(data) : null;
+    }
+
     return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
-        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep, armClick };
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep, armClick, jobLine };
 });
