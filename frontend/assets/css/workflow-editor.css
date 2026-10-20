@@ -917,6 +917,9 @@ svg.connection.selected .main-path,
     font-size: 12px;
     color: #64748b;
     font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    /* a long word (an exit like already_handed_back) wraps instead of pushing the ✏️ button off the node */
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 /* Start node */

@@ -720,7 +720,7 @@ class WorkflowEditor {
                      data-workflow-id="${wf.id}" data-workflow-name="${this.escapeHtml(wf.name || '')}"
                      ${isActive ? 'style="background:#dbeafe; border-left:3px solid #3b82f6;"' : ''}>
                     <span class="opacity-60">${icon}</span>
-                    <span class="flex-shrink-0 text-[10px] text-gray-400 tabular-nums">#${wf.id}</span>
+                    <span class="flex-shrink-0 text-[11px] text-gray-600 font-medium tabular-nums">#${wf.id}</span>
                     <span class="flex-1 truncate" title="${this.escapeHtml(wf.name)} (${badgeLabel}, ID: ${wf.id})">${this.escapeHtml(wf.name || 'Untitled')}</span>
                     <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded" style="${badgeStyle}">${badgeLabel}</span>
                     <button type="button"
@@ -9635,10 +9635,12 @@ class WorkflowEditor {
                     <span class="node-title">${this.escapeHtml(cfg.name || 'Code')}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
-                <div class="code-badges" style="padding:0 8px;max-width:230px;">${this._codeBadgesHtml(cfg)}</div>
+                <div style="display:flex;align-items:flex-start;gap:6px;padding:0 8px;max-width:230px;">
+                    <div class="code-badges" style="flex:1;min-width:0;">${this._codeBadgesHtml(cfg)}</div>
+                    <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
+                </div>
                 <div class="node-body">
                     <small class="node-config-display">${this.escapeHtml(window.CodeNode.exitsLabel(cfg.exits))}</small>
-                    <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
                 </div>
             </div>`;
         const id = this.editor.addNode('code', 1, cfg.exits.length, x, y, 'code', {
