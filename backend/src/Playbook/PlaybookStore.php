@@ -46,11 +46,13 @@ final class PlaybookStore
 
     public function list(int $userId): array
     {
-        $st = $this->db->prepare('SELECT id, pkey, title, text, updated_at FROM playbooks WHERE user_id = ? ORDER BY title');
+        // automation_id: the automation that manages the playbook (null = none); save_playbook_agent checks it on a key clash.
+        $st = $this->db->prepare('SELECT id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE user_id = ? ORDER BY title');
         $st->execute([$userId]);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as &$r) {
             $r['id'] = (int) $r['id'];
+            $r['automation_id'] = $r['automation_id'] === null ? null : (int) $r['automation_id'];
             $used = $this->usedBy($userId, $r['id']);
             $r['used_by'] = count($used['agents']) + count($used['nodes']);
         }

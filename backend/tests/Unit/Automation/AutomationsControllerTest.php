@@ -134,6 +134,20 @@ final class AutomationsControllerTest extends TestCase
         $this->assertSame('cannot check: unreachable', $by[2]['detail']);
     }
 
+    public function testCheckReadsAGarbledDescribeAnswerAsBadAnswer(): void
+    {
+        $this->create();
+        // no `item` key at all (or not an object): not a "not installed" answer, the check cannot conclude
+        $this->mcp->describe['ServiceNow PDI'] = ['ok' => true, 'result' => ['structuredContent' => ['environment' => 'dev']]];
+        $this->mcp->describe['ServiceNow Prod'] = ['ok' => true, 'result' => ['structuredContent' => ['environment' => 'prod', 'item' => 'abc']]];
+        $r = $this->ctl->check($this->req('POST', [], ['id' => 1]));
+        $by = array_column($r['data']['instances'], null, 'mcp_server_id');
+        foreach ([1, 2] as $sid) {
+            $this->assertSame('out_of_sync', $by[$sid]['status']);
+            $this->assertSame('cannot check: bad_answer', $by[$sid]['detail']);
+        }
+    }
+
     public function testCheckIgnoresOtherUsersAndAutomations(): void
     {
         $this->create();

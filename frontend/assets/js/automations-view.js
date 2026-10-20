@@ -96,6 +96,55 @@
         return p;
     }
 
+    /** The placeholder names still in the app's files ({path: text}), sorted and unique; a bare PLACEHOLDER counts too. */
+    function placeholdersIn(files) {
+        const names = new Set();
+        for (const text of Object.values(files || {})) {
+            for (const m of String(text ?? '').matchAll(/PLACEHOLDER(?::([A-Za-z0-9_.-]+))?/g)) names.add(m[1] || 'PLACEHOLDER');
+        }
+        return [...names].sort();
+    }
+
+    /**
+     * save_playbook_agent on a pkey collision for an automation (ruling R11: the playbook key IS the automation key).
+     * `existing` is the playbook holding the key ({id, automation_id}); it is updated in place when it is unmanaged
+     * (automation_id null) or already this automation's; another automation's playbook is refused.
+     */
+    function playbookKeyPlan(existing, automationId) {
+        if (!existing || !(Number(existing.id) > 0)) return { action: 'refuse', automation_id: null };
+        const owner = existing.automation_id == null || existing.automation_id === '' ? null : Number(existing.automation_id);
+        if (owner === null || owner === Number(automationId)) return { action: 'update', playbook_id: Number(existing.id) };
+        return { action: 'refuse', automation_id: owner };
+    }
+
+    function keyTakenMessage(key, automationTitle) {
+        return `key "${key}" taken by automation ${automationTitle}`;
+    }
+
+    /** The Start option's component id in a saved workflow's graph (GET /workflows/{id} data.graph: nodes with type, or rows with node_type), or null. */
+    function startOptionOf(graph) {
+        for (const n of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+            let cfg = n?.config;
+            if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
+            const isStart = (n?.node_type || n?.type || cfg?.type) === 'start';
+            const id = Number(cfg?.start_option);
+            if (isStart && Number.isInteger(id) && id > 0) return id;
+        }
+        return null;
+    }
+
+    /**
+     * The event schedule ▶ needs to start a workflow on its Start option (what the editor saves when the option is
+     * ticked). The current row (pending or paused, as the editor reads it) is updated, else one is created; the
+     * server fills the watch and the Start tag (CodeComponentStore::scheduleBody). `now`: local 'YYYY-MM-DDTHH:mm'.
+     */
+    function startSchedulePlan(schedules, workflowId, componentId, now) {
+        const current = (Array.isArray(schedules) ? schedules : []).find(s => s && (s.status === 'pending' || s.status === 'paused'));
+        const body = { workflow_id: Number(workflowId), trigger_component_id: Number(componentId), repeat_type: 'event',
+            scheduled_time: now, input_prompt: current?.input_prompt || '' };
+        return current ? { method: 'PUT', path: `/schedules/${current.id}`, body } : { method: 'POST', path: '/schedules', body };
+    }
+
     function manualInstallMessage(scope) {
         return `install manually: sh build-install.sh in ~/Documents/synergyAI/outputs/servicenow/${scope}/`;
     }
@@ -147,6 +196,14 @@
         if (!files['package.json'] || !Object.keys(files).some(p => p.startsWith('src/fluent/'))) {
             return { success: false, error: `no deployable app found in /outputs/servicenow/${scope}/ (package.json and src/fluent/*.ts expected)`,
                 manual: true, message: manualInstallMessage(scope) };
+        }
+        // An app with unfilled placeholders would install a flow whose task never reaches SynergyAI (ruling R12).
+        const placeholders = placeholdersIn(files);
+        if (placeholders.length) {
+            return { success: false, installed: false, placeholders,
+                error: `not installed: the app still has placeholders to fill: ${placeholders.join(', ')}`,
+                hint: 'Ask the user for these values, put them in the spec (servicenow.placeholders: {"<name>": {"value": "..."}}), '
+                    + 're-run scripts/create.py with the same --version, then call install_automation again.' };
         }
         let installed;
         try {
@@ -272,5 +329,6 @@
     }
 
     return { deployFileList, driftSummary, clientToolNames, saveAutomationPlan, outputsPath, manualInstallMessage,
+        placeholdersIn, playbookKeyPlan, keyTakenMessage, startOptionOf, startSchedulePlan,
         withServerNames, AutomationApi, collectDeployFiles, installAutomation, AutomationsLibrary };
 });

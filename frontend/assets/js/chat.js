@@ -332,6 +332,7 @@ class ChatApp {
                     provider: { type: 'string', description: 'Optional LLM provider key for the node (defaults to the current one).' },
                     pkey: { type: 'string', description: 'Optional collection key (lowercase letters, digits, single hyphens, max 64). Defaults to one derived from the playbook Title.' },
                     playbook_id: { type: 'integer', description: 'Optional: the id of a playbook to update in place (an automation\'s managed playbook, from save_automation). Its agent is reused.' },
+                    automation_id: { type: 'integer', description: 'Optional: the automation this playbook belongs to (from save_automation). The pkey is then the automation key: a playbook already holding it is updated in place when it is unmanaged or this automation\'s, and refused when another automation manages it.' },
                 },
                 required: ['name', 'playbook'],
             },
@@ -450,10 +451,13 @@ class ChatApp {
         }
         let saved;
         let restart = null;
+        let armed = null;
         try {
             saved = workflowId
                 ? await this._apiJson('PUT', `/workflows/${workflowId}`, dsl)
                 : await this._apiJson('POST', '/workflows', dsl);
+            // A Start option needs its event schedule, or ▶ refuses the workflow (ruling R13); set before the restart.
+            if (saved.ok && saved.json?.data?.id) armed = await this._armStartOption(Number(saved.json.data.id));
         } finally {
             if (wasActive) restart = await this._apiJson('POST', `/workflows/${workflowId}/activate`).catch(e => ({ ok: false, json: { error: e?.message } }));
         }
@@ -471,7 +475,33 @@ class ChatApp {
         }
         try { await window.workflowEditor?.loadWorkflowsList?.(); } catch (_) {}
         return { success: true, workflow_id: Number(id), name: saved.json.data.name, [workflowId ? 'updated' : 'created']: true, ...restarted,
-            ...(automationId ? { automation_id: automationId, linked } : {}) };
+            ...(automationId ? { automation_id: automationId, linked } : {}), ...(armed ? { start_option: armed } : {}) };
+    }
+
+    /**
+     * The saved workflow's Start option gets its event schedule (created, or the current row updated) -- what the
+     * editor saves when the option is ticked -- so ▶ can start it. null when Start has no option.
+     */
+    async _armStartOption(workflowId) {
+        const AV = window.AutomationsView;
+        try {
+            const wf = await this._apiJson('GET', `/workflows/${workflowId}`);
+            const componentId = AV.startOptionOf(wf.json?.data?.graph);
+            if (!componentId) return null;
+            const list = await this._apiJson('GET', `/workflows/${workflowId}/schedules`);
+            if (!list.ok) return { armed: false, error: list.json?.error || `schedules endpoint returned ${list.status}` };
+            const d = new Date();
+            const p = (n) => String(n).padStart(2, '0');
+            const now = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+            const plan = AV.startSchedulePlan(list.json?.data, workflowId, componentId, now);
+            const r = await this._apiJson(plan.method, plan.path, plan.body);
+            return r.ok
+                ? { armed: true, schedule_id: r.json?.data?.id ?? null, hint: 'The workflow can be started with ▶ on its Start node.' }
+                : { armed: false, error: r.json?.error || `schedules endpoint returned ${r.status}`,
+                    hint: 'Tick the Start option on the workflow\'s Start node, then ▶.' };
+        } catch (e) {
+            return { armed: false, error: e?.message || String(e), hint: 'Tick the Start option on the workflow\'s Start node, then ▶.' };
+        }
     }
 
     /**
@@ -3709,8 +3739,28 @@ class ChatApp {
                     const api = new PC.PlaybookApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', () => this.getAuthHeaders());
                     let row = null;
                     let agentId = null;
-                    const playbookId = Number(input.playbook_id) > 0 ? Number(input.playbook_id) : null;
+                    let playbookId = Number(input.playbook_id) > 0 ? Number(input.playbook_id) : null;
+                    const automationId = Number(input.automation_id) > 0 ? Number(input.automation_id) : null;
                     try {
+                        if (!playbookId && automationId) {
+                            // The playbook key IS the automation key (ruling R11): a playbook already holding it is
+                            // updated in place when it is unmanaged or this automation's; another automation's is refused.
+                            const pkey = String(input.pkey || '').trim();
+                            const holder = pkey ? ((await api.list()).data || []).find(r => r.pkey === pkey) : null;
+                            if (holder) {
+                                const AV = window.AutomationsView;
+                                const plan = AV.playbookKeyPlan(holder, automationId);
+                                if (plan.action === 'update') {
+                                    playbookId = plan.playbook_id;
+                                } else {
+                                    let owner = `#${plan.automation_id}`;
+                                    try { owner = ((await this._automationApi().list()) || []).find(a => Number(a.id) === plan.automation_id)?.title || owner; } catch (_) {}
+                                    const err = new Error(AV.keyTakenMessage(pkey, owner));
+                                    err.kind = 'automation_key_taken';
+                                    throw err;
+                                }
+                            }
+                        }
                         if (playbookId) {
                             // An automation's managed playbook: updated in place, its agent reused.
                             const pkey = String(input.pkey || '').trim();
@@ -3726,9 +3776,12 @@ class ChatApp {
                                 || (await api.create({ text: playbook, pkey: String(input.pkey || '').trim() || PC.keyFromTitle(PC.titleOf(playbook) || name) })).data;
                         }
                     } catch (e) {
-                        payload = e?.kind === 'key_taken'
-                            ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct pkey.' }
-                            : { success: false, error: e?.message || String(e) };
+                        payload = (e?.kind === 'automation_key_taken' || (e?.kind === 'key_taken' && automationId))
+                            ? { success: false, error: e.message, code: 'automation_key_taken',
+                                hint: 'Nothing was saved. Pick a NEW automation key and regenerate every part with it (save_automation, create.py, save_playbook_agent, save_workflow); never save the playbook under another pkey alone.' }
+                            : e?.kind === 'key_taken'
+                                ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct pkey.' }
+                                : { success: false, error: e?.message || String(e) };
                     }
                     if (row && agentId) {
                         PC.cache.put(row);

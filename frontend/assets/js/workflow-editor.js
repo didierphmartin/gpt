@@ -9648,6 +9648,8 @@ class WorkflowEditor {
             mcp_servers: [...cfg.mcp_servers], timeout_s: cfg.timeout_s, disabled: !!cfg.disabled,
             code_component_id: cfg.code_component_id ? Number(cfg.code_component_id) : null,
             code_component_missing: !!cfg.code_component_missing,
+            // args (an automation's group, a component's settings) are kept so a Run and a re-save carry them
+            ...(cfg.args && typeof cfg.args === 'object' && !Array.isArray(cfg.args) ? { args: { ...cfg.args } } : {}),
         }, html);
         this.hideHelpOverlay();
         return id;
@@ -14793,9 +14795,8 @@ class WorkflowEditor {
         if (this._wfNodeKind(id, nodes) !== 'start') return nodes;
         const d = nodes[id].data || {};
         const comp = window.CodeComponents?.cache.get(d.start_option);
-        const data = comp?.start_trigger
-            ? { ...window.CodeComponents.linkedNodeConfig(comp, comp.start_trigger.label), type: 'code' }
-            : { name: d.start_option_label || 'Start', code_component_id: d.start_option, code_component_missing: true, exits: d.exits };
+        // The Start's start_args become the component's ARGS, as on the server (StartOptionGraph).
+        const data = window.CodeNode.startAsCode(d, comp, (row, name) => window.CodeComponents.linkedNodeConfig(row, name));
         return { ...nodes, [id]: { ...nodes[id], data } };
     }
 
@@ -14811,9 +14812,8 @@ class WorkflowEditor {
         const parents = window.CodeNode.parentsFor(id, nodes, this._wfOutputs, (u) => this._wfNodeKind(u, nodes),
             (u) => nodes[u]?.data?.agent_type === 'dispatcher');
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
-        const r = await this._codeNodeExecute({ code: d.code || '', exits: d.exits || ['next'],
-            servers: (d.mcp_servers || []).map(window.CodeNode.slug), timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt,
-            name: d.name || 'Code' });
+        // The node's args reach the harness as ARGS, as on the server (CodeNodeExecutor).
+        const r = await this._codeNodeExecute(window.CodeNode.runRequest(d, parents, userPrompt));
         // The agent nodes' record shape: the modal's Input, Output and Logs tabs read it.
         this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents, user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
         this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');

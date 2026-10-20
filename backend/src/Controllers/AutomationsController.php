@@ -128,8 +128,13 @@ final class AutomationsController
             return;
         }
         $env = is_string($payload['environment'] ?? null) ? $payload['environment'] : null;
-        $item = $payload['item'] ?? null;
-        if (!is_array($item)) {
+        // item null = not installed; no item key, or not an object = a garbled answer the check cannot read
+        if (!array_key_exists('item', $payload) || ($payload['item'] !== null && !is_array($payload['item']))) {
+            $this->store->saveInstance($a['id'], $server['id'], 'out_of_sync', null, null, $env, 'cannot check: bad_answer');
+            return;
+        }
+        $item = $payload['item'];
+        if ($item === null) {
             $this->store->saveInstance($a['id'], $server['id'], 'not_installed', null, null, $env, '');
             return;
         }

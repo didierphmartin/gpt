@@ -18,7 +18,7 @@ final class PlaybookStoreTest extends TestCase
     {
         $db->exec('CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL,
             title TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT, updated_at TEXT,
-            published_by INTEGER NULL, published_at TEXT NULL, source_id INTEGER NULL, UNIQUE (user_id, pkey))');
+            published_by INTEGER NULL, published_at TEXT NULL, source_id INTEGER NULL, automation_id INTEGER NULL, UNIQUE (user_id, pkey))');
         $db->exec('CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL,
             agent_type TEXT DEFAULT "standard", instructions TEXT, playbook_id INTEGER)');
         $db->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)');
@@ -53,6 +53,15 @@ final class PlaybookStoreTest extends TestCase
         foreach (['Okta', 'okta--reset', '-okta', 'okta_reset', '', str_repeat('a', 65)] as $bad) {
             $this->assertFalse(PlaybookStore::isValidKey($bad), $bad);
         }
+    }
+
+    public function testListShowsWhichAutomationManagesEachPlaybook(): void
+    {
+        // save_playbook_agent reads it on a key collision (ruling R11): unmanaged or this automation's -> update in place.
+        $row = $this->store->save(3, null, self::OKTA, 'okta-reset');
+        $this->assertNull($this->store->list(3)[0]['automation_id']);
+        $this->db->prepare('UPDATE playbooks SET automation_id = 9 WHERE id = ?')->execute([$row['id']]);
+        $this->assertSame(9, $this->store->list(3)[0]['automation_id']);
     }
 
     public function testSaveKeepsTheTextVerbatimAndCopiesTheTitle(): void

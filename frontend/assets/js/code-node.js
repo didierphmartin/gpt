@@ -311,6 +311,28 @@
     }
 
     /** A loaded config whose exits / mcp_servers are null or not arrays (or exits empty) takes the defaults. */
+    /** A node's ARGS for the harness: its args object (JSON types kept), else {}. */
+    function nodeArgs(v) {
+        return v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : {};
+    }
+
+    /** The worker request for one code-node run (the editor's Run walk), args included as the server sends them. */
+    function runRequest(d, parents, userPrompt) {
+        return { code: d.code || '', exits: d.exits || ['next'], servers: (d.mcp_servers || []).map(slug),
+            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args) };
+    }
+
+    /**
+     * A Start on a Start option as the code node the runner executes (twin of StartOptionGraph::expand): the
+     * component's code with the Start's start_args as its args. `comp` null or no longer an option: a missing node.
+     */
+    function startAsCode(d, comp, linkedNodeConfig) {
+        const args = nodeArgs(d.start_args);
+        return comp?.start_trigger
+            ? { ...linkedNodeConfig(comp, comp.start_trigger.label), type: 'code', args }
+            : { name: d.start_option_label || 'Start', code_component_id: d.start_option, code_component_missing: true, exits: d.exits, args };
+    }
+
     function normalizeConfig(cfg, defaults) {
         const out = { ...cfg };
         out.exits = Array.isArray(cfg.exits) && cfg.exits.length ? cfg.exits : [...defaults.exits];
@@ -337,5 +359,5 @@
     }
 
     return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
-             edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData };
+             edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData, nodeArgs, runRequest, startAsCode };
 });

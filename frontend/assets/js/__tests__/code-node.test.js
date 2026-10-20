@@ -236,4 +236,34 @@ assert.ok(!CN.isConnectable([]));
 assert.ok(!CN.isConnectable(undefined));
 // trigger templates: the exit that carries work is declared, and is one of the template's exits
 for (const t of Object.values(CN.TEMPLATES).filter((x) => x.trigger)) assert.ok(t.exits.includes(t.trigger), t.label);
+// The editor's Run walk hands the harness the same ARGS as the server (StartOptionGraph + CodeNodeExecutor):
+// a code node's config.args, and a Start option's start_args on the synthetic start component.
+assert.deepStrictEqual(CN.nodeArgs({ tag: 'okta-reset', version: 3 }), { tag: 'okta-reset', version: 3 });
+for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeArgs(bad), {});
+{
+    const req = CN.runRequest({ name: 'Hand back', code: 'c', exits: ['handed_back', 'error'], mcp_servers: ['ServiceNow'],
+        timeout_s: 20, args: { group: 'IT L2' } }, [{ name: 'P', text: 't' }], 'go');
+    assert.deepStrictEqual(req, { code: 'c', exits: ['handed_back', 'error'], servers: ['servicenow'], timeout_s: 20,
+        parents: [{ name: 'P', text: 't' }], user_prompt: 'go', name: 'Hand back', args: { group: 'IT L2' } });
+    const bare = CN.runRequest({}, [], '');
+    assert.deepStrictEqual(bare.args, {});
+    assert.deepStrictEqual(bare.exits, ['next']);
+    assert.strictEqual(bare.timeout_s, 30);
+}
+{
+    const comp = { id: 12, name: 'ServiceNow: get new job', code: 'c', exits: ['job', 'no_job', 'error'], mcp_servers: ['ServiceNow'],
+        timeout_s: 30, start_trigger: { label: 'ServiceNow: get new job' } };
+    const linked = (row, name) => ({ name: name || row.name, code_component_id: Number(row.id), code: row.code,
+        exits: [...row.exits], mcp_servers: [...row.mcp_servers], timeout_s: row.timeout_s });
+    const start = { type: 'start', start_option: 12, start_args: { tag: 'okta-reset', version: 3, hand_back_group: 'IT L2' } };
+    const d = CN.startAsCode(start, comp, linked);
+    assert.strictEqual(d.type, 'code');
+    assert.strictEqual(d.code_component_id, 12);
+    assert.deepStrictEqual(d.args, { tag: 'okta-reset', version: 3, hand_back_group: 'IT L2' });
+    assert.strictEqual(typeof d.args.version, 'number');
+    assert.deepStrictEqual(CN.startAsCode({ type: 'start', start_option: 12 }, comp, linked).args, {});
+    // the component is gone: a missing node (its run fails), still with the Start's args
+    const gone = CN.startAsCode({ type: 'start', start_option: 12, start_option_label: 'Get job', exits: ['job'], start_args: { tag: 'k' } }, null, linked);
+    assert.deepStrictEqual(gone, { name: 'Get job', code_component_id: 12, code_component_missing: true, exits: ['job'], args: { tag: 'k' } });
+}
 console.log('code-node.test.js: OK');
