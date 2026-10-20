@@ -53,6 +53,19 @@ final class CodeNodeExecutorTest extends TestCase
         self::assertSame('HI', $out['result']['output_text']);
     }
 
+    public function testConfigArgsReachTheCodeAsTheArgsGlobal(): void
+    {
+        $code = "def run(input, call_tool):\n    return {'route': 'a', 'output': [ARGS.get('tag'), ARGS.get('version') + 1]}\n";
+        $node = self::node($code);
+        $node['config']['args'] = ['tag' => 'okta-reset', 'version' => 2];
+        $out = $this->exec()->run($node, [], [2], '3', [], '');
+        $this->assertRan($out);
+        self::assertSame('["okta-reset", 3]', $out['result']['output_text']);
+        $out = $this->exec()->run(self::node("def run(i, c):\n    return {'route': 'a', 'output': ARGS}\n"), [], [2], '3', [], '');
+        $this->assertRan($out);
+        self::assertSame('{}', $out['result']['output_text']);
+    }
+
     public function testUnknownServerIsRefusedBeforeRunning(): void
     {
         $this->expectExceptionMessage('is not one of your MCP servers');

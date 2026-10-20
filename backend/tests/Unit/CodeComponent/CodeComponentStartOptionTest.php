@@ -178,6 +178,22 @@ final class CodeComponentStartOptionTest extends TestCase
         $this->assertSame(self::TRIGGER['watch'], $b['event_trigger']);
     }
 
+    public function testScheduleBodyAddsOnlyTheStartTagToTheWatch(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (64, ?, ?)')->execute(['start',
+            json_encode(['type' => 'start', 'start_option' => $this->id,
+                'start_args' => ['tag' => 'okta-reset', 'version' => 2, 'hand_back_group' => 'g']])]);
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
+        $this->assertSame(['args' => ['folder' => 'Inbox'], 'tag' => 'okta-reset'], $b['event_trigger']['args']);
+        // the update path has no workflow_id in its body: the caller names it
+        $b = $this->store->scheduleBody(3, ['trigger_component_id' => (string) $this->id], 64);
+        $this->assertSame('okta-reset', $b['event_trigger']['args']['tag']);
+        // another workflow, or a Start without a tag: the watch as stored
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 65, 'trigger_component_id' => (string) $this->id]);
+        $this->assertSame(self::TRIGGER['watch'], $b['event_trigger']);
+    }
+
     public function testScheduleBodyLeavesOtherSchedulesAlone(): void
     {
         $body = ['workflow_id' => 64, 'repeat_type' => 'daily'];

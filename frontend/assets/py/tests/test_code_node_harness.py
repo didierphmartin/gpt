@@ -13,9 +13,9 @@ def ok_result(data):
     return {"content": [{"type": "text", "text": json.dumps(data)}], "structuredContent": data}
 
 
-def run(source, input=None, exits=("next",), servers=(), transport=None, timeout_s=5, threaded=True):
+def run(source, input=None, exits=("next",), servers=(), transport=None, timeout_s=5, threaded=True, args=None):
     transport = transport or (lambda s, t, a: ok_result({}))
-    return h.execute(source, input, list(exits), list(servers), transport, timeout_s, threaded=threaded)
+    return h.execute(source, input, list(exits), list(servers), transport, timeout_s, threaded=threaded, args=args)
 
 
 class DecodeInput(unittest.TestCase):
@@ -250,3 +250,19 @@ class NodeName(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArgsGlobal(unittest.TestCase):
+    """ARGS: the node's start/component arguments as a module global; {} when none."""
+    SRC = "def run(input, call_tool):\n    return ARGS.get('tag')\n"
+
+    def test_args_are_readable_and_keep_their_json_types(self):
+        r = run(self.SRC, args={"tag": "okta-reset", "version": 2})
+        self.assertEqual((r["ok"], r["output_text"]), (True, "okta-reset"))
+        r = run("def run(i, c):\n    return type(ARGS['version']).__name__\n", args={"version": 2})
+        self.assertEqual(r["output_text"], "int")
+
+    def test_no_args_is_an_empty_dict(self):
+        self.assertEqual(run(self.SRC)["output_text"], "null")
+        self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=[])["output_text"], "true")
+        self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=None, threaded=False)["output_text"], "true")

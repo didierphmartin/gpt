@@ -49,7 +49,8 @@ final class StartOptionGraph
                 'config' => ['type' => 'code', 'name' => (string) ($c['start_trigger']['label'] ?? $c['name']),
                     'code_component_id' => $cid, 'code' => $c['code'], 'exits' => $c['exits'],
                     'mcp_servers' => $c['mcp_servers'], 'timeout_s' => $c['timeout_s'],
-                    'start_trigger' => $c['start_trigger'] ?? null],
+                    'start_trigger' => $c['start_trigger'] ?? null,
+                    'args' => is_array($sa = ($start['config'] ?? [])['start_args'] ?? null) ? $sa : []],
                 'pos_x' => (int) ($start['pos_x'] ?? 0) + 1, 'pos_y' => (int) ($start['pos_y'] ?? 0), 'drawflow_node_id' => null];
             foreach ($edges as &$e) {
                 if ((string) $e['from_node_id'] === $startId) {

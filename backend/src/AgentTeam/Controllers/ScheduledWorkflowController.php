@@ -224,7 +224,8 @@ class ScheduledWorkflowController
         }
 
         try {   // a Start option names its component; the component supplies the event (spec §3)
-            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body);
+            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body,
+                (int) ($this->scheduleService->findById($id)['workflow_id'] ?? 0));
         } catch (CodeComponentError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
         }

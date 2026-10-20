@@ -156,11 +156,14 @@ def _with_timeout(fn, timeout_s: int):
 
 
 def execute(source: str, input, exits: list, servers: list, transport, timeout_s: int,
-            threaded: bool = True, node_name: str = "") -> dict:
+            threaded: bool = True, node_name: str = "", args=None) -> dict:
     """Run the code's run(input, call_tool) once under the contract (spec §3).
 
     node_name is the node's name on the canvas, readable by the code as NODE_NAME (e.g. a dispatcher
     branch that files an email into the folder named like itself).
+
+    args is the node's start/component arguments, readable by the code as the module global ARGS (a dict,
+    {} when none were given; JSON types are kept, so an int stays an int).
 
     threaded=True (CPython): run() runs in a daemon thread that is abandoned after timeout_s.
     threaded=False (Pyodide, no threads): the deadline is checked at each call_tool and after run().
@@ -173,7 +176,8 @@ def execute(source: str, input, exits: list, servers: list, transport, timeout_s
 
     def body():
         check_code(source)
-        ns = {"__name__": "code_node", "print": functools.partial(print, file=buf), "NODE_NAME": node_name or ""}
+        ns = {"__name__": "code_node", "print": functools.partial(print, file=buf), "NODE_NAME": node_name or "",
+              "ARGS": dict(args) if isinstance(args, dict) else {}}
         exec(compile(source, "<code node>", "exec"), ns)
         run = ns.get("run")
         if not callable(run):

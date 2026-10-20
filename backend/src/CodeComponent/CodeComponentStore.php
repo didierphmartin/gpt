@@ -207,15 +207,37 @@ final class CodeComponentStore
         return $impact;
     }
 
-    /** A schedule save naming an option becomes that option's event schedule (spec §3); other bodies pass through. */
-    public function scheduleBody(int $userId, array $body): array
+    /**
+     * A schedule save naming an option becomes that option's event schedule (spec §3); other bodies pass through.
+     * The watch is the option's, plus the Start node's start_args.tag as an MCP argument (the other start_args are
+     * not MCP arguments). $workflowId: the workflow when the body does not carry it (an update).
+     */
+    public function scheduleBody(int $userId, array $body, ?int $workflowId = null): array
     {
         if (empty($body['trigger_component_id'])) {
             return $body;
         }
         $id = (int) $body['trigger_component_id'];
-        return ['repeat_type' => 'event', 'event_trigger' => $this->watchFor($userId, $id), 'cron' => null,
+        $watch = $this->watchFor($userId, $id);
+        $tag = $this->startTag((int) ($body['workflow_id'] ?? $workflowId ?? 0));
+        if ($tag !== null) {
+            $watch['args'] = (is_array($watch['args'] ?? null) ? $watch['args'] : []) + ['tag' => $tag];
+        }
+        return ['repeat_type' => 'event', 'event_trigger' => $watch, 'cron' => null,
             'trigger_component_id' => $id] + $body;
+    }
+
+    /** The workflow's Start node's start_args.tag, or null. */
+    private function startTag(int $workflowId): ?string
+    {
+        if ($workflowId <= 0) {
+            return null;
+        }
+        $st = $this->db->prepare("SELECT config FROM workflow_nodes WHERE workflow_id = ? AND node_type = 'start' ORDER BY id LIMIT 1");
+        $st->execute([$workflowId]);
+        $cfg = json_decode((string) $st->fetchColumn(), true);
+        $tag = is_array($cfg) ? ($cfg['start_args']['tag'] ?? null) : null;
+        return is_string($tag) && $tag !== '' ? $tag : null;
     }
 
     /** The option's watch, as an event schedule stores it: {server, tool, args}. */
